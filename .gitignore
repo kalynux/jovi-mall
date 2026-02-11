@@ -1,0 +1,8 @@
+/.env
+/.env.example
+/dist
+/node_modules
+/scripts
+/src/scripts
+/build_output.txt
+/ticket_types.txt

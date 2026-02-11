@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: sans-serif; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #f4f4f4; padding: 10px; text-align: center; }
+        .content { padding: 20px 0; }
+        .footer { font-size: 12px; color: #888; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Welcome to Jovi Mall!</h1>
+        </div>
+        <div class="content">
+            <p>Hi {{name}},</p>
+            <p>Thanks for joining us. We are excited to have you on board!</p>
+            <p>Your account ({{role}}) is now active.</p>
+        </div>
+        <div class="footer">
+            <p>&copy; {{year}} Jovi Mall. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
