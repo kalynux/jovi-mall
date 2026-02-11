@@ -28,7 +28,10 @@ export interface ITicketAttachment extends Document {
     file_name: string;
     file_size: number;
     mime_type: string;
-    created_at: Date;
+    visibility: 'PUBLIC' | 'PRIVATE'; // NEW: Visibility control
+    visible_to_user_ids?: mongoose.Types.ObjectId[]; // NEW: Explicit visibility list for private attachments
+    createdAt: Date;
+    updatedAt: Date;
 }
 
 const TicketAttachmentSchema = new Schema<ITicketAttachment>({
@@ -65,12 +68,25 @@ const TicketAttachmentSchema = new Schema<ITicketAttachment>({
     mime_type: {
         type: String,
         required: true
-    }
+    },
+    visibility: {
+        type: String,
+        enum: ['PUBLIC', 'PRIVATE'],
+        required: true,
+        default: 'PUBLIC'
+    },
+    visible_to_user_ids: [{
+        type: Schema.Types.ObjectId,
+        ref: 'User'
+    }]
 }, {
     timestamps: { createdAt: 'created_at', updatedAt: false } // Immutable after upload
 });
 
 // Chronological retrieval of attachments for a ticket
 TicketAttachmentSchema.index({ ticket_id: 1, created_at: 1 });
+
+// Visibility filtering
+TicketAttachmentSchema.index({ ticket_id: 1, visibility: 1 });
 
 export const TicketAttachmentModel = mongoose.model<ITicketAttachment>('TicketAttachment', TicketAttachmentSchema);

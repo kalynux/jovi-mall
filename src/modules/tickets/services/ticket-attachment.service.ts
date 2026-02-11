@@ -43,17 +43,43 @@ export class TicketAttachmentService {
      * @param file - Multer file object
      * @param uploaderUserId - User ID uploading the file
      * @param uploaderRole - User's role
+     * @param visibility - PUBLIC or PRIVATE (default PUBLIC)
+     * @param visibleToUserIds - User IDs for private attachment visibility
      */
     async uploadAttachment(
         ticketId: string,
         file: Express.Multer.File,
         uploaderUserId: string,
-        uploaderRole: ActorRole
+        uploaderRole: ActorRole,
+        visibility: 'PUBLIC' | 'PRIVATE' = 'PUBLIC',
+        visibleToUserIds?: string[]
     ): Promise<ITicketAttachment> {
         // Check attachment count
         const currentCount = await this.attachmentRepo.countByTicket(ticketId);
         if (currentCount >= 5) {
             throw new AttachmentLimitExceededError();
+        }
+
+        // If private, auto-include uploader and admins in visibility list
+        let finalVisibleToUserIds: mongoose.Types.ObjectId[] | undefined;
+        if (visibility === 'PRIVATE') {
+            const TicketFollowerRepository = require('../repositories/ticket-follower.repository').TicketFollowerRepository;
+            const followerRepo = new TicketFollowerRepository();
+
+            // Get admin followers
+            const adminFollowers = await followerRepo.getAdminFollowers(ticketId);
+            const adminIds = adminFollowers.map((f: any) => f.user_id.toString());
+
+            // Combine uploader + admins + explicit list
+            const allIds = [
+                uploaderUserId,
+                ...adminIds,
+                ...(visibleToUserIds || [])
+            ];
+
+            // Deduplicate and convert to ObjectIds
+            const uniqueIds = [...new Set(allIds)];
+            finalVisibleToUserIds = uniqueIds.map(id => new mongoose.Types.ObjectId(id));
         }
 
         // Upload to storage provider
@@ -85,6 +111,8 @@ export class TicketAttachmentService {
             file_name: file.originalname,
             file_size: file.size,
             mime_type: file.mimetype,
+            visibility, // NEW
+            visible_to_user_ids: finalVisibleToUserIds // NEW
         });
 
         // Emit event
@@ -94,7 +122,8 @@ export class TicketAttachmentService {
             payload: {
                 ticketId,
                 attachmentId: attachment.id,
-                fileName: file.originalname
+                fileName: file.originalname,
+                visibility // NEW
             },
             occurredAt: new Date()
         });
@@ -147,7 +176,7 @@ export class TicketAttachmentService {
             eventType: 'ticket.attachment_deleted',
             aggregateId: attachment.ticket_id.toString(),
             payload: {
-                ticketId: attachment.ticket_id.toString(),
+                createdAt: (attachment.createdAt as Date).toISOString(),
                 attachmentId,
                 deletedBy: userId
             },
@@ -156,10 +185,18 @@ export class TicketAttachmentService {
     }
 
     /**
-     * List attachments for a ticket
+     * List attachments for a ticket with visibility filtering
+     * 
+     * @param ticketId - Ticket ID
+     * @param viewerUserId - User viewing the attachments
+     * @param viewerRole - Viewer's role
      */
-    async listAttachments(ticketId: string): Promise<ITicketAttachment[]> {
-        return await this.attachmentRepo.findByTicket(ticketId);
+    async listAttachments(
+        ticketId: string,
+        viewerUserId: string,
+        viewerRole: ActorRole
+    ): Promise<ITicketAttachment[]> {
+        return await this.attachmentRepo.findByTicket(ticketId, viewerRole, viewerUserId);
     }
 
     /**

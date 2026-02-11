@@ -21,10 +21,43 @@ export class TicketAttachmentRepository {
     }
 
     /**
-     * Find all attachments for a ticket
+     * Find all attachments for a ticket with visibility filtering
+     * 
+     * @param ticketId - Ticket ID
+     * @param viewerRole - Role of the user viewing
+     * @param viewerUserId - User ID of the viewer
      */
-    async findByTicket(ticketId: string): Promise<ITicketAttachment[]> {
-        return await TicketAttachmentModel.find({ ticket_id: ticketId }).sort({ created_at: 1 });
+    async findByTicket(
+        ticketId: string,
+        viewerRole: string,
+        viewerUserId: string
+    ): Promise<ITicketAttachment[]> {
+        const mongoose = require('mongoose');
+
+        // Admins see all attachments
+        if (viewerRole === 'ADMIN') {
+            return await TicketAttachmentModel.find({ ticket_id: ticketId })
+                .sort({ created_at: 1 });
+        }
+
+        // Non-admins see:
+        // - All PUBLIC attachments
+        // - PRIVATE attachments they uploaded
+        // - PRIVATE attachments where they're in visible_to_user_ids
+        return await TicketAttachmentModel.find({
+            ticket_id: ticketId,
+            $or: [
+                { visibility: 'PUBLIC' },
+                {
+                    visibility: 'PRIVATE',
+                    uploaded_by_user_id: new mongoose.Types.ObjectId(viewerUserId)
+                },
+                {
+                    visibility: 'PRIVATE',
+                    visible_to_user_ids: new mongoose.Types.ObjectId(viewerUserId)
+                }
+            ]
+        }).sort({ created_at: 1 });
     }
 
     /**

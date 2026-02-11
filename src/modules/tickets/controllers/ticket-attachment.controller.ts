@@ -29,11 +29,19 @@ export class TicketAttachmentController {
                 return;
             }
 
+            // Parse visibility params (optional)
+            const visibility = (req.body.visibility || 'PUBLIC') as 'PUBLIC' | 'PRIVATE';
+            const visibleToUserIds = req.body.visibleToUserIds
+                ? JSON.parse(req.body.visibleToUserIds)
+                : undefined;
+
             const attachment = await TicketAttachmentController.attachmentService.uploadAttachment(
                 ticketId,
                 req.file,
                 userId,
-                role
+                role,
+                visibility,
+                visibleToUserIds
             );
 
             // Generate URL for the uploaded attachment
@@ -49,7 +57,7 @@ export class TicketAttachmentController {
                     url: url,
                     uploadedBy: attachment.uploaded_by_user_id,
                     uploadedByRole: attachment.uploaded_by_role,
-                    createdAt: attachment.created_at
+                    createdAt: attachment.createdAt
                 }
             });
         } catch (error) {
@@ -63,8 +71,14 @@ export class TicketAttachmentController {
     static async listAttachments(req: Request, res: Response): Promise<void> {
         try {
             const ticketId = req.params.ticketId;
+            const userId = req.auth!.user.id;
+            const role = req.auth!.role as ActorRole;
 
-            const attachments = await TicketAttachmentController.attachmentService.listAttachments(ticketId);
+            const attachments = await TicketAttachmentController.attachmentService.listAttachments(
+                ticketId,
+                userId,
+                role
+            );
 
             // Generate URLs for all attachments
             const attachmentsWithUrls = await Promise.all(
@@ -76,7 +90,7 @@ export class TicketAttachmentController {
                     url: await TicketAttachmentController.attachmentService.getAttachmentUrl(att),
                     uploadedBy: att.uploaded_by_user_id,
                     uploadedByRole: att.uploaded_by_role,
-                    createdAt: att.created_at
+                    createdAt: att.createdAt
                 }))
             );
 

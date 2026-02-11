@@ -104,4 +104,16 @@ export class TicketFollowerRepository {
             user_id: userId
         });
     }
+
+    /**
+     * Get admin followers for a ticket
+     * 
+     * Used for auto-including admins in private attendance visibility
+     */
+    async getAdminFollowers(ticketId: string): Promise<ITicketFollower[]> {
+        return await TicketFollowerModel.find({
+            ticket_id: ticketId,
+            is_admin: true
+        });
+    }
 }
