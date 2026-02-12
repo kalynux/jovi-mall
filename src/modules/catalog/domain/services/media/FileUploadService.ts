@@ -51,7 +51,7 @@ export class FileUploadService {
   constructor(
     private readonly storageProvider: IStorageProvider,
     private readonly fileRepository: IFileRepository
-  ) {}
+  ) { }
 
   /**
    * Upload file to storage and create DB record
@@ -69,12 +69,12 @@ export class FileUploadService {
     // Create file record
     const file = await this.fileRepository.create({
       key: result.key,
-      provider: 'local', // TODO: Pass provider type from config or detect from storageProvider
+      provider: this.storageProvider.getProviderType(),
       mimeType: result.mimeType,
       size: result.size,
       checksum: result.checksum,
       originalName: command.originalName,
-      isOrphan: true, // initially orphaned until attached
+      usageCount: 0, // initially no references until attached
       ownerType: command.vendorId ? 'vendor' : 'system',
       ownerId: command.vendorId,
       deletedAt: null,

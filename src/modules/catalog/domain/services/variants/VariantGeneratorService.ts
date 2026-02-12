@@ -119,8 +119,8 @@ export class VariantGeneratorService {
           lowStockThreshold: null,
           allowOversell: false,
           weight: undefined,
-          optionValueIds: combination.map(v => v.id),
-          mediaIds: [],
+          optionValueIds: combination.map(v => v.id), // Kept original logic for optionValueIds
+          fileIds: [], // Changed from mediaIds to fileIds
           deletedAt: null,
           purgeAt: null,
         };

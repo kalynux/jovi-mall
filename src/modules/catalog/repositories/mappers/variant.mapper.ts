@@ -18,7 +18,8 @@ export interface Variant {
   width?: number;
   height?: number;
   optionValueIds: string[];
-  mediaIds: string[];
+  fileIds: string[];
+  deliveryAgencyId?: string;
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;
@@ -42,7 +43,8 @@ export class VariantMapper implements IMapper<Variant, IProductVariant> {
       allowOversell: doc.allow_oversell,
       weight: doc.weight,
       optionValueIds: doc.optionValueIds.map((id: any) => id.toString()),
-      mediaIds: doc.mediaIds.map((id: any) => id.toString()),
+      fileIds: doc.fileIds?.map((id: any) => id.toString()) || [],
+      deliveryAgencyId: doc.deliveryAgencyId?.toString(),
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       deletedAt: doc.deletedAt,
@@ -61,7 +63,8 @@ export class VariantMapper implements IMapper<Variant, IProductVariant> {
       isInfiniteStock: domain.isInfiniteStock,
       weight: domain.weight,
       optionValueIds: domain.optionValueIds,
-      mediaIds: domain.mediaIds,
+      fileIds: domain.fileIds,
+      deliveryAgencyId: domain.deliveryAgencyId,
     } as any;
   }
 }

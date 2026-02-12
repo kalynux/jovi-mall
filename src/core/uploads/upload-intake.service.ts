@@ -104,7 +104,7 @@ export class UploadIntakeService {
           size: fileContext.size,
           checksum: fileContext.hash || storageResult.checksum,  // Use fingerprint hash if available
           originalName: fileContext.originalName,
-          isOrphan: true,  // Initially orphaned until attached to entity
+          usageCount: 0,  // Initially no references until attached to entity
           ownerType: request.context.vendorId ? 'vendor' : 'system',
           ownerId: request.context.vendorId || undefined,
           deletedAt: null,

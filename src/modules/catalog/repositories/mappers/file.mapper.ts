@@ -9,17 +9,17 @@ import { IFile } from '../../models/file.model';
 export interface File {
   id: string;
   key: string;
-  provider: 'local' | 's3' | 'gcs' | 'r2';
+  provider: 'local' | 's3' | 'gcs' | 'r2' | 'firebase' | 'cloudinary';
   mimeType: string;
   size: number;
   checksum?: string;
   originalName?: string;
-  
-  isOrphan: boolean;
-  
-  ownerType?: 'vendor' | 'system';
+
+  usageCount: number;  // Reference count for safe cleanup
+
+  ownerType?: 'vendor' | 'admin' | 'customer' | 'agent' | 'agency' | 'system';
   ownerId?: string;
-  
+
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;
@@ -42,7 +42,7 @@ export class FileMapper implements IMapper<File, IFile> {
       size: doc.size,
       checksum: doc.checksum,
       originalName: doc.originalName,
-      isOrphan: doc.isOrphan,
+      usageCount: doc.usageCount || 0,
       ownerType: doc.ownerType,
       ownerId: doc.ownerId?.toString(),
       createdAt: doc.createdAt,
@@ -62,7 +62,7 @@ export class FileMapper implements IMapper<File, IFile> {
       size: domain.size,
       checksum: domain.checksum,
       originalName: domain.originalName,
-      isOrphan: domain.isOrphan,
+      usageCount: domain.usageCount,
       ownerType: domain.ownerType,
       ownerId: domain.ownerId,
     } as any;

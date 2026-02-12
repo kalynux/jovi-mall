@@ -17,6 +17,7 @@ export const CreateVariantSchema = z.object({
     width: z.number().min(0).optional(),
     height: z.number().min(0).optional(),
     optionValueIds: z.array(z.string()).optional().default([]),
+    deliveryAgencyId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId').optional(),
 });
 
 export const UpdateVariantSchema = z.object({
@@ -30,6 +31,7 @@ export const UpdateVariantSchema = z.object({
     width: z.number().min(0).optional(),
     height: z.number().min(0).optional(),
     optionValueIds: z.array(z.string()).optional(),
+    deliveryAgencyId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId').optional(),
 });
 
 export const VariantQuerySchema = z.object({

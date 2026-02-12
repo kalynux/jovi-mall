@@ -3,14 +3,14 @@ import { ActorRole } from '../types/ticket.types';
 import { AttachmentLimitExceededError, ForbiddenError, NotFoundError } from '../../../core/errors';
 import { ITicketAttachment } from '../models/ticket-attachment.model';
 import { eventBus } from '../../../core/events/event-bus';
-import { createStorageProvider, IStorageProvider } from "../../../core/storage";
+import { getStorageProvider, IStorageProvider } from "../../../core/storage";
 import { FileModel } from '../../catalog/models/file.model';
 import mongoose from 'mongoose';
 
 /**
  * TicketAttachmentService
  * 
- * Manages file attachments for tickets using the storage factory pattern.
+ * Manages file attachments for tickets using the centralized storage configuration.
  * 
  * DOMAIN RULES:
  * - Max 5 files per ticket
@@ -19,21 +19,13 @@ import mongoose from 'mongoose';
  * - File keys are stored in File model, URLs generated at runtime
  */
 
-const storageProvider = createStorageProvider({
-    provider: 'local',
-    local: {
-        basePath: './storage',      // absolute path to storage directory (e.g., './storage')
-        baseUrl: 'http://localhost:3000/storage',       // base URL for public access (e.g., 'http://localhost:3000/storage')
-    },
-});
-
 export class TicketAttachmentService {
     private attachmentRepo: TicketAttachmentRepository;
     private storageService: IStorageProvider;
 
     constructor() {
         this.attachmentRepo = new TicketAttachmentRepository();
-        this.storageService = storageProvider;
+        this.storageService = getStorageProvider();
     }
 
     /**
@@ -92,7 +84,7 @@ export class TicketAttachmentService {
         // Create File record
         const fileRecord = await FileModel.create({
             key: uploadResult.key,
-            provider: 'local', // Match the storageProvider config
+            provider: this.storageService.getProviderType(),
             mimeType: file.mimetype,
             size: uploadResult.size,
             checksum: uploadResult.checksum,

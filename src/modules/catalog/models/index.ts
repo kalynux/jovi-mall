@@ -2,7 +2,6 @@ export * from './product.model';
 export * from './product-variant.model';
 export * from './product-option.model';
 export * from './product-option-value.model';
-export * from './product-media.model';
 export * from './service-config.model';
 export * from './service-availability.model';
 export * from './file.model';

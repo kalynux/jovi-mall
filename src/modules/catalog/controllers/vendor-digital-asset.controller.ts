@@ -5,16 +5,10 @@ import { ProductRepositoryMongo } from '../repositories/mongo/product.repository
 import { ProductModel } from '../models/product.model';
 import { DigitalAssetService } from '../../digital-delivery/services/digital-asset.service';
 import { ProductDigitalService } from '../domain/services/digital/ProductDigitalService';
-import { createStorageProvider } from '../../../core/storage/storage.factory';
+import { getStorageProvider } from '../../../core/storage';
 
 const productRepository = new ProductRepositoryMongo();
-const storageProvider = createStorageProvider({
-    provider: 'local',
-    local: {
-        basePath: './storage',      // absolute path to storage directory (e.g., './storage')
-        baseUrl: 'http://localhost:3000/storage',       // base URL for public access (e.g., 'http://localhost:3000/storage')
-    },
-});
+const storageProvider = getStorageProvider();
 const digitalAssetService = new DigitalAssetService(storageProvider);
 const digitalService = new ProductDigitalService();
 

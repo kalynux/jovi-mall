@@ -25,7 +25,7 @@ export class CloudinaryStorageProvider implements IStorageProvider {
       api_secret: config.apiSecret,
     });
   }
-  
+
   getSignedUrl?(key: string, expiresInSeconds: number): Promise<string> {
     throw new Error("Method not implemented.");
   }
@@ -42,10 +42,10 @@ export class CloudinaryStorageProvider implements IStorageProvider {
     const now = new Date();
     const year = now.getFullYear().toString();
     const month = (now.getMonth() + 1).toString().padStart(2, '0');
-    
+
     // Generate deterministic but unique public ID
     const uuid = crypto.randomUUID();
-    const publicId = options.filename 
+    const publicId = options.filename
       ? `${uuid}_${this.sanitizeFilename(options.filename)}`
       : uuid;
 
@@ -115,11 +115,15 @@ export class CloudinaryStorageProvider implements IStorageProvider {
   private sanitizeFilename(filename: string): string {
     // Remove extension (Cloudinary handles it)
     const nameWithoutExt = filename.replace(/\.[^.]+$/, '');
-    
+
     return nameWithoutExt
       .replace(/[^a-zA-Z0-9._-]/g, '_')
       .replace(/\.+/g, '.')
       .replace(/^\./, '')
       .substring(0, 100);
+  }
+
+  getProviderType(): 'cloudinary' {
+    return 'cloudinary';
   }
 }

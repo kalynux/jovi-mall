@@ -23,6 +23,7 @@ export interface Product {
   };
   hasVariants: boolean;
   defaultVariantId?: string;
+  fileIds: string[];  // File references converted to string IDs
 
   // Service-specific config
   serviceConfig?: {
@@ -60,6 +61,7 @@ export class ProductMapper implements IMapper<Product, IProduct> {
       seo: doc.seo,
       hasVariants: doc.hasVariants,
       defaultVariantId: doc.defaultVariantId?.toString(),
+      fileIds: doc.fileIds?.map((id: any) => id.toString()) || [],
       serviceConfig: doc.serviceConfig,
       digitalConfig: doc.digitalConfig,
       createdAt: doc.createdAt,

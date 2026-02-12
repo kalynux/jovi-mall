@@ -56,6 +56,18 @@ export class VendorVariantController {
             // Validate request body
             const input = CreateVariantSchema.parse(req.body);
 
+            // Reject deliveryAgencyId for non-physical products
+            if (input.deliveryAgencyId !== undefined && product.type !== 'physical') {
+                res.status(400).json({
+                    success: false,
+                    error: {
+                        code: 'INVALID_FIELD_FOR_PRODUCT_TYPE',
+                        message: 'Delivery agency can only be set for physical products',
+                    },
+                });
+                return;
+            }
+
             // Check for SKU uniqueness
             const existingVariant = await variantRepository.findBySku(input.sku);
             if (existingVariant) {
@@ -91,7 +103,8 @@ export class VendorVariantController {
                 width: input.width,
                 height: input.height,
                 optionValueIds: input.optionValueIds,
-                mediaIds: [],
+                fileIds: [],
+                deliveryAgencyId: input.deliveryAgencyId, // Pass through delivery agency
                 deletedAt: null,
                 purgeAt: null,
             });
@@ -228,6 +241,18 @@ export class VendorVariantController {
 
             // Validate request body
             const input = UpdateVariantSchema.parse(req.body);
+
+            // Reject deliveryAgencyId for non-physical products
+            if (input.deliveryAgencyId !== undefined && product.type !== 'physical') {
+                res.status(400).json({
+                    success: false,
+                    error: {
+                        code: 'INVALID_FIELD_FOR_PRODUCT_TYPE',
+                        message: 'Delivery agency can only be set for physical products',
+                    },
+                });
+                return;
+            }
 
             // Get existing variant
             const existingVariant = await variantRepository.findById(variantId);

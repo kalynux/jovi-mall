@@ -49,6 +49,7 @@ export class ProductDuplicateService {
             seo: { ...originalProduct.seo },
             hasVariants: originalProduct.hasVariants,
             deletedAt: null,
+            fileIds: originalProduct.fileIds,
         };
 
         // 5. Clone type-specific configs

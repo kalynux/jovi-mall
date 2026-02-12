@@ -23,7 +23,7 @@ export class DigitalFileLinkService {
     private readonly fileRepository: IFileRepository,
     private readonly digitalAssetRepository: IDigitalAssetRepository,
     private readonly productRepository: IProductRepository
-  ) {}
+  ) { }
 
   /**
    * Link file to digital asset
@@ -50,12 +50,12 @@ export class DigitalFileLinkService {
       throw new ForbiddenError('Vendor does not own this product');
     }
 
-    // If digital asset already has a file, orphan the old one
+    // If digital asset already has a file, decrement its usage count
     if (digitalAsset.mediaId) {
       const oldFile = await this.fileRepository.findById(digitalAsset.mediaId, options);
       if (oldFile) {
-        // Mark old file as orphaned (it's being replaced)
-        await this.fileRepository.updateOrphanStatus(oldFile.id, true, options);
+        // Decrement usage count for old file (it's being replaced)
+        await this.fileRepository.decrementUsageCount(oldFile.id, options);
       }
     }
 
@@ -66,7 +66,7 @@ export class DigitalFileLinkService {
       options
     );
 
-    // Mark new file as not orphaned
-    await this.fileRepository.updateOrphanStatus(command.fileId, false, options);
+    // Increment usage count for new file
+    await this.fileRepository.incrementUsageCount(command.fileId, options);
   }
 }

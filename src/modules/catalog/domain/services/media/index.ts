@@ -4,8 +4,8 @@ export * from './FileDeleteService';
 export * from './OrphanFileGarbageCollectorService';
 
 // Media attachment
-export * from './MediaAttachService';
-export * from './MediaDetachService';
+export * from './FileAttachService';
+export * from './FileDetachService';
 
 // Digital assets
 export * from './DigitalFileLinkService';

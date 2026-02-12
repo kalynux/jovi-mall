@@ -77,7 +77,7 @@ export class DefaultVariantService {
         allowOversell: false,
         weight: undefined,
         optionValueIds: [],
-        mediaIds: [],
+        fileIds: [],
         deletedAt: null,
         purgeAt: null,
       }, { session });

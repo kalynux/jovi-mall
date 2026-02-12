@@ -10,7 +10,7 @@ import { IStorageProvider } from '../../../core/storage/storage-provider.interfa
  * Ensures proper ownership checks and prevents deletion of assets in use.
  */
 export class DigitalAssetService {
-  constructor(private readonly storageProvider: IStorageProvider) {}
+  constructor(private readonly storageProvider: IStorageProvider) { }
 
   /**
    * Upload a digital asset for a vendor
@@ -32,7 +32,7 @@ export class DigitalAssetService {
     // Create File record
     const fileRecord = await FileModel.create({
       key: uploadResult.key,
-      provider: 'local', // TODO: Make this dynamic based on config
+      provider: this.storageProvider.getProviderType(),
       mimeType: uploadResult.mimeType,
       size: uploadResult.size,
       checksum: uploadResult.checksum,

@@ -27,7 +27,11 @@ export interface IProductVariant extends IBaseDocument {
   height?: number;
 
   optionValueIds: Types.ObjectId[];
-  mediaIds: Types.ObjectId[];
+  fileIds: Types.ObjectId[];
+
+  // Delivery agency for variant fulfillment (physical products only)
+  // undefined = use vendor's default_delivery_agency_id
+  deliveryAgencyId?: Types.ObjectId;
 }
 
 const ProductVariantSchema = new Schema<IProductVariant>({
@@ -53,7 +57,14 @@ const ProductVariantSchema = new Schema<IProductVariant>({
   height: { type: Number },
 
   optionValueIds: [{ type: Schema.Types.ObjectId, ref: 'ProductOptionValue' }],
-  mediaIds: [{ type: Schema.Types.ObjectId, ref: 'ProductMedia' }],
+  fileIds: [{ type: Schema.Types.ObjectId, ref: 'File' }],
+
+  deliveryAgencyId: {
+    type: Schema.Types.ObjectId,
+    ref: 'DeliveryAgency',
+    required: false,
+    index: true,
+  },
 
   ...BaseSchemaFields
 }, BaseSchemaOptions);

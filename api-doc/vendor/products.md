@@ -14,6 +14,7 @@ Complete API reference for managing products in the multi-vendor ecommerce platf
 ## Table of Contents
 
 - [Product CRUD](#product-crud)
+- [**Product Creation Workflows**](./product-update.md) (Step-by-Step Guides for Physical/Digital/Service)
 - [Bulk Operations](#bulk-operations)
 - [Digital Product Management](#digital-product-management)
 - [Service Product Management](#service-product-management)
@@ -422,17 +423,32 @@ POST /api/vendor/products/bulk/status
 POST /api/vendor/products/:id/digital/asset
 ```
 
-> [!WARNING]
-> **Not Yet Implemented**
-> This endpoint returns `501 NOT_IMPLEMENTED`. Integration with `DigitalAssetService` is required.
+> [!TIP]
+> **Workflow Requirement**
+> 1. Create Product (Draft) -> Get ID
+> 2. **Upload Asset (Here)** -> Backend links asset to Product
+> 3. Create Variant (Price) -> Backend links to Product
+> 4. Activate Product
+>
+> See [Product Creation Workflows](./product-update.md) for the full guide.
 
-**Planned Behavior:**
+**Request Body:** `multipart/form-data`
+- `file`: The digital file (max 500MB)
 
-1. Validate product is digital type
-2. Upload file via file upload service
-3. Create `DigitalAsset` record
-4. Update `product.digitalConfig.assetId`
-5. Return updated product
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "assetId": "507f1f77bcf86cd799439013",
+    "filename": "guide.pdf",
+    "size": 102400,
+    "mimeType": "application/pdf"
+  },
+  "message": "Digital asset uploaded successfully"
+}
+```
 
 ---
 

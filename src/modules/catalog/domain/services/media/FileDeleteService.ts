@@ -21,7 +21,7 @@ export class FileDeleteService {
   constructor(
     private readonly storageProvider: IStorageProvider,
     private readonly fileRepository: IFileRepository
-  ) {}
+  ) { }
 
   /**
    * Delete file record and physical file
@@ -32,14 +32,14 @@ export class FileDeleteService {
   async execute(command: DeleteFileCommand): Promise<void> {
     // Find file
     const file = await this.fileRepository.findById(command.fileId);
-    
+
     if (!file) {
       throw new NotFoundError('File not found');
     }
 
-    // Safety check: only delete orphaned files unless forced
-    if (!file.isOrphan && !command.force) {
-      throw new ConflictError('Cannot delete file that is still referenced. Use force=true to override.');
+    // Safety check: only delete files with no references unless forced
+    if (file.usageCount > 0 && !command.force) {
+      throw new ConflictError(`Cannot delete file that is still referenced (usageCount: ${file.usageCount}). Use force=true to override.`);
     }
 
     // Delete physical file from storage

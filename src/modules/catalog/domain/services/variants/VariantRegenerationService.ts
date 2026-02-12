@@ -165,7 +165,7 @@ export class VariantRegenerationService {
             allowOversell: false,
             weight: undefined,
             optionValueIds: combination.map((v: any) => v.id),
-            mediaIds: [],
+            fileIds: [],
             deletedAt: null,
             purgeAt: null,
           });

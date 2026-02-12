@@ -18,7 +18,7 @@ export class FileRepositoryMongo extends BaseRepository<IFile, File> implements 
     const persistence = {
       ...file,
     } as any;
-    
+
     const [doc] = await this.model.create([persistence], options?.session ? { session: options.session } : {});
     return this.mapper.toDomain(doc);
   }
@@ -34,7 +34,7 @@ export class FileRepositoryMongo extends BaseRepository<IFile, File> implements 
 
   async findOrphans(olderThan: Date, options?: RepositoryOptions): Promise<File[]> {
     const query = this.model.find({
-      isOrphan: true,
+      usageCount: 0,  // Files with no references
       createdAt: { $lt: olderThan },
       deletedAt: null,
     });
@@ -47,32 +47,55 @@ export class FileRepositoryMongo extends BaseRepository<IFile, File> implements 
     return docs.map(doc => this.mapper.toDomain(doc));
   }
 
-  async updateOrphanStatus(id: string, isOrphan: boolean, options?: RepositoryOptions): Promise<void> {
-    if (!Types.ObjectId.isValid(id)) return;
-    
-    await this.model.updateOne(
-      { _id: id, deletedAt: null },
-      { isOrphan },
-      options?.session ? { session: options.session } : {}
+  async incrementUsageCount(fileId: string, options?: RepositoryOptions): Promise<void> {
+    if (!Types.ObjectId.isValid(fileId)) {
+      throw new Error('Invalid file ID');
+    }
+
+    const result = await this.model.findByIdAndUpdate(
+      fileId,
+      { $inc: { usageCount: 1 } },
+      { session: options?.session }
     ).exec();
+
+    if (!result) {
+      throw new Error('File not found');
+    }
+  }
+
+  async decrementUsageCount(fileId: string, options?: RepositoryOptions): Promise<void> {
+    if (!Types.ObjectId.isValid(fileId)) {
+      throw new Error('Invalid file ID');
+    }
+
+    // Guard: only decrement if usageCount >= 1
+    const result = await this.model.findOneAndUpdate(
+      { _id: fileId, usageCount: { $gte: 1 } },
+      { $inc: { usageCount: -1 } },
+      { session: options?.session }
+    ).exec();
+
+    if (!result) {
+      throw new Error('Cannot decrement usageCount below 0 or file not found');
+    }
   }
 
   async update(id: string, updates: Partial<File>, options?: RepositoryOptions): Promise<File | null> {
     if (!Types.ObjectId.isValid(id)) return null;
-    
+
     const query = this.model.findOneAndUpdate(
       { _id: id, deletedAt: null },
       { $set: updates },
       { new: true, session: options?.session }
     );
-    
+
     const doc = await query.exec();
     return doc ? this.mapper.toDomain(doc) : null;
   }
 
   async softDelete(id: string, options?: RepositoryOptions): Promise<void> {
     if (!Types.ObjectId.isValid(id)) return;
-    
+
     await this.model.updateOne(
       { _id: id, deletedAt: null },
       { deletedAt: new Date() },
@@ -82,7 +105,7 @@ export class FileRepositoryMongo extends BaseRepository<IFile, File> implements 
 
   async hardDelete(id: string, options?: RepositoryOptions): Promise<void> {
     if (!Types.ObjectId.isValid(id)) return;
-    
+
     await this.model.deleteOne(
       { _id: id },
       options?.session ? { session: options.session } : {}

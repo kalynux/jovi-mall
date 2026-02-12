@@ -19,17 +19,17 @@ import { LocalStorageConfig } from '../storage.config';
  * - Deterministic file paths
  */
 export class LocalStorageProvider implements IStorageProvider {
-  constructor(private readonly config: LocalStorageConfig) {}
+  constructor(private readonly config: LocalStorageConfig) { }
 
   async put(buffer: Buffer, options: StoragePutOptions): Promise<StoragePutResult> {
     const now = new Date();
     const year = now.getFullYear().toString();
     const month = (now.getMonth() + 1).toString().padStart(2, '0');
-    
+
     // Generate unique filename
     const uuid = crypto.randomUUID();
     const extension = this.getExtensionFromMimeType(options.mimeType);
-    const filename = options.filename 
+    const filename = options.filename
       ? `${uuid}_${this.sanitizeFilename(options.filename)}`
       : `${uuid}${extension}`;
 
@@ -80,7 +80,7 @@ export class LocalStorageProvider implements IStorageProvider {
   async getDownloadStream(key: string): Promise<NodeJS.ReadableStream> {
     const filePath = path.join(this.config.basePath, key);
     const fs = await import('fs');
-    
+
     // Check if file exists
     try {
       await import('fs/promises').then(fsp => fsp.access(filePath));
@@ -132,5 +132,9 @@ export class LocalStorageProvider implements IStorageProvider {
     };
 
     return mimeMap[mimeType] || '';
+  }
+
+  getProviderType(): 'local' {
+    return 'local';
   }
 }

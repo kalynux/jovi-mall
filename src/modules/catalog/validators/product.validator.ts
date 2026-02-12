@@ -12,7 +12,7 @@ export const CreateProductSchema = z.object({
         .max(200, 'Title must not exceed 200 characters')
         .trim(),
     description: z.string().optional(),
-    images: z.array(z.string().url('Invalid image URL')).optional(),
+    fileIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid file ID')).optional(),
 
     // SEO
     seoTitle: z.string().max(60, 'SEO title must not exceed 60 characters').optional(),
@@ -46,7 +46,7 @@ export const UpdateProductSchema = z.object({
         .trim()
         .optional(),
     description: z.string().optional(),
-    images: z.array(z.string().url('Invalid image URL')).optional(), // Full replacement
+    fileIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid file ID')).optional(),
 
     // SEO
     seoTitle: z.string().max(60, 'SEO title must not exceed 60 characters').optional(),

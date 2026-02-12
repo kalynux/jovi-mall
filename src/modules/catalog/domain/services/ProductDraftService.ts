@@ -16,7 +16,7 @@ export class ProductDraftService {
   constructor(
     private readonly productRepository: IProductRepository,
     private readonly slugService: SlugService
-  ) {}
+  ) { }
 
   /**
    * Create a new product in DRAFT state
@@ -26,7 +26,7 @@ export class ProductDraftService {
   async execute(input: CreateProductInput): Promise<Product> {
     // Input validation
     const trimmedTitle = input.title.trim();
-    
+
     if (!trimmedTitle) {
       throw new ValidationError('Product title cannot be empty');
     }
@@ -49,6 +49,7 @@ export class ProductDraftService {
       seo: {},
       hasVariants: false,
       deletedAt: null,
+      fileIds: [],
     };
 
     return this.productRepository.create(productData);

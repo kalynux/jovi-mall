@@ -28,7 +28,7 @@ export class FirebaseStorageProvider implements IStorageProvider {
   getDownloadStream(key: string): Promise<NodeJS.ReadableStream> {
     throw new Error("Method not implemented.");
   }
-  
+
   getBuffer(key: string): Promise<Buffer> {
     throw new Error("Method not implemented.");
   }
@@ -159,5 +159,9 @@ export class FirebaseStorageProvider implements IStorageProvider {
     };
 
     return mimeMap[mimeType] || '';
+  }
+
+  getProviderType(): 'firebase' {
+    return 'firebase';
   }
 }

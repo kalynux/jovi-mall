@@ -70,4 +70,11 @@ export interface IStorageProvider {
    * @returns Promise resolving to file buffer
    */
   getBuffer(key: string): Promise<Buffer>;
+
+  /**
+   * Get the provider type identifier
+   * Used to store provider type in database records
+   * @returns Provider type ('local' | 's3' | 'gcs' | 'r2' | 'firebase' | 'cloudinary')
+   */
+  getProviderType(): 'local' | 's3' | 'gcs' | 'r2' | 'firebase' | 'cloudinary';
 }
