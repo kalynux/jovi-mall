@@ -97,7 +97,7 @@ export class ProductBulkOperationsService {
                 }
 
                 // Validate status transition
-                this.statusValidationService.validate(product, status);
+                await this.statusValidationService.validate(product, status);
 
                 // Update status
                 await this.productRepository.update(productId, vendorId, { status: status as any });

@@ -1,5 +1,5 @@
 import { Booking, IBooking } from '../models/booking.model';
-import { CreateBookingInput, BookingStatus } from '../types/booking.types';
+import { CreateBookingInput, BookingStatus, CalendarDayBooking } from '../types/booking.types';
 import { SlotLockService } from './slot-lock.service';
 import { SlotGeneratorService } from './slot-generator.service';
 import { CalendarClientFactory } from '../../integrations/calendar/calendar-client.factory';
@@ -8,6 +8,9 @@ import { ProductModel } from "../../catalog/models";
 import { UserModel } from "../../users/user.model";
 import { getCalendarColorIdByStatus } from '../../integrations/calendar/utils/calendar-event-colors.util';
 import { eventBus } from '../../../core/events/event-bus';
+import { BookingCalendarSyncService } from './booking-calendar-sync.service';
+import { ConflictError, NotFoundError, ValidationError, ForbiddenError } from '../../../core/errors';
+import { format } from 'date-fns';
 
 export class BookingService {
   private slotLockService: SlotLockService;
@@ -246,9 +249,10 @@ export class BookingService {
     // Booking status transition rules
     const VALID_TRANSITIONS: Record<string, string[]> = {
       pending: ['confirmed', 'cancelled'],
-      confirmed: ['completed', 'cancelled'],
-      completed: [], // Terminal state
-      cancelled: [], // Terminal state
+      confirmed: ['completed', 'cancelled', 'no-show'],
+      completed: [],    // Terminal state
+      'no-show': [],    // Terminal state — no calendar sync
+      cancelled: [],    // Terminal state
     };
 
     const booking = await Booking.findOne({
@@ -300,10 +304,15 @@ export class BookingService {
             booking.externalCalendarEventId = calendarEvent.externalId;
             await booking.save();
           }
-        } else if (currentStatus === 'confirmed' && newStatus === 'cancelled' && booking.externalCalendarEventId) {
+        } else if (
+          currentStatus === 'confirmed' &&
+          newStatus === 'cancelled' &&
+          booking.externalCalendarEventId
+        ) {
           // Delete calendar event when cancelling a confirmed booking
           await calendarClient.deleteEvent(booking.externalCalendarEventId);
         }
+        // no-show: intentionally no calendar action
       }
     } catch (calendarError) {
       // Log but don't block status update
@@ -311,6 +320,197 @@ export class BookingService {
     }
 
     return booking;
+  }
+
+  /**
+   * Marks a cash booking as paid (vendor-only operation).
+   *
+   * Rules:
+   * - Vendor must own the booking
+   * - Booking must require payment and not already be paid
+   * - Only valid for cash payment method (or unset, i.e. the vendor is declaring it was cash)
+   *
+   * @param bookingId Booking to mark as paid
+   * @param vendorId Vendor performing the action
+   */
+  async markAsPaidByCash(bookingId: string, vendorId: string): Promise<IBooking> {
+    const booking = await Booking.findOne({
+      _id: bookingId,
+      vendorId,
+      deletedAt: null,
+    });
+
+    if (!booking) {
+      throw new NotFoundError('Booking not found');
+    }
+
+    if (!booking.requiresPayment) {
+      throw new ValidationError('This booking does not require payment');
+    }
+
+    if (booking.paymentStatus === 'paid') {
+      throw new ConflictError('Booking is already marked as paid');
+    }
+
+    // Only allow for bookings that are cash or have no payment method yet
+    if (booking.paymentMethod && booking.paymentMethod !== 'cash') {
+      throw new ValidationError(
+        `Cannot manually mark a '${booking.paymentMethod}' booking as paid. Only cash bookings are eligible.`
+      );
+    }
+
+    booking.paymentStatus = 'paid';
+    booking.paymentMethod = 'cash';
+    booking.paidAt = new Date();
+    await booking.save();
+
+    // Sync calendar color/title (non-blocking)
+    try {
+      const calendarSync = new BookingCalendarSyncService();
+      await calendarSync.syncBookingPaymentStatus(booking);
+    } catch (calendarError) {
+      console.error('[BookingService] Calendar sync error after marking paid:', calendarError);
+    }
+
+    // Emit payment updated event
+    try {
+      await eventBus.publish('booking.payment.updated', {
+        eventType: 'booking.payment.updated',
+        aggregateId: booking._id.toString(),
+        occurredAt: new Date(),
+        payload: {
+          bookingId: booking._id.toString(),
+          vendorId: booking.vendorId.toString(),
+          userId: booking.userId.toString(),
+          paymentStatus: booking.paymentStatus,
+          paymentMethod: booking.paymentMethod,
+          paidAt: booking.paidAt,
+        },
+      });
+    } catch (eventError) {
+      console.error('[BookingService] Failed to emit booking.payment.updated event:', eventError);
+    }
+
+    return booking;
+  }
+
+  /**
+   * Cancels a booking on behalf of a vendor, with optional reason.
+   *
+   * Differences from the customer-facing cancelBooking:
+   * - Ownership is verified via vendorId (not userId)
+   * - Returns ConflictError (409) on double-cancel or terminal state
+   * - Provides calendar cleanup once, via service layer
+   *
+   * @param bookingId Booking to cancel
+   * @param vendorId Vendor requesting cancellation
+   * @param reason Optional reason for cancellation audit trail
+   */
+  async cancelVendorBooking(
+    bookingId: string,
+    vendorId: string,
+    reason?: string
+  ): Promise<IBooking> {
+    const booking = await Booking.findOne({
+      _id: bookingId,
+      vendorId,
+      deletedAt: null,
+    });
+
+    if (!booking) {
+      throw new NotFoundError('Booking not found');
+    }
+
+    if (booking.status === BookingStatus.CANCELLED) {
+      throw new ConflictError('Booking is already cancelled');
+    }
+
+    // Cannot cancel terminal states other than 'cancelled'
+    if (
+      booking.status === BookingStatus.COMPLETED ||
+      booking.status === BookingStatus.NO_SHOW
+    ) {
+      throw new ConflictError(
+        `Cannot cancel a booking that is already '${booking.status}'`
+      );
+    }
+
+    // Delete from calendar (non-blocking, once)
+    if (booking.externalCalendarEventId) {
+      try {
+        const calendarClient = await CalendarClientFactory.forVendor(vendorId);
+        await calendarClient.deleteEvent(booking.externalCalendarEventId);
+      } catch (calendarError) {
+        console.error('[BookingService] Failed to delete calendar event on vendor cancel:', calendarError);
+      }
+    }
+
+    booking.status = BookingStatus.CANCELLED;
+    booking.cancelledAt = new Date();
+    booking.cancelledReason = reason;
+    await booking.save();
+
+    await this.emitBookingCancelledEvent(booking);
+
+    return booking;
+  }
+
+  /**
+   * Returns bookings for a vendor grouped by date, for calendar display.
+   *
+   * Groups are keyed as 'YYYY-MM-DD' in UTC.
+   * N+1 queries are avoided by using a single populated query.
+   *
+   * @param vendorId Authenticated vendor
+   * @param startDate Start of the date range (inclusive, UTC)
+   * @param endDate End of the date range (inclusive, UTC)
+   */
+  async getCalendarView(
+    vendorId: string,
+    startDate: Date,
+    endDate: Date
+  ): Promise<{ date: string; bookings: CalendarDayBooking[] }[]> {
+    const bookings = await Booking.find({
+      vendorId,
+      startAt: { $gte: startDate },
+      endAt: { $lte: endDate },
+      deletedAt: null,
+    })
+      .sort({ startAt: 1 })
+      .populate<{ productId: { _id: any; title: string } }>('productId', 'title')
+      .populate<{ userId: { _id: any; login_email: string } }>('userId', 'login_email')
+      .lean();
+
+    // Group by date (YYYY-MM-DD in UTC)
+    const grouped = new Map<string, CalendarDayBooking[]>();
+
+    for (const booking of bookings) {
+      const dateKey = format(booking.startAt, 'yyyy-MM-dd');
+
+      if (!grouped.has(dateKey)) {
+        grouped.set(dateKey, []);
+      }
+
+      const product = booking.productId as any;
+      const user = booking.userId as any;
+
+      grouped.get(dateKey)!.push({
+        bookingId: booking._id.toString(),
+        startAt: booking.startAt,
+        endAt: booking.endAt,
+        status: booking.status,
+        paymentStatus: booking.paymentStatus,
+        productId: product?._id?.toString() ?? null,
+        productTitle: product?.title ?? null,
+        customerEmail: user?.login_email ?? null,
+        externalCalendarEventId: booking.externalCalendarEventId ?? null,
+      });
+    }
+
+    // Return sorted by date
+    return Array.from(grouped.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, bookings]) => ({ date, bookings }));
   }
 
   /**

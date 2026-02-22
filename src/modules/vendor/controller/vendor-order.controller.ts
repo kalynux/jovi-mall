@@ -4,6 +4,9 @@ import { VendorOrderService } from '../../orders/vendor-order.service';
 import {
     ListOrdersQuerySchema,
     UpdateFulfillmentStatusSchema,
+    UpdateDeliveryAgencySchema,
+    RevokeEntitlementSchema,
+    RestoreEntitlementSchema,
     CreateNoteSchema,
     TimelineQuerySchema
 } from '../validators/vendor-order.validator';
@@ -44,6 +47,7 @@ export class VendorOrderController {
             const filters: any = {};
             if (query.status) filters.status = query.status;
             if (query.paymentStatus) filters.paymentStatus = query.paymentStatus;
+            if (query.orderType) filters.orderType = query.orderType;  // NEW: Order type filter
             if (query.dateFrom) filters.dateFrom = new Date(query.dateFrom);
             if (query.dateTo) filters.dateTo = new Date(query.dateTo);
             if (query.q) filters.q = query.q;
@@ -190,6 +194,136 @@ export class VendorOrderController {
             res.json({
                 success: true,
                 data: notes
+            });
+        } catch (error) {
+            VendorOrderController.handleError(error, res);
+        }
+    }
+
+    /**
+     * PATCH /api/vendor/orders/:id/delivery-agency
+     * 
+     * Update delivery agency for physical order
+     * 
+     * NEW: Phase 1 - Delivery agency assignment
+     * 
+     * BUSINESS RULES:
+     * - Only for physical orders
+     * - Not allowed for delivered/cancelled orders
+     * - Timeline entry created
+     */
+    static async updateDeliveryAgency(req: Request, res: Response): Promise<void> {
+        try {
+            const vendorId = req.auth!.role_entity._id.toString();
+            const orderId = req.params.id;
+
+            // Validate request body
+            const { deliveryAgencyId } = UpdateDeliveryAgencySchema.parse(req.body);
+
+            const order = await vendorOrderService.updateDeliveryAgency(
+                orderId,
+                vendorId,
+                deliveryAgencyId
+            );
+
+            res.json({
+                success: true,
+                data: order,
+                message: 'Delivery agency updated successfully'
+            });
+        } catch (error) {
+            VendorOrderController.handleError(error, res);
+        }
+    }
+
+    /**
+     * GET /api/vendor/orders/:id/entitlements
+     * 
+     * Get digital entitlements for order
+     * 
+     * NEW: Phase 2 - View entitlements
+     */
+    static async getOrderEntitlements(req: Request, res: Response): Promise<void> {
+        try {
+            const vendorId = req.auth!.role_entity._id.toString();
+            const orderId = req.params.id;
+
+            const entitlements = await vendorOrderService.getOrderEntitlements(
+                orderId,
+                vendorId
+            );
+
+            res.json({
+                success: true,
+                data: entitlements,
+                meta: {
+                    count: entitlements.length,
+                    activeCount: entitlements.filter(e => e.isActive).length,
+                    revokedCount: entitlements.filter(e => e.isRevoked).length,
+                    expiredCount: entitlements.filter(e => e.isExpired).length
+                }
+            });
+        } catch (error) {
+            VendorOrderController.handleError(error, res);
+        }
+    }
+
+    /**
+     * POST /api/vendor/entitlements/:id/revoke
+     * 
+     * Revoke digital entitlement
+     * 
+     * NEW: Phase 2 - Revoke customer access
+     */
+    static async revokeEntitlement(req: Request, res: Response): Promise<void> {
+        try {
+            const vendorId = req.auth!.role_entity._id.toString();
+            const entitlementId = req.params.id;
+
+            // Validate request body
+            const { reason } = RevokeEntitlementSchema.parse(req.body);
+
+            const result = await vendorOrderService.revokeEntitlement(
+                entitlementId,
+                vendorId,
+                reason
+            );
+
+            res.json({
+                success: true,
+                data: result,
+                message: 'Entitlement revoked successfully'
+            });
+        } catch (error) {
+            VendorOrderController.handleError(error, res);
+        }
+    }
+
+    /**
+     * POST /api/vendor/entitlements/:id/restore
+     * 
+     * Restore revoked digital entitlement
+     * 
+     * NEW: Phase 2 - Restore customer access
+     */
+    static async restoreEntitlement(req: Request, res: Response): Promise<void> {
+        try {
+            const vendorId = req.auth!.role_entity._id.toString();
+            const entitlementId = req.params.id;
+
+            // Validate request body
+            const { reason } = RestoreEntitlementSchema.parse(req.body);
+
+            const result = await vendorOrderService.restoreEntitlement(
+                entitlementId,
+                vendorId,
+                reason
+            );
+
+            res.json({
+                success: true,
+                data: result,
+                message: 'Entitlement restored successfully'
             });
         } catch (error) {
             VendorOrderController.handleError(error, res);

@@ -4,6 +4,7 @@ import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../cor
 export interface IProductVariant extends IBaseDocument {
   productId: Types.ObjectId;
   sku: string;
+  name?: string; // Variant name (e.g., "PDF", "EPUB", "Basic Service") - required for digital/service
 
   // Variant status for archiving (never hard delete)
   status: 'active' | 'archived';
@@ -37,6 +38,7 @@ export interface IProductVariant extends IBaseDocument {
 const ProductVariantSchema = new Schema<IProductVariant>({
   productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true, index: true },
   sku: { type: String, required: true }, // Index defined below
+  name: { type: String }, // Optional at schema level, validated at service level for digital/service products
 
   status: { type: String, enum: ['active', 'archived'], default: 'active', index: true },
   optionSignature: { type: String, required: true, index: true },

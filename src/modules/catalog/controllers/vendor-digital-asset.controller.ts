@@ -109,6 +109,18 @@ export class VendorDigitalAssetController {
                 return;
             }
 
+            // VALIDATION: Reject if multiple files somehow sent
+            if (req.files && Array.isArray(req.files) && req.files.length > 1) {
+                res.status(400).json({
+                    success: false,
+                    error: {
+                        code: 'INVALID_PAYLOAD',
+                        message: 'Only one digital asset file is allowed per request',
+                    },
+                });
+                return;
+            }
+
             const file = req.file;
 
             // Validate file size

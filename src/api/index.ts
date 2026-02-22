@@ -8,6 +8,8 @@ import { register_all_commands } from '../modules/commands';
 import { googleRoutes } from '../modules/integrations/calendar/google/google.routes';
 import { productBookingRouter } from '../modules/catalog/routes/product-booking.routes';
 import { paymentRouter, paymentWebhookRouter } from '../modules/payments';
+import { bookingPaymentRouter } from '../modules/booking/routes/booking-payment.routes';
+import vendorBookingRoutes from '../modules/booking/routes/vendor-booking.routes';
 
 const router = express.Router();
 
@@ -28,13 +30,19 @@ router.use('/integrations/google', googleRoutes);
 router.use('/products', productBookingRouter);
 router.use('/payments', paymentRouter);  // Payment API endpoints
 
+// Booking payment routes (customer-facing: initiate payment, check status)
+router.use('/bookings', bookingPaymentRouter);
+
 // Vendor routes
 import vendorRoutes from '../modules/vendor/routes';
 router.use('/vendor', vendorRoutes);
 
+// Vendor booking management routes (bookings, calendar view, reschedule, cancel, etc.)
+router.use('/vendor/bookings', vendorBookingRoutes);
+
 // Store routes (also under /vendor path)
 import storeRoutes from '../modules/store/routes';
-router.use('/vendor', storeRoutes);
+router.use('/vendor/store', storeRoutes);
 
 // Vendor product management routes
 import vendorProductsRoutes from '../modules/catalog/routes/vendor-products.routes';

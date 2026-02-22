@@ -7,6 +7,8 @@ export interface CreateProductInput {
   vendorId: string;
   type: 'physical' | 'digital' | 'service';
   title: string;
+  category: string;
+  tags?: string[];
 }
 
 /**
@@ -46,6 +48,8 @@ export class ProductDraftService {
       title: trimmedTitle,
       description: '',
       slug,
+      category: input.category,
+      tags: input.tags ?? [],
       seo: {},
       hasVariants: false,
       deletedAt: null,

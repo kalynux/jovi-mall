@@ -28,6 +28,9 @@ export interface IProduct extends IBaseDocument {
   description: string;
   slug: string;
 
+  category: string;
+  tags: string[];
+
   seo: {
     title?: string;
     description?: string;
@@ -62,6 +65,9 @@ const ProductSchema = new Schema<IProduct>({
   title: { type: String, required: true },
   description: { type: String, default: '' },
   slug: { type: String, required: true }, // Composite index with vendorId below
+
+  category: { type: String, required: true, index: true },
+  tags: [{ type: String }],
 
   seo: {
     title: { type: String },

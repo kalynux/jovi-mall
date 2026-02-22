@@ -11,6 +11,7 @@ export const ListOrdersQuerySchema = z.object({
     // Filters
     status: z.enum(['pending', 'processing', 'shipped', 'delivered', 'fulfilled', 'cancelled']).optional(),
     paymentStatus: z.enum(['pending', 'AWAITING_PAYMENT', 'paid', 'failed', 'refunded']).optional(),
+    orderType: z.enum(['physical', 'digital']).optional(),  // NEW: Filter by order type
     dateFrom: z.string().datetime().optional(),  // ISO 8601
     dateTo: z.string().datetime().optional(),    // ISO 8601
     q: z.string().max(100).optional(),  // Search query
@@ -32,6 +33,32 @@ export const UpdateFulfillmentStatusSchema = z.object({
 });
 
 export type UpdateFulfillmentStatusDto = z.infer<typeof UpdateFulfillmentStatusSchema>;
+
+// Update delivery agency (physical orders only)
+export const UpdateDeliveryAgencySchema = z.object({
+    deliveryAgencyId: z.string()
+        .regex(/^[0-9a-fA-F]{24}$/, 'Invalid delivery agency ID')
+});
+
+export type UpdateDeliveryAgencyDto = z.infer<typeof UpdateDeliveryAgencySchema>;
+
+// Revoke digital entitlement (digital orders only)
+export const RevokeEntitlementSchema = z.object({
+    reason: z.string()
+        .min(10, 'Reason must be at least 10 characters')
+        .max(500, 'Reason cannot exceed 500 characters')
+});
+
+export type RevokeEntitlementDto = z.infer<typeof RevokeEntitlementSchema>;
+
+// Restore digital entitlement (digital orders only)
+export const RestoreEntitlementSchema = z.object({
+    reason: z.string()
+        .min(10, 'Reason must be at least 10 characters')
+        .max(500, 'Reason cannot exceed 500 characters')
+});
+
+export type RestoreEntitlementDto = z.infer<typeof RestoreEntitlementSchema>;
 
 // Create note
 export const CreateNoteSchema = z.object({

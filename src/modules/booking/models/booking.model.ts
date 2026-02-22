@@ -2,7 +2,7 @@ import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
 import { BookingStatus } from '../types/booking.types';
 
-export type BookingPaymentStatus = 
+export type BookingPaymentStatus =
   | 'unpaid'
   | 'pending'
   | 'paid'
@@ -22,11 +22,12 @@ export interface IBooking extends IBaseDocument {
   metadata?: Record<string, any>;
   cancelledAt?: Date;
   cancelledReason?: string;
-  
+
   // Payment tracking
   paymentStatus: BookingPaymentStatus;
   paymentMethod?: BookingPaymentMethod;
   paymentTransactionId?: Types.ObjectId;
+  paidAt?: Date; // Set when cash payment is manually confirmed by vendor
   priceSnapshot: number;
   currency: string;
   requiresPayment: boolean;
@@ -63,7 +64,7 @@ const BookingSchema = new Schema<IBooking>(
     },
     status: {
       type: String,
-      enum: Object.values(BookingStatus),
+      enum: [...Object.values(BookingStatus)],
       required: true,
       default: BookingStatus.PENDING,
       index: true,
@@ -82,7 +83,7 @@ const BookingSchema = new Schema<IBooking>(
     cancelledReason: {
       type: String,
     },
-    
+
     // Payment tracking
     paymentStatus: {
       type: String,
@@ -99,6 +100,9 @@ const BookingSchema = new Schema<IBooking>(
       type: Schema.Types.ObjectId,
       ref: 'PaymentTransaction',
       index: true,
+    },
+    paidAt: {
+      type: Date,
     },
     priceSnapshot: {
       type: Number,
@@ -127,7 +131,7 @@ BookingSchema.index({ productId: 1, startAt: 1, status: 1 });
 BookingSchema.index({ vendorId: 1, paymentStatus: 1 }); // Vendor payment tracking
 
 // Pre-save hook: Auto-mark free bookings as paid
-BookingSchema.pre('save', function(next) {
+BookingSchema.pre('save', function (next) {
   if (this.isNew && !this.requiresPayment) {
     this.paymentStatus = 'paid';
   }

@@ -22,7 +22,7 @@ router.use(requireRole(['vendor']));
  * 
  * Get authenticated vendor's store profile
  */
-router.get('/store', StoreProfileController.getStore);
+router.get('/', StoreProfileController.getStore);
 
 /**
  * PATCH /api/vendor/store
@@ -37,7 +37,7 @@ router.get('/store', StoreProfileController.getStore);
  * 
  * NOT allowed: slug, country (immutable)
  */
-router.patch('/store', StoreProfileController.updateStore);
+router.patch('/', StoreProfileController.updateStore);
 
 /**
  * PATCH /api/vendor/store/status
@@ -46,6 +46,6 @@ router.patch('/store', StoreProfileController.updateStore);
  * 
  * Body: { isOpen, version }
  */
-router.patch('/store/status', StoreProfileController.updateStoreStatus);
+router.patch('/status', StoreProfileController.updateStoreStatus);
 
 export default router;

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { ZodError } from 'zod';
 import { AppError, NotFoundError, ForbiddenError } from '../../../core/errors';
 import { ProductRepositoryMongo } from '../repositories/mongo/product.repository.mongo';
+import { VariantRepositoryMongo } from '../repositories/mongo/variant.repository.mongo';
 import { ProductDraftService } from '../domain/services/ProductDraftService';
 import { ProductUpdateService } from '../domain/services/ProductUpdateService';
 import { ProductArchiveService } from '../domain/services/ProductArchiveService';
@@ -21,13 +22,14 @@ import {
 
 // Initialize services
 const productRepository = new ProductRepositoryMongo();
+const variantRepository = new VariantRepositoryMongo();
 const slugService = new SlugService(productRepository);
 const productDraftService = new ProductDraftService(productRepository, slugService);
-const productUpdateService = new ProductUpdateService(productRepository, slugService);
+const productUpdateService = new ProductUpdateService(productRepository, variantRepository, slugService);
 const productArchiveService = new ProductArchiveService(productRepository);
 const productListService = new ProductListService(productRepository);
 const productDuplicateService = new ProductDuplicateService(productRepository, slugService);
-const productStatusValidationService = new ProductStatusValidationService();
+const productStatusValidationService = new ProductStatusValidationService(variantRepository);
 const productBulkOperationsService = new ProductBulkOperationsService(
     productRepository,
     productStatusValidationService
@@ -124,6 +126,8 @@ export class VendorProductController {
                 vendorId,
                 type: input.type,
                 title: input.title,
+                category: input.category,
+                tags: input.tags,
             });
 
             res.status(201).json({
@@ -151,6 +155,8 @@ export class VendorProductController {
             const product = await productUpdateService.execute(id, vendorId, {
                 title: input.title,
                 description: input.description,
+                category: input.category,
+                tags: input.tags,
                 seoTitle: input.seoTitle,
                 seoDescription: input.seoDescription,
                 digitalConfig: input.digitalConfig,

@@ -5,6 +5,7 @@ export interface Variant {
   id: string;
   productId: string;
   sku: string;
+  name?: string; // Variant name (required for digital/service)
   status: 'active' | 'archived';
   optionSignature: string;
   price: number;
@@ -33,6 +34,7 @@ export class VariantMapper implements IMapper<Variant, IProductVariant> {
       id: doc._id.toString(),
       productId: doc.productId.toString(),
       sku: doc.sku,
+      name: doc.name,
       status: doc.status,
       optionSignature: doc.optionSignature,
       price: doc.price,

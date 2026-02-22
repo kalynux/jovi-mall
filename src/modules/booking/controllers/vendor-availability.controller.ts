@@ -18,7 +18,9 @@ const CreateAvailabilityRuleSchema = z.object({
     isActive: z.boolean().default(false), // Draft by default
 });
 
-const UpdateAvailabilityRuleSchema = CreateAvailabilityRuleSchema.partial();
+// Update schema: exclude isActive (use toggle endpoint instead)
+const UpdateAvailabilityRuleSchema = CreateAvailabilityRuleSchema.omit({ isActive: true }).partial();
+
 
 /**
  * VendorAvailabilityController
@@ -174,6 +176,41 @@ export class VendorAvailabilityController {
             VendorAvailabilityController.handleError(error, res);
         }
     }
+
+    /**
+     * PATCH /api/vendor/availability-rules/:ruleId/toggle
+     * Toggle availability rule active state
+     */
+    static async toggleRule(req: Request, res: Response): Promise<void> {
+        try {
+            const vendorId = req.auth!.role_entity._id.toString();
+            const { ruleId } = req.params;
+
+            const rule = await AvailabilityRule.findOne({ _id: ruleId, deletedAt: null });
+            if (!rule) {
+                res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Availability rule not found' } });
+                return;
+            }
+
+            if (rule.vendorId.toString() !== vendorId) {
+                res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Unauthorized' } });
+                return;
+            }
+
+            // Toggle isActive
+            rule.isActive = !rule.isActive;
+            await rule.save();
+
+            res.json({
+                success: true,
+                data: rule,
+                message: `Availability rule ${rule.isActive ? 'activated' : 'deactivated'}`
+            });
+        } catch (error) {
+            VendorAvailabilityController.handleError(error, res);
+        }
+    }
+
 
     /**
      * DELETE /api/vendor/availability-rules/:ruleId

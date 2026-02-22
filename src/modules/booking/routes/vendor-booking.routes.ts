@@ -1,41 +1,72 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
 import { VendorBookingController } from '../controllers/vendor-booking.controller';
-import { VendorAvailabilityController } from '../controllers/vendor-availability.controller';
 
 const router = Router();
 
-// Apply authentication
+// Apply authentication & vendor role guard to all routes below
 router.use(requireAuth);
 router.use(requireRole(['vendor']));
 
 /**
- * BOOKING MANAGEMENT
+ * BOOKING LISTING & VIEWS
+ *
+ * IMPORTANT: /bookings/calendar MUST be declared before /bookings/:id
+ * to prevent Express treating 'calendar' as a dynamic :id param.
  */
+
+/**
+ * GET /api/vendor/bookings/calendar
+ * Calendar-grouped view of bookings for a date range.
+ * Query: startDate (ISO, required), endDate (ISO, required). Max range: 90 days.
+ */
+router.get('/calendar', VendorBookingController.getCalendarView);
 
 /**
  * GET /api/vendor/bookings
- * List all bookings for vendor
+ * List vendor bookings with filtering and pagination.
+ * Query: status, paymentStatus, productId, startDate, endDate, page, limit.
  */
-router.get('/bookings', VendorBookingController.listBookings);
+router.get('/', VendorBookingController.listBookings);
 
 /**
- * GET /api/vendor/bookings/:id  
- * Get a single booking
+ * GET /api/vendor/bookings/:id
+ * Get a single booking by ID.
  */
-router.get('/bookings/:id', VendorBookingController.getBooking);
+router.get('/:id', VendorBookingController.getBooking);
+
+/**
+ * BOOKING MUTATIONS
+ */
 
 /**
  * PATCH /api/vendor/bookings/:id/status
- * Update booking status (with state machine validation)
+ * Transition booking status (state machine enforced, with calendar sync).
+ * Body: { status: 'pending' | 'confirmed' | 'completed' | 'no-show' | 'cancelled' }
  */
-router.patch('/bookings/:id/status', VendorBookingController.updateBookingStatus);
+router.patch('/:id/status', VendorBookingController.updateBookingStatus);
 
 /**
- * AVAILABILITY RULES
+ * PATCH /api/vendor/bookings/:id/payment-status
+ * Mark a cash booking as paid.
+ * Rules: paymentMethod must be 'cash' or unset, booking must be unpaid.
  */
+router.patch('/:id/payment-status', VendorBookingController.markAsPaid);
 
-// Note: Availability routes are organized by product
-// See vendor-products.routes.ts for product-specific availability routes
+/**
+ * PATCH /api/vendor/bookings/:id/reschedule
+ * Reschedule to a new slot. The vendor must have locked the slot first.
+ * Body: { newSlotId: string }
+ * Eligibility: pending or confirmed bookings only.
+ */
+router.patch('/:id/reschedule', VendorBookingController.rescheduleBooking);
+
+/**
+ * POST /api/vendor/bookings/:id/cancel
+ * Cancel a booking with an optional reason.
+ * Returns 409 on double-cancel or terminal state.
+ * Body: { reason?: string }
+ */
+router.post('/:id/cancel', VendorBookingController.cancelBooking);
 
 export default router;

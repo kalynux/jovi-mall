@@ -1,5 +1,6 @@
 import { NotFoundError, ForbiddenError } from '../../../../core/errors';
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
+import { IVariantRepository } from '../../repositories/interfaces/variant.repository.interface';
 import { Product } from '../../repositories/mappers/product.mapper';
 import { SlugService } from './SlugService';
 
@@ -23,6 +24,10 @@ export interface UpdateProductCommand {
   description?: string;
   images?: string[]; // Full array replacement
 
+  // Categorization
+  category?: string;
+  tags?: string[];
+
   // SEO
   seoTitle?: string;
   seoDescription?: string;
@@ -40,6 +45,7 @@ export interface UpdateProductCommand {
 export class ProductUpdateService {
   constructor(
     private readonly productRepository: IProductRepository,
+    private readonly variantRepository: IVariantRepository,
     private readonly slugService: SlugService
   ) { }
 
@@ -90,8 +96,16 @@ export class ProductUpdateService {
       updates.description = command.description;
     }
 
-    // NOTE: Images are managed through ProductMedia model separately
-    // Not handled here to maintain proper relational structure
+    if (command.category !== undefined) {
+      updates.category = command.category;
+    }
+
+    if (command.tags !== undefined) {
+      updates.tags = command.tags;
+    }
+
+    // NOTE: Images are managed through ProductMedia model separately;
+    // not handled here to maintain proper relational structure.
 
     // SEO fields
     if (command.seoTitle !== undefined || command.seoDescription !== undefined) {
@@ -108,6 +122,35 @@ export class ProductUpdateService {
         ...product.digitalConfig,
         ...command.digitalConfig,
       } as any;
+
+      // AUTO-CREATE DEFAULT VARIANT FOR DIGITAL PRODUCTS
+      // IDEMPOTENT: Only create if product is draft, no variants exist, and no defaultVariantId
+      if (
+        product.status === 'draft' &&
+        !product.hasVariants &&
+        !product.defaultVariantId
+      ) {
+        const defaultVariant = await this.variantRepository.create({
+          productId: productId,
+          sku: `${product.slug}-default`,
+          name: 'Default', // Default variant name for digital products
+          status: 'active',
+          optionSignature: '',
+          price: 0, // Must be set before publishing
+          stock: 0,
+          isInfiniteStock: true, // Digital products have infinite stock
+          lowStockThreshold: null,
+          allowOversell: false,
+          optionValueIds: [],
+          fileIds: [],
+          deletedAt: null,
+          purgeAt: null,
+        });
+
+        // Mark product as having variants
+        updates.hasVariants = true;
+        updates.defaultVariantId = defaultVariant.id;
+      }
     }
 
     // Service config updates (merge with existing)
@@ -116,6 +159,35 @@ export class ProductUpdateService {
         ...product.serviceConfig,
         ...command.serviceConfig,
       } as any;
+
+      // AUTO-CREATE DEFAULT VARIANT FOR SERVICE PRODUCTS
+      // IDEMPOTENT: Only create if product is draft, no variants exist, and no defaultVariantId
+      if (
+        product.status === 'draft' &&
+        !product.hasVariants &&
+        !product.defaultVariantId
+      ) {
+        const defaultVariant = await this.variantRepository.create({
+          productId: productId,
+          sku: `${product.slug}-default`,
+          name: 'Standard Service', // Default variant name for service products
+          status: 'active',
+          optionSignature: '',
+          price: 0, // Must be set before publishing
+          stock: 0,
+          isInfiniteStock: true, // Services have infinite stock
+          lowStockThreshold: null,
+          allowOversell: false,
+          optionValueIds: [],
+          fileIds: [],
+          deletedAt: null,
+          purgeAt: null,
+        });
+
+        // Mark product as having variants
+        updates.hasVariants = true;
+        updates.defaultVariantId = defaultVariant.id;
+      }
     }
 
     // Apply updates

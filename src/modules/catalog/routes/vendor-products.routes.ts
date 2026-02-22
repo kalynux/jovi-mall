@@ -235,6 +235,79 @@ router.delete('/:productId/variants/:variantId', VendorVariantController.archive
 
 /**
  * ==========================================
+ * PRODUCT OPTIONS (Physical Products)
+ * ==========================================
+ */
+
+import { VendorOptionController } from '../controllers/vendor-option.controller';
+
+/**
+ * POST /api/vendor/products/:productId/options
+ * Create a new option for a product
+ * 
+ * Body: { name, position? }
+ */
+router.post('/:productId/options', VendorOptionController.createOption);
+
+/**
+ * GET /api/vendor/products/:productId/options
+ * List all options for a product
+ */
+router.get('/:productId/options', VendorOptionController.listOptions);
+
+/**
+ * PATCH /api/vendor/products/:productId/options/:optionId
+ * Update an option
+ * 
+ * Body: { name?, position? }
+ */
+router.patch('/:productId/options/:optionId', VendorOptionController.updateOption);
+
+/**
+ * PUT /api/vendor/products/:productId/options/reorder
+ * Reorder options
+ * 
+ * Body: { optionIds: string[] }
+ */
+router.put('/:productId/options/reorder', VendorOptionController.reorderOptions);
+
+/**
+ * DELETE /api/vendor/products/:productId/options/:optionId
+ * Delete an option (cascade deletes its values)
+ */
+router.delete('/:productId/options/:optionId', VendorOptionController.deleteOption);
+
+/**
+ * POST /api/vendor/products/:productId/options/:optionId/values
+ * Create a single option value
+ * 
+ * Body: { value }
+ */
+router.post('/:productId/options/:optionId/values', VendorOptionController.createOptionValue);
+
+/**
+ * POST /api/vendor/products/:productId/options/:optionId/values/bulk
+ * Bulk create option values
+ * 
+ * Body: { values: string[] }
+ */
+router.post('/:productId/options/:optionId/values/bulk', VendorOptionController.bulkCreateOptionValues);
+
+/**
+ * GET /api/vendor/products/:productId/options/:optionId/values
+ * List all values for an option
+ */
+router.get('/:productId/options/:optionId/values', VendorOptionController.listOptionValues);
+
+/**
+ * DELETE /api/vendor/products/:productId/options/:optionId/values/:valueId
+ * Delete an option value
+ */
+router.delete('/:productId/options/:optionId/values/:valueId', VendorOptionController.deleteOptionValue);
+
+
+/**
+ * ==========================================
  * SHIPPING CONFIGURATION (Physical Products)
  * ==========================================
  */
@@ -295,6 +368,13 @@ router.patch('/availability-rules/:ruleId', VendorAvailabilityController.updateR
  * Activate (publish) availability rule
  */
 router.patch('/availability-rules/:ruleId/activate', VendorAvailabilityController.activateRule);
+
+/**
+ * PATCH /api/vendor/availability-rules/:ruleId/toggle
+ * Toggle availability rule active state
+ */
+router.patch('/availability-rules/:ruleId/toggle', VendorAvailabilityController.toggleRule);
+
 
 /**
  * DELETE /api/vendor/availability-rules/:ruleId

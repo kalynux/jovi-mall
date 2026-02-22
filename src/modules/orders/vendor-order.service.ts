@@ -368,4 +368,354 @@ export class VendorOrderService {
             createdAt: note.created_at
         }));
     }
+
+    /**
+     * Update delivery agency for physical order
+     * 
+     * NEW: Phase 1 - Delivery agency assignment
+     * 
+     * RULES:
+     * - Only for physical orders
+     * - Only for orders not yet delivered or cancelled
+     * - Agency must exist (validated)
+     * - Updates all order items
+     * - Logs to timeline
+     */
+    async updateDeliveryAgency(
+        orderId: string,
+        vendorId: string,
+        deliveryAgencyId: string
+    ): Promise<any> {
+        // 1. Validate order ownership and type
+        const order = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
+
+        if (!order) {
+            throw new NotFoundError('Order not found');
+        }
+
+        if (order.order_type !== 'physical') {
+            throw new ValidationError('Delivery agency can only be updated for physical orders');
+        }
+
+        // 2. Check order not yet delivered or cancelled
+        if (['delivered', 'cancelled'].includes(order.fulfillment_status)) {
+            throw new UnprocessableEntityError(
+                `Cannot update delivery agency: order is ${order.fulfillment_status}`
+            );
+        }
+
+        // 3. Validate delivery agency exists
+        // Note: We're doing a simple existence check. Add .findOne({ isActive: true }) if needed
+        const { default: mongoose } = await import('mongoose');
+
+        if (!mongoose.connection.db) {
+            throw new Error('Database connection not available');
+        }
+
+        const agencyExists = await mongoose.connection.db.collection('deliveryagencies').findOne({
+            _id: new mongoose.Types.ObjectId(deliveryAgencyId)
+        });
+
+        if (!agencyExists) {
+            throw new NotFoundError('Delivery agency not found');
+        }
+
+        // 4. Update all order items with new agency
+        const updatedOrder = await this.vendorOrderRepo.updateDeliveryAgency(
+            orderId,
+            vendorId,
+            deliveryAgencyId
+        );
+
+        if (!updatedOrder) {
+            throw new NotFoundError('Order not found after update');
+        }
+
+        // 5. Append timeline entry
+        await this.timelineRepo.appendEvent({
+            orderId,
+            eventType: 'delivery.agency_updated',
+            description: `Delivery agency changed to ${agencyExists.name || deliveryAgencyId}`,
+            metadata: {
+                newAgencyId: deliveryAgencyId,
+                agencyName: agencyExists.name || 'Unknown',
+                previousAgencyId: order.items[0]?.delivery?.agency_id?.toString() || null
+            },
+            actorType: 'vendor',
+            actorId: vendorId
+        });
+
+        // 6. Return updated order
+        return this.getOrderDetails(orderId, vendorId);
+    }
+
+    /**
+     * Get digital entitlements for an order
+     * 
+     * NEW: Phase 2 - Digital entitlement viewing
+     * 
+     * RULES:
+     * - Only works for digital orders
+     * - Shows download stats and status
+     * - Customer information included
+     */
+    async getOrderEntitlements(
+        orderId: string,
+        vendorId: string
+    ): Promise<any[]> {
+        // 1. Validate order ownership and type
+        const order = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
+
+        if (!order) {
+            throw new NotFoundError('Order not found');
+        }
+
+        if (order.order_type !== 'digital') {
+            throw new ValidationError('Entitlements are only available for digital orders');
+        }
+
+        // 2. Fetch entitlements
+        const { default: mongoose } = await import('mongoose');
+
+        if (!mongoose.connection.db) {
+            throw new Error('Database connection not available');
+        }
+
+        const entitlements = await mongoose.connection.db
+            .collection('customerdigitalentitlements')
+            .aggregate([
+                {
+                    $match: {
+                        orderId: order._id,
+                        vendorId: new mongoose.Types.ObjectId(vendorId),
+                        deletedAt: null
+                    }
+                },
+                {
+                    $lookup: {
+                        from: 'products',
+                        localField: 'productId',
+                        foreignField: '_id',
+                        as: 'product'
+                    }
+                },
+                {
+                    $lookup: {
+                        from: 'files',
+                        localField: 'assetId',
+                        foreignField: '_id',
+                        as: 'asset'
+                    }
+                },
+                {
+                    $unwind: { path: '$product', preserveNullAndEmptyArrays: true }
+                },
+                {
+                    $unwind: { path: '$asset', preserveNullAndEmptyArrays: true }
+                }
+            ])
+            .toArray();
+
+        const now = new Date();
+
+        // 3. Transform to vendor-friendly DTO
+        return entitlements.map((e: any) => {
+            const isExpired = e.expiresAt !== null && e.expiresAt < now;
+            const isRevoked = e.revokedAt !== null;
+            const hasDownloadsRemaining =
+                e.maxDownloads === null || e.downloadsUsed < e.maxDownloads;
+            const isActive = !isExpired && !isRevoked && hasDownloadsRemaining;
+
+            return {
+                id: e._id.toString(),
+                orderItemId: e.orderItemId.toString(),
+                productId: e.productId.toString(),
+                productTitle: e.product?.title || 'Unknown Product',
+                assetId: e.assetId.toString(),
+                assetName: e.asset?.originalName || 'Unknown Asset',
+                customerId: e.customerId.toString(),
+
+                // Download tracking
+                downloadsUsed: e.downloadsUsed,
+                maxDownloads: e.maxDownloads,
+                downloadsRemaining: e.maxDownloads === null
+                    ? 'unlimited'
+                    : Math.max(0, e.maxDownloads - e.downloadsUsed),
+
+                // Status
+                grantedAt: e.createdAt,
+                expiresAt: e.expiresAt,
+                revokedAt: e.revokedAt,
+                isExpired,
+                isRevoked,
+                isActive,
+
+                // Metadata
+                lastDownloadAt: e.lastDownloadAt || null
+            };
+        });
+    }
+
+    /**
+     * Revoke digital entitlement
+     * 
+     * NEW: Phase 2 - Revoke customer access
+     * 
+     * RULES:
+     * - Vendor must own the entitlement
+     * - Cannot revoke already-revoked entitlement
+     * - Reason required for audit trail
+     * - Timeline entry created
+     */
+    async revokeEntitlement(
+        entitlementId: string,
+        vendorId: string,
+        reason: string
+    ): Promise<any> {
+        // 1. Validate entitlement exists and vendor owns it
+        const { default: mongoose } = await import('mongoose');
+
+        if (!mongoose.connection.db) {
+            throw new Error('Database connection not available');
+        }
+
+        const entitlement = await mongoose.connection.db
+            .collection('customerdigitalentitlements')
+            .findOne({
+                _id: new mongoose.Types.ObjectId(entitlementId),
+                vendorId: new mongoose.Types.ObjectId(vendorId),
+                deletedAt: null
+            });
+
+        if (!entitlement) {
+            throw new NotFoundError('Entitlement not found');
+        }
+
+        // 2. Check not already revoked
+        if (entitlement.revokedAt !== null) {
+            throw new UnprocessableEntityError('Entitlement is already revoked');
+        }
+
+        // 3. Revoke entitlement
+        await mongoose.connection.db
+            .collection('customerdigitalentitlements')
+            .updateOne(
+                { _id: new mongoose.Types.ObjectId(entitlementId) },
+                {
+                    $set: {
+                        revokedAt: new Date(),
+                        updatedAt: new Date()
+                    }
+                }
+            );
+
+        // 4. Append timeline entry to order
+        await this.timelineRepo.appendEvent({
+            orderId: entitlement.orderId.toString(),
+            eventType: 'entitlement.revoked',
+            description: `Digital entitlement revoked: ${reason}`,
+            metadata: {
+                entitlementId: entitlementId,
+                productId: entitlement.productId.toString(),
+                customerId: entitlement.customerId.toString(),
+                reason
+            },
+            actorType: 'vendor',
+            actorId: vendorId
+        });
+
+        // 5. Return revoked entitlement info
+        return {
+            id: entitlementId,
+            revokedAt: new Date(),
+            reason,
+            message: 'Entitlement revoked successfully'
+        };
+    }
+
+    /**
+     * Restore revoked digital entitlement
+     * 
+     * NEW: Phase 2 - Restore customer access
+     * 
+     * RULES:
+     * - Vendor must own the entitlement
+     * - Can only restore revoked entitlements
+     * - Cannot restore expired entitlements
+     * - Reason required for audit trail
+     * - Timeline entry created
+     */
+    async restoreEntitlement(
+        entitlementId: string,
+        vendorId: string,
+        reason: string
+    ): Promise<any> {
+        // 1. Validate entitlement exists and vendor owns it
+        const { default: mongoose } = await import('mongoose');
+
+        if (!mongoose.connection.db) {
+            throw new Error('Database connection not available');
+        }
+
+        const entitlement = await mongoose.connection.db
+            .collection('customerdigitalentitlements')
+            .findOne({
+                _id: new mongoose.Types.ObjectId(entitlementId),
+                vendorId: new mongoose.Types.ObjectId(vendorId),
+                deletedAt: null
+            });
+
+        if (!entitlement) {
+            throw new NotFoundError('Entitlement not found');
+        }
+
+        // 2. Check is currently revoked
+        if (entitlement.revokedAt === null) {
+            throw new UnprocessableEntityError('Entitlement is not revoked');
+        }
+
+        // 3. Check not expired
+        if (entitlement.expiresAt !== null && entitlement.expiresAt < new Date()) {
+            throw new UnprocessableEntityError(
+                'Cannot restore expired entitlement. Entitlement expired on ' +
+                new Date(entitlement.expiresAt).toISOString()
+            );
+        }
+
+        // 4. Restore entitlement
+        await mongoose.connection.db
+            .collection('customerdigitalentitlements')
+            .updateOne(
+                { _id: new mongoose.Types.ObjectId(entitlementId) },
+                {
+                    $set: {
+                        revokedAt: null,
+                        updatedAt: new Date()
+                    }
+                }
+            );
+
+        // 5. Append timeline entry
+        await this.timelineRepo.appendEvent({
+            orderId: entitlement.orderId.toString(),
+            eventType: 'entitlement.restored',
+            description: `Digital entitlement restored: ${reason}`,
+            metadata: {
+                entitlementId: entitlementId,
+                productId: entitlement.productId.toString(),
+                customerId: entitlement.customerId.toString(),
+                reason
+            },
+            actorType: 'vendor',
+            actorId: vendorId
+        });
+
+        // 6. Return restored entitlement info
+        return {
+            id: entitlementId,
+            restoredAt: new Date(),
+            reason,
+            message: 'Entitlement restored successfully'
+        };
+    }
 }

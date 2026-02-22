@@ -8,6 +8,7 @@ import { z } from 'zod';
 
 export const CreateVariantSchema = z.object({
     sku: z.string().min(1, 'SKU is required').max(100, 'SKU must be at most 100 characters'),
+    name: z.string().min(1, 'Name is required').max(100, 'Name must be at most 100 characters').optional(), // Required for digital/service, validated in controller
     price: z.number().min(0, 'Price must be positive'),
     compareAtPrice: z.number().min(0).optional(),
     stock: z.number().int().min(0, 'Stock must be non-negative').default(0),
@@ -22,6 +23,7 @@ export const CreateVariantSchema = z.object({
 
 export const UpdateVariantSchema = z.object({
     sku: z.string().min(1).max(100).optional(),
+    name: z.string().min(1).max(100).optional(),
     price: z.number().min(0).optional(),
     compareAtPrice: z.number().min(0).optional(),
     stock: z.number().int().min(0).optional(),

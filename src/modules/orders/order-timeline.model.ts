@@ -22,7 +22,10 @@ export type TimelineEventType =
     | 'order.created'
     | 'payment.updated'
     | 'fulfillment.updated'
+    | 'delivery.agency_updated'      // NEW: Phase 1 - Delivery agency assignment
     | 'note.added'
+    | 'entitlement.revoked'          // NEW: Phase 2 - Digital entitlement revoked
+    | 'entitlement.restored'         // NEW: Phase 2 - Digital entitlement restored
     | 'system.action';
 
 export type TimelineActorType = 'vendor' | 'customer' | 'system' | 'admin';
@@ -60,7 +63,16 @@ const OrderTimelineSchema = new Schema<IOrderTimeline>({
     },
     event_type: {
         type: String,
-        enum: ['order.created', 'payment.updated', 'fulfillment.updated', 'note.added', 'system.action'],
+        enum: [
+            'order.created',
+            'payment.updated',
+            'fulfillment.updated',
+            'delivery.agency_updated',
+            'note.added',
+            'entitlement.revoked',
+            'entitlement.restored',
+            'system.action'
+        ],
         required: true
     },
     description: {

@@ -46,6 +46,8 @@ export class ProductDuplicateService {
             title: newTitle,
             description: originalProduct.description || '',
             slug: newSlug,
+            category: originalProduct.category,
+            tags: [...(originalProduct.tags ?? [])],
             seo: { ...originalProduct.seo },
             hasVariants: originalProduct.hasVariants,
             deletedAt: null,

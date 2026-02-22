@@ -110,6 +110,30 @@ router.post('/orders/:id/notes', VendorOrderController.addNote);
 router.get('/orders/:id/notes', VendorOrderController.getNotes);
 
 /**
+ * PATCH /api/vendor/orders/:id/delivery-agency
+ * Update delivery agency for physical order (NEW: Phase 1)
+ */
+router.patch('/orders/:id/delivery-agency', VendorOrderController.updateDeliveryAgency);
+
+/**
+ * GET /api/vendor/orders/:id/entitlements
+ * Get digital entitlements for order (NEW: Phase 2)
+ */
+router.get('/orders/:id/entitlements', VendorOrderController.getOrderEntitlements);
+
+/**
+ * POST /api/vendor/entitlements/:id/revoke
+ * Revoke digital entitlement (NEW: Phase 2)
+ */
+router.post('/entitlements/:id/revoke', VendorOrderController.revokeEntitlement);
+
+/**
+ * POST /api/vendor/entitlements/:id/restore
+ * Restore revoked digital entitlement (NEW: Phase 2)
+ */
+router.post('/entitlements/:id/restore', VendorOrderController.restoreEntitlement);
+
+/**
  * ==========================================
  * NOTIFICATIONS & PREFERENCES
  * ==========================================

@@ -1,5 +1,5 @@
 import { OrderModel, IOrder } from './order.model';
-import { FilterQuery } from 'mongoose';
+import { FilterQuery, Types } from 'mongoose';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
 
 /**
@@ -20,6 +20,7 @@ import { PaginationOptions, Page } from '../../core/repositories/base.repository
 export interface OrderFilters {
     status?: string;
     paymentStatus?: string;
+    orderType?: 'physical' | 'digital';  // NEW: Filter by order type
     dateFrom?: Date;
     dateTo?: Date;
     q?: string;  // Search order number or customer email
@@ -47,6 +48,11 @@ export class VendorOrderRepository {
 
         if (filters.paymentStatus) {
             query.payment_status = filters.paymentStatus;
+        }
+
+        // NEW: Order type filter
+        if (filters.orderType) {
+            query.order_type = filters.orderType;
         }
 
         if (filters.dateFrom || filters.dateTo) {
@@ -127,6 +133,39 @@ export class VendorOrderRepository {
                 },
                 {
                     $set: { fulfillment_status: newStatus }
+                },
+                { new: true }
+            )
+            .lean()
+            .exec() as IOrder | null;
+    }
+
+    /**
+     * Update delivery agency for all items in an order
+     * 
+     * NEW: For Phase 1 - Physical order delivery agency assignment
+     * 
+     * RULES:
+     * - Updates all order items with new delivery agency
+     * - Ownership enforced in query
+     * - Returns updated order or null if not found/not owned
+     */
+    async updateDeliveryAgency(
+        orderId: string,
+        vendorId: string,
+        deliveryAgencyId: string
+    ): Promise<IOrder | null> {
+        return await OrderModel
+            .findOneAndUpdate(
+                {
+                    _id: orderId,
+                    vendor_id: vendorId  // CRITICAL: Ownership check
+                },
+                {
+                    $set: {
+                        'items.$[].delivery.agency_id': new Types.ObjectId(deliveryAgencyId),
+                        updated_at: new Date()
+                    }
                 },
                 { new: true }
             )

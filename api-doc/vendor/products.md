@@ -17,6 +17,7 @@ Complete API reference for managing products in the multi-vendor ecommerce platf
 - [**Product Creation Workflows**](./product-update.md) (Step-by-Step Guides for Physical/Digital/Service)
 - [Bulk Operations](#bulk-operations)
 - [Digital Product Management](#digital-product-management)
+- [Product Options](#product-options)
 - [Service Product Management](#service-product-management)
 - [Error Codes](#error-codes)
 - [Type-Specific Fields](#type-specific-fields)
@@ -57,6 +58,8 @@ GET /api/vendor/products
       "title": "Blue T-Shirt",
       "description": "Comfortable cotton t-shirt",
       "slug": "blue-t-shirt",
+      "category": "Apparel",
+      "tags": ["cotton", "summer", "casual"],
       "seo": {
         "title": "Buy Blue T-Shirt Online",
         "description": "High quality cotton t-shirt in blue"
@@ -96,6 +99,8 @@ GET /api/vendor/products/:id
     "title": "eBook: Node.js Guide",
     "description": "Complete guide to Node.js development",
     "slug": "ebook-nodejs-guide",
+    "category": "eBooks",
+    "tags": ["nodejs", "programming", "backend"],
     "digitalConfig": {
       "assetId": "507f1f77bcf86cd799439013",
       "maxDownloads": 5,
@@ -127,16 +132,18 @@ POST /api/vendor/products
 {
   "type": "physical",
   "title": "Blue T-Shirt",
+  "category": "Apparel",
   "description": "Comfortable cotton t-shirt",
+  "tags": ["cotton", "summer", "casual"],
   "seoTitle": "Buy Blue T-Shirt Online",
   "seoDescription": "High quality cotton t-shirt",
-  
+
   // For digital products:
   "digitalConfig": {
     "maxDownloads": 5,
     "expiresAfterDays": 30
   },
-  
+
   // For service products:
   "serviceConfig": {
     "durationMinutes": 60,
@@ -146,6 +153,20 @@ POST /api/vendor/products
   }
 }
 ```
+
+**Fields:**
+
+| Field | Type | Required | Validation |
+|-------|------|----------|------------|
+| `type` | `"physical"` \| `"digital"` \| `"service"` | ✅ Required | — |
+| `title` | string | ✅ Required | 3–200 chars |
+| `category` | string | ✅ Required | Non-empty string |
+| `description` | string | Optional | — |
+| `tags` | string[] | Optional | Non-empty, unique strings |
+| `digitalConfig` | object | Optional | Digital products only |
+| `serviceConfig` | object | Optional | Service products only |
+| `seoTitle` | string | Optional | Max 60 chars |
+| `seoDescription` | string | Optional | Max 160 chars |
 
 **Response:**
 
@@ -180,21 +201,36 @@ PATCH /api/vendor/products/:id
 {
   "title": "Updated Title",
   "description": "Updated description",
+  "category": "Updated Category",
+  "tags": ["new-tag", "another-tag"],
   "seoTitle": "New SEO title",
   "seoDescription": "New SEO description",
-  
+
   // For digital products:
   "digitalConfig": {
     "maxDownloads": 10,
     "expiresAfterDays": 60
   },
-  
+
   // For service products:
   "serviceConfig": {
     "durationMinutes": 90
   }
 }
 ```
+
+**Fields:**
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `title` | string | Optional | 3–200 chars |
+| `description` | string | Optional | — |
+| `category` | string | Optional | Non-empty string |
+| `tags` | string[] | Optional | Replaces entire tags array; must be unique |
+| `seoTitle` | string | Optional | Max 60 chars |
+| `seoDescription` | string | Optional | Max 160 chars |
+| `digitalConfig` | object | Optional | Merged with existing config |
+| `serviceConfig` | object | Optional | Merged with existing config |
 
 > [!IMPORTANT]
 > **Image Management Semantics**
@@ -458,8 +494,29 @@ POST /api/vendor/products/:id/digital/asset
 PUT /api/vendor/products/:id/digital/asset
 ```
 
-> [!WARNING]
-> **Not Yet Implemented**
+**Request Body:** `multipart/form-data`
+- `file`: The replacement digital file (max 500MB)
+
+**Behavior:**
+- Atomically replaces the existing asset
+- Old asset is deleted after successful upload
+- All future downloads will receive the new file
+- `digitalConfig.assetId` on the product is updated automatically
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "assetId": "507f1f77bcf86cd799439015",
+    "filename": "guide-v2.pdf",
+    "size": 204800,
+    "mimeType": "application/pdf"
+  },
+  "message": "Digital asset replaced successfully"
+}
+```
 
 ---
 
@@ -469,8 +526,256 @@ PUT /api/vendor/products/:id/digital/asset
 DELETE /api/vendor/products/:id/digital/asset
 ```
 
+**Behavior:**
+- Unlinks the asset from the product
+- Marks the underlying file for deletion
+- Product `digitalConfig.assetId` is cleared
+- Product cannot be activated without a new asset
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Digital asset removed successfully"
+}
+```
+
+---
+
+### Toggle Digital Asset Availability
+
+```http
+PATCH /api/vendor/products/:id/digital/toggle
+```
+
+Quickly enable or disable asset delivery without modifying the product itself.
+
+**Request Body:**
+
+```json
+{
+  "isActive": false
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "isActive": false
+  },
+  "message": "Digital asset availability updated"
+}
+```
+
+> [!TIP]
+> Use this to temporarily block downloads (e.g., for legal review) without archiving the product.
+
+---
+
+## Product Options
+
+Product options define the dimensions on which variants differ (e.g., Size, Color). Only **physical products** support options.
+
+> [!IMPORTANT]
+> Options are created first, then option values are added within each option. Variants are then created referencing specific `optionValueIds`.
+
+### Create Option
+
+```http
+POST /api/vendor/products/:productId/options
+```
+
+**Request Body:**
+
+```json
+{
+  "name": "Color",
+  "position": 1
+}
+```
+
+**Response (201):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439020",
+    "productId": "507f1f77bcf86cd799439011",
+    "name": "Color",
+    "position": 1,
+    "values": []
+  },
+  "message": "Option created successfully"
+}
+```
+
+---
+
+### List Options
+
+```http
+GET /api/vendor/products/:productId/options
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "507f1f77bcf86cd799439020",
+      "productId": "507f1f77bcf86cd799439011",
+      "name": "Color",
+      "position": 1,
+      "values": [
+        { "_id": "507f...", "value": "Black" },
+        { "_id": "507f...", "value": "White" }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+### Update Option
+
+```http
+PATCH /api/vendor/products/:productId/options/:optionId
+```
+
+**Request Body:**
+
+```json
+{
+  "name": "Shade",
+  "position": 2
+}
+```
+
+---
+
+### Reorder Options
+
+```http
+PUT /api/vendor/products/:productId/options/reorder
+```
+
+**Request Body:**
+
+```json
+{
+  "optionIds": [
+    "507f1f77bcf86cd799439021",
+    "507f1f77bcf86cd799439020"
+  ]
+}
+```
+
+---
+
+### Delete Option
+
+```http
+DELETE /api/vendor/products/:productId/options/:optionId
+```
+
 > [!WARNING]
-> **Not Yet Implemented**
+> **Cascade Delete**: Deleting an option also deletes all its values. Variants that referenced those values may become invalid.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Option deleted successfully"
+}
+```
+
+---
+
+### Create Option Value
+
+```http
+POST /api/vendor/products/:productId/options/:optionId/values
+```
+
+**Request Body:**
+
+```json
+{
+  "value": "Black"
+}
+```
+
+**Response (201):**
+
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439030",
+    "optionId": "507f1f77bcf86cd799439020",
+    "value": "Black"
+  },
+  "message": "Option value created successfully"
+}
+```
+
+---
+
+### Bulk Create Option Values
+
+```http
+POST /api/vendor/products/:productId/options/:optionId/values/bulk
+```
+
+**Request Body:**
+
+```json
+{
+  "values": ["Black", "White", "Navy"]
+}
+```
+
+**Response (201):**
+
+```json
+{
+  "success": true,
+  "data": [
+    { "_id": "...", "value": "Black" },
+    { "_id": "...", "value": "White" },
+    { "_id": "...", "value": "Navy" }
+  ],
+  "message": "Option values created successfully"
+}
+```
+
+---
+
+### List Option Values
+
+```http
+GET /api/vendor/products/:productId/options/:optionId/values
+```
+
+---
+
+### Delete Option Value
+
+```http
+DELETE /api/vendor/products/:productId/options/:optionId/values/:valueId
+```
+
+> [!WARNING]
+> Deleting an option value may invalidate variants that include this value in their option signature.
 
 ---
 

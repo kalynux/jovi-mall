@@ -14,6 +14,15 @@ export const CreateProductSchema = z.object({
     description: z.string().optional(),
     fileIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid file ID')).optional(),
 
+    // Categorization
+    category: z.string().min(1, 'Category cannot be empty'),
+    tags: z.array(
+        z.string().min(1, 'Each tag must be a non-empty string')
+    ).refine(
+        (arr) => new Set(arr).size === arr.length,
+        { message: 'Tags must be unique' }
+    ).optional(),
+
     // SEO
     seoTitle: z.string().max(60, 'SEO title must not exceed 60 characters').optional(),
     seoDescription: z.string().max(160, 'SEO description must not exceed 160 characters').optional(),
@@ -47,6 +56,15 @@ export const UpdateProductSchema = z.object({
         .optional(),
     description: z.string().optional(),
     fileIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid file ID')).optional(),
+
+    // Categorization
+    category: z.string().min(1, 'Category cannot be empty').optional(),
+    tags: z.array(
+        z.string().min(1, 'Each tag must be a non-empty string')
+    ).refine(
+        (arr) => new Set(arr).size === arr.length,
+        { message: 'Tags must be unique' }
+    ).optional(),
 
     // SEO
     seoTitle: z.string().max(60, 'SEO title must not exceed 60 characters').optional(),

@@ -342,6 +342,186 @@ Body:
 
 ---
 
+### PATCH /api/vendor/orders/:id/delivery-agency
+
+**Description**: Assign or change the delivery agency for a physical order.
+
+**Authorization**: Vendor access required.
+
+**Request Headers**:
+- `Authorization: Bearer <token>`
+- `Content-Type: application/json`
+
+**Path Parameters**:
+- `id` (string, required) - Order ID
+
+**Request Body**:
+```json
+{
+  "deliveryAgencyId": "507f1f77bcf86cd799439099"
+}
+```
+
+**Success Response**:
+
+Status: `200 OK`
+
+Body:
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "string",
+    "deliveryAgencyId": "507f1f77bcf86cd799439099",
+    "updated_at": "2026-02-09T23:54:00.000Z"
+  },
+  "message": "Delivery agency updated successfully"
+}
+```
+
+**Error Responses**:
+- `404` – `NOT_FOUND` – Order not found or does not belong to vendor
+- `400` – `INVALID_PRODUCT_TYPE` – Order does not contain physical products requiring delivery
+
+---
+
+### GET /api/vendor/orders/:id/entitlements
+
+**Description**: View digital entitlements for an order. Returns download statistics and customer access information for digital products.
+
+> [!NOTE]
+> Only applicable for orders containing **digital products**. Returns an empty array for physical/service orders.
+
+**Authorization**: Vendor access required.
+
+**Request Headers**:
+- `Authorization: Bearer <token>`
+
+**Path Parameters**:
+- `id` (string, required) - Order ID
+
+**Success Response**:
+
+Status: `200 OK`
+
+Body:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "507f1f77bcf86cd799439050",
+      "orderId": "string",
+      "productId": "string",
+      "customerId": "string",
+      "status": "active",
+      "downloadCount": 2,
+      "maxDownloads": 5,
+      "expiresAt": "2027-02-09T23:54:00.000Z",
+      "revokedAt": null,
+      "revokeReason": null,
+      "createdAt": "2026-02-09T23:54:00.000Z"
+    }
+  ]
+}
+```
+
+**Error Responses**:
+- `404` – `NOT_FOUND` – Order not found or does not belong to vendor
+
+---
+
+### POST /api/vendor/entitlements/:id/revoke
+
+> [!NOTE]
+> Note the base path: `/api/vendor/entitlements/:id/revoke` — the **entitlement ID**, not order ID.
+
+**Description**: Revoke a customer's access to a digital entitlement. Requires a reason for audit purposes.
+
+**Authorization**: Vendor access required.
+
+**Request Headers**:
+- `Authorization: Bearer <token>`
+- `Content-Type: application/json`
+
+**Path Parameters**:
+- `id` (string, required) - Entitlement ID
+
+**Request Body**:
+```json
+{
+  "reason": "Customer requested refund"
+}
+```
+
+- `reason` (**required**, string) - Reason for revocation (logged in audit trail)
+
+**Success Response**:
+
+Status: `200 OK`
+
+Body:
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439050",
+    "status": "revoked",
+    "revokedAt": "2026-02-09T23:54:00.000Z",
+    "revokeReason": "Customer requested refund"
+  },
+  "message": "Entitlement revoked successfully"
+}
+```
+
+**Error Responses**:
+- `404` – `NOT_FOUND` – Entitlement not found or does not belong to vendor's order
+- `400` – `VALIDATION_ERROR` – Missing or empty reason
+
+---
+
+### POST /api/vendor/entitlements/:id/restore
+
+> [!NOTE]
+> Note the base path: `/api/vendor/entitlements/:id/restore` — the **entitlement ID**, not order ID.
+
+**Description**: Restore a previously revoked digital entitlement. Only works if the entitlement has not expired.
+
+**Authorization**: Vendor access required.
+
+**Request Headers**:
+- `Authorization: Bearer <token>`
+
+**Path Parameters**:
+- `id` (string, required) - Entitlement ID
+
+**Request Body**: None
+
+**Success Response**:
+
+Status: `200 OK`
+
+Body:
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "507f1f77bcf86cd799439050",
+    "status": "active",
+    "revokedAt": null,
+    "revokeReason": null
+  },
+  "message": "Entitlement restored successfully"
+}
+```
+
+**Error Responses**:
+- `404` – `NOT_FOUND` – Entitlement not found or does not belong to vendor's order
+- `400` – `ENTITLEMENT_EXPIRED` – Entitlement has expired and cannot be restored
+- `400` – `ENTITLEMENT_NOT_REVOKED` – Entitlement is not currently revoked
+
+---
+
 ## Error Responses
 
 All error responses follow this format:

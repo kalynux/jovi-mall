@@ -17,6 +17,10 @@ export interface Product {
   title: string;
   description: string;
   slug: string;
+
+  category: string;
+  tags: string[];
+
   seo: {
     title?: string;
     description?: string;
@@ -58,6 +62,8 @@ export class ProductMapper implements IMapper<Product, IProduct> {
       title: doc.title,
       description: doc.description,
       slug: doc.slug,
+      category: doc.category,
+      tags: doc.tags || [],
       seo: doc.seo,
       hasVariants: doc.hasVariants,
       defaultVariantId: doc.defaultVariantId?.toString(),
