@@ -31,4 +31,12 @@ export class UserRepository {
   async updatePassword(userId: string, passwordHash: string): Promise<void> {
     await UserModel.findByIdAndUpdate(userId, { password_hash: passwordHash });
   }
+
+  async addRoleToUser(userId: string, role: string): Promise<IUser | null> {
+    return await UserModel.findByIdAndUpdate(
+      userId,
+      { $addToSet: { roles: role } },
+      { new: true }
+    );
+  }
 }

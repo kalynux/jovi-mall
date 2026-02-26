@@ -43,47 +43,56 @@ export class VendorRepository {
   }
 
   /**
-   * Update vendor profile with optimistic locking
-   * 
-   * This method ensures that concurrent updates don't silently overwrite each other.
-   * It checks that the version matches before applying the update and increments it atomically.
-   * 
-   * @param vendorId - Vendor ID
-   * @param currentVersion - Expected current version
-   * @param updates - Fields to update
-   * @returns Updated vendor or null if version mismatch
+   * Update vendor profile with optimistic locking.
+   * Checks version matches before applying the update and increments atomically.
    */
   async updateProfileWithVersion(
     vendorId: string,
     currentVersion: number,
     updates: Partial<IVendor>
   ): Promise<IVendor | null> {
-    // Atomic update: only succeeds if version matches
     return await VendorModel.findOneAndUpdate(
       { _id: vendorId, version: currentVersion },
-      {
-        ...updates,
-        $inc: { version: 1 } // Increment version atomically
-      },
-      { new: true } // Return updated document
+      { ...updates, $inc: { version: 1 } },
+      { new: true }
     );
   }
 
   /**
-   * Update profile without version check (use with caution)
-   * 
-   * This should only be used for system-initiated updates where
-   * optimistic locking is not required (e.g., verification status changes)
+   * Update profile without version check.
+   * Use only for system-initiated updates (e.g., onboarding step recalculation).
    */
   async updateProfile(vendorId: string, updates: Partial<IVendor>): Promise<IVendor | null> {
     return await VendorModel.findByIdAndUpdate(vendorId, updates, { new: true });
   }
 
   /**
-   * Unlink WhatsApp account for a vendor
-   * @param userId - User ID
-   * @returns Updated vendor
+   * Set the onboarding step. Called by the service after field-presence recalculation.
    */
+  async updateOnboardingStep(vendorId: string, step: number): Promise<IVendor | null> {
+    return await VendorModel.findByIdAndUpdate(
+      vendorId,
+      { onboarding_step: step },
+      { new: true }
+    );
+  }
+
+  /**
+   * Admin-only: flip legit_verified on both top-level (deprecated) and kyc_details.
+   */
+  async setLegitVerified(vendorId: string, verified: boolean): Promise<IVendor | null> {
+    return await VendorModel.findByIdAndUpdate(
+      vendorId,
+      {
+        $set: {
+          legit_verified: verified,
+          'kyc_details.legit_verified': verified,
+        },
+      },
+      { new: true }
+    );
+  }
+
   async unlinkWhatsApp(userId: string): Promise<IVendor | null> {
     return await VendorModel.findOneAndUpdate(
       { user_id: userId },

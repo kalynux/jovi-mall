@@ -1,7 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { GoogleCalendarProvider } from './google.provider';
 import { requireAuth } from '../../../../api/middlewares/auth.middleware';
-import { requireSessionAuth } from '../../../../api/middlewares/session.middleware';
 import { OAuthStateService } from '../../../auth/services/oauth-state.service';
 import { ConnectedCalendarAccount } from './connected-account.model';
 import { VendorModel } from '../../../vendors/vendor.model';
@@ -18,17 +17,17 @@ const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => P
 /**
  * GET /integrations/google/connect
  * Redirects the user to Google's OAuth consent screen.
- * Requires browser session authentication (NOT Bearer token)
+ * Requires browser cookie authentication (access_token JWT cookie).
  */
 router.get(
   '/connect',
-  requireSessionAuth,
+  requireAuth,
   asyncHandler(async (req: Request, res: Response) => {
-    const userId = req.auth!.user._id.toString();
-    const sessionId = req.sessionId!;
+    const userId = req.auth!.user.id;
 
-    // Generate OAuth state for CSRF protection
-    const state = oauthStateService.generateState({ userId, sessionId });
+    // Generate OAuth state for CSRF protection — signed JWT is the security mechanism;
+    // userId is used as both the subject and the session nonce.
+    const state = oauthStateService.generateState({ userId });
 
     // Get Google auth URL with state
     const url = provider.getAuthUrl(state);
@@ -39,14 +38,14 @@ router.get(
 /**
  * GET /integrations/google/callback
  * Handles the OAuth callback from Google.
- * Requires browser session authentication (NOT Bearer token)
+ * Requires browser cookie authentication (access_token JWT cookie).
  */
 router.get(
   '/callback',
-  requireSessionAuth,
+  requireAuth,
   asyncHandler(async (req: Request, res: Response) => {
     const { code, state } = req.query;
-    const userId = req.auth!.user._id.toString();
+    const userId = req.auth!.user.id;
 
     console.log({ code, userId });
 
@@ -60,20 +59,14 @@ router.get(
       return res.status(400).json({ error: 'Missing OAuth state' });
     }
 
-    // Validate OAuth state (CRITICAL CSRF protection)
+    // Validate OAuth state (CSRF protection — the signed state JWT is the guarantee)
     try {
-      const { userId: stateUserId, sessionId: stateSessionId } = oauthStateService.verifyState(state);
+      const { userId: stateUserId } = oauthStateService.verifyState(state);
 
-      // Verify userId matches current session
+      // Verify userId in state matches the authenticated user from cookie
       if (stateUserId !== userId) {
-        console.log('User ID mismatch between state and session');
+        console.log('User ID mismatch between OAuth state and cookie auth');
         return res.status(403).json({ error: 'Invalid OAuth state: user mismatch' });
-      }
-
-      // Verify sessionId matches current session
-      if (stateSessionId !== req.sessionId) {
-        console.log('Session ID mismatch');
-        return res.status(403).json({ error: 'Invalid OAuth state: session mismatch' });
       }
     } catch (error: any) {
       console.log('State validation failed:', error.message);
@@ -88,8 +81,6 @@ router.get(
 
     console.log('Google Calendar connected successfully');
 
-    // Redirect to a simple success page or JSON response
-    // For now, returning JSON success
     res.json({ success: true, message: 'Google Calendar connected successfully' });
   })
 );

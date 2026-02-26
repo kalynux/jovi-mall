@@ -1,73 +1,69 @@
 import { Request, Response, NextFunction } from 'express';
-import { SessionService } from '../../modules/auth/services/session.service';
-import { COOKIE_NAME } from '../../config/cookie.config';
+import jwt from 'jsonwebtoken';
+import { UserRepository } from '../../modules/users/user.repository';
+import { AUTH_COOKIE } from '../../config/cookie.config';
+import { AuthUserPayload } from './auth.middleware';
 
-const sessionService = new SessionService();
-
-// Extend Express Request type
-declare global {
-    namespace Express {
-        interface Request {
-            sessionId?: string;
-        }
-    }
-}
+const userRepo = new UserRepository();
 
 /**
- * Session-based authentication middleware
- * Validates session cookie and attaches user to req.auth
- * Does NOT check Bearer tokens - use requireAuth for that
+ * requireBrowserAuth
+ *
+ * Validates the `access_token` JWT cookie and attaches the user to req.auth.
+ * This replaces the old session-ID-based `requireSessionAuth` middleware.
+ *
+ * Use this on routes that are ONLY intended for browser clients (e.g. OAuth
+ * redirect flows where a Bearer header is not available).
+ *
+ * For all other routes, prefer `requireAuth` from auth.middleware.ts which
+ * supports both cookie and Bearer header.
  */
-export const requireSessionAuth = async (
-    req: Request,
-    res: Response,
-    next: NextFunction
-) => {
-    try {
-        // Debug logging
-        console.log('Session middleware - cookies:', req.cookies);
-        console.log('Session middleware - COOKIE_NAME:', COOKIE_NAME);
+// export const requireBrowserAuth = async (
+//     req: Request,
+//     res: Response,
+//     next: NextFunction
+// ) => {
+//     const token = req.cookies?.[AUTH_COOKIE.ACCESS];
 
-        // Read session cookie
-        const sessionId = req.cookies?.[COOKIE_NAME];
+//     if (!token) {
+//         res.status(401).json({ error: 'Unauthorized: No access token cookie' });
+//         return;
+//     }
 
-        console.log('Session middleware - sessionId:', sessionId);
+//     try {
+//         const payload = jwt.verify(
+//             token,
+//             process.env.JWT_SECRET || 'secret'
+//         ) as AuthUserPayload;
 
-        if (!sessionId) {
-            console.log('Session middleware - No session cookie found');
-            res.status(401).json({ error: 'Unauthorized: No session' });
-            return;
-        }
+//         const user = await userRepo.findById(payload.userId);
+//         if (!user) {
+//             res.status(401).json({ error: 'Unauthorized: User not found' });
+//             return;
+//         }
 
-        // Validate session
-        console.log('Session middleware - Validating session:', sessionId);
-        const { userId, user } = await sessionService.validateSession(sessionId);
-        console.log('Session middleware - Session valid for user:', userId);
+//         req.auth = {
+//             user,
+//             role: payload.role,
+//             role_entity: null, // Populate downstream if needed
+//         };
 
-        // Attach to request (same format as requireAuth middleware)
-        req.auth = {
-            user,
-            role: user.roles[0], // Use first role from roles array
-            role_entity: null, // Will be populated if needed
-        };
+//         req.user = user;
+//         req.role = payload.role;
 
-        // Also attach sessionId for OAuth state generation
-        req.sessionId = sessionId;
-
-        next();
-    } catch (error: any) {
-        // Session invalid or expired
-        console.log('Session middleware - Error:', error.message);
-        res.status(401).json({
-            error: 'Unauthorized: Invalid or expired session',
-            message: error.message
-        });
-    }
-};
+//         next();
+//     } catch {
+//         res.status(401).json({ error: 'Unauthorized: Invalid or expired token' });
+//     }
+// };
 
 /**
- * Middleware to enforce JSON-only POST requests (CSRF protection)
- * Rejects form-encoded POSTs from browsers
+ * requireJsonContent
+ *
+ * Rejects non-JSON POST/PUT/PATCH requests.
+ * Acts as a lightweight CSRF mitigation: browsers cannot send
+ * `application/json` cross-origin without a CORS preflight, which
+ * the server controls via the origin allowlist.
  */
 export const requireJsonContent = (
     req: Request,
@@ -76,14 +72,10 @@ export const requireJsonContent = (
 ) => {
     if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
         const contentType = req.headers['content-type'];
-
         if (!contentType || !contentType.includes('application/json')) {
-            res.status(400).json({
-                error: 'Bad Request: Only JSON content is accepted'
-            });
+            res.status(400).json({ error: 'Bad Request: Only JSON content is accepted' });
             return;
         }
     }
-
     next();
 };

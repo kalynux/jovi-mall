@@ -5,7 +5,7 @@ import { initAggregationScheduler } from './core/jobs/aggregation-scheduler';
 
 dotenv.config();
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8022;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/jovi-mall';
 
 async function startServer() {

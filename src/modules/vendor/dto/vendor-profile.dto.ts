@@ -1,11 +1,24 @@
-import { IVendor } from '../../vendors/vendor.model';
+import { IVendor, IVendorBranding, IVendorBusinessAddress, IVendorOperatingHours, IVendorKycDetails, IVendorSocialLinks } from '../../vendors/vendor.model';
+import { IPayoutDetails } from '../../../core/types/payout.types';
+import { UpdateVendorProfileInput } from '../validators/vendor-onboarding.validator';
 
-/**
- * Get Vendor Profile Response DTO
- * 
- * Sanitized vendor profile for API responses.
- * Excludes sensitive internal fields.
- */
+// ─── Response DTOs ────────────────────────────────────────────────────────────
+
+export interface VendorPayoutDetailsSanitized {
+  method: 'mobile_money' | 'bank';
+  mobile_money: {
+    provider: string;
+    phone_number_masked: string; // e.g. "+237 •••• •• 34"
+    account_name: string;
+  } | null;
+  bank: {
+    bank_name: string;
+    account_number_masked: string; // e.g. "•••• •••• 1234"
+    account_name: string;
+    country: string;
+  } | null;
+}
+
 export interface GetVendorProfileResponseDto {
   id: string;
   email: string;
@@ -14,6 +27,15 @@ export interface GetVendorProfileResponseDto {
   phoneVerified: boolean;
   businessName: string;
   displayName?: string;
+  businessDescription: string | null;
+  country: string | null;
+  branding: IVendorBranding;
+  businessAddresses: IVendorBusinessAddress[];
+  operatingHours: IVendorOperatingHours[];
+  payoutDetails: VendorPayoutDetailsSanitized | null;
+  /** KYC number is never returned. Only the verified flag is exposed. */
+  kycVerified: boolean;
+  socialLinks: IVendorSocialLinks;
   notificationPreferences: {
     email: boolean;
     whatsapp: boolean;
@@ -21,61 +43,79 @@ export interface GetVendorProfileResponseDto {
   };
   twoFactorEnabled: boolean;
   status: string;
-  version: number; // For optimistic locking
+  onboardingStep: number;
+  version: number;
   createdAt: Date;
   updatedAt: Date;
 }
 
-/**
- * Update Vendor Profile Input DTO
- * 
- * Input for profile updates. Validated by Zod schema.
- */
-export interface UpdateVendorProfileInputDto {
-  displayName?: string;
-  email?: string;
-  phone?: string;
-  notificationPreferences?: {
-    email?: boolean;
-    whatsapp?: boolean;
-    phone?: boolean;
+export interface VendorCompletionStatusDto {
+  onboardingStep: number;
+  isComplete: boolean;
+  missingFields: string[];
+  stepLabel: string;
+}
+
+// ─── Mapper ───────────────────────────────────────────────────────────────────
+
+function maskPhoneNumber(phone: string): string {
+  if (phone.length <= 4) return '••••';
+  return phone.slice(0, -4).replace(/\d/g, '•') + phone.slice(-4);
+}
+
+function maskAccountNumber(account: string): string {
+  if (account.length <= 4) return '••••';
+  return '•'.repeat(account.length - 4) + account.slice(-4);
+}
+
+function sanitizePayoutDetails(payout: IPayoutDetails | null): VendorPayoutDetailsSanitized | null {
+  if (!payout) return null;
+  return {
+    method: payout.method,
+    mobile_money: payout.mobile_money
+      ? {
+        provider: payout.mobile_money.provider,
+        phone_number_masked: maskPhoneNumber(payout.mobile_money.phone_number),
+        account_name: payout.mobile_money.account_name,
+      }
+      : null,
+    bank: payout.bank
+      ? {
+        bank_name: payout.bank.bank_name,
+        account_number_masked: maskAccountNumber(payout.bank.account_number),
+        account_name: payout.bank.account_name,
+        country: payout.bank.country,
+      }
+      : null,
   };
-  version: number; // Required for optimistic locking
 }
 
-/**
- * Update Password Input DTO
- */
-export interface UpdatePasswordInputDto {
-  oldPassword: string;
-  newPassword: string;
-}
-
-/**
- * Vendor Profile Mapper
- * 
- * Maps between domain model and DTOs.
- * Ensures sensitive fields are never leaked.
- */
 export class VendorProfileMapper {
   /**
-   * Map Vendor domain model to sanitized response DTO
-   * 
-   * SECURITY: This is the ONLY way vendor data should be sent to clients.
-   * Never send the raw IVendor document.
-   * 
-   * @param vendor - Vendor domain model
-   * @returns Sanitized DTO safe for API responses
+   * Map Vendor domain model to sanitized response DTO.
+   *
+   * SECURITY:
+   * - KYC national_id_number is NEVER included
+   * - Payout account numbers are masked
+   * - version included for optimistic locking on client
    */
   static toResponseDto(vendor: IVendor): GetVendorProfileResponseDto {
     return {
       id: vendor._id.toString(),
-      email: vendor.email || '',
+      email: vendor.email ?? '',
       emailVerified: vendor.email_verified,
-      phone: vendor.phone || '',
+      phone: vendor.phone ?? '',
       phoneVerified: vendor.phone_verified,
       businessName: vendor.business_name,
       displayName: vendor.display_name,
+      businessDescription: vendor.business_description,
+      country: vendor.country ?? null,
+      branding: vendor.branding,
+      businessAddresses: vendor.business_addresses,
+      operatingHours: vendor.operating_hours,
+      payoutDetails: sanitizePayoutDetails(vendor.payout_details),
+      kycVerified: vendor.kyc_details?.legit_verified ?? false,
+      socialLinks: vendor.social_links,
       notificationPreferences: {
         email: vendor.notification_preferences.email,
         whatsapp: vendor.notification_preferences.whatsapp,
@@ -83,6 +123,7 @@ export class VendorProfileMapper {
       },
       twoFactorEnabled: vendor.two_factor_enabled,
       status: vendor.status,
+      onboardingStep: vendor.onboarding_step,
       version: vendor.version,
       createdAt: vendor.created_at,
       updatedAt: vendor.updated_at,
@@ -90,43 +131,34 @@ export class VendorProfileMapper {
   }
 
   /**
-   * Map input DTO to partial domain model for updates
-   * 
-   * SECURITY: Explicit field mapping prevents mass assignment vulnerabilities.
-   * Only allowed fields are mapped.
-   * 
-   * @param input - Update input DTO
-   * @returns Partial vendor object safe for updates
+   * Map update input to a safe partial domain payload.
+   * Explicit field mapping — prevents mass assignment.
    */
-  static toUpdatePayload(input: UpdateVendorProfileInputDto): Partial<IVendor> {
+  static toUpdatePayload(input: UpdateVendorProfileInput): Partial<IVendor> {
     const payload: Partial<IVendor> = {};
 
-    if (input.displayName !== undefined) {
-      payload.display_name = input.displayName;
+    if (input.displayName !== undefined) payload.display_name = input.displayName;
+    if (input.businessDescription !== undefined) payload.business_description = input.businessDescription as string | null;
+    if (input.email !== undefined) payload.email = input.email;
+    if (input.phone !== undefined) payload.phone = input.phone;
+    if (input.timezone !== undefined) payload.timezone = input.timezone;
+    if (input.country !== undefined) payload.country = input.country;
+    if (input.branding !== undefined) payload.branding = input.branding as IVendorBranding;
+    if (input.business_addresses !== undefined) payload.business_addresses = input.business_addresses as IVendorBusinessAddress[];
+    if (input.operating_hours !== undefined) payload.operating_hours = input.operating_hours as IVendorOperatingHours[];
+    if (input.payout_details !== undefined) payload.payout_details = input.payout_details as IPayoutDetails;
+    if (input.kyc_details !== undefined) {
+      payload.kyc_details = {
+        national_id_number: input.kyc_details.national_id_number ?? null,
+        legit_verified: false, // legit_verified is admin-only; never set from user input
+      };
     }
-
-    if (input.email !== undefined) {
-      payload.email = input.email;
-    }
-
-    if (input.phone !== undefined) {
-      payload.phone = input.phone;
-    }
-
-    if (input.notificationPreferences) {
+    if (input.social_links !== undefined) payload.social_links = input.social_links as IVendorSocialLinks;
+    if (input.notificationPreferences !== undefined) {
       payload.notification_preferences = {
-        email:
-          input.notificationPreferences.email !== undefined
-            ? input.notificationPreferences.email
-            : true, // Default if not provided
-        whatsapp:
-          input.notificationPreferences.whatsapp !== undefined
-            ? input.notificationPreferences.whatsapp
-            : false,
-        phone:
-          input.notificationPreferences.phone !== undefined
-            ? input.notificationPreferences.phone
-            : false,
+        email: input.notificationPreferences.email ?? true,
+        whatsapp: input.notificationPreferences.whatsapp ?? false,
+        phone: input.notificationPreferences.phone ?? false,
       };
     }
 

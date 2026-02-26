@@ -26,22 +26,39 @@ router.use(requireRole(['vendor']));
 router.get('/profile', VendorProfileController.getProfile);
 
 /**
+ * GET /api/vendor/profile/completion-status
+ *
+ * Get onboarding step + missing fields for the authenticated vendor.
+ * Frontend uses this to route to the correct onboarding screen.
+ */
+router.get('/profile/completion-status', VendorProfileController.getCompletionStatus);
+
+/**
  * PATCH /api/vendor/profile
- * 
- * Update authenticated vendor's profile
- * 
- * Body: { displayName?, email?, phone?, notificationPreferences?, version }
+ *
+ * Update authenticated vendor's profile (general, outside onboarding flow).
+ * Body: { displayName?, businessDescription?, email?, phone?, branding?, socialLinks?, ... version }
  */
 router.patch('/profile', VendorProfileController.updateProfile);
 
 /**
  * PATCH /api/vendor/profile/password
- * 
- * Change authenticated vendor's password
- * 
+ *
+ * Change authenticated vendor's password.
  * Body: { oldPassword, newPassword }
  */
 router.patch('/profile/password', VendorProfileController.updatePassword);
+
+/**
+ * PATCH /api/vendor/onboarding/step
+ *
+ * Complete an onboarding step (upsert + recalculate).
+ * Body: { step: 1 | 2 | 3, ...stepFields }
+ *   Step 1: { country, timezone, payout_details }
+ *   Step 2: { default_delivery_agency_id }
+ *   Step 3: { skip?: boolean, branding?, business_addresses? }
+ */
+router.patch('/onboarding/step', VendorProfileController.completeOnboardingStep);
 
 /**
  * ==========================================

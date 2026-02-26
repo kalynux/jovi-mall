@@ -7,12 +7,21 @@ import { VendorRepository } from '../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../delivery/delivery-agency.repository';
 import { DeliveryAgentRepository } from '../delivery/delivery-agent.repository';
 import { AdminRepository } from '../admins/admin.repository';
-import { LoginInput, RegisterInput } from './auth.schemas';
+import { AddRoleInput, AuthMeInput, LoginInput, RegisterInput } from './auth.schemas';
 import { IUser } from '../users/user.model';
 import { EMAIL_VERIFY_DB, getRedisClient } from '../../infra/redis/redis.factory';
 import { MailService } from '../mail/mail.service';
 
 const EMAIL_VERIFY_EXPIRE = 86400; // 24 hours
+
+// ─── Token TTLs (in seconds) ─────────────────────────────────────────────────
+const ACCESS_TOKEN_TTL_S = parseInt(process.env.AUTH_ACCESS_TOKEN_TTL || '900');     // 15 min
+const REFRESH_TOKEN_TTL_S = parseInt(process.env.AUTH_REFRESH_TOKEN_TTL || '2592000'); // 30 days
+
+export interface AuthTokens {
+  accessToken: string;
+  refreshToken: string;
+}
 
 export class AuthService {
   private userRepo: UserRepository;
@@ -34,6 +43,60 @@ export class AuthService {
     this.mailService = new MailService();
   }
 
+  // ─── Token Generation ───────────────────────────────────────────────────────
+
+  generateAccessToken(user: IUser, role: string): string {
+    return jwt.sign(
+      { userId: user._id, role },
+      process.env.JWT_SECRET || 'secret',
+      { expiresIn: ACCESS_TOKEN_TTL_S }
+    );
+  }
+
+  generateRefreshToken(user: IUser, role: string): string {
+    return jwt.sign(
+      { userId: user._id, role, type: 'refresh' },
+      process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'secret',
+      { expiresIn: REFRESH_TOKEN_TTL_S }
+    );
+  }
+
+  issueTokenPair(user: IUser, role: string): AuthTokens {
+    return {
+      accessToken: this.generateAccessToken(user, role),
+      refreshToken: this.generateRefreshToken(user, role),
+    };
+  }
+
+  /**
+   * Validates an incoming refresh token and issues a new access token.
+   * Refresh token is NOT rotated (stateless, single-issue).
+   */
+  async rotateRefreshToken(refreshToken: string): Promise<{ accessToken: string; user: IUser; role: string }> {
+    let payload: { userId: string; role: string; type: string };
+
+    try {
+      payload = jwt.verify(
+        refreshToken,
+        process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'secret'
+      ) as any;
+    } catch {
+      throw new Error('Invalid or expired refresh token');
+    }
+
+    if (payload.type !== 'refresh') {
+      throw new Error('Invalid token type');
+    }
+
+    const user = await this.userRepo.findById(payload.userId);
+    if (!user) throw new Error('User not found');
+
+    const accessToken = this.generateAccessToken(user, payload.role);
+    return { accessToken, user, role: payload.role };
+  }
+
+  // ─── Auth Flows ─────────────────────────────────────────────────────────────
+
   async register(input: RegisterInput) {
     // Check duplication (login identifiers)
     const existingPhone = await this.userRepo.findByPhone(input.phone);
@@ -45,7 +108,7 @@ export class AuthService {
     }
 
     // Role handling
-    const role = input.role || 'customer';
+    const role = input.role || 'vendor';
 
     // Hash Password
     const passwordHash = await bcrypt.hash(input.password, 10);
@@ -75,7 +138,8 @@ export class AuthService {
       case 'vendor':
         roleEntity = await this.vendorRepo.create({
           user_id: user._id,
-          business_name: input.business_name || input.name, // Fallback to name if business name not provided
+          name: input.name,
+          business_name: input.business_name || input.name,
           email: input.email,
           phone: input.phone,
           email_verified: false,
@@ -83,9 +147,10 @@ export class AuthService {
           legit_verified: false
         });
         break;
-      case 'agency': // Maps to delivery_agency
+      case 'agency':
         roleEntity = await this.agencyRepo.create({
           user_id: user._id,
+          name: input.name,
           agency_name: input.agency_name || input.name,
           email: input.email,
           phone: input.phone,
@@ -94,7 +159,7 @@ export class AuthService {
           legit_verified: false
         });
         break;
-      case 'agent': // Maps to delivery_agent
+      case 'agent':
         roleEntity = await this.agentRepo.create({
           user_id: user._id,
           name: input.name,
@@ -105,7 +170,6 @@ export class AuthService {
         });
         break;
       case 'admin':
-        // Admin usually needs special creation flow, but for consistency:
         roleEntity = await this.adminRepo.create({
           user_id: user._id,
           name: input.name,
@@ -116,10 +180,8 @@ export class AuthService {
         throw new Error(`Registration for role ${role} not fully supported yet`);
     }
 
-    // Generate Token
-    const token = this.generateToken(user, role);
-
-    return { user, role_entity: roleEntity, token };
+    const tokens = this.issueTokenPair(user, role);
+    return { user, role, role_entity: roleEntity, ...tokens };
   }
 
   async login(input: LoginInput) {
@@ -143,7 +205,7 @@ export class AuthService {
       if (user.roles.length === 1) {
         role = user.roles[0];
       } else {
-        throw new Error('Role selection required'); // User has multiple roles, must specify
+        throw new Error('Role selection required');
       }
     } else {
       if (!user.roles.includes(role as any)) {
@@ -153,35 +215,122 @@ export class AuthService {
 
     // Load Role Entity
     let entity = null;
-    if (role === 'customer') {
-      entity = await this.customerRepo.findByUserId(user.id);
-    } else if (role === 'vendor') {
-      entity = await this.vendorRepo.findByUserId(user.id);
-    } else if (role === 'agency') {
-      entity = await this.agencyRepo.findByUserId(user.id);
-    } else if (role === 'agent') {
-      entity = await this.agentRepo.findByUserId(user.id);
-    } else if (role === 'admin') {
-      entity = await this.adminRepo.findByUserId(user.id);
+    if (role === 'customer') entity = await this.customerRepo.findByUserId(user.id);
+    else if (role === 'vendor') entity = await this.vendorRepo.findByUserId(user.id);
+    else if (role === 'agency') entity = await this.agencyRepo.findByUserId(user.id);
+    else if (role === 'agent') entity = await this.agentRepo.findByUserId(user.id);
+    else if (role === 'admin') entity = await this.adminRepo.findByUserId(user.id);
+
+    const tokens = this.issueTokenPair(user, role);
+    // console.log(JSON.stringify({ user, role, role_entity: entity, ...tokens }, null, 2))
+    return { user, role, role_entity: entity, ...tokens };
+  }
+
+  async authMe(input: AuthMeInput) {
+    const user = await this.userRepo.findById(input.userId);
+    if (!user) throw new Error('Account not found');
+
+    let role = input.role;
+    if (!role) {
+      if (user.roles.length === 1) {
+        role = user.roles[0];
+      } else {
+        throw new Error('Role selection required');
+      }
+    } else {
+      if (!user.roles.includes(role as any)) {
+        throw new Error('User does not have this role');
+      }
     }
 
-    const token = this.generateToken(user, role);
-    return { user, role, role_entity: entity, token };
+    let entity = null;
+    if (role === 'customer') entity = await this.customerRepo.findByUserId(user.id);
+    else if (role === 'vendor') entity = await this.vendorRepo.findByUserId(user.id);
+    else if (role === 'agency') entity = await this.agencyRepo.findByUserId(user.id);
+    else if (role === 'agent') entity = await this.agentRepo.findByUserId(user.id);
+    else if (role === 'admin') entity = await this.adminRepo.findByUserId(user.id);
+
+    const tokens = this.issueTokenPair(user, role);
+    return { user, role, role_entity: entity, ...tokens };
   }
 
-  private generateToken(user: IUser, role: string): string {
-    const payload = {
-      userId: user._id,
-      role: role,
-    };
-    return jwt.sign(payload, process.env.JWT_SECRET || 'secret', { expiresIn: '7d' });
+  async addRole(userId: string, input: AddRoleInput) {
+    const user = await this.userRepo.findById(userId);
+    if (!user) throw new Error('Account not found');
+
+    const role = input.role;
+
+    if (user.roles.includes(role as any)) {
+      throw new Error(`User already has the '${role}' role`);
+    }
+
+    let roleEntity;
+    switch (role) {
+      case 'customer':
+        roleEntity = await this.customerRepo.create({
+          user_id: user._id,
+          name: input.name || '',
+          email: user.login_email,
+          phone: user.login_phone,
+          email_verified: false,
+          phone_verified: false,
+        });
+        break;
+      case 'vendor':
+        roleEntity = await this.vendorRepo.create({
+          user_id: user._id,
+          business_name: input.business_name || input.name || '',
+          email: user.login_email,
+          phone: user.login_phone,
+          email_verified: false,
+          phone_verified: false,
+          legit_verified: false,
+        });
+        break;
+      case 'agency':
+        roleEntity = await this.agencyRepo.create({
+          user_id: user._id,
+          agency_name: input.agency_name || input.name || '',
+          email: user.login_email,
+          phone: user.login_phone,
+          email_verified: false,
+          phone_verified: false,
+          legit_verified: false,
+        });
+        break;
+      case 'agent':
+        roleEntity = await this.agentRepo.create({
+          user_id: user._id,
+          name: input.name || '',
+          email: user.login_email,
+          phone: user.login_phone,
+          email_verified: false,
+          phone_verified: false,
+        });
+        break;
+      case 'admin':
+        roleEntity = await this.adminRepo.create({
+          user_id: user._id,
+          name: input.name || '',
+          email: user.login_email,
+        });
+        break;
+      default:
+        throw new Error(`Role '${role}' is not supported`);
+    }
+
+    await this.userRepo.addRoleToUser(userId, role);
+
+    const tokens = this.issueTokenPair(user, role);
+    return { user, role, role_entity: roleEntity, ...tokens };
   }
+
+  // ─── Email / Phone Verification ─────────────────────────────────────────────
 
   async sendEmailVerification(userId: string, role: string) {
     let email = '';
     let entity: any = null;
 
-    // Retrieve entity based on role
     if (role === 'customer') entity = await this.customerRepo.findByUserId(userId);
     else if (role === 'vendor') entity = await this.vendorRepo.findByUserId(userId);
     else if (role === 'agency') entity = await this.agencyRepo.findByUserId(userId);
@@ -189,7 +338,7 @@ export class AuthService {
     else if (role === 'admin') entity = await this.adminRepo.findByUserId(userId);
 
     if (!entity) throw new Error(`${role} profile not found`);
-    if (entity.email_verified) throw new Error('Email already verified'); // Note: Admin might not have this field
+    if (entity.email_verified) throw new Error('Email already verified');
     if (!entity.email) throw new Error('No email to verify');
 
     email = entity.email;
@@ -197,7 +346,6 @@ export class AuthService {
     const token = crypto.randomBytes(32).toString('hex');
     const redis = await getRedisClient(this.redisDb);
 
-    // Store userId AND role
     const value = JSON.stringify({ userId, role });
     await redis.set(`email_verify:${token}`, value, { EX: EMAIL_VERIFY_EXPIRE });
 
@@ -227,21 +375,7 @@ export class AuthService {
     }
 
     const { userId, role } = JSON.parse(value);
-
     await redis.del(key);
-
-    if (role === 'customer') await this.customerRepo.markEmailVerified(userId);
-    // TODO: Add markEmailVerified to other repositories if they have it
-    // Assuming they do or logic is similar (Vendor has it, waiting for updates on others if distinct)
-    // Actually, I should update other repositories to have markEmailVerified if they don't.
-    // They generally do if they follow the pattern. 
-    // BUT, the current repositories I checked only Customer had explicit markEmailVerified shown in strict checks earlier?
-    // Let's check using findOneAndUpdate generic.
-    // For now, I will use a generic update if possible or add methods.
-
-    // Quick fix: Add specific calls if methods exist
-    // Implementation Plan: "Update login to support all role entities" covers this implicitly.
-    // I should ensure repositories support email verification.
 
     const repos: any = {
       'customer': this.customerRepo,
@@ -253,13 +387,6 @@ export class AuthService {
     const repo = repos[role];
     if (repo && typeof repo.markEmailVerified === 'function') {
       await repo.markEmailVerified(userId);
-    } else if (repo) {
-      // Fallback manual update if method missing
-      // Note: better to add method to repo, but in service logic:
-      // Most repos have generic updates? 
-      // I'll stick to what I know exists or try-catch/implement method in repo next step if missing.
-      // CustomerRepo has it.
-      // Let's assume others might need it.
     }
 
     return { message: 'Email verified successfully' };
@@ -276,27 +403,23 @@ export class AuthService {
     if (!entity) throw new Error(`${role} profile not found`);
     if (!entity.phone) throw new Error('Entity must have a phone number to bind WhatsApp');
 
-    // Check if already verified?
-    // User requirement: "role_entity.wa.verified !== true"
     if (entity.wa?.verified === true) {
       throw new Error('WhatsApp already verified for this role');
     }
 
-    // Generate Secure Code (12 chars, Upper + Num)
-    const code = crypto.randomBytes(6).toString('hex').toUpperCase(); // 12 chars
-    const redis = await getRedisClient(4); // DB 4
+    const code = crypto.randomBytes(6).toString('hex').toUpperCase();
+    const redis = await getRedisClient(4);
 
     const value = JSON.stringify({
       user_id: userId,
       role: role,
       role_entity_id: entity._id,
       phone: entity.phone,
-      wa_phone_id: waPhoneId // Store the expected ID
+      wa_phone_id: waPhoneId
     });
 
-    await redis.set(`wa_verify:${code}`, value, { EX: 600 }); // 10 mins
+    await redis.set(`wa_verify:${code}`, value, { EX: 600 });
 
-    // WhatsApp deep link for one-click verification
     const botNumber = process.env.WA_BOT_NUMBER || '';
     const command = `/link:${code}`;
     const waLink = botNumber

@@ -67,4 +67,20 @@ router.use('/customer/tickets', customerTicketRoutes);
 router.use('/agency/tickets', agencyTicketRoutes);
 router.use('/agent/tickets', agentTicketRoutes);
 
+// Customer profile routes
+import customerRoutes from '../modules/customers/routes';
+router.use('/customer', customerRoutes);
+
+// Delivery Agency profile routes
+import agencyRoutes from '../modules/delivery/agency.routes';
+router.use('/agency', agencyRoutes);
+
+// Delivery Agent profile routes
+import agentRoutes from '../modules/delivery/agent.routes';
+router.use('/agent', agentRoutes);
+
+// Admin profile routes
+import adminRoutes from '../modules/admins/routes';
+router.use('/admin', adminRoutes);
+
 export const apiRouter = router;

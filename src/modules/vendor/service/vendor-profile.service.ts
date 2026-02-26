@@ -1,25 +1,30 @@
 import { VendorRepository } from '../../vendors/vendor.repository';
-import { VendorProfileMapper, GetVendorProfileResponseDto, UpdateVendorProfileInputDto } from '../dto/vendor-profile.dto';
+import { VendorProfileMapper, GetVendorProfileResponseDto, VendorCompletionStatusDto } from '../dto/vendor-profile.dto';
 import { VendorConfig } from '../config/vendor.config';
 import { NotFoundError, ForbiddenError, ConflictError } from '../../../core/errors';
 import { eventBus } from '../../../core/events/event-bus';
 import { auditLogger } from '../../../core/audit/audit-logger';
+import { VendorOnboardingStep, VendorOnboardingStepValue } from '../../../core/constants/onboarding-steps';
+import { IVendor } from '../../vendors/vendor.model';
+import {
+  UpdateVendorProfileInput,
+  VendorOnboardingStep1Input,
+  VendorOnboardingStep2Input,
+  VendorOnboardingStep3Input,
+} from '../validators/vendor-onboarding.validator';
 
 /**
  * Vendor Profile Service
- * 
- * Core business logic for vendor profile management.
- * 
+ *
  * ARCHITECTURE:
- * - Zod validates SHAPE (in controller/validator layer)
- * - Service enforces POLICY (email lock, feature flags, business rules)
+ * - Zod validates SHAPE (in validator layer)
+ * - Service enforces POLICY (field presence rules, feature flags)
  * - Repository handles persistence
- * 
- * ENTERPRISE PATTERNS:
- * - Optimistic locking for concurrent update safety
- * - Domain events for integration/webhooks
- * - Audit logging for compliance
- * - Explicit field mapping to prevent mass assignment
+ *
+ * ONBOARDING MODEL:
+ * - Field-presence upsert: data is always applied, then step is recalculated
+ * - No directional enforcement — any write triggers full re-evaluation
+ * - Response includes `missing_fields[]` so frontend knows what to prompt for
  */
 export class VendorProfileService {
   private vendorRepo: VendorRepository;
@@ -28,89 +33,55 @@ export class VendorProfileService {
     this.vendorRepo = new VendorRepository();
   }
 
-  /**
-   * Get vendor profile
-   * 
-   * Returns sanitized profile safe for API responses.
-   * 
-   * @param vendorId - Vendor ID
-   * @returns Sanitized vendor profile
-   * @throws NotFoundError if vendor not found
-   */
+  // ─── Read ─────────────────────────────────────────────────────────────────
+
   async getProfile(vendorId: string): Promise<GetVendorProfileResponseDto> {
     const vendor = await this.vendorRepo.findById(vendorId);
-    
-    if (!vendor) {
-      throw new NotFoundError('Vendor profile not found');
-    }
-
+    if (!vendor) throw new NotFoundError('Vendor profile not found');
     return VendorProfileMapper.toResponseDto(vendor);
   }
 
-  /**
-   * Update vendor profile
-   * 
-   * BUSINESS RULES ENFORCED:
-   * 1. Optimistic locking - prevents concurrent update conflicts
-   * 2. Email change lock - enforced via config flag
-   * 3. Feature flag enforcement - whatsapp/phone notifications
-   * 4. No mass assignment - explicit field mapping only
-   * 
-   * SIDE EFFECTS:
-   * - Emits domain event: vendor.profile.updated
-   * - Logs audit trail
-   * 
-   * @param vendorId - Vendor ID
-   * @param input - Update input DTO (already validated by Zod)
-   * @returns Updated sanitized profile
-   * @throws NotFoundError if vendor not found
-   * @throws ForbiddenError if business rule violated
-   * @throws ConflictError if optimistic locking fails
-   */
+  async getCompletionStatus(vendorId: string): Promise<VendorCompletionStatusDto> {
+    const vendor = await this.vendorRepo.findById(vendorId);
+    if (!vendor) throw new NotFoundError('Vendor profile not found');
+    return this.buildCompletionStatus(vendor);
+  }
+
+  // ─── Update (General) ─────────────────────────────────────────────────────
+
   async updateProfile(
     vendorId: string,
-    input: UpdateVendorProfileInputDto
+    input: UpdateVendorProfileInput
   ): Promise<GetVendorProfileResponseDto> {
-    // 1. Load current vendor
     const vendor = await this.vendorRepo.findById(vendorId);
-    if (!vendor) {
-      throw new NotFoundError('Vendor profile not found');
-    }
+    if (!vendor) throw new NotFoundError('Vendor profile not found');
 
-    // 2. BUSINESS POLICY: Email change lock
+    // POLICY: Email change lock
     if (input.email && input.email !== vendor.email) {
       if (!VendorConfig.ALLOW_EMAIL_CHANGE) {
         throw new ForbiddenError(
-          'Email changes are not allowed. Please contact support if you need to update your email address.'
+          'Email changes are not allowed. Contact support to update your email.'
         );
       }
     }
 
-    // 3. BUSINESS POLICY: Feature flag enforcement for notification preferences
+    // POLICY: Feature flags for notification preferences
     if (input.notificationPreferences) {
-      // WhatsApp notifications feature flag
-      if (input.notificationPreferences.whatsapp && input.notificationPreferences.whatsapp !== vendor.notification_preferences.whatsapp) {
-        if (!VendorConfig.ENABLE_WHATSAPP_NOTIFICATIONS) {
-          throw new ForbiddenError(
-            'WhatsApp notifications are not available on your current plan. Please upgrade to enable this feature.'
-          );
-        }
+      if (
+        input.notificationPreferences.whatsapp &&
+        !VendorConfig.ENABLE_WHATSAPP_NOTIFICATIONS
+      ) {
+        throw new ForbiddenError('WhatsApp notifications are not available on your current plan.');
       }
-
-      // Phone notifications feature flag
-      if (input.notificationPreferences.phone && input.notificationPreferences.phone !== vendor.notification_preferences.phone) {
-        if (!VendorConfig.ENABLE_PHONE_NOTIFICATIONS) {
-          throw new ForbiddenError(
-            'Phone notifications are not available on your current plan. Please upgrade to enable this feature.'
-          );
-        }
+      if (
+        input.notificationPreferences.phone &&
+        !VendorConfig.ENABLE_PHONE_NOTIFICATIONS
+      ) {
+        throw new ForbiddenError('Phone notifications are not available on your current plan.');
       }
     }
 
-    // 4. Map input to update payload (explicit field mapping, no mass assignment)
     const updatePayload = VendorProfileMapper.toUpdatePayload(input);
-
-    // 5. OPTIMISTIC LOCKING: Update with version check
     const updated = await this.vendorRepo.updateProfileWithVersion(
       vendorId,
       input.version,
@@ -119,76 +90,185 @@ export class VendorProfileService {
 
     if (!updated) {
       throw new ConflictError(
-        'Profile was modified by another request. Please refresh the page and try again.'
+        'Profile was modified by another request. Please refresh and try again.'
       );
     }
 
-    // 6. Calculate changes for event/audit (simple diff)
-    const changes = this.calculateChanges(vendor, updated);
+    // Recalculate onboarding step from field presence
+    const newStep = this.recalculateOnboardingStep(updated);
+    if (newStep !== updated.onboarding_step) {
+      await this.vendorRepo.updateOnboardingStep(vendorId, newStep);
+      updated.onboarding_step = newStep;
+    }
 
-    // 7. DOMAIN EVENT: vendor.profile.updated
-    await eventBus.publish('vendor.profile.updated', {
-      eventType: 'vendor.profile.updated',
-      aggregateId: vendorId,
-      payload: {
-        vendorId,
-        changes,
-      },
-      occurredAt: new Date(),
-    });
-
-    // 8. AUDIT LOG
-    await auditLogger.log({
-      actor: {
-        userId: vendor.user_id.toString(),
-        role: 'vendor',
-      },
-      action: 'VENDOR_PROFILE_UPDATED',
-      resource: {
-        type: 'Vendor',
-        id: vendorId,
-      },
-      changes,
-      timestamp: new Date(),
-    });
-
-    // 9. Return sanitized profile
+    await this.emitUpdateEvent(vendor, updated, vendorId);
     return VendorProfileMapper.toResponseDto(updated);
   }
 
+  // ─── Onboarding Steps ─────────────────────────────────────────────────────
+
   /**
-   * Calculate changes between old and new vendor
-   * 
-   * Simple diff for audit logging and events.
-   * Only tracks fields that can be updated via API.
-   * 
-   * @param oldVendor - Vendor before update
-   * @param newVendor - Vendor after update
-   * @returns Object with changed fields
+   * Complete Step 1: Basic Setup (country, timezone, payout_details)
+   * Always applied as an upsert. Step recalculated after write.
    */
-  private calculateChanges(oldVendor: any, newVendor: any): Record<string, any> {
-    const changes: Record<string, any> = {};
+  async completeStep1(
+    vendorId: string,
+    input: VendorOnboardingStep1Input
+  ): Promise<{ profile: GetVendorProfileResponseDto; completionStatus: VendorCompletionStatusDto }> {
+    const vendor = await this.vendorRepo.findById(vendorId);
+    if (!vendor) throw new NotFoundError('Vendor profile not found');
 
-    if (oldVendor.display_name !== newVendor.display_name) {
+    const updated = await this.vendorRepo.updateProfile(vendorId, {
+      country: input.country,
+      timezone: input.timezone,
+      payout_details: input.payout_details as IVendor['payout_details'],
+    });
+    if (!updated) throw new NotFoundError('Vendor not found after update');
+
+    const newStep = this.recalculateOnboardingStep(updated);
+    await this.vendorRepo.updateOnboardingStep(vendorId, newStep);
+    updated.onboarding_step = newStep;
+
+    return {
+      profile: VendorProfileMapper.toResponseDto(updated),
+      completionStatus: this.buildCompletionStatus(updated),
+    };
+  }
+
+  /**
+   * Complete Step 2: Delivery Linking (default_delivery_agency_id)
+   */
+  async completeStep2(
+    vendorId: string,
+    input: VendorOnboardingStep2Input
+  ): Promise<{ profile: GetVendorProfileResponseDto; completionStatus: VendorCompletionStatusDto }> {
+    const vendor = await this.vendorRepo.findById(vendorId);
+    if (!vendor) throw new NotFoundError('Vendor profile not found');
+
+    const updated = await this.vendorRepo.updateProfile(vendorId, {
+      default_delivery_agency_id: input.default_delivery_agency_id as unknown as IVendor['default_delivery_agency_id'],
+    });
+    if (!updated) throw new NotFoundError('Vendor not found after update');
+
+    const newStep = this.recalculateOnboardingStep(updated);
+    await this.vendorRepo.updateOnboardingStep(vendorId, newStep);
+    updated.onboarding_step = newStep;
+
+    return {
+      profile: VendorProfileMapper.toResponseDto(updated),
+      completionStatus: this.buildCompletionStatus(updated),
+    };
+  }
+
+  /**
+   * Complete Step 3: Branding (optional/skippable).
+   * If skip=true, advances directly to COMPLETED.
+   */
+  async completeStep3(
+    vendorId: string,
+    input: VendorOnboardingStep3Input
+  ): Promise<{ profile: GetVendorProfileResponseDto; completionStatus: VendorCompletionStatusDto }> {
+    const vendor = await this.vendorRepo.findById(vendorId);
+    if (!vendor) throw new NotFoundError('Vendor profile not found');
+
+    if (!input.skip) {
+      const updates: Partial<IVendor> = {};
+      if (input.branding) updates.branding = input.branding as IVendor['branding'];
+      if (input.business_addresses)
+        updates.business_addresses = input.business_addresses as IVendor['business_addresses'];
+      if (Object.keys(updates).length > 0) {
+        await this.vendorRepo.updateProfile(vendorId, updates);
+      }
+    }
+
+    // Step 3 is always satisfiable (optional) — advance to COMPLETED
+    await this.vendorRepo.updateOnboardingStep(vendorId, VendorOnboardingStep.COMPLETED);
+    const finalVendor = await this.vendorRepo.findById(vendorId);
+    if (!finalVendor) throw new NotFoundError('Vendor not found');
+
+    return {
+      profile: VendorProfileMapper.toResponseDto(finalVendor),
+      completionStatus: this.buildCompletionStatus(finalVendor),
+    };
+  }
+
+  // ─── Private Helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Recalculate onboarding_step from field presence.
+   * Returns the lowest incomplete required step, or 0 if all done.
+   */
+  private recalculateOnboardingStep(vendor: IVendor): VendorOnboardingStepValue {
+    const step1Complete =
+      !!vendor.country &&
+      !!vendor.timezone &&
+      !!vendor.payout_details;
+
+    if (!step1Complete) return VendorOnboardingStep.BASIC_SETUP;
+
+    const step2Complete = !!vendor.default_delivery_agency_id;
+    if (!step2Complete) return VendorOnboardingStep.DELIVERY_LINKING;
+
+    // Step 3 is optional — if step 1+2 are done and step is already > 2, just complete
+    if (vendor.onboarding_step === VendorOnboardingStep.BRANDING) {
+      return VendorOnboardingStep.BRANDING; // Let the controller call completeStep3 to finish
+    }
+
+    return VendorOnboardingStep.COMPLETED;
+  }
+
+  private buildCompletionStatus(vendor: IVendor): VendorCompletionStatusDto {
+    const missing: string[] = [];
+
+    if (!vendor.country) missing.push('country');
+    if (!vendor.timezone || vendor.timezone === 'Africa/Douala') {
+      // Only flag if explicitly not set (default is populated but still prompt to confirm)
+    }
+    if (!vendor.payout_details) missing.push('payout_details');
+    if (!vendor.default_delivery_agency_id) missing.push('default_delivery_agency_id');
+
+    const step = vendor.onboarding_step;
+    const stepLabels: Record<number, string> = {
+      0: 'Onboarding Complete',
+      1: 'Basic Setup',
+      2: 'Delivery Linking',
+      3: 'Branding (Optional)',
+    };
+
+    return {
+      onboardingStep: step,
+      isComplete: step === VendorOnboardingStep.COMPLETED,
+      missingFields: missing,
+      stepLabel: stepLabels[step] ?? `Step ${step}`,
+    };
+  }
+
+  private async emitUpdateEvent(
+    oldVendor: IVendor,
+    newVendor: IVendor,
+    vendorId: string
+  ): Promise<void> {
+    const changes: Record<string, unknown> = {};
+    if (oldVendor.display_name !== newVendor.display_name)
       changes.displayName = { from: oldVendor.display_name, to: newVendor.display_name };
-    }
-
-    if (oldVendor.email !== newVendor.email) {
+    if (oldVendor.email !== newVendor.email)
       changes.email = { from: oldVendor.email, to: newVendor.email };
-    }
-
-    if (oldVendor.phone !== newVendor.phone) {
+    if (oldVendor.phone !== newVendor.phone)
       changes.phone = { from: oldVendor.phone, to: newVendor.phone };
-    }
 
-    // Check notification preferences
-    const oldPrefs = oldVendor.notification_preferences;
-    const newPrefs = newVendor.notification_preferences;
-    
-    if (JSON.stringify(oldPrefs) !== JSON.stringify(newPrefs)) {
-      changes.notificationPreferences = { from: oldPrefs, to: newPrefs };
-    }
+    await eventBus.publish('vendor.profile.updated', {
+      eventType: 'vendor.profile.updated',
+      aggregateId: vendorId,
+      payload: { vendorId, changes },
+      occurredAt: new Date(),
+    });
 
-    return changes;
+    await auditLogger.log({
+      actor: { userId: oldVendor.user_id.toString(), role: 'vendor' },
+      action: 'VENDOR_PROFILE_UPDATED',
+      resource: { type: 'Vendor', id: vendorId },
+      changes,
+      timestamp: new Date(),
+    });
   }
 }

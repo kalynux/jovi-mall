@@ -5,20 +5,18 @@ const STATE_EXPIRATION = '5m'; // 5 minutes
 
 interface OAuthStatePayload {
     userId: string;
-    sessionId: string;
 }
 
 export class OAuthStateService {
     /**
      * Generate a signed OAuth state token
-     * @param payload - userId and sessionId to encode
+     * @param payload - userId to encode
      * @returns Signed state token
      */
     generateState(payload: OAuthStatePayload): string {
         return jwt.sign(
             {
-                userId: payload.userId,
-                sessionId: payload.sessionId,
+                userId: payload.userId
             },
             OAUTH_STATE_SECRET,
             {
@@ -42,8 +40,7 @@ export class OAuthStateService {
             }
 
             return {
-                userId: decoded.userId,
-                sessionId: decoded.sessionId,
+                userId: decoded.userId
             };
         } catch (error: any) {
             if (error.name === 'TokenExpiredError') {
