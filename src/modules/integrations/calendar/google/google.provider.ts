@@ -3,6 +3,8 @@ import mongoose from 'mongoose';
 import { ICalendarIntegrationProvider } from '../interfaces/calendar.integration.interface';
 import { ConnectedCalendarAccount } from './connected-account.model';
 import { GoogleTokenVault } from './google-token.vault';
+import { createAppError } from '../../../../core/errors';
+import { ERROR_CODES } from '../../../../core/error-codes';
 
 export class GoogleCalendarProvider implements ICalendarIntegrationProvider {
   private vault: GoogleTokenVault;
@@ -13,19 +15,19 @@ export class GoogleCalendarProvider implements ICalendarIntegrationProvider {
 
   private getClientId(): string {
     const id = process.env.GOOGLE_CLIENT_ID;
-    if (!id) throw new Error('GOOGLE_CLIENT_ID not configured');
+    if (!id) throw createAppError(ERROR_CODES.GOOGLE_MISSING_CLIENT_ID, 500, 'GOOGLE_CLIENT_ID not configured');
     return id;
   }
 
   private getClientSecret(): string {
     const secret = process.env.GOOGLE_CLIENT_SECRET;
-    if (!secret) throw new Error('GOOGLE_CLIENT_SECRET not configured');
+    if (!secret) throw createAppError(ERROR_CODES.GOOGLE_MISSING_CLIENT_SECRET, 500, 'GOOGLE_CLIENT_SECRET not configured');
     return secret;
   }
 
   private getRedirectUri(): string {
     const uri = process.env.GOOGLE_REDIRECT_URI;
-    if (!uri) throw new Error('GOOGLE_REDIRECT_URI not configured');
+    if (!uri) throw createAppError(ERROR_CODES.GOOGLE_MISSING_REDIRECT_URI, 500, 'GOOGLE_REDIRECT_URI not configured');
     return uri;
   }
 
@@ -61,11 +63,11 @@ export class GoogleCalendarProvider implements ICalendarIntegrationProvider {
     const { data: userInfo } = await oauth2.userinfo.get();
 
     if (!userInfo.id || !userInfo.email) {
-      throw new Error('Failed to retrieve user profile from Google');
+      throw createAppError(ERROR_CODES.GOOGLE_PROFILE_FETCH_FAILED, 502, 'Failed to retrieve user profile from Google');
     }
 
     if (!tokens.access_token) {
-      throw new Error('No access token received');
+      throw createAppError(ERROR_CODES.GOOGLE_NO_ACCESS_TOKEN, 502, 'No access token received');
     }
 
     // Encrypt tokens
@@ -104,7 +106,7 @@ export class GoogleCalendarProvider implements ICalendarIntegrationProvider {
         // If this is a new connection, we MUST have a refresh token.
         // If not, we might need to prompt re-consent.
         // But throwing here is safer than storing a broken state.
-        throw new Error('No refresh token received for new connection. Please try again.');
+        throw createAppError(ERROR_CODES.GOOGLE_NO_REFRESH_TOKEN, 400, 'No refresh token received for new connection. Please try again.');
       }
 
       await ConnectedCalendarAccount.create({
@@ -154,7 +156,7 @@ export class GoogleCalendarProvider implements ICalendarIntegrationProvider {
   private async getAuthenticatedClient(userId: string): Promise<Auth.OAuth2Client> {
     const account = await ConnectedCalendarAccount.findOne({ userId, provider: 'google' });
     if (!account) {
-      throw new Error('Google Calendar is not connected');
+      throw createAppError(ERROR_CODES.GOOGLE_CALENDAR_NOT_CONNECTED, 400, 'Google Calendar is not connected');
     }
 
     const client = this.createAuthClient();

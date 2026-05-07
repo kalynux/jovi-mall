@@ -1,10 +1,10 @@
-import { NotFoundError, ForbiddenError } from '../../../../core/errors';
+import { createAppError } from '../../../../core/errors';
+import { ERROR_CODES } from '../../../../core/error-codes';
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
 import { IVariantRepository } from '../../repositories/interfaces/variant.repository.interface';
 import { Product } from '../../repositories/mappers/product.mapper';
 import { SlugService } from './SlugService';
 
-// DTO-compatible types (accept strings from HTTP requests)
 export interface UpdateDigitalConfigDto {
   assetId?: string;
   maxDownloads?: number | null;
@@ -22,20 +22,13 @@ export interface UpdateServiceConfigDto {
 export interface UpdateProductCommand {
   title?: string;
   description?: string;
-  images?: string[]; // Full array replacement
-
-  // Categorization
+  images?: string[];
   category?: string;
   tags?: string[];
-
-  // SEO
   seoTitle?: string;
   seoDescription?: string;
-
-  // Type-specific configs (use DTO types, not Mongoose types)
   digitalConfig?: UpdateDigitalConfigDto;
   serviceConfig?: UpdateServiceConfigDto;
-
   regenerateSlug?: boolean;
 }
 
@@ -49,65 +42,38 @@ export class ProductUpdateService {
     private readonly slugService: SlugService
   ) { }
 
-  /**
-   * Update an existing product
-   * @param productId - Product ID
-   * @param vendorId - Vendor ID for ownership check
-   * @param command - Update command with allowed fields only
-   * @returns Updated product domain entity
-   */
   async execute(
     productId: string,
     vendorId: string,
     command: UpdateProductCommand
   ): Promise<Product> {
-    // Load product
     const product = await this.productRepository.findById(productId, vendorId);
 
     if (!product) {
-      throw new NotFoundError('Product not found');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
     }
 
-    // Vendor ownership check
     if (product.vendorId !== vendorId) {
-      throw new ForbiddenError('You do not have permission to update this product');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 403);
     }
 
-    // State validation: only DRAFT or ACTIVE can be updated
     if (product.status !== 'draft' && product.status !== 'active') {
-      throw new ForbiddenError(
-        `Cannot update product in ${product.status.toUpperCase()} state. Only DRAFT or ACTIVE products can be updated.`
-      );
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_STATE, 422, undefined, { status: product.status });
     }
 
-    // Build updates
     const updates: Partial<Product> = {};
 
     if (command.title !== undefined) {
       updates.title = command.title.trim();
-
-      // Regenerate slug if requested
       if (command.regenerateSlug) {
         updates.slug = await this.slugService.generate(updates.title, vendorId);
       }
     }
 
-    if (command.description !== undefined) {
-      updates.description = command.description;
-    }
+    if (command.description !== undefined) updates.description = command.description;
+    if (command.category !== undefined) updates.category = command.category;
+    if (command.tags !== undefined) updates.tags = command.tags;
 
-    if (command.category !== undefined) {
-      updates.category = command.category;
-    }
-
-    if (command.tags !== undefined) {
-      updates.tags = command.tags;
-    }
-
-    // NOTE: Images are managed through ProductMedia model separately;
-    // not handled here to maintain proper relational structure.
-
-    // SEO fields
     if (command.seoTitle !== undefined || command.seoDescription !== undefined) {
       updates.seo = {
         ...product.seo,
@@ -116,29 +82,19 @@ export class ProductUpdateService {
       };
     }
 
-    // Digital config updates (merge with existing)
     if (command.digitalConfig !== undefined && product.type === 'digital') {
-      updates.digitalConfig = {
-        ...product.digitalConfig,
-        ...command.digitalConfig,
-      } as any;
+      updates.digitalConfig = { ...product.digitalConfig, ...command.digitalConfig } as any;
 
-      // AUTO-CREATE DEFAULT VARIANT FOR DIGITAL PRODUCTS
-      // IDEMPOTENT: Only create if product is draft, no variants exist, and no defaultVariantId
-      if (
-        product.status === 'draft' &&
-        !product.hasVariants &&
-        !product.defaultVariantId
-      ) {
+      if (product.status === 'draft' && !product.hasVariants && !product.defaultVariantId) {
         const defaultVariant = await this.variantRepository.create({
-          productId: productId,
+          productId,
           sku: `${product.slug}-default`,
-          name: 'Default', // Default variant name for digital products
+          name: 'Default',
           status: 'active',
           optionSignature: '',
-          price: 0, // Must be set before publishing
+          price: 0,
           stock: 0,
-          isInfiniteStock: true, // Digital products have infinite stock
+          isInfiniteStock: true,
           lowStockThreshold: null,
           allowOversell: false,
           optionValueIds: [],
@@ -146,36 +102,24 @@ export class ProductUpdateService {
           deletedAt: null,
           purgeAt: null,
         });
-
-        // Mark product as having variants
         updates.hasVariants = true;
         updates.defaultVariantId = defaultVariant.id;
       }
     }
 
-    // Service config updates (merge with existing)
     if (command.serviceConfig !== undefined && product.type === 'service') {
-      updates.serviceConfig = {
-        ...product.serviceConfig,
-        ...command.serviceConfig,
-      } as any;
+      updates.serviceConfig = { ...product.serviceConfig, ...command.serviceConfig } as any;
 
-      // AUTO-CREATE DEFAULT VARIANT FOR SERVICE PRODUCTS
-      // IDEMPOTENT: Only create if product is draft, no variants exist, and no defaultVariantId
-      if (
-        product.status === 'draft' &&
-        !product.hasVariants &&
-        !product.defaultVariantId
-      ) {
+      if (product.status === 'draft' && !product.hasVariants && !product.defaultVariantId) {
         const defaultVariant = await this.variantRepository.create({
-          productId: productId,
+          productId,
           sku: `${product.slug}-default`,
-          name: 'Standard Service', // Default variant name for service products
+          name: 'Standard Service',
           status: 'active',
           optionSignature: '',
-          price: 0, // Must be set before publishing
+          price: 0,
           stock: 0,
-          isInfiniteStock: true, // Services have infinite stock
+          isInfiniteStock: true,
           lowStockThreshold: null,
           allowOversell: false,
           optionValueIds: [],
@@ -183,18 +127,15 @@ export class ProductUpdateService {
           deletedAt: null,
           purgeAt: null,
         });
-
-        // Mark product as having variants
         updates.hasVariants = true;
         updates.defaultVariantId = defaultVariant.id;
       }
     }
 
-    // Apply updates
     const updatedProduct = await this.productRepository.update(productId, vendorId, updates);
 
     if (!updatedProduct) {
-      throw new NotFoundError('Product not found after update');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
     }
 
     return updatedProduct;

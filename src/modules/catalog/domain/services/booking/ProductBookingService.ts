@@ -6,7 +6,8 @@ import { BookingService } from '../../../../booking/services/booking.service';
 import { IBooking } from '../../../../booking/models/booking.model';
 import { Slot } from '../../../../booking/types/booking.types';
 import { BookingPriceResolver, ResolvedPrice } from './BookingPriceResolver';
-import { ValidationError } from '../../../../../core/errors';
+import { createAppError } from '../../../../../core/errors';
+import { ERROR_CODES } from '../../../../../core/error-codes';
 
 export interface BookProductResult {
   booking: IBooking;
@@ -45,19 +46,15 @@ export class ProductBookingService {
     // Step 1: Fetch and validate product
     const product = await this.productRepository.findByIdUnscoped(productId);
     if (!product) {
-      throw new ValidationError(`Product ${productId} not found`);
+      throw createAppError(ERROR_CODES.CATALOG_BOOKING_PRODUCT_NOT_FOUND, 404, undefined, { productId });
     }
 
     if (product.type !== 'service') {
-      throw new ValidationError(
-        `Product ${productId} is not a service product. Type: ${product.type}`
-      );
+      throw createAppError(ERROR_CODES.CATALOG_BOOKING_INVALID_PRODUCT_TYPE, 422, undefined, { productId, type: product.type });
     }
 
     if (!product.serviceConfig) {
-      throw new ValidationError(
-        `Service product ${productId} is missing serviceConfig`
-      );
+      throw createAppError(ERROR_CODES.CATALOG_BOOKING_MISSING_SERVICE_CONFIG, 422, undefined, { productId });
     }
 
     // Step 2: Get availability windows
@@ -99,25 +96,19 @@ export class ProductBookingService {
     // Step 1: Fetch and validate product
     const product = await this.productRepository.findByIdUnscoped(productId);
     if (!product) {
-      throw new ValidationError(`Product ${productId} not found`);
+      throw createAppError(ERROR_CODES.CATALOG_BOOKING_PRODUCT_NOT_FOUND, 404, undefined, { productId });
     }
 
     if (product.type !== 'service') {
-      throw new ValidationError(
-        `Product ${productId} is not a service product`
-      );
+      throw createAppError(ERROR_CODES.CATALOG_BOOKING_INVALID_PRODUCT_TYPE, 422, undefined, { productId });
     }
 
     if (product.status !== 'active') {
-      throw new ValidationError(
-        `Product ${productId} is not active. Status: ${product.status}`
-      );
+      throw createAppError(ERROR_CODES.CATALOG_BOOKING_PRODUCT_NOT_ACTIVE, 422, undefined, { productId, status: product.status });
     }
 
     if (!product.serviceConfig) {
-      throw new ValidationError(
-        `Service product ${productId} is missing serviceConfig`
-      );
+      throw createAppError(ERROR_CODES.CATALOG_BOOKING_MISSING_SERVICE_CONFIG, 422, undefined, { productId });
     }
 
     // Step 2: Parse slot to get timing
@@ -170,6 +161,6 @@ export class ProductBookingService {
   ): Promise<IBooking[]> {
     // This would require adding a method to BookingService
     // For now, we'll throw a not implemented error
-    throw new Error('Not yet implemented. Add BookingService.getProductBookings()');
+    throw createAppError(ERROR_CODES.CATALOG_BOOKING_NOT_IMPLEMENTED, 501, 'getProductBookings is not yet implemented');
   }
 }

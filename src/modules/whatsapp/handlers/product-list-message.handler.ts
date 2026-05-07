@@ -1,6 +1,7 @@
 import { ProductListMessage } from '../types/whatsapp-message.types';
 import { WhatsAppMessageHandler, BuildContext, ProviderPayload } from './handler.interface';
-import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Product List Message Handler
@@ -8,41 +9,59 @@ import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
 export class ProductListMessageHandler implements WhatsAppMessageHandler<ProductListMessage> {
     validate(message: ProductListMessage, context: BuildContext): void {
         if (!message.header) {
-            throw new InvalidMessagePayloadError('product_list', [
-                { field: 'header', message: 'Header is required' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: product_list',
+                { messageType: 'product_list', validationErrors: [{ field: 'header', message: 'Header is required' }] }
+            );
         }
 
         if (!message.body) {
-            throw new InvalidMessagePayloadError('product_list', [
-                { field: 'body', message: 'Body is required' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: product_list',
+                { messageType: 'product_list', validationErrors: [{ field: 'body', message: 'Body is required' }] }
+            );
         }
 
         if (!message.catalogId) {
-            throw new InvalidMessagePayloadError('product_list', [
-                { field: 'catalogId', message: 'Catalog ID is required' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: product_list',
+                { messageType: 'product_list', validationErrors: [{ field: 'catalogId', message: 'Catalog ID is required' }] }
+            );
         }
 
         if (!message.sections || message.sections.length === 0) {
-            throw new InvalidMessagePayloadError('product_list', [
-                { field: 'sections', message: 'At least one section is required' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: product_list',
+                { messageType: 'product_list', validationErrors: [{ field: 'sections', message: 'At least one section is required' }] }
+            );
         }
 
         // Validate sections
         for (const section of message.sections) {
             if (!section.title) {
-                throw new InvalidMessagePayloadError('product_list', [
-                    { field: 'sections.title', message: 'Section title is required' },
-                ]);
+                throw createAppError(
+                    ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                    400,
+                    'Invalid payload for message type: product_list',
+                    { messageType: 'product_list', validationErrors: [{ field: 'sections.title', message: 'Section title is required' }] }
+                );
             }
 
             if (!section.product_items || section.product_items.length === 0) {
-                throw new InvalidMessagePayloadError('product_list', [
-                    { field: 'sections.product_items', message: 'Each section must have at least one product' },
-                ]);
+                throw createAppError(
+                    ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                    400,
+                    'Invalid payload for message type: product_list',
+                    { messageType: 'product_list', validationErrors: [{ field: 'sections.product_items', message: 'Each section must have at least one product' }] }
+                );
             }
         }
 

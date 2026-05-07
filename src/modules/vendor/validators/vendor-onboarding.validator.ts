@@ -56,17 +56,27 @@ export const VendorOnboardingStep1Schema = z.object({
 
 export type VendorOnboardingStep1Input = z.infer<typeof VendorOnboardingStep1Schema>;
 
-// ─── Step 2: Delivery Linking (REQUIRED) ──────────────────────────────────────
-//   default_delivery_agency_id
+// ─── Step 2: Delivery Linking (OPTIONAL / SKIPPABLE) ──────────────────────────
+//   default_delivery_agency_id — skip if vendor sells services only
 
 export const VendorOnboardingStep2Schema = z.object({
+    /** Set to true to skip this step without selecting a delivery agency. */
+    skip: z.boolean().optional().default(false),
     default_delivery_agency_id: z
         .string()
-        .min(1, 'A delivery agency must be selected')
-        .trim(),
-});
+        .min(1, 'A delivery agency ID is required when not skipping')
+        .trim()
+        .optional(),
+}).refine(
+    (data) => data.skip || !!data.default_delivery_agency_id,
+    {
+        message: 'Either skip must be true or a default_delivery_agency_id must be provided',
+        path: ['default_delivery_agency_id'],
+    }
+);
 
 export type VendorOnboardingStep2Input = z.infer<typeof VendorOnboardingStep2Schema>;
+
 
 // ─── Step 3: Branding (OPTIONAL / SKIPPABLE) ─────────────────────────────────
 //   branding, business_addresses

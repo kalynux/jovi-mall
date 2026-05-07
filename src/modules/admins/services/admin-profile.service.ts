@@ -1,6 +1,7 @@
 import { AdminRepository } from '../admin.repository';
 import { AdminProfileMapper, GetAdminProfileResponseDto, GetAdminSelfProfileResponseDto } from '../dto/admin-profile.dto';
-import { NotFoundError } from '../../../core/errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { IAdmin } from '../admin.model';
 import { UpdateAdminProfileInput } from '../validators/admin-profile.validator';
 
@@ -16,7 +17,7 @@ export class AdminProfileService {
      */
     async getSelfProfile(adminId: string): Promise<GetAdminSelfProfileResponseDto> {
         const admin = await this.adminRepo.findById(adminId);
-        if (!admin) throw new NotFoundError('Admin profile not found');
+        if (!admin) throw createAppError(ERROR_CODES.ADMIN_NOT_FOUND, 404, 'Admin profile not found');
         return AdminProfileMapper.toSelfResponseDto(admin);
     }
 
@@ -25,7 +26,7 @@ export class AdminProfileService {
      */
     async getProfile(adminId: string): Promise<GetAdminProfileResponseDto> {
         const admin = await this.adminRepo.findById(adminId);
-        if (!admin) throw new NotFoundError('Admin profile not found');
+        if (!admin) throw createAppError(ERROR_CODES.ADMIN_NOT_FOUND, 404, 'Admin profile not found');
         return AdminProfileMapper.toResponseDto(admin);
     }
 
@@ -34,11 +35,11 @@ export class AdminProfileService {
         input: UpdateAdminProfileInput
     ): Promise<GetAdminSelfProfileResponseDto> {
         const admin = await this.adminRepo.findById(adminId);
-        if (!admin) throw new NotFoundError('Admin profile not found');
+        if (!admin) throw createAppError(ERROR_CODES.ADMIN_NOT_FOUND, 404, 'Admin profile not found');
 
         const payload = AdminProfileMapper.toUpdatePayload(input);
         const updated = await this.adminRepo.updateProfile(adminId, payload as Partial<IAdmin>);
-        if (!updated) throw new NotFoundError('Admin not found after update');
+        if (!updated) throw createAppError(ERROR_CODES.ADMIN_NOT_FOUND, 404, 'Admin not found after update');
 
         return AdminProfileMapper.toSelfResponseDto(updated);
     }

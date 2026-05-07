@@ -2,7 +2,8 @@ import axios, { AxiosInstance } from 'axios';
 import { WhatsAppProvider } from './provider.interface';
 import { SendResult } from '../types/whatsapp-message.types';
 import { ProviderPayload } from '../handlers/handler.interface';
-import { ProviderRejectedMessageError } from '../types/whatsapp-error.types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Meta WhatsApp Cloud Provider
@@ -25,11 +26,19 @@ export class MetaWhatsAppCloudProvider implements WhatsAppProvider {
         this.phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
 
         if (!accessToken) {
-            throw new Error('WHATSAPP_ACCESS_TOKEN environment variable is required');
+            throw createAppError(
+                ERROR_CODES.CONFIG_MISSING_WA_ACCESS_TOKEN,
+                500,
+                'WHATSAPP_ACCESS_TOKEN environment variable is required'
+            );
         }
 
         if (!this.phoneNumberId) {
-            throw new Error('WHATSAPP_PHONE_NUMBER_ID environment variable is required');
+            throw createAppError(
+                ERROR_CODES.CONFIG_MISSING_WA_PHONE_ID,
+                500,
+                'WHATSAPP_PHONE_NUMBER_ID environment variable is required'
+            );
         }
 
         // Configure HTTP client
@@ -75,10 +84,12 @@ export class MetaWhatsAppCloudProvider implements WhatsAppProvider {
                 const whatsappError = error.response.data?.error;
 
                 if (whatsappError) {
-                    throw new ProviderRejectedMessageError(
-                        whatsappError.code || error.response.status,
+                    throw createAppError(
+                        ERROR_CODES.WHATSAPP_PROVIDER_REJECTED,
+                        502,
                         whatsappError.message || 'Unknown WhatsApp error',
                         {
+                            code: whatsappError.code || error.response.status,
                             errorData: whatsappError.error_data,
                             type: whatsappError.type,
                             fbtrace_id: whatsappError.fbtrace_id,

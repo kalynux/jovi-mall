@@ -8,7 +8,6 @@ import {
   PipelineStage,
 } from 'mongoose';
 import { IMapper } from '../database/mapper.interface';
-import { NotFoundError } from '../errors';
 
 export interface RepositoryOptions {
   session?: ClientSession;
@@ -37,7 +36,7 @@ export abstract class BaseRepository<
   constructor(
     protected readonly model: Model<T>,
     protected readonly mapper: IMapper<DomainT, T>
-  ) {}
+  ) { }
 
   /**
    * PROTECTED: Find one document by filter.
@@ -125,7 +124,7 @@ export abstract class BaseRepository<
       [persistenceEntity],
       options?.session ? { session: options.session } : {}
     );
-    
+
     // create returns the doc, which we map back to domain (ensuring we have the ID etc)
     return this.mapper.toDomain(createdDoc as T);
   }
@@ -138,8 +137,8 @@ export abstract class BaseRepository<
     id: string,
     options?: RepositoryOptions
   ): Promise<void> {
-     if (!Types.ObjectId.isValid(id)) return;
-     
+    if (!Types.ObjectId.isValid(id)) return;
+
     const update = {
       deletedAt: new Date(),
     } as UpdateQuery<T>;
@@ -188,7 +187,7 @@ export abstract class BaseRepository<
     id: string,
     options?: RepositoryOptions
   ): Promise<void> {
-     if (!Types.ObjectId.isValid(id)) return;
+    if (!Types.ObjectId.isValid(id)) return;
 
     const query = this.model.deleteOne({ _id: id } as FilterQuery<T>);
 

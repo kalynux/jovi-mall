@@ -414,16 +414,16 @@ Starts the WhatsApp phone verification flow.
 ### Request Body
 
 ```json
-{ "wa_phone_id": "1234567890" }
+{ "update_other_roles": false } // if set to true, it will auto update (verify) the whastsapp status of the other roles that are not verified
 ```
 
 ### Response `200`
 
 ```json
 {
-  "code": "A1B2C3D4E5F6",
-  "command": "/link:A1B2C3D4E5F6",
-  "wa_link": "https://wa.me/234XXXXXXXXXX?text=%2Flink%3AA1B2C3D4E5F6",
+  "code": "A1B2C3D4", // 8 alpha-numeric characters
+  "command": "/link:A1B2C3D4",
+  "wa_link": "https://wa.me/234XXXXXXXXXX?text=%2Flink%3AA1B2C3D4",
   "expires_in_seconds": 600,
   "instructions": "Click the wa_link to verify your WhatsApp account automatically..."
 }

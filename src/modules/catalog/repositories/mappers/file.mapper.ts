@@ -54,7 +54,6 @@ export class FileMapper implements IMapper<File, IFile> {
 
   toPersistence(domain: File): IFile {
     return {
-      // @ts-ignore: _id is optional in creation, handled by Mongoose
       _id: domain.id,
       key: domain.key,
       provider: domain.provider,

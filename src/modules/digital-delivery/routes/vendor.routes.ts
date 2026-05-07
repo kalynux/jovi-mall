@@ -1,6 +1,9 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { DigitalAssetService } from '../services/digital-asset.service';
+import { asyncHandler } from '../../../api/middlewares/async-handler';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Vendor Digital Asset Routes
@@ -34,17 +37,17 @@ export function createVendorDigitalRoutes(
   router.post(
     '/assets/upload',
     upload.single('file'),
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
       try {
         // TODO: Extract vendorId from auth middleware
         const vendorId = (req as any).user?.vendorId;
         if (!vendorId) {
-          return res.status(401).json({ error: 'Unauthorized' });
+          return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
         }
 
         const file = req.file;
         if (!file) {
-          return res.status(400).json({ error: 'No file uploaded' });
+          return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'No file uploaded'));
         }
 
         // Validate file type (digital products typically PDF, ZIP, etc.)
@@ -66,9 +69,11 @@ export function createVendorDigitalRoutes(
         ];
 
         if (!allowedMimeTypes.includes(file.mimetype)) {
-          return res.status(400).json({
-            error: `File type ${file.mimetype} not supported for digital products`,
-          });
+          return next(createAppError(
+            ERROR_CODES.CATALOG_FILE_TYPE_INVALID,
+            400,
+            `File type ${file.mimetype} not supported for digital products`
+          ));
         }
 
         const asset = await assetService.uploadAsset(vendorId, {
@@ -85,9 +90,9 @@ export function createVendorDigitalRoutes(
         });
       } catch (error: any) {
         console.error('Error uploading digital asset:', error);
-        return res.status(500).json({ error: 'Failed to upload asset' });
+        next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to upload asset'));
       }
-    }
+    })
   );
 
   /**
@@ -97,12 +102,12 @@ export function createVendorDigitalRoutes(
    * Auth: Vendor required
    * Response: Array of assets
    */
-  router.get('/assets', async (req: Request, res: Response) => {
+  router.get('/assets', asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     try {
       // TODO: Extract vendorId from auth middleware
       const vendorId = (req as any).user?.vendorId;
       if (!vendorId) {
-        return res.status(401).json({ error: 'Unauthorized' });
+        return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
       }
 
       const assets = await assetService.listVendorAssets(vendorId);
@@ -118,9 +123,9 @@ export function createVendorDigitalRoutes(
       );
     } catch (error: any) {
       console.error('Error listing assets:', error);
-      return res.status(500).json({ error: 'Failed to list assets' });
+      next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to list assets'));
     }
-  });
+  }));
 
   /**
    * DELETE /api/vendor/digital/assets/:id
@@ -129,12 +134,12 @@ export function createVendorDigitalRoutes(
    * Auth: Vendor required
    * Response: 204 No Content
    */
-  router.delete('/assets/:id', async (req: Request, res: Response) => {
+  router.delete('/assets/:id', asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     try {
       // TODO: Extract vendorId from auth middleware
       const vendorId = (req as any).user?.vendorId;
       if (!vendorId) {
-        return res.status(401).json({ error: 'Unauthorized' });
+        return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
       }
 
       const { id } = req.params;
@@ -144,9 +149,9 @@ export function createVendorDigitalRoutes(
       return res.status(204).send();
     } catch (error: any) {
       console.error('Error deleting asset:', error);
-      return res.status(400).json({ error: error.message });
+      next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 400, error.message));
     }
-  });
+  }));
 
   return router;
 }

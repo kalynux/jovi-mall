@@ -1,6 +1,7 @@
 import { ProductMessage } from '../types/whatsapp-message.types';
 import { WhatsAppMessageHandler, BuildContext, ProviderPayload } from './handler.interface';
-import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Product Message Handler
@@ -8,15 +9,21 @@ import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
 export class ProductMessageHandler implements WhatsAppMessageHandler<ProductMessage> {
     validate(message: ProductMessage, context: BuildContext): void {
         if (!message.catalogId) {
-            throw new InvalidMessagePayloadError('product', [
-                { field: 'catalogId', message: 'Catalog ID is required' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: product',
+                { messageType: 'product', validationErrors: [{ field: 'catalogId', message: 'Catalog ID is required' }] }
+            );
         }
 
         if (!message.productRetailerId) {
-            throw new InvalidMessagePayloadError('product', [
-                { field: 'productRetailerId', message: 'Product retailer ID is required' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: product',
+                { messageType: 'product', validationErrors: [{ field: 'productRetailerId', message: 'Product retailer ID is required' }] }
+            );
         }
 
         if (!context.sendContext.isWithin24hWindow) {

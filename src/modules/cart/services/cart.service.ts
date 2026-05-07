@@ -3,7 +3,8 @@ import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product
 import { VariantRepositoryMongo } from '../../catalog/repositories/mongo/variant.repository.mongo';
 import { PriceResolverService } from '../../catalog/domain/services/pricing-inventory/PriceResolverService';
 import { CartModel, ICart } from '../models/cart.model';
-import { ValidationError } from '../../../core/errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * CartService - Shopping cart management
@@ -29,13 +30,13 @@ export interface CartResponse {
     sku: string;
     variantTitle?: string;
     optionsSnapshot: string;
-    
+
     // Product data (context)
     productId: string;
     title: string;
     vendorId: string;
     productType: 'physical' | 'digital';
-    
+
     // Pricing
     quantity: number;
     price: number;
@@ -73,7 +74,7 @@ export class CartService {
    * @returns Updated cart
    * @throws ValidationError on business rule violation
    */
- async addToCart(
+  async addToCart(
     userId: string,
     productId: string,
     variantId: string,
@@ -82,34 +83,30 @@ export class CartService {
   ): Promise<CartResponse> {
     // 1. ENFORCE: variantId is REQUIRED (variant-first architecture)
     if (!variantId) {
-      throw new ValidationError(
-        'VARIANT_REQUIRED: variantId is required. The variant is the sellable unit.'
-      );
+      throw createAppError(ERROR_CODES.CART_VARIANT_REQUIRED, 400, 'variantId is required. The variant is the sellable unit.');
     }
 
     // 2. Fetch product to validate type
     const product = await this.productRepository.findByIdUnscoped(productId);
 
     if (!product) {
-      throw new ValidationError(`Product ${productId} not found`);
+      throw createAppError(ERROR_CODES.CART_PRODUCT_NOT_FOUND, 404, `Product ${productId} not found`);
     }
 
     // 3. Block service products from cart (defense in depth)
     if (product.type === 'service') {
-      throw new ValidationError(
-        'SERVICE_PRODUCTS_MUST_BE_BOOKED: Service products cannot be added to cart. Please use the booking system instead.'
-      );
+      throw createAppError(ERROR_CODES.CART_SERVICE_PRODUCT_NOT_ALLOWED, 400, 'Service products cannot be added to cart. Please use the booking system instead.');
     }
 
     // 4. Get variant and validate
     const variant = await this.variantRepository.findById(variantId);
     if (!variant) {
-      throw new ValidationError(`Variant ${variantId} not found`);
+      throw createAppError(ERROR_CODES.CART_VARIANT_NOT_FOUND, 404, `Variant ${variantId} not found`);
     }
 
     // Validate variant belongs to product
     if (variant.productId !== productId) {
-      throw new ValidationError(`Variant does not belong to this product`);
+      throw createAppError(ERROR_CODES.CART_VARIANT_PRODUCT_MISMATCH, 400, 'Variant does not belong to this product');
     }
 
     // Resolve price using PriceResolverService 
@@ -122,9 +119,7 @@ export class CartService {
 
     // 5. FAIL-FAST: Digital products must have quantity = 1
     if (product.type === 'digital' && quantity !== 1) {
-      throw new ValidationError(
-        'DIGITAL_QUANTITY_MUST_BE_ONE: Digital products can only be purchased with quantity of 1.'
-      );
+      throw createAppError(ERROR_CODES.CART_DIGITAL_QUANTITY_MUST_BE_ONE, 400, 'Digital products can only be purchased with quantity of 1.');
     }
 
     // 4. Load existing cart
@@ -135,16 +130,12 @@ export class CartService {
       const existingType = cart.productType;
 
       if (existingType && existingType !== product.type) {
-        throw new ValidationError(
-          `CART_MIXED_PRODUCT_TYPES_NOT_ALLOWED: Your cart contains ${existingType} products. Cannot add ${product.type} products. Please checkout or clear your cart first.`
-        );
+        throw createAppError(ERROR_CODES.CART_MIXED_PRODUCT_TYPES, 409, `Your cart contains ${existingType} products. Cannot add ${product.type} products. Please checkout or clear your cart first.`);
       }
 
       // Digital: V1 scope - only allow ONE digital product in cart
       if (product.type === 'digital') {
-        throw new ValidationError(
-          'DIGITAL_CART_LIMIT_REACHED: Only one digital product can be added to cart at a time. Please checkout or clear your cart first.'
-        );
+        throw createAppError(ERROR_CODES.CART_DIGITAL_LIMIT_REACHED, 409, 'Only one digital product can be added to cart at a time. Please checkout or clear your cart first.');
       }
     }
 
@@ -183,13 +174,13 @@ export class CartService {
         sku: variant.sku,
         variantTitle,
         optionsSnapshot: variant.optionSignature,
-        
+
         // Product data (context)
         productId: new Types.ObjectId(product.id),
         title: product.title,
         vendorId: new Types.ObjectId(product.vendorId),
         productType: product.type as 'physical' | 'digital',
-        
+
         // Pricing
         quantity,
         price: resolvedPrice.unitPrice,
@@ -214,7 +205,7 @@ export class CartService {
     const cart = await CartModel.findOne({ userId });
 
     if (!cart) {
-      throw new ValidationError('Cart not found');
+      throw createAppError(ERROR_CODES.CART_NOT_FOUND, 404, 'Cart not found');
     }
 
     // Remove item
@@ -299,13 +290,13 @@ export class CartService {
         sku: item.sku,
         variantTitle: item.variantTitle,
         optionsSnapshot: item.optionsSnapshot,
-        
+
         // Product data
         productId: item.productId.toString(),
         title: item.title,
         vendorId: item.vendorId.toString(),
         productType: item.productType,
-        
+
         // Pricing
         quantity: item.quantity,
         price: item.price,
@@ -331,7 +322,7 @@ export class CartService {
     const cart = await CartModel.findOne({ userId });
 
     if (!cart || cart.items.length === 0) {
-      throw new ValidationError('Cannot checkout empty cart');
+      throw createAppError(ERROR_CODES.CART_EMPTY_CHECKOUT, 400, 'Cannot checkout empty cart');
     }
 
     // TODO: Add shipping constraints for digital products

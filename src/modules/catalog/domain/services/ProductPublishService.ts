@@ -1,4 +1,5 @@
-import { NotFoundError, ForbiddenError, ConflictError, ValidationError } from '../../../../core/errors';
+import { createAppError } from '../../../../core/errors';
+import { ERROR_CODES } from '../../../../core/error-codes';
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
 import { Product } from '../../repositories/mappers/product.mapper';
 
@@ -10,65 +11,43 @@ export interface VendorContext {
  * ProductPublishService: Publish products with moderation based on vendor verification
  */
 export class ProductPublishService {
-  constructor(private readonly productRepository: IProductRepository) {}
+  constructor(private readonly productRepository: IProductRepository) { }
 
-  /**
-   * Publish a product (with moderation if vendor not verified)
-   * @param productId - Product ID
-   * @param vendorId - Vendor ID for ownership check
-   * @param vendorContext - Vendor verification context
-   * @returns Published product domain entity
-   */
   async execute(
     productId: string,
     vendorId: string,
     vendorContext: VendorContext
   ): Promise<Product> {
-    // Load product
     const product = await this.productRepository.findById(productId, vendorId);
 
     if (!product) {
-      throw new NotFoundError('Product not found');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
     }
 
-    // Vendor ownership check
     if (product.vendorId !== vendorId) {
-      throw new ForbiddenError('You do not have permission to publish this product');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 403);
     }
 
-    // Idempotency check: already published
     if (product.status === 'active' || product.status === 'pending_review') {
-      throw new ConflictError(
-        `Product is already ${product.status.toUpperCase()}. Cannot publish again.`
-      );
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ALREADY_PUBLISHED, 409, undefined, { status: product.status });
     }
 
-    // State validation: only DRAFT or ARCHIVED can be published
     if (product.status !== 'draft' && product.status !== 'archived') {
-      throw new ForbiddenError(
-        `Cannot publish product in ${product.status.toUpperCase()} state. Only DRAFT or ARCHIVED products can be published.`
-      );
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_STATE, 422, undefined, { status: product.status });
     }
 
-    // Content validation
     if (!product.title || product.title.trim().length === 0) {
-      throw new ValidationError('Product must have a valid title before publishing');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TITLE, 422);
     }
 
-    if (!product.slug || product.slug.trim().length === 0) {
-      throw new ValidationError('Product must have a valid slug before publishing');
-    }
-
-    // Determine target status based on vendor verification
     const newStatus = vendorContext.legitVerified ? 'active' : 'pending_review';
 
-    // Update status
     const updatedProduct = await this.productRepository.update(productId, vendorId, {
       status: newStatus,
     });
 
     if (!updatedProduct) {
-      throw new NotFoundError('Product not found after update');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
     }
 
     return updatedProduct;

@@ -50,15 +50,44 @@ router.patch('/profile', VendorProfileController.updateProfile);
 router.patch('/profile/password', VendorProfileController.updatePassword);
 
 /**
- * PATCH /api/vendor/onboarding/step
+ * GET /api/vendor/delivery-agencies
  *
- * Complete an onboarding step (upsert + recalculate).
- * Body: { step: 1 | 2 | 3, ...stepFields }
- *   Step 1: { country, timezone, payout_details }
- *   Step 2: { default_delivery_agency_id }
- *   Step 3: { skip?: boolean, branding?, business_addresses? }
+ * List delivery agencies available for selection during onboarding or at any time.
+ * Only returns agencies that are NOT inactive and have completed onboarding (step 0).
+ *
+ * Query params:
+ *   page                    (integer, default 1)
+ *   limit                   (integer, default 20, max 50)
+ *   search                  (string)  — free-text: matches name, region, city, address
+ *   region                  (string)  — filter by coverage area
+ *   hq_city                 (string)  — filter by primary HQ city
+ *   storage_based           ('true')  — only agencies with storage-based pricing enabled
+ *   pickup_based            ('true')  — only agencies with pickup-based pricing enabled
+ *   returns_payer           ('vendor'|'agency'|'customer') — filter by returns payer
+ *   min_claim_deadline_days (integer) — minimum damage claim window in days
  */
-router.patch('/onboarding/step', VendorProfileController.completeOnboardingStep);
+router.get('/delivery-agencies', VendorProfileController.listDeliveryAgencies);
+
+// ─── Onboarding ───────────────────────────────────────────────────────────────
+
+/**
+ * PUT /api/vendor/onboarding/basic-setup
+ * Step 1 (Required): country, timezone, payout_details
+ */
+router.put('/onboarding/basic-setup', VendorProfileController.completeBasicSetup);
+
+/**
+ * PUT /api/vendor/onboarding/delivery-linking
+ * Step 2 (Optional/Skippable): { skip?: boolean, default_delivery_agency_id? }
+ */
+router.put('/onboarding/delivery-linking', VendorProfileController.completeDeliveryLinking);
+
+/**
+ * PUT /api/vendor/onboarding/branding
+ * Step 3 (Optional/Skippable): { skip?: boolean, branding?, business_addresses? }
+ */
+router.put('/onboarding/branding', VendorProfileController.completeBrandingSetup);
+
 
 /**
  * ==========================================

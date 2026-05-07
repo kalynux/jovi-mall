@@ -1,6 +1,7 @@
 import { TextMessage } from '../types/whatsapp-message.types';
 import { WhatsAppMessageHandler, BuildContext, ProviderPayload } from './handler.interface';
-import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Text Message Handler
@@ -11,16 +12,22 @@ export class TextMessageHandler implements WhatsAppMessageHandler<TextMessage> {
     validate(message: TextMessage, context: BuildContext): void {
         // Validate body is present and non-empty
         if (!message.body || message.body.trim().length === 0) {
-            throw new InvalidMessagePayloadError('text', [
-                { field: 'body', message: 'Message body is required and cannot be empty' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: text',
+                { messageType: 'text', validationErrors: [{ field: 'body', message: 'Message body is required and cannot be empty' }] }
+            );
         }
 
         // Validate body length (WhatsApp limit is 4096 characters)
         if (message.body.length > 4096) {
-            throw new InvalidMessagePayloadError('text', [
-                { field: 'body', message: `Message body exceeds maximum length of 4096 characters (got ${message.body.length})` },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: text',
+                { messageType: 'text', validationErrors: [{ field: 'body', message: `Message body exceeds maximum length of 4096 characters (got ${message.body.length})` }] }
+            );
         }
 
         // Policy check: Text messages require 24-hour window

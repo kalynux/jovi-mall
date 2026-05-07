@@ -1,6 +1,7 @@
 import { ReactionMessage } from '../types/whatsapp-message.types';
 import { WhatsAppMessageHandler, BuildContext, ProviderPayload } from './handler.interface';
-import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Reaction Message Handler
@@ -8,23 +9,32 @@ import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
 export class ReactionMessageHandler implements WhatsAppMessageHandler<ReactionMessage> {
     validate(message: ReactionMessage, context: BuildContext): void {
         if (!message.messageId) {
-            throw new InvalidMessagePayloadError('reaction', [
-                { field: 'messageId', message: 'Message ID to react to is required' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: reaction',
+                { messageType: 'reaction', validationErrors: [{ field: 'messageId', message: 'Message ID to react to is required' }] }
+            );
         }
 
         // Emoji is required (empty string to remove reaction)
         if (message.emoji === undefined || message.emoji === null) {
-            throw new InvalidMessagePayloadError('reaction', [
-                { field: 'emoji', message: 'Emoji is required (use empty string to remove reaction)' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: reaction',
+                { messageType: 'reaction', validationErrors: [{ field: 'emoji', message: 'Emoji is required (use empty string to remove reaction)' }] }
+            );
         }
 
         // Validate emoji length (single emoji)
         if (message.emoji.length > 10) {
-            throw new InvalidMessagePayloadError('reaction', [
-                { field: 'emoji', message: 'Emoji must be a single emoji character' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: reaction',
+                { messageType: 'reaction', validationErrors: [{ field: 'emoji', message: 'Emoji must be a single emoji character' }] }
+            );
         }
 
         if (!context.sendContext.isWithin24hWindow) {

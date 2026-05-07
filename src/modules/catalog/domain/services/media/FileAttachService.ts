@@ -1,4 +1,5 @@
-import { ConflictError, NotFoundError, ForbiddenError } from '../../../../../core/errors';
+import { createAppError } from '../../../../../core/errors';
+import { ERROR_CODES } from '../../../../../core/error-codes';
 import { IFileRepository } from '../../../repositories/interfaces/file.repository.interface';
 import { IProductRepository } from '../../../repositories/interfaces/product.repository.interface';
 import { IVariantRepository } from '../../../repositories/interfaces/variant.repository.interface';
@@ -42,7 +43,7 @@ export class FileAttachService {
         // 1. Validate file exists
         const file = await this.fileRepository.findById(command.fileId, options);
         if (!file) {
-            throw new NotFoundError('File not found');
+            throw createAppError(ERROR_CODES.CATALOG_FILE_NOT_FOUND, 404);
         }
 
         // 2. AUTHORIZATION CHECK
@@ -58,12 +59,12 @@ export class FileAttachService {
             }
 
             if (!product) {
-                throw new NotFoundError('Product not found or access denied');
+                throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404, 'Product not found or access denied');
             }
 
             // Check if already attached
             if (product.fileIds && product.fileIds.includes(command.fileId)) {
-                throw new ConflictError('File is already attached to this product');
+                throw createAppError(ERROR_CODES.CATALOG_FILE_ALREADY_ATTACHED, 409, 'File is already attached to this product');
             }
 
             // Add fileId to product fileIds
@@ -79,20 +80,20 @@ export class FileAttachService {
         } else if (command.ownerType === 'variant') {
             const variant = await this.variantRepository.findById(command.ownerId, options);
             if (!variant) {
-                throw new NotFoundError('Variant not found');
+                throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
             }
 
             // Verify actor owns the parent product (for vendors)
             if (command.actorType === 'vendor') {
                 const product = await this.productRepository.findById(variant.productId, command.actorId, options);
                 if (!product) {
-                    throw new ForbiddenError('Vendor does not own this variant\'s product');
+                    throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 403, "Vendor does not own this variant's product");
                 }
             }
 
             // Check if already attached
             if (variant.fileIds && variant.fileIds.includes(command.fileId)) {
-                throw new ConflictError('File is already attached to this variant');
+                throw createAppError(ERROR_CODES.CATALOG_FILE_ALREADY_ATTACHED, 409, 'File is already attached to this variant');
             }
 
             // Add fileId to variant fileIds
@@ -140,9 +141,10 @@ export class FileAttachService {
         }
 
         // ❌ Deny: Actor does not own file and is not admin
-        throw new ForbiddenError(
-            `Cannot attach file uploaded by ${file.ownerType}. ` +
-            `Only file owner or admins can attach files.`
+        throw createAppError(
+            ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED,
+            403,
+            `Cannot attach file uploaded by ${file.ownerType}. Only file owner or admins can attach files.`
         );
     }
 }

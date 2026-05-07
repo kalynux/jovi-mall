@@ -1,4 +1,5 @@
-import { ConflictError, NotFoundError } from '../../../../../core/errors';
+import { createAppError } from '../../../../../core/errors';
+import { ERROR_CODES } from '../../../../../core/error-codes';
 import { IStorageProvider } from '../../../../../core/storage';
 import { IFileRepository } from '../../../repositories/interfaces/file.repository.interface';
 
@@ -34,12 +35,12 @@ export class FileDeleteService {
     const file = await this.fileRepository.findById(command.fileId);
 
     if (!file) {
-      throw new NotFoundError('File not found');
+      throw createAppError(ERROR_CODES.CATALOG_FILE_NOT_FOUND, 404);
     }
 
     // Safety check: only delete files with no references unless forced
     if (file.usageCount > 0 && !command.force) {
-      throw new ConflictError(`Cannot delete file that is still referenced (usageCount: ${file.usageCount}). Use force=true to override.`);
+      throw createAppError(ERROR_CODES.CATALOG_FILE_STILL_REFERENCED, 409, undefined, { usageCount: file.usageCount });
     }
 
     // Delete physical file from storage

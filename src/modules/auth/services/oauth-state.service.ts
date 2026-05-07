@@ -1,4 +1,6 @@
 import jwt from 'jsonwebtoken';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 const OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET || process.env.JWT_SECRET || 'oauth-state-secret';
 const STATE_EXPIRATION = '5m'; // 5 minutes
@@ -36,7 +38,7 @@ export class OAuthStateService {
             const decoded = jwt.verify(state, OAUTH_STATE_SECRET) as any;
 
             if (!decoded.userId || !decoded.sessionId) {
-                throw new Error('Invalid state payload');
+                throw createAppError(ERROR_CODES.AUTH_OAUTH_STATE_INVALID, 400, 'Invalid state payload');
             }
 
             return {
@@ -44,10 +46,10 @@ export class OAuthStateService {
             };
         } catch (error: any) {
             if (error.name === 'TokenExpiredError') {
-                throw new Error('OAuth state expired');
+                throw createAppError(ERROR_CODES.AUTH_OAUTH_STATE_EXPIRED, 400, 'OAuth state expired');
             }
             if (error.name === 'JsonWebTokenError') {
-                throw new Error('Invalid OAuth state');
+                throw createAppError(ERROR_CODES.AUTH_OAUTH_STATE_INVALID, 400, 'Invalid OAuth state');
             }
             throw error;
         }

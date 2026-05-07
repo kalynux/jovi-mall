@@ -201,6 +201,7 @@ export class MyCoolPayGateway implements PaymentGateway {
     // });
     // return await response.json();
 
+    // eslint-disable-next-line no-restricted-syntax
     throw new Error('MyCoolPay API integration not implemented. Add API credentials to .env');
   }
 }

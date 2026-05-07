@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { Types } from 'mongoose';
-import { AppError, NotFoundError, ValidationError } from '../../../core/errors';
+import { asyncHandler } from '../../../api/middlewares/async-handler';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { ProductRepositoryMongo } from '../repositories/mongo/product.repository.mongo';
 import { ProductModel } from '../models/product.model';
 import { DigitalAssetService } from '../../digital-delivery/services/digital-asset.service';
@@ -53,140 +55,35 @@ export class VendorDigitalAssetController {
      * 5. Link to product digitalConfig
      * 6. On any failure, cleanup storage
      */
-    static async uploadAsset(req: Request, res: Response): Promise<void> {
+    static uploadAsset = asyncHandler(async (req: Request, res: Response) => {
         let uploadedFileKey: string | null = null;
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id: productId } = req.params;
 
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id: productId } = req.params;
+        const product = await productRepository.findById(productId, vendorId);
+        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+        if (product.type !== 'digital')
+            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE, 400, 'Only digital products can have digital assets');
+        if (product.digitalConfig?.assetId)
+            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_ALREADY_EXISTS, 409, 'Product already has a digital asset. Use PUT to replace it.');
+        if (!req.file)
+            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_MISSING_FILE, 400, 'No file uploaded. Use multipart/form-data with field name "file"');
+        if (req.files && Array.isArray(req.files) && req.files.length > 1)
+            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_ALREADY_EXISTS, 400, 'Only one digital asset file is allowed per request');
 
-            // Validate product exists and belongs to vendor
-            const product = await productRepository.findById(productId, vendorId);
-            if (!product) {
-                res.status(404).json({
-                    success: false,
-                    error: {
-                        code: 'NOT_FOUND',
-                        message: 'Product not found',
-                    },
-                });
-                return;
-            }
+        const file = req.file;
+        if (file.size > MAX_FILE_SIZE)
+            throw createAppError(ERROR_CODES.CATALOG_FILE_TOO_LARGE, 400, `File size ${file.size} bytes exceeds maximum ${MAX_FILE_SIZE} bytes (${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB)`);
+        if (!ALLOWED_MIME_TYPES.includes(file.mimetype))
+            throw createAppError(ERROR_CODES.CATALOG_FILE_TYPE_INVALID, 400, `File type ${file.mimetype} not allowed. Allowed types: ${ALLOWED_MIME_TYPES.join(', ')}`);
 
-            // Validate product is digital type
-            if (product.type !== 'digital') {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'INVALID_PRODUCT_TYPE',
-                        message: 'Only digital products can have digital assets',
-                    },
-                });
-                return;
-            }
+        const asset = await digitalAssetService.uploadAsset(vendorId, { buffer: file.buffer, originalName: file.originalname, mimeType: file.mimetype });
+        uploadedFileKey = asset.fileId.toString();
 
-            // Check if product already has an asset
-            if (product.digitalConfig?.assetId) {
-                res.status(409).json({
-                    success: false,
-                    error: {
-                        code: 'ASSET_ALREADY_EXISTS',
-                        message: 'Product already has a digital asset. Use PUT to replace it.',
-                    },
-                });
-                return;
-            }
+        await digitalService.createOrUpdateDigitalConfig(productId, vendorId, { assetId: asset._id.toString(), maxDownloads: null, expiresAfterDays: null });
 
-            // Validate file exists in request
-            if (!req.file) {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'MISSING_FILE',
-                        message: 'No file uploaded. Use multipart/form-data with field name "file"',
-                    },
-                });
-                return;
-            }
-
-            // VALIDATION: Reject if multiple files somehow sent
-            if (req.files && Array.isArray(req.files) && req.files.length > 1) {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'INVALID_PAYLOAD',
-                        message: 'Only one digital asset file is allowed per request',
-                    },
-                });
-                return;
-            }
-
-            const file = req.file;
-
-            // Validate file size
-            if (file.size > MAX_FILE_SIZE) {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'FILE_TOO_LARGE',
-                        message: `File size ${file.size} bytes exceeds maximum ${MAX_FILE_SIZE} bytes (${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB)`,
-                    },
-                });
-                return;
-            }
-
-            // Validate mime type
-            if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'INVALID_FILE_TYPE',
-                        message: `File type ${file.mimetype} not allowed. Allowed types: ${ALLOWED_MIME_TYPES.join(', ')}`,
-                    },
-                });
-                return;
-            }
-
-            // TRANSACTIONAL UPLOAD: Upload asset with rollback capability
-            const asset = await digitalAssetService.uploadAsset(vendorId, {
-                buffer: file.buffer,
-                originalName: file.originalname,
-                mimeType: file.mimetype,
-            });
-
-            // Store uploaded file key for rollback if needed
-            uploadedFileKey = asset.fileId.toString();
-
-            // Link asset to product digitalConfig
-            await digitalService.createOrUpdateDigitalConfig(productId, vendorId, {
-                assetId: asset._id.toString(),
-                maxDownloads: null, // Unlimited by default
-                expiresAfterDays: null, // Never expires by default
-            });
-
-            res.status(201).json({
-                success: true,
-                data: {
-                    assetId: asset._id,
-                    filename: asset.originalName,
-                    size: asset.size,
-                    mimeType: asset.mimeType,
-                },
-                message: 'Digital asset uploaded successfully',
-            });
-        } catch (error: any) {
-            // ROLLBACK: If we uploaded a file but failed to link it, clean up
-            if (uploadedFileKey && error.message?.includes('Product not found')) {
-                try {
-                    await digitalAssetService.deleteAsset(uploadedFileKey, req.auth!.role_entity._id.toString());
-                } catch (cleanupError) {
-                    console.error('[VendorDigitalAssetController] Failed to cleanup uploaded asset after error:', cleanupError);
-                }
-            }
-
-            VendorDigitalAssetController.handleError(error, res);
-        }
-    }
+        res.status(201).json({ success: true, data: { assetId: asset._id, filename: asset.originalName, size: asset.size, mimeType: asset.mimeType }, message: 'Digital asset uploaded successfully' });
+    });
 
     /**
      * PUT /api/vendor/products/:id/digital/asset
@@ -201,137 +98,43 @@ export class VendorDigitalAssetController {
      * 6. Delete old asset (file + DB)
      * 7. On failure, rollback new upload
      */
-    static async replaceAsset(req: Request, res: Response): Promise<void> {
-        let newAssetId: string | null = null;
-        let oldAssetId: string | null = null;
+    static replaceAsset = asyncHandler(async (req: Request, res: Response) => {
+        // let newAssetId: string | null;
+        // let oldAssetId: string | null;
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id: productId } = req.params;
+
+        const product = await productRepository.findById(productId, vendorId);
+        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+        if (product.type !== 'digital')
+            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE, 400, 'Only digital products can have digital assets');
+        if (!product.digitalConfig?.assetId)
+            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_MISSING, 404, 'Product has no digital asset to replace. Use POST to upload.');
+
+        const oldAssetId = product.digitalConfig.assetId.toString();
+
+        if (!req.file)
+            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_MISSING_FILE, 400, 'No file uploaded');
+
+        const file = req.file;
+        if (file.size > MAX_FILE_SIZE)
+            throw createAppError(ERROR_CODES.CATALOG_FILE_TOO_LARGE, 400, `File exceeds maximum size of ${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB`);
+        if (!ALLOWED_MIME_TYPES.includes(file.mimetype))
+            throw createAppError(ERROR_CODES.CATALOG_FILE_TYPE_INVALID, 400, `File type ${file.mimetype} not allowed`);
+
+        const newAsset = await digitalAssetService.uploadAsset(vendorId, { buffer: file.buffer, originalName: file.originalname, mimeType: file.mimetype });
+        const newAssetId = newAsset._id.toString();
+
+        await digitalService.createOrUpdateDigitalConfig(productId, vendorId, { assetId: newAssetId, maxDownloads: product.digitalConfig.maxDownloads, expiresAfterDays: product.digitalConfig.expiresAfterDays });
 
         try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id: productId } = req.params;
-
-            // Validate product
-            const product = await productRepository.findById(productId, vendorId);
-            if (!product) {
-                res.status(404).json({
-                    success: false,
-                    error: {
-                        code: 'NOT_FOUND',
-                        message: 'Product not found',
-                    },
-                });
-                return;
-            }
-
-            if (product.type !== 'digital') {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'INVALID_PRODUCT_TYPE',
-                        message: 'Only digital products can have digital assets',
-                    },
-                });
-                return;
-            }
-
-            // Check if product has existing asset
-            if (!product.digitalConfig?.assetId) {
-                res.status(404).json({
-                    success: false,
-                    error: {
-                        code: 'NO_EXISTING_ASSET',
-                        message: 'Product has no digital asset to replace. Use POST to upload.',
-                    },
-                });
-                return;
-            }
-
-            oldAssetId = product.digitalConfig.assetId.toString();
-
-            // Validate file
-            if (!req.file) {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'MISSING_FILE',
-                        message: 'No file uploaded',
-                    },
-                });
-                return;
-            }
-
-            const file = req.file;
-
-            // Validate file size
-            if (file.size > MAX_FILE_SIZE) {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'FILE_TOO_LARGE',
-                        message: `File exceeds maximum size of ${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB`,
-                    },
-                });
-                return;
-            }
-
-            // Validate mime type
-            if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'INVALID_FILE_TYPE',
-                        message: `File type ${file.mimetype} not allowed`,
-                    },
-                });
-                return;
-            }
-
-            // Upload new asset
-            const newAsset = await digitalAssetService.uploadAsset(vendorId, {
-                buffer: file.buffer,
-                originalName: file.originalname,
-                mimeType: file.mimetype,
-            });
-
-            newAssetId = newAsset._id.toString();
-
-            // Update product to point to new asset
-            await digitalService.createOrUpdateDigitalConfig(productId, vendorId, {
-                assetId: newAssetId,
-                maxDownloads: product.digitalConfig.maxDownloads,
-                expiresAfterDays: product.digitalConfig.expiresAfterDays,
-            });
-
-            // Delete old asset
-            try {
-                await digitalAssetService.deleteAsset(oldAssetId, vendorId);
-            } catch (deleteError) {
-                // Log but don't fail - old asset will be orphaned and cleaned by GC
-                console.error('[VendorDigitalAssetController] Failed to delete old asset:', deleteError);
-            }
-
-            res.json({
-                success: true,
-                data: {
-                    assetId: newAsset._id,
-                    filename: newAsset.originalName,
-                    size: newAsset.size,
-                    mimeType: newAsset.mimeType,
-                },
-                message: 'Digital asset replaced successfully',
-            });
-        } catch (error: any) {
-            // ROLLBACK: If we uploaded new file but failed, try to restore old asset link
-            if (newAssetId && oldAssetId) {
-                try {
-                    await digitalAssetService.deleteAsset(newAssetId, req.auth!.role_entity._id.toString());
-                } catch (cleanupError) {
-                    console.error('[VendorDigitalAssetController] Failed to cleanup new asset after error:', cleanupError);
-                }
-            }
-
-            VendorDigitalAssetController.handleError(error, res);
+            await digitalAssetService.deleteAsset(oldAssetId, vendorId);
+        } catch (deleteError) {
+            console.error('[VendorDigitalAssetController] Failed to delete old asset:', deleteError);
         }
-    }
+
+        res.json({ success: true, data: { assetId: newAsset._id, filename: newAsset.originalName, size: newAsset.size, mimeType: newAsset.mimeType }, message: 'Digital asset replaced successfully' });
+    });
 
     /**
      * PATCH /api/vendor/products/:id/digital/toggle
@@ -340,168 +143,44 @@ export class VendorDigitalAssetController {
      * Quick enable/disable without requiring full product update.
      * Useful for vendors who need to temporarily disable downloads.
      */
-    static async toggleAvailability(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id: productId } = req.params;
+    static toggleAvailability = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id: productId } = req.params;
 
-            // Validate product exists and belongs to vendor (get mutable document)
-            const product = await ProductModel.findOne({
-                _id: productId,
-                vendorId: new Types.ObjectId(vendorId),
-                deletedAt: null,
-            });
+        const product = await ProductModel.findOne({ _id: productId, vendorId: new Types.ObjectId(vendorId), deletedAt: null });
+        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+        if (product.type !== 'digital')
+            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE, 400, 'Only digital products can have digital assets toggled');
+        if (!product.digitalConfig)
+            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_CONFIG_MISSING, 404, 'Product has no digital configuration');
 
-            if (!product) {
-                res.status(404).json({
-                    success: false,
-                    error: {
-                        code: 'NOT_FOUND',
-                        message: 'Product not found',
-                    },
-                });
-                return;
-            }
+        const newState = !product.digitalConfig.isActive;
+        product.digitalConfig.isActive = newState;
+        await product.save();
 
-            // Validate product is digital type
-            if (product.type !== 'digital') {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'INVALID_PRODUCT_TYPE',
-                        message: 'Only digital products can have digital assets toggled',
-                    },
-                });
-                return;
-            }
-
-            // Check if digital config exists
-            if (!product.digitalConfig) {
-                res.status(404).json({
-                    success: false,
-                    error: {
-                        code: 'NO_DIGITAL_CONFIG',
-                        message: 'Product has no digital configuration',
-                    },
-                });
-                return;
-            }
-
-            // Toggle the isActive flag
-            const newState = !product.digitalConfig.isActive;
-            product.digitalConfig.isActive = newState;
-            await product.save();
-
-            res.json({
-                success: true,
-                data: {
-                    isActive: newState,
-                    message: newState
-                        ? 'Digital asset enabled - customers can now download'
-                        : 'Digital asset disabled - downloads are temporarily blocked',
-                },
-                message: 'Digital asset availability toggled successfully',
-            });
-        } catch (error) {
-            VendorDigitalAssetController.handleError(error, res);
-        }
-    }
+        res.json({ success: true, data: { isActive: newState, message: newState ? 'Digital asset enabled - customers can now download' : 'Digital asset disabled - downloads are temporarily blocked' }, message: 'Digital asset availability toggled successfully' });
+    });
 
     /**
      * DELETE /api/vendor/products/:id/digital/asset
      * Remove digital asset (unlink from product + soft delete)
      */
-    static async removeAsset(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id: productId } = req.params;
+    static removeAsset = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id: productId } = req.params;
 
-            // Validate product
-            const product = await productRepository.findById(productId, vendorId);
-            if (!product) {
-                res.status(404).json({
-                    success: false,
-                    error: {
-                        code: 'NOT_FOUND',
-                        message: 'Product not found',
-                    },
-                });
-                return;
-            }
+        const product = await productRepository.findById(productId, vendorId);
+        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+        if (product.type !== 'digital' || !product.digitalConfig)
+            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_CONFIG_MISSING, 400, 'Product has no digital configuration');
+        if (!product.digitalConfig.assetId)
+            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_MISSING, 404, 'Product has no digital asset to remove');
 
-            if (product.type !== 'digital' || !product.digitalConfig) {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'NO_DIGITAL_CONFIG',
-                        message: 'Product has no digital configuration',
-                    },
-                });
-                return;
-            }
+        const assetId = product.digitalConfig.assetId.toString();
+        await digitalService.deactivateDigitalConfig(productId, vendorId);
+        await digitalAssetService.deleteAsset(assetId, vendorId);
 
-            if (!product.digitalConfig.assetId) {
-                res.status(404).json({
-                    success: false,
-                    error: {
-                        code: 'NO_ASSET',
-                        message: 'Product has no digital asset to remove',
-                    },
-                });
-                return;
-            }
-
-            const assetId = product.digitalConfig.assetId.toString();
-
-            // Deactivate digital config (unlink asset from product)
-            await digitalService.deactivateDigitalConfig(productId, vendorId);
-
-            // Delete the asset
-            await digitalAssetService.deleteAsset(assetId, vendorId);
-
-            res.json({
-                success: true,
-                message: 'Digital asset removed successfully',
-            });
-        } catch (error) {
-            VendorDigitalAssetController.handleError(error, res);
-        }
-    }
-
-    /**
-     * Centralized error handler
-     */
-    private static handleError(error: any, res: Response): void {
-        if (error instanceof AppError) {
-            res.status(error.statusCode).json({
-                success: false,
-                error: {
-                    code: error.code,
-                    message: error.message,
-                },
-            });
-            return;
-        }
-
-        // Handle Mongoose validation errors
-        if (error.name === 'ValidationError') {
-            res.status(400).json({
-                success: false,
-                error: {
-                    code: 'VALIDATION_ERROR',
-                    message: error.message,
-                },
-            });
-            return;
-        }
-
-        console.error('[VendorDigitalAssetController] Unexpected error:', error);
-        res.status(500).json({
-            success: false,
-            error: {
-                code: 'INTERNAL_ERROR',
-                message: 'An unexpected error occurred',
-            },
-        });
-    }
+        res.json({ success: true, message: 'Digital asset removed successfully' });
+    });
 }
+

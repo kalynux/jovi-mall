@@ -1,9 +1,16 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import { requestIdMiddleware } from './api/middlewares/request-id.middleware';
+import { errorHandlerMiddleware } from './api/middlewares/error-handler.middleware';
+import { ERROR_CODES } from './core/error-codes';
+import { createAppError } from './core/errors';
 
 const app = express();
+
+// ─── Request Correlation ID (must be first) ───────────────────────────────────
+app.use(requestIdMiddleware);
 
 // Middleware
 app.use(helmet({
@@ -153,5 +160,13 @@ app.get('/test-auth', (req, res) => {
 
 import { apiRouter } from './api';
 app.use('/api', apiRouter);
+
+// ─── 404 Handler (unmatched routes) ──────────────────────────────────────────
+app.use((_req: Request, _res: Response, next: NextFunction) => {
+  next(createAppError(ERROR_CODES.NOT_FOUND, 404, 'Route not found'));
+});
+
+// ─── Global Error Handler (must be last) ─────────────────────────────────────
+app.use(errorHandlerMiddleware);
 
 export { app };

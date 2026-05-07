@@ -14,7 +14,8 @@ import { OrderRepository } from '../../orders/order.repository';
 import { OrderService } from '../../orders/order.service';
 import { Booking, IBooking } from '../../booking/models/booking.model';
 import { BookingCalendarSyncService } from '../../booking/services/booking-calendar-sync.service';
-import { ValidationError } from '../../../core/errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
 
 /**
@@ -90,7 +91,7 @@ export class PaymentOrchestratorService {
     const order = await this.orderRepo.findById(orderId);
 
     if (!order) {
-      throw new ValidationError('Order not found');
+      throw createAppError(ERROR_CODES.PAYMENT_ORDER_NOT_FOUND, 404);
     }
 
     // Validate order belongs to customer (assuming userId from channel or context)
@@ -99,11 +100,11 @@ export class PaymentOrchestratorService {
 
     // Validate order status
     if (order.payment_status === 'paid') {
-      throw new ValidationError('Order already paid');
+      throw createAppError(ERROR_CODES.PAYMENT_ORDER_ALREADY_PAID, 409);
     }
 
     if (order.payment_status !== 'AWAITING_PAYMENT' && order.payment_status !== 'pending') {
-      throw new ValidationError(`Cannot initiate payment for order with status: ${order.payment_status}`);
+      throw createAppError(ERROR_CODES.PAYMENT_INVALID_ORDER_STATUS, 400, undefined, { status: order.payment_status });
     }
 
     // 2. GENERATE IDEMPOTENCY KEY
@@ -141,7 +142,7 @@ export class PaymentOrchestratorService {
     // 4. CREATE NEW PAYMENT TRANSACTION
     const gatewayInstance = this.gateways.get(gateway);
     if (!gatewayInstance) {
-      throw new ValidationError(`Gateway ${gateway} not supported`);
+      throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, undefined, { gateway });
     }
 
     // Determine payment method
@@ -212,7 +213,7 @@ export class PaymentOrchestratorService {
       });
       await transaction.save();
 
-      throw new ValidationError(`Payment initiation failed: ${error.message}`);
+      throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, { cause: error.message });
     }
   }
 
@@ -256,29 +257,29 @@ export class PaymentOrchestratorService {
     const booking = await Booking.findById(bookingId);
 
     if (!booking) {
-      throw new ValidationError('Booking not found');
+      throw createAppError(ERROR_CODES.PAYMENT_BOOKING_NOT_FOUND, 404);
     }
 
     // 2. VALIDATE PAYMENT ELIGIBILITY
 
     // Check if cancelled
     if (booking.status === 'cancelled') {
-      throw new ValidationError('Cannot pay for cancelled booking');
+      throw createAppError(ERROR_CODES.PAYMENT_BOOKING_CANCELLED, 400);
     }
 
     // Check if payment is required
     if (!booking.requiresPayment) {
-      throw new ValidationError('This booking does not require payment');
+      throw createAppError(ERROR_CODES.PAYMENT_BOOKING_NO_PAYMENT_REQUIRED, 400);
     }
 
     // Check if already paid
     if (booking.paymentStatus === 'paid') {
-      throw new ValidationError('Booking already paid');
+      throw createAppError(ERROR_CODES.PAYMENT_BOOKING_ALREADY_PAID, 409);
     }
 
     // USER REFINEMENT: Safety lock - reject if pending
     if (booking.paymentStatus === 'pending') {
-      throw new ValidationError('Payment already in progress. Please complete or cancel the pending payment.');
+      throw createAppError(ERROR_CODES.PAYMENT_BOOKING_IN_PROGRESS, 409);
     }
 
     const userId = booking.userId.toString();
@@ -322,7 +323,7 @@ export class PaymentOrchestratorService {
     // 5. CREATE NEW PAYMENT TRANSACTION
     const gatewayInstance = this.gateways.get(gateway);
     if (!gatewayInstance) {
-      throw new ValidationError(`Gateway ${gateway} not supported`);
+      throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, undefined, { gateway });
     }
 
     // Determine payment method
@@ -400,7 +401,7 @@ export class PaymentOrchestratorService {
       booking.paymentStatus = 'failed';
       await booking.save();
 
-      throw new ValidationError(`Payment initiation failed: ${error.message}`);
+      throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, { cause: error.message });
     }
   }
 
@@ -422,7 +423,7 @@ export class PaymentOrchestratorService {
     const transaction = await PaymentTransactionModel.findById(transactionId);
 
     if (!transaction) {
-      throw new ValidationError('Payment transaction not found');
+      throw createAppError(ERROR_CODES.PAYMENT_TRANSACTION_NOT_FOUND, 404);
     }
 
     // Already in terminal state
@@ -437,7 +438,7 @@ export class PaymentOrchestratorService {
     // Call gateway to verify
     const gatewayInstance = this.gateways.get(transaction.gateway);
     if (!gatewayInstance) {
-      throw new ValidationError(`Gateway ${transaction.gateway} not supported`);
+      throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, undefined, { gateway: transaction.gateway });
     }
 
     try {
@@ -471,7 +472,7 @@ export class PaymentOrchestratorService {
       };
 
     } catch (error: any) {
-      throw new ValidationError(`Payment verification failed: ${error.message}`);
+      throw createAppError(ERROR_CODES.PAYMENT_VERIFICATION_FAILED, 502, undefined, { cause: error.message });
     }
   }
 
@@ -524,11 +525,11 @@ export class PaymentOrchestratorService {
         eventType = payload.event;
         newStatus = this.mapMyCoolPayStatus(payload.status);
       } else {
-        throw new Error(`Unsupported gateway: ${gateway}`);
+        throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, undefined, { gateway });
       }
 
       if (!gatewayRef) {
-        throw new Error('Could not extract gateway reference from webhook payload');
+        throw createAppError(ERROR_CODES.PAYMENT_WEBHOOK_INVALID_PAYLOAD, 400);
       }
 
       // 3. FIND TRANSACTION
@@ -638,7 +639,7 @@ export class PaymentOrchestratorService {
    */
   private async handleBookingPaymentSuccess(transaction: IPaymentTransaction): Promise<void> {
     if (!transaction.bookingId) {
-      throw new Error('Transaction does not have a bookingId');
+      throw createAppError(ERROR_CODES.PAYMENT_MISSING_BOOKING_ID, 500);
     }
 
     const booking = await Booking.findById(transaction.bookingId);

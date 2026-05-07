@@ -4,15 +4,13 @@ import { requireAuth } from '../../../../api/middlewares/auth.middleware';
 import { OAuthStateService } from '../../../auth/services/oauth-state.service';
 import { ConnectedCalendarAccount } from './connected-account.model';
 import { VendorModel } from '../../../vendors/vendor.model';
+import { asyncHandler } from '../../../../api/middlewares/async-handler';
+import { createAppError } from '../../../../core/errors';
+import { ERROR_CODES } from '../../../../core/error-codes';
 
 const router = Router();
 const provider = new GoogleCalendarProvider();
 const oauthStateService = new OAuthStateService();
-
-// Helper to handle async errors
-const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => Promise<any>) => (req: Request, res: Response, next: NextFunction) => {
-  Promise.resolve(fn(req, res, next)).catch(next);
-};
 
 /**
  * GET /integrations/google/connect
@@ -22,7 +20,7 @@ const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => P
 router.get(
   '/connect',
   requireAuth,
-  asyncHandler(async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.auth!.user.id;
 
     // Generate OAuth state for CSRF protection — signed JWT is the security mechanism;
@@ -43,7 +41,7 @@ router.get(
 router.get(
   '/callback',
   requireAuth,
-  asyncHandler(async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const { code, state } = req.query;
     const userId = req.auth!.user.id;
 
@@ -51,12 +49,12 @@ router.get(
 
     if (!code || typeof code !== 'string') {
       console.log('Missing or invalid authorization code');
-      return res.status(400).json({ error: 'Missing or invalid authorization code' });
+      return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'Missing or invalid authorization code'));
     }
 
     if (!state || typeof state !== 'string') {
       console.log('Missing OAuth state');
-      return res.status(400).json({ error: 'Missing OAuth state' });
+      return next(createAppError(ERROR_CODES.AUTH_OAUTH_STATE_INVALID, 400, 'Missing OAuth state'));
     }
 
     // Validate OAuth state (CSRF protection — the signed state JWT is the guarantee)
@@ -66,11 +64,11 @@ router.get(
       // Verify userId in state matches the authenticated user from cookie
       if (stateUserId !== userId) {
         console.log('User ID mismatch between OAuth state and cookie auth');
-        return res.status(403).json({ error: 'Invalid OAuth state: user mismatch' });
+        return next(createAppError(ERROR_CODES.AUTH_OAUTH_STATE_INVALID, 403, 'Invalid OAuth state: user mismatch'));
       }
     } catch (error: any) {
       console.log('State validation failed:', error.message);
-      return res.status(403).json({ error: 'Invalid or expired OAuth state' });
+      return next(createAppError(ERROR_CODES.AUTH_OAUTH_STATE_EXPIRED, 403, 'Invalid or expired OAuth state'));
     }
 
     // Check if user is a vendor and get vendorId
@@ -92,9 +90,9 @@ router.get(
 router.get(
   '/status',
   requireAuth,
-  asyncHandler(async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.auth?.user.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!userId) return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
 
     const account = await ConnectedCalendarAccount.findOne({ userId, provider: 'google' });
 
@@ -117,9 +115,9 @@ router.get(
 router.post(
   '/disconnect',
   requireAuth,
-  asyncHandler(async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.auth?.user.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!userId) return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
 
     await provider.disconnect(userId);
     res.json({ success: true, message: 'Disconnected successfully' });
@@ -133,15 +131,15 @@ router.post(
 router.get(
   '/test',
   requireAuth,
-  asyncHandler(async (req: Request, res: Response) => {
+  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.auth?.user.id;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+    if (!userId) return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
 
     try {
       const result = await provider.testConnection(userId);
       res.json({ success: result });
     } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
+      next(createAppError(ERROR_CODES.INTEGRATION_UNSUPPORTED_CALENDAR_PROVIDER, 500, error.message));
     }
   })
 );

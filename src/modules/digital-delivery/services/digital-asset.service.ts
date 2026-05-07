@@ -2,6 +2,8 @@ import { Types } from 'mongoose';
 import { DigitalAssetModel, IDigitalAsset } from '../models/digital-asset.model';
 import { FileModel } from '../../catalog/models/file.model';
 import { IStorageProvider } from '../../../core/storage/storage-provider.interface';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * DigitalAssetService - Vendor file management
@@ -61,18 +63,18 @@ export class DigitalAssetService {
    */
   async deleteAsset(assetId: string, vendorId: string): Promise<void> {
     if (!Types.ObjectId.isValid(assetId)) {
-      throw new Error('Invalid asset ID');
+      throw createAppError(ERROR_CODES.DIGITAL_ASSET_NOT_FOUND, 400, 'Invalid asset ID');
     }
 
     // Load asset
     const asset = await DigitalAssetModel.findById(assetId);
     if (!asset) {
-      throw new Error('Digital asset not found');
+      throw createAppError(ERROR_CODES.DIGITAL_ASSET_NOT_FOUND, 404, 'Digital asset not found');
     }
 
     // Verify ownership
     if (asset.vendorId.toString() !== vendorId) {
-      throw new Error('Unauthorized: You do not own this asset');
+      throw createAppError(ERROR_CODES.DIGITAL_ASSET_ACCESS_DENIED, 403, 'Unauthorized: You do not own this asset');
     }
 
     // Check if asset is in use by any product
@@ -83,9 +85,7 @@ export class DigitalAssetService {
     });
 
     if (inUse) {
-      throw new Error(
-        'Cannot delete asset: It is currently linked to one or more products'
-      );
+      throw createAppError(ERROR_CODES.DIGITAL_ASSET_IN_USE, 409, 'Cannot delete asset: It is currently linked to one or more products');
     }
 
     // Soft delete the asset
@@ -107,7 +107,7 @@ export class DigitalAssetService {
    */
   async getAsset(assetId: string, vendorId: string): Promise<IDigitalAsset> {
     if (!Types.ObjectId.isValid(assetId)) {
-      throw new Error('Invalid asset ID');
+      throw createAppError(ERROR_CODES.DIGITAL_ASSET_NOT_FOUND, 400, 'Invalid asset ID');
     }
 
     const asset = await DigitalAssetModel.findOne({
@@ -117,7 +117,7 @@ export class DigitalAssetService {
     });
 
     if (!asset) {
-      throw new Error('Digital asset not found');
+      throw createAppError(ERROR_CODES.DIGITAL_ASSET_NOT_FOUND, 404, 'Digital asset not found');
     }
 
     return asset;

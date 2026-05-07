@@ -1,6 +1,7 @@
 import { AudioMessage } from '../types/whatsapp-message.types';
 import { WhatsAppMessageHandler, BuildContext, ProviderPayload } from './handler.interface';
-import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Audio Message Handler
@@ -8,15 +9,21 @@ import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
 export class AudioMessageHandler implements WhatsAppMessageHandler<AudioMessage> {
     validate(message: AudioMessage, context: BuildContext): void {
         if (!message.link && !message.id) {
-            throw new InvalidMessagePayloadError('audio', [
-                { field: 'link/id', message: 'Either link or id must be provided' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: audio',
+                { messageType: 'audio', validationErrors: [{ field: 'link/id', message: 'Either link or id must be provided' }] }
+            );
         }
 
         if (message.link && message.id) {
-            throw new InvalidMessagePayloadError('audio', [
-                { field: 'link/id', message: 'Provide either link OR id, not both' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: audio',
+                { messageType: 'audio', validationErrors: [{ field: 'link/id', message: 'Provide either link OR id, not both' }] }
+            );
         }
 
         if (!context.sendContext.isWithin24hWindow) {

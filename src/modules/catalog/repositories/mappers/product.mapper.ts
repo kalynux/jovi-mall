@@ -81,7 +81,6 @@ export class ProductMapper implements IMapper<Product, IProduct> {
     // This is a partial implementation effectively, as we don't always create from full domain objects
     // But for a rigorous mapper:
     return {
-      // @ts-ignore: _id is optional in creation usually, handled by Mongoose
       _id: domain.id,
       vendorId: domain.vendorId,
       type: domain.type,

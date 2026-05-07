@@ -1,6 +1,7 @@
 import bcrypt from 'bcrypt';
 import { UserRepository } from './user.repository';
-import { NotFoundError, ForbiddenError } from '../../core/errors';
+import { createAppError } from '../../core/errors';
+import { ERROR_CODES } from '../../core/error-codes';
 import { eventBus } from '../../core/events/event-bus';
 import { auditLogger } from '../../core/audit/audit-logger';
 
@@ -46,13 +47,13 @@ export class UserService {
     // 1. Load user
     const user = await this.userRepo.findById(userId);
     if (!user) {
-      throw new NotFoundError('User not found');
+      throw createAppError(ERROR_CODES.USER_NOT_FOUND, 404);
     }
 
     // 2. Verify old password
     const isValid = await bcrypt.compare(oldPassword, user.password_hash);
     if (!isValid) {
-      throw new ForbiddenError('Current password is incorrect');
+      throw createAppError(ERROR_CODES.USER_INVALID_PASSWORD, 403, 'Current password is incorrect');
     }
 
     // 3. Hash new password (bcrypt cost factor 12 for enterprise security)

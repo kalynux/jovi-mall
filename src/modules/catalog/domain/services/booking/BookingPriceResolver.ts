@@ -1,7 +1,8 @@
 import { Product } from '../../../repositories/mappers/product.mapper';
 import { IVariantRepository } from '../../../repositories/interfaces/variant.repository.interface';
 import { DEFAULT_VARIANT_SIGNATURE } from '../../services/variants/constants';
-import { ValidationError } from '../../../../../core/errors';
+import { createAppError } from '../../../../../core/errors';
+import { ERROR_CODES } from '../../../../../core/error-codes';
 
 export interface PriceBreakdown {
   basePrice: number;
@@ -54,9 +55,7 @@ export class BookingPriceResolver {
     const activeVariants = variants.filter(v => v.status === 'active');
 
     if (activeVariants.length === 0) {
-      throw new ValidationError(
-        `Product ${product.id} has no active variants. Cannot determine price.`
-      );
+      throw createAppError(ERROR_CODES.CATALOG_BOOKING_INVALID_PRICE, 422, undefined, { productId: product.id, reason: 'no_active_variants' });
     }
 
     // 3. Find the default variant
@@ -65,16 +64,12 @@ export class BookingPriceResolver {
     );
 
     if (!defaultVariant) {
-      throw new ValidationError(
-        `Product ${product.id} has no default variant. Unable to resolve booking price.`
-      );
+      throw createAppError(ERROR_CODES.CATALOG_BOOKING_INVALID_PRICE, 422, undefined, { productId: product.id, reason: 'no_default_variant' });
     }
 
     // 4. Validate variant price
     if (defaultVariant.price < 0) {
-      throw new ValidationError(
-        `Invalid variant price for product ${product.id}: price cannot be negative`
-      );
+      throw createAppError(ERROR_CODES.CATALOG_BOOKING_INVALID_PRICE, 422, undefined, { productId: product.id, reason: 'negative_price' });
     }
 
     // 5. Calculate duration multiplier
@@ -83,17 +78,13 @@ export class BookingPriceResolver {
     const slotDurationMinutes = (slot.end.getTime() - slot.start.getTime()) / (1000 * 60);
 
     if (!product.serviceConfig) {
-      throw new ValidationError(
-        `Service product ${product.id} is missing serviceConfig`
-      );
+      throw createAppError(ERROR_CODES.CATALOG_BOOKING_MISSING_SERVICE_CONFIG, 422, undefined, { productId: product.id });
     }
 
     const configuredDurationMinutes = product.serviceConfig.durationMinutes;
 
     if (configuredDurationMinutes <= 0) {
-      throw new ValidationError(
-        `Invalid service duration for product ${product.id}: must be greater than 0`
-      );
+      throw createAppError(ERROR_CODES.CATALOG_BOOKING_INVALID_PRICE, 422, undefined, { productId: product.id, reason: 'invalid_duration' });
     }
 
     const durationMultiplier = slotDurationMinutes / configuredDurationMinutes;

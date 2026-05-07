@@ -1,6 +1,7 @@
 import { MediaCarouselMessage } from '../types/whatsapp-message.types';
 import { WhatsAppMessageHandler, BuildContext, ProviderPayload } from './handler.interface';
-import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Media Carousel Message Handler
@@ -8,30 +9,42 @@ import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
 export class MediaCarouselMessageHandler implements WhatsAppMessageHandler<MediaCarouselMessage> {
     validate(message: MediaCarouselMessage, context: BuildContext): void {
         if (!message.cards || message.cards.length === 0) {
-            throw new InvalidMessagePayloadError('media_carousel', [
-                { field: 'cards', message: 'At least one card is required' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: media_carousel',
+                { messageType: 'media_carousel', validationErrors: [{ field: 'cards', message: 'At least one card is required' }] }
+            );
         }
 
         // Validate WhatsApp's carousel limits (typically 10 cards max)
         if (message.cards.length > 10) {
-            throw new InvalidMessagePayloadError('media_carousel', [
-                { field: 'cards', message: 'Maximum 10 cards allowed in carousel' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: media_carousel',
+                { messageType: 'media_carousel', validationErrors: [{ field: 'cards', message: 'Maximum 10 cards allowed in carousel' }] }
+            );
         }
 
         // Validate each card
         for (const card of message.cards) {
             if (!card.header || !card.body) {
-                throw new InvalidMessagePayloadError('media_carousel', [
-                    { field: 'cards', message: 'Each card must have header and body' },
-                ]);
+                throw createAppError(
+                    ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                    400,
+                    'Invalid payload for message type: media_carousel',
+                    { messageType: 'media_carousel', validationErrors: [{ field: 'cards', message: 'Each card must have header and body' }] }
+                );
             }
 
             if (!card.body.text) {
-                throw new InvalidMessagePayloadError('media_carousel', [
-                    { field: 'cards.body.text', message: 'Card body text is required' },
-                ]);
+                throw createAppError(
+                    ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                    400,
+                    'Invalid payload for message type: media_carousel',
+                    { messageType: 'media_carousel', validationErrors: [{ field: 'cards.body.text', message: 'Card body text is required' }] }
+                );
             }
         }
 

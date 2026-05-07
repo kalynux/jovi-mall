@@ -11,7 +11,8 @@ import {
 } from '../repositories/vendor-notification-preference.repository';
 import { IVendorNotification } from '../models/vendor-notification.model';
 import { IVendorNotificationPreference } from '../models/vendor-notification-preference.model';
-import { NotFoundError } from '../../../core/errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 export interface ListNotificationsResult {
     notifications: LeanVendorNotification[];
@@ -80,7 +81,7 @@ export class VendorNotificationService {
         const notification = await this.notificationRepo.markAsRead(notificationId, vendorId);
 
         if (!notification) {
-            throw new NotFoundError('Notification not found');
+            throw createAppError(ERROR_CODES.VENDOR_NOTIFICATION_NOT_FOUND, 404, 'Notification not found');
         }
 
         return notification;

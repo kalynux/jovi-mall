@@ -16,12 +16,12 @@ const controller = new BrowserAuthController();
  */
 
 /** POST /api/auth/browser/login — issue JWT cookies for browser clients */
-router.post('/login', requireJsonContent, (req, res) => controller.login(req, res));
+router.post('/login', requireJsonContent, (req, res, next) => controller.login(req, res, next));
 
 /** POST /api/auth/browser/refresh — issue new access_token cookie */
-router.post('/refresh', requireJsonContent, (req, res) => controller.refresh(req, res));
+router.post('/refresh', requireJsonContent, (req, res, next) => controller.refresh(req, res, next));
 
 /** POST /api/auth/browser/logout — clear both auth cookies */
-router.post('/logout', requireJsonContent, (req, res) => controller.logout(req, res));
+router.post('/logout', requireJsonContent, (req, res, next) => controller.logout(req, res, next));
 
 export const browserAuthRoutes = router;

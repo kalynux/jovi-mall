@@ -9,7 +9,8 @@ import { UserModel } from "../../users/user.model";
 import { getCalendarColorIdByStatus } from '../../integrations/calendar/utils/calendar-event-colors.util';
 import { eventBus } from '../../../core/events/event-bus';
 import { BookingCalendarSyncService } from './booking-calendar-sync.service';
-import { ConflictError, NotFoundError, ValidationError, ForbiddenError } from '../../../core/errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { format } from 'date-fns';
 
 export class BookingService {
@@ -32,12 +33,12 @@ export class BookingService {
 
     const product = await ProductModel.findById(productId);
     if (!product) {
-      throw new Error('Product not found');
+      throw createAppError(ERROR_CODES.BOOKING_PRODUCT_NOT_FOUND, 404, 'Product not found');
     }
 
     const user = await UserModel.findById(userId);
     if (!user) {
-      throw new Error('User not found');
+      throw createAppError(ERROR_CODES.BOOKING_USER_NOT_FOUND, 404, 'User not found');
     }
     // Step 1: Assert slot is locked by the owner
     await this.slotLockService.assertLocked(slotId, lockOwnerId);
@@ -109,16 +110,16 @@ export class BookingService {
   ): Promise<IBooking> {
     const booking = await Booking.findById(bookingId);
     if (!booking) {
-      throw new Error('Booking not found');
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
     }
 
     // Verify ownership
     if (booking.userId.toString() !== userId) {
-      throw new Error('Unauthorized to cancel this booking');
+      throw createAppError(ERROR_CODES.BOOKING_UNAUTHORIZED, 403, 'Unauthorized to cancel this booking');
     }
 
     if (booking.status === BookingStatus.CANCELLED) {
-      throw new Error('Booking is already cancelled');
+      throw createAppError(ERROR_CODES.BOOKING_ALREADY_CANCELLED, 409, 'Booking is already cancelled');
     }
 
     // Delete from calendar if exists
@@ -159,11 +160,11 @@ export class BookingService {
   ): Promise<IBooking> {
     const booking = await Booking.findById(bookingId);
     if (!booking) {
-      throw new Error('Booking not found');
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
     }
 
     if (booking.status === BookingStatus.CANCELLED) {
-      throw new Error('Cannot reschedule a cancelled booking');
+      throw createAppError(ERROR_CODES.BOOKING_ALREADY_CANCELLED, 409, 'Cannot reschedule a cancelled booking');
     }
 
     // Step 1: Assert new slot is locked
@@ -193,7 +194,7 @@ export class BookingService {
         });
       } catch (error) {
         console.error('Failed to update calendar event:', error);
-        throw new Error('Failed to reschedule in calendar');
+        throw createAppError(ERROR_CODES.BOOKING_CALENDAR_SYNC_FAILED, 500, 'Failed to reschedule in calendar');
       }
     }
 
@@ -262,17 +263,14 @@ export class BookingService {
     });
 
     if (!booking) {
-      throw new Error('Booking not found');
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
     }
 
     const currentStatus = booking.status;
 
     // Validate transition
     if (!VALID_TRANSITIONS[currentStatus]?.includes(newStatus)) {
-      throw new Error(
-        `Cannot transition from ${currentStatus} to ${newStatus}. ` +
-        `Allowed transitions: ${VALID_TRANSITIONS[currentStatus]?.join(', ') || 'none (terminal state)'}`
-      );
+      throw createAppError(ERROR_CODES.BOOKING_INVALID_STATUS_TRANSITION, 400, `Cannot transition from ${currentStatus} to ${newStatus}. Allowed transitions: ${VALID_TRANSITIONS[currentStatus]?.join(', ') || 'none (terminal state)'}`);
     }
 
     // Update status
@@ -341,22 +339,20 @@ export class BookingService {
     });
 
     if (!booking) {
-      throw new NotFoundError('Booking not found');
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
     }
 
     if (!booking.requiresPayment) {
-      throw new ValidationError('This booking does not require payment');
+      throw createAppError(ERROR_CODES.BOOKING_PAYMENT_NOT_REQUIRED, 400, 'This booking does not require payment');
     }
 
     if (booking.paymentStatus === 'paid') {
-      throw new ConflictError('Booking is already marked as paid');
+      throw createAppError(ERROR_CODES.BOOKING_ALREADY_PAID, 409, 'Booking is already marked as paid');
     }
 
     // Only allow for bookings that are cash or have no payment method yet
     if (booking.paymentMethod && booking.paymentMethod !== 'cash') {
-      throw new ValidationError(
-        `Cannot manually mark a '${booking.paymentMethod}' booking as paid. Only cash bookings are eligible.`
-      );
+      throw createAppError(ERROR_CODES.BOOKING_INVALID_PAYMENT_METHOD, 400, `Cannot manually mark a '${booking.paymentMethod}' booking as paid. Only cash bookings are eligible.`);
     }
 
     booking.paymentStatus = 'paid';
@@ -418,11 +414,11 @@ export class BookingService {
     });
 
     if (!booking) {
-      throw new NotFoundError('Booking not found');
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
     }
 
     if (booking.status === BookingStatus.CANCELLED) {
-      throw new ConflictError('Booking is already cancelled');
+      throw createAppError(ERROR_CODES.BOOKING_ALREADY_CANCELLED, 409, 'Booking is already cancelled');
     }
 
     // Cannot cancel terminal states other than 'cancelled'
@@ -430,9 +426,7 @@ export class BookingService {
       booking.status === BookingStatus.COMPLETED ||
       booking.status === BookingStatus.NO_SHOW
     ) {
-      throw new ConflictError(
-        `Cannot cancel a booking that is already '${booking.status}'`
-      );
+      throw createAppError(ERROR_CODES.BOOKING_TERMINAL_STATE, 409, `Cannot cancel a booking that is already '${booking.status}'`);
     }
 
     // Delete from calendar (non-blocking, once)

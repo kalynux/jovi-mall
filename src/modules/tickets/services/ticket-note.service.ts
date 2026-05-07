@@ -1,7 +1,8 @@
 import { TicketNoteRepository } from '../repositories/ticket-note.repository';
 import { TicketFollowerRepository } from '../repositories/ticket-follower.repository';
 import { ActorRole, NoteVisibility } from '../types/ticket.types';
-import { CustomerPrivateNoteError, ForbiddenError, NotFoundError } from '../../../core/errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { ITicketNote } from '../models/ticket-note.model';
 import { eventBus } from '../../../core/events/event-bus';
 import mongoose from 'mongoose';
@@ -51,12 +52,12 @@ export class TicketNoteService {
         // Validate user is follower or admin
         const isFollower = await this.followerRepo.isFollower(ticketId, authorUserId);
         if (!isFollower && authorRole !== ActorRole.ADMIN) {
-            throw new ForbiddenError('Only ticket followers can create notes');
+            throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Only ticket followers can create notes');
         }
 
         // Customers can only create public notes
         if (authorRole === ActorRole.CUSTOMER && visibility === NoteVisibility.PRIVATE) {
-            throw new CustomerPrivateNoteError();
+            throw createAppError(ERROR_CODES.TICKET_CUSTOMER_PRIVATE_NOTE_FORBIDDEN, 403, 'Customers cannot create private notes');
         }
 
         // For private notes, validate visibleToUserIds are ticket followers
@@ -65,9 +66,7 @@ export class TicketNoteService {
             const invalidUserIds = visibleToUserIds.filter(id => !ticketFollowerIds.includes(id));
 
             if (invalidUserIds.length > 0) {
-                throw new ForbiddenError(
-                    'All users in visibleToUserIds must be ticket followers'
-                );
+                throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'All users in visibleToUserIds must be ticket followers');
             }
         }
 

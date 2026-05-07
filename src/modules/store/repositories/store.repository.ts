@@ -1,5 +1,6 @@
 import { StoreModel, IStore } from '../models/store.model';
-import { NotFoundError } from '../../../core/errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Store Repository
@@ -20,13 +21,11 @@ export class StoreRepository {
    */
   async findByVendorId(vendorId: string): Promise<IStore> {
     const store = await StoreModel.findOne({ vendor_id: vendorId });
-    
+
     if (!store) {
-      throw new NotFoundError(
-        `Store not found for vendor ${vendorId}. This is a system bug - vendors should always have a store.`
-      );
+      throw createAppError(ERROR_CODES.STORE_NOT_FOUND, 404, `Store not found for vendor ${vendorId}. This is a system bug - vendors should always have a store.`);
     }
-    
+
     return store;
   }
 

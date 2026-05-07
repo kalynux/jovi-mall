@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { validateFiscalCalendar } from '../utils/fiscal-calendar.util';
 import { validateTimezone } from '../utils/timezone.util';
-import { InvalidDateRangeError, DateRangeExceededError, UnsupportedTimezoneError } from '../../../core/errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Base analytics query schema (without refinements)
@@ -10,14 +11,14 @@ const AnalyticsQueryBaseSchema = z.object({
     from: z.string().transform((val) => {
         const date = new Date(val);
         if (isNaN(date.getTime())) {
-            throw new InvalidDateRangeError(`Invalid 'from' date: ${val}`);
+            throw createAppError(ERROR_CODES.ANALYTICS_INVALID_DATE_RANGE, 400, `Invalid 'from' date: ${val}`);
         }
         return date;
     }),
     to: z.string().transform((val) => {
         const date = new Date(val);
         if (isNaN(date.getTime())) {
-            throw new InvalidDateRangeError(`Invalid 'to' date: ${val}`);
+            throw createAppError(ERROR_CODES.ANALYTICS_INVALID_DATE_RANGE, 400, `Invalid 'to' date: ${val}`);
         }
         return date;
     }),
@@ -31,18 +32,18 @@ const AnalyticsQueryBaseSchema = z.object({
 export const AnalyticsQuerySchema = AnalyticsQueryBaseSchema.refine((data) => {
     // Validate from <= to
     if (data.from > data.to) {
-        throw new InvalidDateRangeError('Start date must be before or equal to end date');
+        throw createAppError(ERROR_CODES.ANALYTICS_INVALID_DATE_RANGE, 400, 'Start date must be before or equal to end date');
     }
 
     // Validate date range not exceeding 365 days
     const daysDiff = (data.to.getTime() - data.from.getTime()) / (1000 * 60 * 60 * 24);
     if (daysDiff > 365) {
-        throw new DateRangeExceededError(365);
+        throw createAppError(ERROR_CODES.ANALYTICS_DATE_RANGE_EXCEEDED, 400, 'Date range cannot exceed 365 days');
     }
 
     // Validate timezone if provided
     if (data.timezone && !validateTimezone(data.timezone)) {
-        throw new UnsupportedTimezoneError(data.timezone);
+        throw createAppError(ERROR_CODES.ANALYTICS_UNSUPPORTED_TIMEZONE, 400, undefined, { timezone: data.timezone });
     }
 
     // Validate fiscal calendar (hard check for gregorian)
@@ -59,16 +60,16 @@ export const SalesQuerySchema = AnalyticsQueryBaseSchema.extend({
 }).refine((data) => {
     // Apply the same validations as base schema
     if (data.from > data.to) {
-        throw new InvalidDateRangeError('Start date must be before or equal to end date');
+        throw createAppError(ERROR_CODES.ANALYTICS_INVALID_DATE_RANGE, 400, 'Start date must be before or equal to end date');
     }
 
     const daysDiff = (data.to.getTime() - data.from.getTime()) / (1000 * 60 * 60 * 24);
     if (daysDiff > 365) {
-        throw new DateRangeExceededError(365);
+        throw createAppError(ERROR_CODES.ANALYTICS_DATE_RANGE_EXCEEDED, 400, 'Date range cannot exceed 365 days');
     }
 
     if (data.timezone && !validateTimezone(data.timezone)) {
-        throw new UnsupportedTimezoneError(data.timezone);
+        throw createAppError(ERROR_CODES.ANALYTICS_UNSUPPORTED_TIMEZONE, 400, undefined, { timezone: data.timezone });
     }
 
     validateFiscalCalendar(data.fiscalCalendar);
@@ -90,16 +91,16 @@ export const ProductQuerySchema = AnalyticsQueryBaseSchema.extend({
 }).refine((data) => {
     // Apply the same validations as base schema
     if (data.from > data.to) {
-        throw new InvalidDateRangeError('Start date must be before or equal to end date');
+        throw createAppError(ERROR_CODES.ANALYTICS_INVALID_DATE_RANGE, 400, 'Start date must be before or equal to end date');
     }
 
     const daysDiff = (data.to.getTime() - data.from.getTime()) / (1000 * 60 * 60 * 24);
     if (daysDiff > 365) {
-        throw new DateRangeExceededError(365);
+        throw createAppError(ERROR_CODES.ANALYTICS_DATE_RANGE_EXCEEDED, 400, 'Date range cannot exceed 365 days');
     }
 
     if (data.timezone && !validateTimezone(data.timezone)) {
-        throw new UnsupportedTimezoneError(data.timezone);
+        throw createAppError(ERROR_CODES.ANALYTICS_UNSUPPORTED_TIMEZONE, 400, undefined, { timezone: data.timezone });
     }
 
     validateFiscalCalendar(data.fiscalCalendar);

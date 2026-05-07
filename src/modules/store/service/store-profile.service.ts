@@ -5,7 +5,8 @@ import {
   UpdateStoreProfileInputDto,
   UpdateStoreStatusInputDto,
 } from '../dto/store-profile.dto';
-import { ConflictError, ForbiddenError } from '../../../core/errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
 import { auditLogger } from '../../../core/audit/audit-logger';
 
@@ -45,7 +46,7 @@ export class StoreProfileService {
   async getStore(vendorId: string): Promise<GetStoreProfileResponseDto> {
     // Repository throws NotFoundError if not found
     const store = await this.storeRepo.findByVendorId(vendorId);
-    
+
     return StoreProfileMapper.toResponseDto(store);
   }
 
@@ -80,14 +81,10 @@ export class StoreProfileService {
     // but we throw explicit errors to make the policy clear.
     const rawInput = input as any;
     if (rawInput.slug !== undefined) {
-      throw new ForbiddenError(
-        'Slug cannot be modified. Contact support if you need to change your store URL.'
-      );
+      throw createAppError(ERROR_CODES.AUTH_FORBIDDEN, 403, 'Slug cannot be modified. Contact support if you need to change your store URL.');
     }
     if (rawInput.country !== undefined) {
-      throw new ForbiddenError(
-        'Country cannot be modified. This is locked for tax and shipping compliance.'
-      );
+      throw createAppError(ERROR_CODES.AUTH_FORBIDDEN, 403, 'Country cannot be modified. This is locked for tax and shipping compliance.');
     }
 
     // 3. Map input to update payload (explicit field mapping, no mass assignment)
@@ -101,9 +98,7 @@ export class StoreProfileService {
     );
 
     if (!updated) {
-      throw new ConflictError(
-        'Store was modified by another request. Please refresh and try again.'
-      );
+      throw createAppError(ERROR_CODES.STORE_SLUG_TAKEN, 409, 'Store was modified by another request. Please refresh and try again.');
     }
 
     // 5. Calculate changes for event/audit (simple diff)
@@ -167,9 +162,7 @@ export class StoreProfileService {
     );
 
     if (!updated) {
-      throw new ConflictError(
-        'Store was modified by another request. Please refresh and try again.'
-      );
+      throw createAppError(ERROR_CODES.STORE_SLUG_TAKEN, 409, 'Store was modified by another request. Please refresh and try again.');
     }
 
     // 2. DOMAIN EVENT: store.status.changed

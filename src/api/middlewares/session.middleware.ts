@@ -3,6 +3,8 @@ import jwt from 'jsonwebtoken';
 import { UserRepository } from '../../modules/users/user.repository';
 import { AUTH_COOKIE } from '../../config/cookie.config';
 import { AuthUserPayload } from './auth.middleware';
+import { createAppError } from "../../core/errors";
+import { ERROR_CODES } from "../../core/error-codes";
 
 const userRepo = new UserRepository();
 
@@ -73,8 +75,7 @@ export const requireJsonContent = (
     if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
         const contentType = req.headers['content-type'];
         if (!contentType || !contentType.includes('application/json')) {
-            res.status(400).json({ error: 'Bad Request: Only JSON content is accepted' });
-            return;
+            return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'Bad Request: Only JSON content is accepted'));
         }
     }
     next();

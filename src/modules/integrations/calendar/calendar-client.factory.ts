@@ -1,5 +1,6 @@
 import { ICalendarClient } from './interfaces/calendar-client.interface';
-import { CalendarNotConnectedError } from './errors/calendar.errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { ConnectedCalendarAccount } from './google/connected-account.model';
 import { GoogleCalendarClient } from './google/google-calendar.client';
 import { VendorModel } from "../../vendors/vendor.model";
@@ -15,7 +16,11 @@ export class CalendarClientFactory {
     });
 
     if (!account) {
-      throw new CalendarNotConnectedError(`User ${userId} has not connected a calendar`);
+      throw createAppError(
+        ERROR_CODES.GOOGLE_CALENDAR_NOT_CONNECTED,
+        400,
+        `User ${userId} has not connected a calendar`
+      );
     }
 
     // Switch by provider
@@ -23,7 +28,11 @@ export class CalendarClientFactory {
       return new GoogleCalendarClient(account);
     }
 
-    throw new Error(`Unsupported calendar provider: ${account.provider}`);
+    throw createAppError(
+      ERROR_CODES.INTEGRATION_UNSUPPORTED_CALENDAR_PROVIDER,
+      400,
+      `Unsupported calendar provider: ${account.provider}`
+    );
   }
 
   /**
@@ -65,7 +74,11 @@ export class CalendarClientFactory {
     }
 
     if (!account) {
-      throw new CalendarNotConnectedError(`Vendor ${vendorId} has not connected a calendar`);
+      throw createAppError(
+        ERROR_CODES.GOOGLE_CALENDAR_NOT_CONNECTED,
+        400,
+        `Vendor ${vendorId} has not connected a calendar`
+      );
     }
     return new GoogleCalendarClient(account);
   }

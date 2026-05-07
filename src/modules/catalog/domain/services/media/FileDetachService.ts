@@ -1,4 +1,5 @@
-import { NotFoundError, ForbiddenError } from '../../../../../core/errors';
+import { createAppError } from '../../../../../core/errors';
+import { ERROR_CODES } from '../../../../../core/error-codes';
 import { IFileRepository } from '../../../repositories/interfaces/file.repository.interface';
 import { IProductRepository } from '../../../repositories/interfaces/product.repository.interface';
 import { IVariantRepository } from '../../../repositories/interfaces/variant.repository.interface';
@@ -37,14 +38,14 @@ export class FileDetachService {
         // Validate file exists
         const file = await this.fileRepository.findById(command.fileId, options);
         if (!file) {
-            throw new NotFoundError('File not found');
+            throw createAppError(ERROR_CODES.CATALOG_FILE_NOT_FOUND, 404);
         }
 
         // Validate owner exists and remove fileId from file Ids
         if (command.ownerType === 'product') {
             const product = await this.productRepository.findById(command.ownerId, command.vendorId, options);
             if (!product) {
-                throw new NotFoundError('Product not found or access denied');
+                throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404, 'Product not found or access denied');
             }
 
             // Remove fileId from product fileIds
@@ -61,13 +62,13 @@ export class FileDetachService {
         } else if (command.ownerType === 'variant') {
             const variant = await this.variantRepository.findById(command.ownerId, options);
             if (!variant) {
-                throw new NotFoundError('Variant not found');
+                throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
             }
 
             // Verify vendor owns the parent product
             const product = await this.productRepository.findById(variant.productId, command.vendorId, options);
             if (!product) {
-                throw new ForbiddenError('Vendor does not own this variant\'s product');
+                throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 403, "Vendor does not own this variant's product");
             }
 
             // Remove fileId from variant fileIds

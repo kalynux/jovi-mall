@@ -4,14 +4,10 @@ import {
     WhatsAppMessage,
     SendResult,
 } from '../types/whatsapp-message.types';
-import {
-    WhatsAppSendError,
-    IdempotencyRequiredError,
-    DuplicateMessageError,
-    ValidationError,
-} from '../types/whatsapp-error.types';
 import { HandlerRegistry } from '../handlers/handler-registry';
 import { WhatsAppMessageHandler, BuildContext } from '../handlers/handler.interface';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { WhatsAppPolicyValidator } from '../validation/policy-validator';
 import { WhatsAppProvider } from '../providers/provider.interface';
 import { MetaWhatsAppCloudProvider } from '../providers/meta-cloud.provider';
@@ -94,14 +90,24 @@ export class WhatsAppMessagingService {
             const isIdempotencyRequired = this.policyValidator.isIdempotencyRequired(payload.type);
 
             if (isIdempotencyRequired && !payload.meta?.idempotencyKey) {
-                throw new IdempotencyRequiredError(payload.type);
+                throw createAppError(
+                    ERROR_CODES.WHATSAPP_IDEMPOTENCY_REQUIRED,
+                    400,
+                    `Idempotency key is required for message type: ${payload.type}`,
+                    { messageType: payload.type }
+                );
             }
 
             // Step 3: Check for duplicate (idempotency)
             if (payload.meta?.idempotencyKey) {
                 const duplicate = await this.checkIdempotency(payload.meta.idempotencyKey);
                 if (duplicate) {
-                    throw new DuplicateMessageError(payload.meta.idempotencyKey, duplicate.messageId);
+                    throw createAppError(
+                        ERROR_CODES.WHATSAPP_DUPLICATE_MESSAGE,
+                        409,
+                        `Duplicate message detected with idempotency key: ${payload.meta.idempotencyKey}`,
+                        { idempotencyKey: payload.meta.idempotencyKey, originalMessageId: duplicate.messageId }
+                    );
                 }
             }
 
@@ -158,7 +164,7 @@ export class WhatsAppMessagingService {
             console.error(`[WhatsAppMessagingService] [${traceId}] Send failed:`, error);
 
             // Normalize error response
-            if (error instanceof WhatsAppSendError) {
+            if (error && error.code && error.statusCode) { // If it's an AppError
                 return {
                     success: false,
                     error: {
@@ -229,25 +235,48 @@ export class WhatsAppMessagingService {
      */
     private validateBasePayload(payload: WhatsAppSendPayload): void {
         if (!payload.to || typeof payload.to !== 'string') {
-            throw new ValidationError('to', 'Recipient phone number is required');
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_VALIDATION_ERROR,
+                400,
+                'Validation failed for field \'to\': Recipient phone number is required',
+                { field: 'to', reason: 'Recipient phone number is required' }
+            );
         }
 
-        // Validate E.164 format (basic check)
         if (!payload.to.startsWith('+') || payload.to.length < 10) {
-            throw new ValidationError('to', 'Phone number must be in E.164 format (e.g., +1234567890)');
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_VALIDATION_ERROR,
+                400,
+                'Validation failed for field \'to\': Phone number must be in E.164 format (e.g., +1234567890)',
+                { field: 'to', reason: 'Phone number must be in E.164 format (e.g., +1234567890)' }
+            );
         }
 
         if (!payload.type) {
-            throw new ValidationError('type', 'Message type is required');
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_VALIDATION_ERROR,
+                400,
+                'Validation failed for field \'type\': Message type is required',
+                { field: 'type', reason: 'Message type is required' }
+            );
         }
 
         if (!payload.message) {
-            throw new ValidationError('message', 'Message payload is required');
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_VALIDATION_ERROR,
+                400,
+                'Validation failed for field \'message\': Message payload is required',
+                { field: 'message', reason: 'Message payload is required' }
+            );
         }
 
-        // Validate message type matches message payload type
         if ((payload.message as any).type !== payload.type) {
-            throw new ValidationError('message.type', 'Message type mismatch');
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_VALIDATION_ERROR,
+                400,
+                'Validation failed for field \'message.type\': Message type mismatch',
+                { field: 'message.type', reason: 'Message type mismatch' }
+            );
         }
     }
 

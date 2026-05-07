@@ -1,4 +1,6 @@
-import { UploadPipelineContext, UploadPolicyViolationError, IUploadValidator, IUploadObserver, IVirusScanner } from './upload-policy.types';
+import { UploadPipelineContext, IUploadValidator, IUploadObserver, IVirusScanner } from './upload-policy.types';
+import { createAppError } from '../errors';
+import { ERROR_CODES } from '../error-codes';
 import { UploadPolicyConfig } from './upload-config';
 import { UploadPipelineContextImpl } from './upload-pipeline-context';
 import { FileSniffingProcessor } from './processors/file-sniffing.processor';
@@ -78,7 +80,12 @@ export class UploadPolicyEngine {
       if (context.hasViolations()) {
         // Notify observer: validation failed
         await this.observer.onValidationFailed?.(context, context.violations);
-        throw new UploadPolicyViolationError(context.violations);
+        throw createAppError(
+          ERROR_CODES.UPLOAD_POLICY_VIOLATION,
+          400,
+          'Upload policy violations found',
+          { violations: context.violations }
+        );
       }
 
       // Notify observer: validation passed
@@ -86,7 +93,7 @@ export class UploadPolicyEngine {
 
     } catch (error) {
       // If not already a violation error, wrap it
-      if (!(error instanceof UploadPolicyViolationError)) {
+      if (!(error && (error as any).code === ERROR_CODES.UPLOAD_POLICY_VIOLATION)) {
         await this.observer.onUploadFailed?.(context, error as Error);
         throw error;
       }

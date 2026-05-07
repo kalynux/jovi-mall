@@ -1,6 +1,8 @@
 import { TelegramRepository, TelegramLinkData } from '../telegram.repository';
 import { TelegramTokenService } from './telegram-token.service';
 import { TelegramBotService } from './telegram-bot.service';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 export interface TelegramUserData {
     chatId: string;
@@ -148,7 +150,7 @@ export class TelegramLinkService {
         const link = await this.repository.findByUserId(userId);
 
         if (!link) {
-            throw new Error('No Telegram account linked');
+            throw createAppError(ERROR_CODES.TELEGRAM_NOT_LINKED, 404);
         }
 
         // Send warning message before deletion

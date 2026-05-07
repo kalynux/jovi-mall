@@ -1,4 +1,5 @@
-import { NotFoundError, ForbiddenError } from '../../../../../core/errors';
+import { createAppError } from '../../../../../core/errors';
+import { ERROR_CODES } from '../../../../../core/error-codes';
 import { TransactionManager } from '../../../../../core/database/transaction.manager';
 import { IProductRepository } from '../../../repositories/interfaces/product.repository.interface';
 import { IStockReservationRepository } from '../../../repositories/interfaces/stock-reservation.repository.interface';
@@ -28,7 +29,7 @@ export class StockReleaseService {
     private readonly digitalAssetRepository: IDigitalAssetRepository,
     private readonly availabilityRepository: IAvailabilityRepository,
     private readonly transactionManager: TransactionManager
-  ) {}
+  ) { }
 
   async execute(command: ReleaseStockCommand): Promise<void> {
     await this.transactionManager.runInTransaction(async (session) => {
@@ -36,7 +37,7 @@ export class StockReleaseService {
       const reservation = await this.reservationRepository.findByReservationId(command.reservationId, { session });
 
       if (!reservation) {
-        throw new NotFoundError('Reservation not found');
+        throw createAppError(ERROR_CODES.CATALOG_VARIANT_RESERVATION_NOT_FOUND, 404, 'Reservation not found');
       }
 
       // IDEMPOTENCY: If already released, return success
@@ -46,23 +47,23 @@ export class StockReleaseService {
 
       // Cannot release committed reservation
       if (reservation.status === 'committed') {
-        throw new ForbiddenError('Cannot release committed reservation');
+        throw createAppError(ERROR_CODES.CATALOG_VARIANT_RESERVATION_CONFLICT, 409, 'Cannot release committed reservation');
       }
 
       // 2. VENDOR OWNERSHIP CHECK: Load product and validate vendor
       const product = await this.productRepository.findById(reservation.productId, command.vendorId, { session });
-      
+
       if (!product) {
-        throw new NotFoundError('Product not found');
+        throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
       }
 
       if (product.vendorId !== command.vendorId) {
-        throw new ForbiddenError('You do not have permission to release this reservation');
+        throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 403, 'You do not have permission to release this reservation');
       }
 
       // Also check reservation vendorId matches
       if (reservation.vendorId !== command.vendorId) {
-        throw new ForbiddenError('Reservation does not belong to this vendor');
+        throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 403, 'Reservation does not belong to this vendor');
       }
 
       // 3. Restore stock/capacity based on type
@@ -92,7 +93,7 @@ export class StockReleaseService {
     const variant = await this.variantRepository.findById(variantId, { session });
 
     if (!variant) {
-      throw new NotFoundError('Variant not found');
+      throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
     }
 
     // Skip restoration if infinite stock

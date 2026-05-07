@@ -1,0 +1,158 @@
+{
+  "countries": {
+    "cm": {
+      "name": {
+        "en": "Cameroon",
+        "fr": "Cameroun"
+      },
+      "regions": {
+        "adamaoua": {
+          "name": {
+            "en": "Adamaoua",
+            "fr": "Adamaoua"
+          },
+          "cities": [
+            "Ngaoundéré",
+            "Banyo",
+            "Meiganga",
+            "Tibati",
+            "Tignère"
+          ]
+        },
+        "centre": {
+          "name": {
+            "en": "Centre",
+            "fr": "Centre"
+          },
+          "cities": [
+            "Yaoundé",
+            "Bafia",
+            "Mbalmayo",
+            "Monatélé",
+            "Nanga Eboko",
+            "Eseka",
+            "Akonolinga",
+            "Obala",
+            "Mfou",
+            "Ntui"
+          ]
+        },
+        "east": {
+          "name": {
+            "en": "East",
+            "fr": "Est"
+          },
+          "cities": [
+            "Bertoua",
+            "Batouri",
+            "Abong-Mbang",
+            "Yokadouma",
+            "Lomié"
+          ]
+        },
+        "far_north": {
+          "name": {
+            "en": "Far North",
+            "fr": "Extrême-Nord"
+          },
+          "cities": [
+            "Maroua",
+            "Kousséri",
+            "Mokolo",
+            "Mora",
+            "Yagoua",
+            "Kaélé"
+          ]
+        },
+        "littoral": {
+          "name": {
+            "en": "Littoral",
+            "fr": "Littoral"
+          },
+          "cities": [
+            "Douala",
+            "Edéa",
+            "Nkongsamba",
+            "Yabassi",
+            "Mbanga",
+            "Loum",
+            "Penja"
+          ]
+        },
+        "north": {
+          "name": {
+            "en": "North",
+            "fr": "Nord"
+          },
+          "cities": [
+            "Garoua",
+            "Guider",
+            "Tcholliré",
+            "Poli",
+            "Figuil"
+          ]
+        },
+        "northwest": {
+          "name": {
+            "en": "Northwest",
+            "fr": "Nord-Ouest"
+          },
+          "cities": [
+            "Bamenda",
+            "Kumbo",
+            "Wum",
+            "Fundong",
+            "Ndop",
+            "Bali",
+            "Mbengwi"
+          ]
+        },
+        "south": {
+          "name": {
+            "en": "South",
+            "fr": "Sud"
+          },
+          "cities": [
+            "Ebolowa",
+            "Sangmélima",
+            "Kribi",
+            "Ambam"
+          ]
+        },
+        "southwest": {
+          "name": {
+            "en": "Southwest",
+            "fr": "Sud-Ouest"
+          },
+          "cities": [
+            "Buea",
+            "Limbe",
+            "Kumba",
+            "Tiko",
+            "Mutengene",
+            "Mamfe",
+            "Fontem",
+            "Mundemba"
+          ]
+        },
+        "west": {
+          "name": {
+            "en": "West",
+            "fr": "Ouest"
+          },
+          "cities": [
+            "Bafoussam",
+            "Dschang",
+            "Foumban",
+            "Mbouda",
+            "Bafang",
+            "Bangangté",
+            "Bandjoun",
+            "Foumbot",
+            "Tonga"
+          ]
+        }
+      }
+    }
+  }
+}

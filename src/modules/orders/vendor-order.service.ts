@@ -3,7 +3,8 @@ import { OrderTimelineRepository } from './order-timeline.repository';
 import { VendorOrderNoteRepository } from './vendor-order-note.repository';
 import { IOrder, FulfillmentStatus } from './order.model';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
-import { NotFoundError, UnprocessableEntityError, ValidationError } from '../../core/errors';
+import { createAppError } from '../../core/errors';
+import { ERROR_CODES } from '../../core/error-codes';
 import { eventBus } from '../../core/events/event-bus';
 
 /**
@@ -98,7 +99,7 @@ export class VendorOrderService {
         const order = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
 
         if (!order) {
-            throw new NotFoundError('Order not found');
+            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
 
         // Transform to detailed DTO
@@ -164,38 +165,48 @@ export class VendorOrderService {
         const order = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
 
         if (!order) {
-            throw new NotFoundError('Order not found');
+            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
 
         const currentStatus = order.fulfillment_status;
 
         // 2. Terminal state protection
         if (FULFILLMENT_STATE_MACHINE[currentStatus].length === 0) {
-            throw new UnprocessableEntityError(
-                `Cannot update fulfillment status: order is in terminal state '${currentStatus}'`
+            throw createAppError(
+                ERROR_CODES.ORDER_TERMINAL_STATE,
+                422,
+                undefined,
+                { status: currentStatus }
             );
         }
 
         // 3. State machine validation
         const allowedTransitions = FULFILLMENT_STATE_MACHINE[currentStatus];
         if (!allowedTransitions.includes(newStatus)) {
-            throw new ValidationError(
-                `Invalid state transition: cannot transition from '${currentStatus}' to '${newStatus}'. ` +
-                `Allowed transitions: ${allowedTransitions.join(', ')}`
+            throw createAppError(
+                ERROR_CODES.ORDER_INVALID_TRANSITION,
+                400,
+                undefined,
+                { from: currentStatus, to: newStatus, allowed: allowedTransitions }
             );
         }
 
         // 4. Payment-fulfillment coupling
         if (newStatus === 'processing' && order.payment_status !== 'paid') {
-            throw new UnprocessableEntityError(
-                `Cannot start processing: payment status is '${order.payment_status}'. ` +
-                `Order must be paid before fulfillment can begin.`
+            throw createAppError(
+                ERROR_CODES.ORDER_PAYMENT_REQUIRED,
+                422,
+                undefined,
+                { paymentStatus: order.payment_status }
             );
         }
 
         if (['failed', 'refunded'].includes(order.payment_status)) {
-            throw new UnprocessableEntityError(
-                `Cannot advance fulfillment: payment status is '${order.payment_status}'`
+            throw createAppError(
+                ERROR_CODES.ORDER_PAYMENT_FAILED_STATE,
+                422,
+                undefined,
+                { paymentStatus: order.payment_status }
             );
         }
 
@@ -207,7 +218,7 @@ export class VendorOrderService {
         );
 
         if (!updatedOrder) {
-            throw new NotFoundError('Order not found after update');
+            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
 
         // 6. Append timeline entry
@@ -273,7 +284,7 @@ export class VendorOrderService {
         const order = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
 
         if (!order) {
-            throw new NotFoundError('Order not found');
+            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
 
         // Fetch timeline
@@ -311,7 +322,7 @@ export class VendorOrderService {
         const order = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
 
         if (!order) {
-            throw new NotFoundError('Order not found');
+            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
 
         // Create note
@@ -354,7 +365,7 @@ export class VendorOrderService {
         const order = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
 
         if (!order) {
-            throw new NotFoundError('Order not found');
+            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
 
         // Fetch notes
@@ -390,17 +401,20 @@ export class VendorOrderService {
         const order = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
 
         if (!order) {
-            throw new NotFoundError('Order not found');
+            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
 
         if (order.order_type !== 'physical') {
-            throw new ValidationError('Delivery agency can only be updated for physical orders');
+            throw createAppError(ERROR_CODES.ORDER_WRONG_TYPE, 400, 'Delivery agency can only be updated for physical orders');
         }
 
         // 2. Check order not yet delivered or cancelled
         if (['delivered', 'cancelled'].includes(order.fulfillment_status)) {
-            throw new UnprocessableEntityError(
-                `Cannot update delivery agency: order is ${order.fulfillment_status}`
+            throw createAppError(
+                ERROR_CODES.ORDER_TERMINAL_STATE,
+                422,
+                undefined,
+                { status: order.fulfillment_status }
             );
         }
 
@@ -409,7 +423,7 @@ export class VendorOrderService {
         const { default: mongoose } = await import('mongoose');
 
         if (!mongoose.connection.db) {
-            throw new Error('Database connection not available');
+            throw createAppError(ERROR_CODES.DATABASE_CONNECTION_ERROR, 500);
         }
 
         const agencyExists = await mongoose.connection.db.collection('deliveryagencies').findOne({
@@ -417,7 +431,7 @@ export class VendorOrderService {
         });
 
         if (!agencyExists) {
-            throw new NotFoundError('Delivery agency not found');
+            throw createAppError(ERROR_CODES.ORDER_DELIVERY_AGENCY_NOT_FOUND, 404);
         }
 
         // 4. Update all order items with new agency
@@ -428,7 +442,7 @@ export class VendorOrderService {
         );
 
         if (!updatedOrder) {
-            throw new NotFoundError('Order not found after update');
+            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
 
         // 5. Append timeline entry
@@ -467,18 +481,18 @@ export class VendorOrderService {
         const order = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
 
         if (!order) {
-            throw new NotFoundError('Order not found');
+            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
 
         if (order.order_type !== 'digital') {
-            throw new ValidationError('Entitlements are only available for digital orders');
+            throw createAppError(ERROR_CODES.ORDER_WRONG_TYPE, 400, 'Entitlements are only available for digital orders');
         }
 
         // 2. Fetch entitlements
         const { default: mongoose } = await import('mongoose');
 
         if (!mongoose.connection.db) {
-            throw new Error('Database connection not available');
+            throw createAppError(ERROR_CODES.DATABASE_CONNECTION_ERROR, 500);
         }
 
         const entitlements = await mongoose.connection.db
@@ -576,7 +590,7 @@ export class VendorOrderService {
         const { default: mongoose } = await import('mongoose');
 
         if (!mongoose.connection.db) {
-            throw new Error('Database connection not available');
+            throw createAppError(ERROR_CODES.DATABASE_CONNECTION_ERROR, 500);
         }
 
         const entitlement = await mongoose.connection.db
@@ -588,12 +602,12 @@ export class VendorOrderService {
             });
 
         if (!entitlement) {
-            throw new NotFoundError('Entitlement not found');
+            throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_NOT_FOUND, 404);
         }
 
         // 2. Check not already revoked
         if (entitlement.revokedAt !== null) {
-            throw new UnprocessableEntityError('Entitlement is already revoked');
+            throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_ALREADY_REVOKED, 422);
         }
 
         // 3. Revoke entitlement
@@ -654,7 +668,7 @@ export class VendorOrderService {
         const { default: mongoose } = await import('mongoose');
 
         if (!mongoose.connection.db) {
-            throw new Error('Database connection not available');
+            throw createAppError(ERROR_CODES.DATABASE_CONNECTION_ERROR, 500);
         }
 
         const entitlement = await mongoose.connection.db
@@ -666,19 +680,21 @@ export class VendorOrderService {
             });
 
         if (!entitlement) {
-            throw new NotFoundError('Entitlement not found');
+            throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_NOT_FOUND, 404);
         }
 
         // 2. Check is currently revoked
         if (entitlement.revokedAt === null) {
-            throw new UnprocessableEntityError('Entitlement is not revoked');
+            throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_NOT_REVOKED, 422);
         }
 
         // 3. Check not expired
         if (entitlement.expiresAt !== null && entitlement.expiresAt < new Date()) {
-            throw new UnprocessableEntityError(
-                'Cannot restore expired entitlement. Entitlement expired on ' +
-                new Date(entitlement.expiresAt).toISOString()
+            throw createAppError(
+                ERROR_CODES.DIGITAL_ENTITLEMENT_EXPIRED,
+                422,
+                undefined,
+                { expiredAt: new Date(entitlement.expiresAt).toISOString() }
             );
         }
 

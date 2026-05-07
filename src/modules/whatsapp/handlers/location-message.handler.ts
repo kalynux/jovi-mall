@@ -1,6 +1,7 @@
 import { LocationMessage } from '../types/whatsapp-message.types';
 import { WhatsAppMessageHandler, BuildContext, ProviderPayload } from './handler.interface';
-import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Location Message Handler
@@ -8,29 +9,41 @@ import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
 export class LocationMessageHandler implements WhatsAppMessageHandler<LocationMessage> {
     validate(message: LocationMessage, context: BuildContext): void {
         if (message.latitude === undefined || message.latitude === null) {
-            throw new InvalidMessagePayloadError('location', [
-                { field: 'latitude', message: 'Latitude is required' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: location',
+                { messageType: 'location', validationErrors: [{ field: 'latitude', message: 'Latitude is required' }] }
+            );
         }
 
         if (message.longitude === undefined || message.longitude === null) {
-            throw new InvalidMessagePayloadError('location', [
-                { field: 'longitude', message: 'Longitude is required' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: location',
+                { messageType: 'location', validationErrors: [{ field: 'longitude', message: 'Longitude is required' }] }
+            );
         }
 
         // Validate latitude range (-90 to 90)
         if (message.latitude < -90 || message.latitude > 90) {
-            throw new InvalidMessagePayloadError('location', [
-                { field: 'latitude', message: 'Latitude must be between -90 and 90' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: location',
+                { messageType: 'location', validationErrors: [{ field: 'latitude', message: 'Latitude must be between -90 and 90' }] }
+            );
         }
 
         // Validate longitude range (-180 to 180)
         if (message.longitude < -180 || message.longitude > 180) {
-            throw new InvalidMessagePayloadError('location', [
-                { field: 'longitude', message: 'Longitude must be between -180 and 180' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: location',
+                { messageType: 'location', validationErrors: [{ field: 'longitude', message: 'Longitude must be between -180 and 180' }] }
+            );
         }
 
         if (!context.sendContext.isWithin24hWindow) {

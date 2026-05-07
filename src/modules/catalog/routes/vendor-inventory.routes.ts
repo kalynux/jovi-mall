@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { VendorInventoryController } from '../controllers/vendor-inventory.controller';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
 import multer from 'multer';
@@ -32,7 +32,7 @@ const vendorAuth = [requireAuth, requireRole(['vendor'])];
  */
 
 // GET /api/vendor/inventory/alerts
-router.get('/alerts', vendorAuth, (req: Request, res: Response) => controller.getAlerts(req, res));
+router.get('/alerts', vendorAuth, (req: Request, res: Response, next: NextFunction) => controller.getAlerts(req, res, next));
 
 // PATCH /api/vendor/inventory/bulk-update
 // Supports both JSON and CSV uploads
@@ -40,13 +40,13 @@ router.patch(
     '/bulk-update',
     vendorAuth,
     upload.single('file'),
-    (req: Request, res: Response) => controller.bulkUpdate(req, res)
+    (req: Request, res: Response, next: NextFunction) => controller.bulkUpdate(req, res, next)
 );
 
 // GET /api/vendor/inventory/history
-router.get('/history', vendorAuth, (req: Request, res: Response) => controller.getHistory(req, res));
+router.get('/history', vendorAuth, (req: Request, res: Response, next: NextFunction) => controller.getHistory(req, res, next));
 
 // GET /api/vendor/inventory/reservations
-router.get('/reservations', vendorAuth, (req: Request, res: Response) => controller.getReservations(req, res));
+router.get('/reservations', vendorAuth, (req: Request, res: Response, next: NextFunction) => controller.getReservations(req, res, next));
 
 export default router;

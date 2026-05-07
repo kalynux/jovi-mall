@@ -1,6 +1,8 @@
 import { Types } from 'mongoose';
 import { ProductModel, IProduct } from '../../../models/product.model';
 import { DigitalAssetModel } from '../../../../digital-delivery/models/digital-asset.model';
+import { createAppError } from '../../../../../core/errors';
+import { ERROR_CODES } from '../../../../../core/error-codes';
 
 /**
  * ProductDigitalService - Digital product business logic
@@ -23,15 +25,15 @@ export class ProductDigitalService {
    */
   validateDigitalProduct(product: IProduct): void {
     if (product.type !== 'digital') {
-      throw new Error('Product is not a digital product');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE, 400, 'Product is not a digital product');
     }
 
     if (!product.digitalConfig) {
-      throw new Error('Digital product must have digitalConfig defined');
+      throw createAppError(ERROR_CODES.CATALOG_DIGITAL_CONFIG_MISSING, 400, 'Digital product must have digitalConfig defined');
     }
 
     if (!product.digitalConfig.assetId) {
-      throw new Error('Digital product must have assetId configured');
+      throw createAppError(ERROR_CODES.CATALOG_DIGITAL_CONFIG_MISSING, 400, 'Digital product must have assetId configured');
     }
   }
 
@@ -42,17 +44,17 @@ export class ProductDigitalService {
    */
   async assertIsDigital(productId: string): Promise<IProduct> {
     if (!Types.ObjectId.isValid(productId)) {
-      throw new Error('Invalid product ID');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 400, 'Invalid product ID');
     }
 
     const product = await ProductModel.findById(productId);
 
     if (!product) {
-      throw new Error('Product not found');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404, 'Product not found');
     }
 
     if (product.type !== 'digital') {
-      throw new Error('Product is not a digital product');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE, 400, 'Product is not a digital product');
     }
 
     return product;
@@ -66,7 +68,7 @@ export class ProductDigitalService {
    */
   async validateAssetOwnership(assetId: string, vendorId: string): Promise<void> {
     if (!Types.ObjectId.isValid(assetId)) {
-      throw new Error('Invalid asset ID');
+      throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_NOT_FOUND, 400, 'Invalid asset ID');
     }
 
     const asset = await DigitalAssetModel.findOne({
@@ -75,11 +77,11 @@ export class ProductDigitalService {
     });
 
     if (!asset) {
-      throw new Error('Digital asset not found');
+      throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_NOT_FOUND, 404, 'Digital asset not found');
     }
 
     if (asset.vendorId.toString() !== vendorId) {
-      throw new Error('Unauthorized: Asset does not belong to this vendor');
+      throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_ACCESS_DENIED, 403, 'Unauthorized: Asset does not belong to this vendor');
     }
   }
 
@@ -99,7 +101,7 @@ export class ProductDigitalService {
     config: DigitalConfigDto
   ): Promise<void> {
     if (!Types.ObjectId.isValid(productId)) {
-      throw new Error('Invalid product ID');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 400, 'Invalid product ID');
     }
 
     // Load product with ownership check
@@ -110,12 +112,12 @@ export class ProductDigitalService {
     });
 
     if (!product) {
-      throw new Error('Product not found or access denied');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 404, 'Product not found or access denied');
     }
 
     // Verify product is digital
     if (product.type !== 'digital') {
-      throw new Error('Can only configure digital products');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE, 400, 'Can only configure digital products');
     }
 
     // Validate asset ownership
@@ -130,7 +132,7 @@ export class ProductDigitalService {
     };
 
     await product.save();
-    
+
     // No need to sync to DigitalProductConfig - entitlement reads from Product directly
   }
 
@@ -142,7 +144,7 @@ export class ProductDigitalService {
    */
   async getDigitalConfig(productId: string): Promise<any> {
     if (!Types.ObjectId.isValid(productId)) {
-      throw new Error('Invalid product ID');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 400, 'Invalid product ID');
     }
 
     const product = await ProductModel.findOne({
@@ -151,15 +153,15 @@ export class ProductDigitalService {
     });
 
     if (!product) {
-      throw new Error('Product not found');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404, 'Product not found');
     }
 
     if (product.type !== 'digital') {
-      throw new Error('Product is not a digital product');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE, 400, 'Product is not a digital product');
     }
 
     if (!product.digitalConfig) {
-      throw new Error('Digital product has no configuration');
+      throw createAppError(ERROR_CODES.CATALOG_DIGITAL_CONFIG_MISSING, 400, 'Digital product has no configuration');
     }
 
     return product.digitalConfig;
@@ -172,7 +174,7 @@ export class ProductDigitalService {
    */
   async deactivateDigitalConfig(productId: string, vendorId: string): Promise<void> {
     if (!Types.ObjectId.isValid(productId)) {
-      throw new Error('Invalid product ID');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 400, 'Invalid product ID');
     }
 
     const product = await ProductModel.findOne({
@@ -182,11 +184,11 @@ export class ProductDigitalService {
     });
 
     if (!product) {
-      throw new Error('Product not found or access denied');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 404, 'Product not found or access denied');
     }
 
     if (product.type !== 'digital' || !product.digitalConfig) {
-      throw new Error('Product has no digital configuration');
+      throw createAppError(ERROR_CODES.CATALOG_DIGITAL_CONFIG_MISSING, 400, 'Product has no digital configuration');
     }
 
     // Deactivate in product

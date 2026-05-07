@@ -26,7 +26,7 @@ export const VendorOnboardingStep = {
     COMPLETED: 0,
     /** Step 1 (Required): country, timezone, payout_details */
     BASIC_SETUP: 1,
-    /** Step 2 (Required): default_delivery_agency_id */
+    /** Step 2 (Optional/Skippable): default_delivery_agency_id — skip if vendor sells services only */
     DELIVERY_LINKING: 2,
     /** Step 3 (Optional/Skippable): branding (logo, cover), business_addresses */
     BRANDING: 3,
@@ -41,7 +41,7 @@ export const AgencyOnboardingStep = {
     /** Onboarding fully completed. Frontend routes to agency dashboard. */
     COMPLETED: 0,
     /**
-     * Step 1 (Required): coverage_areas (min 1 polygon),
+     * Step 1 (Required): coverage_areas (min 1 region),
      * headquarters_addresses (min 1 entry; first entry is primary)
      */
     LOGISTICS_SETUP: 1,
@@ -49,6 +49,8 @@ export const AgencyOnboardingStep = {
     PAYOUT_SETUP: 2,
     /** Step 3 (Optional/Skippable): logo_url, timezone */
     BRANDING: 3,
+    /** Step 4 (Required): pricing, returns, and damage policies */
+    POLICY_SETUP: 4,
 } as const;
 
 export type AgencyOnboardingStepValue =

@@ -1,5 +1,6 @@
 import { FlowMessage } from '../../types/whatsapp-message.types';
-import { InvalidMessagePayloadError, PolicyViolationError } from '../../types/whatsapp-error.types';
+import { createAppError } from '../../../../core/errors';
+import { ERROR_CODES } from '../../../../core/error-codes';
 import { FlowRegistry } from './flow-registry';
 
 /**
@@ -23,40 +24,53 @@ export class FlowValidator {
     validate(message: FlowMessage, hasFlowCapability: boolean): void {
         // Check flow capability
         if (!hasFlowCapability) {
-            throw new PolicyViolationError(
-                'MISSING_CAPABILITY',
-                'Account does not have WhatsApp Flows capability',
-                { messageType: 'flow' }
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_POLICY_VIOLATION,
+                403,
+                'WhatsApp policy violation: Account does not have WhatsApp Flows capability',
+                { policyType: 'MISSING_CAPABILITY', reason: 'Account does not have WhatsApp Flows capability', messageType: 'flow' }
             );
         }
 
         // Validate flow ID
         if (!message.flowId || message.flowId.trim().length === 0) {
-            throw new InvalidMessagePayloadError('flow', [
-                { field: 'flowId', message: 'Flow ID is required' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: flow',
+                { messageType: 'flow', validationErrors: [{ field: 'flowId', message: 'Flow ID is required' }] }
+            );
         }
 
         // Validate flow action
         const validActions = ['navigate', 'data_exchange'];
         if (!message.flowAction || !validActions.includes(message.flowAction)) {
-            throw new InvalidMessagePayloadError('flow', [
-                { field: 'flowAction', message: `Invalid flow action. Must be one of: ${validActions.join(', ')}` },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: flow',
+                { messageType: 'flow', validationErrors: [{ field: 'flowAction', message: `Invalid flow action. Must be one of: ${validActions.join(', ')}` }] }
+            );
         }
 
         // Validate header
         if (!message.header || message.header.trim().length === 0) {
-            throw new InvalidMessagePayloadError('flow', [
-                { field: 'header', message: 'Header is required' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: flow',
+                { messageType: 'flow', validationErrors: [{ field: 'header', message: 'Header is required' }] }
+            );
         }
 
         // Validate body
         if (!message.body || message.body.trim().length === 0) {
-            throw new InvalidMessagePayloadError('flow', [
-                { field: 'body', message: 'Body is required' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: flow',
+                { messageType: 'flow', validationErrors: [{ field: 'body', message: 'Body is required' }] }
+            );
         }
 
         // Check if flow is registered and published
@@ -69,10 +83,11 @@ export class FlowValidator {
         } else {
             // Check if flow is published
             if (flow.status !== 'PUBLISHED') {
-                throw new PolicyViolationError(
-                    'FLOW_NOT_PUBLISHED',
-                    `Flow ${message.flowId} is not published`,
-                    { flowId: message.flowId, status: flow.status }
+                throw createAppError(
+                    ERROR_CODES.WHATSAPP_POLICY_VIOLATION,
+                    403,
+                    `WhatsApp policy violation: Flow ${message.flowId} is not published`,
+                    { policyType: 'FLOW_NOT_PUBLISHED', reason: `Flow ${message.flowId} is not published`, flowId: message.flowId, status: flow.status }
                 );
             }
 

@@ -1,6 +1,7 @@
 import { ImageMessage } from '../types/whatsapp-message.types';
 import { WhatsAppMessageHandler, BuildContext, ProviderPayload } from './handler.interface';
-import { InvalidMessagePayloadError } from '../types/whatsapp-error.types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Image Message Handler
@@ -11,30 +12,42 @@ export class ImageMessageHandler implements WhatsAppMessageHandler<ImageMessage>
     validate(message: ImageMessage, context: BuildContext): void {
         // Either link or id must be provided
         if (!message.link && !message.id) {
-            throw new InvalidMessagePayloadError('image', [
-                { field: 'link/id', message: 'Either link or id must be provided' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: image',
+                { messageType: 'image', validationErrors: [{ field: 'link/id', message: 'Either link or id must be provided' }] }
+            );
         }
 
         // Cannot provide both
         if (message.link && message.id) {
-            throw new InvalidMessagePayloadError('image', [
-                { field: 'link/id', message: 'Provide either link OR id, not both' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: image',
+                { messageType: 'image', validationErrors: [{ field: 'link/id', message: 'Provide either link OR id, not both' }] }
+            );
         }
 
         // Validate caption length if provided (WhatsApp limit is 1024 characters)
         if (message.caption && message.caption.length > 1024) {
-            throw new InvalidMessagePayloadError('image', [
-                { field: 'caption', message: `Caption exceeds maximum length of 1024 characters (got ${message.caption.length})` },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: image',
+                { messageType: 'image', validationErrors: [{ field: 'caption', message: `Caption exceeds maximum length of 1024 characters (got ${message.caption.length})` }] }
+            );
         }
 
         // Validate URL format if link provided
         if (message.link && !this.isValidUrl(message.link)) {
-            throw new InvalidMessagePayloadError('image', [
-                { field: 'link', message: 'Invalid URL format' },
-            ]);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_INVALID_PAYLOAD,
+                400,
+                'Invalid payload for message type: image',
+                { messageType: 'image', validationErrors: [{ field: 'link', message: 'Invalid URL format' }] }
+            );
         }
 
         // Policy check: Image messages require 24-hour window

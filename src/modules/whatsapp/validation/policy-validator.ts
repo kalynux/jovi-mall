@@ -5,7 +5,8 @@ import {
     WindowPolicy,
     CapabilityPolicy,
 } from '../types/whatsapp-policy.types';
-import { PolicyViolationError } from '../types/whatsapp-error.types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { WhatsappService } from '../whatsapp.service';
 
 /**
@@ -73,10 +74,13 @@ export class WhatsAppPolicyValidator {
     ): void {
         // Check 1: 24-hour window constraint
         if (!sendContext.isWithin24hWindow && messageType !== 'template') {
-            throw new PolicyViolationError(
-                '24H_WINDOW',
-                `Message type '${messageType}' requires 24-hour window. Use 'template' message instead.`,
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_POLICY_VIOLATION,
+                403,
+                `WhatsApp policy violation: Message type '${messageType}' requires 24-hour window. Use 'template' message instead.`,
                 {
+                    policyType: '24H_WINDOW',
+                    reason: `Message type '${messageType}' requires 24-hour window. Use 'template' message instead.`,
                     messageType,
                     isWithin24hWindow: sendContext.isWithin24hWindow,
                     allowedTypes: ['template'],
@@ -86,10 +90,13 @@ export class WhatsAppPolicyValidator {
 
         // Check 2: Interactive capability
         if (messageType === 'interactive' && !sendContext.hasInteractiveCapability) {
-            throw new PolicyViolationError(
-                'MISSING_CAPABILITY',
-                'Account does not have interactive message capability',
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_POLICY_VIOLATION,
+                403,
+                'WhatsApp policy violation: Account does not have interactive message capability',
                 {
+                    policyType: 'MISSING_CAPABILITY',
+                    reason: 'Account does not have interactive message capability',
                     messageType,
                     requiredCapability: 'interactive',
                 }
@@ -98,10 +105,13 @@ export class WhatsAppPolicyValidator {
 
         // Check 3: Flow capability
         if (messageType === 'flow' && !sendContext.hasFlowCapability) {
-            throw new PolicyViolationError(
-                'MISSING_CAPABILITY',
-                'Account does not have WhatsApp Flows capability',
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_POLICY_VIOLATION,
+                403,
+                'WhatsApp policy violation: Account does not have WhatsApp Flows capability',
                 {
+                    policyType: 'MISSING_CAPABILITY',
+                    reason: 'Account does not have WhatsApp Flows capability',
                     messageType,
                     requiredCapability: 'flows',
                 }
@@ -110,10 +120,13 @@ export class WhatsAppPolicyValidator {
 
         // Check 4: Message type allowed in current context
         if (!sendContext.allowedMessageTypes.includes(messageType)) {
-            throw new PolicyViolationError(
-                'MESSAGE_TYPE_NOT_ALLOWED',
-                `Message type '${messageType}' is not allowed in current context`,
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_POLICY_VIOLATION,
+                403,
+                `WhatsApp policy violation: Message type '${messageType}' is not allowed in current context`,
                 {
+                    policyType: 'MESSAGE_TYPE_NOT_ALLOWED',
+                    reason: `Message type '${messageType}' is not allowed in current context`,
                     messageType,
                     allowedTypes: sendContext.allowedMessageTypes,
                 }

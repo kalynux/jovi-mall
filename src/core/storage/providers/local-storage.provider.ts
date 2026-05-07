@@ -3,6 +3,8 @@ import * as fs from 'fs/promises';
 import * as crypto from 'crypto';
 import { IStorageProvider, StoragePutOptions, StoragePutResult } from '../storage-provider.interface';
 import { LocalStorageConfig } from '../storage.config';
+import { createAppError } from '../../errors';
+import { ERROR_CODES } from '../../error-codes';
 
 /**
  * Local Filesystem Storage Provider
@@ -85,7 +87,7 @@ export class LocalStorageProvider implements IStorageProvider {
     try {
       await import('fs/promises').then(fsp => fsp.access(filePath));
     } catch (error) {
-      throw new Error(`File not found: ${key}`);
+      throw createAppError(ERROR_CODES.STORAGE_FILE_NOT_FOUND, 404, `File not found: ${key}`);
     }
 
     return fs.createReadStream(filePath);
@@ -97,7 +99,7 @@ export class LocalStorageProvider implements IStorageProvider {
       return await fs.readFile(filePath);
     } catch (error: any) {
       if (error.code === 'ENOENT') {
-        throw new Error(`File not found: ${key}`);
+        throw createAppError(ERROR_CODES.STORAGE_FILE_NOT_FOUND, 404, `File not found: ${key}`);
       }
       throw error;
     }

@@ -3,6 +3,8 @@ import * as admin from 'firebase-admin';
 import { Bucket } from '@google-cloud/storage';
 import { IStorageProvider, StoragePutOptions, StoragePutResult } from '../storage-provider.interface';
 import { FirebaseStorageConfig } from '../storage.config';
+import { createAppError } from '../../errors';
+import { ERROR_CODES } from '../../error-codes';
 
 /**
  * Firebase Storage Provider
@@ -26,11 +28,11 @@ export class FirebaseStorageProvider implements IStorageProvider {
   }
 
   getDownloadStream(key: string): Promise<NodeJS.ReadableStream> {
-    throw new Error("Method not implemented.");
+    throw createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 501, 'getDownloadStream is not implemented for Firebase Storage provider');
   }
 
   getBuffer(key: string): Promise<Buffer> {
-    throw new Error("Method not implemented.");
+    throw createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 501, 'getBuffer is not implemented for Firebase Storage provider');
   }
 
   private initializeFirebase(): void {
@@ -105,7 +107,7 @@ export class FirebaseStorageProvider implements IStorageProvider {
     } catch (error: any) {
       // Idempotent: ignore if file doesn't exist (404)
       if (error.code !== 404) {
-        throw new Error(`Firebase Storage delete failed: ${error.message}`);
+        throw createAppError(ERROR_CODES.STORAGE_DELETE_FAILED, 500, `Firebase Storage delete failed: ${error.message}`);
       }
     }
   }

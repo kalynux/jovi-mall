@@ -5,6 +5,9 @@
  * Hard validation prevents false expectations
  */
 
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
+
 /**
  * Validate fiscal calendar parameter
  * 
@@ -12,9 +15,12 @@
  */
 export function validateFiscalCalendar(calendar: string): void {
     if (calendar !== 'gregorian') {
-        throw new Error(
+        throw createAppError(
+            ERROR_CODES.VENDOR_UNSUPPORTED_FISCAL_CALENDAR,
+            400,
             `Fiscal calendar '${calendar}' is not supported. ` +
-            `Only 'gregorian' calendar is currently available.`
+            `Only 'gregorian' calendar is currently available.`,
+            { calendar }
         );
     }
 }

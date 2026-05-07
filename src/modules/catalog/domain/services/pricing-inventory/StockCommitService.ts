@@ -1,4 +1,5 @@
-import { NotFoundError, ForbiddenError } from '../../../../../core/errors';
+import { createAppError } from '../../../../../core/errors';
+import { ERROR_CODES } from '../../../../../core/error-codes';
 import { TransactionManager } from '../../../../../core/database/transaction.manager';
 import { IProductRepository } from '../../../repositories/interfaces/product.repository.interface';
 import { IStockReservationRepository } from '../../../repositories/interfaces/stock-reservation.repository.interface';
@@ -24,7 +25,7 @@ export class StockCommitService {
     private readonly productRepository: IProductRepository,
     private readonly reservationRepository: IStockReservationRepository,
     private readonly transactionManager: TransactionManager
-  ) {}
+  ) { }
 
   async execute(command: CommitStockCommand): Promise<StockReservation> {
     return this.transactionManager.runInTransaction(async (session) => {
@@ -32,7 +33,7 @@ export class StockCommitService {
       const reservation = await this.reservationRepository.findByReservationId(command.reservationId, { session });
 
       if (!reservation) {
-        throw new NotFoundError('Reservation not found');
+        throw createAppError(ERROR_CODES.CATALOG_VARIANT_RESERVATION_NOT_FOUND, 404, 'Reservation not found');
       }
 
       // IDEMPOTENCY: If already committed, return success
@@ -42,28 +43,28 @@ export class StockCommitService {
 
       // 2. VENDOR OWNERSHIP CHECK: Load product and validate vendor
       const product = await this.productRepository.findById(reservation.productId, command.vendorId, { session });
-      
+
       if (!product) {
-        throw new NotFoundError('Product not found');
+        throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
       }
 
       if (product.vendorId !== command.vendorId) {
-        throw new ForbiddenError('You do not have permission to commit this reservation');
+        throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 403, 'You do not have permission to commit this reservation');
       }
 
       // Also check reservation vendorId matches
       if (reservation.vendorId !== command.vendorId) {
-        throw new ForbiddenError('Reservation does not belong to this vendor');
+        throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 403, 'Reservation does not belong to this vendor');
       }
 
       // 3. Validate reservation status
       if (reservation.status !== 'active') {
-        throw new ForbiddenError(`Cannot commit reservation with status: ${reservation.status.toUpperCase()}`);
+        throw createAppError(ERROR_CODES.CATALOG_VARIANT_RESERVATION_CONFLICT, 409, `Cannot commit reservation with status: ${reservation.status.toUpperCase()}`);
       }
 
       // 4. Check expiration
       if (reservation.expiresAt < new Date()) {
-        throw new ForbiddenError('Reservation has expired');
+        throw createAppError(ERROR_CODES.CATALOG_VARIANT_RESERVATION_CONFLICT, 409, 'Reservation has expired');
       }
 
       // 5. Update status to committed
@@ -74,7 +75,7 @@ export class StockCommitService {
       );
 
       if (!committed) {
-        throw new NotFoundError('Failed to commit reservation');
+        throw createAppError(ERROR_CODES.CATALOG_VARIANT_RESERVATION_NOT_FOUND, 404, 'Failed to commit reservation');
       }
 
       // Stock is NOT restored - it was already decremented during reservation

@@ -2,7 +2,10 @@ import { VendorRepository } from '../../vendors/vendor.repository';
 import { CustomerRepository } from '../../customers/customer.repository';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
 import { DeliveryAgentRepository } from '../../delivery/delivery-agent.repository';
+import { UserRepository } from '../../users/user.repository';
 import { getRedisClient, WA_VERIFY_DB } from '../../../infra/redis/redis.factory';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 export interface LinkStatus {
     linked: boolean;
@@ -22,112 +25,94 @@ export class WhatsAppLinkService {
     private customerRepo: CustomerRepository;
     private agencyRepo: DeliveryAgencyRepository;
     private agentRepo: DeliveryAgentRepository;
+    private userRepo: UserRepository;
 
     constructor() {
         this.vendorRepo = new VendorRepository();
         this.customerRepo = new CustomerRepository();
         this.agencyRepo = new DeliveryAgencyRepository();
         this.agentRepo = new DeliveryAgentRepository();
+        this.userRepo = new UserRepository();
     }
 
     /**
-     * Verify code and link WhatsApp account
-     * Called by webhook when user sends /link:CODE command
-     * 
-     * @param code - Verification code from user
-     * @param waPhoneId - WhatsApp phone ID from webhook (reply_to)
-     * @returns Success status
+     * Verify code and link WhatsApp account.
+     * Called by the webhook command handler when the user sends /link:CODE.
+     *
+     * Throws an AppError on any failure — callers do not need to inspect
+     * a return value; a clean return means success.
+     *
+     * @param code   - Verification code supplied by the user
+     * @param waData - Sender data from the webhook (wa_phone_id + display name)
      */
-    async verifyCode(code: string, waPhoneId: string): Promise<{ success: boolean; message: string }> {
+    async verifyCode(code: string, waData: { wa_phone_id: string; name: string }): Promise<void> {
         const redis = await getRedisClient(WA_VERIFY_DB);
         const key = `wa_verify:${code}`;
         const value = await redis.get(key);
 
         if (!value) {
             console.log(`[WhatsAppLink] Invalid or expired code: ${code}`);
-            return {
-                success: false,
-                message: 'Invalid or expired verification code. Please request a new code.'
-            };
+            throw createAppError(ERROR_CODES.AUTH_VERIFY_TOKEN_INVALID, 400);
         }
 
         const data = JSON.parse(value);
-        const { user_id, role, wa_phone_id: expectedWaPhoneId } = data;
+        const { user_id, role, update_other_roles } = data;
 
-        // Validate phone ID matches
-        if (expectedWaPhoneId !== waPhoneId) {
-            console.log(`[WhatsAppLink] Phone ID mismatch. Expected ${expectedWaPhoneId}, got ${waPhoneId}`);
-            return {
-                success: false,
-                message: 'WhatsApp account mismatch. Please use the correct WhatsApp account.'
-            };
-        }
-
-        // Delete token (single-use)
+        // Delete token immediately — single-use regardless of what follows
         await redis.del(key);
 
-        // Update primary role entity
-        try {
-            const waData = {
-                wa_phone_id: waPhoneId,
-                name: data.name
-            };
+        switch (role) {
+            case 'vendor':
+                await this.vendorRepo.updateWaVerified(user_id, waData);
+                break;
+            case 'customer':
+                await this.customerRepo.updateWaVerified(user_id, waData);
+                break;
+            case 'agency':
+                await this.agencyRepo.updateWaVerified(user_id, waData);
+                break;
+            case 'agent':
+                await this.agentRepo.updateWaVerified(user_id, waData);
+                break;
+            default:
+                throw createAppError(ERROR_CODES.WHATSAPP_ROLE_NOT_SUPPORTED, 400, undefined, { role });
+        }
 
-            switch (role) {
-                case 'vendor':
-                    await this.vendorRepo.updateWaVerified(user_id, waData);
-                    break;
-                case 'customer':
-                    await this.customerRepo.updateWaVerified(user_id, waData);
-                    break;
-                case 'agency':
-                    await this.agencyRepo.updateWaVerified(user_id, waData);
-                    break;
-                case 'agent':
-                    await this.agentRepo.updateWaVerified(user_id, waData);
-                    break;
-                default:
-                    throw new Error(`Role ${role} does not support WhatsApp linking`);
-            }
+        console.log(`[WhatsAppLink] Account linked for user ${user_id} (${role})`);
 
-            console.log(`[WhatsAppLink] Account linked for user ${user_id} (${role})`);
-
-            // Cross-role verification: update other roles that don't have WhatsApp verified
-            await this.crossRoleVerification(user_id, role, waPhoneId, data.name);
-
-            return {
-                success: true,
-                message: 'WhatsApp account linked successfully!'
-            };
-        } catch (error: any) {
-            console.error('[WhatsAppLink] Error linking account:', error);
-            return {
-                success: false,
-                message: 'Failed to link WhatsApp account. Please try again.'
-            };
+        if (update_other_roles) {
+            await this.crossRoleVerification(user_id, role, waData);
         }
     }
 
+
     /**
-     * Cross-role verification: Verify WhatsApp on other roles if not already verified
-     * 
+     * Cross-role verification: Verify WhatsApp on other roles if not already verified.
+     *
+     * Fetches the user document once to determine which roles they actually have,
+     * then only queries the relevant role entity collections — avoiding blind lookups
+     * across all 4 collections when the user may only have 1 or 2 roles.
+     *
      * @param userId - User ID
-     * @param primaryRole - The role that initiated verification
-     * @param waPhoneId - WhatsApp phone ID to verify
-     * @param name - Name to store
+     * @param primaryRole - The role that initiated verification (already updated)
+     * @param waData - WhatsApp data to verify
      */
     private async crossRoleVerification(
         userId: string,
         primaryRole: string,
-        waPhoneId: string,
-        name?: string
+        waData: { wa_phone_id: string; name: string }
     ): Promise<void> {
-        const roles = ['vendor', 'customer', 'agency', 'agent'];
-        const otherRoles = roles.filter(r => r !== primaryRole);
+        // Fetch the user once to know which roles they actually hold
+        const user = await this.userRepo.findById(userId);
+        if (!user || !user.roles?.length) return;
 
-        const waData = { wa_phone_id: waPhoneId, name };
+        // Only process roles the user actually has, excluding the primary (already updated)
+        const rolesToSync = user.roles.filter(
+            (r) => r !== primaryRole && r !== 'admin'
+        );
+        if (!rolesToSync.length) return;
 
-        for (const role of otherRoles) {
+        for (const role of rolesToSync) {
             try {
                 let entity: any = null;
                 let repo: any = null;
@@ -149,15 +134,17 @@ export class WhatsAppLinkService {
                         entity = await this.agentRepo.findByUserId(userId);
                         repo = this.agentRepo;
                         break;
+                    default:
+                        continue; // skip any unsupported roles
                 }
 
                 // Only update if entity exists AND WhatsApp is NOT already verified
-                if (entity && !entity.wa?.verified && (!entity.wa?.wa_phone_id || entity.wa?.wa_phone_id === waPhoneId)) {
+                if (entity && !entity.wa?.verified && (!entity.wa?.wa_phone_id || entity.wa?.wa_phone_id === waData.wa_phone_id)) {
                     await repo.updateWaVerified(userId, waData);
                     console.log(`[WhatsAppLink] Cross-verified WhatsApp for ${role} role`);
                 }
             } catch (error) {
-                // Log but don't fail - cross-role verification is best-effort
+                // Log but don't fail — cross-role verification is best-effort
                 console.error(`[WhatsAppLink] Failed to cross-verify ${role}:`, error);
             }
         }
@@ -171,7 +158,7 @@ export class WhatsAppLinkService {
      * @returns Link status
      */
     async getStatus(userId: string, role: string): Promise<LinkStatus> {
-        let entity: any = null;
+        let entity: any;
 
         switch (role) {
             case 'vendor':
@@ -209,39 +196,39 @@ export class WhatsAppLinkService {
      * @param role - User role
      */
     async unlinkAccount(userId: string, role: string): Promise<void> {
-        let entity: any = null;
+        let entity: any;
 
         switch (role) {
             case 'vendor':
                 entity = await this.vendorRepo.findByUserId(userId);
                 if (!entity?.wa?.verified) {
-                    throw new Error('No WhatsApp account linked');
+                    throw createAppError(ERROR_CODES.WHATSAPP_NOT_LINKED, 404);
                 }
                 await this.vendorRepo.unlinkWhatsApp(userId);
                 break;
             case 'customer':
                 entity = await this.customerRepo.findByUserId(userId);
                 if (!entity?.wa?.verified) {
-                    throw new Error('No WhatsApp account linked');
+                    throw createAppError(ERROR_CODES.WHATSAPP_NOT_LINKED, 404);
                 }
                 await this.customerRepo.unlinkWhatsApp(userId);
                 break;
             case 'agency':
                 entity = await this.agencyRepo.findByUserId(userId);
                 if (!entity?.wa?.verified) {
-                    throw new Error('No WhatsApp account linked');
+                    throw createAppError(ERROR_CODES.WHATSAPP_NOT_LINKED, 404);
                 }
                 await this.agencyRepo.unlinkWhatsApp(userId);
                 break;
             case 'agent':
                 entity = await this.agentRepo.findByUserId(userId);
                 if (!entity?.wa?.verified) {
-                    throw new Error('No WhatsApp account linked');
+                    throw createAppError(ERROR_CODES.WHATSAPP_NOT_LINKED, 404);
                 }
                 await this.agentRepo.unlinkWhatsApp(userId);
                 break;
             default:
-                throw new Error(`Role ${role} does not support WhatsApp linking`);
+                throw createAppError(ERROR_CODES.WHATSAPP_ROLE_NOT_SUPPORTED, 400, undefined, { role });
         }
 
         console.log(`[WhatsAppLink] Account unlinked for user ${userId} (${role})`);

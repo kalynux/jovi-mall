@@ -204,6 +204,7 @@ export class NotchPayGateway implements PaymentGateway {
     // });
     // return await response.json();
 
+    // eslint-disable-next-line no-restricted-syntax
     throw new Error('NotchPay API integration not implemented. Add API credentials to .env');
   }
 }

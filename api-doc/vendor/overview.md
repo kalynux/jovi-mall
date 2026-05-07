@@ -142,6 +142,8 @@ Most resources use soft deletion:
 
 The vendor API is organized into the following modules:
 
+- [**Onboarding**](./onboarding.md) - Step-by-step vendor onboarding flow (basic setup, delivery linking, branding)
+- [**Delivery Agencies**](./delivery-agencies.md) - Browse and select a default delivery agency
 - [**Variants**](./variants.md) - Manage product variants (physical products only)
 - [**Shipping**](./shipping.md) - Configure shipping for physical products
 - [**Availability Rules**](./availability-rules.md) - Define service availability schedules

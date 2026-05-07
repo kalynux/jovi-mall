@@ -2,6 +2,8 @@ import { Types } from 'mongoose';
 import { CustomerDigitalEntitlementModel } from '../models/customer-digital-entitlement.model';
 import { DownloadTokenHelper } from '../models/download-token.model';
 import { CreateDownloadLinkDto, DownloadLinkResult } from '../types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * DownloadLinkService - Generate secure download links
@@ -23,7 +25,7 @@ export class DownloadLinkService {
     dto: CreateDownloadLinkDto
   ): Promise<DownloadLinkResult> {
     if (!Types.ObjectId.isValid(dto.entitlementId)) {
-      throw new Error('Invalid entitlement ID');
+      throw createAppError(ERROR_CODES.DIGITAL_INVALID_ENTITLEMENT_ID, 400);
     }
 
     // Load entitlement
@@ -32,23 +34,23 @@ export class DownloadLinkService {
     );
 
     if (!entitlement) {
-      throw new Error('Entitlement not found');
+      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_NOT_FOUND, 404);
     }
 
     // Verify ownership
     if (entitlement.customerId.toString() !== dto.customerId) {
-      throw new Error('Unauthorized: This entitlement does not belong to you');
+      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_UNAUTHORIZED, 403);
     }
 
     // Validation: Check not revoked
     if (entitlement.revokedAt !== null) {
-      throw new Error('This entitlement has been revoked');
+      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_REVOKED, 403);
     }
 
     // Validation: Check not expired
     const now = new Date();
     if (entitlement.expiresAt !== null && entitlement.expiresAt < now) {
-      throw new Error('This entitlement has expired');
+      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_EXPIRED, 403);
     }
 
     // Validation: Check downloads available
@@ -56,7 +58,7 @@ export class DownloadLinkService {
       entitlement.maxDownloads !== null &&
       entitlement.downloadsUsed >= entitlement.maxDownloads
     ) {
-      throw new Error('Download limit exceeded');
+      throw createAppError(ERROR_CODES.DIGITAL_DOWNLOAD_LIMIT_EXCEEDED, 403);
     }
 
     // Generate secure token and store in Redis

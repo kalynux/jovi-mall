@@ -8,6 +8,8 @@ import { DeliveryAgentRepository } from '../../modules/delivery/delivery-agent.r
 import { AdminRepository } from '../../modules/admins/admin.repository';
 import { AUTH_COOKIE, accessCookieOptions } from '../../config/cookie.config';
 import { AuthService } from '../../modules/auth/auth.service';
+import { createAppError } from '../../core/errors';
+import { ERROR_CODES } from '../../core/error-codes';
 
 // Module-level singletons
 const userRepo = new UserRepository();
@@ -24,6 +26,7 @@ export interface AuthUserPayload {
 }
 
 declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       auth?: {
@@ -42,15 +45,11 @@ declare global {
  * Resolves a JWT access token from:
  *   1. `access_token` httpOnly cookie (preferred, for browser clients)
  *   2. `Authorization: Bearer <token>` header (fallback, for API / mobile clients)
- *
- * This dual-source resolution means existing Bearer-token API clients are NOT broken.
  */
 function extractToken(req: Request): string | null {
-  // 1. Cookie (browser clients with credentials: 'include')
   const cookieToken = req.cookies?.[AUTH_COOKIE.ACCESS];
   if (cookieToken) return cookieToken;
 
-  // 2. Authorization header (mobile apps, API clients, CLI tools)
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ')) {
     return authHeader.split(' ')[1];
@@ -63,8 +62,7 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
   const token = extractToken(req);
 
   if (!token) {
-    res.status(401).json({ error: 'Unauthorized: Missing token' });
-    return;
+    return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
   }
 
   let payload: AuthUserPayload;
@@ -77,8 +75,7 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
       const refreshToken = req.cookies?.[AUTH_COOKIE.REFRESH];
 
       if (!refreshToken) {
-        res.status(401).json({ error: 'Unauthorized: Access token expired and no refresh token present' });
-        return;
+        return next(createAppError(ERROR_CODES.AUTH_TOKEN_EXPIRED, 401));
       }
 
       try {
@@ -87,24 +84,21 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
         res.cookie(AUTH_COOKIE.ACCESS, refreshed.accessToken, accessCookieOptions);
         payload = jwt.decode(refreshed.accessToken) as AuthUserPayload;
       } catch {
-        res.status(401).json({ error: 'Unauthorized: Session expired, please log in again' });
-        return;
+        return next(createAppError(ERROR_CODES.AUTH_SESSION_EXPIRED, 401));
       }
     } else {
-      // Token is corrupted, tampered, or uses an invalid signature — hard reject
-      res.status(401).json({ error: 'Unauthorized: Invalid token' });
-      return;
+      // Token is corrupted, tampered, or uses an invalid signature
+      return next(createAppError(ERROR_CODES.AUTH_TOKEN_INVALID, 401));
     }
   }
 
-  // 1. Load User
+  // Load User
   const user = await userRepo.findById(payload.userId);
   if (!user) {
-    res.status(401).json({ error: 'Unauthorized: User not found' });
-    return;
+    return next(createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 401));
   }
 
-  // 2. Load Role Entity
+  // Load Role Entity
   let entity = null;
   const role = payload.role;
 
@@ -115,11 +109,10 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
   else if (role === 'admin') entity = await adminRepo.findByUserId(user.id);
 
   if (!entity) {
-    res.status(401).json({ error: 'Unauthorized: Role profile not found' });
-    return;
+    return next(createAppError(ERROR_CODES.AUTH_ROLE_PROFILE_NOT_FOUND, 401));
   }
 
-  // 3. Attach to Request
+  // Attach to Request
   req.auth = { user, role, role_entity: entity };
 
   // Backward compatibility aliases
@@ -133,13 +126,14 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
 export const requireRole = (allowedRoles: string[]) => {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.auth?.role) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
+      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
     }
 
     if (!allowedRoles.includes(req.auth.role)) {
-      res.status(403).json({ error: 'Forbidden: Insufficient permissions' });
-      return;
+      return next(createAppError(ERROR_CODES.AUTH_ROLE_NOT_FOUND, 403, 'Insufficient permissions', {
+        required: allowedRoles,
+        actual: req.auth.role,
+      }));
     }
     next();
   };

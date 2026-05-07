@@ -23,13 +23,13 @@ const BankSubSchema = new Schema(
         bank_name: { type: String, required: true, trim: true },
         account_number: { type: String, required: true, trim: true },
         account_name: { type: String, required: true, trim: true },
-        country: { type: String, required: true, trim: true, uppercase: true }, // ISO-2
+        country: { type: String, required: true, trim: true },
     },
     { _id: false }
 );
 
 /**
- * Shared payout details sub-schema.
+ * Single payout method sub-schema (mobile money OR bank).
  *
  * Used by: Vendor, DeliveryAgency
  *
@@ -38,7 +38,7 @@ const BankSubSchema = new Schema(
  * - No payment tokens are stored here; the payment gateway handles tokenization
  * - Only the method owner (vendor/agency) can write; admin can read
  */
-export const PayoutDetailsSchema = new Schema(
+export const PayoutMethodSchema = new Schema(
     {
         method: {
             type: String,
@@ -50,6 +50,12 @@ export const PayoutDetailsSchema = new Schema(
     },
     { _id: false }
 );
+
+/**
+ * @deprecated Use PayoutMethodSchema for new code.
+ * Alias kept for backward compatibility with Vendor model.
+ */
+export const PayoutDetailsSchema = PayoutMethodSchema;
 
 // ─── TypeScript Interfaces ───────────────────────────────────────────────────
 
@@ -66,11 +72,28 @@ export interface IBankPayout {
     country: string;
 }
 
-export interface IPayoutDetails {
+/**
+ * A single payout method entry (one of mobile_money or bank).
+ */
+export interface IPayoutMethod {
     method: 'mobile_money' | 'bank';
     mobile_money: IMobileMoneyPayout | null;
     bank: IBankPayout | null;
 }
+
+/**
+ * The full payout_details field on a DeliveryAgency document.
+ * An ordered array of IPayoutMethod entries — the FIRST item is the preferred method.
+ * Must contain at least 1 entry when onboarding is complete.
+ *
+ * @deprecated (single object form) Use IPayoutMethod for new code.
+ */
+export type IPayoutDetails = IPayoutMethod[];
+
+/**
+ * @deprecated Alias for backward compatibility with Vendor model.
+ */
+export type IPayoutDetailsSingle = IPayoutMethod;
 
 // ─── Zod Validators ─────────────────────────────────────────────────────────
 
@@ -84,18 +107,14 @@ const BankZodSchema = z.object({
     bank_name: z.string().min(1, 'Bank name is required').trim(),
     account_number: z.string().min(1, 'Account number is required').trim(),
     account_name: z.string().min(1, 'Account name is required').trim(),
-    country: z
-        .string()
-        .length(2, 'Country must be a valid ISO-2 code')
-        .toUpperCase(),
+    country: z.string().min(1, 'Country is required').trim(),
 });
 
 /**
- * Validates payout details input from API requests.
- *
+ * Validates a single payout method entry.
  * Ensures the correct sub-object is provided for the chosen method.
  */
-export const PayoutDetailsZodSchema = z
+export const PayoutMethodZodSchema = z
     .discriminatedUnion('method', [
         z.object({
             method: z.literal('mobile_money'),
@@ -116,5 +135,24 @@ export const PayoutDetailsZodSchema = z
         return { ...data, mobile_money: null };
     });
 
+/**
+ * Validates an ordered array of payout methods.
+ * - Minimum 1 entry required.
+ * - The FIRST entry is treated as the preferred/default payout method.
+ * - No duplicate methods allowed (enforced by refine).
+ */
+export const PayoutDetailsZodSchema = z
+    .array(PayoutMethodZodSchema)
+    .min(1, 'At least one payout method is required')
+    .max(3, 'You may add at most 3 payout methods');
+
+/**
+ * @deprecated Use PayoutMethodZodSchema for single-method validation.
+ * Alias kept for backward compatibility.
+ */
+export const PayoutDetailsZodSchemaSingle = PayoutMethodZodSchema;
+
+export type PayoutMethodInput = z.input<typeof PayoutMethodZodSchema>;
+export type PayoutMethodOutput = z.output<typeof PayoutMethodZodSchema>;
 export type PayoutDetailsInput = z.input<typeof PayoutDetailsZodSchema>;
 export type PayoutDetailsOutput = z.output<typeof PayoutDetailsZodSchema>;

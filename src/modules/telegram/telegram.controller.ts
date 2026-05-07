@@ -1,9 +1,12 @@
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { TelegramService } from "./telegram.service";
 import { TelegramLinkService } from './services/telegram-link.service';
 import { TelegramNotificationService } from './services/telegram-notification.service';
 import { SendNotificationSchema } from './validators/telegram.validator';
 import { CommandBus } from '../command-bus/command-bus';
+import { asyncHandler } from '../../api/middlewares/async-handler';
+import { createAppError } from '../../core/errors';
+import { ERROR_CODES } from '../../core/error-codes';
 
 interface TelegramWebhookPayload {
     chat_id: string;
@@ -29,7 +32,7 @@ export class TelegramController {
     /**
      * Handle webhook from n8n (Telegram bot messages)
      */
-    handleWebhook = async (req: Request, res: Response) => {
+    handleWebhook = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
         try {
             const body: TelegramWebhookPayload = req.body;
             const { chat_id, is_command, command, payload, user_id } = body;
@@ -51,60 +54,57 @@ export class TelegramController {
             res.status(200).json(result);
         } catch (error: any) {
             console.error('[Telegram-Webhook] Error:', error.message);
-            res.status(400).json({ error: error.message });
+            next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 400, error.message));
         }
-    };
+    });
 
     /**
      * Generate link token for authenticated user
      */
-    generateLinkToken = async (req: Request, res: Response) => {
+    generateLinkToken = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
         try {
             const userId = req.auth?.user?.id;
 
             if (!userId) {
-                res.status(401).json({ error: 'Unauthorized' });
-                return;
+                return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
             }
 
             const result = await this.linkService.generateLinkToken(userId);
             res.status(200).json(result);
         } catch (error: any) {
             console.error('[Telegram] Error generating link token:', error.message);
-            res.status(500).json({ error: 'Failed to generate link token' });
+            next(createAppError(ERROR_CODES.TELEGRAM_LINK_FAILED, 500, 'Failed to generate link token'));
         }
-    };
+    });
 
     /**
      * Get Telegram link status for authenticated user
      */
-    getStatus = async (req: Request, res: Response) => {
+    getStatus = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
         try {
             const userId = req.auth?.user?.id;
 
             if (!userId) {
-                res.status(401).json({ error: 'Unauthorized' });
-                return;
+                return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
             }
 
             const status = await this.linkService.getStatus(userId);
             res.status(200).json(status);
         } catch (error: any) {
             console.error('[Telegram] Error getting status:', error.message);
-            res.status(500).json({ error: 'Failed to get status' });
+            next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to get status'));
         }
-    };
+    });
 
     /**
      * Toggle activation state for authenticated user
      */
-    toggleActivation = async (req: Request, res: Response) => {
+    toggleActivation = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
         try {
             const userId = req.auth?.user?.id;
 
             if (!userId) {
-                res.status(401).json({ error: 'Unauthorized' });
-                return;
+                return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
             }
 
             const result = await this.linkService.toggleActivation(userId);
@@ -113,18 +113,17 @@ export class TelegramController {
             console.error('[Telegram] Error toggling activation:', error.message);
 
             if (error.message.includes('not found')) {
-                res.status(404).json({ error: 'No Telegram account linked' });
-                return;
+                return next(createAppError(ERROR_CODES.TELEGRAM_NOT_LINKED, 404, 'No Telegram account linked'));
             }
 
-            res.status(500).json({ error: 'Failed to toggle activation' });
+            next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to toggle activation'));
         }
-    };
+    });
 
     /**
      * Send notification (admin only)
      */
-    sendNotification = async (req: Request, res: Response) => {
+    sendNotification = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
         try {
             // Validate request body
             const validatedData = SendNotificationSchema.parse(req.body);
@@ -134,30 +133,28 @@ export class TelegramController {
             if (result.success) {
                 res.status(200).json(result);
             } else {
-                res.status(400).json(result);
+                next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 400, result.error));
             }
         } catch (error: any) {
             console.error('[Telegram] Error sending notification:', error.message);
 
             if (error.name === 'ZodError') {
-                res.status(400).json({ error: 'Validation failed', details: error.errors });
-                return;
+                return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'Validation failed', { details: error.errors }));
             }
 
-            res.status(500).json({ error: 'Failed to send notification' });
+            next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to send notification'));
         }
-    };
+    });
 
     /**
      * Disconnect Telegram account for authenticated user
      */
-    disconnectAccount = async (req: Request, res: Response) => {
+    disconnectAccount = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
         try {
             const userId = req.auth?.user?.id;
 
             if (!userId) {
-                res.status(401).json({ error: 'Unauthorized' });
-                return;
+                return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
             }
 
             await this.linkService.disconnectAccount(userId);
@@ -166,11 +163,10 @@ export class TelegramController {
             console.error('[Telegram] Error disconnecting account:', error.message);
 
             if (error.message.includes('No Telegram account')) {
-                res.status(404).json({ error: 'No Telegram account linked' });
-                return;
+                return next(createAppError(ERROR_CODES.TELEGRAM_NOT_LINKED, 404, 'No Telegram account linked'));
             }
 
-            res.status(500).json({ error: 'Failed to disconnect account' });
+            next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to disconnect account'));
         }
-    };
+    });
 }

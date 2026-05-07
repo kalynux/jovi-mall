@@ -2,6 +2,8 @@ import * as crypto from 'crypto';
 import { v2 as cloudinary, UploadApiResponse } from 'cloudinary';
 import { IStorageProvider, StoragePutOptions, StoragePutResult } from '../storage-provider.interface';
 import { CloudinaryStorageConfig } from '../storage.config';
+import { createAppError } from '../../errors';
+import { ERROR_CODES } from '../../error-codes';
 
 /**
  * Cloudinary Storage Provider
@@ -27,15 +29,15 @@ export class CloudinaryStorageProvider implements IStorageProvider {
   }
 
   getSignedUrl?(key: string, expiresInSeconds: number): Promise<string> {
-    throw new Error("Method not implemented.");
+    throw createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 501, "Method not implemented.");
   }
 
   getDownloadStream(key: string): Promise<NodeJS.ReadableStream> {
-    throw new Error("Method not implemented.");
+    throw createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 501, "Method not implemented.");
   }
 
   getBuffer(key: string): Promise<Buffer> {
-    throw new Error("Method not implemented.");
+    throw createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 501, "Method not implemented.");
   }
 
   async put(buffer: Buffer, options: StoragePutOptions): Promise<StoragePutResult> {
@@ -62,12 +64,21 @@ export class CloudinaryStorageProvider implements IStorageProvider {
         },
         (error, result: UploadApiResponse | undefined) => {
           if (error) {
-            reject(new Error(`Cloudinary upload failed: ${error.message}`));
+            reject(createAppError(
+              ERROR_CODES.STORAGE_UPLOAD_FAILED,
+              502,
+              `Cloudinary upload failed: ${error.message}`,
+              { originalError: error }
+            ));
             return;
           }
 
           if (!result) {
-            reject(new Error('Cloudinary upload failed: no result returned'));
+            reject(createAppError(
+              ERROR_CODES.STORAGE_UPLOAD_FAILED,
+              502,
+              'Cloudinary upload failed: no result returned'
+            ));
             return;
           }
 
@@ -95,7 +106,12 @@ export class CloudinaryStorageProvider implements IStorageProvider {
       // Idempotent: if resource doesn't exist, Cloudinary returns success
       // Only throw on actual errors
       if (error.http_code !== 404) {
-        throw new Error(`Cloudinary delete failed: ${error.message}`);
+        throw createAppError(
+          ERROR_CODES.STORAGE_DELETE_FAILED,
+          502,
+          `Cloudinary delete failed: ${error.message}`,
+          { originalError: error }
+        );
       }
     }
   }

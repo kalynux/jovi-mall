@@ -1,5 +1,7 @@
 import { getRedisClient, SLOT_LOCK_DB } from '../../../infra/redis/redis.factory';
 import { SlotLockData } from '../types/booking.types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 export class SlotLockService {
   private static readonly DEFAULT_TTL = 900; // 15 minutes in seconds
@@ -11,7 +13,7 @@ export class SlotLockService {
   async lock(slotId: string, ownerId: string, ttlSeconds: number = SlotLockService.DEFAULT_TTL): Promise<boolean> {
     const redis = await getRedisClient(SLOT_LOCK_DB);
     const key = this.getKey(slotId);
-    
+
     const lockData: SlotLockData = {
       ownerId,
       expiresAt: Date.now() + ttlSeconds * 1000,
@@ -58,18 +60,18 @@ export class SlotLockService {
 
     const value = await redis.get(key);
     if (!value) {
-      throw new Error(`Slot ${slotId} is not locked`);
+      throw createAppError(ERROR_CODES.BOOKING_SLOT_NOT_LOCKED, 409, `Slot ${slotId} is not locked`);
     }
 
     const lockData: SlotLockData = JSON.parse(value);
     if (lockData.ownerId !== ownerId) {
-      throw new Error(`Slot ${slotId} is locked by another user`);
+      throw createAppError(ERROR_CODES.BOOKING_UNAUTHORIZED, 403, `Slot ${slotId} is locked by another user`);
     }
 
     // Check if expired
     if (lockData.expiresAt < Date.now()) {
       await redis.del(key);
-      throw new Error(`Slot ${slotId} lock has expired`);
+      throw createAppError(ERROR_CODES.BOOKING_SLOT_NOT_LOCKED, 409, `Slot ${slotId} lock has expired`);
     }
   }
 

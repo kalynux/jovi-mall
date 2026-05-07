@@ -4,6 +4,8 @@ import {
   ICustomerDigitalEntitlement,
 } from '../models/customer-digital-entitlement.model';
 import { GrantEntitlementDto, EntitlementSummary } from '../types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * DigitalEntitlementService - Post-payment entitlement granting
@@ -33,13 +35,11 @@ export class DigitalEntitlementService {
     });
 
     if (!product || !product.digitalConfig) {
-      throw new Error(
-        'No active digital product configuration found for this product'
-      );
+      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_CONFIG_MISSING, 400, 'No active digital product configuration found for this product');
     }
 
     if (!product.digitalConfig.isActive) {
-      throw new Error('Digital product configuration is not active');
+      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_CONFIG_INACTIVE, 400, 'Digital product configuration is not active');
     }
 
     const config = product.digitalConfig;
@@ -77,7 +77,7 @@ export class DigitalEntitlementService {
         });
 
         if (!existing) {
-          throw new Error('Duplicate entitlement but not found in database');
+          throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_NOT_FOUND, 500, 'Duplicate entitlement but not found in database');
         }
 
         return existing;
@@ -185,7 +185,7 @@ export class DigitalEntitlementService {
     reason: string
   ): Promise<void> {
     if (!Types.ObjectId.isValid(entitlementId)) {
-      throw new Error('Invalid entitlement ID');
+      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_NOT_FOUND, 400, 'Invalid entitlement ID');
     }
 
     const result = await CustomerDigitalEntitlementModel.updateOne(
@@ -199,7 +199,7 @@ export class DigitalEntitlementService {
     );
 
     if (result.modifiedCount === 0) {
-      throw new Error('Entitlement not found or already revoked');
+      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_NOT_FOUND, 404, 'Entitlement not found or already revoked');
     }
   }
 

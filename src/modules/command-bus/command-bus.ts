@@ -1,4 +1,6 @@
 import { ZodType } from 'zod';
+import { createAppError } from '../../core/errors';
+import { ERROR_CODES } from '../../core/error-codes';
 
 export type CommandHandler<T = any, R = any> = (payload: T, context: any) => Promise<R>;
 
@@ -18,7 +20,7 @@ export class CommandBus {
    */
   register<T, R>(name: string, schema: ZodType<T, any, any>, handler: CommandHandler<T, R>): void {
     if (this.registry.has(name)) {
-      throw new Error(`Command "${name}" is already registered`);
+      throw createAppError(ERROR_CODES.COMMAND_ALREADY_REGISTERED, 500, `Command "${name}" is already registered`);
     }
     this.registry.set(name, { schema, handler });
   }
@@ -31,16 +33,18 @@ export class CommandBus {
    */
   async execute<R = any>(name: string, payload: unknown, context: any = {}): Promise<R> {
     const definition = this.registry.get(name);
-    
+
     if (!definition) {
-      throw new Error(`Command "${name}" not found`);
+      throw createAppError(ERROR_CODES.COMMAND_NOT_FOUND, 404, `Command "${name}" not found`);
     }
 
-    try {
-      const validatedPayload = definition.schema.parse(payload);
-      return await definition.handler(validatedPayload, context);
-    } catch (error) {
-       throw error;
-    }
+    const validatedPayload = definition.schema.parse(payload);
+    return await definition.handler(validatedPayload, context);
+    // try {
+    //   const validatedPayload = definition.schema.parse(payload);
+    //   return await definition.handler(validatedPayload, context);
+    // } catch (error) {
+    //   throw error;
+    // }
   }
 }

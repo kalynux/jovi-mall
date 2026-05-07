@@ -3,6 +3,8 @@ import { BaseRepository, RepositoryOptions } from '../../../../core/repositories
 import { FileModel, IFile } from '../../models/file.model';
 import { IFileRepository } from '../interfaces/file.repository.interface';
 import { File, FileMapper } from '../mappers/file.mapper';
+import { createAppError } from '../../../../core/errors';
+import { ERROR_CODES } from '../../../../core/error-codes';
 
 /**
  * File Repository - MongoDB Implementation
@@ -49,7 +51,7 @@ export class FileRepositoryMongo extends BaseRepository<IFile, File> implements 
 
   async incrementUsageCount(fileId: string, options?: RepositoryOptions): Promise<void> {
     if (!Types.ObjectId.isValid(fileId)) {
-      throw new Error('Invalid file ID');
+      throw createAppError(ERROR_CODES.CATALOG_FILE_NOT_FOUND, 400, 'Invalid file ID');
     }
 
     const result = await this.model.findByIdAndUpdate(
@@ -59,13 +61,13 @@ export class FileRepositoryMongo extends BaseRepository<IFile, File> implements 
     ).exec();
 
     if (!result) {
-      throw new Error('File not found');
+      throw createAppError(ERROR_CODES.CATALOG_FILE_NOT_FOUND, 404, 'File not found');
     }
   }
 
   async decrementUsageCount(fileId: string, options?: RepositoryOptions): Promise<void> {
     if (!Types.ObjectId.isValid(fileId)) {
-      throw new Error('Invalid file ID');
+      throw createAppError(ERROR_CODES.CATALOG_FILE_NOT_FOUND, 400, 'Invalid file ID');
     }
 
     // Guard: only decrement if usageCount >= 1
@@ -76,7 +78,7 @@ export class FileRepositoryMongo extends BaseRepository<IFile, File> implements 
     ).exec();
 
     if (!result) {
-      throw new Error('Cannot decrement usageCount below 0 or file not found');
+      throw createAppError(ERROR_CODES.CATALOG_FILE_NOT_FOUND, 404, 'Cannot decrement usageCount below 0 or file not found');
     }
   }
 

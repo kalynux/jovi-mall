@@ -1,6 +1,7 @@
 import { VendorDailyMetricsRepository } from '../repositories/vendor-daily-metrics.repository';
 import { VendorVariantDailyMetricsRepository } from '../repositories/vendor-variant-daily-metrics.repository';
-import { AggregationNotReadyError } from '../../../core/errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * VendorAnalyticsService - Read-only analytics query service
@@ -37,10 +38,11 @@ export class VendorAnalyticsService {
 
         // Explicit data availability contract
         if (!dailyMetrics || dailyMetrics.length === 0) {
-            throw new AggregationNotReadyError(
-                `No analytics data available for vendor ${vendorId} in range ${range.from.toISOString().split('T')[0]} to ${range.to.toISOString().split('T')[0]}. ` +
-                `Aggregation may not have run yet or vendor has no data for this period.`
-            );
+            throw createAppError(ERROR_CODES.ANALYTICS_AGGREGATION_NOT_READY, 503, undefined, {
+                vendorId,
+                from: range.from.toISOString().split('T')[0],
+                to: range.to.toISOString().split('T')[0],
+            });
         }
 
         // Aggregate across all days
@@ -99,9 +101,11 @@ export class VendorAnalyticsService {
         );
 
         if (!dailyMetrics || dailyMetrics.length === 0) {
-            throw new AggregationNotReadyError(
-                `No sales data available for vendor ${vendorId} in range ${range.from.toISOString().split('T')[0]} to ${range.to.toISOString().split('T')[0]}.`
-            );
+            throw createAppError(ERROR_CODES.ANALYTICS_AGGREGATION_NOT_READY, 503, undefined, {
+                vendorId,
+                from: range.from.toISOString().split('T')[0],
+                to: range.to.toISOString().split('T')[0],
+            });
         }
 
         const lastCalculatedAt = new Date(
@@ -181,9 +185,11 @@ export class VendorAnalyticsService {
         );
 
         if (topByRevenue.length === 0 && topByQuantity.length === 0) {
-            throw new AggregationNotReadyError(
-                `No product data available for vendor ${vendorId} in range ${range.from.toISOString().split('T')[0]} to ${range.to.toISOString().split('T')[0]}.`
-            );
+            throw createAppError(ERROR_CODES.ANALYTICS_AGGREGATION_NOT_READY, 503, undefined, {
+                vendorId,
+                from: range.from.toISOString().split('T')[0],
+                to: range.to.toISOString().split('T')[0],
+            });
         }
 
         return {
@@ -211,9 +217,11 @@ export class VendorAnalyticsService {
         );
 
         if (!dailyMetrics || dailyMetrics.length === 0) {
-            throw new AggregationNotReadyError(
-                `No customer data available for vendor ${vendorId} in range ${range.from.toISOString().split('T')[0]} to ${range.to.toISOString().split('T')[0]}.`
-            );
+            throw createAppError(ERROR_CODES.ANALYTICS_AGGREGATION_NOT_READY, 503, undefined, {
+                vendorId,
+                from: range.from.toISOString().split('T')[0],
+                to: range.to.toISOString().split('T')[0],
+            });
         }
 
         // Aggregate customer metrics

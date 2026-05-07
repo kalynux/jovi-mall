@@ -1,4 +1,5 @@
-import { ValidationError } from '../../../../core/errors';
+import { createAppError } from '../../../../core/errors';
+import { ERROR_CODES } from '../../../../core/error-codes';
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
 import { Product } from '../../repositories/mappers/product.mapper';
 import { SlugService } from './SlugService';
@@ -20,27 +21,19 @@ export class ProductDraftService {
     private readonly slugService: SlugService
   ) { }
 
-  /**
-   * Create a new product in DRAFT state
-   * @param input - Product creation input
-   * @returns Created product domain entity
-   */
   async execute(input: CreateProductInput): Promise<Product> {
-    // Input validation
     const trimmedTitle = input.title.trim();
 
     if (!trimmedTitle) {
-      throw new ValidationError('Product title cannot be empty');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TITLE, 422, 'Product title cannot be empty');
     }
 
     if (trimmedTitle.length < 3) {
-      throw new ValidationError('Product title must be at least 3 characters long');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TITLE, 422, 'Product title must be at least 3 characters long');
     }
 
-    // Generate unique slug
     const slug = await this.slugService.generate(trimmedTitle, input.vendorId);
 
-    // Create product in DRAFT state
     const productData: Omit<Product, 'id' | 'createdAt' | 'updatedAt'> = {
       vendorId: input.vendorId,
       type: input.type,

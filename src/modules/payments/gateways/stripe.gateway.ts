@@ -8,6 +8,9 @@ import {
   RefundResult,
   PaymentGatewayStatus
 } from './gateway.interface';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
+
 
 /**
  * StripeGateway - Card Payment Gateway
@@ -64,7 +67,7 @@ export class StripeGateway implements PaymentGateway {
       // Successful PaymentIntent creation
       if (response.id) {
         const status = this.normalizeStripeStatus(response.status);
-        
+
         return {
           success: true,
           gatewayRef: response.id,
@@ -182,15 +185,15 @@ export class StripeGateway implements PaymentGateway {
    * PLACEHOLDER - Replace with actual Stripe SDK or HTTP client
    */
   private async callStripeAPI(
-    endpoint: string, 
-    data: any = null, 
+    endpoint: string,
+    data: any = null,
     method: 'GET' | 'POST' = 'POST'
   ): Promise<any> {
     // PLACEHOLDER IMPLEMENTATION
     // In production, use Stripe Node SDK or fetch with proper error handling
-    
+
     console.log(`[StripeGateway] ${method} https://api.stripe.com/v1${endpoint}`, data);
-    
+
     // If API key is not configured, return mock response
     if (!this.secretKey) {
       if (method === 'POST' && endpoint === '/payment_intents') {
@@ -202,7 +205,7 @@ export class StripeGateway implements PaymentGateway {
           currency: data.currency
         };
       }
-      
+
       return {
         id: `pi_${Date.now()}`,
         status: 'succeeded',
@@ -226,6 +229,6 @@ export class StripeGateway implements PaymentGateway {
     //   return await stripe.refunds.create(data);
     // }
 
-    throw new Error('Stripe API integration not implemented. Add STRIPE_SECRET_KEY to .env');
+    throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_IMPLEMENTED, 501, 'Stripe integration not yet implemented. Add STRIPE_SECRET_KEY to .env');
   }
 }

@@ -32,6 +32,7 @@ export class TicketAttachmentRepository {
         viewerRole: string,
         viewerUserId: string
     ): Promise<ITicketAttachment[]> {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const mongoose = require('mongoose');
 
         // Admins see all attachments

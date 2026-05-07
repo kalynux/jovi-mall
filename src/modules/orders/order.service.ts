@@ -6,7 +6,8 @@ import { ShipmentRepository } from '../shipments/shipment.repository';
 import { VendorRepository } from '../vendors/vendor.repository';
 import { IVendor } from '../vendors/vendor.model';
 import { OrderNumberGenerator } from './utils/order-number-generator';
-import { ValidationError } from '../../core/errors';
+import { createAppError } from '../../core/errors';
+import { ERROR_CODES } from '../../core/error-codes';
 import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.repository.mongo';
 import { VariantRepositoryMongo } from '../catalog/repositories/mongo/variant.repository.mongo';
 import { eventBus } from '../../core/events/event-bus';
@@ -69,36 +70,34 @@ export class OrderService {
     const cart = await this.cartService.getCart(customerId);
 
     if (!cart || cart.items.length === 0) {
-      throw new ValidationError('CART_EMPTY: Cannot create order from empty cart');
+      throw createAppError(ERROR_CODES.ORDER_CART_EMPTY, 400, 'Cannot create order from empty cart');
     }
 
     if (!cart.productType) {
-      throw new ValidationError('CART_INVALID: Cart must have a product type');
+      throw createAppError(ERROR_CODES.ORDER_CART_INVALID, 400, 'Cart must have a product type');
     }
 
     // Defense in depth: scan for service products (should never happen)
     for (const item of cart.items) {
       if ((item.productType as string) === 'service') {
-        throw new ValidationError(
-          'SERVICE_PRODUCTS_NOT_ALLOWED_IN_ORDERS: Service products cannot be ordered. They must be booked separately.'
-        );
+        throw createAppError(ERROR_CODES.ORDER_CART_INVALID, 400, 'Service products cannot be ordered. They must be booked separately.');
       }
     }
 
     // Validate all items have required variant-first data
     for (const item of cart.items) {
       if (!item.variantId) {
-        throw new ValidationError('VARIANT_REQUIRED: All cart items must have a variant_id');
+        throw createAppError(ERROR_CODES.ORDER_CART_INVALID, 400, 'All cart items must have a variant_id');
       }
       if (!item.sku) {
-        throw new ValidationError('INVALID_CART_ITEM: Cart item missing SKU');
+        throw createAppError(ERROR_CODES.ORDER_CART_INVALID, 400, 'Cart item missing SKU');
       }
     }
 
     // Ensure all items have same currency
     const currencies = [...new Set(cart.items.map(item => item.currency))];
     if (currencies.length > 1) {
-      throw new ValidationError('CURRENCY_MISMATCH: All cart items must have the same currency');
+      throw createAppError(ERROR_CODES.ORDER_CART_INVALID, 400, 'All cart items must have the same currency');
     }
     const currency = currencies[0];
 
@@ -106,7 +105,7 @@ export class OrderService {
     const orderType: OrderType = cart.productType as OrderType;
 
     if (orderType !== 'physical' && orderType !== 'digital') {
-      throw new ValidationError(`INVALID_ORDER_TYPE: Order type must be 'physical' or 'digital', got '${orderType}'`);
+      throw createAppError(ERROR_CODES.ORDER_CART_INVALID, 400, `Order type must be 'physical' or 'digital', got '${orderType}'`);
     }
 
     // 2. GENERATE ORDER NUMBER
@@ -163,20 +162,20 @@ export class OrderService {
         const product: any = await this.productRepo.findByIdUnscoped(cartItem.productId);
 
         if (!product) {
-          throw new ValidationError(`Product ${cartItem.productId} not found`);
+          throw createAppError(ERROR_CODES.ORDER_PRODUCT_NOT_FOUND, 404, undefined, { productId: cartItem.productId });
         }
 
         let agencyId = product.delivery?.agency_id?.toString();
 
         // Fallback to vendor default delivery agency
         if (!agencyId) {
-          let vendorId = cartItem.vendorId;
+          const vendorId = cartItem.vendorId;
           let vendor = vendorCache[vendorId];
 
           if (!vendor) {
             const v = await this.vendorRepo.findById(vendorId);
             if (!v) {
-              throw new ValidationError(`Vendor ${vendorId} not found`);
+              throw createAppError(ERROR_CODES.ORDER_VENDOR_NOT_FOUND, 404, undefined, { vendorId });
             }
             vendor = v;
             vendorCache[vendorId] = vendor;
@@ -186,7 +185,7 @@ export class OrderService {
         }
 
         if (!agencyId) {
-          throw new ValidationError(`No delivery agency configured for product ${cartItem.title}`);
+          throw createAppError(ERROR_CODES.ORDER_NO_DELIVERY_AGENCY, 422, undefined, { product: cartItem.title });
         }
 
         // Add delivery info to order item
@@ -297,7 +296,7 @@ export class OrderService {
     const order = await this.orderRepo.findById(orderId);
 
     if (!order) {
-      throw new ValidationError(`Order ${orderId} not found`);
+      throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404, undefined, { orderId });
     }
 
     // IDEMPOTENCY CHECK

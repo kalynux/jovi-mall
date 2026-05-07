@@ -1,5 +1,8 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { ProductDigitalService, DigitalConfigDto } from '../../catalog/domain/services/digital/ProductDigitalService';
+import { asyncHandler } from '../../../api/middlewares/async-handler';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Vendor Digital Product Configuration Routes
@@ -16,19 +19,19 @@ const digitalService = new ProductDigitalService();
  * 
  * Body: { assetId, maxDownloads?, expiresAfterDays? }
  */
-router.post('/products/:id/digital-config', async (req: Request, res: Response) => {
+router.post('/products/:id/digital-config', asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   try {
     // TODO: Extract vendorId from auth middleware
     const vendorId = (req as any).user?.vendorId;
     if (!vendorId) {
-      return res.status(401).json({ error: 'Unauthorized' });
+      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
     }
 
     const { id: productId } = req.params;
     const { assetId, maxDownloads, expiresAfterDays } = req.body;
 
     if (!assetId) {
-      return res.status(400).json({ error: 'assetId is required' });
+      return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'assetId is required'));
     }
 
     const config: DigitalConfigDto = {
@@ -39,21 +42,21 @@ router.post('/products/:id/digital-config', async (req: Request, res: Response) 
 
     await digitalService.createOrUpdateDigitalConfig(productId, vendorId, config);
 
-    return res.status(200).json({ 
+    return res.status(200).json({
       success: true,
       message: 'Digital configuration updated successfully'
     });
   } catch (error: any) {
     console.error('Error setting digital config:', error);
-    return res.status(400).json({ error: error.message });
+    next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 400, error.message));
   }
-});
+}));
 
 /**
  * GET /api/vendor/products/:id/digital-config
  * Get digital configuration for a product
  */
-router.get('/products/:id/digital-config', async (req: Request, res: Response) => {
+router.get('/products/:id/digital-config', asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id: productId } = req.params;
 
@@ -62,34 +65,34 @@ router.get('/products/:id/digital-config', async (req: Request, res: Response) =
     return res.status(200).json(config);
   } catch (error: any) {
     console.error('Error fetching digital config:', error);
-    return res.status(404).json({ error: error.message });
+    next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 404, error.message));
   }
-});
+}));
 
 /**
  * DELETE /api/vendor/products/:id/digital-config
  * Deactivate digital configuration
  */
-router.delete('/products/:id/digital-config', async (req: Request, res: Response) => {
+router.delete('/products/:id/digital-config', asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   try {
     // TODO: Extract vendorId from auth middleware
     const vendorId = (req as any).user?.vendorId;
     if (!vendorId) {
-      return res.status(401).json({ error: 'Unauthorized' });
+      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
     }
 
     const { id: productId } = req.params;
 
     await digitalService.deactivateDigitalConfig(productId, vendorId);
 
-    return res.status(200).json({ 
+    return res.status(200).json({
       success: true,
       message: 'Digital configuration deactivated'
     });
   } catch (error: any) {
     console.error('Error deactivating digital config:', error);
-    return res.status(400).json({ error: error.message });
+    next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 400, error.message));
   }
-});
+}));
 
 export default router;

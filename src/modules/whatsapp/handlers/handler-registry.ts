@@ -1,6 +1,7 @@
 import { WhatsAppMessageType, WhatsAppMessageTypes } from '../types/whatsapp-message.types';
 import { WhatsAppMessageHandler } from './handler.interface';
-import { UnsupportedMessageTypeError } from '../types/whatsapp-error.types';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Handler Registry
@@ -36,7 +37,12 @@ export class HandlerRegistry {
     get(type: WhatsAppMessageType): WhatsAppMessageHandler<any> {
         const handler = this.handlers.get(type);
         if (!handler) {
-            throw new UnsupportedMessageTypeError(type);
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_UNSUPPORTED_MESSAGE_TYPE,
+                400,
+                `Unsupported message type: ${type}`,
+                { type }
+            );
         }
         return handler;
     }
@@ -67,7 +73,9 @@ export class HandlerRegistry {
         }
 
         if (missingTypes.length > 0) {
-            throw new Error(
+            throw createAppError(
+                ERROR_CODES.INTERNAL_SERVER_ERROR,
+                500,
                 `FATAL: No handlers registered for message types: ${missingTypes.join(', ')}\n` +
                 `All message types MUST have a registered handler.\n` +
                 `Please implement handlers for these types or remove them from WhatsAppMessageTypes.`

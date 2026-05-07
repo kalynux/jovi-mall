@@ -1,4 +1,5 @@
-import { NotFoundError, ForbiddenError, ValidationError, BulkLimitExceededError, TransactionLimitExceededError } from '../../../../../core/errors';
+import { createAppError } from '../../../../../core/errors';
+import { ERROR_CODES } from '../../../../../core/error-codes';
 import { TransactionManager } from '../../../../../core/database/transaction.manager';
 import { IProductRepository } from '../../../repositories/interfaces/product.repository.interface';
 import { IVariantRepository } from '../../../repositories/interfaces/variant.repository.interface';
@@ -59,11 +60,11 @@ export class BulkStockUpdateService {
     ): Promise<BulkUpdateResult | BulkUpdateError> {
         // 1. Validate row limit
         if (updates.length > this.MAX_ROWS) {
-            throw new BulkLimitExceededError(this.MAX_ROWS);
+            throw createAppError(ERROR_CODES.CATALOG_BULK_LIMIT_EXCEEDED, 422, undefined, { max: this.MAX_ROWS, received: updates.length });
         }
 
         if (updates.length === 0) {
-            throw new ValidationError('Bulk update must contain at least one item');
+            throw createAppError(ERROR_CODES.CATALOG_BULK_EMPTY, 400, 'Bulk update must contain at least one item');
         }
 
         const batchId = uuidv4();
@@ -186,7 +187,7 @@ export class BulkStockUpdateService {
                     );
 
                     if (!updated) {
-                        throw new Error(`Failed to update variant ${variant.id}`);
+                        throw createAppError(ERROR_CODES.CATALOG_BULK_UPDATE_FAILED, 500, undefined, { variantId: variant.id });
                     }
 
                     // Create audit log
@@ -224,7 +225,7 @@ export class BulkStockUpdateService {
         } catch (error: any) {
             // Check for MongoDB transaction size limit
             if (error.message?.includes('Transaction') || error.code === 16 || error.code === 280) {
-                throw new TransactionLimitExceededError();
+                throw createAppError(ERROR_CODES.CATALOG_BULK_TRANSACTION_LIMIT, 413, 'Bulk operation exceeded database transaction size limit. Reduce batch size.');
             }
             throw error;
         }

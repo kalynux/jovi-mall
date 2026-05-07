@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { AuthService } from './auth.service';
 import { LoginSchema, RegisterSchema, AddRoleSchema, AuthMeSchema } from './auth.schemas';
@@ -8,6 +8,9 @@ import {
   refreshCookieOptions,
   clearCookieOptions,
 } from '../../config/cookie.config';
+import { asyncHandler } from '../../api/middlewares/async-handler';
+import { createAppError } from '../../core/errors';
+import { ERROR_CODES } from '../../core/error-codes';
 
 const authService = new AuthService();
 
@@ -27,156 +30,83 @@ function clearAuthCookies(res: Response) {
 
 export class AuthController {
 
-  static async register(req: Request, res: Response) {
-    try {
-      const input = RegisterSchema.parse(req.body);
-      const { user, role, role_entity, accessToken, refreshToken, ...rest } = await authService.register(input);
+  static register = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    const input = RegisterSchema.parse(req.body);
+    const { user, role, role_entity, accessToken, refreshToken } = await authService.register(input);
+    setAuthCookies(res, accessToken, refreshToken);
+    res.status(201).json({ user, role, role_entity });
+  });
 
-      setAuthCookies(res, accessToken, refreshToken);
-
-      res.status(201).json({ user, role, role_entity });
-    } catch (error: any) {
-      if (error instanceof ZodError) {
-        res.status(400).json({ error: 'Validation Error', details: error.errors });
-        return;
-      }
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async login(req: Request, res: Response) {
-    try {
-      const input = LoginSchema.parse(req.body);
-      const { user, role, role_entity, accessToken, refreshToken } = await authService.login(input);
-
-      setAuthCookies(res, accessToken, refreshToken);
-
-      // Return user payload — no tokens in body
-      res.status(200).json({ user, role, role_entity });
-    } catch (error: any) {
-      if (error instanceof ZodError) {
-        res.status(400).json({ error: 'Validation Error', details: error.errors });
-        return;
-      }
-      res.status(401).json({ error: error.message });
-    }
-  }
+  static login = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    const input = LoginSchema.parse(req.body);
+    const { user, role, role_entity, accessToken, refreshToken } = await authService.login(input);
+    setAuthCookies(res, accessToken, refreshToken);
+    res.status(200).json({ user, role, role_entity });
+  });
 
   /**
    * POST /api/auth/logout
-   * Clears both auth cookies. Client must also discard any in-memory tokens.
+   * Clears both auth cookies.
    */
-  static async logout(req: Request, res: Response) {
+  static logout = asyncHandler(async (_req: Request, res: Response) => {
     clearAuthCookies(res);
     res.status(200).json({ success: true, message: 'Logged out successfully' });
-  }
+  });
 
-  static async me(req: Request, res: Response) {
-    const user = (req as any).auth?.user;
-    const role = (req as any).auth?.role;
-    const role_entity = (req as any).auth?.role_entity;
+  static me = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    const user = req.auth?.user;
+    const role = req.auth?.role;
+    const role_entity = req.auth?.role_entity;
     if (!user) {
-      res.status(401).json({ error: 'Not authenticated' });
-      return;
+      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
     }
     res.status(200).json({ user, role, role_entity });
-  }
+  });
 
-  static async authMe(req: Request, res: Response) {
-    try {
-      const userId = req.auth?.user?.id;
-      if (!userId) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
-      const { role } = req.params;
-      const input = AuthMeSchema.parse({ userId, role });
-      const { user, role: resolvedRole, role_entity, accessToken, refreshToken } = await authService.authMe(input);
-
-      // Re-issue cookies scoped to chosen role
-      setAuthCookies(res, accessToken, refreshToken);
-
-      res.status(200).json({ user, role: resolvedRole, role_entity });
-    } catch (error: any) {
-      if (error instanceof ZodError) {
-        res.status(400).json({ error: 'Validation Error', details: error.errors });
-        return;
-      }
-      res.status(401).json({ error: error.message });
+  static authMe = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.auth?.user?.id;
+    if (!userId) {
+      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
     }
-  }
+    const { role } = req.params;
+    const input = AuthMeSchema.parse({ userId, role });
+    const { user, role: resolvedRole, role_entity, accessToken, refreshToken } = await authService.authMe(input);
+    setAuthCookies(res, accessToken, refreshToken);
+    res.status(200).json({ user, role: resolvedRole, role_entity });
+  });
 
-  static async addRole(req: Request, res: Response) {
-    try {
-      const userId = req.auth?.user?.id;
-      if (!userId) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
-      const input = AddRoleSchema.parse(req.body);
-      const { user, role, role_entity, accessToken, refreshToken } = await authService.addRole(userId, input);
-
-      // Issue cookies scoped to the newly added role
-      setAuthCookies(res, accessToken, refreshToken);
-
-      res.status(201).json({ user, role, role_entity });
-    } catch (error: any) {
-      if (error instanceof ZodError) {
-        res.status(400).json({ error: 'Validation Error', details: error.errors });
-        return;
-      }
-      res.status(400).json({ error: error.message });
+  static addRole = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.auth?.user?.id;
+    if (!userId) {
+      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
     }
-  }
+    const input = AddRoleSchema.parse(req.body);
+    const { user, role, role_entity, accessToken, refreshToken } = await authService.addRole(userId, input);
+    setAuthCookies(res, accessToken, refreshToken);
+    res.status(201).json({ user, role, role_entity });
+  });
 
-  static async sendEmailVerification(req: Request, res: Response) {
-    try {
-      const user = (req as any).user;
-      const role = (req as any).role;
-      if (!user || !role) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
-      const result = await authService.sendEmailVerification(user.userId, role);
-      res.status(200).json(result);
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
+  static sendEmailVerification = asyncHandler(async (req: Request, res: Response) => {
+    const user = req.auth?.user;
+    const role = req.auth?.role;
+    const result = await authService.sendEmailVerification((user as any).id, role!);
+    res.status(200).json(result);
+  });
+
+  static verifyEmail = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    const { token } = req.query;
+    if (!token || typeof token !== 'string') {
+      return next(createAppError(ERROR_CODES.AUTH_VERIFY_TOKEN_INVALID, 400, 'Missing verification token'));
     }
-  }
+    const result = await authService.verifyEmail(token);
+    res.status(200).json(result);
+  });
 
-  static async verifyEmail(req: Request, res: Response) {
-    try {
-      const { token } = req.query;
-      if (!token || typeof token !== 'string') {
-        res.status(400).json({ error: 'Missing token' });
-        return;
-      }
-      const result = await authService.verifyEmail(token);
-      res.status(200).json(result);
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async requestWaVerification(req: Request, res: Response) {
-    try {
-      const user = (req as any).user;
-      const role = (req as any).role;
-      if (!user || !role) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
-
-      const { wa_phone_id } = req.body;
-      if (!wa_phone_id) {
-        res.status(400).json({ error: 'wa_phone_id is required' });
-        return;
-      }
-
-      const result = await authService.issueWaVerificationCode(user.userId, role, wa_phone_id);
-      res.status(200).json(result);
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
+  static requestWaVerification = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    const user = req.auth?.user;
+    const role = req.auth?.role;
+    const { update_other_roles } = req.body;
+    const result = await authService.issueWaVerificationCode((user as any).id, role!, update_other_roles);
+    res.status(200).json(result);
+  });
 }

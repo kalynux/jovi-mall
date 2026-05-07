@@ -1,12 +1,11 @@
-import { NotFoundError, ForbiddenError, ValidationError } from '../../../../../core/errors';
+import { createAppError } from '../../../../../core/errors';
+import { ERROR_CODES } from '../../../../../core/error-codes';
 import { TransactionManager } from '../../../../../core/database/transaction.manager';
 import { IProductRepository } from '../../../repositories/interfaces/product.repository.interface';
 import { IOptionRepository } from '../../../repositories/interfaces/option.repository.interface';
 import { IOptionValueRepository } from '../../../repositories/interfaces/option-value.repository.interface';
 import { IVariantRepository } from '../../../repositories/interfaces/variant.repository.interface';
 import { Variant } from '../../../repositories/mappers/variant.mapper';
-import { ProductOption } from '../../../repositories/mappers/option.mapper';
-import { ProductOptionValue } from '../../../repositories/mappers/option-value.mapper';
 import { MAX_VARIANTS_PER_PRODUCT } from './constants';
 import { generateOptionSignature, generateSKU, cartesianProduct, calculateCartesianProductCount } from './utils';
 
@@ -19,12 +18,6 @@ export interface GenerateVariantsCommand {
 
 /**
  * VariantGeneratorService: Generate cartesian product of option values
- * 
- * Business Rules:
- * - MAX_VARIANTS_PER_PRODUCT validation (prevents cartesian explosion)
- * - Generates deterministic optionSignature
- * - Generates deterministic SKU
- * - All variants created with status='active'
  */
 export class VariantGeneratorService {
   constructor(
@@ -36,74 +29,51 @@ export class VariantGeneratorService {
     private readonly maxVariantsPerProduct: number = MAX_VARIANTS_PER_PRODUCT
   ) { }
 
-  /**
-   * Generate all variants from current option matrix
-   * Throws ValidationError if cartesian product exceeds maxVariantsPerProduct
-   */
   async execute(command: GenerateVariantsCommand): Promise<Variant[]> {
     return this.transactionManager.runInTransaction(async (session) => {
-      // 1. Load and validate product
       const product = await this.productRepository.findById(command.productId, command.vendorId, { session });
 
-      if (!product) {
-        throw new NotFoundError('Product not found');
-      }
+      if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+      if (product.vendorId !== command.vendorId) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 403);
 
-      if (product.vendorId !== command.vendorId) {
-        throw new ForbiddenError('You do not have permission to generate variants for this product');
-      }
-
-      // 2. Load options (sorted by position)
       const options = await this.optionRepository.findByProduct(command.productId, { session });
 
-      if (options.length === 0) {
-        throw new ValidationError('Product has no options. Use DefaultVariantService for products without options.');
-      }
+      if (options.length === 0) throw createAppError(ERROR_CODES.CATALOG_VARIANT_NO_OPTIONS, 422);
 
-      // 3. Load all option values
       const optionIds = options.map(opt => opt.id);
       const allValues = await this.optionValueRepository.findByOptions(optionIds, { session });
 
-      // Group values by option
-      const valuesByOption = new Map<string, ProductOptionValue[]>();
+      const valuesByOption = new Map<string, any[]>();
       for (const value of allValues) {
-        if (!valuesByOption.has(value.optionId)) {
-          valuesByOption.set(value.optionId, []);
-        }
+        if (!valuesByOption.has(value.optionId)) valuesByOption.set(value.optionId, []);
         valuesByOption.get(value.optionId)!.push(value);
       }
 
-      // 4. Validate all options have values
       for (const option of options) {
         const values = valuesByOption.get(option.id) || [];
         if (values.length === 0) {
-          throw new ValidationError(`Option "${option.name}" has no values`);
+          throw createAppError(ERROR_CODES.CATALOG_VARIANT_OPTION_EMPTY, 422, undefined, { option: option.name });
         }
       }
 
-      // 5. Calculate cartesian product count
       const valueCounts = options.map(opt => (valuesByOption.get(opt.id) || []).length);
       const totalCombinations = calculateCartesianProductCount(valueCounts);
 
       if (totalCombinations > this.maxVariantsPerProduct) {
-        throw new ValidationError(
-          `Cannot generate ${totalCombinations} variants (exceeds limit of ${this.maxVariantsPerProduct}). ` +
-          `Calculation: ${valueCounts.join(' × ')} = ${totalCombinations}`
-        );
+        throw createAppError(ERROR_CODES.CATALOG_VARIANT_LIMIT_EXCEEDED, 422, undefined, {
+          total: totalCombinations,
+          max: this.maxVariantsPerProduct,
+        });
       }
 
-      // 6. Generate cartesian product
       const valueArrays = options.map(opt => valuesByOption.get(opt.id) || []);
       const combinations = cartesianProduct(valueArrays);
 
-      // 7. Build variant objects
       const variants: Omit<Variant, 'id' | 'createdAt' | 'updatedAt'>[] = combinations.map(combination => {
-        // Build option signature
-        const optionValuePairs = combination.map((value, index) => ({
+        const optionValuePairs = combination.map((value: any, index: number) => ({
           optionName: options[index].name,
           value: value.value,
         }));
-
         const signature = generateOptionSignature(optionValuePairs);
         const sku = generateSKU(command.productId, signature);
 
@@ -119,17 +89,14 @@ export class VariantGeneratorService {
           lowStockThreshold: null,
           allowOversell: false,
           weight: undefined,
-          optionValueIds: combination.map(v => v.id), // Kept original logic for optionValueIds
-          fileIds: [], // Changed from mediaIds to fileIds
+          optionValueIds: combination.map((v: any) => v.id),
+          fileIds: [],
           deletedAt: null,
           purgeAt: null,
         };
       });
 
-      // 8. Batch create variants
-      const createdVariants = await this.variantRepository.createMany(variants, { session });
-
-      return createdVariants;
+      return this.variantRepository.createMany(variants, { session });
     });
   }
 }

@@ -7,13 +7,8 @@ import {
   CalendarProviderCapabilities,
   CreateEventOptions,
 } from '../interfaces/calendar-client.interface';
-import {
-  CalendarNotConnectedError,
-  CalendarAuthExpiredError,
-  CalendarPermissionError,
-  CalendarProviderError,
-  CalendarConflictError,
-} from '../errors/calendar.errors';
+import { createAppError } from '../../../../core/errors';
+import { ERROR_CODES } from '../../../../core/error-codes';
 import { IConnectedCalendarAccount } from './connected-account.model';
 import { ConnectedCalendarAccount } from './connected-account.model';
 import { GoogleTokenVault } from './google-token.vault';
@@ -83,7 +78,7 @@ export class GoogleCalendarClient implements ICalendarClient {
       });
 
       if (!response.data) {
-        throw new CalendarProviderError('No response data from Google Calendar');
+        throw createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 502, 'No response data from Google Calendar');
       }
 
       return GoogleCalendarMapper.toDomain(response.data);
@@ -102,7 +97,7 @@ export class GoogleCalendarClient implements ICalendarClient {
       });
 
       if (!response.data) {
-        throw new CalendarProviderError('No response data from Google Calendar');
+        throw createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 502, 'No response data from Google Calendar');
       }
 
       return GoogleCalendarMapper.toDomain(response.data);
@@ -176,7 +171,7 @@ export class GoogleCalendarClient implements ICalendarClient {
     const redirectUri = process.env.GOOGLE_REDIRECT_URI || "http://localhost:3000/api/integrations/google/callback";
 
     if (!clientId || !clientSecret || !redirectUri) {
-      throw new CalendarProviderError('Google Calendar credentials not configured');
+      throw createAppError(ERROR_CODES.GOOGLE_MISSING_CLIENT_ID, 500, 'Google Calendar credentials not configured');
     }
 
     const client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
@@ -211,7 +206,7 @@ export class GoogleCalendarClient implements ICalendarClient {
 
         if (Object.keys(update).length > 0) {
           await ConnectedCalendarAccount.updateOne({ _id: this.account._id }, { $set: update });
-          
+
           // Update instance
           if (tokens.access_token) this.account.accessToken = update.accessToken;
           if (tokens.refresh_token) this.account.refreshToken = update.refreshToken;
@@ -234,20 +229,20 @@ export class GoogleCalendarClient implements ICalendarClient {
 
     // Conflict errors
     if (code === 409 || code === 412) {
-      return new CalendarConflictError(message);
+      return createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 409, message);
     }
 
     // Permission errors
     if (code === 401 || code === 403) {
-      return new CalendarPermissionError(message);
+      return createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 403, message);
     }
 
     // Auth expired (invalid_grant from refresh token)
     if (message.includes('invalid_grant') || message.includes('Token has been expired or revoked')) {
-      return new CalendarAuthExpiredError(message);
+      return createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 401, message);
     }
 
     // Generic provider error
-    return new CalendarProviderError(message, String(code), error.response?.data?.error?.message);
+    return createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 502, message, { originalCode: code, data: error.response?.data?.error?.message });
   }
 }

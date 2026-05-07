@@ -4,6 +4,8 @@ import handlebars from 'handlebars';
 import { ConsoleMailProvider } from './providers/console.provider';
 import { SmtpMailProvider } from './providers/smtp.provider';
 import { IMailProvider, SendEmailOptions, EmailType } from './mail.interface';
+import { createAppError } from '../../core/errors';
+import { ERROR_CODES } from '../../core/error-codes';
 
 export class MailService {
   private provider: IMailProvider;
@@ -34,7 +36,7 @@ export class MailService {
     if (override) return override;
 
     const defaultSender = process.env.MAIL_FROM_DEFAULT || 'noreply@jovimall.com';
-    
+
     switch (type) {
       case 'AUTH':
         return process.env.MAIL_FROM_AUTH || 'auth@jovimall.com';
@@ -53,7 +55,7 @@ export class MailService {
     }
 
     const templatePath = path.join(__dirname, 'templates', `${templateName}.hbs`);
-    
+
     try {
       const source = await fs.readFile(templatePath, 'utf-8');
       const template = handlebars.compile(source);
@@ -61,7 +63,7 @@ export class MailService {
       return template(variables);
     } catch (error) {
       console.error(`Failed to load template: ${templateName}`, error);
-      throw new Error(`Template not found: ${templateName}`);
+      throw createAppError(ERROR_CODES.MAIL_TEMPLATE_NOT_FOUND, 500, undefined, { template: templateName });
     }
   }
 }

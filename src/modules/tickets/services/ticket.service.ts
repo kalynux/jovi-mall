@@ -3,12 +3,8 @@ import { TicketFollowerService } from './ticket-follower.service';
 import { TicketNoteService } from './ticket-note.service';
 import { TicketStatus, TicketPriority, ActorRole, EntityType, TicketImportance } from '../types/ticket.types';
 import { ITicket } from '../models/ticket.model';
-import {
-    PriorityLockedError,
-    ForbiddenError,
-    NotFoundError,
-    ValidationError
-} from '../../../core/errors';
+import { AppError, createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
 import mongoose from 'mongoose';
 
@@ -74,7 +70,9 @@ export class TicketService {
         if (ticket.assigned_admin_id) {
             const activeAdminId = ticket.assigned_admin_id.toString();
             if (activeAdminId !== adminUserId) {
-                throw new ForbiddenError(
+                throw createAppError(
+                    ERROR_CODES.TICKET_ACCESS_DENIED,
+                    403,
                     'This ticket is locked to another admin. Only they can perform actions.'
                 );
             }
@@ -182,7 +180,7 @@ export class TicketService {
     ): Promise<ITicket> {
         const ticket = await this.ticketRepo.findById(ticketId);
         if (!ticket) {
-            throw new NotFoundError('Ticket not found');
+            throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
         }
 
         // Validate active admin permission (exclusive locking)
@@ -192,7 +190,7 @@ export class TicketService {
         if (role !== ActorRole.ADMIN) {
             const isFollower = await this.followerService.isFollower(ticketId, userId);
             if (!isFollower) {
-                throw new ForbiddenError('Only ticket followers can update status');
+                throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Only ticket followers can update status');
             }
         }
 
@@ -204,7 +202,7 @@ export class TicketService {
         // Update status
         const updatedTicket = await this.ticketRepo.updateStatus(ticketId, newStatus, userId);
         if (!updatedTicket) {
-            throw new Error('Failed to update ticket status');
+            throw new AppError(ERROR_CODES.TICKET_UPDATE_FAILED, 500, ERROR_CODES.TICKET_UPDATE_FAILED, false);
         }
 
         // Set active admin if admin is acting (exclusive lock on first action)
@@ -264,7 +262,7 @@ export class TicketService {
         // Fetch ticket once (optimization)
         const ticket = await this.ticketRepo.findById(ticketId);
         if (!ticket) {
-            throw new NotFoundError('Ticket not found');
+            throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
         }
 
         // Validate active admin permission (exclusive locking)
@@ -277,7 +275,7 @@ export class TicketService {
         } else {
             // Non-admin assignment: userId mandatory
             if (!targetUserId) {
-                throw new ValidationError(`User ID is required when assigning to role ${targetRole}`);
+                throw createAppError(ERROR_CODES.TICKET_ASSIGN_FAILED, 400, `User ID is required when assigning to role ${targetRole}`);
             }
         }
 
@@ -298,7 +296,7 @@ export class TicketService {
         // Perform assignment
         const updatedTicket = await this.ticketRepo.assign(ticketId, targetRole, targetUserId, adminId);
         if (!updatedTicket) {
-            throw new Error('Failed to assign ticket');
+            throw new AppError(ERROR_CODES.TICKET_ASSIGN_FAILED, 500, ERROR_CODES.TICKET_ASSIGN_FAILED, false);
         }
 
         // Set active admin if admin is acting (exclusive lock on first action)
@@ -349,7 +347,7 @@ export class TicketService {
         // Fetch ticket once (optimization)
         const ticket = await this.ticketRepo.findById(ticketId);
         if (!ticket) {
-            throw new NotFoundError('Ticket not found');
+            throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
         }
 
         // Validate active admin permission FIRST (exclusive locking)
@@ -359,9 +357,7 @@ export class TicketService {
         if (ticket.priority_locked) {
             // If locked, only active admin can update
             if (role !== ActorRole.ADMIN) {
-                throw new PriorityLockedError(
-                    'Priority is locked by admin and cannot be modified'
-                );
+                throw createAppError(ERROR_CODES.TICKET_PRIORITY_LOCKED, 403, 'Priority is locked by admin and cannot be modified');
             }
             // At this point, admin has passed validateActiveAdminPermission
             // So they ARE the active admin and can update
@@ -378,7 +374,7 @@ export class TicketService {
             lockPriority
         );
         if (!updatedTicket) {
-            throw new Error('Failed to update priority');
+            throw new AppError(ERROR_CODES.TICKET_PRIORITY_UPDATE_FAILED, 500, ERROR_CODES.TICKET_PRIORITY_UPDATE_FAILED, false);
         }
 
         // Set active admin if admin is acting (exclusive lock on first action)
@@ -420,7 +416,7 @@ export class TicketService {
         // Fetch ticket once (optimization)
         const ticket = await this.ticketRepo.findById(ticketId);
         if (!ticket) {
-            throw new NotFoundError('Ticket not found');
+            throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
         }
 
         // Validate active admin permission (exclusive locking)
@@ -428,12 +424,12 @@ export class TicketService {
 
         // Validate only creator or admin can close
         if (role !== ActorRole.ADMIN && ticket.created_by_user_id.toString() !== userId) {
-            throw new ForbiddenError('Only ticket creator or admin can close ticket');
+            throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Only ticket creator or admin can close ticket');
         }
 
         const updatedTicket = await this.ticketRepo.updateStatus(ticketId, TicketStatus.CLOSED, userId);
         if (!updatedTicket) {
-            throw new Error('Failed to close ticket');
+            throw new AppError(ERROR_CODES.TICKET_CLOSE_FAILED, 500, ERROR_CODES.TICKET_CLOSE_FAILED, false);
         }
 
         // Set active admin if admin is acting (exclusive lock on first action)
@@ -458,25 +454,25 @@ export class TicketService {
      */
     async reopenTicket(ticketId: string, userId: string, role: ActorRole): Promise<ITicket> {
         if (role !== ActorRole.ADMIN) {
-            throw new ForbiddenError('Only admins can reopen tickets');
+            throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Only admins can reopen tickets');
         }
 
         // Fetch ticket once (optimization)
         const ticket = await this.ticketRepo.findById(ticketId);
         if (!ticket) {
-            throw new NotFoundError('Ticket not found');
+            throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
         }
 
         // Note: No active admin validation needed - reopening is allowed by any admin
         // since ticket was previously closed and unlocked
 
         if (ticket.status !== TicketStatus.CLOSED) {
-            throw new ValidationError('Only closed tickets can be reopened');
+            throw createAppError(ERROR_CODES.TICKET_INVALID_STATUS_TRANSITION, 400, 'Only closed tickets can be reopened');
         }
 
         const updatedTicket = await this.ticketRepo.updateStatus(ticketId, TicketStatus.OPEN, userId);
         if (!updatedTicket) {
-            throw new Error('Failed to reopen ticket');
+            throw new AppError(ERROR_CODES.TICKET_REOPEN_FAILED, 500, ERROR_CODES.TICKET_REOPEN_FAILED, false);
         }
 
         // Set active admin (admin who reopens becomes active)
@@ -500,7 +496,7 @@ export class TicketService {
         // Fetch ticket once (optimization)
         const ticket = await this.ticketRepo.findById(ticketId);
         if (!ticket) {
-            throw new NotFoundError('Ticket not found');
+            throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
         }
 
         // Validate active admin permission (exclusive locking)
@@ -510,14 +506,14 @@ export class TicketService {
         if (role !== ActorRole.ADMIN) {
             const isFollower = await this.followerService.isFollower(ticketId, userId);
             if (!isFollower) {
-                throw new ForbiddenError('Only ticket followers can update tickets');
+                throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Only ticket followers can update tickets');
             }
         }
 
         // Update ticket
         const updatedTicket = await this.ticketRepo.update(ticketId, updates, userId);
         if (!updatedTicket) {
-            throw new Error('Failed to update ticket');
+            throw new AppError(ERROR_CODES.TICKET_GENERAL_UPDATE_FAILED, 500, ERROR_CODES.TICKET_GENERAL_UPDATE_FAILED, false);
         }
 
         // Set active admin if admin is acting (exclusive lock on first action)
@@ -559,7 +555,7 @@ export class TicketService {
         // TODO: Implement actual validation based on entityType
         // For now, just basic validation
         if (!entityId || entityId.trim() === '') {
-            throw new ValidationError('Entity ID is required');
+            throw createAppError(ERROR_CODES.TICKET_GENERAL_UPDATE_FAILED, 400, 'Entity ID is required');
         }
 
         // Example validation (implement for each entity type):
@@ -580,7 +576,7 @@ export class TicketService {
         // Allow any transition for now
         // Can add strict state machine rules here if needed
         if (from === to) {
-            throw new ValidationError('Status is already set to this value');
+            throw createAppError(ERROR_CODES.TICKET_INVALID_STATUS_TRANSITION, 400, 'Status is already set to this value');
         }
     }
 }

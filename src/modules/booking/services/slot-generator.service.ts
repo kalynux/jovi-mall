@@ -1,5 +1,7 @@
 import { Slot, TimeWindow } from '../types/booking.types';
 import crypto from 'crypto';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 export class SlotGeneratorService {
   /**
@@ -20,7 +22,7 @@ export class SlotGeneratorService {
 
       while (currentStart + slotDuration <= windowEnd) {
         const currentEnd = currentStart + slotDuration;
-        
+
         const slot: Slot = {
           id: this.generateSlotId(new Date(currentStart), new Date(currentEnd)),
           start: new Date(currentStart),
@@ -52,14 +54,14 @@ export class SlotGeneratorService {
   parseSlotId(slotId: string): { start: Date; end: Date } {
     const parts = slotId.split('_');
     if (parts.length < 3 || parts[0] !== 'slot') {
-      throw new Error('Invalid slot ID format');
+      throw createAppError(ERROR_CODES.BOOKING_INVALID_SLOT_ID, 400, 'Invalid slot ID format');
     }
 
     const startTime = parseInt(parts[1], 10);
     const endTime = parseInt(parts[2], 10);
 
     if (isNaN(startTime) || isNaN(endTime)) {
-      throw new Error('Invalid slot ID: timestamps are not numbers');
+      throw createAppError(ERROR_CODES.BOOKING_INVALID_SLOT_ID, 400, 'Invalid slot ID: timestamps are not numbers');
     }
 
     return {

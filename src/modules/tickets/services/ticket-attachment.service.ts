@@ -1,6 +1,7 @@
 import { TicketAttachmentRepository } from '../repositories/ticket-attachment.repository';
 import { ActorRole } from '../types/ticket.types';
-import { AttachmentLimitExceededError, ForbiddenError, NotFoundError } from '../../../core/errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { ITicketAttachment } from '../models/ticket-attachment.model';
 import { eventBus } from '../../../core/events/event-bus';
 import { getStorageProvider, IStorageProvider } from "../../../core/storage";
@@ -49,12 +50,13 @@ export class TicketAttachmentService {
         // Check attachment count
         const currentCount = await this.attachmentRepo.countByTicket(ticketId);
         if (currentCount >= 5) {
-            throw new AttachmentLimitExceededError();
+            throw createAppError(ERROR_CODES.TICKET_ATTACHMENT_LIMIT_EXCEEDED, 422);
         }
 
         // If private, auto-include uploader and admins in visibility list
         let finalVisibleToUserIds: mongoose.Types.ObjectId[] | undefined;
         if (visibility === 'PRIVATE') {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
             const TicketFollowerRepository = require('../repositories/ticket-follower.repository').TicketFollowerRepository;
             const followerRepo = new TicketFollowerRepository();
 
@@ -139,19 +141,19 @@ export class TicketAttachmentService {
     ): Promise<void> {
         // Only admins can delete
         if (role !== ActorRole.ADMIN) {
-            throw new ForbiddenError('Only admins can delete attachments');
+            throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Only admins can delete attachments');
         }
 
         // Get attachment
         const attachment = await this.attachmentRepo.findById(attachmentId);
         if (!attachment) {
-            throw new NotFoundError('Attachment not found');
+            throw createAppError(ERROR_CODES.TICKET_ATTACHMENT_MISSING, 404, 'Attachment not found');
         }
 
         // Get file record
         const fileRecord = await FileModel.findById(attachment.file_id);
         if (!fileRecord) {
-            throw new NotFoundError('File record not found');
+            throw createAppError(ERROR_CODES.TICKET_ATTACHMENT_MISSING, 404, 'File record not found');
         }
 
         // Delete from storage
@@ -208,7 +210,7 @@ export class TicketAttachmentService {
     async getAttachmentUrl(attachment: ITicketAttachment): Promise<string> {
         const fileRecord = await FileModel.findById(attachment.file_id);
         if (!fileRecord) {
-            throw new NotFoundError('File record not found');
+            throw createAppError(ERROR_CODES.TICKET_ATTACHMENT_MISSING, 404, 'File record not found');
         }
         return this.storageService.getPublicUrl(fileRecord.key);
     }

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
-import { ZodError } from 'zod';
-import { AppError, NotFoundError, ForbiddenError } from '../../../core/errors';
+import { asyncHandler } from '../../../api/middlewares/async-handler';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { ProductRepositoryMongo } from '../repositories/mongo/product.repository.mongo';
 import { VariantRepositoryMongo } from '../repositories/mongo/variant.repository.mongo';
 import { ProductDraftService } from '../domain/services/ProductDraftService';
@@ -46,317 +47,106 @@ export class VendorProductController {
      * GET /api/vendor/products/:id
      * Get single product
      */
-    static async getProduct(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id } = req.params;
-
-            const product = await productRepository.findById(id, vendorId);
-
-            if (!product) {
-                res.status(404).json({
-                    success: false,
-                    error: {
-                        code: 'NOT_FOUND',
-                        message: 'Product not found',
-                    },
-                });
-                return;
-            }
-
-            res.json({
-                success: true,
-                data: product,
-            });
-        } catch (error) {
-            VendorProductController.handleError(error, res);
-        }
-    }
+    static getProduct = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id } = req.params;
+        const product = await productRepository.findById(id, vendorId);
+        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+        res.json({ success: true, data: product });
+    });
 
     /**
      * GET /api/vendor/products
      * List products with filters, search, and sorting
      */
-    static async listProducts(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-
-            // Validate query parameters
-            const query = ProductQuerySchema.parse(req.query);
-
-            const result = await productListService.execute(
-                vendorId,
-                {
-                    type: query.type,
-                    status: query.status,
-                    searchQuery: query.q,
-                },
-                {
-                    page: query.page,
-                    limit: query.limit,
-                },
-                {
-                    sortBy: query.sortBy,
-                    sortOrder: query.sortOrder,
-                }
-            );
-
-            res.json({
-                success: true,
-                data: result.data,
-                meta: result.meta,
-            });
-        } catch (error) {
-            VendorProductController.handleError(error, res);
-        }
-    }
+    static listProducts = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const query = ProductQuerySchema.parse(req.query);
+        const result = await productListService.execute(vendorId, { type: query.type, status: query.status, searchQuery: query.q }, { page: query.page, limit: query.limit }, { sortBy: query.sortBy, sortOrder: query.sortOrder });
+        res.json({ success: true, data: result.data, meta: result.meta });
+    });
 
     /**
      * POST /api/vendor/products
      * Create a new product
      */
-    static async createProduct(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-
-            // Validate request body
-            const input = CreateProductSchema.parse(req.body);
-
-            const product = await productDraftService.execute({
-                vendorId,
-                type: input.type,
-                title: input.title,
-                category: input.category,
-                tags: input.tags,
-            });
-
-            res.status(201).json({
-                success: true,
-                data: product,
-                message: 'Product created successfully',
-            });
-        } catch (error) {
-            VendorProductController.handleError(error, res);
-        }
-    }
+    static createProduct = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const input = CreateProductSchema.parse(req.body);
+        const product = await productDraftService.execute({ vendorId, type: input.type, title: input.title, category: input.category, tags: input.tags });
+        res.status(201).json({ success: true, data: product, message: 'Product created successfully' });
+    });
 
     /**
      * PATCH /api/vendor/products/:id
      * Update product (images replace full array)
      */
-    static async updateProduct(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id } = req.params;
-
-            // Validate request body
-            const input = UpdateProductSchema.parse(req.body);
-
-            const product = await productUpdateService.execute(id, vendorId, {
-                title: input.title,
-                description: input.description,
-                category: input.category,
-                tags: input.tags,
-                seoTitle: input.seoTitle,
-                seoDescription: input.seoDescription,
-                digitalConfig: input.digitalConfig,
-                serviceConfig: input.serviceConfig,
-            });
-
-            res.json({
-                success: true,
-                data: product,
-                message: 'Product updated successfully',
-            });
-        } catch (error) {
-            VendorProductController.handleError(error, res);
-        }
-    }
+    static updateProduct = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id } = req.params;
+        const input = UpdateProductSchema.parse(req.body);
+        const product = await productUpdateService.execute(id, vendorId, { title: input.title, description: input.description, category: input.category, tags: input.tags, seoTitle: input.seoTitle, seoDescription: input.seoDescription, digitalConfig: input.digitalConfig, serviceConfig: input.serviceConfig });
+        res.json({ success: true, data: product, message: 'Product updated successfully' });
+    });
 
     /**
      * PATCH /api/vendor/products/:id/status
      * Change product status with validation
      */
-    static async changeStatus(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id } = req.params;
-
-            // Validate request body
-            const input = ChangeProductStatusSchema.parse(req.body);
-
-            // Fetch product
-            const product = await productRepository.findById(id, vendorId);
-            if (!product) {
-                res.status(404).json({
-                    success: false,
-                    error: {
-                        code: 'NOT_FOUND',
-                        message: 'Product not found',
-                    },
-                });
-                return;
-            }
-
-            // Validate status transition
-            productStatusValidationService.validate(product, input.status);
-
-            // Update status
-            const updatedProduct = await productRepository.update(id, vendorId, {
-                status: input.status,
-            });
-
-            res.json({
-                success: true,
-                data: updatedProduct,
-                message: `Product status changed to ${input.status}`,
-            });
-        } catch (error) {
-            VendorProductController.handleError(error, res);
-        }
-    }
+    static changeStatus = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id } = req.params;
+        const input = ChangeProductStatusSchema.parse(req.body);
+        const product = await productRepository.findById(id, vendorId);
+        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+        productStatusValidationService.validate(product, input.status);
+        const updatedProduct = await productRepository.update(id, vendorId, { status: input.status });
+        res.json({ success: true, data: updatedProduct, message: `Product status changed to ${input.status}` });
+    });
 
     /**
      * POST /api/vendor/products/:id/duplicate
      * Duplicate product with slug collision prevention
      */
-    static async duplicateProduct(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id } = req.params;
-
-            const duplicatedProduct = await productDuplicateService.execute(id, vendorId);
-
-            res.status(201).json({
-                success: true,
-                data: duplicatedProduct,
-                message: 'Product duplicated successfully',
-            });
-        } catch (error) {
-            VendorProductController.handleError(error, res);
-        }
-    }
+    static duplicateProduct = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id } = req.params;
+        const duplicatedProduct = await productDuplicateService.execute(id, vendorId);
+        res.status(201).json({ success: true, data: duplicatedProduct, message: 'Product duplicated successfully' });
+    });
 
     /**
      * DELETE /api/vendor/products/:id
      * Archive product (soft delete)
      */
-    static async archiveProduct(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id } = req.params;
-
-            await productArchiveService.execute(id, vendorId);
-
-            res.json({
-                success: true,
-                message: 'Product archived successfully',
-            });
-        } catch (error) {
-            VendorProductController.handleError(error, res);
-        }
-    }
+    static archiveProduct = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id } = req.params;
+        await productArchiveService.execute(id, vendorId);
+        res.json({ success: true, message: 'Product archived successfully' });
+    });
 
     /**
      * POST /api/vendor/products/bulk/archive
      * Bulk archive products
      */
-    static async bulkArchive(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-
-            // Validate request body
-            const input = BulkArchiveSchema.parse(req.body);
-
-            const result = await productBulkOperationsService.bulkArchive(
-                input.productIds,
-                vendorId
-            );
-
-            res.json({
-                success: true,
-                data: result,
-                message: `Archived ${result.success} of ${result.total} products`,
-            });
-        } catch (error) {
-            VendorProductController.handleError(error, res);
-        }
-    }
+    static bulkArchive = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const input = BulkArchiveSchema.parse(req.body);
+        const result = await productBulkOperationsService.bulkArchive(input.productIds, vendorId);
+        res.json({ success: true, data: result, message: `Archived ${result.success} of ${result.total} products` });
+    });
 
     /**
      * POST /api/vendor/products/bulk/status
      * Bulk status change
      */
-    static async bulkStatusChange(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-
-            // Validate request body
-            const input = BulkStatusChangeSchema.parse(req.body);
-
-            // Use validation version if activating
-            const result = input.status === 'active'
-                ? await productBulkOperationsService.bulkStatusChangeWithValidation(
-                    input.productIds,
-                    vendorId,
-                    input.status
-                )
-                : await productBulkOperationsService.bulkStatusChange(
-                    input.productIds,
-                    vendorId,
-                    input.status
-                );
-
-            res.json({
-                success: true,
-                data: result,
-                message: `Updated ${result.success} of ${result.total} products`,
-            });
-        } catch (error) {
-            VendorProductController.handleError(error, res);
-        }
-    }
-
-    /**
-     * Centralized error handler
-     */
-    private static handleError(error: any, res: Response): void {
-        // Zod validation errors
-        if (error instanceof ZodError) {
-            res.status(400).json({
-                success: false,
-                error: {
-                    code: 'VALIDATION_ERROR',
-                    message: 'Request validation failed',
-                    details: error.errors.map((e) => ({
-                        field: e.path.join('.'),
-                        message: e.message,
-                    })),
-                },
-            });
-            return;
-        }
-
-        // Application errors
-        if (error instanceof AppError) {
-            res.status(error.statusCode).json({
-                success: false,
-                error: {
-                    code: error.code,
-                    message: error.message,
-                },
-            });
-            return;
-        }
-
-        // Unknown errors
-        console.error('[VendorProductController] Unexpected error:', error);
-        res.status(500).json({
-            success: false,
-            error: {
-                code: 'INTERNAL_ERROR',
-                message: 'An unexpected error occurred. Please try again later.',
-            },
-        });
-    }
+    static bulkStatusChange = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const input = BulkStatusChangeSchema.parse(req.body);
+        const result = input.status === 'active'
+            ? await productBulkOperationsService.bulkStatusChangeWithValidation(input.productIds, vendorId, input.status)
+            : await productBulkOperationsService.bulkStatusChange(input.productIds, vendorId, input.status);
+        res.json({ success: true, data: result, message: `Updated ${result.success} of ${result.total} products` });
+    });
 }

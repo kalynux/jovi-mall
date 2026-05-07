@@ -1,7 +1,90 @@
 import mongoose, { Schema, Document } from 'mongoose';
-import { GeoPointSchema, IGeoPoint, PolygonSchema, IPolygon } from '../../core/types/geo.types';
-import { PayoutDetailsSchema, IPayoutDetails } from '../../core/types/payout.types';
+// No geo types needed
+import { PayoutMethodSchema, IPayoutMethod } from '../../core/types/payout.types';
 import { AgencyOnboardingStep } from '../../core/constants/onboarding-steps';
+
+// ─── Policies Sub-Schemas ─────────────────────────────────────────────────────
+
+const StorageBasedPricingSchema = new Schema(
+  {
+    enabled: { type: Boolean, required: true, default: true },
+    monthly_storage_fee_per_sku: { type: Number, required: true, min: 0 },
+    pick_pack_fee_per_order: { type: Number, required: true, min: 0 },
+    local_delivery_fee: { type: Number, required: true, min: 0 },
+    out_of_region_delivery_fee: { type: Number, required: true, min: 0 },
+  },
+  { _id: false }
+);
+
+const PickupBasedPricingSchema = new Schema(
+  {
+    enabled: { type: Boolean, required: true, default: true },
+    base_rate_first_kg: { type: Number, required: true, min: 0 },
+    additional_per_kg: { type: Number, required: true, min: 0 },
+    out_of_region_surcharge: { type: Number, required: true, min: 0 },
+  },
+  { _id: false }
+);
+
+const CodHandlingFeeSchema = new Schema(
+  {
+    type: { type: String, enum: ['percentage', 'fixed'], required: true },
+    value: { type: Number, required: true, min: 0 },
+  },
+  { _id: false }
+);
+
+const AdditionalFeesSchema = new Schema(
+  {
+    cod_handling_fee: { type: CodHandlingFeeSchema, required: true },
+    failed_delivery_fee: { type: Number, required: true, min: 0 },
+    rto_fee: { type: Number, required: true, min: 0 },
+    peak_season_surcharge: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
+
+const AgencyPoliciesPricingSchema = new Schema(
+  {
+    storage_based: { type: StorageBasedPricingSchema, required: true },
+    pickup_based: { type: PickupBasedPricingSchema, required: true },
+    additional_fees: { type: AdditionalFeesSchema, required: true },
+    notes: { type: String, default: null, maxlength: 700, trim: true },
+  },
+  { _id: false }
+);
+
+const AgencyPoliciesReturnsSchema = new Schema(
+  {
+    payer: { type: String, enum: ['vendor', 'agency', 'customer'], required: true },
+    handling_fee: { type: Number, required: true, min: 0 },
+    return_window_days: { type: Number, required: true, min: 0 },
+    notes: { type: String, default: null, maxlength: 700, trim: true },
+  },
+  { _id: false }
+);
+
+const AgencyPoliciesDamageSchema = new Schema(
+  {
+    claim_deadline_days: { type: Number, required: true, min: 0 },
+    max_refund_per_item: { type: Number, required: true, min: 0 },
+    /** Admin-controlled. Defaults to 'agency' and can only be changed by an admin. */
+    inspector: { type: String, enum: ['agency', 'vendor', 'admin'], default: 'admin' },
+    /** Admin-controlled. Defaults to 1000 and can only be changed by an admin. */
+    investigation_fee: { type: Number, default: 1000, min: 0 },
+    notes: { type: String, default: null, maxlength: 700, trim: true },
+  },
+  { _id: false }
+);
+
+const AgencyPoliciesSchema = new Schema(
+  {
+    pricing: { type: AgencyPoliciesPricingSchema, required: true },
+    returns: { type: AgencyPoliciesReturnsSchema, required: true },
+    damage: { type: AgencyPoliciesDamageSchema, required: true },
+  },
+  { _id: false }
+);
 
 // ─── KYC Details Sub-Schema ───────────────────────────────────────────────────
 
@@ -30,16 +113,72 @@ const SupportContactSchema = new Schema(
 
 const HeadquartersAddressSchema = new Schema(
   {
-    address_line1: { type: String, required: true, trim: true },
+    region: { type: String, required: true, trim: true },
     city: { type: String, required: true, trim: true },
-    country: { type: String, required: true, trim: true, uppercase: true },
-    location: { type: GeoPointSchema, default: null },
+    address_description: { type: String, required: true, trim: true },
     support_contact: { type: SupportContactSchema, required: true },
   },
   { _id: true }
 );
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
+
+export interface IStorageBasedPricing {
+  enabled: boolean;
+  monthly_storage_fee_per_sku: number;
+  pick_pack_fee_per_order: number;
+  local_delivery_fee: number;
+  out_of_region_delivery_fee: number;
+}
+
+export interface IPickupBasedPricing {
+  enabled: boolean;
+  base_rate_first_kg: number;
+  additional_per_kg: number;
+  out_of_region_surcharge: number;
+}
+
+export interface ICodHandlingFee {
+  type: 'percentage' | 'fixed';
+  value: number;
+}
+
+export interface IAdditionalFees {
+  cod_handling_fee: ICodHandlingFee;
+  failed_delivery_fee: number;
+  rto_fee: number;
+  peak_season_surcharge?: number;
+}
+
+export interface IAgencyPoliciesPricing {
+  storage_based: IStorageBasedPricing;
+  pickup_based: IPickupBasedPricing;
+  additional_fees: IAdditionalFees;
+  notes?: string | null;
+}
+
+export interface IAgencyPoliciesReturns {
+  payer: 'vendor' | 'agency' | 'customer';
+  handling_fee: number;
+  return_window_days: number;
+  notes?: string | null;
+}
+
+export interface IAgencyPoliciesDamage {
+  claim_deadline_days: number;
+  max_refund_per_item: number;
+  /** Admin-controlled preset. Never set by the frontend. Defaults to 'agency'. */
+  inspector?: 'agency' | 'vendor' | 'admin';
+  /** Admin-controlled preset. Never set by the frontend. Defaults to 1000. */
+  investigation_fee?: number;
+  notes?: string | null;
+}
+
+export interface IAgencyPolicies {
+  pricing: IAgencyPoliciesPricing;
+  returns: IAgencyPoliciesReturns;
+  damage: IAgencyPoliciesDamage;
+}
 
 export interface IAgencyKycDetails {
   registration_number: string | null;
@@ -54,10 +193,9 @@ export interface IAgencySupportContact {
 
 export interface IAgencyHeadquartersAddress {
   _id: mongoose.Types.ObjectId;
-  address_line1: string;
+  region: string;
   city: string;
-  country: string;
-  location: IGeoPoint | null;
+  address_description: string;
   support_contact: IAgencySupportContact;
 }
 
@@ -70,17 +208,22 @@ export interface IDeliveryAgency extends Document {
   agency_name: string;
   logo_url: string | null;
   /**
-   * GeoJSON polygons covering this agency's service areas.
+   * Regions covering this agency's service areas.
    * Min 1 when onboarding is complete.
    */
-  coverage_areas: IPolygon[];
+  coverage_areas: string[];
   /**
    * Physical locations. Min 1 entry required.
    * First entry (index 0) is always the PRIMARY headquarters.
    */
   headquarters_addresses: IAgencyHeadquartersAddress[];
-  payout_details: IPayoutDetails | null;
+  /**
+   * Ordered list of payout methods. The FIRST entry is the preferred / default method.
+   * Min 1 entry when onboarding is complete.
+   */
+  payout_details: IPayoutMethod[];
   kyc_details: IAgencyKycDetails;
+  policies: IAgencyPolicies | null;
   /** @deprecated Use kyc_details.legit_verified. Kept for backward compat. */
   legit_verified: boolean;
   wa?: {
@@ -112,9 +255,9 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
     phone_verified: { type: Boolean, default: false },
     agency_name: { type: String, required: true },
     logo_url: { type: String, default: null },
-    coverage_areas: { type: [PolygonSchema], default: [] },
+    coverage_areas: { type: [String], default: [] },
     headquarters_addresses: { type: [HeadquartersAddressSchema], default: [] },
-    payout_details: { type: PayoutDetailsSchema, default: null },
+    payout_details: { type: [PayoutMethodSchema], default: [] },
     kyc_details: {
       type: AgencyKycDetailsSchema,
       default: () => ({
@@ -123,6 +266,7 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
         legit_verified: false,
       }),
     },
+    policies: { type: AgencyPoliciesSchema, default: null },
     /** @deprecated */
     legit_verified: { type: Boolean, default: false },
     wa: {
@@ -147,8 +291,6 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );
 
-// Geospatial indexes
-DeliveryAgencySchema.index({ 'coverage_areas': '2dsphere' }, { sparse: true });
-DeliveryAgencySchema.index({ 'headquarters_addresses.location': '2dsphere' }, { sparse: true });
+// Geospatial indexes were removed as location data is now string-based.
 
 export const DeliveryAgencyModel = mongoose.model<IDeliveryAgency>('DeliveryAgency', DeliveryAgencySchema);

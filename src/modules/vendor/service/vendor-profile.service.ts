@@ -1,11 +1,14 @@
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { VendorProfileMapper, GetVendorProfileResponseDto, VendorCompletionStatusDto } from '../dto/vendor-profile.dto';
+import { VendorAgencyMapper, VendorAgencyListItemDto, AgencyListMeta } from '../dto/vendor-agency.dto';
 import { VendorConfig } from '../config/vendor.config';
-import { NotFoundError, ForbiddenError, ConflictError } from '../../../core/errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
 import { auditLogger } from '../../../core/audit/audit-logger';
 import { VendorOnboardingStep, VendorOnboardingStepValue } from '../../../core/constants/onboarding-steps';
 import { IVendor } from '../../vendors/vendor.model';
+import { DeliveryAgencyRepository, AgencyListQueryParams } from '../../delivery/delivery-agency.repository';
 import {
   UpdateVendorProfileInput,
   VendorOnboardingStep1Input,
@@ -37,13 +40,13 @@ export class VendorProfileService {
 
   async getProfile(vendorId: string): Promise<GetVendorProfileResponseDto> {
     const vendor = await this.vendorRepo.findById(vendorId);
-    if (!vendor) throw new NotFoundError('Vendor profile not found');
+    if (!vendor) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor profile not found');
     return VendorProfileMapper.toResponseDto(vendor);
   }
 
   async getCompletionStatus(vendorId: string): Promise<VendorCompletionStatusDto> {
     const vendor = await this.vendorRepo.findById(vendorId);
-    if (!vendor) throw new NotFoundError('Vendor profile not found');
+    if (!vendor) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor profile not found');
     return this.buildCompletionStatus(vendor);
   }
 
@@ -54,14 +57,12 @@ export class VendorProfileService {
     input: UpdateVendorProfileInput
   ): Promise<GetVendorProfileResponseDto> {
     const vendor = await this.vendorRepo.findById(vendorId);
-    if (!vendor) throw new NotFoundError('Vendor profile not found');
+    if (!vendor) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor profile not found');
 
     // POLICY: Email change lock
     if (input.email && input.email !== vendor.email) {
       if (!VendorConfig.ALLOW_EMAIL_CHANGE) {
-        throw new ForbiddenError(
-          'Email changes are not allowed. Contact support to update your email.'
-        );
+        throw createAppError(ERROR_CODES.AUTH_FORBIDDEN, 403, 'Email changes are not allowed. Contact support to update your email.');
       }
     }
 
@@ -71,13 +72,13 @@ export class VendorProfileService {
         input.notificationPreferences.whatsapp &&
         !VendorConfig.ENABLE_WHATSAPP_NOTIFICATIONS
       ) {
-        throw new ForbiddenError('WhatsApp notifications are not available on your current plan.');
+        throw createAppError(ERROR_CODES.AUTH_FORBIDDEN, 403, 'WhatsApp notifications are not available on your current plan.');
       }
       if (
         input.notificationPreferences.phone &&
         !VendorConfig.ENABLE_PHONE_NOTIFICATIONS
       ) {
-        throw new ForbiddenError('Phone notifications are not available on your current plan.');
+        throw createAppError(ERROR_CODES.AUTH_FORBIDDEN, 403, 'Phone notifications are not available on your current plan.');
       }
     }
 
@@ -89,9 +90,7 @@ export class VendorProfileService {
     );
 
     if (!updated) {
-      throw new ConflictError(
-        'Profile was modified by another request. Please refresh and try again.'
-      );
+      throw createAppError(ERROR_CODES.VENDOR_FISCAL_CALENDAR_INVALID, 409, 'Profile was modified by another request. Please refresh and try again.');
     }
 
     // Recalculate onboarding step from field presence
@@ -116,14 +115,14 @@ export class VendorProfileService {
     input: VendorOnboardingStep1Input
   ): Promise<{ profile: GetVendorProfileResponseDto; completionStatus: VendorCompletionStatusDto }> {
     const vendor = await this.vendorRepo.findById(vendorId);
-    if (!vendor) throw new NotFoundError('Vendor profile not found');
+    if (!vendor) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor profile not found');
 
     const updated = await this.vendorRepo.updateProfile(vendorId, {
       country: input.country,
       timezone: input.timezone,
       payout_details: input.payout_details as IVendor['payout_details'],
     });
-    if (!updated) throw new NotFoundError('Vendor not found after update');
+    if (!updated) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor not found after update');
 
     const newStep = this.recalculateOnboardingStep(updated);
     await this.vendorRepo.updateOnboardingStep(vendorId, newStep);
@@ -136,27 +135,46 @@ export class VendorProfileService {
   }
 
   /**
-   * Complete Step 2: Delivery Linking (default_delivery_agency_id)
+   * Complete Step 2: Delivery Linking (Optional/Skippable).
+   * - If skip=true: advances to BRANDING without setting a delivery agency.
+   * - If default_delivery_agency_id provided: validates the agency is eligible
+   *   (exists, not inactive, onboarding completed) then saves it.
    */
   async completeStep2(
     vendorId: string,
     input: VendorOnboardingStep2Input
   ): Promise<{ profile: GetVendorProfileResponseDto; completionStatus: VendorCompletionStatusDto }> {
     const vendor = await this.vendorRepo.findById(vendorId);
-    if (!vendor) throw new NotFoundError('Vendor profile not found');
+    if (!vendor) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor profile not found');
 
-    const updated = await this.vendorRepo.updateProfile(vendorId, {
-      default_delivery_agency_id: input.default_delivery_agency_id as unknown as IVendor['default_delivery_agency_id'],
-    });
-    if (!updated) throw new NotFoundError('Vendor not found after update');
+    if (!input.skip && input.default_delivery_agency_id) {
+      // Validate the selected agency is eligible
+      const agencyRepo = new DeliveryAgencyRepository();
+      const agency = await agencyRepo.findById(input.default_delivery_agency_id);
+      if (!agency) {
+        throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, 'The selected delivery agency does not exist.');
+      }
+      if (agency.status === 'inactive') {
+        throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 400, 'The selected delivery agency is inactive.');
+      }
+      if (agency.onboarding_step !== 0) {
+        throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 400, 'The selected delivery agency has not completed its onboarding.');
+      }
 
-    const newStep = this.recalculateOnboardingStep(updated);
-    await this.vendorRepo.updateOnboardingStep(vendorId, newStep);
-    updated.onboarding_step = newStep;
+      await this.vendorRepo.updateProfile(vendorId, {
+        default_delivery_agency_id: input.default_delivery_agency_id as unknown as IVendor['default_delivery_agency_id'],
+      });
+    }
+    // If skip=true: default_delivery_agency_id stays null — no update needed
+
+    // Step 2 is optional — always advance to BRANDING
+    await this.vendorRepo.updateOnboardingStep(vendorId, VendorOnboardingStep.BRANDING);
+    const finalVendor = await this.vendorRepo.findById(vendorId);
+    if (!finalVendor) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor not found after update');
 
     return {
-      profile: VendorProfileMapper.toResponseDto(updated),
-      completionStatus: this.buildCompletionStatus(updated),
+      profile: VendorProfileMapper.toResponseDto(finalVendor),
+      completionStatus: this.buildCompletionStatus(finalVendor),
     };
   }
 
@@ -169,7 +187,7 @@ export class VendorProfileService {
     input: VendorOnboardingStep3Input
   ): Promise<{ profile: GetVendorProfileResponseDto; completionStatus: VendorCompletionStatusDto }> {
     const vendor = await this.vendorRepo.findById(vendorId);
-    if (!vendor) throw new NotFoundError('Vendor profile not found');
+    if (!vendor) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor profile not found');
 
     if (!input.skip) {
       const updates: Partial<IVendor> = {};
@@ -184,7 +202,7 @@ export class VendorProfileService {
     // Step 3 is always satisfiable (optional) — advance to COMPLETED
     await this.vendorRepo.updateOnboardingStep(vendorId, VendorOnboardingStep.COMPLETED);
     const finalVendor = await this.vendorRepo.findById(vendorId);
-    if (!finalVendor) throw new NotFoundError('Vendor not found');
+    if (!finalVendor) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor not found');
 
     return {
       profile: VendorProfileMapper.toResponseDto(finalVendor),
@@ -199,6 +217,7 @@ export class VendorProfileService {
    * Returns the lowest incomplete required step, or 0 if all done.
    */
   private recalculateOnboardingStep(vendor: IVendor): VendorOnboardingStepValue {
+    // Step 1 is required
     const step1Complete =
       !!vendor.country &&
       !!vendor.timezone &&
@@ -206,12 +225,15 @@ export class VendorProfileService {
 
     if (!step1Complete) return VendorOnboardingStep.BASIC_SETUP;
 
-    const step2Complete = !!vendor.default_delivery_agency_id;
-    if (!step2Complete) return VendorOnboardingStep.DELIVERY_LINKING;
+    // Step 2 is optional — if the vendor is still on this step, stay here
+    // (they must call completeStep2 with skip or an ID to advance)
+    if (vendor.onboarding_step === VendorOnboardingStep.DELIVERY_LINKING) {
+      return VendorOnboardingStep.DELIVERY_LINKING;
+    }
 
-    // Step 3 is optional — if step 1+2 are done and step is already > 2, just complete
+    // Step 3 is optional — if on BRANDING, stay here until completeStep3 is called
     if (vendor.onboarding_step === VendorOnboardingStep.BRANDING) {
-      return VendorOnboardingStep.BRANDING; // Let the controller call completeStep3 to finish
+      return VendorOnboardingStep.BRANDING;
     }
 
     return VendorOnboardingStep.COMPLETED;
@@ -221,17 +243,14 @@ export class VendorProfileService {
     const missing: string[] = [];
 
     if (!vendor.country) missing.push('country');
-    if (!vendor.timezone || vendor.timezone === 'Africa/Douala') {
-      // Only flag if explicitly not set (default is populated but still prompt to confirm)
-    }
     if (!vendor.payout_details) missing.push('payout_details');
-    if (!vendor.default_delivery_agency_id) missing.push('default_delivery_agency_id');
+    // default_delivery_agency_id is optional — not flagged as a missing required field
 
     const step = vendor.onboarding_step;
     const stepLabels: Record<number, string> = {
       0: 'Onboarding Complete',
       1: 'Basic Setup',
-      2: 'Delivery Linking',
+      2: 'Delivery Linking (Optional)',
       3: 'Branding (Optional)',
     };
 
@@ -240,6 +259,30 @@ export class VendorProfileService {
       isComplete: step === VendorOnboardingStep.COMPLETED,
       missingFields: missing,
       stepLabel: stepLabels[step] ?? `Step ${step}`,
+    };
+  }
+
+  // ─── Agency Listing (Vendor-Facing) ───────────────────────────────────────
+
+  /**
+   * List delivery agencies available for vendor selection.
+   * Delegates query + filtering to the agency repository.
+   * Returns a vendor-safe DTO (no payout/KYC sensitive data).
+   */
+  async listAvailableAgencies(
+    params: AgencyListQueryParams,
+  ): Promise<{ agencies: VendorAgencyListItemDto[]; meta: AgencyListMeta }> {
+    const agencyRepo = new DeliveryAgencyRepository();
+    const { agencies, total } = await agencyRepo.findAvailableForVendors(params);
+
+    return {
+      agencies: agencies.map(VendorAgencyMapper.toListItemDto),
+      meta: {
+        total,
+        page: params.page,
+        limit: params.limit,
+        totalPages: Math.ceil(total / params.limit),
+      },
     };
   }
 

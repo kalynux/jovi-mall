@@ -5,7 +5,6 @@ import {
     MarkAsReadParamSchema,
     UpdateNotificationPreferencesSchema
 } from '../validators/vendor-notification.validator';
-import { ValidationError } from '../../../core/errors';
 
 /**
  * VendorNotificationController

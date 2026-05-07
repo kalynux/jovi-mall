@@ -1,6 +1,8 @@
 import { calendar_v3 } from 'googleapis';
 import { CalendarEvent, CalendarEventInput } from '../interfaces/calendar-client.interface';
 import { CALENDAR_COLOR } from '../utils/calendar-event-colors.util';
+import { createAppError } from '../../../../core/errors';
+import { ERROR_CODES } from '../../../../core/error-codes';
 
 export class GoogleCalendarMapper {
   /**
@@ -9,11 +11,19 @@ export class GoogleCalendarMapper {
    */
   static toDomain(gEvent: calendar_v3.Schema$Event): CalendarEvent {
     if (!gEvent.id) {
-      throw new Error('Google event missing ID');
+      throw createAppError(
+        ERROR_CODES.GOOGLE_EVENT_MISSING_ID,
+        400,
+        'Google event missing ID'
+      );
     }
 
     if (!gEvent.start?.dateTime || !gEvent.end?.dateTime) {
-      throw new Error('Google event missing start/end dateTime');
+      throw createAppError(
+        ERROR_CODES.GOOGLE_EVENT_MISSING_DATETIME,
+        400,
+        'Google event missing start/end dateTime'
+      );
     }
 
     // Combine user-defined metadata with Google event metadata

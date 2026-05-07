@@ -1,11 +1,14 @@
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { WhatsappService } from './whatsapp.service';
 import { WhatsAppLinkService } from './services/whatsapp-link.service';
 import { CommandBus } from '../command-bus/command-bus';
+import { asyncHandler } from '../../api/middlewares/async-handler';
+import { createAppError } from '../../core/errors';
+import { ERROR_CODES } from '../../core/error-codes';
 
 interface WhatsappWebhookPayload {
-  reply_to: string; // The WA ID
-  wa_phone_id?: string; // Sometimes distinct
+  reply_to: string;
+  wa_phone_id?: string;
   user_id?: string;
   is_command: boolean;
   command?: string;
@@ -23,82 +26,43 @@ export class WhatsappController {
     this.commandBus = commandBus;
   }
 
-  handleWebhook = async (req: Request, res: Response) => {
-    try {
-      const body: WhatsappWebhookPayload = req.body;
-      const { reply_to, is_command, command, payload, user_id } = body;
+  handleWebhook = asyncHandler(async (req: Request, res: Response) => {
+    const body: WhatsappWebhookPayload = req.body;
+    const { reply_to, is_command, command, payload, user_id } = body;
 
-      // 1. Record Inbound (Open Chat Window)
-      await this.waService.recordInbound(reply_to, user_id);
+    await this.waService.recordInbound(reply_to, user_id);
 
-      // 2. Handle Command
-      let result = { message: 'Inbound recorded' };
-      if (is_command && command) {
-        // Construct context
-        const context = {
-          source: 'whatsapp',
-          wa_phone_id: reply_to,
-          user_id
-        };
-
-        // Execute via Bus (including link command)
-        console.log(`[WA-Webhook] Dispatching command: ${command}`);
-        const cmdResult = await this.commandBus.execute(command, payload, context);
-        result = { ...result, ...cmdResult };
-      }
-
-      res.status(200).json(result);
-    } catch (error: any) {
-      console.error('[WA-Webhook] Error:', error.message);
-      res.status(400).json({ error: error.message });
+    let result = { message: 'Inbound recorded' };
+    if (is_command && command) {
+      const context = { source: 'whatsapp', wa_phone_id: reply_to, user_id };
+      const cmdResult = await this.commandBus.execute(command, payload, context);
+      result = { ...result, ...cmdResult };
     }
-  };
 
-  /**
-   * Get WhatsApp link status for authenticated user
-   */
-  getStatus = async (req: Request, res: Response) => {
-    try {
-      const userId = req.auth?.user?.id;
-      const role = req.auth?.role;
+    res.status(200).json(result);
+  });
 
-      if (!userId || !role) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
+  getStatus = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.auth?.user?.id;
+    const role = req.auth?.role;
 
-      const status = await this.linkService.getStatus(userId, role);
-      res.status(200).json(status);
-    } catch (error: any) {
-      console.error('[WhatsApp] Error getting status:', error.message);
-      res.status(500).json({ error: 'Failed to get status' });
+    if (!userId || !role) {
+      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
     }
-  };
 
-  /**
-   * Unlink WhatsApp account for authenticated user
-   */
-  unlinkAccount = async (req: Request, res: Response) => {
-    try {
-      const userId = req.auth?.user?.id;
-      const role = req.auth?.role;
+    const status = await this.linkService.getStatus(userId, role);
+    res.status(200).json(status);
+  });
 
-      if (!userId || !role) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
+  unlinkAccount = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.auth?.user?.id;
+    const role = req.auth?.role;
 
-      await this.linkService.unlinkAccount(userId, role);
-      res.status(200).json({ success: true, message: 'WhatsApp account unlinked' });
-    } catch (error: any) {
-      console.error('[WhatsApp] Error unlinking account:', error.message);
-
-      if (error.message.includes('No WhatsApp account')) {
-        res.status(404).json({ error: 'No WhatsApp account linked' });
-        return;
-      }
-
-      res.status(500).json({ error: 'Failed to unlink account' });
+    if (!userId || !role) {
+      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
     }
-  };
+
+    await this.linkService.unlinkAccount(userId, role);
+    res.status(200).json({ success: true, message: 'WhatsApp account unlinked' });
+  });
 }

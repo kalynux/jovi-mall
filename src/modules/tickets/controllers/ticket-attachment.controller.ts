@@ -1,146 +1,79 @@
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { TicketAttachmentService } from '../services/ticket-attachment.service';
-import { AppError } from '../../../core/errors';
 import { ActorRole } from '../types/ticket.types';
+import { asyncHandler } from '../../../api/middlewares/async-handler';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
-/**
- * TicketAttachmentController
- * 
- * HTTP layer for ticket file attachments.
- */
+const attachmentService = new TicketAttachmentService();
 
 export class TicketAttachmentController {
-    private static attachmentService = new TicketAttachmentService();
 
-    // * POST /api/*/tickets/:ticketId/attachments
-    // * Upload a file attachment to a ticket
-    // * Requires multer middleware for file upload
-    static async uploadAttachment(req: Request, res: Response): Promise<void> {
-        try {
-            const ticketId = req.params.ticketId;
-            const userId = req.auth!.user.id;
-            const role = req.auth!.role as ActorRole;
+    static uploadAttachment = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+        const ticketId = req.params.ticketId;
+        const userId = req.auth!.user.id;
+        const role = req.auth!.role as ActorRole;
 
-            if (!req.file) {
-                res.status(400).json({
-                    success: false,
-                    error: 'No file provided'
-                });
-                return;
+        if (!req.file) {
+            return next(createAppError(ERROR_CODES.TICKET_ATTACHMENT_MISSING, 400));
+        }
+
+        const visibility = (req.body.visibility || 'PUBLIC') as 'PUBLIC' | 'PRIVATE';
+        const visibleToUserIds = req.body.visibleToUserIds
+            ? JSON.parse(req.body.visibleToUserIds)
+            : undefined;
+
+        const attachment = await attachmentService.uploadAttachment(
+            ticketId, req.file, userId, role, visibility, visibleToUserIds
+        );
+
+        const url = await attachmentService.getAttachmentUrl(attachment);
+
+        res.status(201).json({
+            success: true,
+            data: {
+                id: attachment.id,
+                fileName: attachment.file_name,
+                fileSize: attachment.file_size,
+                mimeType: attachment.mime_type,
+                url,
+                uploadedBy: attachment.uploaded_by_user_id,
+                uploadedByRole: attachment.uploaded_by_role,
+                createdAt: attachment.createdAt
             }
-
-            // Parse visibility params (optional)
-            const visibility = (req.body.visibility || 'PUBLIC') as 'PUBLIC' | 'PRIVATE';
-            const visibleToUserIds = req.body.visibleToUserIds
-                ? JSON.parse(req.body.visibleToUserIds)
-                : undefined;
-
-            const attachment = await TicketAttachmentController.attachmentService.uploadAttachment(
-                ticketId,
-                req.file,
-                userId,
-                role,
-                visibility,
-                visibleToUserIds
-            );
-
-            // Generate URL for the uploaded attachment
-            const url = await TicketAttachmentController.attachmentService.getAttachmentUrl(attachment);
-
-            res.status(201).json({
-                success: true,
-                data: {
-                    id: attachment.id,
-                    fileName: attachment.file_name,
-                    fileSize: attachment.file_size,
-                    mimeType: attachment.mime_type,
-                    url: url,
-                    uploadedBy: attachment.uploaded_by_user_id,
-                    uploadedByRole: attachment.uploaded_by_role,
-                    createdAt: attachment.createdAt
-                }
-            });
-        } catch (error) {
-            TicketAttachmentController.handleError(error, res);
-        }
-    }
-
-    //   * GET /api/*/tickets /: ticketId / attachments
-    // * List attachments for a ticket
-
-    static async listAttachments(req: Request, res: Response): Promise<void> {
-        try {
-            const ticketId = req.params.ticketId;
-            const userId = req.auth!.user.id;
-            const role = req.auth!.role as ActorRole;
-
-            const attachments = await TicketAttachmentController.attachmentService.listAttachments(
-                ticketId,
-                userId,
-                role
-            );
-
-            // Generate URLs for all attachments
-            const attachmentsWithUrls = await Promise.all(
-                attachments.map(async (att) => ({
-                    id: att.id,
-                    fileName: att.file_name,
-                    fileSize: att.file_size,
-                    mimeType: att.mime_type,
-                    url: await TicketAttachmentController.attachmentService.getAttachmentUrl(att),
-                    uploadedBy: att.uploaded_by_user_id,
-                    uploadedByRole: att.uploaded_by_role,
-                    createdAt: att.createdAt
-                }))
-            );
-
-            res.status(200).json({
-                success: true,
-                data: attachmentsWithUrls
-            });
-        } catch (error) {
-            TicketAttachmentController.handleError(error, res);
-        }
-    }
-
-    /**
-     * DELETE /api/admin/tickets/attachments/:id
-     * Delete an attachment (admin only)
-     */
-    static async deleteAttachment(req: Request, res: Response): Promise<void> {
-        try {
-            const attachmentId = req.params.id;
-            const userId = req.auth!.user.id;
-            const role = req.auth!.role as ActorRole;
-
-            await TicketAttachmentController.attachmentService.deleteAttachment(attachmentId, userId, role);
-
-            res.status(200).json({
-                success: true,
-                message: 'Attachment deleted successfully'
-            });
-        } catch (error) {
-            TicketAttachmentController.handleError(error, res);
-        }
-    }
-
-    /**
-     * Centralized error handler
-     */
-    private static handleError(error: any, res: Response): void {
-        if (error instanceof AppError) {
-            res.status(error.statusCode).json({
-                success: false,
-                error: error.message,
-                code: error.code
-            });
-            return;
-        }
-
-        console.error('Unexpected error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Internal server error'
         });
-    }
+    });
+
+    static listAttachments = asyncHandler(async (req: Request, res: Response) => {
+        const ticketId = req.params.ticketId;
+        const userId = req.auth!.user.id;
+        const role = req.auth!.role as ActorRole;
+
+        const attachments = await attachmentService.listAttachments(ticketId, userId, role);
+
+        const attachmentsWithUrls = await Promise.all(
+            attachments.map(async (att) => ({
+                id: att.id,
+                fileName: att.file_name,
+                fileSize: att.file_size,
+                mimeType: att.mime_type,
+                url: await attachmentService.getAttachmentUrl(att),
+                uploadedBy: att.uploaded_by_user_id,
+                uploadedByRole: att.uploaded_by_role,
+                createdAt: att.createdAt
+            }))
+        );
+
+        res.status(200).json({ success: true, data: attachmentsWithUrls });
+    });
+
+    static deleteAttachment = asyncHandler(async (req: Request, res: Response) => {
+        const attachmentId = req.params.id;
+        const userId = req.auth!.user.id;
+        const role = req.auth!.role as ActorRole;
+
+        await attachmentService.deleteAttachment(attachmentId, userId, role);
+
+        res.status(200).json({ success: true, message: 'Attachment deleted successfully' });
+    });
 }

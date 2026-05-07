@@ -1,6 +1,9 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { DigitalEntitlementService } from '../../digital-delivery/services/digital-entitlement.service';
 import { DownloadLinkService } from '../../digital-delivery/services/download-link.service';
+import { asyncHandler } from '../../../api/middlewares/async-handler';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * Customer Digital Product Routes
@@ -18,12 +21,12 @@ const downloadLinkService = new DownloadLinkService();
  * 
  * Returns all digital products the customer has purchased with entitlement status.
  */
-router.get('/digital-products', async (req: Request, res: Response) => {
+router.get('/digital-products', asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   try {
     // TODO: Extract customerId from auth middleware
     const customerId = (req as any).user?.customerId;
     if (!customerId) {
-      return res.status(401).json({ error: 'Unauthorized' });
+      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
     }
 
     const entitlements = await entitlementService.getCustomerEntitlements(customerId);
@@ -34,9 +37,9 @@ router.get('/digital-products', async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error('Error fetching customer digital products:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Internal server error'));
   }
-});
+}));
 
 /**
  * POST /api/customer/digital-products/:id/download-link
@@ -45,12 +48,12 @@ router.get('/digital-products', async (req: Request, res: Response) => {
  * Param :id = entitlementId
  * Returns: { url, expiresAt, downloadsRemaining }
  */
-router.post('/digital-products/:id/download-link', async (req: Request, res: Response) => {
+router.post('/digital-products/:id/download-link', asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   try {
     // TODO: Extract customerId from auth middleware
     const customerId = (req as any).user?.customerId;
     if (!customerId) {
-      return res.status(401).json({ error: 'Unauthorized' });
+      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
     }
 
     const { id: entitlementId } = req.params;
@@ -63,8 +66,8 @@ router.post('/digital-products/:id/download-link', async (req: Request, res: Res
     return res.status(200).json(result);
   } catch (error: any) {
     console.error('Error creating download link:', error);
-    return res.status(400).json({ error: error.message });
+    next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 400, error.message));
   }
-});
+}));
 
 export default router;

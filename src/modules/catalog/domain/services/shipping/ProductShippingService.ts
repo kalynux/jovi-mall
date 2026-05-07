@@ -1,5 +1,7 @@
 import { Types } from 'mongoose';
 import { IShippingConfig, ShippingConfigModel } from '../../../models/shipping-config.model';
+import { createAppError } from '../../../../../core/errors';
+import { ERROR_CODES } from '../../../../../core/error-codes';
 
 /**
  * ProductShippingService
@@ -32,7 +34,7 @@ export class ProductShippingService {
         if (existing) {
             // Verify ownership
             if (existing.vendorId.toString() !== vendorId) {
-                throw new Error('Unauthorized: Shipping config belongs to another vendor');
+                throw createAppError(ERROR_CODES.CATALOG_SHIPPING_ACCESS_DENIED, 403, 'Unauthorized: Shipping config belongs to another vendor');
             }
 
             // Update existing
@@ -74,7 +76,7 @@ export class ProductShippingService {
 
         // Verify ownership
         if (config.vendorId.toString() !== vendorId) {
-            throw new Error('Unauthorized');
+            throw createAppError(ERROR_CODES.CATALOG_SHIPPING_ACCESS_DENIED, 403, 'Unauthorized: Shipping config belongs to another vendor');
         }
 
         return config;
@@ -90,12 +92,12 @@ export class ProductShippingService {
         });
 
         if (!config) {
-            throw new Error('Shipping config not found');
+            throw createAppError(ERROR_CODES.CATALOG_SHIPPING_NOT_FOUND, 404, 'Shipping config not found');
         }
 
         // Verify ownership
         if (config.vendorId.toString() !== vendorId) {
-            throw new Error('Unauthorized');
+            throw createAppError(ERROR_CODES.CATALOG_SHIPPING_ACCESS_DENIED, 403, 'Unauthorized: Shipping config belongs to another vendor');
         }
 
         // Soft delete

@@ -1,4 +1,6 @@
-import { IUploadValidator, UploadPipelineContext, UploadPolicyViolationError } from '../upload-policy.types';
+import { IUploadValidator, UploadPipelineContext } from '../upload-policy.types';
+import { createAppError } from '../../errors';
+import { ERROR_CODES } from '../../error-codes';
 import { UploadPolicyConfig } from '../upload-config';
 
 /**
@@ -12,7 +14,7 @@ import { UploadPolicyConfig } from '../upload-config';
  * - Validates vendorId matches context
  */
 export class PermissionValidator implements IUploadValidator {
-  constructor(private readonly config: UploadPolicyConfig) {}
+  constructor(private readonly config: UploadPolicyConfig) { }
 
   async validate(context: UploadPipelineContext): Promise<void> {
     const { role, vendorId } = context.request.context;
@@ -49,7 +51,12 @@ export class PermissionValidator implements IUploadValidator {
 
     // Throw if violations found
     if (context.hasViolations()) {
-      throw new UploadPolicyViolationError(context.violations);
+      throw createAppError(
+        ERROR_CODES.UPLOAD_POLICY_VIOLATION,
+        400,
+        'Upload policy permissions violated',
+        { violations: context.violations }
+      );
     }
   }
 }

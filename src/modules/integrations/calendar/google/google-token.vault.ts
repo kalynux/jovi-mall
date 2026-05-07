@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import { createAppError } from '../../../../core/errors';
+import { ERROR_CODES } from '../../../../core/error-codes';
 
 export class GoogleTokenVault {
   private static readonly ALGORITHM = 'aes-256-gcm';
@@ -9,14 +11,18 @@ export class GoogleTokenVault {
   private get key(): Buffer {
     const key = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY || "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     if (!key) {
-      throw new Error('GOOGLE_TOKEN_ENCRYPTION_KEY is not defined');
+      throw createAppError(
+        ERROR_CODES.GOOGLE_TOKEN_ENCRYPTION_KEY_MISSING,
+        500,
+        'GOOGLE_TOKEN_ENCRYPTION_KEY is not defined'
+      );
     }
     if (key.length !== 64) { // 32 bytes as hex string = 64 chars
-         // Fallback if users provide 32 raw chars instead of hex, though hex is safer for env vars.
-         // But for standard `openssl rand -hex 32` it produces 64 chars.
-         // Let's assume standard usage: 32 bytes.
-         // If the user provided a 32-char string directly (not hex encoded), checking key.length might be tricky.
-         // Let's try to parse as hex.
+      // Fallback if users provide 32 raw chars instead of hex, though hex is safer for env vars.
+      // But for standard `openssl rand -hex 32` it produces 64 chars.
+      // Let's assume standard usage: 32 bytes.
+      // If the user provided a 32-char string directly (not hex encoded), checking key.length might be tricky.
+      // Let's try to parse as hex.
     }
     return Buffer.from(key, 'hex');
   }
@@ -50,14 +56,18 @@ export class GoogleTokenVault {
   decrypt(text: string): string {
     const parts = text.split(':');
     if (parts.length !== 3) {
-      throw new Error('Invalid encrypted text format');
+      throw createAppError(
+        ERROR_CODES.GOOGLE_TOKEN_INVALID_FORMAT,
+        400,
+        'Invalid encrypted text format'
+      );
     }
 
     const [ivHex, authTagHex, encryptedHex] = parts;
 
     const iv = Buffer.from(ivHex, GoogleTokenVault.ENCODING);
     const authTag = Buffer.from(authTagHex, GoogleTokenVault.ENCODING);
-    
+
     const decipher = crypto.createDecipheriv(
       GoogleTokenVault.ALGORITHM,
       this.key,

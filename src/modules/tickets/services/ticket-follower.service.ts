@@ -2,7 +2,8 @@ import { TicketFollowerRepository } from '../repositories/ticket-follower.reposi
 import { TicketRepository } from '../repositories/ticket.repository';
 import { TicketNoteRepository } from '../repositories/ticket-note.repository';
 import { ActorRole } from '../types/ticket.types';
-import { FollowerLimitExceededError, ForbiddenError, NotFoundError } from '../../../core/errors';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * TicketFollowerService
@@ -63,9 +64,7 @@ export class TicketFollowerService {
 
             // Check if this user would be the 6th distinct non-admin user
             if (!distinctNonAdminUserIds.includes(userId) && distinctNonAdminUserIds.length >= 5) {
-                throw new FollowerLimitExceededError(
-                    'Cannot add follower: maximum of 5 non-admin users per ticket has been reached'
-                );
+                throw createAppError(ERROR_CODES.TICKET_FOLLOWER_LIMIT_EXCEEDED, 422, 'Cannot add follower: maximum of 5 non-admin users per ticket has been reached');
             }
         }
 
@@ -103,34 +102,34 @@ export class TicketFollowerService {
     ): Promise<void> {
         // Only admins can remove followers
         if (requesterRole !== ActorRole.ADMIN) {
-            throw new ForbiddenError('Only admins can remove followers');
+            throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Only admins can remove followers');
         }
 
         // Get ticket details
         const ticket = await this.ticketRepo.findById(ticketId);
         if (!ticket) {
-            throw new NotFoundError('Ticket not found');
+            throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
         }
 
         // Get follower details
         const follower = await this.followerRepo.getFollower(ticketId, userIdToRemove);
         if (!follower) {
-            throw new NotFoundError('Follower not found');
+            throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404, 'Follower not found');
         }
 
         // Cannot remove creator
         if (ticket.created_by_user_id.toString() === userIdToRemove) {
-            throw new ForbiddenError('Cannot remove ticket creator from followers');
+            throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Cannot remove ticket creator from followers');
         }
 
         // Cannot remove current assignee
         if (ticket.assigned_to_user_id && ticket.assigned_to_user_id.toString() === userIdToRemove) {
-            throw new ForbiddenError('Cannot remove current assignee from followers');
+            throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Cannot remove current assignee from followers');
         }
 
         // Cannot remove admins
         if (follower.is_admin) {
-            throw new ForbiddenError('Cannot remove admins from followers');
+            throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Cannot remove admins from followers');
         }
 
         // Remove follower

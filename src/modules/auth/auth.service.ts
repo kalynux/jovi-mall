@@ -11,6 +11,8 @@ import { AddRoleInput, AuthMeInput, LoginInput, RegisterInput } from './auth.sch
 import { IUser } from '../users/user.model';
 import { EMAIL_VERIFY_DB, getRedisClient } from '../../infra/redis/redis.factory';
 import { MailService } from '../mail/mail.service';
+import { createAppError } from '../../core/errors';
+import { ERROR_CODES } from '../../core/error-codes';
 
 const EMAIL_VERIFY_EXPIRE = 86400; // 24 hours
 
@@ -80,16 +82,19 @@ export class AuthService {
         refreshToken,
         process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'secret'
       ) as any;
-    } catch {
-      throw new Error('Invalid or expired refresh token');
+    } catch (err: any) {
+      if (err?.name === 'TokenExpiredError') {
+        throw createAppError(ERROR_CODES.AUTH_SESSION_EXPIRED, 401);
+      }
+      throw createAppError(ERROR_CODES.AUTH_REFRESH_TOKEN_INVALID, 401);
     }
 
     if (payload.type !== 'refresh') {
-      throw new Error('Invalid token type');
+      throw createAppError(ERROR_CODES.AUTH_REFRESH_TOKEN_INVALID, 401, 'Invalid token type');
     }
 
     const user = await this.userRepo.findById(payload.userId);
-    if (!user) throw new Error('User not found');
+    if (!user) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 401);
 
     const accessToken = this.generateAccessToken(user, payload.role);
     return { accessToken, user, role: payload.role };
@@ -98,22 +103,17 @@ export class AuthService {
   // ─── Auth Flows ─────────────────────────────────────────────────────────────
 
   async register(input: RegisterInput) {
-    // Check duplication (login identifiers)
     const existingPhone = await this.userRepo.findByPhone(input.phone);
-    if (existingPhone) throw new Error('User with this phone already exists');
+    if (existingPhone) throw createAppError(ERROR_CODES.AUTH_PHONE_TAKEN, 409);
 
     if (input.email) {
       const existingEmail = await this.userRepo.findByEmail(input.email);
-      if (existingEmail) throw new Error('User with this email already exists');
+      if (existingEmail) throw createAppError(ERROR_CODES.AUTH_EMAIL_TAKEN, 409);
     }
 
-    // Role handling
     const role = input.role || 'vendor';
-
-    // Hash Password
     const passwordHash = await bcrypt.hash(input.password, 10);
 
-    // Create User (Auth)
     const user = await this.userRepo.create({
       login_phone: input.phone,
       login_email: input.email,
@@ -122,62 +122,39 @@ export class AuthService {
       status: 'active'
     });
 
-    // Create Role Entity
     let roleEntity;
     switch (role) {
       case 'customer':
         roleEntity = await this.customerRepo.create({
-          user_id: user._id,
-          name: input.name,
-          email: input.email,
-          phone: input.phone,
-          email_verified: false,
-          phone_verified: false
+          user_id: user._id, name: input.name, email: input.email, phone: input.phone,
+          email_verified: false, phone_verified: false
         });
         break;
       case 'vendor':
         roleEntity = await this.vendorRepo.create({
-          user_id: user._id,
-          name: input.name,
-          business_name: input.business_name || input.name,
-          email: input.email,
-          phone: input.phone,
-          email_verified: false,
-          phone_verified: false,
-          legit_verified: false
+          user_id: user._id, business_name: input.business_name || input.name,
+          email: input.email, phone: input.phone, email_verified: false, phone_verified: false, legit_verified: false
         });
         break;
       case 'agency':
         roleEntity = await this.agencyRepo.create({
-          user_id: user._id,
-          name: input.name,
-          agency_name: input.agency_name || input.name,
-          email: input.email,
-          phone: input.phone,
-          email_verified: false,
-          phone_verified: false,
-          legit_verified: false
+          user_id: user._id, agency_name: input.agency_name || input.name,
+          email: input.email, phone: input.phone, email_verified: false, phone_verified: false, legit_verified: false
         });
         break;
       case 'agent':
         roleEntity = await this.agentRepo.create({
-          user_id: user._id,
-          name: input.name,
-          email: input.email,
-          phone: input.phone,
-          email_verified: false,
-          phone_verified: false,
+          user_id: user._id, name: input.name, email: input.email, phone: input.phone,
+          email_verified: false, phone_verified: false,
         });
         break;
       case 'admin':
         roleEntity = await this.adminRepo.create({
-          user_id: user._id,
-          name: input.name,
-          email: input.email
+          user_id: user._id, name: input.name, email: input.email
         });
         break;
       default:
-        throw new Error(`Registration for role ${role} not fully supported yet`);
+        throw createAppError(ERROR_CODES.AUTH_UNSUPPORTED_ROLE, 400, undefined, { role });
     }
 
     const tokens = this.issueTokenPair(user, role);
@@ -185,7 +162,7 @@ export class AuthService {
   }
 
   async login(input: LoginInput) {
-    let user: IUser | null = null;
+    let user: IUser | null;
     const isEmail = input.identifier.includes('@');
 
     if (isEmail) {
@@ -194,26 +171,24 @@ export class AuthService {
       user = await this.userRepo.findByPhone(input.identifier);
     }
 
-    if (!user) throw new Error('Invalid credentials');
+    if (!user) throw createAppError(ERROR_CODES.AUTH_INVALID_CREDENTIALS, 401);
 
     const isValid = await bcrypt.compare(input.password, user.password_hash);
-    if (!isValid) throw new Error('Invalid credentials');
+    if (!isValid) throw createAppError(ERROR_CODES.AUTH_INVALID_CREDENTIALS, 401);
 
-    // Role Selection
     let role = input.role;
     if (!role) {
       if (user.roles.length === 1) {
         role = user.roles[0];
       } else {
-        throw new Error('Role selection required');
+        throw createAppError(ERROR_CODES.AUTH_ROLE_REQUIRED, 400);
       }
     } else {
       if (!user.roles.includes(role as any)) {
-        throw new Error('User does not have this role');
+        throw createAppError(ERROR_CODES.AUTH_ROLE_NOT_FOUND, 403, undefined, { role });
       }
     }
 
-    // Load Role Entity
     let entity = null;
     if (role === 'customer') entity = await this.customerRepo.findByUserId(user.id);
     else if (role === 'vendor') entity = await this.vendorRepo.findByUserId(user.id);
@@ -222,24 +197,23 @@ export class AuthService {
     else if (role === 'admin') entity = await this.adminRepo.findByUserId(user.id);
 
     const tokens = this.issueTokenPair(user, role);
-    // console.log(JSON.stringify({ user, role, role_entity: entity, ...tokens }, null, 2))
     return { user, role, role_entity: entity, ...tokens };
   }
 
   async authMe(input: AuthMeInput) {
     const user = await this.userRepo.findById(input.userId);
-    if (!user) throw new Error('Account not found');
+    if (!user) throw createAppError(ERROR_CODES.AUTH_ACCOUNT_NOT_FOUND, 401);
 
     let role = input.role;
     if (!role) {
       if (user.roles.length === 1) {
         role = user.roles[0];
       } else {
-        throw new Error('Role selection required');
+        throw createAppError(ERROR_CODES.AUTH_ROLE_REQUIRED, 400);
       }
     } else {
       if (!user.roles.includes(role as any)) {
-        throw new Error('User does not have this role');
+        throw createAppError(ERROR_CODES.AUTH_ROLE_NOT_FOUND, 403, undefined, { role });
       }
     }
 
@@ -256,67 +230,49 @@ export class AuthService {
 
   async addRole(userId: string, input: AddRoleInput) {
     const user = await this.userRepo.findById(userId);
-    if (!user) throw new Error('Account not found');
+    if (!user) throw createAppError(ERROR_CODES.AUTH_ACCOUNT_NOT_FOUND, 404);
 
     const role = input.role;
 
     if (user.roles.includes(role as any)) {
-      throw new Error(`User already has the '${role}' role`);
+      throw createAppError(ERROR_CODES.AUTH_ROLE_ALREADY_EXISTS, 409, undefined, { role });
     }
 
     let roleEntity;
     switch (role) {
       case 'customer':
         roleEntity = await this.customerRepo.create({
-          user_id: user._id,
-          name: input.name || '',
-          email: user.login_email,
-          phone: user.login_phone,
-          email_verified: false,
-          phone_verified: false,
+          user_id: user._id, name: input.name || '', email: user.login_email, phone: user.login_phone,
+          email_verified: false, phone_verified: false,
         });
         break;
       case 'vendor':
         roleEntity = await this.vendorRepo.create({
-          user_id: user._id,
-          business_name: input.business_name || input.name || '',
-          email: user.login_email,
-          phone: user.login_phone,
-          email_verified: false,
-          phone_verified: false,
-          legit_verified: false,
+          user_id: user._id, business_name: input.business_name || input.name || '',
+          email: user.login_email, phone: user.login_phone,
+          email_verified: false, phone_verified: false, legit_verified: false,
         });
         break;
       case 'agency':
         roleEntity = await this.agencyRepo.create({
-          user_id: user._id,
-          agency_name: input.agency_name || input.name || '',
-          email: user.login_email,
-          phone: user.login_phone,
-          email_verified: false,
-          phone_verified: false,
-          legit_verified: false,
+          user_id: user._id, agency_name: input.agency_name || input.name || '',
+          email: user.login_email, phone: user.login_phone,
+          email_verified: false, phone_verified: false, legit_verified: false,
         });
         break;
       case 'agent':
         roleEntity = await this.agentRepo.create({
-          user_id: user._id,
-          name: input.name || '',
-          email: user.login_email,
-          phone: user.login_phone,
-          email_verified: false,
-          phone_verified: false,
+          user_id: user._id, name: input.name || '', email: user.login_email, phone: user.login_phone,
+          email_verified: false, phone_verified: false,
         });
         break;
       case 'admin':
         roleEntity = await this.adminRepo.create({
-          user_id: user._id,
-          name: input.name || '',
-          email: user.login_email,
+          user_id: user._id, name: input.name || '', email: user.login_email,
         });
         break;
       default:
-        throw new Error(`Role '${role}' is not supported`);
+        throw createAppError(ERROR_CODES.AUTH_UNSUPPORTED_ROLE, 400, undefined, { role });
     }
 
     await this.userRepo.addRoleToUser(userId, role);
@@ -328,7 +284,7 @@ export class AuthService {
   // ─── Email / Phone Verification ─────────────────────────────────────────────
 
   async sendEmailVerification(userId: string, role: string) {
-    let email = '';
+    // let email: string;
     let entity: any = null;
 
     if (role === 'customer') entity = await this.customerRepo.findByUserId(userId);
@@ -337,11 +293,11 @@ export class AuthService {
     else if (role === 'agent') entity = await this.agentRepo.findByUserId(userId);
     else if (role === 'admin') entity = await this.adminRepo.findByUserId(userId);
 
-    if (!entity) throw new Error(`${role} profile not found`);
-    if (entity.email_verified) throw new Error('Email already verified');
-    if (!entity.email) throw new Error('No email to verify');
+    if (!entity) throw createAppError(ERROR_CODES.AUTH_PROFILE_NOT_FOUND, 404, undefined, { role });
+    if (entity.email_verified) throw createAppError(ERROR_CODES.AUTH_EMAIL_ALREADY_VERIFIED, 409);
+    if (!entity.email) throw createAppError(ERROR_CODES.AUTH_EMAIL_MISSING, 422);
 
-    email = entity.email;
+    const email = entity.email;
 
     const token = crypto.randomBytes(32).toString('hex');
     const redis = await getRedisClient(this.redisDb);
@@ -371,7 +327,7 @@ export class AuthService {
     const value = await redis.get(key);
 
     if (!value) {
-      throw new Error('Invalid or expired verification token');
+      throw createAppError(ERROR_CODES.AUTH_VERIFY_TOKEN_INVALID, 400);
     }
 
     const { userId, role } = JSON.parse(value);
@@ -392,7 +348,7 @@ export class AuthService {
     return { message: 'Email verified successfully' };
   }
 
-  async issueWaVerificationCode(userId: string, role: string, waPhoneId: string) {
+  async issueWaVerificationCode(userId: string, role: string, update_other_roles: boolean) {
     let entity: any = null;
     if (role === 'customer') entity = await this.customerRepo.findByUserId(userId);
     else if (role === 'vendor') entity = await this.vendorRepo.findByUserId(userId);
@@ -400,14 +356,14 @@ export class AuthService {
     else if (role === 'agent') entity = await this.agentRepo.findByUserId(userId);
     else if (role === 'admin') entity = await this.adminRepo.findByUserId(userId);
 
-    if (!entity) throw new Error(`${role} profile not found`);
-    if (!entity.phone) throw new Error('Entity must have a phone number to bind WhatsApp');
+    if (!entity) throw createAppError(ERROR_CODES.AUTH_PROFILE_NOT_FOUND, 404, undefined, { role });
+    // if (!entity.phone) throw createAppError(ERROR_CODES.AUTH_PHONE_REQUIRED_FOR_WA, 422); // we don't need his phone number to verify his whatsapp number, he can setup the account with an email address
 
     if (entity.wa?.verified === true) {
-      throw new Error('WhatsApp already verified for this role');
+      throw createAppError(ERROR_CODES.AUTH_WA_ALREADY_VERIFIED, 409, undefined, { role });
     }
 
-    const code = crypto.randomBytes(6).toString('hex').toUpperCase();
+    const code = crypto.randomBytes(8).toString('hex').toUpperCase();
     const redis = await getRedisClient(4);
 
     const value = JSON.stringify({
@@ -415,7 +371,7 @@ export class AuthService {
       role: role,
       role_entity_id: entity._id,
       phone: entity.phone,
-      wa_phone_id: waPhoneId
+      update_other_roles
     });
 
     await redis.set(`wa_verify:${code}`, value, { EX: 600 });
@@ -429,10 +385,11 @@ export class AuthService {
     return {
       code,
       command,
+      bot_number: botNumber,
       wa_link: waLink,
       expires_in_seconds: 600,
       instructions: waLink
-        ? 'Click the wa_link to verify your WhatsApp account automatically, or send the command manually to our WhatsApp bot.'
+        ? 'Click the link to verify your WhatsApp account automatically, or send the command manually to our WhatsApp bot.'
         : 'Send the command above to our WhatsApp bot to verify your account.'
     };
   }

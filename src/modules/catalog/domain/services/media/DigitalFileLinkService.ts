@@ -1,4 +1,5 @@
-import { ConflictError, NotFoundError, ForbiddenError } from '../../../../../core/errors';
+import { createAppError } from '../../../../../core/errors';
+import { ERROR_CODES } from '../../../../../core/error-codes';
 import { IFileRepository } from '../../../repositories/interfaces/file.repository.interface';
 import { IDigitalAssetRepository } from '../../../repositories/interfaces/digital-asset.repository.interface';
 import { IProductRepository } from '../../../repositories/interfaces/product.repository.interface';
@@ -35,19 +36,19 @@ export class DigitalFileLinkService {
     // Validate file exists
     const file = await this.fileRepository.findById(command.fileId, options);
     if (!file) {
-      throw new NotFoundError('File not found');
+      throw createAppError(ERROR_CODES.CATALOG_FILE_NOT_FOUND, 404);
     }
 
     // Validate digital asset exists
     const digitalAsset = await this.digitalAssetRepository.findById(command.digitalAssetId, options);
     if (!digitalAsset) {
-      throw new NotFoundError('Digital asset not found');
+      throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_NOT_FOUND, 404);
     }
 
     // Verify vendor owns the parent product
     const product = await this.productRepository.findById(digitalAsset.productId, command.vendorId, options);
     if (!product) {
-      throw new ForbiddenError('Vendor does not own this product');
+      throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 403, 'Vendor does not own this product');
     }
 
     // If digital asset already has a file, decrement its usage count

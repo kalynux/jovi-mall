@@ -1,5 +1,7 @@
 import { TelegramLink, ITelegramLink } from './telegram.model';
 import mongoose from 'mongoose';
+import { createAppError } from '../../core/errors';
+import { ERROR_CODES } from '../../core/error-codes';
 
 export interface TelegramLinkData {
     chatId: string;
@@ -56,7 +58,7 @@ export class TelegramRepository {
         );
 
         if (!link) {
-            throw new Error('Failed to create or update Telegram link');
+            throw createAppError(ERROR_CODES.TELEGRAM_LINK_FAILED, 500);
         }
 
         return link;
@@ -69,7 +71,7 @@ export class TelegramRepository {
         const link = await this.findByUserId(userId);
 
         if (!link) {
-            throw new Error('Telegram link not found');
+            throw createAppError(ERROR_CODES.TELEGRAM_LINK_NOT_FOUND, 404);
         }
 
         link.isActive = !link.isActive;
