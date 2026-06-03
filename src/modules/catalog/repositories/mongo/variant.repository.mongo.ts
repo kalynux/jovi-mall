@@ -50,9 +50,33 @@ export class VariantRepositoryMongo extends BaseRepository<IProductVariant, Vari
 
   async update(id: string, updates: Partial<Variant>, options?: RepositoryOptions): Promise<Variant | null> {
     if (!Types.ObjectId.isValid(id)) return null;
+
+    // Translate domain camelCase fields to the snake_case names used in MongoDB
+    const persistenceUpdates: Record<string, any> = { ...updates };
+    if ('lowStockThreshold' in updates) {
+      persistenceUpdates.low_stock_threshold = updates.lowStockThreshold;
+      delete persistenceUpdates.lowStockThreshold;
+    }
+    if ('allowOversell' in updates) {
+      persistenceUpdates.allow_oversell = updates.allowOversell;
+      delete persistenceUpdates.allowOversell;
+    }
+
+    // For partial digitalConfig updates, expand into dotted paths so we don't
+    // overwrite untouched sub-fields (e.g. assetId when only limits change).
+    // If callers want to replace the whole sub-doc (incl. clearing), they should
+    // pass digitalConfig: undefined or use a separate $unset path elsewhere.
+    if ('digitalConfig' in updates && updates.digitalConfig && typeof updates.digitalConfig === 'object') {
+      const dc = updates.digitalConfig as { assetId?: string; maxDownloads?: number | null; expiresAfterDays?: number | null };
+      if (dc.assetId !== undefined) persistenceUpdates['digitalConfig.assetId'] = dc.assetId;
+      if ('maxDownloads' in dc) persistenceUpdates['digitalConfig.maxDownloads'] = dc.maxDownloads;
+      if ('expiresAfterDays' in dc) persistenceUpdates['digitalConfig.expiresAfterDays'] = dc.expiresAfterDays;
+      delete persistenceUpdates.digitalConfig;
+    }
+
     const doc = await this.model.findOneAndUpdate(
       { _id: id, deletedAt: null },
-      { $set: updates },
+      { $set: persistenceUpdates },
       { new: true, session: options?.session }
     );
     return doc ? this.mapper.toDomain(doc) : null;

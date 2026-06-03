@@ -183,11 +183,102 @@ export function getDefaultUploadConfig(): UploadPolicyConfig {
 }
 
 /**
+ * Upload configuration for vendor digital assets (downloadable goods).
+ *
+ * Differs from the product-media config in two deliberate ways:
+ *  1. NO image transforms — a digital asset is the product the vendor sells, so
+ *     it must be stored byte-for-byte (never resized/recompressed/converted).
+ *  2. A broader, larger allowlist (pdf/zip/audio/video/images) with per-type
+ *     size limits up to 500MB.
+ *
+ * Security note: every file still passes magic-byte sniffing, virus scanning and
+ * fingerprinting. Because the pipeline rejects any file whose sniffed type is
+ * undetectable or differs from the claimed type, formats that do not sniff to a
+ * stable MIME (e.g. legacy Office binaries, raw `application/octet-stream`) are
+ * intentionally NOT accepted here — that ambiguity is the executable-spoofing
+ * vector this routing exists to close.
+ */
+export function getDigitalAssetUploadConfig(): UploadPolicyConfig {
+  const noTransform = (maxSizeBytes: number): MimeTypePolicy => ({
+    allowed: true,
+    maxSizeBytes,
+  });
+
+  const MB = 1024 * 1024;
+
+  // Single knob for the per-request size cap. The vendor digital-asset
+  // controller derives its pre-upload size check from this same value, so the
+  // controller gate and the pipeline's TotalSizeValidator can never disagree.
+  const parsedMax = parseInt(process.env.MAX_DIGITAL_ASSET_SIZE || '', 10);
+  const maxTotalSizeBytes = Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : 500 * MB;
+
+  return {
+    maxFilesPerRequest: 1,
+    maxTotalSizeBytes,
+
+    perMimeType: {
+      // Documents
+      'application/pdf': noTransform(100 * MB),
+      'application/epub+zip': noTransform(100 * MB),
+      // Archives / bundles
+      'application/zip': noTransform(500 * MB),
+      'application/x-rar-compressed': noTransform(500 * MB),
+      'application/vnd.rar': noTransform(500 * MB),
+      'application/x-7z-compressed': noTransform(500 * MB),
+      // Audio
+      'audio/mpeg': noTransform(100 * MB),
+      'audio/wav': noTransform(200 * MB),
+      // Video
+      'video/mp4': noTransform(500 * MB),
+      'video/quicktime': noTransform(500 * MB),
+      // Images (stored untouched — no transforms)
+      'image/jpeg': noTransform(50 * MB),
+      'image/png': noTransform(50 * MB),
+      'image/webp': noTransform(50 * MB),
+      'image/gif': noTransform(50 * MB),
+    },
+
+    virusScan: {
+      enabled: true,
+      provider: 'mock',
+      blockOnFailure: true,
+    },
+
+    // Digital assets are not subject to the shared per-vendor media quota.
+    userQuotas: {
+      enabled: false,
+      maxFilesTotal: 0,
+      maxStorageBytes: 0,
+    },
+
+    fingerprinting: {
+      algorithm: 'sha256',
+      enabled: true,
+    },
+
+    // Each digital asset owns its own File record (deleting one asset must not
+    // affect another), so duplicate collapsing is disabled here.
+    duplicateDetection: {
+      enabled: false,
+      blockDuplicates: false,
+    },
+
+    observability: {
+      enabled: true,
+      logLevel: 'info',
+    },
+  };
+}
+
+/**
  * Load upload configuration from environment variables
  * Falls back to defaults for missing values
  */
 export function loadUploadConfig(): UploadPolicyConfig {
   const defaults = getDefaultUploadConfig();
+
+  console.log("duplicateDectection.enabled", process.env.UPLOAD_DUPLICATE_DETECTION_ENABLED !== 'false',  process.env.UPLOAD_DUPLICATE_DETECTION_ENABLED);
+  console.log("duplicateDectection.block", process.env.UPLOAD_DUPLICATE_BLOCK === 'true',  process.env.UPLOAD_DUPLICATE_BLOCK);
   
   return {
     maxFilesPerRequest: parseInt(process.env.UPLOAD_MAX_FILES_PER_REQUEST || String(defaults.maxFilesPerRequest)),

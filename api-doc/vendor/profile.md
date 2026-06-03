@@ -321,6 +321,205 @@ Content-Type: application/json
 
 ---
 
+### GET /api/vendor/profile/default-delivery-agency
+
+Retrieve the authenticated vendor's currently-configured default delivery agency details.
+
+#### Authentication
+
+- **Required**: Yes
+- **Role**: `vendor`
+
+#### Headers
+
+```http
+Authorization: Bearer <jwt_token>
+```
+
+#### Response
+
+**Success (200 OK)**:
+Returns the agency details as a vendor-safe `VendorAgencyListItemDto`. Returns `null` if no default is configured.
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "683abc1234567890abcdef01",
+    "agencyName": "Swift Deliveries Cameroon",
+    "logoUrl": "https://cdn.example.com/logos/swift-deliveries.png",
+    "kycVerified": true,
+    "headquartersAddress": {
+      "region": "Littoral",
+      "city": "Douala",
+      "address_description": "4th Floor, Immeuble Ndokotti, Akwa"
+    },
+    "coverageAreas": ["littoral", "centre", "west"],
+    "rating": null,
+    "policies": {
+      "pricing": {
+        "storage_based_enabled": true,
+        "pickup_based_enabled": true,
+        "notes": null
+      },
+      "returns": {
+        "payer": "vendor",
+        "return_window_days": 7,
+        "notes": "Returns must include original packaging."
+      },
+      "damage": {
+        "claim_deadline_days": 5,
+        "max_refund_per_item": 50000,
+        "notes": null
+      }
+    }
+  }
+}
+```
+
+Or when no default is set:
+```json
+{
+  "success": true,
+  "data": null
+}
+```
+
+#### Error Responses
+
+Same as `GET /api/vendor/profile`.
+
+---
+
+### PUT /api/vendor/profile/default-delivery-agency
+
+Set or update the authenticated vendor's default delivery agency outside the onboarding flow.
+
+#### Authentication
+
+- **Required**: Yes
+- **Role**: `vendor`
+
+#### Headers
+
+```http
+Authorization: Bearer <jwt_token>
+Content-Type: application/json
+```
+
+#### Request Body
+
+```json
+{
+  "agencyId": "683abc1234567890abcdef01"
+}
+```
+
+**Fields**:
+- `agencyId` (**required**, string, valid MongoDB ObjectId): The ID of the delivery agency.
+
+#### Response
+
+**Success (200 OK)**:
+Returns the configured agency details as a vendor-safe `VendorAgencyListItemDto`.
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "683abc1234567890abcdef01",
+    "agencyName": "Swift Deliveries Cameroon",
+    "logoUrl": "https://cdn.example.com/logos/swift-deliveries.png",
+    "kycVerified": true,
+    "headquartersAddress": {
+      "region": "Littoral",
+      "city": "Douala",
+      "address_description": "4th Floor, Immeuble Ndokotti, Akwa"
+    },
+    "coverageAreas": ["littoral", "centre", "west"],
+    "rating": null,
+    "policies": {
+      "pricing": {
+        "storage_based_enabled": true,
+        "pickup_based_enabled": true,
+        "notes": null
+      },
+      "returns": {
+        "payer": "vendor",
+        "return_window_days": 7,
+        "notes": "Returns must include original packaging."
+      },
+      "damage": {
+        "claim_deadline_days": 5,
+        "max_refund_per_item": 50000,
+        "notes": null
+      }
+    }
+  },
+  "message": "Default delivery agency updated successfully"
+}
+```
+
+#### Error Responses
+
+**Validation Error (400)**:
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Request validation failed",
+    "details": [
+      {
+        "field": "agencyId",
+        "message": "Invalid input: Must be a valid agency ID"
+      }
+    ]
+  }
+}
+```
+
+**Agency Not Found / Ineligible (400 / 404)**:
+Returned if the agency does not exist, is inactive, or has not completed onboarding.
+```json
+{
+  "success": false,
+  "error": {
+    "code": "DELIVERY_AGENCY_NOT_FOUND",
+    "message": "The selected delivery agency does not exist."
+  }
+}
+```
+
+---
+
+### DELETE /api/vendor/profile/default-delivery-agency
+
+Clear the authenticated vendor's default delivery agency.
+
+#### Authentication
+
+- **Required**: Yes
+- **Role**: `vendor`
+
+#### Headers
+
+```http
+Authorization: Bearer <jwt_token>
+```
+
+#### Response
+
+**Success (200 OK)**:
+```json
+{
+  "success": true,
+  "message": "Default delivery agency cleared"
+}
+```
+
+---
+
 ## Feature Flags & Configuration
 
 ### Email Change Lock

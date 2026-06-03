@@ -1,6 +1,6 @@
 /**
  * Vendor Order DTOs
- * 
+ *
  * TypeScript types for API responses.
  * These are used for documentation and type safety.
  */
@@ -13,7 +13,9 @@ export interface VendorOrderListItemDTO {
 
     customer: {
         id: string;
-        // name and email populated from customer service
+        name: string | null;
+        email: string | null;
+        avatar: string | null;
     };
 
     subtotal: number;
@@ -38,7 +40,31 @@ export interface OrderItemDTO {
     optionsSnapshot: string;
     quantity: number;
     price: number;
+    subtotal: number;
     currency: string;
+}
+
+export interface ShippingAddressDTO {
+    street: string;
+    city: string;
+    state: string | null;
+    country: string;
+}
+
+export interface DeliveryAgentDTO {
+    id: string;
+    name: string;
+    phone: string | null;
+    avatarUrl: string | null;
+}
+
+export interface OrderDeliveryDTO {
+    agencyId: string | null;
+    agencyName: string | null;
+    agencyPhone: string | null;
+    deliveryStatus: string;
+    shipmentId: string | null;
+    agent: DeliveryAgentDTO | null;
 }
 
 export interface VendorOrderDetailsDTO {
@@ -50,8 +76,16 @@ export interface VendorOrderDetailsDTO {
 
     customer: {
         id: string;
-        // Populated from customer service
+        name: string | null;
+        email: string | null;
+        phone: string | null;
+        avatar: string | null;
+        orderCount: number;
+        totalSpent: number;
     };
+
+    /** Customer's default shipping address. null if no address on file. */
+    shippingAddress: ShippingAddressDTO | null;
 
     items: OrderItemDTO[];
 
@@ -59,6 +93,7 @@ export interface VendorOrderDetailsDTO {
         base: number;
         tax: number;
         discount: number;
+        shipping: number;
         total: number;
     };
     totalAmount: number;
@@ -67,6 +102,12 @@ export interface VendorOrderDetailsDTO {
     fulfillmentStatus: string;
     paymentStatus: string;
     paymentIntentId?: string;
+
+    /** Delivery info for physical orders. null for digital orders. */
+    delivery: OrderDeliveryDTO | null;
+
+    /** Vendor-internal notes (not visible to customers). */
+    notes: VendorOrderNoteDTO[];
 }
 
 export interface VendorOrderTimelineDTO {

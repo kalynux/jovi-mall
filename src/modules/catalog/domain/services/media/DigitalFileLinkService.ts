@@ -1,6 +1,7 @@
 import { createAppError } from '../../../../../core/errors';
 import { ERROR_CODES } from '../../../../../core/error-codes';
 import { IFileRepository } from '../../../repositories/interfaces/file.repository.interface';
+import { IFileReferenceRepository } from '../../../repositories/interfaces/file-reference.repository.interface';
 import { IDigitalAssetRepository } from '../../../repositories/interfaces/digital-asset.repository.interface';
 import { IProductRepository } from '../../../repositories/interfaces/product.repository.interface';
 import { RepositoryOptions } from '../../../repositories/types';
@@ -22,6 +23,7 @@ export interface LinkDigitalFileCommand {
 export class DigitalFileLinkService {
   constructor(
     private readonly fileRepository: IFileRepository,
+    private readonly fileReferenceRepository: IFileReferenceRepository,
     private readonly digitalAssetRepository: IDigitalAssetRepository,
     private readonly productRepository: IProductRepository
   ) { }
@@ -51,13 +53,16 @@ export class DigitalFileLinkService {
       throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 403, 'Vendor does not own this product');
     }
 
-    // If digital asset already has a file, decrement its usage count
+    // If digital asset already has a file, release that file's reference (it's
+    // being replaced).
     if (digitalAsset.mediaId) {
-      const oldFile = await this.fileRepository.findById(digitalAsset.mediaId, options);
-      if (oldFile) {
-        // Decrement usage count for old file (it's being replaced)
-        await this.fileRepository.decrementUsageCount(oldFile.id, options);
-      }
+      await this.fileReferenceRepository.remove(
+        digitalAsset.mediaId,
+        'digital_asset',
+        command.digitalAssetId,
+        'digitalAsset',
+        options,
+      );
     }
 
     // Link new file to digital asset
@@ -67,7 +72,14 @@ export class DigitalFileLinkService {
       options
     );
 
-    // Increment usage count for new file
-    await this.fileRepository.incrementUsageCount(command.fileId, options);
+    // Register the reference for the new file
+    await this.fileReferenceRepository.add({
+      fileId: command.fileId,
+      entityType: 'digital_asset',
+      entityId: command.digitalAssetId,
+      field: 'digitalAsset',
+      ownerType: 'vendor',
+      ownerId: command.vendorId,
+    }, options);
   }
 }

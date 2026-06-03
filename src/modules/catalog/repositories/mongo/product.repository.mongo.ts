@@ -1,8 +1,9 @@
-import { FilterQuery, Model, Types } from 'mongoose';
+import { FilterQuery, Types } from 'mongoose';
 import { BaseRepository, Page, PaginationOptions, RepositoryOptions } from '../../../../core/repositories/base.repository';
 import { IProduct, ProductModel } from '../../models';
 import { IProductRepository } from '../interfaces/product.repository.interface';
 import { Product, ProductMapper } from '../mappers/product.mapper';
+import { ProductListProjection } from '../../read-models/product-detail.read-model';
 
 export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> implements IProductRepository {
   constructor() {
@@ -151,6 +152,86 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
     };
 
     return this.paginate(query, paginationWithSort, options);
+  }
+
+  /**
+   * List-view projection for the vendor products grid/list UI.
+   * Projects only the fields the UI needs and runs lean — no domain mapping.
+   */
+  async searchListView(
+    vendorId: string,
+    filters: {
+      type?: string;
+      status?: string;
+      searchQuery?: string;
+    },
+    pagination: PaginationOptions,
+    sort?: {
+      sortBy: 'createdAt' | 'updatedAt' | 'title';
+      sortOrder: 'asc' | 'desc';
+    },
+    options?: RepositoryOptions
+  ): Promise<Page<ProductListProjection>> {
+    const query: FilterQuery<IProduct> = {
+      vendorId: vendorId as any,
+      deletedAt: null,
+    };
+
+    if (filters.type) query.type = filters.type as any;
+    if (filters.status) query.status = filters.status as any;
+    if (filters.searchQuery) {
+      query.$or = [
+        { title: { $regex: filters.searchQuery, $options: 'i' } },
+        { description: { $regex: filters.searchQuery, $options: 'i' } },
+      ];
+    }
+
+    const sortObj: Record<string, 1 | -1> = sort
+      ? { [sort.sortBy]: sort.sortOrder === 'asc' ? 1 : -1 }
+      : { createdAt: -1 };
+
+    const { page, limit } = pagination;
+    const skip = (page - 1) * limit;
+
+    const countQuery = this.model.countDocuments(query);
+    const findQuery = this.model
+      .find(query)
+      .select('_id title type status category hasVariants vectorisationEnabled vectorisationStatus fileIds')
+      .sort(sortObj)
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    if (options?.session) {
+      countQuery.session(options.session);
+      findQuery.session(options.session);
+    }
+
+    const [total, docs] = await Promise.all([countQuery.exec(), findQuery.exec()]);
+
+    const data: ProductListProjection[] = (docs as any[]).map((doc) => ({
+      id: doc._id.toString(),
+      title: doc.title,
+      type: doc.type,
+      status: doc.status,
+      category: doc.category,
+      hasVariants: doc.hasVariants ?? false,
+      vectorisationEnabled: doc.vectorisationEnabled ?? false,
+      vectorisationStatus: doc.vectorisationStatus ?? 'not_started',
+      fileIds: Array.isArray(doc.fileIds)
+        ? doc.fileIds.map((id: any) => id.toString())
+        : [],
+    }));
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit),
+      },
+    };
   }
 
   /**

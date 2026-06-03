@@ -8,13 +8,14 @@ The flow uses dedicated `PUT` endpoints for each step — the same pattern used 
 
 ## Overview
 
-The onboarding is a **3-step process** entered after the user adds the "vendor" role to their account:
+The onboarding is a **4-step process** entered after the user adds the "vendor" role to their account:
 
 | # | Step | Endpoint | Required? |
 |---|------|----------|-----------|
 | 1 | Basic Setup | `PUT /api/vendor/onboarding/basic-setup` | Yes |
 | 2 | Delivery Linking | `PUT /api/vendor/onboarding/delivery-linking` | No (skippable) |
 | 3 | Branding | `PUT /api/vendor/onboarding/branding` | No (skippable) |
+| 4 | Policy Setup | `PUT /api/vendor/onboarding/policy-setup` | No (skippable) |
 
 `onboarding_step` values returned in the profile:
 
@@ -23,6 +24,7 @@ The onboarding is a **3-step process** entered after the user adds the "vendor" 
 | `1` | Awaiting Basic Setup |
 | `2` | Awaiting Delivery Linking |
 | `3` | Awaiting Branding |
+| `4` | Awaiting Policy Setup |
 | `0` | **Onboarding Complete** → redirect to dashboard |
 
 ---
@@ -31,10 +33,52 @@ The onboarding is a **3-step process** entered after the user adds the "vendor" 
 
 Call this on every login to determine which onboarding screen to show.
 
+Two endpoints are available — use the richer one (`/onboarding/status`) for building the step-indicator UI.
+
+### Option A — Rich status (recommended)
+
+- **Endpoint**: `GET /api/vendor/onboarding/status`
+- **Auth**: Yes (Vendor role)
+
+#### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "currentStep": 1,
+    "currentStepLabel": "Basic Setup",
+    "isComplete": false,
+    "progressPercent": 0,
+    "completedFields": [],
+    "missingFields": ["country", "payout_details"],
+    "steps": [
+      { "step": 1, "label": "Basic Setup",                 "status": "current",   "required": true  },
+      { "step": 2, "label": "Delivery Linking (Optional)", "status": "pending",   "required": false },
+      { "step": 3, "label": "Branding (Optional)",         "status": "pending",   "required": false },
+      { "step": 4, "label": "Policy Setup (Optional)",     "status": "pending",   "required": false }
+    ],
+    "warnings": [
+      "KYC verification is pending. Your account may have limited functionality until verified by admin."
+    ]
+  }
+}
+```
+
+**`steps[].status` meanings:**
+
+| Value | Meaning |
+|-------|---------|
+| `"completed"` | Step was already submitted successfully. |
+| `"current"` | This is the step the user should complete next. |
+| `"pending"` | Step is locked until prior required steps are done. |
+
+### Option B — Simple status
+
 - **Endpoint**: `GET /api/vendor/profile/completion-status`
 - **Auth**: Yes (Vendor role)
 
-### Response
+#### Response
 
 ```json
 {
@@ -51,22 +95,33 @@ Call this on every login to determine which onboarding screen to show.
 **Frontend routing logic:**
 
 ```
-onboardingStep === 0  →  /dashboard                 (onboarding complete)
-onboardingStep === 1  →  /onboarding/basic-setup
-onboardingStep === 2  →  /onboarding/delivery-linking
-onboardingStep === 3  →  /onboarding/branding
+currentStep === 0  →  /dashboard                 (onboarding complete)
+currentStep === 1  →  /onboarding/basic-setup
+currentStep === 2  →  /onboarding/delivery-linking
+currentStep === 3  →  /onboarding/branding
+currentStep === 4  →  /onboarding/policy-setup
 ```
 
 ---
 
 ## 2. Submit Onboarding Steps
 
+### Optimistic Concurrency (Optional)
+
+Any `PUT` step endpoint accepts an optional `version` integer field. If supplied, the backend checks that it matches the profile's current `version` before writing. If it doesn't match (another session submitted changes simultaneously), the request fails with `VENDOR_ONBOARDING_CONCURRENT_MODIFICATION (409)`.
+
+**Best practice:** Always pass `version` from the last profile response you received. On success, the response includes the incremented `version` — store it for the next write.
+
 ### Re-edit Behaviour
 
 Once a step is marked complete you may re-submit its endpoint to update the data. The backend saves the new values but does **not** reset `onboarding_step`. This means:
 
-- Submitting Step 1 again when you're on Step 3 → data saved, `onboarding_step` stays `3`.
-- Submitting Step 3 at any point → data saved, `onboarding_step` unchanged (unless this is the final step, in which case it advances to `0`).
+- Submitting Step 1 again when you're on Step 2, 3, or 4 → data saved, `onboarding_step` stays unchanged.
+- Submitting Step 2 again when you're on Step 3 or 4 → agency ID updated (or no-op if `skip: true`), `onboarding_step` stays unchanged.
+- Submitting Step 3 again when you're on Step 4 → branding/addresses saved, `onboarding_step` stays `4`.
+- Submitting Step 4 completes onboarding → `onboarding_step` advances to `0`.
+
+> **Note:** Once onboarding is fully complete (`onboarding_step === 0`), all onboarding step endpoints return `409 VENDOR_ONBOARDING_ALREADY_COMPLETED`. Use the general profile update endpoint (`PATCH /api/vendor/profile`) to make changes instead.
 
 ---
 
@@ -108,6 +163,7 @@ Captures the vendor's country, timezone, and payout method.
 | `payout_details[].method` | `string` | Yes | Enum: `"mobile_money"` or `"bank"` | Determines which sub-object is required. |
 | `payout_details[].mobile_money` | `object \| null` | Conditional | Required if `method === "mobile_money"` | See sub-fields below. |
 | `payout_details[].bank` | `object \| null` | Conditional | Required if `method === "bank"` | See sub-fields below. |
+| `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard. |
 
 **`mobile_money` sub-fields:**
 
@@ -179,6 +235,7 @@ Allows the vendor to select a default delivery agency for physical product order
 |-------|------|-----------|------------|-------|
 | `skip` | `boolean` | No | Defaults to `false` | Set `true` to skip without selecting an agency. |
 | `default_delivery_agency_id` | `string` | Conditional | Min 1 char. Must be a valid agency ID. | Required if `skip` is `false` or not provided. |
+| `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard. |
 
 > **Validation rules:**
 > - Either `skip` must be `true` **or** `default_delivery_agency_id` must be provided — you cannot submit an empty form.
@@ -246,6 +303,7 @@ Captures the vendor's branding (logo, cover image) and business addresses. This 
 | Field | Type | Required? | Validation | Notes |
 |-------|------|-----------|------------|-------|
 | `skip` | `boolean` | No | Defaults to `false` | Set `true` to skip and finalize onboarding. |
+| `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard. Ignored if `skip: true`. |
 | `branding` | `object` | No | See sub-fields | Ignored if `skip: true`. |
 | `branding.logo_url` | `string \| null` | No | Must be a valid absolute URL | Vendor logo image. |
 | `branding.cover_image_url` | `string \| null` | No | Must be a valid absolute URL | Cover/banner image. |
@@ -263,6 +321,121 @@ Captures the vendor's branding (logo, cover image) and business addresses. This 
 {
   "success": true,
   "message": "Branding setup completed",
+  "data": {
+    "profile": { "..." : "full vendor profile object" },
+    "completionStatus": {
+      "onboardingStep": 4,
+      "isComplete": false,
+      "missingFields": [],
+      "stepLabel": "Policy Setup (Optional)"
+    }
+  }
+}
+```
+
+---
+
+### Step 4: Policy Setup (Optional / Skippable)
+
+- **Endpoint**: `PUT /api/vendor/onboarding/policy-setup`
+- **Auth**: Yes (Vendor role)
+- **Prerequisite**: Step 3 completed or skipped
+
+Captures the vendor's return, cancellation, and support policies. All three sub-policies are optional — the vendor may provide any combination, or skip the step entirely.
+
+> **Note:** The `inspector` field on the return policy is **admin-controlled** and is always set to `"admin"`. It is not accepted in vendor requests.
+
+#### Request Body — Providing Data
+
+```json
+{
+  "return_policy": {
+    "return_eligible": true,
+    "return_window_days": 14,
+    "refund_type": "full",
+    "return_shipping_payer": "customer",
+    "refund_processing_days": 7,
+    "return_condition_notes": "Item must be unused and in original packaging."
+  },
+  "cancellation_policy": {
+    "cancellable": true,
+    "cancellation_deadline": "within_24_hours",
+    "cancellation_fee_type": "none"
+  },
+  "support_policy": {
+    "channels": [
+      { "type": "email", "contact": "support@mybrand.com" },
+      { "type": "whatsapp", "contact": "+237670000000" }
+    ],
+    "eligibility_notes": "Support available to customers with a valid order only.",
+    "required_info": ["order_number", "product_photo_video"],
+    "availability": "business_hours",
+    "languages": ["English", "French"]
+  }
+}
+```
+
+#### Request Body — Skipping
+
+```json
+{ "skip": true }
+```
+
+#### Field Reference — Return Policy
+
+| Field | Type | Required? | Validation | Notes |
+|-------|------|-----------|------------|-------|
+| `return_eligible` | `boolean` | No | — | Defaults to `true`. |
+| `return_window_days` | `integer` | No | Min `0`, Max `180` | Defaults to `14`. |
+| `refund_type` | `string` | No | `"full"` \| `"partial"` \| `"none"` | Defaults to `"full"`. |
+| `refund_percentage` | `number \| null` | Conditional | `0`–`100` | Required when `refund_type` is `"partial"`. |
+| `return_shipping_payer` | `string` | No | `"vendor"` \| `"customer"` \| `"customer_reimbursed_if_defect"` | Defaults to `"customer"`. |
+| `refund_processing_days` | `integer` | No | Min `1`, Max `30` | Defaults to `7`. |
+| `return_condition_notes` | `string \| null` | No | Max `500` chars | Free-text conditions for accepting a return. |
+
+#### Field Reference — Cancellation Policy
+
+| Field | Type | Required? | Validation | Notes |
+|-------|------|-----------|------------|-------|
+| `cancellable` | `boolean` | No | — | Defaults to `true`. |
+| `cancellation_deadline` | `string \| null` | No | See enum below | Deadline after which cancellation is not allowed. |
+| `cancellation_deadline_days` | `integer \| null` | Conditional | Min `0` | Required when `cancellation_deadline` is `"anytime_until_days_before_delivery"`. |
+| `cancellation_fee_type` | `string \| null` | No | `"none"` \| `"fixed"` \| `"percentage"` \| `"full_non_refundable"` | — |
+| `cancellation_fee_value` | `number \| null` | Conditional | Min `0` | Required when `cancellation_fee_type` is `"fixed"` or `"percentage"`. |
+| `late_cancellation_refund_type` | `string \| null` | No | `"fixed"` \| `"percentage"` \| `"full_non_refundable"` | Refund given when cancelled late. |
+| `late_cancellation_refund_value` | `number \| null` | Conditional | Min `0` | Required when `late_cancellation_refund_type` is `"fixed"` or `"percentage"`. |
+
+**`cancellation_deadline` enum values:**
+
+| Value | Meaning |
+|-------|---------|
+| `"within_1_hour"` | Within 1 hour of order placement |
+| `"within_24_hours"` | Within 24 hours of order placement |
+| `"before_vendor_confirmation"` | Before the vendor confirms the order |
+| `"before_service_start"` | Before the service start date/time |
+| `"anytime_until_days_before_delivery"` | Any time up to `cancellation_deadline_days` before delivery |
+
+#### Field Reference — Support Policy
+
+| Field | Type | Required? | Validation | Notes |
+|-------|------|-----------|------------|-------|
+| `channels` | `object[]` | No | Max 4 entries | Support contact channels offered. |
+| `channels[].type` | `string` | Yes | `"email"` \| `"phone"` \| `"whatsapp"` \| `"telegram"` | Channel type. |
+| `channels[].contact` | `string` | Yes | Min `1`, Max `200` chars | Email address, phone number, or username. |
+| `eligibility_notes` | `string \| null` | No | Max `500` chars | Free-text describing who can contact support. |
+| `required_info` | `string[]` | No | See enum below | Information customers must provide when contacting support. |
+| `availability` | `string \| null` | No | `"24_7"` \| `"business_hours"` \| `"limited"` | Support hours. |
+| `availability_description` | `string \| null` | No | Max `200` chars | Details for `"limited"` availability (e.g. `"Mon–Fri, 10–18"`). |
+| `languages` | `string[]` | No | Max 20 entries, each max 50 chars | Languages supported (e.g. `["English", "French"]`). |
+
+**`required_info` enum values:** `"order_number"`, `"product_photo_video"`, `"tracking_number"`
+
+#### Success Response (`200 OK`)
+
+```json
+{
+  "success": true,
+  "message": "Policy setup completed",
   "data": {
     "profile": { "..." : "full vendor profile object" },
     "completionStatus": {
@@ -300,6 +473,7 @@ Use `data.completionStatus.onboardingStep` to determine which screen to navigate
 | `1` | Show Basic Setup form |
 | `2` | Show Delivery Linking form |
 | `3` | Show Branding form |
+| `4` | Show Policy Setup form |
 
 ---
 
@@ -329,9 +503,12 @@ Returned when the request body fails Zod schema validation.
 
 | HTTP | Code | When it occurs | Suggested frontend action |
 |------|------|----------------|---------------------------|
+| `400` | `VENDOR_ONBOARDING_STEP_INCOMPLETE` | A prerequisite step has not been completed (e.g. submitting Step 3 before Step 1). | Redirect to the earliest incomplete step. |
 | `400` | `DELIVERY_AGENCY_NOT_FOUND` | The delivery agency ID submitted in Step 2 is inactive or has not completed onboarding. | Show error message and let user pick a different agency. |
 | `404` | `AUTH_USER_NOT_FOUND` | No vendor profile exists for the authenticated user. | Redirect to the add-role or registration flow. |
 | `404` | `DELIVERY_AGENCY_NOT_FOUND` | The delivery agency ID submitted in Step 2 does not exist. | Show error message and let user pick a different agency. |
+| `409` | `VENDOR_ONBOARDING_ALREADY_COMPLETED` | The vendor is fully onboarded; onboarding endpoints are locked. Use the general profile update endpoint instead. | Redirect to dashboard. |
+| `409` | `VENDOR_ONBOARDING_CONCURRENT_MODIFICATION` | The `version` you sent does not match the server's current value — another session saved changes in the meantime. | Show a prompt: *"Your profile was modified elsewhere. Please refresh and try again."* Then re-fetch the profile, store the new `version`, and let the user re-submit. |
 | `500` | `INTERNAL_ERROR` | Unexpected server error. | Show generic error message. |
 
 ---
@@ -340,10 +517,12 @@ Returned when the request body fails Zod schema validation.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/vendor/profile/completion-status` | Check current onboarding step and missing fields |
+| `GET` | `/api/vendor/onboarding/status` | Rich onboarding status: steps[], progressPercent, completedFields, warnings |
+| `GET` | `/api/vendor/profile/completion-status` | Simple onboarding step + missing fields |
 | `PUT` | `/api/vendor/onboarding/basic-setup` | Submit Step 1: country, timezone, payout details |
 | `PUT` | `/api/vendor/onboarding/delivery-linking` | Submit Step 2: select delivery agency or skip |
 | `PUT` | `/api/vendor/onboarding/branding` | Submit Step 3: branding, business addresses, or skip |
+| `PUT` | `/api/vendor/onboarding/policy-setup` | Submit Step 4: return, cancellation, and support policies, or skip |
 | `GET` | `/api/vendor/delivery-agencies` | Browse available delivery agencies ([full docs](./delivery-agencies.md)) |
 
 ---
@@ -356,13 +535,15 @@ flowchart TD
     B -->|"step = 1"| C["Step 1: Basic Setup"]
     B -->|"step = 2"| D["Step 2: Delivery Linking"]
     B -->|"step = 3"| E["Step 3: Branding"]
+    B -->|"step = 4"| P["Step 4: Policy Setup"]
     B -->|"step = 0"| F["Dashboard"]
 
     C -->|"PUT /onboarding/basic-setup"| D
     D -->|"Browse agencies"| G["GET /delivery-agencies"]
     G --> D
     D -->|"PUT /onboarding/delivery-linking (select or skip)"| E
-    E -->|"PUT /onboarding/branding (provide or skip)"| F
+    E -->|"PUT /onboarding/branding (provide or skip)"| P
+    P -->|"PUT /onboarding/policy-setup (provide or skip)"| F
 ```
 
 ---

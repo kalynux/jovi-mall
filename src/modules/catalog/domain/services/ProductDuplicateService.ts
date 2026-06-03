@@ -3,6 +3,7 @@ import { ERROR_CODES } from '../../../../core/error-codes';
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
 import { Product } from '../../repositories/mappers/product.mapper';
 import { SlugService } from './SlugService';
+import { FileReferenceService } from './media/FileReferenceService';
 
 /**
  * ProductDuplicateService: Duplicate a product with collision-safe slug generation
@@ -10,7 +11,8 @@ import { SlugService } from './SlugService';
 export class ProductDuplicateService {
     constructor(
         private readonly productRepository: IProductRepository,
-        private readonly slugService: SlugService
+        private readonly slugService: SlugService,
+        private readonly fileReferenceService: FileReferenceService
     ) { }
 
     async execute(productId: string, vendorId: string): Promise<Product> {
@@ -34,15 +36,21 @@ export class ProductDuplicateService {
             category: originalProduct.category,
             tags: [...(originalProduct.tags ?? [])],
             seo: { ...originalProduct.seo },
-            hasVariants: originalProduct.hasVariants,
+            hasVariants: false,
+            defaultVariantId: undefined,
             deletedAt: null,
-            fileIds: originalProduct.fileIds,
+            fileIds: [...(originalProduct.fileIds ?? [])],
+            // Duplicated products start with vectorisation reset — vendor must re-enable
+            vectorisationEnabled: false,
+            vectorisationStatus: 'not_started',
+            vectorisedDataId: null,
         };
 
         if (originalProduct.type === 'digital' && originalProduct.digitalConfig) {
+            // Duplicates start disabled. Per-variant assets/limits are not copied — vendor
+            // must re-upload assets per variant on the clone via the variant upload endpoints.
             clonedData.digitalConfig = {
-                ...originalProduct.digitalConfig,
-                assetId: undefined as any,
+                isActive: false,
             };
         }
 
@@ -50,7 +58,21 @@ export class ProductDuplicateService {
             clonedData.serviceConfig = { ...originalProduct.serviceConfig };
         }
 
-        return this.productRepository.create(clonedData);
+        const duplicate = await this.productRepository.create(clonedData);
+
+        // The clone references the same media as the original — register a
+        // reference row per file so the clone counts as a distinct user of each.
+        if (clonedData.fileIds.length > 0) {
+            await this.fileReferenceService.reconcile({
+                previousFileIds: [],
+                nextFileIds: clonedData.fileIds,
+                vendorId,
+                entityType: 'product',
+                entityId: duplicate.id,
+            });
+        }
+
+        return duplicate;
     }
 
     private async generateUniqueSlug(baseSlug: string, vendorId: string): Promise<string> {

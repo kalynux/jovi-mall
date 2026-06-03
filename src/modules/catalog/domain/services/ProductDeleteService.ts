@@ -2,6 +2,7 @@ import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import { TransactionManager } from '../../../../core/database/transaction.manager';
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
+import { IFileReferenceRepository } from '../../repositories/interfaces/file-reference.repository.interface';
 
 /**
  * ProductDeleteService: Soft delete products with configurable retention policy
@@ -10,7 +11,8 @@ export class ProductDeleteService {
   constructor(
     private readonly productRepository: IProductRepository,
     private readonly transactionManager: TransactionManager,
-    private readonly retentionDays: number
+    private readonly retentionDays: number,
+    private readonly fileReferenceRepository: IFileReferenceRepository
   ) { }
 
   async execute(productId: string, vendorId: string): Promise<void> {
@@ -30,6 +32,11 @@ export class ProductDeleteService {
       purgeAt.setDate(purgeAt.getDate() + this.retentionDays);
 
       await this.productRepository.softDelete(productId, vendorId, { session }, purgeAt);
+
+      // Release the product's file references so its media can be reclaimed by
+      // the orphan collector. (Variant-level references are cleaned by their own
+      // delete path.)
+      await this.fileReferenceRepository.removeAllForEntity('product', productId, { session });
     });
   }
 }

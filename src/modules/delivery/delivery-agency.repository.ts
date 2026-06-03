@@ -55,29 +55,39 @@ export class DeliveryAgencyRepository {
   }
 
   /**
-   * Atomic onboarding update — single findOneAndUpdate that applies data + step + updated_at
-   * in one atomic operation. Uses optimistic concurrency via updated_at check.
+   * Atomic onboarding update — single findOneAndUpdate that applies data + step + version
+   * in one atomic operation. Uses optimistic concurrency via integer version check.
    *
    * @param agencyId - Agency document _id
    * @param updates - Fields to update (data + onboarding_step)
-   * @param expectedUpdatedAt - The updated_at timestamp the client last read (for optimistic concurrency)
+   * @param expectedVersion - The version integer the client last read (for optimistic concurrency)
    * @param session - Optional MongoDB session for transaction support
-   * @returns Updated document, or null if concurrency conflict (updated_at mismatch)
+   * @returns Updated document, or null if concurrency conflict (version mismatch)
    */
   async atomicOnboardingUpdate(
     agencyId: string,
     updates: Partial<IDeliveryAgency> & { onboarding_step: AgencyOnboardingStepValue },
-    expectedUpdatedAt?: Date,
+    expectedVersion?: number,
     session?: ClientSession,
   ): Promise<IDeliveryAgency | null> {
     const filter: Record<string, unknown> = { _id: agencyId };
-    if (expectedUpdatedAt) {
-      filter.updated_at = expectedUpdatedAt;
+    
+    if (expectedVersion !== undefined) {
+      if (expectedVersion === 0) {
+        // Handle legacy documents where the version field does not exist yet
+        filter.$or = [
+          { version: 0 },
+          { version: { $exists: false } },
+          { version: null }
+        ];
+      } else {
+        filter.version = expectedVersion;
+      }
     }
 
     const query = DeliveryAgencyModel.findOneAndUpdate(
       filter,
-      { $set: updates },
+      { $set: updates, $inc: { version: 1 } },
       { new: true },
     );
     if (session) query.session(session);
@@ -119,7 +129,7 @@ export class DeliveryAgencyRepository {
   }
 
   async updateProfile(agencyId: string, updates: Partial<IDeliveryAgency>, session?: ClientSession): Promise<IDeliveryAgency | null> {
-    const query = DeliveryAgencyModel.findByIdAndUpdate(agencyId, updates, { new: true });
+    const query = DeliveryAgencyModel.findByIdAndUpdate(agencyId, { $set: updates, $inc: { version: 1 } }, { new: true });
     if (session) query.session(session);
     return query.exec();
   }

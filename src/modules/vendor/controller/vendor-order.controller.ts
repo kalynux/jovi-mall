@@ -180,8 +180,30 @@ export class VendorOrderController {
     }
 
     /**
+     * GET /api/vendor/orders/:id/notes/:noteId
+     *
+     * Get a single vendor-internal note by ID.
+     * Used to fetch the full note content from a timeline noteId reference.
+     */
+    static async getNote(req: Request, res: Response): Promise<void> {
+        try {
+            const vendorId = req.auth!.role_entity._id.toString();
+            const noteId = req.params.noteId;
+
+            const note = await vendorOrderService.getNoteById(noteId, vendorId);
+
+            res.json({
+                success: true,
+                data: note
+            });
+        } catch (error) {
+            VendorOrderController.handleError(error, res);
+        }
+    }
+
+    /**
      * GET /api/vendor/orders/:id/notes
-     * 
+     *
      * Get vendor-internal notes for order
      */
     static async getNotes(req: Request, res: Response): Promise<void> {

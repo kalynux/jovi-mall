@@ -46,6 +46,7 @@ export interface GetAgencyProfileResponseDto {
     timezone: string;
     status: string;
     onboardingStep: number;
+    version: number;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -89,6 +90,7 @@ export interface CreateAgencyResponseDto {
     id: string;
     agencyName: string;
     onboardingStep: number;
+    version: number;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -186,6 +188,7 @@ export class AgencyProfileMapper {
             timezone: agency.timezone,
             status: agency.status,
             onboardingStep: agency.onboarding_step,
+            version: agency.version,
             createdAt: agency.created_at,
             updatedAt: agency.updated_at,
         };
@@ -196,6 +199,7 @@ export class AgencyProfileMapper {
             id: agency._id.toString(),
             agencyName: agency.agency_name,
             onboardingStep: agency.onboarding_step,
+            version: agency.version,
             createdAt: agency.created_at,
             updatedAt: agency.updated_at,
         };

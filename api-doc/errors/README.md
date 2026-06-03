@@ -122,7 +122,37 @@ Occurs when a bulk operation payload has too many rows.
 }
 ```
 
-### 7. Other Contextual Domain Errors
+### 7. File Upload Policy Violations
+**Code:** `UPLOAD_POLICY_VIOLATION` (Status `400`)
+Returned by `POST /api/files/upload` when one or more files fail the upload
+security/policy pipeline (MIME sniffing, size, duplicate detection, virus scan,
+etc.). Because several files are validated in one request, the `details.violations`
+array can contain **multiple entries**, each scoped to a file via `fileIndex`.
+
+```json
+{
+  "details": {
+    "violations": [
+      {
+        "code": "MIME_NOT_ALLOWED",   // machine-readable reason — drive UI/i18n off this
+        "message": "File type not allowed: application/x-executable",
+        "fileIndex": 0,   // 0-based index into the uploaded files array (absent for request-wide violations)
+        "metadata": { "detectedMimeType": "application/x-executable", "originalName": "aaron-burden-b9drVB7xIOI-unsplash.jpg" }   // optional extra context
+      }
+    ]
+  }
+}
+```
+
+*Frontend usage:* Map each `violation.fileIndex` back to the corresponding file in
+your upload list and show the per-file reason inline. `violation.code` is one of:
+`FILE_TOO_LARGE`, `MIME_NOT_ALLOWED`, `TOO_MANY_FILES`, `QUOTA_EXCEEDED`,
+`VIRUS_DETECTED`, `PERMISSION_DENIED`, `TOTAL_SIZE_EXCEEDED`, `DUPLICATE_FILE`,
+`MIME_TYPE_MISMATCH`, `POLYGLOT_DETECTED`, `UNDETECTABLE_TYPE`. See the
+[File Management API](../vendor/file-management.md#post-apifilesupload) for the full
+per-code reference.
+
+### 8. Other Contextual Domain Errors
 The backend frequently includes context variables inside the `details` object for general domain errors. For example:
 - `PAYMENT_ORDER_NOT_FOUND` may include `{"orderId": "..."}`
 - `STORE_SLUG_TAKEN` may include `{"slug": "..."}`

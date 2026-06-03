@@ -4,6 +4,7 @@ import { uploadSingle } from '../../../api/middlewares/upload.middleware';
 import { VendorProductController } from '../controllers/vendor-product.controller';
 import { VendorDigitalAssetController } from '../controllers/vendor-digital-asset.controller';
 import { VendorServiceCalendarController } from '../controllers/vendor-service-calendar.controller';
+import { requireProductEditable } from '../middlewares/require-product-editable.middleware';
 
 const router = Router();
 
@@ -78,19 +79,30 @@ router.get('/:id', VendorProductController.getProduct);
  *   serviceConfig?
  * }
  */
-router.patch('/:id', VendorProductController.updateProduct);
+router.patch('/:id', requireProductEditable, VendorProductController.updateProduct);
 
 /**
  * PATCH /api/vendor/products/:id/status
  * Change product status
- * 
+ *
  * Body: { status }
- * 
+ *
  * Validation rules:
  * - Cannot activate digital product without asset
  * - Cannot activate service product without duration
  */
-router.patch('/:id/status', VendorProductController.changeStatus);
+router.patch('/:id/status', requireProductEditable, VendorProductController.changeStatus);
+
+/**
+ * PATCH /api/vendor/products/:id/default-variant
+ * Set the default variant for display and pricing
+ *
+ * Body: { variantId: string }
+ *
+ * The default variant is auto-set to the first created variant.
+ * Use this endpoint to manually reassign it.
+ */
+router.patch('/:id/default-variant', requireProductEditable, VendorProductController.setDefaultVariant);
 
 /**
  * POST /api/vendor/products/:id/duplicate
@@ -101,7 +113,7 @@ router.patch('/:id/status', VendorProductController.changeStatus);
  * - title = "Original title (copy)"
  * - slug = intelligent collision prevention (original-slug-copy, -copy-2, etc.)
  */
-router.post('/:id/duplicate', VendorProductController.duplicateProduct);
+router.post('/:id/duplicate', requireProductEditable, VendorProductController.duplicateProduct);
 
 /**
  * DELETE /api/vendor/products/:id
@@ -109,7 +121,44 @@ router.post('/:id/duplicate', VendorProductController.duplicateProduct);
  * 
  * Sets status to 'archived'
  */
-router.delete('/:id', VendorProductController.archiveProduct);
+router.delete('/:id', requireProductEditable, VendorProductController.archiveProduct);
+
+/**
+ * ==========================================
+ * VECTORISATION (per product)
+ * ==========================================
+ */
+
+/**
+ * GET /api/vendor/products/:id/vectorisation/status
+ * Read the current vectorisation snapshot for a product.
+ */
+router.get('/:id/vectorisation/status', VendorProductController.getVectorisationStatus);
+
+/**
+ * PATCH /api/vendor/products/:id/vectorisation
+ * Set the vectorisation opt-in state for quick toggles.
+ *
+ * Body: { enabled: boolean }
+ *
+ * Idempotent — passing the current state returns 200 with a no-op message.
+ * For state changes that produce side effects, responds 202 and runs the
+ * upstream call (enable→vectorise, disable→delete) after the response.
+ *
+ * Vendors can also toggle this field as part of PATCH /:id (the regular
+ * product update); this dedicated route exists for quick toggles only.
+ *
+ * Blocked while vectorisationStatus === 'pending'.
+ */
+router.patch('/:id/vectorisation', requireProductEditable, VendorProductController.setVectorisation);
+
+/**
+ * POST /api/vendor/products/:id/vectorisation/retry
+ * Resubmit the full payload to the vectoriser (fire-and-forget).
+ *
+ * Blocked while vectorisationStatus === 'pending'.
+ */
+router.post('/:id/vectorisation/retry', requireProductEditable, VendorProductController.retryVectorisation);
 
 /**
  * ==========================================
@@ -142,48 +191,61 @@ router.post('/bulk/status', VendorProductController.bulkStatusChange);
 
 /**
  * ==========================================
- * DIGITAL PRODUCT MANAGEMENT
+ * DIGITAL ASSET MANAGEMENT (per variant)
  * ==========================================
+ * Assets are owned per-variant — a digital product can have up to 5 variants,
+ * each with its own asset, price, SKU, name, maxDownloads, and expiresAfterDays.
+ * A digital variant is `status: 'active'` iff it has an asset uploaded.
  */
 
 /**
- * POST /api/vendor/products/:id/digital/asset
- * Upload digital asset
- * 
- * Multipart form-data with file field named "file"
- * 
- * Transactional upload with rollback on failure
- * File size and mime type validation applied
+ * POST /api/vendor/products/:productId/variants/:variantId/digital/asset
+ * Upload a digital asset for a specific variant.
+ *
+ * Multipart form-data with file field named "file".
+ * Rejects if the variant already has an asset (use PUT to replace).
+ * On success, the variant transitions to `status: 'active'`.
  */
-router.post('/:id/digital/asset', uploadSingle, VendorDigitalAssetController.uploadAsset);
+router.post(
+    '/:productId/variants/:variantId/digital/asset',
+    requireProductEditable,
+    uploadSingle,
+    VendorDigitalAssetController.uploadAsset,
+);
 
 /**
- * PUT /api/vendor/products/:id/digital/asset
- * Replace digital asset
- * 
- * Multipart form-data with file field named "file"
- * 
- * Atomically replaces old asset with new one
- * Old asset is deleted after successful upload
+ * PUT /api/vendor/products/:productId/variants/:variantId/digital/asset
+ * Replace the existing digital asset on a variant. Old asset is deleted after
+ * successful upload. The variant stays `status: 'active'`.
  */
-router.put('/:id/digital/asset', uploadSingle, VendorDigitalAssetController.replaceAsset);
+router.put(
+    '/:productId/variants/:variantId/digital/asset',
+    requireProductEditable,
+    uploadSingle,
+    VendorDigitalAssetController.replaceAsset,
+);
 
 /**
- * DELETE /api/vendor/products/:id/digital/asset
- * Remove digital asset
- * 
- * Unlinks asset from product and marks for deletion
+ * DELETE /api/vendor/products/:productId/variants/:variantId/digital/asset
+ * Remove the digital asset from a variant. The variant becomes `status: 'archived'`
+ * (digital variants cannot be active without an asset).
  */
-router.delete('/:id/digital/asset', VendorDigitalAssetController.removeAsset);
+router.delete(
+    '/:productId/variants/:variantId/digital/asset',
+    requireProductEditable,
+    VendorDigitalAssetController.removeAsset,
+);
 
 /**
- * PATCH /api/vendor/products/:id/digital/toggle
- * Toggle digital asset availability
- * 
- * Quick enable/disable without full product update
- * Useful for temporarily blocking downloads
+ * PATCH /api/vendor/products/:productId/variants/:variantId/digital/config
+ * Update download limits (maxDownloads, expiresAfterDays) for a variant.
+ * Body: { maxDownloads?: number|null, expiresAfterDays?: number|null }
  */
-router.patch('/:id/digital/toggle', VendorDigitalAssetController.toggleAvailability);
+router.patch(
+    '/:productId/variants/:variantId/digital/config',
+    requireProductEditable,
+    VendorDigitalAssetController.updateDigitalConfig,
+);
 
 /**
  * ==========================================
@@ -203,7 +265,7 @@ import { VendorVariantController } from '../controllers/vendor-variant.controlle
  *   optionValueIds?
  * }
  */
-router.post('/:id/variants', VendorVariantController.createVariant);
+router.post('/:id/variants', requireProductEditable, VendorVariantController.createVariant);
 
 /**
  * GET /api/vendor/products/:id/variants
@@ -225,13 +287,27 @@ router.get('/:productId/variants/:variantId', VendorVariantController.getVariant
  * 
  * Body: partial variant updates
  */
-router.patch('/:productId/variants/:variantId', VendorVariantController.updateVariant);
+router.patch('/:productId/variants/:variantId', requireProductEditable, VendorVariantController.updateVariant);
+
+/**
+ * PATCH /api/vendor/products/:productId/variants/:variantId/status
+ * Toggle variant between active and archived (e.g. vendor temporarily disabling
+ * a variant during a stock shortage). Activation enforces the same rules as
+ * promoting the product to active (price > 0, digital variants require an asset).
+ *
+ * Body: { status: 'active' | 'archived' }
+ */
+router.patch(
+    '/:productId/variants/:variantId/status',
+    requireProductEditable,
+    VendorVariantController.changeStatus,
+);
 
 /**
  * DELETE /api/vendor/products/:productId/variants/:variantId
  * Archive a variant (soft delete)
  */
-router.delete('/:productId/variants/:variantId', VendorVariantController.archiveVariant);
+router.delete('/:productId/variants/:variantId', requireProductEditable, VendorVariantController.archiveVariant);
 
 /**
  * ==========================================
@@ -247,7 +323,7 @@ import { VendorOptionController } from '../controllers/vendor-option.controller'
  * 
  * Body: { name, position? }
  */
-router.post('/:productId/options', VendorOptionController.createOption);
+router.post('/:productId/options', requireProductEditable, VendorOptionController.createOption);
 
 /**
  * GET /api/vendor/products/:productId/options
@@ -261,7 +337,7 @@ router.get('/:productId/options', VendorOptionController.listOptions);
  * 
  * Body: { name?, position? }
  */
-router.patch('/:productId/options/:optionId', VendorOptionController.updateOption);
+router.patch('/:productId/options/:optionId', requireProductEditable, VendorOptionController.updateOption);
 
 /**
  * PUT /api/vendor/products/:productId/options/reorder
@@ -269,13 +345,13 @@ router.patch('/:productId/options/:optionId', VendorOptionController.updateOptio
  * 
  * Body: { optionIds: string[] }
  */
-router.put('/:productId/options/reorder', VendorOptionController.reorderOptions);
+router.put('/:productId/options/reorder', requireProductEditable, VendorOptionController.reorderOptions);
 
 /**
  * DELETE /api/vendor/products/:productId/options/:optionId
  * Delete an option (cascade deletes its values)
  */
-router.delete('/:productId/options/:optionId', VendorOptionController.deleteOption);
+router.delete('/:productId/options/:optionId', requireProductEditable, VendorOptionController.deleteOption);
 
 /**
  * POST /api/vendor/products/:productId/options/:optionId/values
@@ -283,7 +359,7 @@ router.delete('/:productId/options/:optionId', VendorOptionController.deleteOpti
  * 
  * Body: { value }
  */
-router.post('/:productId/options/:optionId/values', VendorOptionController.createOptionValue);
+router.post('/:productId/options/:optionId/values', requireProductEditable, VendorOptionController.createOptionValue);
 
 /**
  * POST /api/vendor/products/:productId/options/:optionId/values/bulk
@@ -291,7 +367,7 @@ router.post('/:productId/options/:optionId/values', VendorOptionController.creat
  * 
  * Body: { values: string[] }
  */
-router.post('/:productId/options/:optionId/values/bulk', VendorOptionController.bulkCreateOptionValues);
+router.post('/:productId/options/:optionId/values/bulk', requireProductEditable, VendorOptionController.bulkCreateOptionValues);
 
 /**
  * GET /api/vendor/products/:productId/options/:optionId/values
@@ -300,10 +376,20 @@ router.post('/:productId/options/:optionId/values/bulk', VendorOptionController.
 router.get('/:productId/options/:optionId/values', VendorOptionController.listOptionValues);
 
 /**
+ * PATCH /api/vendor/products/:productId/options/:optionId/values/:valueId
+ * Rename an option value
+ * 
+ * Body: { value: "New Value" }
+ * 
+ * Safe operation — does not affect variant optionValueIds or optionSignature.
+ */
+router.patch('/:productId/options/:optionId/values/:valueId', requireProductEditable, VendorOptionController.updateOptionValue);
+
+/**
  * DELETE /api/vendor/products/:productId/options/:optionId/values/:valueId
  * Delete an option value
  */
-router.delete('/:productId/options/:optionId/values/:valueId', VendorOptionController.deleteOptionValue);
+router.delete('/:productId/options/:optionId/values/:valueId', requireProductEditable, VendorOptionController.deleteOptionValue);
 
 
 /**
@@ -323,7 +409,7 @@ import { VendorShippingController } from '../controllers/vendor-shipping.control
  *   originZipCode, handlingDays, shippingEnabled
  * }
  */
-router.post('/:id/shipping', VendorShippingController.upsertShippingConfig);
+router.post('/:id/shipping', requireProductEditable, VendorShippingController.upsertShippingConfig);
 
 /**
  * GET /api/vendor/products/:id/shipping
@@ -335,7 +421,7 @@ router.get('/:id/shipping', VendorShippingController.getShippingConfig);
  * DELETE /api/vendor/products/:id/shipping
  * Delete shipping configuration
  */
-router.delete('/:id/shipping', VendorShippingController.deleteShippingConfig);
+router.delete('/:id/shipping', requireProductEditable, VendorShippingController.deleteShippingConfig);
 
 /**
  * ==========================================
@@ -349,7 +435,7 @@ import { VendorAvailabilityController } from '../../booking/controllers/vendor-a
  * POST /api/vendor/products/:id/availability-rules
  * Create availability rule (starts as draft)
  */
-router.post('/:id/availability-rules', VendorAvailabilityController.createRule);
+router.post('/:id/availability-rules', requireProductEditable, VendorAvailabilityController.createRule);
 
 /**
  * GET /api/vendor/products/:id/availability-rules

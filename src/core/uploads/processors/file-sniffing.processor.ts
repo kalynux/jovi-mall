@@ -1,5 +1,6 @@
 import { fileTypeFromBuffer } from 'file-type';
 import { IUploadProcessor, UploadPipelineContext } from '../upload-policy.types';
+import { areMimeTypesEquivalent } from '../mime-aliases';
 
 /**
  * File Sniffing Processor
@@ -48,11 +49,15 @@ export class FileSniffingProcessor implements IUploadProcessor {
         fileContext.mimeType = detectedMimeType;
         fileContext.wasSniffed = true;
 
-        // Check for MIME type mismatch (potential spoofing)
-        if (claimedMimeType !== detectedMimeType) {
-          // Log the mismatch for security monitoring
-          // This is not necessarily malicious (client might have wrong MIME)
-          // But it's important to track for security analysis
+        // Check for MIME type mismatch (potential spoofing).
+        //
+        // Only flag a TRUE mismatch — clients (especially Windows browsers)
+        // routinely send a vendor/legacy synonym of the canonical sniffed type
+        // (e.g. `application/x-zip-compressed` for a real `application/zip`).
+        // Those describe identical bytes and must not be rejected. The
+        // allowlist still validates against the detected type, so suppressing
+        // synonym noise here cannot let a disallowed format through.
+        if (!areMimeTypesEquivalent(claimedMimeType, detectedMimeType)) {
           context.addViolation({
             code: 'MIME_TYPE_MISMATCH',
             message: `MIME type mismatch detected. Claimed: ${claimedMimeType}, Actual: ${detectedMimeType}`,

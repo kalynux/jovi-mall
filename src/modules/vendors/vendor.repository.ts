@@ -67,12 +67,33 @@ export class VendorRepository {
   }
 
   /**
+   * Atomic onboarding update with optional optimistic concurrency check.
+   * When expectedVersion is provided, the update only proceeds if the document's
+   * current version matches — returning null on a version mismatch.
+   */
+  async atomicOnboardingUpdate(
+    vendorId: string,
+    updates: Partial<IVendor>,
+    expectedVersion?: number,
+  ): Promise<IVendor | null> {
+    const filter: Record<string, unknown> = { _id: vendorId };
+    if (expectedVersion !== undefined) {
+      filter.version = expectedVersion;
+    }
+    return await VendorModel.findOneAndUpdate(
+      filter,
+      { $set: updates, $inc: { version: 1 } },
+      { new: true },
+    );
+  }
+
+  /**
    * Set the onboarding step. Called by the service after field-presence recalculation.
    */
   async updateOnboardingStep(vendorId: string, step: number): Promise<IVendor | null> {
     return await VendorModel.findByIdAndUpdate(
       vendorId,
-      { onboarding_step: step },
+      { onboarding_step: step, $inc: { version: 1 } },
       { new: true }
     );
   }

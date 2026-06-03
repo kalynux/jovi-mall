@@ -125,9 +125,9 @@ Called immediately after the user adds the "agency" role. Sets the agency name a
 
 ### Optimistic Concurrency (Optional)
 
-Any `PUT` step endpoint accepts an optional `updated_at` field. If supplied, the backend checks that it matches the profile's current `updated_at` before writing. If it doesn't match (another admin submitted changes simultaneously), the request fails with `DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION (409)`.
+Any `PUT` step endpoint accepts an optional `version` integer field. If supplied, the backend checks that it matches the profile's current `version` before writing. If it doesn't match (another session submitted changes simultaneously), the request fails with `DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION (409)`.
 
-**Best practice:** Always pass `updated_at` from the last profile response you received.
+**Best practice:** Always pass `version` from the last profile response you received. On success, the response includes the incremented `version` — store it for the next write.
 
 ### Re-edit Behaviour
 
@@ -171,7 +171,7 @@ Captures the geographic regions served by the agency and at least one physical h
       }
     }
   ],
-  "updated_at": "2024-05-18T10:00:00Z"
+  "version": 0
 }
 ```
 
@@ -186,7 +186,7 @@ Captures the geographic regions served by the agency and at least one physical h
 | `headquarters_addresses[].address_description` | `string` | Yes | Min 1, Max 200 chars | Full street address / landmark. |
 | `headquarters_addresses[].support_contact.phone` | `string` | Yes | Min 6, Max 20 chars. Regex `/^\+?[0-9\s\-()]+$/` | Phone number for this location. |
 | `headquarters_addresses[].support_contact.email` | `string \| null` | No | Valid email format | Contact email for this location. |
-| `updated_at` | `string (ISO 8601)` | No | Must match profile `updated_at` if provided | Optimistic concurrency guard. |
+| `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard. |
 
 ---
 
@@ -288,7 +288,7 @@ Captures the agency logo and operating timezone. This step is optional — the u
 {
   "logo_url": "https://cdn.example.com/fasttrack-logo.png",
   "timezone": "Africa/Douala",
-  "updated_at": "2024-05-18T10:05:00Z"
+  "version": 1
 }
 ```
 
@@ -309,7 +309,7 @@ Send `skip: true` to bypass this step without providing branding data. The flow 
 | `skip` | `boolean` | No | — | Set `true` to skip this step entirely and advance to Policy Setup. |
 | `logo_url` | `string \| null` | No | Must be a valid absolute URL | Ignored if `skip: true`. |
 | `timezone` | `string` | No | IANA timezone string | Defaults to `"Africa/Douala"` if not provided. Ignored if `skip: true`. |
-| `updated_at` | `string (ISO 8601)` | No | Must match profile `updated_at` if provided | Ignored if `skip: true`. |
+| `version` | `number (integer)` | No | Must match profile `version` if provided | Ignored if `skip: true`. |
 
 ---
 
@@ -363,7 +363,7 @@ This is the final required step. It captures the three policy pillars that gover
       "notes": "Damage claims without original packaging will be rejected."
     }
   },
-  "updated_at": "2024-05-18T10:10:00Z"
+  "version": 2
 }
 ```
 
@@ -518,6 +518,7 @@ All `PUT` step submissions return the full updated profile and a `completionStat
       "timezone": "Africa/Douala",
       "status": "pending_verification",
       "onboardingStep": 0,
+      "version": 4,
       "createdAt": "2024-05-18T10:00:00Z",
       "updatedAt": "2024-05-18T10:15:00Z"
     },
@@ -566,5 +567,5 @@ Returned when the request body fails Zod schema validation. The `details` array 
 | `400` | `DELIVERY_ONBOARDING_STEP_INCOMPLETE` | A prerequisite step has not been completed (e.g. submitting Step 3 before Step 1). | Redirect to the earliest incomplete step. |
 | `400` | `DELIVERY_ONBOARDING_STEP_INVALID` | The payload was sent to the wrong step endpoint. | Check routing logic. |
 | `409` | `DELIVERY_ONBOARDING_ALREADY_COMPLETED` | The agency is fully onboarded; onboarding endpoints are locked. Use the general profile update endpoint instead. | Redirect to dashboard. |
-| `409` | `DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION` | The `updated_at` you sent does not match the server's current value — another session saved changes in the meantime. | Show a prompt: *"Your profile was modified elsewhere. Please refresh and try again."* Then re-fetch the profile and let the user re-submit. |
+| `409` | `DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION` | The `version` you sent does not match the server's current value — another session saved changes in the meantime. | Show a prompt: *"Your profile was modified elsewhere. Please refresh and try again."* Then re-fetch the profile, store the new `version`, and let the user re-submit. |
 | `404` | `DELIVERY_AGENCY_NOT_FOUND` | No agency profile exists for the authenticated user. | Trigger the initialization flow (`POST /api/agency`). |

@@ -1,131 +1,153 @@
 import { Request, Response } from 'express';
-import { Types } from 'mongoose';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { ProductRepositoryMongo } from '../repositories/mongo/product.repository.mongo';
-import { ProductModel } from '../models/product.model';
+import { VariantRepositoryMongo } from '../repositories/mongo/variant.repository.mongo';
+import { FileRepositoryMongo } from '../repositories/mongo/file.repository.mongo';
+import { FileReferenceRepositoryMongo } from '../repositories/mongo/file-reference.repository.mongo';
 import { DigitalAssetService } from '../../digital-delivery/services/digital-asset.service';
-import { ProductDigitalService } from '../domain/services/digital/ProductDigitalService';
+import { VariantDigitalService } from '../domain/services/digital/VariantDigitalService';
+import { ProductStatusValidationService } from '../domain/services/ProductStatusValidationService';
 import { getStorageProvider } from '../../../core/storage';
+import { getDigitalAssetUploadConfig } from '../../../core/uploads/upload-config';
+import { getAcceptableClaimedMimeTypes, isAcceptableClaimedMimeType } from '../../../core/uploads/mime-aliases';
+import { UpdateVariantDigitalConfigSchema } from '../validators/variant.validator';
 
 const productRepository = new ProductRepositoryMongo();
+const variantRepository = new VariantRepositoryMongo();
+const fileRepository = new FileRepositoryMongo();
+const fileReferenceRepository = new FileReferenceRepositoryMongo();
 const storageProvider = getStorageProvider();
-const digitalAssetService = new DigitalAssetService(storageProvider);
-const digitalService = new ProductDigitalService();
+const digitalAssetService = new DigitalAssetService(storageProvider, fileRepository, fileReferenceRepository);
+const variantDigitalService = new VariantDigitalService();
+const productStatusValidationService = new ProductStatusValidationService(productRepository, variantRepository);
 
-// File upload limits (configurable via env)
-const MAX_FILE_SIZE = parseInt(process.env.MAX_DIGITAL_ASSET_SIZE || '524288000'); // 500MB default
-const ALLOWED_MIME_TYPES = [
-    'application/pdf',
-    'application/zip',
-    'application/x-zip-compressed',
-    'application/x-rar-compressed',
-    'application/octet-stream', // Generic binary
-    'video/mp4',
-    'video/quicktime',
-    'audio/mpeg',
-    'audio/wav',
-    'audio/mp3',
-    'image/jpeg',
-    'image/png',
-    'image/gif',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.ms-excel',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-];
+// Pre-upload gate, DERIVED from the digital-asset pipeline config so the two
+// can never drift. The pipeline (UploadIntakeService) remains authoritative:
+// it sniffs the real type and validates it against the same allowlist. This
+// up-front check just rejects an obviously-wrong request cheaply, before the
+// file is buffered through the pipeline.
+const digitalAssetUploadConfig = getDigitalAssetUploadConfig();
+const MAX_FILE_SIZE = digitalAssetUploadConfig.maxTotalSizeBytes;
+const ACCEPTED_CLAIMED_MIME_TYPES = getAcceptableClaimedMimeTypes(
+    Object.keys(digitalAssetUploadConfig.perMimeType),
+);
+
+function assertValidUpload(req: Request): Express.Multer.File {
+    if (!req.file) {
+        throw createAppError(
+            ERROR_CODES.CATALOG_DIGITAL_ASSET_MISSING_FILE,
+            400,
+            'No file uploaded. Use multipart/form-data with field name "file"',
+        );
+    }
+    if (req.files && Array.isArray(req.files) && req.files.length > 1) {
+        throw createAppError(
+            ERROR_CODES.CATALOG_DIGITAL_ASSET_ALREADY_EXISTS,
+            400,
+            'Only one digital asset file is allowed per request',
+        );
+    }
+    const file = req.file;
+    if (file.size > MAX_FILE_SIZE) {
+        throw createAppError(
+            ERROR_CODES.CATALOG_FILE_TOO_LARGE,
+            400,
+            `File size ${file.size} bytes exceeds maximum ${MAX_FILE_SIZE} bytes (${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB)`,
+        );
+    }
+    if (!isAcceptableClaimedMimeType(file.mimetype, ACCEPTED_CLAIMED_MIME_TYPES)) {
+        throw createAppError(
+            ERROR_CODES.CATALOG_FILE_TYPE_INVALID,
+            400,
+            `File type ${file.mimetype} not allowed. Accepted formats: ${Object.keys(digitalAssetUploadConfig.perMimeType).join(', ')}`,
+        );
+    }
+    return file;
+}
 
 /**
  * VendorDigitalAssetController
- * 
- * Manages digital asset upload/replacement/deletion for digital products.
- * Implements transactional guarantees for storage + DB consistency.
+ *
+ * Manages per-variant digital asset upload/replacement/deletion and download-limit
+ * configuration. A digital variant is `status: 'active'` iff it has an assetId; the
+ * service layer maintains that invariant.
  */
 export class VendorDigitalAssetController {
     /**
-     * POST /api/vendor/products/:id/digital/asset
-     * Upload digital asset for a product
-     * 
-     * TRANSACTIONAL FLOW:
-     * 1. Validate product exists + ownership + type
-     * 2. Validate file (size, mime type)
-     * 3. Upload to storage (with rollback on failure)
-     * 4. Create DB records (DigitalAsset + File)
-     * 5. Link to product digitalConfig
-     * 6. On any failure, cleanup storage
+     * POST /api/vendor/products/:productId/variants/:variantId/digital/asset
+     * Upload a digital asset for a specific variant.
      */
     static uploadAsset = asyncHandler(async (req: Request, res: Response) => {
-        let uploadedFileKey: string | null = null;
         const vendorId = req.auth!.role_entity._id.toString();
-        const { id: productId } = req.params;
+        const { productId, variantId } = req.params;
 
         const product = await productRepository.findById(productId, vendorId);
         if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
-        if (product.type !== 'digital')
-            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE, 400, 'Only digital products can have digital assets');
-        if (product.digitalConfig?.assetId)
-            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_ALREADY_EXISTS, 409, 'Product already has a digital asset. Use PUT to replace it.');
-        if (!req.file)
-            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_MISSING_FILE, 400, 'No file uploaded. Use multipart/form-data with field name "file"');
-        if (req.files && Array.isArray(req.files) && req.files.length > 1)
-            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_ALREADY_EXISTS, 400, 'Only one digital asset file is allowed per request');
+        if (product.type !== 'digital') {
+            throw createAppError(
+                ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
+                400,
+                'Only digital products can have digital assets',
+            );
+        }
 
-        const file = req.file;
-        if (file.size > MAX_FILE_SIZE)
-            throw createAppError(ERROR_CODES.CATALOG_FILE_TOO_LARGE, 400, `File size ${file.size} bytes exceeds maximum ${MAX_FILE_SIZE} bytes (${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB)`);
-        if (!ALLOWED_MIME_TYPES.includes(file.mimetype))
-            throw createAppError(ERROR_CODES.CATALOG_FILE_TYPE_INVALID, 400, `File type ${file.mimetype} not allowed. Allowed types: ${ALLOWED_MIME_TYPES.join(', ')}`);
+        const file = assertValidUpload(req);
 
-        const asset = await digitalAssetService.uploadAsset(vendorId, { buffer: file.buffer, originalName: file.originalname, mimeType: file.mimetype });
-        uploadedFileKey = asset.fileId.toString();
+        const asset = await digitalAssetService.uploadAsset(vendorId, {
+            buffer: file.buffer,
+            originalName: file.originalname,
+            mimeType: file.mimetype,
+        });
 
-        await digitalService.createOrUpdateDigitalConfig(productId, vendorId, { assetId: asset._id.toString(), maxDownloads: null, expiresAfterDays: null });
+        await variantDigitalService.attachAssetToVariant(productId, variantId, vendorId, asset);
 
-        res.status(201).json({ success: true, data: { assetId: asset._id, filename: asset.originalName, size: asset.size, mimeType: asset.mimeType }, message: 'Digital asset uploaded successfully' });
+        res.status(201).json({
+            success: true,
+            data: {
+                variantId,
+                assetId: asset._id,
+                filename: asset.originalName,
+                size: asset.size,
+                mimeType: asset.mimeType,
+            },
+            message: 'Digital asset uploaded successfully',
+        });
     });
 
     /**
-     * PUT /api/vendor/products/:id/digital/asset
-     * Replace existing digital asset
-     * 
-     * TRANSACTIONAL FLOW:
-     * 1. Validate product + ownership + type
-     * 2. Validate old asset exists
-     * 3. Upload new file
-     * 4. Create new DB records
-     * 5. Update product digitalConfig to new asset
-     * 6. Delete old asset (file + DB)
-     * 7. On failure, rollback new upload
+     * PUT /api/vendor/products/:productId/variants/:variantId/digital/asset
+     * Replace the existing digital asset on a variant.
      */
     static replaceAsset = asyncHandler(async (req: Request, res: Response) => {
-        // let newAssetId: string | null;
-        // let oldAssetId: string | null;
         const vendorId = req.auth!.role_entity._id.toString();
-        const { id: productId } = req.params;
+        const { productId, variantId } = req.params;
 
         const product = await productRepository.findById(productId, vendorId);
         if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
-        if (product.type !== 'digital')
-            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE, 400, 'Only digital products can have digital assets');
-        if (!product.digitalConfig?.assetId)
-            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_MISSING, 404, 'Product has no digital asset to replace. Use POST to upload.');
+        if (product.type !== 'digital') {
+            throw createAppError(
+                ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
+                400,
+                'Only digital products can have digital assets',
+            );
+        }
 
-        const oldAssetId = product.digitalConfig.assetId.toString();
+        const file = assertValidUpload(req);
 
-        if (!req.file)
-            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_MISSING_FILE, 400, 'No file uploaded');
+        const newAsset = await digitalAssetService.uploadAsset(vendorId, {
+            buffer: file.buffer,
+            originalName: file.originalname,
+            mimeType: file.mimetype,
+        });
 
-        const file = req.file;
-        if (file.size > MAX_FILE_SIZE)
-            throw createAppError(ERROR_CODES.CATALOG_FILE_TOO_LARGE, 400, `File exceeds maximum size of ${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB`);
-        if (!ALLOWED_MIME_TYPES.includes(file.mimetype))
-            throw createAppError(ERROR_CODES.CATALOG_FILE_TYPE_INVALID, 400, `File type ${file.mimetype} not allowed`);
-
-        const newAsset = await digitalAssetService.uploadAsset(vendorId, { buffer: file.buffer, originalName: file.originalname, mimeType: file.mimetype });
-        const newAssetId = newAsset._id.toString();
-
-        await digitalService.createOrUpdateDigitalConfig(productId, vendorId, { assetId: newAssetId, maxDownloads: product.digitalConfig.maxDownloads, expiresAfterDays: product.digitalConfig.expiresAfterDays });
+        const { oldAssetId } = await variantDigitalService.replaceVariantAsset(
+            productId,
+            variantId,
+            vendorId,
+            newAsset,
+        );
 
         try {
             await digitalAssetService.deleteAsset(oldAssetId, vendorId);
@@ -133,54 +155,76 @@ export class VendorDigitalAssetController {
             console.error('[VendorDigitalAssetController] Failed to delete old asset:', deleteError);
         }
 
-        res.json({ success: true, data: { assetId: newAsset._id, filename: newAsset.originalName, size: newAsset.size, mimeType: newAsset.mimeType }, message: 'Digital asset replaced successfully' });
+        res.json({
+            success: true,
+            data: {
+                variantId,
+                assetId: newAsset._id,
+                filename: newAsset.originalName,
+                size: newAsset.size,
+                mimeType: newAsset.mimeType,
+            },
+            message: 'Digital asset replaced successfully',
+        });
     });
 
     /**
-     * PATCH /api/vendor/products/:id/digital/toggle
-     * Toggle digital asset availability (isActive flag)
-     * 
-     * Quick enable/disable without requiring full product update.
-     * Useful for vendors who need to temporarily disable downloads.
-     */
-    static toggleAvailability = asyncHandler(async (req: Request, res: Response) => {
-        const vendorId = req.auth!.role_entity._id.toString();
-        const { id: productId } = req.params;
-
-        const product = await ProductModel.findOne({ _id: productId, vendorId: new Types.ObjectId(vendorId), deletedAt: null });
-        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
-        if (product.type !== 'digital')
-            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE, 400, 'Only digital products can have digital assets toggled');
-        if (!product.digitalConfig)
-            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_CONFIG_MISSING, 404, 'Product has no digital configuration');
-
-        const newState = !product.digitalConfig.isActive;
-        product.digitalConfig.isActive = newState;
-        await product.save();
-
-        res.json({ success: true, data: { isActive: newState, message: newState ? 'Digital asset enabled - customers can now download' : 'Digital asset disabled - downloads are temporarily blocked' }, message: 'Digital asset availability toggled successfully' });
-    });
-
-    /**
-     * DELETE /api/vendor/products/:id/digital/asset
-     * Remove digital asset (unlink from product + soft delete)
+     * DELETE /api/vendor/products/:productId/variants/:variantId/digital/asset
+     * Remove the digital asset from a variant. The variant is archived as a result
+     * (a digital variant cannot be active without an asset).
      */
     static removeAsset = asyncHandler(async (req: Request, res: Response) => {
         const vendorId = req.auth!.role_entity._id.toString();
-        const { id: productId } = req.params;
+        const { productId, variantId } = req.params;
 
         const product = await productRepository.findById(productId, vendorId);
         if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
-        if (product.type !== 'digital' || !product.digitalConfig)
-            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_CONFIG_MISSING, 400, 'Product has no digital configuration');
-        if (!product.digitalConfig.assetId)
-            throw createAppError(ERROR_CODES.CATALOG_DIGITAL_ASSET_MISSING, 404, 'Product has no digital asset to remove');
+        if (product.type !== 'digital') {
+            throw createAppError(
+                ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
+                400,
+                'Only digital products can have digital assets',
+            );
+        }
 
-        const assetId = product.digitalConfig.assetId.toString();
-        await digitalService.deactivateDigitalConfig(productId, vendorId);
-        await digitalAssetService.deleteAsset(assetId, vendorId);
+        const { assetId } = await variantDigitalService.clearVariantAsset(productId, variantId, vendorId);
+
+        // Variant is now archived. If this leaves the product without an active
+        // variant carrying an asset, the product can no longer be 'active' —
+        // demote it to 'draft'.
+        await productStatusValidationService.revalidateActiveStatus(productId, vendorId);
+
+        try {
+            await digitalAssetService.deleteAsset(assetId, vendorId);
+        } catch (deleteError) {
+            console.error('[VendorDigitalAssetController] Failed to delete asset:', deleteError);
+        }
 
         res.json({ success: true, message: 'Digital asset removed successfully' });
     });
-}
 
+    /**
+     * PATCH /api/vendor/products/:productId/variants/:variantId/digital/config
+     * Update download limits (maxDownloads, expiresAfterDays) for a variant.
+     * Does not touch the asset itself.
+     */
+    static updateDigitalConfig = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { productId, variantId } = req.params;
+        const input = UpdateVariantDigitalConfigSchema.parse(req.body);
+
+        const product = await productRepository.findById(productId, vendorId);
+        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+        if (product.type !== 'digital') {
+            throw createAppError(
+                ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
+                400,
+                'Only digital products can have variant digital config',
+            );
+        }
+
+        await variantDigitalService.updateVariantDigitalConfig(productId, variantId, vendorId, input);
+
+        res.json({ success: true, message: 'Variant digital config updated' });
+    });
+}

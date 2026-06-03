@@ -222,6 +222,16 @@ const files = await uploadIntakeService.execute({
 // Throws UploadPolicyViolationError with MIME_TYPE_MISMATCH
 ```
 
+**Synonyms are tolerated.** The same format is labelled differently by
+different clients/OSes (e.g. Windows sends `application/x-zip-compressed` for a
+real `application/zip`, and `application/octet-stream`/`application/x-compressed`
+are unspecified generic claims). These are NOT spoofs — they describe identical
+bytes — so they do **not** raise `MIME_TYPE_MISMATCH`. The equivalence rules
+live in `mime-aliases.ts` (`areMimeTypesEquivalent`). Crucially, the allowlist
+(`MimeTypeValidator`) always validates against the **detected** type, so
+widening the synonym set can never let a disallowed format through — a spoofed
+file still fails on its real sniffed type.
+
 ### File Fingerprinting
 
 ```typescript

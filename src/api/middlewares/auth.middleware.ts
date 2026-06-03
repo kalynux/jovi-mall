@@ -61,34 +61,51 @@ function extractToken(req: Request): string | null {
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
   const token = extractToken(req);
 
-  if (!token) {
-    return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
-  }
-
   let payload: AuthUserPayload;
 
-  try {
-    payload = jwt.verify(token, process.env.JWT_SECRET || 'secret') as AuthUserPayload;
-  } catch (err: any) {
-    // Access token is expired — attempt a silent, transparent refresh
-    if (err.name === 'TokenExpiredError') {
-      const refreshToken = req.cookies?.[AUTH_COOKIE.REFRESH];
+  if (!token) {
+    // Access token cookie was deleted by the browser after expiry.
+    // Attempt a silent refresh before rejecting the request.
+    const refreshToken = req.cookies?.[AUTH_COOKIE.REFRESH];
 
-      if (!refreshToken) {
-        return next(createAppError(ERROR_CODES.AUTH_TOKEN_EXPIRED, 401));
-      }
+    console.log('No access token — attempting silent refresh. refreshToken:', refreshToken);
 
-      try {
-        const refreshed = await authService.rotateRefreshToken(refreshToken);
-        // Issue new access_token cookie transparently
-        res.cookie(AUTH_COOKIE.ACCESS, refreshed.accessToken, accessCookieOptions);
-        payload = jwt.decode(refreshed.accessToken) as AuthUserPayload;
-      } catch {
-        return next(createAppError(ERROR_CODES.AUTH_SESSION_EXPIRED, 401));
+    if (!refreshToken) {
+      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
+    }
+
+    try {
+      const refreshed = await authService.rotateRefreshToken(refreshToken);
+      // Issue new access_token cookie transparently
+      res.cookie(AUTH_COOKIE.ACCESS, refreshed.accessToken, accessCookieOptions);
+      payload = jwt.decode(refreshed.accessToken) as AuthUserPayload;
+    } catch {
+      return next(createAppError(ERROR_CODES.AUTH_SESSION_EXPIRED, 401));
+    }
+  } else {
+    try {
+      payload = jwt.verify(token, process.env.JWT_SECRET || 'secret') as AuthUserPayload;
+    } catch (err: any) {
+      // Access token is present but expired — attempt a silent, transparent refresh
+      if (err.name === 'TokenExpiredError') {
+        const refreshToken = req.cookies?.[AUTH_COOKIE.REFRESH];
+
+        if (!refreshToken) {
+          return next(createAppError(ERROR_CODES.AUTH_TOKEN_EXPIRED, 401));
+        }
+
+        try {
+          const refreshed = await authService.rotateRefreshToken(refreshToken);
+          // Issue new access_token cookie transparently
+          res.cookie(AUTH_COOKIE.ACCESS, refreshed.accessToken, accessCookieOptions);
+          payload = jwt.decode(refreshed.accessToken) as AuthUserPayload;
+        } catch {
+          return next(createAppError(ERROR_CODES.AUTH_SESSION_EXPIRED, 401));
+        }
+      } else {
+        // Token is corrupted, tampered, or uses an invalid signature
+        return next(createAppError(ERROR_CODES.AUTH_TOKEN_INVALID, 401));
       }
-    } else {
-      // Token is corrupted, tampered, or uses an invalid signature
-      return next(createAppError(ERROR_CODES.AUTH_TOKEN_INVALID, 401));
     }
   }
 

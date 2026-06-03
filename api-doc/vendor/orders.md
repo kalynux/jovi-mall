@@ -18,6 +18,28 @@ All requests must include a valid Bearer token with vendor role:
 Authorization: Bearer <access_token>
 ```
 
+---
+
+## Actions Overview
+
+| Action | Method | Endpoint | Physical | Digital |
+|--------|--------|----------|----------|---------|
+| List orders | `GET` | `/api/vendor/orders` | ✅ | ✅ |
+| Get order details | `GET` | `/api/vendor/orders/:id` | ✅ | ✅ |
+| Update fulfillment status | `PATCH` | `/api/vendor/orders/:id/status` | ✅ | ✅ |
+| Add internal note | `POST` | `/api/vendor/orders/:id/notes` | ✅ | ✅ |
+| Get internal notes | `GET` | `/api/vendor/orders/:id/notes` | ✅ | ✅ |
+| Get single note | `GET` | `/api/vendor/orders/:id/notes/:noteId` | ✅ | ✅ |
+| View timeline / audit trail | `GET` | `/api/vendor/orders/:id/timeline` | ✅ | ✅ |
+| Assign delivery agency | `PATCH` | `/api/vendor/orders/:id/delivery-agency` | ✅ | ❌ |
+| View digital entitlements | `GET` | `/api/vendor/orders/:id/entitlements` | ❌ | ✅ |
+| Revoke digital entitlement | `POST` | `/api/vendor/entitlements/:id/revoke` | ❌ | ✅ |
+| Restore digital entitlement | `POST` | `/api/vendor/entitlements/:id/restore` | ❌ | ✅ |
+
+> Notes are also embedded inside `GET /orders/:id` response — the dedicated notes endpoint is useful when polling for note updates without re-fetching the full order.
+
+---
+
 ## Endpoints
 
 ### GET /api/vendor/orders
@@ -34,6 +56,7 @@ Authorization: Bearer <access_token>
 **Query Parameters**:
 - `status` (string, optional) - Filter by order status. Enum: `pending`, `processing`, `shipped`, `delivered`, `fulfilled`, `cancelled`
 - `paymentStatus` (string, optional) - Filter by payment status. Enum: `pending`, `AWAITING_PAYMENT`, `paid`, `failed`, `refunded`
+- `orderType` (string, optional) - Filter by order type. Enum: `physical`, `digital`
 - `dateFrom` (string, optional) - Filter orders from date (ISO 8601 format)
 - `dateTo` (string, optional) - Filter orders to date (ISO 8601 format)
 - `q` (string, optional, max 100 chars) - Search query (order number, customer name, etc.)
@@ -54,25 +77,31 @@ Body:
   "success": true,
   "data": [
     {
-      "_id": "string",
+      "id": "string",
       "orderNumber": "string",
-      "status": "pending",
+      "orderType": "physical",
+      "fulfillmentStatus": "pending",
       "paymentStatus": "paid",
-      "totalAmount": 150.00,
       "customer": {
-        "name": "string",
-        "email": "string"
+        "id": "string",
+        "name": "Jane Doe",
+        "email": "jane@example.com",
+        "avatar": "https://..."
       },
+      "subtotal": 100.00,
+      "tax": 10.00,
+      "shipping": 0,
+      "total": 110.00,
+      "currency": "XAF",
       "itemCount": 3,
-      "created_at": "2026-02-09T23:54:00.000Z",
-      "updated_at": "2026-02-09T23:54:00.000Z"
+      "createdAt": "2026-02-09T23:54:00.000Z"
     }
   ],
   "meta": {
     "total": 50,
     "page": 1,
     "limit": 20,
-    "totalPages": 3
+    "pages": 3
   }
 }
 ```
@@ -107,39 +136,85 @@ Body:
 {
   "success": true,
   "data": {
-    "_id": "string",
+    "id": "string",
     "orderNumber": "string",
-    "status": "processing",
+    "orderType": "physical",
+    "fulfillmentStatus": "processing",
     "paymentStatus": "paid",
-    "totalAmount": 150.00,
+    "paymentIntentId": "string",
     "customer": {
-      "_id": "string",
-      "name": "string",
-      "email": "string",
-      "phone": "string"
+      "id": "string",
+      "name": "Jane Doe",
+      "email": "jane@example.com",
+      "phone": "+237600000000",
+      "avatar": "https://...",
+      "orderCount": 5,
+      "totalSpent": 75000
+    },
+    "shippingAddress": {
+      "street": "123 Main Street",
+      "city": "Douala",
+      "state": "Littoral",
+      "country": "CM"
     },
     "items": [
       {
+        "id": "string",
         "productId": "string",
-        "productName": "string",
         "variantId": "string",
+        "title": "string",
+        "variantTitle": "string",
+        "sku": "string",
+        "optionsSnapshot": "Color:Red;Size:M",
         "quantity": 2,
         "price": 50.00,
-        "subtotal": 100.00
+        "subtotal": 100.00,
+        "currency": "XAF"
       }
     ],
-    "shippingAddress": {
-      "street": "string",
-      "city": "string",
-      "state": "string",
-      "zipCode": "string",
-      "country": "string"
+    "priceBreakdown": {
+      "base": 100.00,
+      "tax": 10.00,
+      "discount": 0.00,
+      "shipping": 0,
+      "total": 110.00
     },
-    "created_at": "2026-02-09T23:54:00.000Z",
-    "updated_at": "2026-02-09T23:54:00.000Z"
+    "totalAmount": 110.00,
+    "currency": "XAF",
+    "delivery": {
+      "agencyId": "507f1f77bcf86cd799439099",
+      "agencyName": "FastShip Logistics",
+      "agencyPhone": "+237600000000",
+      "deliveryStatus": "assigned",
+      "shipmentId": "507f1f77bcf86cd799439100",
+      "agent": {
+        "id": "507f1f77bcf86cd799439101",
+        "name": "John Doe",
+        "phone": "+237600000001",
+        "avatarUrl": "https://..."
+      }
+    },
+    "notes": [
+      {
+        "id": "string",
+        "message": "Customer requested gift wrapping",
+        "authorId": "string",
+        "createdAt": "2026-02-09T23:54:00.000Z"
+      }
+    ],
+    "createdAt": "2026-02-09T23:54:00.000Z",
+    "updatedAt": "2026-02-09T23:54:00.000Z"
   }
 }
 ```
+
+> **Notes:**
+> - `customer.orderCount` and `customer.totalSpent` reflect only orders with **this vendor** (not lifetime totals across all vendors).
+> - `customer.*` fields are `null` if the customer profile cannot be resolved.
+> - `shippingAddress` is derived from the customer's default saved address. It is `null` if the customer has no address on file. Field mapping: `address_line1` → `street`.
+> - `delivery` is `null` for digital orders. `delivery.agent` is `null` until an agent is assigned to the shipment.
+> - `delivery.deliveryStatus` reflects the per-item delivery status: `pending`, `assigned`, `picked_up`, `in_transit`, `delivered`, `failed`, or `returned`.
+> - `priceBreakdown.shipping` is always `0` — shipping cost tracking is not yet implemented in the order schema.
 
 **Error Responses**:
 - `404` – `NOT_FOUND` – Order not found or does not belong to vendor
@@ -173,17 +248,13 @@ Body:
 Status: `200 OK`
 
 Body:
+
+The response is the full updated order details object (same shape as `GET /api/vendor/orders/:id`).
+
 ```json
 {
   "success": true,
-  "data": {
-    "_id": "string",
-    "orderNumber": "string",
-    "status": "shipped",
-    "paymentStatus": "paid",
-    "totalAmount": 150.00,
-    "updated_at": "2026-02-09T23:54:00.000Z"
-  },
+  "data": { "...same as GET /api/vendor/orders/:id data..." },
   "message": "Order status updated to 'shipped'"
 }
 ```
@@ -226,13 +297,13 @@ Body:
     {
       "_id": "string",
       "orderId": "string",
-      "eventType": "status_changed",
+      "eventType": "fulfillment.updated",
       "oldValue": "pending",
       "newValue": "processing",
       "actor": {
         "type": "vendor",
         "id": "string",
-        "name": "string"
+        "name": "Vendor Business Name"
       },
       "created_at": "2026-02-09T23:54:00.000Z"
     }
@@ -241,10 +312,27 @@ Body:
     "total": 15,
     "page": 1,
     "limit": 20,
-    "totalPages": 1
+    "pages": 1
   }
 }
 ```
+
+**`eventType` values**:
+
+| Value | Produces `oldValue`/`newValue` | Description |
+|-------|-------------------------------|-------------|
+| `order.created` | — | Order was placed |
+| `payment.updated` | — | Payment status changed |
+| `fulfillment.updated` | ✅ Previous/new fulfillment status | Fulfillment status changed |
+| `delivery.agency_updated` | — | Delivery agency assigned or changed |
+| `note.added` | `noteId` populated | Vendor internal note added |
+| `entitlement.revoked` | — | Digital entitlement revoked |
+| `entitlement.restored` | — | Digital entitlement restored |
+| `system.action` | — | Automated system event |
+
+> `oldValue` and `newValue` are only populated for `fulfillment.updated` events. For all other event types they are `null`.
+> `noteId` is only populated for `note.added` events — use it with `GET /orders/:id/notes/:noteId` to fetch the full note content.
+> `actor.id` and `actor.name` are `null` for `system` events.
 
 **Error Responses**:
 - `404` – `NOT_FOUND` – Order not found or does not belong to vendor
@@ -283,12 +371,10 @@ Body:
 {
   "success": true,
   "data": {
-    "_id": "string",
-    "orderId": "string",
+    "id": "string",
     "message": "Customer requested gift wrapping",
     "authorId": "string",
-    "authorName": "string",
-    "created_at": "2026-02-09T23:54:00.000Z"
+    "createdAt": "2026-02-09T23:54:00.000Z"
   },
   "message": "Note added successfully"
 }
@@ -326,12 +412,10 @@ Body:
   "success": true,
   "data": [
     {
-      "_id": "string",
-      "orderId": "string",
+      "id": "string",
       "message": "Customer requested gift wrapping",
       "authorId": "string",
-      "authorName": "string",
-      "created_at": "2026-02-09T23:54:00.000Z"
+      "createdAt": "2026-02-09T23:54:00.000Z"
     }
   ]
 }
@@ -339,6 +423,46 @@ Body:
 
 **Error Responses**:
 - `404` – `NOT_FOUND` – Order not found or does not belong to vendor
+
+---
+
+### GET /api/vendor/orders/:id/notes/:noteId
+
+**Description**: Get a single vendor-internal note by its ID. Intended for use when the frontend reads a `note.added` timeline event and wants to display the full note content without re-fetching all notes.
+
+**Authorization**: Vendor access required.
+
+**Request Headers**:
+- `Authorization: Bearer <token>`
+
+**Path Parameters**:
+- `id` (string, required) - Order ID
+- `noteId` (string, required) - Note ID (found in `noteId` field of `note.added` timeline events)
+
+**Query Parameters**: None
+
+**Request Body**: None
+
+**Success Response**:
+
+Status: `200 OK`
+
+Body:
+```json
+{
+  "success": true,
+  "data": {
+    "id": "string",
+    "orderId": "string",
+    "message": "Customer requested gift wrapping",
+    "authorId": "string",
+    "createdAt": "2026-02-09T23:54:00.000Z"
+  }
+}
+```
+
+**Error Responses**:
+- `404` – `NOT_FOUND` – Note not found or does not belong to this vendor
 
 ---
 
@@ -367,14 +491,13 @@ Body:
 Status: `200 OK`
 
 Body:
+
+The response is the full updated order details object (same shape as `GET /api/vendor/orders/:id`), with the `delivery.agencyId` and `delivery.agencyName` fields now reflecting the new agency.
+
 ```json
 {
   "success": true,
-  "data": {
-    "_id": "string",
-    "deliveryAgencyId": "507f1f77bcf86cd799439099",
-    "updated_at": "2026-02-09T23:54:00.000Z"
-  },
+  "data": { "...same as GET /api/vendor/orders/:id data..." },
   "message": "Delivery agency updated successfully"
 }
 ```
@@ -410,24 +533,42 @@ Body:
   "success": true,
   "data": [
     {
-      "_id": "507f1f77bcf86cd799439050",
-      "orderId": "string",
+      "id": "507f1f77bcf86cd799439050",
+      "orderItemId": "string",
       "productId": "string",
+      "productTitle": "E-book: Advanced TypeScript",
+      "variantId": "string",
+      "variantName": "PDF Edition",
+      "assetId": "string",
+      "assetName": "advanced-typescript.pdf",
       "customerId": "string",
-      "status": "active",
-      "downloadCount": 2,
+      "downloadsUsed": 2,
       "maxDownloads": 5,
+      "downloadsRemaining": 3,
+      "grantedAt": "2026-02-09T23:54:00.000Z",
       "expiresAt": "2027-02-09T23:54:00.000Z",
       "revokedAt": null,
-      "revokeReason": null,
-      "createdAt": "2026-02-09T23:54:00.000Z"
+      "lastDownloadAt": "2026-03-01T10:00:00.000Z",
+      "isActive": true,
+      "isRevoked": false,
+      "isExpired": false
     }
-  ]
+  ],
+  "meta": {
+    "count": 1,
+    "activeCount": 1,
+    "revokedCount": 0,
+    "expiredCount": 0
+  }
 }
 ```
 
+> `downloadsRemaining` is the string `"unlimited"` when `maxDownloads` is `null`.
+> `variantId`/`variantName` identify which **format** of the digital product was purchased (e.g. "PDF Edition" vs "Source Code (ZIP)"). Each entitlement maps to exactly one variant's asset, with `maxDownloads`/`expiresAt` snapshotted from that variant at purchase time. See the [Digital Products Guide](./digital-products.md).
+
 **Error Responses**:
 - `404` – `NOT_FOUND` – Order not found or does not belong to vendor
+- `400` – `INVALID_PRODUCT_TYPE` – Order is not a digital order
 
 ---
 
@@ -465,10 +606,10 @@ Body:
 {
   "success": true,
   "data": {
-    "_id": "507f1f77bcf86cd799439050",
-    "status": "revoked",
+    "id": "507f1f77bcf86cd799439050",
     "revokedAt": "2026-02-09T23:54:00.000Z",
-    "revokeReason": "Customer requested refund"
+    "reason": "Customer requested refund",
+    "message": "Entitlement revoked successfully"
   },
   "message": "Entitlement revoked successfully"
 }
@@ -476,6 +617,7 @@ Body:
 
 **Error Responses**:
 - `404` – `NOT_FOUND` – Entitlement not found or does not belong to vendor's order
+- `422` – `DIGITAL_ENTITLEMENT_ALREADY_REVOKED` – Entitlement is already revoked
 - `400` – `VALIDATION_ERROR` – Missing or empty reason
 
 ---
@@ -495,7 +637,18 @@ Body:
 **Path Parameters**:
 - `id` (string, required) - Entitlement ID
 
-**Request Body**: None
+**Request Headers**:
+- `Authorization: Bearer <token>`
+- `Content-Type: application/json`
+
+**Request Body**:
+```json
+{
+  "reason": "Customer issue resolved"
+}
+```
+
+- `reason` (**required**, string) - Reason for restoration (logged in audit trail)
 
 **Success Response**:
 
@@ -506,10 +659,10 @@ Body:
 {
   "success": true,
   "data": {
-    "_id": "507f1f77bcf86cd799439050",
-    "status": "active",
-    "revokedAt": null,
-    "revokeReason": null
+    "id": "507f1f77bcf86cd799439050",
+    "restoredAt": "2026-02-09T23:54:00.000Z",
+    "reason": "Customer issue resolved",
+    "message": "Entitlement restored successfully"
   },
   "message": "Entitlement restored successfully"
 }
@@ -517,8 +670,9 @@ Body:
 
 **Error Responses**:
 - `404` – `NOT_FOUND` – Entitlement not found or does not belong to vendor's order
-- `400` – `ENTITLEMENT_EXPIRED` – Entitlement has expired and cannot be restored
-- `400` – `ENTITLEMENT_NOT_REVOKED` – Entitlement is not currently revoked
+- `422` – `DIGITAL_ENTITLEMENT_NOT_REVOKED` – Entitlement is not currently revoked
+- `422` – `DIGITAL_ENTITLEMENT_EXPIRED` – Entitlement has expired and cannot be restored
+- `400` – `VALIDATION_ERROR` – Missing or empty reason
 
 ---
 

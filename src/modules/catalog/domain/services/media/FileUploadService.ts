@@ -74,7 +74,6 @@ export class FileUploadService {
       size: result.size,
       checksum: result.checksum,
       originalName: command.originalName,
-      usageCount: 0, // initially no references until attached
       ownerType: command.vendorId ? 'vendor' : 'system',
       ownerId: command.vendorId,
       deletedAt: null,

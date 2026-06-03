@@ -1,18 +1,40 @@
 import { Types } from 'mongoose';
 import { DigitalAssetModel, IDigitalAsset } from '../models/digital-asset.model';
-import { FileModel } from '../../catalog/models/file.model';
 import { IStorageProvider } from '../../../core/storage/storage-provider.interface';
+import { IFileRepository } from '../../catalog/repositories/interfaces/file.repository.interface';
+import { IFileReferenceRepository } from '../../catalog/repositories/interfaces/file-reference.repository.interface';
+import { UploadIntakeService } from '../../../core/uploads/upload-intake.service';
+import { getDigitalAssetUploadConfig } from '../../../core/uploads/upload-config';
+import { NoopObserver } from '../../../core/uploads/observers/noop-observer';
+import { MockScanner } from '../../../core/uploads/scanners/mock-scanner';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
  * DigitalAssetService - Vendor file management
- * 
+ *
  * Handles upload, deletion, and retrieval of digital assets for vendors.
  * Ensures proper ownership checks and prevents deletion of assets in use.
+ *
+ * Uploads go through {@link UploadIntakeService} (magic-byte sniffing, virus
+ * scan, fingerprinting) — the storage provider is never written to directly.
  */
 export class DigitalAssetService {
-  constructor(private readonly storageProvider: IStorageProvider) { }
+  private readonly uploadIntakeService: UploadIntakeService;
+
+  constructor(
+    storageProvider: IStorageProvider,
+    private readonly fileRepository: IFileRepository,
+    private readonly fileReferenceRepository: IFileReferenceRepository,
+  ) {
+    this.uploadIntakeService = new UploadIntakeService(
+      getDigitalAssetUploadConfig(),
+      storageProvider,
+      fileRepository,
+      new NoopObserver(),
+      new MockScanner(),
+    );
+  }
 
   /**
    * Upload a digital asset for a vendor
@@ -24,33 +46,40 @@ export class DigitalAssetService {
     vendorId: string,
     file: { buffer: Buffer; originalName: string; mimeType: string }
   ): Promise<IDigitalAsset> {
-    // Upload to storage provider
-    const uploadResult = await this.storageProvider.put(file.buffer, {
+    // Route through the security pipeline. This creates the File record
+    // (owned by the vendor, no references yet) after sniffing + scanning.
+    const [fileRecord] = await this.uploadIntakeService.execute({
       folder: 'digital',
-      mimeType: file.mimeType,
-      filename: file.originalName,
+      context: { userId: vendorId, vendorId, role: 'vendor' },
+      files: [{
+        buffer: file.buffer,
+        originalName: file.originalName,
+        mimeType: file.mimeType,
+      }],
     });
 
-    // Create File record
-    const fileRecord = await FileModel.create({
-      key: uploadResult.key,
-      provider: this.storageProvider.getProviderType(),
-      mimeType: uploadResult.mimeType,
-      size: uploadResult.size,
-      checksum: uploadResult.checksum,
-      originalName: file.originalName,
-      isOrphan: false, // Will be linked to digital asset
-      ownerType: 'vendor',
-      ownerId: new Types.ObjectId(vendorId),
-    });
+    if (!fileRecord) {
+      throw createAppError(ERROR_CODES.STORAGE_UPLOAD_FAILED, 500, 'Digital asset upload produced no file');
+    }
 
     // Create DigitalAsset record
     const digitalAsset = await DigitalAssetModel.create({
       vendorId: new Types.ObjectId(vendorId),
-      fileId: fileRecord._id,
+      fileId: new Types.ObjectId(fileRecord.id),
       originalName: file.originalName,
-      mimeType: uploadResult.mimeType,
-      size: uploadResult.size,
+      mimeType: fileRecord.mimeType,
+      size: fileRecord.size,
+    });
+
+    // The DigitalAsset is the single reference to this File — register it so the
+    // orphan garbage collector won't reclaim the file while the asset is live.
+    await this.fileReferenceRepository.add({
+      fileId: fileRecord.id,
+      entityType: 'digital_asset',
+      entityId: digitalAsset._id.toString(),
+      field: 'digitalAsset',
+      ownerType: 'vendor',
+      ownerId: vendorId,
     });
 
     return digitalAsset;
@@ -77,26 +106,24 @@ export class DigitalAssetService {
       throw createAppError(ERROR_CODES.DIGITAL_ASSET_ACCESS_DENIED, 403, 'Unauthorized: You do not own this asset');
     }
 
-    // Check if asset is in use by any product
-    const { ProductModel } = await import('../../catalog/models/product.model');
-    const inUse = await ProductModel.findOne({
+    // Check if asset is in use by any variant. Assets live per-variant now.
+    const { ProductVariantModel } = await import('../../catalog/models/product-variant.model');
+    const inUse = await ProductVariantModel.findOne({
       'digitalConfig.assetId': asset._id,
       deletedAt: null,
     });
 
     if (inUse) {
-      throw createAppError(ERROR_CODES.DIGITAL_ASSET_IN_USE, 409, 'Cannot delete asset: It is currently linked to one or more products');
+      throw createAppError(ERROR_CODES.DIGITAL_ASSET_IN_USE, 409, 'Cannot delete asset: It is currently linked to one or more product variants');
     }
 
     // Soft delete the asset
     asset.deletedAt = new Date();
     await asset.save();
 
-    // Mark file as orphan (will be cleaned up by garbage collector)
-    await FileModel.updateOne(
-      { _id: asset.fileId },
-      { $set: { isOrphan: true } }
-    );
+    // Release the File reference. Once the file has no live references the orphan
+    // garbage collector will reclaim it. Idempotent — safe if already removed.
+    await this.fileReferenceRepository.removeAllForEntity('digital_asset', asset._id.toString());
   }
 
   /**

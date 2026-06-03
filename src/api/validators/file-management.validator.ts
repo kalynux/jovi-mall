@@ -7,15 +7,50 @@ import { z } from 'zod';
  */
 
 /**
+ * Broad media categories mapped onto MIME types so callers can filter by the
+ * kind of media without knowing exact MIME strings. The concrete MIME matching
+ * for each category lives in the controller (`MEDIA_CATEGORY_MATCHERS`).
+ */
+export const MEDIA_CATEGORIES = ['image', 'video', 'audio', 'document', 'archive', 'other'] as const;
+
+/**
  * List Files Query Parameters
  * GET /api/files
+ *
+ * Supports pagination, full-text-style search on the file name, and filtering
+ * by file characteristics (MIME type / category, provider, owner, size range,
+ * upload date range) plus sorting.
  */
 export const ListFilesQuerySchema = z.object({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(50).default(20),
+
+    // Search: case-insensitive substring match on originalName.
+    search: z.string().trim().min(1).max(255).optional(),
+
+    // Characteristic filters.
     mimeType: z.string().optional(),
+    category: z.enum(MEDIA_CATEGORIES).optional(),
     provider: z.enum(['local', 's3', 'gcs', 'r2', 'firebase', 'cloudinary']).optional(),
-});
+    ownerType: z.enum(['vendor', 'admin', 'customer', 'agent', 'agency', 'system']).optional(),
+    minSize: z.coerce.number().int().min(0).optional(),
+    maxSize: z.coerce.number().int().min(0).optional(),
+    createdAfter: z.coerce.date().optional(),
+    createdBefore: z.coerce.date().optional(),
+
+    // Sorting.
+    sortBy: z.enum(['createdAt', 'updatedAt', 'size', 'originalName']).default('createdAt'),
+    sortOrder: z.enum(['asc', 'desc']).default('desc'),
+})
+    .refine(
+        (data) => data.minSize === undefined || data.maxSize === undefined || data.minSize <= data.maxSize,
+        { message: 'minSize must be less than or equal to maxSize', path: ['minSize'] },
+    )
+    .refine(
+        (data) =>
+            !data.createdAfter || !data.createdBefore || data.createdAfter <= data.createdBefore,
+        { message: 'createdAfter must be on or before createdBefore', path: ['createdAfter'] },
+    );
 
 export type ListFilesQuery = z.infer<typeof ListFilesQuerySchema>;
 

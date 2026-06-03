@@ -35,7 +35,7 @@ function loadStorageConfig(): StorageConfig {
     // Load local storage config (always available as fallback)
     config.local = {
         basePath: process.env.STORAGE_LOCAL_PATH || './storage',
-        baseUrl: process.env.STORAGE_LOCAL_URL || 'http://localhost:3000/storage',
+        baseUrl: process.env.STORAGE_LOCAL_URL || 'http://localhost:8022/api/files',
     };
 
     // Load Firebase config if available

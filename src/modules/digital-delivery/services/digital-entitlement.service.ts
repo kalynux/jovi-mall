@@ -26,28 +26,23 @@ export class DigitalEntitlementService {
   async grantEntitlement(
     dto: GrantEntitlementDto
   ): Promise<ICustomerDigitalEntitlement> {
-    // Load product to get digitalConfig
+    // Product-wide kill switch — vendor can disable all downloads via this flag.
     const { ProductModel } = await import('../../catalog/models/product.model');
-    const product = await ProductModel.findOne({
+    const productActive = await ProductModel.exists({
       _id: new Types.ObjectId(dto.productId),
       type: 'digital',
+      'digitalConfig.isActive': true,
       deletedAt: null,
     });
 
-    if (!product || !product.digitalConfig) {
-      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_CONFIG_MISSING, 400, 'No active digital product configuration found for this product');
+    if (!productActive) {
+      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_CONFIG_INACTIVE, 400, 'Digital product is not active');
     }
 
-    if (!product.digitalConfig.isActive) {
-      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_CONFIG_INACTIVE, 400, 'Digital product configuration is not active');
-    }
-
-    const config = product.digitalConfig;
-
-    // Compute expiry
+    // Compute expiry from the snapshotted variant config in dto.
     let expiresAt: Date | null = null;
-    if (config.expiresAfterDays !== null) {
-      const daysInMs = config.expiresAfterDays * 24 * 60 * 60 * 1000;
+    if (dto.expiresAfterDays !== null) {
+      const daysInMs = dto.expiresAfterDays * 24 * 60 * 60 * 1000;
       expiresAt = new Date(Date.now() + daysInMs);
     }
 
@@ -57,11 +52,12 @@ export class DigitalEntitlementService {
         orderId: new Types.ObjectId(dto.orderId),
         orderItemId: new Types.ObjectId(dto.orderItemId),
         productId: new Types.ObjectId(dto.productId),
-        assetId: config.assetId,
+        variantId: new Types.ObjectId(dto.variantId),
+        assetId: new Types.ObjectId(dto.assetId),
         customerId: new Types.ObjectId(dto.customerId),
         vendorId: new Types.ObjectId(dto.vendorId),
         downloadsUsed: 0,
-        maxDownloads: config.maxDownloads,
+        maxDownloads: dto.maxDownloads,
         expiresAt,
         revokedAt: null,
       });
@@ -101,6 +97,7 @@ export class DigitalEntitlementService {
       deletedAt: null,
     })
       .populate('productId', 'title')
+      .populate('variantId', 'name sku')
       .populate('assetId', 'originalName')
       .sort({ createdAt: -1 });
 
@@ -115,10 +112,12 @@ export class DigitalEntitlementService {
 
       return {
         id: e.id,
-        productId: e.productId.id,
-        productTitle: e.productId.title,
-        assetId: e.assetId.id,
-        originalName: e.assetId.originalName,
+        productId: e.productId?.id ?? e.productId?.toString(),
+        productTitle: e.productId?.title,
+        variantId: e.variantId?.id ?? e.variantId?.toString(),
+        variantName: e.variantId?.name ?? e.variantId?.sku,
+        assetId: e.assetId?.id ?? e.assetId?.toString(),
+        originalName: e.assetId?.originalName,
         downloadsUsed: e.downloadsUsed,
         maxDownloads: e.maxDownloads,
         expiresAt: e.expiresAt,

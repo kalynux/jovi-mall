@@ -3,6 +3,96 @@ import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
 import { PayoutDetailsSchema, IPayoutDetails } from '../../core/types/payout.types';
 import { VendorOnboardingStep } from '../../core/constants/onboarding-steps';
 
+// ─── Vendor Policy Sub-Schemas ────────────────────────────────────────────────
+
+const VendorReturnPolicySchema = new Schema(
+  {
+    return_eligible: { type: Boolean, required: true, default: true },
+    return_window_days: { type: Number, required: true, min: 0, max: 180, default: 14 },
+    refund_type: { type: String, enum: ['full', 'partial', 'none'], required: true, default: 'full' },
+    refund_percentage: { type: Number, min: 0, max: 100, default: null },
+    return_shipping_payer: {
+      type: String,
+      enum: ['vendor', 'customer', 'customer_reimbursed_if_defect'],
+      required: true,
+      default: 'customer',
+    },
+    refund_processing_days: { type: Number, required: true, min: 1, max: 30, default: 7 },
+    return_condition_notes: { type: String, default: null, maxlength: 500, trim: true },
+    /** Admin-controlled. Defaults to 'admin'. Vendors cannot change this. */
+    inspector: { type: String, enum: ['admin', 'vendor', 'platform'], default: 'admin' },
+  },
+  { _id: false },
+);
+
+const VendorCancellationPolicySchema = new Schema(
+  {
+    cancellable: { type: Boolean, required: true, default: true },
+    cancellation_deadline: {
+      type: String,
+      enum: [
+        'within_1_hour',
+        'within_24_hours',
+        'before_vendor_confirmation',
+        'before_service_start',
+        'anytime_until_days_before_delivery',
+      ],
+      default: null,
+    },
+    cancellation_deadline_days: { type: Number, min: 0, default: null },
+    cancellation_fee_type: {
+      type: String,
+      enum: ['none', 'fixed', 'percentage', 'full_non_refundable'],
+      default: 'none',
+    },
+    cancellation_fee_value: { type: Number, min: 0, default: null },
+    late_cancellation_refund_type: {
+      type: String,
+      enum: ['fixed', 'percentage', 'full_non_refundable'],
+      default: null,
+    },
+    late_cancellation_refund_value: { type: Number, min: 0, default: null },
+  },
+  { _id: false },
+);
+
+const VendorSupportChannelSchema = new Schema(
+  {
+    type: { type: String, enum: ['email', 'phone', 'whatsapp', 'telegram'], required: true },
+    contact: { type: String, required: true, trim: true },
+  },
+  { _id: false },
+);
+
+const VendorSupportPolicySchema = new Schema(
+  {
+    channels: { type: [VendorSupportChannelSchema], default: [] },
+    eligibility_notes: { type: String, default: null, maxlength: 500, trim: true },
+    required_info: {
+      type: [String],
+      enum: ['order_number', 'product_photo_video', 'tracking_number'],
+      default: [],
+    },
+    availability: {
+      type: String,
+      enum: ['24_7', 'business_hours', 'limited'],
+      default: null,
+    },
+    availability_description: { type: String, default: null, maxlength: 200, trim: true },
+    languages: { type: [String], default: [] },
+  },
+  { _id: false },
+);
+
+const VendorPoliciesSchema = new Schema(
+  {
+    return_policy: { type: VendorReturnPolicySchema, default: null },
+    cancellation_policy: { type: VendorCancellationPolicySchema, default: null },
+    support_policy: { type: VendorSupportPolicySchema, default: null },
+  },
+  { _id: false },
+);
+
 // ─── Operating Hours Sub-Schema ───────────────────────────────────────────────
 
 const OperatingHoursSchema = new Schema(
@@ -69,7 +159,49 @@ const SocialLinksSchema = new Schema(
   { _id: false }
 );
 
-// ─── Interface ────────────────────────────────────────────────────────────────
+// ─── Interfaces ───────────────────────────────────────────────────────────────
+
+export interface IVendorReturnPolicy {
+  return_eligible: boolean;
+  return_window_days: number;
+  refund_type: 'full' | 'partial' | 'none';
+  refund_percentage: number | null;
+  return_shipping_payer: 'vendor' | 'customer' | 'customer_reimbursed_if_defect';
+  refund_processing_days: number;
+  return_condition_notes: string | null;
+  /** Admin-controlled. Never set by vendor input. Defaults to 'admin'. */
+  inspector?: 'admin' | 'vendor' | 'platform';
+}
+
+export interface IVendorCancellationPolicy {
+  cancellable: boolean;
+  cancellation_deadline: 'within_1_hour' | 'within_24_hours' | 'before_vendor_confirmation' | 'before_service_start' | 'anytime_until_days_before_delivery' | null;
+  cancellation_deadline_days: number | null;
+  cancellation_fee_type: 'none' | 'fixed' | 'percentage' | 'full_non_refundable' | null;
+  cancellation_fee_value: number | null;
+  late_cancellation_refund_type: 'fixed' | 'percentage' | 'full_non_refundable' | null;
+  late_cancellation_refund_value: number | null;
+}
+
+export interface IVendorSupportChannel {
+  type: 'email' | 'phone' | 'whatsapp' | 'telegram';
+  contact: string;
+}
+
+export interface IVendorSupportPolicy {
+  channels: IVendorSupportChannel[];
+  eligibility_notes: string | null;
+  required_info: Array<'order_number' | 'product_photo_video' | 'tracking_number'>;
+  availability: '24_7' | 'business_hours' | 'limited' | null;
+  availability_description: string | null;
+  languages: string[];
+}
+
+export interface IVendorPolicies {
+  return_policy: IVendorReturnPolicy | null;
+  cancellation_policy: IVendorCancellationPolicy | null;
+  support_policy: IVendorSupportPolicy | null;
+}
 
 export interface IVendorBusinessAddress {
   _id: mongoose.Types.ObjectId;
@@ -120,6 +252,7 @@ export interface IVendor extends Document {
   payout_details: IPayoutDetails | null;
   kyc_details: IVendorKycDetails;
   social_links: IVendorSocialLinks;
+  policies: IVendorPolicies | null;
   /** @deprecated Use kyc_details.legit_verified instead. Kept for query backward compatibility during migration. */
   legit_verified: boolean;
   default_delivery_agency_id?: mongoose.Types.ObjectId | null;
@@ -174,6 +307,7 @@ const VendorSchema = new Schema<IVendor>(
       type: SocialLinksSchema,
       default: () => ({ instagram: null, facebook: null, twitter: null }),
     },
+    policies: { type: VendorPoliciesSchema, default: null },
     /**
      * @deprecated Kept for backward compatibility. Always mirrors kyc_details.legit_verified.
      * The single source of truth is kyc_details.legit_verified.

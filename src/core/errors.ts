@@ -399,6 +399,7 @@ export function createAppError(
     [ERROR_CODES.MAIL_TEMPLATE_NOT_FOUND]: 'Mail template not found',
 
     [ERROR_CODES.VENDOR_FISCAL_CALENDAR_INVALID]: 'Invalid fiscal calendar configuration',
+    [ERROR_CODES.VENDOR_ONBOARDING_CONCURRENT_MODIFICATION]: 'Vendor profile was modified by another request. Please refresh and try again.',
 
     [ERROR_CODES.CATALOG_INSUFFICIENT_STOCK]: 'Insufficient stock available',
     [ERROR_CODES.CATALOG_OVERSALE_NOT_ALLOWED]: 'Operation would result in negative stock. Overselling not allowed.',
@@ -432,6 +433,7 @@ export function createAppError(
     [ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED]: 'catalog product access denied',
     [ERROR_CODES.CATALOG_PRODUCT_INVALID_STATE]: 'catalog product invalid state',
     [ERROR_CODES.CATALOG_PRODUCT_INVALID_TITLE]: 'catalog product invalid title',
+    [ERROR_CODES.CATALOG_PRODUCT_NO_DESCRIPTION]: 'A description is required to activate or publish a product',
     [ERROR_CODES.CATALOG_PRODUCT_ALREADY_PUBLISHED]: 'catalog product already published',
     [ERROR_CODES.CATALOG_PRODUCT_NO_VARIANTS]: 'catalog product no variants',
     [ERROR_CODES.CATALOG_PRODUCT_NO_DEFAULT_VARIANT]: 'catalog product no default variant',
@@ -452,6 +454,7 @@ export function createAppError(
     [ERROR_CODES.CATALOG_VARIANT_INSUFFICIENT_STOCK]: 'catalog variant insufficient stock',
     [ERROR_CODES.CATALOG_VARIANT_UNSUPPORTED_TYPE]: 'catalog variant unsupported type',
     [ERROR_CODES.CATALOG_VARIANT_NO_DIGITAL_ASSET]: 'catalog variant no digital asset',
+    [ERROR_CODES.CATALOG_DIGITAL_VARIANT_LIMIT_EXCEEDED]: 'Digital products are limited to 5 active variants',
     [ERROR_CODES.CATALOG_VARIANT_INVALID_QUANTITY]: 'catalog variant invalid quantity',
     [ERROR_CODES.CATALOG_VARIANT_STOCK_ONLY_PHYSICAL]: 'catalog variant stock only physical',
     [ERROR_CODES.CATALOG_VARIANT_RESERVATION_CONFLICT]: 'catalog variant reservation conflict',

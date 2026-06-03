@@ -1,0 +1,141 @@
+import { Product } from '../repositories/mappers/product.mapper';
+import { Variant } from '../repositories/mappers/variant.mapper';
+import { FileRepositoryMongo } from '../repositories/mongo/file.repository.mongo';
+import { DigitalAssetModel } from '../../digital-delivery/models/digital-asset.model';
+import { IStorageProvider } from '../../../core/storage/storage-provider.interface';
+import { FileDetail, AssetDetail } from './product-detail.read-model';
+
+/**
+ * Fetch File documents for an array of IDs and compute their public URLs.
+ * Files not found (deleted, invalid ID) are silently omitted.
+ */
+async function buildFileDetails(
+  fileIds: string[],
+  fileRepo: FileRepositoryMongo,
+  storage: IStorageProvider,
+): Promise<FileDetail[]> {
+  if (fileIds.length === 0) return [];
+  const results = await Promise.all(fileIds.map(id => fileRepo.findById(id)));
+  return results
+    .filter((f): f is NonNullable<typeof f> => f !== null)
+    .map(f => ({
+      id: f.id,
+      key: f.key,
+      url: storage.getPublicUrl(f.key),
+      mimeType: f.mimeType,
+      size: f.size,
+      originalName: f.originalName,
+    }));
+}
+
+function humanFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  const rounded = value >= 10 || unit === 0 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded} ${units[unit]}`;
+}
+
+function mimeSubtype(mime: string): string {
+  const slash = mime.indexOf('/');
+  return slash === -1 ? mime : mime.slice(slash + 1);
+}
+
+/**
+ * Enriched product response — replaces bare fileIds with populated details.
+ *
+ * - `files` replaces `fileIds` (gallery/cover images with URLs)
+ * - `digitalConfig` retains only the product-wide `isActive` toggle.
+ *   Per-variant asset/limits are surfaced via EnrichedVariant.digital.
+ */
+export type EnrichedProduct = Omit<Product, 'fileIds'> & {
+  files: FileDetail[];
+};
+
+export async function enrichProduct(
+  product: Product,
+  fileRepo: FileRepositoryMongo,
+  storage: IStorageProvider,
+): Promise<EnrichedProduct> {
+  const files = await buildFileDetails(product.fileIds, fileRepo, storage);
+  const { fileIds: _dropped, ...rest } = product;
+  return { ...rest, files };
+}
+
+/**
+ * Enriched variant response — replaces bare fileIds with populated file details
+ * and resolves the digital asset reference (if any) into a populated AssetDetail.
+ *
+ * - `files` replaces `fileIds` (variant-specific images with URLs)
+ * - `displayName` falls back to "<asset.originalName> - <format> - <size>" when
+ *   variant.name is unset (or to productTitle as a final fallback if no asset yet)
+ * - `digital` populates the asset + limits for digital variants
+ */
+export type EnrichedVariant = Omit<Variant, 'fileIds' | 'digitalConfig'> & {
+  files: FileDetail[];
+  displayName: string;
+  digital?: {
+    asset?: AssetDetail;
+    maxDownloads: number | null;
+    expiresAfterDays: number | null;
+  };
+};
+
+export async function enrichVariant(
+  variant: Variant,
+  fileRepo: FileRepositoryMongo,
+  storage: IStorageProvider,
+  productTitle?: string,
+): Promise<EnrichedVariant> {
+  const files = await buildFileDetails(variant.fileIds, fileRepo, storage);
+
+  let digital: EnrichedVariant['digital'];
+  let asset: AssetDetail | undefined;
+  if (variant.digitalConfig) {
+    if (variant.digitalConfig.assetId) {
+      const doc = await DigitalAssetModel.findOne({
+        _id: variant.digitalConfig.assetId,
+        deletedAt: null,
+      }).lean();
+      if (doc) {
+        asset = {
+          id: doc._id.toString(),
+          originalName: doc.originalName,
+          mimeType: doc.mimeType,
+          size: doc.size,
+        };
+      }
+    }
+    digital = {
+      asset,
+      maxDownloads: variant.digitalConfig.maxDownloads ?? null,
+      expiresAfterDays: variant.digitalConfig.expiresAfterDays ?? null,
+    };
+  }
+
+  // Display name fallback: explicit name -> asset-derived label -> product title -> sku.
+  let displayName = variant.name ?? '';
+  if (!displayName && asset) {
+    displayName = `${asset.originalName} - ${mimeSubtype(asset.mimeType)} - ${humanFileSize(asset.size)}`;
+  }
+  if (!displayName) {
+    displayName = productTitle ?? variant.sku;
+  }
+
+  const { fileIds: _dropped, digitalConfig: _dc, ...rest } = variant;
+  return { ...rest, files, displayName, digital };
+}
+
+export async function enrichVariants(
+  variants: Variant[],
+  fileRepo: FileRepositoryMongo,
+  storage: IStorageProvider,
+  productTitle?: string,
+): Promise<EnrichedVariant[]> {
+  return Promise.all(variants.map(v => enrichVariant(v, fileRepo, storage, productTitle)));
+}

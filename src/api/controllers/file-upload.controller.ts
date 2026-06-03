@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { UploadIntakeService } from '../../core/uploads/upload-intake.service';
 import { loadUploadConfig } from '../../core/uploads/upload-config';
@@ -50,7 +50,7 @@ export class FileUploadController {
      * POST /api/files/upload
      * Upload 1-10 files with role-based size limits
      */
-    static async uploadFiles(req: Request, res: Response): Promise<void> {
+    static async uploadFiles(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
             const userRole = req.auth!.role;
             const userId = req.auth!.user._id.toString();
@@ -137,28 +137,11 @@ export class FileUploadController {
                     roleLimit: `${maxFileSize / (1024 * 1024)} MB`,
                 },
             });
-        } catch (error: any) {
-            console.error('[FileUploadController] Upload error:', error);
-
-            // Handle specific errors
-            if (error.name === 'UploadPolicyViolationError') {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'UPLOAD_POLICY_VIOLATION',
-                        message: error.message,
-                    },
-                });
-                return;
-            }
-
-            res.status(500).json({
-                success: false,
-                error: {
-                    code: 'UPLOAD_FAILED',
-                    message: 'File upload failed',
-                },
-            });
+        } catch (error) {
+            // Forward to the global error handler, which normalises AppError
+            // (including its `details`, e.g. the per-file policy violations) into
+            // the standard response envelope. See error-handler.middleware.ts.
+            next(error);
         }
     }
 }

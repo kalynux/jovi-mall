@@ -1,14 +1,14 @@
 import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
-import { IVariantRepository } from '../../repositories/interfaces/variant.repository.interface';
 import { Product } from '../../repositories/mappers/product.mapper';
 import { SlugService } from './SlugService';
+import { FileReferenceService } from './media/FileReferenceService';
+import { assertProductImageLimit } from './media/image-limits';
 
+// Per-variant asset/limits live on ProductVariant.digitalConfig now.
+// Only the product-wide `isActive` kill switch is updatable here.
 export interface UpdateDigitalConfigDto {
-  assetId?: string;
-  maxDownloads?: number | null;
-  expiresAfterDays?: number | null;
   isActive?: boolean;
 }
 
@@ -19,16 +19,21 @@ export interface UpdateServiceConfigDto {
   bookingMode?: 'calendar' | 'manual' | 'capacity';
 }
 
+export interface UpdateDeliveryConfigDto {
+  agencyId: string | null;
+}
+
 export interface UpdateProductCommand {
   title?: string;
   description?: string;
-  images?: string[];
+  fileIds?: string[];            // Full array replacement for product media
   category?: string;
   tags?: string[];
   seoTitle?: string;
   seoDescription?: string;
   digitalConfig?: UpdateDigitalConfigDto;
   serviceConfig?: UpdateServiceConfigDto;
+  delivery?: UpdateDeliveryConfigDto;
   regenerateSlug?: boolean;
 }
 
@@ -38,8 +43,8 @@ export interface UpdateProductCommand {
 export class ProductUpdateService {
   constructor(
     private readonly productRepository: IProductRepository,
-    private readonly variantRepository: IVariantRepository,
-    private readonly slugService: SlugService
+    private readonly slugService: SlugService,
+    private readonly fileReferenceService: FileReferenceService
   ) { }
 
   async execute(
@@ -74,6 +79,12 @@ export class ProductUpdateService {
     if (command.category !== undefined) updates.category = command.category;
     if (command.tags !== undefined) updates.tags = command.tags;
 
+    // Full array replacement — frontend must send the complete desired array
+    if (command.fileIds !== undefined) {
+      assertProductImageLimit(product.type, command.fileIds.length);
+      updates.fileIds = command.fileIds;
+    }
+
     if (command.seoTitle !== undefined || command.seoDescription !== undefined) {
       updates.seo = {
         ...product.seo,
@@ -84,52 +95,35 @@ export class ProductUpdateService {
 
     if (command.digitalConfig !== undefined && product.type === 'digital') {
       updates.digitalConfig = { ...product.digitalConfig, ...command.digitalConfig } as any;
-
-      if (product.status === 'draft' && !product.hasVariants && !product.defaultVariantId) {
-        const defaultVariant = await this.variantRepository.create({
-          productId,
-          sku: `${product.slug}-default`,
-          name: 'Default',
-          status: 'active',
-          optionSignature: '',
-          price: 0,
-          stock: 0,
-          isInfiniteStock: true,
-          lowStockThreshold: null,
-          allowOversell: false,
-          optionValueIds: [],
-          fileIds: [],
-          deletedAt: null,
-          purgeAt: null,
-        });
-        updates.hasVariants = true;
-        updates.defaultVariantId = defaultVariant.id;
-      }
     }
 
     if (command.serviceConfig !== undefined && product.type === 'service') {
       updates.serviceConfig = { ...product.serviceConfig, ...command.serviceConfig } as any;
+    }
 
-      if (product.status === 'draft' && !product.hasVariants && !product.defaultVariantId) {
-        const defaultVariant = await this.variantRepository.create({
-          productId,
-          sku: `${product.slug}-default`,
-          name: 'Standard Service',
-          status: 'active',
-          optionSignature: '',
-          price: 0,
-          stock: 0,
-          isInfiniteStock: true,
-          lowStockThreshold: null,
-          allowOversell: false,
-          optionValueIds: [],
-          fileIds: [],
-          deletedAt: null,
-          purgeAt: null,
-        });
-        updates.hasVariants = true;
-        updates.defaultVariantId = defaultVariant.id;
+    if (command.delivery !== undefined) {
+      if (product.type !== 'physical') {
+        throw createAppError(
+          ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
+          400,
+          'Delivery configuration only applies to physical products',
+        );
       }
+      // Persistence uses snake_case (agency_id) — see product.model.ts schema.
+      (updates as any).delivery = { agency_id: command.delivery.agencyId };
+    }
+
+    // Keep file references in sync with the replaced media array. Runs before the
+    // product write so an unauthorized file reference is rejected before it is
+    // ever persisted.
+    if (command.fileIds !== undefined) {
+      await this.fileReferenceService.reconcile({
+        previousFileIds: product.fileIds ?? [],
+        nextFileIds: command.fileIds,
+        vendorId,
+        entityType: 'product',
+        entityId: productId,
+      });
     }
 
     const updatedProduct = await this.productRepository.update(productId, vendorId, updates);

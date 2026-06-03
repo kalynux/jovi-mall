@@ -1,7 +1,7 @@
 # File Management Service API Documentation
 
-**Version:** 1.0  
-**Last Updated:** 2026-02-13  
+**Version:** 1.1  
+**Last Updated:** 2026-06-03  
 **Audience:** Frontend Developers, Backend Engineers, Platform Documentation
 
 ---
@@ -84,10 +84,30 @@ Return File entities
 
 ### Reference Counting
 Files track how many entities reference them via `usageCount`:
-- **Increment**: When file is attached to product/variant
-- **Decrement**: When file is detached from product/variant
+- **Increment**: When file is attached to product/variant (or a digital asset is created)
+- **Decrement**: When file is detached from product/variant (or a digital asset is deleted)
 - **Atomic**: Uses MongoDB `$inc` operator to prevent race conditions
 - **Deletion Rule**: Files can only be soft-deleted when `usageCount === 0`
+
+**How counts are maintained:** The catalog write endpoints treat `fileIds` as a
+full-array replacement and reconcile the difference against `usageCount`:
+
+| Endpoint                                                  | Effect on counts                                              |
+|-----------------------------------------------------------|--------------------------------------------------------------|
+| `POST /api/vendor/products` (with `fileIds`)              | Increments each attached file.                               |
+| `PATCH /api/vendor/products/:id` (`fileIds`)              | Increments newly-added, decrements removed.                  |
+| `PATCH /api/vendor/products/:pid/variants/:vid` (`fileIds`)| Increments newly-added, decrements removed.                 |
+| `POST /api/vendor/products/:id/duplicate`                 | Increments each file the clone inherits.                     |
+| Digital asset upload / delete                             | Increments on upload, decrements on delete.                  |
+
+Newly-attached files are authorized before they are persisted: a file must be
+owned by the acting vendor (or be a `system` file), otherwise the request is
+rejected with `403`.
+
+> **Legacy data note:** attachments created before reference-counting was
+> enforced have `usageCount: 0`. The first detach of such a file is tolerated
+> (the decrement is skipped rather than erroring), so existing products remain
+> editable. A one-off backfill is required to make historical counts exact.
 
 ---
 
@@ -186,15 +206,69 @@ files: File[] (max 10 files)
 ```
 
 **400 - Upload Policy Violation:**
+
+Unlike the three errors above (which are returned directly by the controller with a
+minimal `{ code, message }` body), the policy-violation error flows through the
+**global error handler**, so it follows the [standard error envelope](../errors/README.md)
+— it includes `requestId`, `statusCode`, and a `details.violations` array that
+explains, **per file**, exactly what failed. Use `details.violations` to drive
+per-file UI messaging rather than the generic top-level `message`.
+
 ```json
 {
   "success": false,
+  "requestId": "req-7f3c9a2b",
   "error": {
     "code": "UPLOAD_POLICY_VIOLATION",
-    "message": "File type not allowed: application/x-executable"
+    "message": "Upload policy violations found",
+    "statusCode": 400,
+    "details": {
+      "violations": [
+        {
+          "code": "MIME_NOT_ALLOWED",
+          "message": "File type not allowed: application/x-executable",
+          "fileIndex": 0,
+          "metadata": { "detectedMimeType": "application/x-executable" }
+        },
+        {
+          "code": "DUPLICATE_FILE",
+          "message": "This file has already been uploaded",
+          "fileIndex": 2
+        }
+      ]
+    }
   }
 }
 ```
+
+**`details.violations[]` shape:**
+
+| Field        | Type     | Description                                                                                  |
+|--------------|----------|----------------------------------------------------------------------------------------------|
+| `code`       | string   | Machine-readable violation reason (see table below). Drive UI/i18n off this, not `message`.  |
+| `message`    | string   | Human-readable fallback message for this specific violation.                                 |
+| `fileIndex`  | number?  | 0-based index into the uploaded `files` array this violation applies to. Absent for request-wide violations (e.g. `TOTAL_SIZE_EXCEEDED`, `QUOTA_EXCEEDED`). |
+| `metadata`   | object?  | Optional extra context (e.g. detected MIME type, size, limit) for richer messaging.          |
+
+**Violation `code` values:**
+
+| Code                  | Meaning                                                                 |
+|-----------------------|-------------------------------------------------------------------------|
+| `FILE_TOO_LARGE`      | A file exceeds the configured size limit.                               |
+| `MIME_NOT_ALLOWED`    | The detected MIME type is not in the allow-list.                        |
+| `TOO_MANY_FILES`      | More files than the per-request limit.                                  |
+| `QUOTA_EXCEEDED`      | The actor's storage quota would be exceeded.                            |
+| `VIRUS_DETECTED`      | Virus scanner flagged the file.                                         |
+| `PERMISSION_DENIED`   | The actor is not permitted to upload this file.                         |
+| `TOTAL_SIZE_EXCEEDED` | Combined size of all files in the request exceeds the limit.            |
+| `DUPLICATE_FILE`      | The file (by checksum) was already uploaded.                            |
+| `MIME_TYPE_MISMATCH`  | Declared MIME type does not match the sniffed content.                  |
+| `POLYGLOT_DETECTED`   | File is a polyglot (valid as multiple types) — rejected as unsafe.      |
+| `UNDETECTABLE_TYPE`   | The real file type could not be determined.                             |
+
+> Because multiple files are validated together, a single request can return
+> several violations across different `fileIndex` values. Show each file's own
+> error next to its preview using `fileIndex`.
 
 **Side Effects:**
 1. File uploaded to storage provider
@@ -209,17 +283,60 @@ files: File[] (max 10 files)
 
 #### GET /api/files
 
-List files uploaded by the authenticated user (admins see all files).
+List files uploaded by the authenticated user (admins see all files). Supports
+**name search**, **characteristic filtering**, and **sorting**. All parameters
+are optional and combine with AND semantics (a file must match every supplied
+filter). Filters always apply *on top of* the ownership scope, so non-admins can
+only ever search/filter within their own files.
 
 **Authentication:** Required
 
 **Query Parameters:**
-| Parameter | Type   | Required | Default | Description                     |
-|-----------|--------|----------|---------|---------------------------------|
-| page      | number | No       | 1       | Page number (min: 1)            |
-| limit     | number | No       | 20      | Items per page (1-50)           |
-| mimeType  | string | No       | -       | Filter by MIME type             |
-| provider  | string | No       | -       | Filter by provider (local, s3, etc.) |
+| Parameter      | Type   | Required | Default     | Description                                                                                 |
+|----------------|--------|----------|-------------|---------------------------------------------------------------------------------------------|
+| page           | number | No       | 1           | Page number (min: 1)                                                                         |
+| limit          | number | No       | 20          | Items per page (1-50)                                                                        |
+| search         | string | No       | -           | Case-insensitive substring match on `originalName` (1-255 chars). Special chars are escaped. |
+| mimeType       | string | No       | -           | Filter by exact MIME type (e.g. `image/jpeg`). Takes precedence over `category`.            |
+| category       | enum   | No       | -           | Broad media category: `image`, `video`, `audio`, `document`, `archive`, `other`. Ignored if `mimeType` is set. |
+| provider       | enum   | No       | -           | Filter by storage provider (`local`, `s3`, `gcs`, `r2`, `firebase`, `cloudinary`).          |
+| ownerType      | enum   | No       | -           | Filter by uploader type (`vendor`, `admin`, `customer`, `agent`, `agency`, `system`). Mainly useful for admins. |
+| minSize        | number | No       | -           | Minimum file size in **bytes** (inclusive).                                                  |
+| maxSize        | number | No       | -           | Maximum file size in **bytes** (inclusive).                                                  |
+| createdAfter   | date   | No       | -           | Only files uploaded on/after this ISO-8601 date.                                             |
+| createdBefore  | date   | No       | -           | Only files uploaded on/before this ISO-8601 date.                                            |
+| sortBy         | enum   | No       | `createdAt` | Sort field: `createdAt`, `updatedAt`, `size`, `originalName`.                                |
+| sortOrder      | enum   | No       | `desc`      | Sort direction: `asc` or `desc`.                                                             |
+
+**Media category → MIME mapping (`category`):**
+
+| Category   | Matches                                                                                                   |
+|------------|-----------------------------------------------------------------------------------------------------------|
+| `image`    | Any `image/*` MIME type.                                                                                   |
+| `video`    | Any `video/*` MIME type.                                                                                   |
+| `audio`    | Any `audio/*` MIME type.                                                                                   |
+| `document` | PDF, Word, Excel, PowerPoint (legacy + OOXML), RTF, plain text, CSV.                                       |
+| `archive`  | ZIP, RAR, 7z, TAR, GZIP.                                                                                   |
+| `other`    | Anything not matched by the categories above (negation of all known image/video/audio/document/archive types). |
+
+**Validation:**
+- `minSize` must be ≤ `maxSize` when both are provided (`400 VALIDATION_ERROR` otherwise).
+- `createdAfter` must be on/before `createdBefore` when both are provided (`400 VALIDATION_ERROR` otherwise).
+
+**Example Requests:**
+```http
+# Search owned files by name
+GET /api/files?search=invoice
+
+# All images larger than 1 MB, newest first
+GET /api/files?category=image&minSize=1048576&sortBy=createdAt&sortOrder=desc
+
+# PDFs uploaded in May 2026, sorted by name
+GET /api/files?category=document&createdAfter=2026-05-01&createdBefore=2026-05-31&sortBy=originalName&sortOrder=asc
+
+# Admin: every vendor-owned file on Cloudinary
+GET /api/files?ownerType=vendor&provider=cloudinary
+```
 
 **Success Response (200):**
 ```json
@@ -284,10 +401,31 @@ Retrieve metadata for a single file by ID.
     "ownerType": "vendor",
     "ownerId": "65e1a2b3c4d5e6f7a8b9c0d1",
     "createdAt": "2026-02-13T06:00:00Z",
-    "updatedAt": "2026-02-13T06:00:00Z"
+    "updatedAt": "2026-02-13T06:00:00Z",
+    "usage": {
+      "totalReferences": 2,
+      "products": [
+        { "id": "65e1a2b3c4d5e6f7a8b9c0d2", "title": "Premium Cotton T-Shirt", "type": "physical", "status": "active" }
+      ],
+      "variants": [
+        { "id": "65e1a2b3c4d5e6f7a8b9c0d3", "productId": "65e1a2b3c4d5e6f7a8b9c0d2", "sku": "TSHIRT-RED-M", "status": "active" }
+      ],
+      "digitalAssets": []
+    }
   }
 }
 ```
+
+**The `usage` object** resolves *where* the file is referenced so a client can show what would break before deleting it (and explain a non-zero `usageCount`):
+
+| Field             | Description                                                            |
+|-------------------|------------------------------------------------------------------------|
+| `totalReferences` | Count of products + variants + digital assets referencing this file.   |
+| `products`        | Products whose `fileIds` contain this file.                            |
+| `variants`        | Variants whose `fileIds` contain this file.                           |
+| `digitalAssets`   | Digital assets (downloadable goods) backed by this file.              |
+
+> `totalReferences` is derived from live references and should match `usageCount`. A mismatch indicates legacy data attached before reference-counting was enforced — see [Reference Counting](#reference-counting).
 
 **Error Responses:**
 
@@ -1321,7 +1459,7 @@ const signedUrl = await api.getSignedUrl(fileId); // Short-lived
 | No files in upload request            | 400         | NO_FILES_UPLOADED           | At least one file is required                               | Include files in FormData                 |
 | More than 10 files uploaded           | 400         | TOO_MANY_FILES              | Maximum 10 files per request                                | Upload in batches                         |
 | File exceeds role limit               | 413         | FILE_TOO_LARGE              | File "X" exceeds ROLE limit of Y MB                         | Reduce file size or contact admin         |
-| Upload policy violation               | 400         | UPLOAD_POLICY_VIOLATION     | File type not allowed: X                                    | Upload allowed file type                  |
+| Upload policy violation               | 400         | UPLOAD_POLICY_VIOLATION     | Upload policy violations found (see `details.violations[]`) | Read per-file `violations`; fix flagged file(s) |
 | File not found (GET)                  | 404         | NOT_FOUND                   | File not found                                              | Verify file ID is correct                 |
 | Access denied (non-owner)             | 403         | FORBIDDEN                   | You do not have access to this file                        | Request owner or admin to share           |
 | Update validation failed              | 400         | VALIDATION_ERROR            | Invalid input                                               | Check request body against schema         |
@@ -1329,7 +1467,7 @@ const signedUrl = await api.getSignedUrl(fileId); // Short-lived
 | Hard delete (non-admin)               | 403         | FORBIDDEN                   | Admin access required                                       | Request admin assistance                  |
 | List orphans (non-admin)              | 403         | FORBIDDEN                   | Admin access required                                       | Request admin assistance                  |
 | Orphans query (olderThan < 24h)       | 400         | VALIDATION_ERROR            | olderThan must be at least 24 hours in the past            | Adjust olderThan parameter                |
-| Internal server error                 | 500         | INTERNAL_ERROR              | An unexpected error occurred                                | Check logs, contact support               |
+| Internal server error                 | 500         | INTERNAL_SERVER_ERROR       | An unexpected error occurred                                | Check logs (cite `requestId`), contact support |
 
 ### Edge Cases
 
@@ -1552,12 +1690,23 @@ async function uploadFiles(files: File[]) {
     setFileIds(uploadedFiles.map(f => f.id));
     
   } catch (error) {
-    if (error.response?.status === 413) {
+    const err = error.response?.data?.error;
+
+    if (err?.code === 'UPLOAD_POLICY_VIOLATION') {
+      // Per-file failures — map each violation back to its file via fileIndex
+      const violations = err.details?.violations ?? [];
+      for (const v of violations) {
+        const fileName = v.fileIndex != null ? files[v.fileIndex]?.name : undefined;
+        // Prefer mapping v.code → an i18n key; fall back to v.message
+        setFileError(v.fileIndex, fileName ? `${fileName}: ${v.message}` : v.message);
+      }
+    } else if (error.response?.status === 413) {
       alert('One or more files exceed size limit');
     } else if (error.response?.status === 400) {
-      alert(error.response.data.error.message);
+      alert(err?.message ?? 'Upload rejected');
     } else {
-      alert('Upload failed. Please try again.');
+      // Unexpected error — surface requestId for support tracing
+      alert(`Upload failed. Please try again. (Ref: ${err?.requestId ?? error.response?.data?.requestId ?? 'n/a'})`);
     }
   } finally {
     setUploading(false);
@@ -1828,6 +1977,6 @@ This File Management Service provides a robust, enterprise-grade solution for ha
 
 ---
 
-**Document Version:** 1.0  
-**Last Updated:** 2026-02-13  
+**Document Version:** 1.1  
+**Last Updated:** 2026-06-03  
 **Maintained By:** Backend Architecture Team

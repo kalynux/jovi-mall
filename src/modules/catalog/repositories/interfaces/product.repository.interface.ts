@@ -1,5 +1,6 @@
 import { Product } from '../mappers/product.mapper';
 import { Page, PaginationOptions, RepositoryOptions } from '../types';
+import { ProductListProjection } from '../../read-models/product-detail.read-model';
 
 export interface IProductRepository {
   create(product: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>, options?: RepositoryOptions): Promise<Product>;
@@ -31,6 +32,27 @@ export interface IProductRepository {
     },
     options?: RepositoryOptions
   ): Promise<Page<Product>>;
+
+  /**
+   * List-view projection: returns only the fields required by the vendor
+   * products grid/list UI. Uses MongoDB projection + lean for minimal
+   * payload and bypasses the full domain mapper.
+   * The thumbnailFileId is the first entry in fileIds (or null).
+   */
+  searchListView(
+    vendorId: string,
+    filters: {
+      type?: string;
+      status?: string;
+      searchQuery?: string;
+    },
+    pagination: PaginationOptions,
+    sort?: {
+      sortBy: 'createdAt' | 'updatedAt' | 'title';
+      sortOrder: 'asc' | 'desc';
+    },
+    options?: RepositoryOptions
+  ): Promise<Page<ProductListProjection>>;
 
   // Bulk operations
   bulkUpdateStatus(

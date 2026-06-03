@@ -240,6 +240,7 @@ export interface IDeliveryAgency extends Document {
    * Recalculated from field presence after every write.
    */
   onboarding_step: number;
+  version: number;
   created_at: Date;
   updated_at: Date;
 }
@@ -287,6 +288,7 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
       default: AgencyOnboardingStep.LOGISTICS_SETUP,
       min: 0,
     },
+    version: { type: Number, default: 0 },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

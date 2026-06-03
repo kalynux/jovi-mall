@@ -165,7 +165,7 @@ export class OrderService {
           throw createAppError(ERROR_CODES.ORDER_PRODUCT_NOT_FOUND, 404, undefined, { productId: cartItem.productId });
         }
 
-        let agencyId = product.delivery?.agency_id?.toString();
+        let agencyId = product.delivery?.agencyId?.toString();
 
         // Fallback to vendor default delivery agency
         if (!agencyId) {
@@ -319,35 +319,26 @@ export class OrderService {
       // This would call delivery/shipment services to start the fulfillment process
 
     } else if (order.order_type === 'digital') {
-      // Digital: Grant entitlements
+      // Digital: Grant entitlements via the shared fulfillment helper.
+      // It loads each variant's digitalConfig (assetId, maxDownloads, expiresAfterDays)
+      // and snapshots them onto the entitlement at grant time.
       order.fulfillment_status = 'processing';
 
       console.log(`[OrderService] Digital order ${orderId} paid. Granting entitlements...`);
 
-      // Grant entitlements for all digital order items
-      // Note: DigitalEntitlementService fetches product and gets assetId from product.digitalConfig
-      const { DigitalEntitlementService } = await import('../digital-delivery/services/digital-entitlement.service');
-      const entitlementService = new DigitalEntitlementService();
+      const { handleDigitalProductFulfillment } = await import('./digital-fulfillment.integration');
 
-      for (const item of order.items) {
-        try {
-          await entitlementService.grantEntitlement({
-            orderId: order._id.toString(),
-            orderItemId: item._id.toString(),
-            productId: item.product_id.toString(),
-            customerId: order.customer_id.toString(),
-            vendorId: item.vendor_id.toString(),
-            assetId: '' // Will be fetched from product.digitalConfig by service
-          });
+      await handleDigitalProductFulfillment(
+        order._id.toString(),
+        order.items.map(item => ({
+          _id: item._id.toString(),
+          productId: item.product_id.toString(),
+          variantId: item.variant_id.toString(),
+          quantity: item.quantity,
+        })),
+        order.customer_id.toString(),
+      );
 
-          console.log(`[OrderService] Entitlement granted for order item ${item._id}`);
-        } catch (error: any) {
-          console.error(`[OrderService] Failed to grant entitlement for item ${item._id}:`, error);
-          // Continue with other items even if one fails
-        }
-      }
-
-      // After entitlements granted
       order.fulfillment_status = 'fulfilled';
     }
 

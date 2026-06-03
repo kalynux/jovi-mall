@@ -2,6 +2,7 @@ import { createAppError } from '../../../../../core/errors';
 import { ERROR_CODES } from '../../../../../core/error-codes';
 import { IStorageProvider } from '../../../../../core/storage';
 import { IFileRepository } from '../../../repositories/interfaces/file.repository.interface';
+import { IFileReferenceRepository } from '../../../repositories/interfaces/file-reference.repository.interface';
 
 export interface DeleteFileCommand {
   fileId: string;
@@ -21,7 +22,8 @@ export interface DeleteFileCommand {
 export class FileDeleteService {
   constructor(
     private readonly storageProvider: IStorageProvider,
-    private readonly fileRepository: IFileRepository
+    private readonly fileRepository: IFileRepository,
+    private readonly fileReferenceRepository: IFileReferenceRepository
   ) { }
 
   /**
@@ -38,9 +40,12 @@ export class FileDeleteService {
       throw createAppError(ERROR_CODES.CATALOG_FILE_NOT_FOUND, 404);
     }
 
-    // Safety check: only delete files with no references unless forced
-    if (file.usageCount > 0 && !command.force) {
-      throw createAppError(ERROR_CODES.CATALOG_FILE_STILL_REFERENCED, 409, undefined, { usageCount: file.usageCount });
+    // Safety check: only delete files with no live references unless forced
+    if (!command.force) {
+      const referenceCount = await this.fileReferenceRepository.countByFile(file.id);
+      if (referenceCount > 0) {
+        throw createAppError(ERROR_CODES.CATALOG_FILE_STILL_REFERENCED, 409, undefined, { referenceCount });
+      }
     }
 
     // Delete physical file from storage

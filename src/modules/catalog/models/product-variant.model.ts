@@ -33,6 +33,15 @@ export interface IProductVariant extends IBaseDocument {
   // Delivery agency for variant fulfillment (physical products only)
   // undefined = use vendor's default_delivery_agency_id
   deliveryAgencyId?: Types.ObjectId;
+
+  // Digital-specific config — only set on variants of digital products.
+  // A digital variant is `status: 'active'` iff `digitalConfig.assetId` is set
+  // (enforced by VariantDigitalService and vendor-variant.controller).
+  digitalConfig?: {
+    assetId?: Types.ObjectId;        // ref DigitalAsset; absent until file upload
+    maxDownloads: number | null;     // null = unlimited
+    expiresAfterDays: number | null; // null = never expires
+  };
 }
 
 const ProductVariantSchema = new Schema<IProductVariant>({
@@ -66,6 +75,16 @@ const ProductVariantSchema = new Schema<IProductVariant>({
     ref: 'DeliveryAgency',
     required: false,
     index: true,
+  },
+
+  digitalConfig: {
+    type: {
+      assetId: { type: Schema.Types.ObjectId, ref: 'DigitalAsset', required: false },
+      maxDownloads: { type: Number, default: null, min: 1 },
+      expiresAfterDays: { type: Number, default: null, min: 1 },
+    },
+    required: false,
+    default: undefined,
   },
 
   ...BaseSchemaFields

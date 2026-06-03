@@ -12,8 +12,8 @@
  * CRITICAL: Must be idempotent (webhook retries safe)
  */
 
-import { Types } from 'mongoose';
 import { ProductModel } from '../catalog/models/product.model';
+import { ProductVariantModel } from '../catalog/models/product-variant.model';
 import { DigitalEntitlementService } from '../digital-delivery/services/digital-entitlement.service';
 
 /**
@@ -33,6 +33,7 @@ export async function handleDigitalProductFulfillment(
   orderItems: Array<{
     _id: string; // orderItemId
     productId: string;
+    variantId: string;
     quantity: number;
   }>,
   customerId: string
@@ -42,7 +43,6 @@ export async function handleDigitalProductFulfillment(
   // Process each order item
   for (const item of orderItems) {
     try {
-      // Load product to check type
       const product = await ProductModel.findById(item.productId);
 
       if (!product) {
@@ -51,42 +51,49 @@ export async function handleDigitalProductFulfillment(
       }
 
       // Only process digital products
-      if (product.type === 'digital') {
-        // Verify digitalConfig exists
-        if (!product.digitalConfig || !product.digitalConfig.isActive) {
-          console.error(
-            `Digital product ${product.id} has no active configuration. Entitlement not granted.`
-          );
-          // TODO: Alert vendor or create support ticket
-          continue;
-        }
+      if (product.type !== 'digital') continue;
 
-        // Grant entitlement (IDEMPOTENT - safe for webhook retries)
-        const entitlement = await entitlementService.grantEntitlement({
-          orderId,
-          orderItemId: item._id.toString(),
-          productId: product.id,
-          assetId: product.digitalConfig.assetId.toString(),
-          customerId,
-          vendorId: product.vendorId.toString(),
-        });
-
-        console.log(
-          `✅ Granted digital entitlement ${entitlement.id} for product ${product.title}`
+      if (!product.digitalConfig?.isActive) {
+        console.error(
+          `Digital product ${product.id} is inactive. Entitlement not granted for order ${orderId}.`
         );
-
-        // TODO: Send customer notification email
-        // await sendDigitalProductReadyEmail(customerId, product.title);
+        continue;
       }
+
+      const variant = await ProductVariantModel.findOne({
+        _id: item.variantId,
+        productId: product._id,
+        deletedAt: null,
+      });
+      if (!variant?.digitalConfig?.assetId) {
+        console.error(
+          `Variant ${item.variantId} has no digital asset. Entitlement not granted for order ${orderId}.`
+        );
+        continue;
+      }
+
+      // Grant entitlement (IDEMPOTENT - safe for webhook retries).
+      // maxDownloads / expiresAfterDays are snapshotted from the variant at grant time.
+      const entitlement = await entitlementService.grantEntitlement({
+        orderId,
+        orderItemId: item._id.toString(),
+        productId: product.id,
+        variantId: variant._id.toString(),
+        assetId: variant.digitalConfig.assetId.toString(),
+        customerId,
+        vendorId: product.vendorId.toString(),
+        maxDownloads: variant.digitalConfig.maxDownloads ?? null,
+        expiresAfterDays: variant.digitalConfig.expiresAfterDays ?? null,
+      });
+
+      console.log(
+        `✅ Granted digital entitlement ${entitlement.id} for product ${product.title} (variant ${variant.name ?? variant.sku})`
+      );
     } catch (error: any) {
       console.error(
         `❌ Failed to grant entitlement for order ${orderId}, item ${item._id}:`,
         error.message
       );
-
-      // IMPORTANT: Don't throw - log error and continue
-      // Manual entitlement grant can be done later if needed
-      // TODO: Create error tracking entry for admin review
     }
   }
 }

@@ -262,18 +262,22 @@ export class CartService {
    *   "size:large|color:red" → "Size: Large, Color: Red"
    */
   private generateVariantTitle(optionSignature: string): string {
-    if (optionSignature === 'default') {
+    if (!optionSignature || optionSignature === 'default') {
       return '';
     }
 
+    // Option-less variants (e.g. digital) carry a non-"key:value" signature (the SKU),
+    // so only format genuine "key:value" pairs and drop anything that isn't one.
     return optionSignature
       .split('|')
       .map(pair => {
         const [key, value] = pair.split(':');
+        if (!key || !value) return null;
         const capitalizedKey = key.charAt(0).toUpperCase() + key.slice(1);
         const capitalizedValue = value.charAt(0).toUpperCase() + value.slice(1);
         return `${capitalizedKey}: ${capitalizedValue}`;
       })
+      .filter((pair): pair is string => pair !== null)
       .join(', ');
   }
 

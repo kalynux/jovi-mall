@@ -3,6 +3,7 @@
 
 import { IMapper } from "../../../../core/database/mapper.interface";
 import { IProduct } from "../../models";
+import { VectorisationStatus } from "../../models/product.model";
 
 // Domain Entity (Simplified for now, matching IProduct structure but purely decoupled if needed later)
 // For Phase 3, we can reuse the interface logic or define a specific class. 
@@ -37,13 +38,20 @@ export interface Product {
     bookingMode: 'calendar' | 'manual' | 'capacity';
   };
 
-  // Digital-specific config
+  // Digital-specific config (product-wide kill switch only; per-variant asset/limits live on the variant)
   digitalConfig?: {
-    assetId: string;
-    maxDownloads: number | null;
-    expiresAfterDays: number | null;
     isActive: boolean;
   };
+
+  // Physical-specific delivery config. Null agencyId means the vendor's default applies at order time.
+  delivery?: {
+    agencyId: string | null;
+  };
+
+  // ─── Vectorisation tracking ───────────────────────────────────────────────
+  vectorisationEnabled: boolean;
+  vectorisationStatus: VectorisationStatus;
+  vectorisedDataId: string | null;
 
   createdAt: Date;
   updatedAt: Date;
@@ -69,7 +77,15 @@ export class ProductMapper implements IMapper<Product, IProduct> {
       defaultVariantId: doc.defaultVariantId?.toString(),
       fileIds: doc.fileIds?.map((id: any) => id.toString()) || [],
       serviceConfig: doc.serviceConfig,
-      digitalConfig: doc.digitalConfig,
+      digitalConfig: doc.digitalConfig ? {
+        isActive: doc.digitalConfig.isActive ?? true,
+      } : undefined,
+      delivery: doc.delivery
+        ? { agencyId: doc.delivery.agency_id?.toString() ?? null }
+        : undefined,
+      vectorisationEnabled: doc.vectorisationEnabled ?? false,
+      vectorisationStatus: doc.vectorisationStatus ?? 'not_started',
+      vectorisedDataId: doc.vectorisedDataId ?? null,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       deletedAt: doc.deletedAt,

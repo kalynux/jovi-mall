@@ -19,28 +19,29 @@ export interface IFileRepository {
   findById(id: string, options?: RepositoryOptions): Promise<File | null>;
 
   /**
+   * Batch-fetch files by their IDs in a single query.
+   * Invalid or missing IDs are silently dropped.
+   */
+  findManyByIds(ids: string[], options?: RepositoryOptions): Promise<File[]>;
+
+  /**
    * Find file by provider key
    */
   findByKey(key: string, provider: string, options?: RepositoryOptions): Promise<File | null>;
 
   /**
-   * Find files with zero usage count older than a given date (for garbage collection)
+   * Find an existing file with the same content checksum owned by the given
+   * vendor. Scoped per-vendor so duplicate detection never matches files
+   * uploaded by other owners. Returns null when no live (non-deleted) match
+   * exists.
+   */
+  findByChecksum(checksum: string, ownerId: string, options?: RepositoryOptions): Promise<File | null>;
+
+  /**
+   * Find files with no live references older than a given date (for garbage
+   * collection). "No references" is derived from the file_references collection.
    */
   findOrphans(olderThan: Date, options?: RepositoryOptions): Promise<File[]>;
-
-  /**
-   * Atomically increment usageCount by 1
-   * Uses MongoDB $inc operator for atomic updates
-   * @throws Error if file not found
-   */
-  incrementUsageCount(fileId: string, options?: RepositoryOptions): Promise<void>;
-
-  /**
-   * Atomically decrement usageCount by 1
-   * Guards against negative values (only decrements if usageCount >= 1)
-   * @throws Error if file not found or usageCount < 1
-   */
-  decrementUsageCount(fileId: string, options?: RepositoryOptions): Promise<void>;
 
   /**
    * Update file metadata

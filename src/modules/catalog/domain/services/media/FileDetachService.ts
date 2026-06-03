@@ -1,6 +1,7 @@
 import { createAppError } from '../../../../../core/errors';
 import { ERROR_CODES } from '../../../../../core/error-codes';
 import { IFileRepository } from '../../../repositories/interfaces/file.repository.interface';
+import { IFileReferenceRepository } from '../../../repositories/interfaces/file-reference.repository.interface';
 import { IProductRepository } from '../../../repositories/interfaces/product.repository.interface';
 import { IVariantRepository } from '../../../repositories/interfaces/variant.repository.interface';
 import { RepositoryOptions } from '../../../repositories/types';
@@ -14,15 +15,16 @@ export interface DetachFileCommand {
 
 /**
  * FileDetachService
- * 
+ *
  * Detaches file from product or variant by removing fileId from fileIds array.
- * Atomically decrements usageCount on the file (will fail if usageCount < 1).
- * 
+ * Removes the matching `file_references` row (idempotent).
+ *
  * NEVER mutates owner fields (those represent original uploader).
  */
 export class FileDetachService {
     constructor(
         private readonly fileRepository: IFileRepository,
+        private readonly fileReferenceRepository: IFileReferenceRepository,
         private readonly productRepository: IProductRepository,
         private readonly variantRepository: IVariantRepository,
     ) { }
@@ -32,7 +34,6 @@ export class FileDetachService {
      * @param command - Detach command with file, owner, and vendor details
      * @throws NotFoundError if file or owner not found
      * @throws ForbiddenError if vendor doesn't own the product
-     * @throws Error if usageCount cannot be decremented (already 0)
      */
     async execute(command: DetachFileCommand, options?: RepositoryOptions): Promise<void> {
         // Validate file exists
@@ -82,7 +83,13 @@ export class FileDetachService {
             );
         }
 
-        // Atomically decrement usageCount (will fail if usageCount < 1)
-        await this.fileRepository.decrementUsageCount(command.fileId, options);
+        // Remove the reference (replaces the old usageCount decrement). Idempotent.
+        await this.fileReferenceRepository.remove(
+            command.fileId,
+            command.ownerType,
+            command.ownerId,
+            'media',
+            options,
+        );
     }
 }

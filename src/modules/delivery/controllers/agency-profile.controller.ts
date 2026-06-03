@@ -74,9 +74,9 @@ export class AgencyProfileController {
         const userId = req.auth!.user._id.toString();
         const agencyId = req.auth!.role_entity._id.toString();
         const input = AgencyOnboardingStep1Schema.parse(req.body);
-        const expectedUpdatedAt = req.body.updated_at ? new Date(req.body.updated_at) : undefined;
+        const expectedVersion = typeof req.body.version === 'number' ? req.body.version : undefined;
 
-        const result = await agencyProfileService.completeStep1(agencyId, userId, input, expectedUpdatedAt);
+        const result = await agencyProfileService.completeStep1(agencyId, userId, input, expectedVersion);
         res.json({ success: true, data: result, message: 'Logistics setup completed' });
     });
 
@@ -88,9 +88,9 @@ export class AgencyProfileController {
         const userId = req.auth!.user._id.toString();
         const agencyId = req.auth!.role_entity._id.toString();
         const input = AgencyOnboardingStep2Schema.parse(req.body);
-        const expectedUpdatedAt = req.body.updated_at ? new Date(req.body.updated_at) : undefined;
+        const expectedVersion = typeof req.body.version === 'number' ? req.body.version : undefined;
 
-        const result = await agencyProfileService.completeStep2(agencyId, userId, input, expectedUpdatedAt);
+        const result = await agencyProfileService.completeStep2(agencyId, userId, input, expectedVersion);
         res.json({ success: true, data: result, message: 'Payout setup completed' });
     });
 
@@ -102,9 +102,9 @@ export class AgencyProfileController {
         const userId = req.auth!.user._id.toString();
         const agencyId = req.auth!.role_entity._id.toString();
         const input = AgencyOnboardingStep3Schema.parse(req.body);
-        const expectedUpdatedAt = req.body.updated_at ? new Date(req.body.updated_at) : undefined;
+        const expectedVersion = typeof req.body.version === 'number' ? req.body.version : undefined;
 
-        const result = await agencyProfileService.completeStep3(agencyId, userId, input, expectedUpdatedAt);
+        const result = await agencyProfileService.completeStep3(agencyId, userId, input, expectedVersion);
         res.json({ success: true, data: result, message: 'Branding setup completed' });
     });
 
@@ -116,9 +116,9 @@ export class AgencyProfileController {
         const userId = req.auth!.user._id.toString();
         const agencyId = req.auth!.role_entity._id.toString();
         const input = AgencyOnboardingStep4Schema.parse(req.body);
-        const expectedUpdatedAt = req.body.updated_at ? new Date(req.body.updated_at) : undefined;
+        const expectedVersion = typeof req.body.version === 'number' ? req.body.version : undefined;
 
-        const result = await agencyProfileService.completePolicySetup(agencyId, userId, input, expectedUpdatedAt);
+        const result = await agencyProfileService.completePolicySetup(agencyId, userId, input, expectedVersion);
         res.json({ success: true, data: result, message: 'Policy setup completed' });
     });
 }

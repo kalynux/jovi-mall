@@ -21,6 +21,13 @@ export interface Variant {
   optionValueIds: string[];
   fileIds: string[];
   deliveryAgencyId?: string;
+  digitalConfig?: {
+    assetId?: string;
+    // Optional in the domain type so partial PATCH updates can include only one of the fields.
+    // Persistence layer (mapper/repository) normalizes missing → null on read.
+    maxDownloads?: number | null;
+    expiresAfterDays?: number | null;
+  };
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;
@@ -44,9 +51,17 @@ export class VariantMapper implements IMapper<Variant, IProductVariant> {
       lowStockThreshold: doc.low_stock_threshold,
       allowOversell: doc.allow_oversell,
       weight: doc.weight,
+      length: doc.length,
+      width: doc.width,
+      height: doc.height,
       optionValueIds: doc.optionValueIds.map((id: any) => id.toString()),
       fileIds: doc.fileIds?.map((id: any) => id.toString()) || [],
       deliveryAgencyId: doc.deliveryAgencyId?.toString(),
+      digitalConfig: doc.digitalConfig ? {
+        assetId: doc.digitalConfig.assetId?.toString(),
+        maxDownloads: doc.digitalConfig.maxDownloads ?? null,
+        expiresAfterDays: doc.digitalConfig.expiresAfterDays ?? null,
+      } : undefined,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       deletedAt: doc.deletedAt,
@@ -64,6 +79,9 @@ export class VariantMapper implements IMapper<Variant, IProductVariant> {
       stock: domain.stock,
       isInfiniteStock: domain.isInfiniteStock,
       weight: domain.weight,
+      length: domain.length,
+      width: domain.width,
+      height: domain.height,
       optionValueIds: domain.optionValueIds,
       fileIds: domain.fileIds,
       deliveryAgencyId: domain.deliveryAgencyId,

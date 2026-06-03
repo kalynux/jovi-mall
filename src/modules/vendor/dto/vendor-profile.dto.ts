@@ -1,6 +1,7 @@
-import { IVendor, IVendorBranding, IVendorBusinessAddress, IVendorOperatingHours, IVendorKycDetails, IVendorSocialLinks } from '../../vendors/vendor.model';
+import { IVendor, IVendorBranding, IVendorBusinessAddress, IVendorOperatingHours, IVendorKycDetails, IVendorSocialLinks, IVendorPolicies } from '../../vendors/vendor.model';
 import { IPayoutDetails } from '../../../core/types/payout.types';
 import { UpdateVendorProfileInput } from '../validators/vendor-onboarding.validator';
+import { VendorOnboardingStep } from '../../../core/constants/onboarding-steps';
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
@@ -36,6 +37,7 @@ export interface GetVendorProfileResponseDto {
   /** KYC number is never returned. Only the verified flag is exposed. */
   kycVerified: boolean;
   socialLinks: IVendorSocialLinks;
+  policies: IVendorPolicies | null;
   notificationPreferences: {
     email: boolean;
     whatsapp: boolean;
@@ -54,6 +56,22 @@ export interface VendorCompletionStatusDto {
   isComplete: boolean;
   missingFields: string[];
   stepLabel: string;
+}
+
+export interface VendorOnboardingStatusDto {
+  currentStep: number;
+  currentStepLabel: string;
+  isComplete: boolean;
+  progressPercent: number;
+  completedFields: string[];
+  missingFields: string[];
+  steps: Array<{
+    step: number;
+    label: string;
+    status: 'completed' | 'current' | 'pending';
+    required: boolean;
+  }>;
+  warnings: string[];
 }
 
 // ─── Mapper ───────────────────────────────────────────────────────────────────
@@ -116,6 +134,7 @@ export class VendorProfileMapper {
       payoutDetails: sanitizePayoutDetails(vendor.payout_details),
       kycVerified: vendor.kyc_details?.legit_verified ?? false,
       socialLinks: vendor.social_links,
+      policies: vendor.policies ?? null,
       notificationPreferences: {
         email: vendor.notification_preferences.email,
         whatsapp: vendor.notification_preferences.whatsapp,
@@ -127,6 +146,59 @@ export class VendorProfileMapper {
       version: vendor.version,
       createdAt: vendor.created_at,
       updatedAt: vendor.updated_at,
+    };
+  }
+
+  static toOnboardingStatusDto(vendor: IVendor): VendorOnboardingStatusDto {
+    const step = vendor.onboarding_step;
+
+    const stepDefs = [
+      { step: 1, label: 'Basic Setup',                 required: true  },
+      { step: 2, label: 'Delivery Linking (Optional)', required: false },
+      { step: 3, label: 'Branding (Optional)',         required: false },
+      { step: 4, label: 'Policy Setup (Optional)',     required: false },
+    ];
+
+    const stepStatus = (n: number): 'completed' | 'current' | 'pending' => {
+      if (step === VendorOnboardingStep.COMPLETED) return 'completed';
+      if (step > n) return 'completed';
+      if (step === n) return 'current';
+      return 'pending';
+    };
+
+    const completedCount = step === VendorOnboardingStep.COMPLETED ? 4 : step - 1;
+    const progressPercent = Math.round((completedCount / 4) * 100);
+
+    const completedFields: string[] = [];
+    const missingFields: string[] = [];
+
+    if (vendor.country) completedFields.push('country'); else missingFields.push('country');
+    if (vendor.timezone) completedFields.push('timezone');
+    if (vendor.payout_details) completedFields.push('payout_details'); else missingFields.push('payout_details');
+    if (vendor.default_delivery_agency_id) completedFields.push('default_delivery_agency_id');
+
+    const stepLabels: Record<number, string> = {
+      0: 'Onboarding Complete',
+      1: 'Basic Setup',
+      2: 'Delivery Linking (Optional)',
+      3: 'Branding (Optional)',
+      4: 'Policy Setup (Optional)',
+    };
+
+    const warnings: string[] = [];
+    if (!(vendor.kyc_details?.legit_verified)) {
+      warnings.push('KYC verification is pending. Your account may have limited functionality until verified by admin.');
+    }
+
+    return {
+      currentStep: step,
+      currentStepLabel: stepLabels[step] ?? `Step ${step}`,
+      isComplete: step === VendorOnboardingStep.COMPLETED,
+      progressPercent,
+      completedFields,
+      missingFields,
+      steps: stepDefs.map((s) => ({ ...s, status: stepStatus(s.step) })),
+      warnings,
     };
   }
 
@@ -154,6 +226,7 @@ export class VendorProfileMapper {
       };
     }
     if (input.social_links !== undefined) payload.social_links = input.social_links as IVendorSocialLinks;
+    if (input.policies !== undefined) payload.policies = input.policies as IVendorPolicies;
     if (input.notificationPreferences !== undefined) {
       payload.notification_preferences = {
         email: input.notificationPreferences.email ?? true,

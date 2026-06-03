@@ -1,10 +1,10 @@
 import { createAppError } from '../../../../../core/errors';
 import { ERROR_CODES } from '../../../../../core/error-codes';
 import { IFileRepository } from '../../../repositories/interfaces/file.repository.interface';
+import { IFileReferenceRepository } from '../../../repositories/interfaces/file-reference.repository.interface';
 import { IProductRepository } from '../../../repositories/interfaces/product.repository.interface';
 import { IVariantRepository } from '../../../repositories/interfaces/variant.repository.interface';
 import { RepositoryOptions } from '../../../repositories/types';
-import { IFile } from '../../../models/file.model';
 
 export type ActorType = 'vendor' | 'admin' | 'customer' | 'agent' | 'agency';
 
@@ -18,9 +18,9 @@ export interface AttachFileCommand {
 
 /**
  * FileAttachService
- * 
+ *
  * Attaches file to product or variant by adding fileId to fileIds array.
- * Atomically increments usageCount on the file.
+ * Registers a row in `file_references` so the file counts as in use.
  * Enforces authorization: actor must own file, OR file is system-owned, OR actor is admin.
  * 
  * DOES NOT mutate owner fields (those represent original uploader).
@@ -28,6 +28,7 @@ export interface AttachFileCommand {
 export class FileAttachService {
     constructor(
         private readonly fileRepository: IFileRepository,
+        private readonly fileReferenceRepository: IFileReferenceRepository,
         private readonly productRepository: IProductRepository,
         private readonly variantRepository: IVariantRepository
     ) { }
@@ -106,8 +107,15 @@ export class FileAttachService {
             );
         }
 
-        // 4. Atomically increment usageCount
-        await this.fileRepository.incrementUsageCount(command.fileId, options);
+        // 4. Register the reference (replaces the old usageCount increment)
+        await this.fileReferenceRepository.add({
+            fileId: command.fileId,
+            entityType: command.ownerType,
+            entityId: command.ownerId,
+            field: 'media',
+            ownerType: command.actorType,
+            ownerId: command.actorId,
+        }, options);
     }
 
     /**

@@ -124,10 +124,11 @@ All timestamp fields are returned in ISO 8601 format:
 ### Product Type Constraints
 
 Certain endpoints are only applicable to specific product types:
-- **Variants**: Physical products only
+- **Variants**: Physical and digital products (digital: 1–5 format variants, each with its own asset)
+- **Options**: Physical products only
 - **Shipping**: Physical products only
 - **Availability Rules**: Service products only
-- **Digital Assets**: Digital products only
+- **Digital Assets**: Digital products only — managed **per variant** (`/products/:productId/variants/:variantId/digital/*`)
 
 Attempting to use type-specific endpoints on incompatible product types returns `INVALID_PRODUCT_TYPE` error.
 
@@ -144,7 +145,10 @@ The vendor API is organized into the following modules:
 
 - [**Onboarding**](./onboarding.md) - Step-by-step vendor onboarding flow (basic setup, delivery linking, branding)
 - [**Delivery Agencies**](./delivery-agencies.md) - Browse and select a default delivery agency
-- [**Variants**](./variants.md) - Manage product variants (physical products only)
+- [**Products**](./products.md) - Product CRUD, status, duplication
+- [**Variants**](./variants.md) - Manage product variants (physical and digital products)
+- [**Digital Products**](./digital-products.md) - Multi-variant digital products: per-variant assets (1–5 formats), upload/replace/remove, download limits, activation rules, UI guidance
+- [**Product Upload Flow**](./product-upload-flow.md) - End-to-end create-to-publish flow per product type
 - [**Shipping**](./shipping.md) - Configure shipping for physical products
 - [**Availability Rules**](./availability-rules.md) - Define service availability schedules
 - [**Orders**](./orders.md) - View and manage vendor orders

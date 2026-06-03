@@ -11,12 +11,11 @@ export type FileOwnerType = 'vendor' | 'admin' | 'customer' | 'agent' | 'agency'
  * Files are first-class database records that can be shared across products, variants, and digital assets.
  * 
  * Owner fields represent the original uploader and are set once on upload, never mutated.
- * 
- * usageCount tracks how many entities reference this file:
- * - Incremented atomically when file is attached to product/variant
- * - Decremented atomically when file is detached
- * - Used for safe garbage collection (usageCount === 0)
- * - Enforced at repository level, never client-side
+ *
+ * References are tracked in the `file_references` collection (one row per
+ * entity that uses the file). A file is "in use" iff it has at least one live
+ * reference; orphan garbage collection reclaims files with none. See
+ * {@link IFileReference}.
  */
 export interface IFile extends IBaseDocument {
   key: string;              // provider-specific key (file path or object key)
@@ -25,8 +24,6 @@ export interface IFile extends IBaseDocument {
   size: number;              // file size in bytes
   checksum?: string;         // optional checksum (MD5, SHA256, etc.)
   originalName?: string;     // original filename when uploaded
-
-  usageCount: number;        // reference count for safe cleanup (atomic updates only)
 
   // Original uploader - set once on upload, never mutated
   ownerType?: FileOwnerType; // 'vendor', 'admin', 'customer', 'agent', 'agency', or 'system'
@@ -45,8 +42,6 @@ const FileSchema = new Schema<IFile>({
   checksum: { type: String },
   originalName: { type: String },
 
-  usageCount: { type: Number, default: 0, min: 0, index: true },
-
   ownerType: {
     type: String,
     enum: ['vendor', 'admin', 'customer', 'agent', 'agency', 'system']
@@ -58,7 +53,7 @@ const FileSchema = new Schema<IFile>({
 
 // Indexes
 FileSchema.index({ key: 1, provider: 1 }, { unique: true }); // Unique file per provider
-// FileSchema.index({ usageCount: 1 }); // For garbage collection queries (already indexed above)
+FileSchema.index({ ownerId: 1, checksum: 1 }); // Per-vendor duplicate detection by content hash
 // FileSchema.index({ deletedAt: 1 }); // Soft delete queries
 
 export const FileModel =

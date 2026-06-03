@@ -14,14 +14,15 @@ import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../cor
 export interface ICustomerDigitalEntitlement extends IBaseDocument {
   orderId: Types.ObjectId;         // Source order
   orderItemId: Types.ObjectId;     // Specific line item
-  productId: Types.ObjectId;       // What was purchased
-  assetId: Types.ObjectId;         // What file to deliver
+  productId: Types.ObjectId;       // What product was purchased
+  variantId: Types.ObjectId;       // Specific variant (format/tier) purchased
+  assetId: Types.ObjectId;         // What file to deliver (snapshot from variant at grant time)
   customerId: Types.ObjectId;      // Who can download
   vendorId: Types.ObjectId;        // File owner
-  
+
   downloadsUsed: number;           // Atomic counter (incremented with guard)
-  maxDownloads: number | null;     // Copy from config at grant time (null = unlimited)
-  expiresAt: Date | null;          // Computed from config (null = never expires)
+  maxDownloads: number | null;     // Copy from variant config at grant time (null = unlimited)
+  expiresAt: Date | null;          // Computed from variant config (null = never expires)
   revokedAt: Date | null;          // Admin/vendor revocation
 }
 
@@ -35,15 +36,21 @@ const CustomerDigitalEntitlementSchema = new Schema<ICustomerDigitalEntitlement>
     type: Schema.Types.ObjectId, 
     required: true 
   },
-  productId: { 
-    type: Schema.Types.ObjectId, 
-    ref: 'Product', 
-    required: true 
+  productId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Product',
+    required: true
   },
-  assetId: { 
-    type: Schema.Types.ObjectId, 
-    ref: 'DigitalAsset', 
-    required: true 
+  variantId: {
+    type: Schema.Types.ObjectId,
+    ref: 'ProductVariant',
+    required: true,
+    index: true,
+  },
+  assetId: {
+    type: Schema.Types.ObjectId,
+    ref: 'DigitalAsset',
+    required: true
   },
   customerId: { 
     type: Schema.Types.ObjectId, 
@@ -73,6 +80,9 @@ CustomerDigitalEntitlementSchema.index(
 
 // Customer's library
 CustomerDigitalEntitlementSchema.index({ customerId: 1, productId: 1 });
+
+// Variant-grouped library views (different formats of the same product)
+CustomerDigitalEntitlementSchema.index({ customerId: 1, variantId: 1 });
 
 // Trace back to purchase
 CustomerDigitalEntitlementSchema.index({ orderId: 1 });

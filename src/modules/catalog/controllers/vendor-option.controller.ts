@@ -52,7 +52,7 @@ export class VendorOptionController {
 
     /**
      * GET /api/vendor/products/:productId/options
-     * List all options for a product
+     * List all options for a product (with nested values)
      */
     static listOptions = asyncHandler(async (req: Request, res: Response) => {
         const vendorId = req.auth!.role_entity._id.toString();
@@ -60,7 +60,30 @@ export class VendorOptionController {
         const product = await productRepository.findById(productId, vendorId);
         if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
         const options = await optionRepository.findByProduct(productId);
-        res.json({ success: true, data: options, meta: { total: options.length } });
+
+        // Fetch all values for these options in a single query and group by optionId
+        const optionIds = options.map(opt => opt.id);
+        const allValues = optionIds.length > 0
+            ? await optionValueRepository.findByOptions(optionIds)
+            : [];
+
+        const valuesByOptionId = new Map<string, typeof allValues>();
+        for (const val of allValues) {
+            const group = valuesByOptionId.get(val.optionId) || [];
+            group.push(val);
+            valuesByOptionId.set(val.optionId, group);
+        }
+
+        const optionsWithValues = options.map(opt => ({
+            ...opt,
+            values: (valuesByOptionId.get(opt.id) || []).map(v => ({
+                id: v.id,
+                optionId: v.optionId,
+                value: v.value,
+            })),
+        }));
+
+        res.json({ success: true, data: optionsWithValues, meta: { total: optionsWithValues.length } });
     });
 
     /**
@@ -156,6 +179,24 @@ export class VendorOptionController {
         await VendorOptionController.validateOptionOwnership(productId, optionId, vendorId);
         const optionValues = await optionValueRepository.findByOption(optionId);
         res.json({ success: true, data: optionValues, meta: { total: optionValues.length } });
+    });
+
+    /**
+     * PATCH /api/vendor/products/:productId/options/:optionId/values/:valueId
+     * Rename an option value (e.g., "Blk" → "Black")
+     * 
+     * Safe operation — does NOT affect variant optionValueIds or optionSignature.
+     * The value's ID remains the same; only the display string changes.
+     */
+    static updateOptionValue = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { productId, optionId, valueId } = req.params;
+        await VendorOptionController.validateOptionOwnership(productId, optionId, vendorId);
+        const optionValue = await optionValueRepository.findById(valueId);
+        if (!optionValue || optionValue.optionId !== optionId) throw createAppError(ERROR_CODES.CATALOG_OPTION_NOT_FOUND, 404, 'Option value not found');
+        const input = UpdateOptionValueSchema.parse(req.body);
+        const updatedValue = await optionValueRepository.update(valueId, input);
+        res.json({ success: true, data: updatedValue, message: 'Option value updated successfully' });
     });
 
     /**

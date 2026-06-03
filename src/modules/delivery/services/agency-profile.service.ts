@@ -36,7 +36,7 @@ import {
  * - Step-enforced: each step verifies current `onboarding_step` matches prerequisite
  * - Idempotent: re-submitting a completed step returns success without re-writing
  * - Atomic: single findOneAndUpdate per step (data + step in one operation)
- * - Optimistic concurrency: updated_at check rejects stale writes
+ * - Optimistic concurrency: version check rejects stale writes
  * - Events published via EventBus after successful mutations
  * - Audit logged via auditLogger
  */
@@ -152,7 +152,7 @@ export class AgencyProfileService {
         agencyId: string,
         userId: string,
         input: AgencyOnboardingStep1Input,
-        expectedUpdatedAt?: Date,
+        expectedVersion?: number,
     ): Promise<{ profile: GetAgencyProfileResponseDto; completionStatus: AgencyCompletionStatusDto }> {
         const agency = await this.agencyRepo.findById(agencyId);
         if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
@@ -172,7 +172,7 @@ export class AgencyProfileService {
                     headquarters_addresses: input.headquarters_addresses as IDeliveryAgency['headquarters_addresses'],
                     onboarding_step: agency.onboarding_step as AgencyOnboardingStepValue,
                 },
-                expectedUpdatedAt,
+                expectedVersion,
             );
 
             if (!updated) {
@@ -201,10 +201,11 @@ export class AgencyProfileService {
                 headquarters_addresses: input.headquarters_addresses as IDeliveryAgency['headquarters_addresses'],
                 onboarding_step: newStep,
             },
-            expectedUpdatedAt,
+            expectedVersion,
         );
 
         if (!updated) {
+            console.log('Update failed', expectedVersion);
             throw createAppError(ERROR_CODES.DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION, 409);
         }
 
@@ -230,7 +231,7 @@ export class AgencyProfileService {
         agencyId: string,
         userId: string,
         input: AgencyOnboardingStep2Input,
-        expectedUpdatedAt?: Date,
+        expectedVersion?: number,
     ): Promise<{ profile: GetAgencyProfileResponseDto; completionStatus: AgencyCompletionStatusDto }> {
         const agency = await this.agencyRepo.findById(agencyId);
         if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
@@ -249,7 +250,7 @@ export class AgencyProfileService {
                     payout_details: input.payout_details as IPayoutMethod[],
                     onboarding_step: agency.onboarding_step as AgencyOnboardingStepValue,
                 },
-                expectedUpdatedAt,
+                expectedVersion,
             );
 
             if (!updated) {
@@ -282,7 +283,7 @@ export class AgencyProfileService {
                 payout_details: input.payout_details as IPayoutMethod[],
                 onboarding_step: newStep,
             },
-            expectedUpdatedAt,
+            expectedVersion,
         );
 
         if (!updated) {
@@ -311,7 +312,7 @@ export class AgencyProfileService {
         agencyId: string,
         userId: string,
         input: AgencyOnboardingStep3Input,
-        expectedUpdatedAt?: Date,
+        expectedVersion?: number,
     ): Promise<{ profile: GetAgencyProfileResponseDto; completionStatus: AgencyCompletionStatusDto }> {
         const agency = await this.agencyRepo.findById(agencyId);
         if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
@@ -331,7 +332,7 @@ export class AgencyProfileService {
                 if (input.logo_url !== undefined) updates.logo_url = input.logo_url as string | null;
                 if (input.timezone !== undefined) updates.timezone = input.timezone;
             }
-            const updated = await this.agencyRepo.atomicOnboardingUpdate(agencyId, updates, expectedUpdatedAt);
+            const updated = await this.agencyRepo.atomicOnboardingUpdate(agencyId, updates, expectedVersion);
             if (!updated) throw createAppError(ERROR_CODES.DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION, 409);
             await this.auditOnboardingStep(userId, agencyId, 'BRANDING_DATA_UPDATED', 3, agency.onboarding_step);
             return {
@@ -356,7 +357,7 @@ export class AgencyProfileService {
             if (input.timezone !== undefined) updates.timezone = input.timezone;
         }
 
-        const updated = await this.agencyRepo.atomicOnboardingUpdate(agencyId, updates, expectedUpdatedAt);
+        const updated = await this.agencyRepo.atomicOnboardingUpdate(agencyId, updates, expectedVersion);
 
         if (!updated) {
             throw createAppError(ERROR_CODES.DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION, 409);
@@ -385,7 +386,7 @@ export class AgencyProfileService {
         agencyId: string,
         userId: string,
         input: AgencyOnboardingStep4Input,
-        expectedUpdatedAt?: Date,
+        expectedVersion?: number,
     ): Promise<{ profile: GetAgencyProfileResponseDto; completionStatus: AgencyCompletionStatusDto }> {
         const agency = await this.agencyRepo.findById(agencyId);
         if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
@@ -426,7 +427,7 @@ export class AgencyProfileService {
                     policies,
                     onboarding_step: agency.onboarding_step as AgencyOnboardingStepValue,
                 },
-                expectedUpdatedAt,
+                expectedVersion,
             );
             if (!updated) throw createAppError(ERROR_CODES.DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION, 409);
             await this.auditOnboardingStep(userId, agencyId, 'POLICY_DATA_UPDATED', 4, agency.onboarding_step);
@@ -443,7 +444,7 @@ export class AgencyProfileService {
                 policies,
                 onboarding_step: AgencyOnboardingStep.COMPLETED,
             },
-            expectedUpdatedAt,
+            expectedVersion,
         );
 
         if (!updated) {

@@ -30,6 +30,8 @@ export const VendorOnboardingStep = {
     DELIVERY_LINKING: 2,
     /** Step 3 (Optional/Skippable): branding (logo, cover), business_addresses */
     BRANDING: 3,
+    /** Step 4 (Optional/Skippable): return_policy, cancellation_policy, support_policy */
+    POLICY_SETUP: 4,
 } as const;
 
 export type VendorOnboardingStepValue =

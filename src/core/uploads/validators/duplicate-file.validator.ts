@@ -19,6 +19,19 @@ export class DuplicateFileValidator implements IUploadValidator {
       return;
     }
 
+    // Duplicate detection is scoped per-vendor: a vendor cannot re-upload a
+    // file they already own, but identical content from other owners is not a
+    // duplicate. Uploads without a vendor (e.g. system) are not deduplicated.
+    const ownerId = context.getVendorId();
+    if (!ownerId) {
+      return;
+    }
+
+    // Tracks content hashes already seen earlier in THIS request, so two
+    // identical files in a single upload are caught even though neither is
+    // persisted yet. Maps hash -> the file index that first carried it.
+    const seenHashes = new Map<string, number>();
+
     for (let i = 0; i < context.files.length; i++) {
       const fileContext = context.files[i];
 
@@ -27,11 +40,35 @@ export class DuplicateFileValidator implements IUploadValidator {
         continue;
       }
 
+      // In-request duplicate: an earlier file in this same upload had the same
+      // content. The DB check below can't catch this because nothing is stored
+      // until validation passes.
+      const firstIndex = seenHashes.get(fileContext.hash);
+      if (firstIndex !== undefined) {
+        if (this.config.duplicateDetection.blockDuplicates) {
+          context.addViolation({
+            code: 'DUPLICATE_FILE',
+            message: `Duplicate file detected. Identical content was already provided earlier in this request.`,
+            fileIndex: i,
+            metadata: {
+              hash: fileContext.hash,
+              duplicateOfIndex: firstIndex,
+              originalName: fileContext.originalName,
+            },
+          });
+        } else {
+          console.info(`Duplicate file detected in request (hash: ${fileContext.hash}, index ${i} duplicates ${firstIndex}), but duplicates are allowed`);
+        }
+        // Already flagged/logged against the first occurrence; no need to also
+        // hit the DB for this copy.
+        continue;
+      }
+      seenHashes.set(fileContext.hash, i);
+
       try {
-        // Check if file with same hash already exists
-        // Note: This assumes a method to find by checksum exists
-        // You may need to add this to IFileRepository
-        const existingFile = await this.findByChecksum(fileContext.hash);
+        // Cross-request duplicate: this vendor already owns a stored file with
+        // the same content hash.
+        const existingFile = await this.fileRepository.findByChecksum(fileContext.hash, ownerId);
 
         if (existingFile) {
           if (this.config.duplicateDetection.blockDuplicates) {
@@ -59,15 +96,5 @@ export class DuplicateFileValidator implements IUploadValidator {
         console.warn(`Duplicate check failed for ${fileContext.originalName}:`, error.message);
       }
     }
-  }
-
-  /**
-   * Find file by checksum
-   * This is a temporary implementation - ideally this should be in IFileRepository
-   */
-  private async findByChecksum(checksum: string): Promise<any | null> {
-    // TODO: Add findByChecksum method to IFileRepository
-    // For now, return null to allow uploads
-    return null;
   }
 }

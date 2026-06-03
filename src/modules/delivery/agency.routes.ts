@@ -35,28 +35,28 @@ router.get('/onboarding/status', AgencyProfileController.getOnboardingStatus);
 /**
  * PUT /api/agency/onboarding/logistics
  * Step 1 (Required): coverage_areas (min 1), headquarters_addresses (min 1; first = primary)
- * Optional: { updated_at } for optimistic concurrency
+ * Optional: { version } for optimistic concurrency
  */
 router.put('/onboarding/logistics', AgencyProfileController.completeLogisticsSetup);
 
 /**
  * PUT /api/agency/onboarding/payout
  * Step 2 (Required): payout_details
- * Optional: { updated_at } for optimistic concurrency
+ * Optional: { version } for optimistic concurrency
  */
 router.put('/onboarding/payout', AgencyProfileController.completePayoutSetup);
 
 /**
  * PUT /api/agency/onboarding/branding
  * Step 3 (Optional/Skippable): { skip?: boolean, logo_url?, timezone? }
- * Optional: { updated_at } for optimistic concurrency
+ * Optional: { version } for optimistic concurrency
  */
 router.put('/onboarding/branding', AgencyProfileController.completeBrandingSetup);
 
 /**
  * PUT /api/agency/onboarding/policies
  * Step 4 (Required): { policies: { pricing, returns, damage } }
- * Optional: { updated_at } for optimistic concurrency
+ * Optional: { version } for optimistic concurrency
  */
 router.put('/onboarding/policies', AgencyProfileController.completePolicySetup);
 

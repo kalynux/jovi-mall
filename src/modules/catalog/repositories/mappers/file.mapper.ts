@@ -15,8 +15,6 @@ export interface File {
   checksum?: string;
   originalName?: string;
 
-  usageCount: number;  // Reference count for safe cleanup
-
   ownerType?: 'vendor' | 'admin' | 'customer' | 'agent' | 'agency' | 'system';
   ownerId?: string;
 
@@ -42,7 +40,6 @@ export class FileMapper implements IMapper<File, IFile> {
       size: doc.size,
       checksum: doc.checksum,
       originalName: doc.originalName,
-      usageCount: doc.usageCount || 0,
       ownerType: doc.ownerType,
       ownerId: doc.ownerId?.toString(),
       createdAt: doc.createdAt,
@@ -61,7 +58,6 @@ export class FileMapper implements IMapper<File, IFile> {
       size: domain.size,
       checksum: domain.checksum,
       originalName: domain.originalName,
-      usageCount: domain.usageCount,
       ownerType: domain.ownerType,
       ownerId: domain.ownerId,
     } as any;

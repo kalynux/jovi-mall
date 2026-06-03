@@ -83,4 +83,10 @@ router.use('/agent', agentRoutes);
 import adminRoutes from '../modules/admins/routes';
 router.use('/admin', adminRoutes);
 
+// File upload and management routes
+import fileRoutes from './routes/file-upload.routes';
+import path from "path";
+router.use('/files', express.static(path.join(__dirname, '../..', 'storage')));
+router.use('/files', fileRoutes);
+
 export const apiRouter = router;

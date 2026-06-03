@@ -1,11 +1,13 @@
+import mongoose, { Types } from 'mongoose';
 import { VendorOrderRepository, OrderFilters } from './vendor-order.repository';
 import { OrderTimelineRepository } from './order-timeline.repository';
 import { VendorOrderNoteRepository } from './vendor-order-note.repository';
-import { IOrder, FulfillmentStatus } from './order.model';
+import { IOrder, OrderModel, FulfillmentStatus } from './order.model';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { eventBus } from '../../core/events/event-bus';
+import { CustomerModel } from '../customers/customer.model';
 
 /**
  * Vendor Order Service
@@ -56,33 +58,42 @@ export class VendorOrderService {
     ): Promise<Page<any>> {
         const result = await this.vendorOrderRepo.findByVendor(vendorId, filters, pagination);
 
+        // Batch-fetch customer profiles for all orders in this page
+        const uniqueCustomerIds = [...new Set(result.data.map(o => o.customer_id.toString()))];
+        const customerMap = await this._batchResolveCustomers(uniqueCustomerIds);
+
         // Transform to DTO
-        const dtoData = result.data.map(order => ({
-            id: order._id.toString(),
-            orderNumber: order.order_number,
-            orderType: order.order_type,
-            createdAt: order.created_at,
+        const dtoData = result.data.map(order => {
+            const customerId = order.customer_id.toString();
+            const customerProfile = customerMap.get(customerId);
+            return {
+                id: order._id.toString(),
+                orderNumber: order.order_number,
+                orderType: order.order_type,
+                createdAt: order.created_at,
 
-            // Customer summary (no sensitive data)
-            customer: {
-                id: order.customer_id.toString()
-                // TODO: Populate customer name/email from customer service
-            },
+                customer: {
+                    id: customerId,
+                    name: customerProfile?.name ?? null,
+                    email: customerProfile?.email ?? null,
+                    avatar: customerProfile?.avatar ?? null
+                },
 
-            // Totals (immutable snapshot)
-            subtotal: order.price_breakdown.base,
-            tax: order.price_breakdown.tax,
-            shipping: 0,  // TODO: Calculate shipping from delivery
-            total: order.total_amount,
-            currency: order.currency,
+                // Totals (immutable snapshot)
+                subtotal: order.price_breakdown.base,
+                tax: order.price_breakdown.tax,
+                shipping: 0,
+                total: order.total_amount,
+                currency: order.currency,
 
-            // Status
-            fulfillmentStatus: order.fulfillment_status,
-            paymentStatus: order.payment_status,
+                // Status
+                fulfillmentStatus: order.fulfillment_status,
+                paymentStatus: order.payment_status,
 
-            // Item count
-            itemCount: order.items.length
-        }));
+                // Item count
+                itemCount: order.items.length
+            };
+        });
 
         return {
             data: dtoData,
@@ -92,8 +103,9 @@ export class VendorOrderService {
 
     /**
      * Get order details
-     * 
+     *
      * Ownership validated. Returns 404 if not found or not owned.
+     * Includes delivery agency/agent info (physical orders) and vendor notes.
      */
     async getOrderDetails(orderId: string, vendorId: string): Promise<any> {
         const order = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
@@ -101,6 +113,15 @@ export class VendorOrderService {
         if (!order) {
             throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
+
+        const customerId = order.customer_id.toString();
+
+        // Fetch delivery info, notes, and customer data in parallel
+        const [delivery, notes, customerData] = await Promise.all([
+            this._resolveDeliveryInfo(order),
+            this.noteRepo.findByOrder(orderId, vendorId),
+            this._resolveCustomerInfo(customerId, vendorId)
+        ]);
 
         // Transform to detailed DTO
         return {
@@ -110,18 +131,21 @@ export class VendorOrderService {
             createdAt: order.created_at,
             updatedAt: order.updated_at,
 
-            // Customer (read-only)
             customer: {
-                id: order.customer_id.toString()
-                // TODO: Populate from customer service
+                id: customerId,
+                name: customerData?.name ?? null,
+                email: customerData?.email ?? null,
+                phone: customerData?.phone ?? null,
+                avatar: customerData?.avatar ?? null,
+                orderCount: customerData?.orderCount ?? 0,
+                totalSpent: customerData?.totalSpent ?? 0
             },
 
-            // Shipping address (read-only)
-            // TODO: Fetch from order or customer service
+            shippingAddress: customerData?.shippingAddress ?? null,
 
             // Line items with pricing snapshots
             items: order.items.map(item => ({
-                id: item._id.toString(),
+                id: item._id?.toString(),
                 productId: item.product_id.toString(),
                 variantId: item.variant_id.toString(),
                 title: item.title,
@@ -130,19 +154,179 @@ export class VendorOrderService {
                 optionsSnapshot: item.options_snapshot,
                 quantity: item.quantity,
                 price: item.price,
+                subtotal: item.price * item.quantity,
                 currency: item.currency
             })),
 
             // Pricing
-            priceBreakdown: order.price_breakdown,
+            priceBreakdown: {
+                base: order.price_breakdown.base,
+                tax: order.price_breakdown.tax,
+                discount: order.price_breakdown.discount,
+                shipping: 0,
+                total: order.price_breakdown.total
+            },
             totalAmount: order.total_amount,
             currency: order.currency,
 
             // Status
             fulfillmentStatus: order.fulfillment_status,
             paymentStatus: order.payment_status,
-            paymentIntentId: order.payment_intent_id
+            paymentIntentId: order.payment_intent_id,
+
+            // Delivery (physical orders only, null for digital)
+            delivery,
+
+            // Vendor-internal notes
+            notes: notes.map(note => ({
+                id: note._id.toString(),
+                message: note.message,
+                authorId: note.author_id.toString(),
+                createdAt: note.created_at
+            }))
         };
+    }
+
+    /**
+     * Resolve delivery agency and agent info for a physical order.
+     *
+     * Returns null for digital orders or orders without delivery data.
+     * Looks up agency name and agent details via shipment reference.
+     */
+    private async _resolveDeliveryInfo(order: any): Promise<any> {
+        if (order.order_type !== 'physical' || !order.items?.length) {
+            return null;
+        }
+
+        const deliveryData = order.items[0].delivery;
+        if (!deliveryData) {
+            return null;
+        }
+
+        const db = mongoose.connection.db;
+
+        if (!db) {
+            return null;
+        }
+
+        // Look up agency name and contact in parallel with shipment lookup
+        const [agency, shipment] = await Promise.all([
+            deliveryData.agency_id
+                ? db.collection('deliveryagencies').findOne(
+                    { _id: deliveryData.agency_id },
+                    { projection: { agency_name: 1, phone: 1, email: 1 } }
+                )
+                : Promise.resolve(null),
+            deliveryData.shipment_id
+                ? db.collection('shipments').findOne({ _id: deliveryData.shipment_id })
+                : Promise.resolve(null)
+        ]);
+
+        // Look up agent from shipment
+        let agent: any = null;
+        if (shipment?.agent_id) {
+            const agentDoc = await db.collection('deliveryagents').findOne(
+                { _id: shipment.agent_id },
+                { projection: { name: 1, phone: 1, avatar_url: 1 } }
+            );
+            if (agentDoc) {
+                agent = {
+                    id: agentDoc._id.toString(),
+                    name: agentDoc.name,
+                    phone: agentDoc.phone || null,
+                    avatarUrl: agentDoc.avatar_url || null
+                };
+            }
+        }
+
+        return {
+            agencyId: deliveryData.agency_id?.toString() || null,
+            agencyName: agency?.agency_name || null,
+            agencyPhone: agency?.phone || null,
+            deliveryStatus: deliveryData.status,
+            shipmentId: deliveryData.shipment_id?.toString() || null,
+            agent
+        };
+    }
+
+    /**
+     * Resolve full customer profile + stats for the order detail view.
+     *
+     * Returns name, email, phone, avatar, and per-vendor order stats.
+     * Also extracts the customer's default shipping address.
+     */
+    private async _resolveCustomerInfo(customerId: string, vendorId: string): Promise<any> {
+        const [customer, stats] = await Promise.all([
+            CustomerModel.findById(customerId)
+                .select('name email phone avatar_url saved_addresses')
+                .lean()
+                .exec() as Promise<any>,
+            OrderModel.aggregate([
+                {
+                    $match: {
+                        customer_id: new Types.ObjectId(customerId),
+                        vendor_id: new Types.ObjectId(vendorId)
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        orderCount: { $sum: 1 },
+                        totalSpent: { $sum: '$total_amount' }
+                    }
+                }
+            ])
+        ]);
+
+        if (!customer) {
+            return null;
+        }
+
+        // Use the customer's default address, falling back to first address
+        const defaultAddr = customer.saved_addresses?.find((a: any) => a.is_default)
+            ?? customer.saved_addresses?.[0]
+            ?? null;
+
+        const shippingAddress = defaultAddr ? {
+            street: defaultAddr.address_line1,
+            city: defaultAddr.city,
+            state: defaultAddr.state ?? null,
+            country: defaultAddr.country
+        } : null;
+
+        return {
+            name: customer.name,
+            email: customer.email ?? null,
+            phone: customer.phone ?? null,
+            avatar: customer.avatar_url ?? null,
+            orderCount: stats[0]?.orderCount ?? 0,
+            totalSpent: stats[0]?.totalSpent ?? 0,
+            shippingAddress
+        };
+    }
+
+    /**
+     * Batch-fetch customer profiles for a list of customer IDs.
+     *
+     * Returns a Map keyed by customer ID string for O(1) lookup during DTO mapping.
+     */
+    private async _batchResolveCustomers(customerIds: string[]): Promise<Map<string, any>> {
+        if (customerIds.length === 0) return new Map();
+
+        const customers = await CustomerModel.find({ _id: { $in: customerIds } })
+            .select('name email avatar_url')
+            .lean()
+            .exec() as any[];
+
+        const map = new Map<string, any>();
+        for (const c of customers) {
+            map.set(c._id.toString(), {
+                name: c.name,
+                email: c.email ?? null,
+                avatar: c.avatar_url ?? null
+            });
+        }
+        return map;
     }
 
     /**
@@ -228,8 +412,7 @@ export class VendorOrderService {
             description: `Fulfillment status changed from '${currentStatus}' to '${newStatus}'`,
             metadata: {
                 previousStatus: currentStatus,
-                newStatus,
-                vendorId
+                newStatus
             },
             actorType: 'vendor',
             actorId: vendorId
@@ -272,8 +455,8 @@ export class VendorOrderService {
 
     /**
      * Get order timeline
-     * 
-     * Ownership validated.
+     *
+     * Ownership validated. Actor names resolved via batch lookup.
      */
     async getTimeline(
         orderId: string,
@@ -290,21 +473,87 @@ export class VendorOrderService {
         // Fetch timeline
         const result = await this.timelineRepo.findByOrder(orderId, pagination);
 
-        // Transform to DTO
-        const dtoData = result.data.map(entry => ({
-            id: entry._id.toString(),
-            eventType: entry.event_type,
-            description: entry.description,
-            metadata: entry.metadata,
-            actorType: entry.actor_type,
-            actorId: entry.actor_id?.toString() || null,
-            createdAt: entry.created_at
-        }));
+        // Resolve actor names in batch
+        const actorNameMap = await this._resolveActorNames(result.data);
+
+        // Transform to DTO matching frontend contract
+        const dtoData = result.data.map(entry => {
+            const actorId = entry.actor_id?.toString() || null;
+            return {
+                _id: entry._id.toString(),
+                orderId: entry.order_id.toString(),
+                eventType: entry.event_type,
+                oldValue: entry.metadata?.previousStatus ?? null,
+                newValue: entry.metadata?.newStatus ?? null,
+                noteId: entry.metadata?.noteId ?? null,
+                description: entry.metadata?.reason ?? entry.metadata?.messagePreview ?? entry.description,
+                actor: {
+                    type: entry.actor_type,
+                    id: actorId,
+                    name: actorId ? (actorNameMap.get(actorId) ?? null) : null
+                },
+                created_at: entry.created_at
+            };
+        });
 
         return {
             data: dtoData,
-            meta: result.meta
+            meta: {
+                total: result.meta.total,
+                page: result.meta.page,
+                limit: result.meta.limit,
+                pages: result.meta.pages
+            }
         };
+    }
+
+    /**
+     * Batch-resolve actor display names for timeline entries.
+     *
+     * Vendors → business_name from vendors collection.
+     * Customers → name from customers collection.
+     * System → "System".
+     */
+    private async _resolveActorNames(entries: any[]): Promise<Map<string, string>> {
+        const nameMap = new Map<string, string>();
+
+        const vendorIds: Types.ObjectId[] = [];
+        const customerIds: string[] = [];
+
+        for (const entry of entries) {
+            if (!entry.actor_id) continue;
+            if (entry.actor_type === 'vendor') {
+                vendorIds.push(entry.actor_id);
+            } else if (entry.actor_type === 'customer') {
+                customerIds.push(entry.actor_id.toString());
+            }
+        }
+
+        const db = mongoose.connection.db;
+
+        const [vendors, customers] = await Promise.all([
+            vendorIds.length > 0 && db
+                ? db.collection('vendors')
+                    .find({ _id: { $in: vendorIds } })
+                    .project({ business_name: 1 })
+                    .toArray()
+                : Promise.resolve([]),
+            customerIds.length > 0
+                ? CustomerModel.find({ _id: { $in: customerIds } })
+                    .select('name')
+                    .lean()
+                    .exec() as Promise<any[]>
+                : Promise.resolve([])
+        ]);
+
+        for (const v of vendors as any[]) {
+            nameMap.set(v._id.toString(), v.business_name);
+        }
+        for (const c of customers) {
+            nameMap.set((c as any)._id.toString(), (c as any).name);
+        }
+
+        return nameMap;
     }
 
     /**
@@ -343,7 +592,7 @@ export class VendorOrderService {
                 messagePreview: message.substring(0, 100)
             },
             actorType: 'vendor',
-            actorId: authorId
+            actorId: vendorId
         });
 
         // Return note DTO
@@ -356,8 +605,29 @@ export class VendorOrderService {
     }
 
     /**
+     * Get a single vendor note by ID.
+     *
+     * Ownership validated via vendorId — returns 404 if note not found or not owned.
+     */
+    async getNoteById(noteId: string, vendorId: string): Promise<any> {
+        const note = await this.noteRepo.findById(noteId, vendorId);
+
+        if (!note) {
+            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
+        }
+
+        return {
+            id: note._id.toString(),
+            orderId: note.order_id.toString(),
+            message: note.message,
+            authorId: note.author_id.toString(),
+            createdAt: note.created_at
+        };
+    }
+
+    /**
      * Get vendor notes for order
-     * 
+     *
      * Ownership validated.
      */
     async getNotes(orderId: string, vendorId: string): Promise<any[]> {
@@ -522,10 +792,21 @@ export class VendorOrderService {
                     }
                 },
                 {
+                    $lookup: {
+                        from: 'productvariants',
+                        localField: 'variantId',
+                        foreignField: '_id',
+                        as: 'variant'
+                    }
+                },
+                {
                     $unwind: { path: '$product', preserveNullAndEmptyArrays: true }
                 },
                 {
                     $unwind: { path: '$asset', preserveNullAndEmptyArrays: true }
+                },
+                {
+                    $unwind: { path: '$variant', preserveNullAndEmptyArrays: true }
                 }
             ])
             .toArray();
@@ -545,6 +826,8 @@ export class VendorOrderService {
                 orderItemId: e.orderItemId.toString(),
                 productId: e.productId.toString(),
                 productTitle: e.product?.title || 'Unknown Product',
+                variantId: e.variantId ? e.variantId.toString() : null,
+                variantName: e.variant?.name || e.variant?.sku || null,
                 assetId: e.assetId.toString(),
                 assetName: e.asset?.originalName || 'Unknown Asset',
                 customerId: e.customerId.toString(),

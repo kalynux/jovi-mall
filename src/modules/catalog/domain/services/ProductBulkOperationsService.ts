@@ -1,6 +1,8 @@
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
 import { BulkOperationResponse } from '../../dto/product.dto';
 import { ProductStatusValidationService } from './ProductStatusValidationService';
+import { ProductModel } from '../../models/product.model';
+import { Types } from 'mongoose';
 
 /**
  * ProductBulkOperationsService
@@ -15,57 +17,92 @@ export class ProductBulkOperationsService {
     ) { }
 
     /**
+     * Partition product ids into (eligible, pending) sets.
+     * Products with vectorisationStatus === 'pending' cannot be mutated in bulk —
+     * they would race the in-flight vectoriser snapshot.
+     */
+    private async partitionByVectorisationLock(
+        productIds: string[],
+    ): Promise<{ eligible: string[]; pending: string[] }> {
+        const validIds = productIds.filter(id => Types.ObjectId.isValid(id));
+        if (validIds.length === 0) return { eligible: [], pending: [] };
+
+        const pendingDocs = await ProductModel.find(
+            { _id: { $in: validIds }, vectorisationStatus: 'pending', deletedAt: null },
+            { _id: 1 },
+        ).lean();
+
+        const pendingSet = new Set(pendingDocs.map(d => d._id.toString()));
+        const eligible: string[] = [];
+        const pending: string[] = [];
+
+        for (const id of productIds) {
+            if (pendingSet.has(id)) pending.push(id);
+            else eligible.push(id);
+        }
+
+        return { eligible, pending };
+    }
+
+    /**
      * Bulk archive products
-     * 
+     *
      * @param productIds - Array of product IDs to archive
      * @param vendorId - Vendor ID (ownership enforcement)
-     * @returns Result with success/failure counts
+     * @returns Result with success/failure counts. Pending products are reported as failures.
      */
     async bulkArchive(
         productIds: string[],
         vendorId: string
     ): Promise<BulkOperationResponse> {
-        const modifiedCount = await this.productRepository.bulkArchive(
-            productIds,
-            vendorId
-        );
+        const { eligible, pending } = await this.partitionByVectorisationLock(productIds);
+
+        const modifiedCount = eligible.length > 0
+            ? await this.productRepository.bulkArchive(eligible, vendorId)
+            : 0;
+
+        const errors = pending.map(productId => ({
+            productId,
+            reason: 'Vectorisation is in progress for this product. Try again once it completes.',
+        }));
 
         return {
             success: modifiedCount,
             failed: productIds.length - modifiedCount,
             total: productIds.length,
+            errors: errors.length > 0 ? errors : undefined,
         };
     }
 
     /**
      * Bulk status change
-     * 
+     *
      * @param productIds - Array of product IDs
      * @param vendorId - Vendor ID (ownership enforcement)
      * @param status - New status to set
-     * @returns Result with success/failure counts
+     * @returns Result with success/failure counts. Pending products are reported as failures.
      */
     async bulkStatusChange(
         productIds: string[],
         vendorId: string,
         status: string
     ): Promise<BulkOperationResponse> {
-        // If activating, we need to validate each product individually
-        // For now, we'll use the repository method which doesn't validate
-        // In production, you might want to fetch and validate each product
-        // before bulk updating, but for performance we'll allow the update
-        // and rely on frontend validation
+        const { eligible, pending } = await this.partitionByVectorisationLock(productIds);
 
-        const modifiedCount = await this.productRepository.bulkUpdateStatus(
-            productIds,
-            vendorId,
-            status
-        );
+        const modifiedCount = eligible.length > 0
+            ? await this.productRepository.bulkUpdateStatus(eligible, vendorId, status)
+            : 0;
+
+        const errors = pending.map(productId => ({
+            productId,
+            reason: 'Vectorisation is in progress for this product. Try again once it completes.',
+        }));
 
         return {
             success: modifiedCount,
             failed: productIds.length - modifiedCount,
             total: productIds.length,
+            errors: errors.length > 0 ? errors : undefined,
         };
     }
 
@@ -83,8 +120,16 @@ export class ProductBulkOperationsService {
         const errors: Array<{ productId: string; reason: string }> = [];
         let successCount = 0;
 
+        const { eligible, pending } = await this.partitionByVectorisationLock(productIds);
+        for (const productId of pending) {
+            errors.push({
+                productId,
+                reason: 'Vectorisation is in progress for this product. Try again once it completes.',
+            });
+        }
+
         // Validate and update each product individually
-        for (const productId of productIds) {
+        for (const productId of eligible) {
             try {
                 const product = await this.productRepository.findById(productId, vendorId);
 

@@ -1,9 +1,14 @@
 import { Request, Response } from 'express';
+import { z } from 'zod';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { ProductRepositoryMongo } from '../repositories/mongo/product.repository.mongo';
 import { VariantRepositoryMongo } from '../repositories/mongo/variant.repository.mongo';
+import { FileRepositoryMongo } from '../repositories/mongo/file.repository.mongo';
+import { FileReferenceRepositoryMongo } from '../repositories/mongo/file-reference.repository.mongo';
+import { getStorageProvider } from '../../../core/storage';
+import { enrichProduct } from '../read-models/enrich-product-detail';
 import { ProductDraftService } from '../domain/services/ProductDraftService';
 import { ProductUpdateService } from '../domain/services/ProductUpdateService';
 import { ProductArchiveService } from '../domain/services/ProductArchiveService';
@@ -12,25 +17,40 @@ import { ProductDuplicateService } from '../domain/services/ProductDuplicateServ
 import { ProductStatusValidationService } from '../domain/services/ProductStatusValidationService';
 import { ProductBulkOperationsService } from '../domain/services/ProductBulkOperationsService';
 import { SlugService } from '../domain/services/SlugService';
+import { FileReferenceService } from '../domain/services/media/FileReferenceService';
 import {
     CreateProductSchema,
     UpdateProductSchema,
-    ChangeProductStatusSchema,
+    VendorChangeProductStatusSchema,
     ProductQuerySchema,
     BulkArchiveSchema,
-    BulkStatusChangeSchema,
+    VendorBulkStatusChangeSchema,
+    SetVectorisationSchema,
 } from '../validators/product.validator';
+import { vectorisationService } from '../domain/services/VectorisationService';
+
+const BulkVectoriseSchema = z.object({
+    productIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId')).optional(),
+});
+
+const SetDefaultVariantSchema = z.object({
+    variantId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId'),
+});
 
 // Initialize services
 const productRepository = new ProductRepositoryMongo();
 const variantRepository = new VariantRepositoryMongo();
+const fileRepository = new FileRepositoryMongo();
+const fileReferenceRepository = new FileReferenceRepositoryMongo();
+const storageProvider = getStorageProvider();
 const slugService = new SlugService(productRepository);
-const productDraftService = new ProductDraftService(productRepository, slugService);
-const productUpdateService = new ProductUpdateService(productRepository, variantRepository, slugService);
+const fileReferenceService = new FileReferenceService(fileRepository, fileReferenceRepository);
+const productDraftService = new ProductDraftService(productRepository, slugService, fileReferenceService);
+const productUpdateService = new ProductUpdateService(productRepository, slugService, fileReferenceService);
 const productArchiveService = new ProductArchiveService(productRepository);
-const productListService = new ProductListService(productRepository);
-const productDuplicateService = new ProductDuplicateService(productRepository, slugService);
-const productStatusValidationService = new ProductStatusValidationService(variantRepository);
+const productListService = new ProductListService(productRepository, fileRepository, storageProvider);
+const productDuplicateService = new ProductDuplicateService(productRepository, slugService, fileReferenceService);
+const productStatusValidationService = new ProductStatusValidationService(productRepository, variantRepository);
 const productBulkOperationsService = new ProductBulkOperationsService(
     productRepository,
     productStatusValidationService
@@ -38,7 +58,7 @@ const productBulkOperationsService = new ProductBulkOperationsService(
 
 /**
  * VendorProductController
- * 
+ *
  * HTTP layer for vendor product management.
  * All routes enforce vendor ownership via req.auth.role_entity._id
  */
@@ -52,7 +72,8 @@ export class VendorProductController {
         const { id } = req.params;
         const product = await productRepository.findById(id, vendorId);
         if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
-        res.json({ success: true, data: product });
+        const detail = await enrichProduct(product, fileRepository, storageProvider);
+        res.json({ success: true, data: detail });
     });
 
     /**
@@ -62,7 +83,12 @@ export class VendorProductController {
     static listProducts = asyncHandler(async (req: Request, res: Response) => {
         const vendorId = req.auth!.role_entity._id.toString();
         const query = ProductQuerySchema.parse(req.query);
-        const result = await productListService.execute(vendorId, { type: query.type, status: query.status, searchQuery: query.q }, { page: query.page, limit: query.limit }, { sortBy: query.sortBy, sortOrder: query.sortOrder });
+        const result = await productListService.execute(
+            vendorId,
+            { type: query.type, status: query.status, searchQuery: query.q },
+            { page: query.page, limit: query.limit },
+            { sortBy: query.sortBy, sortOrder: query.sortOrder }
+        );
         res.json({ success: true, data: result.data, meta: result.meta });
     });
 
@@ -73,20 +99,90 @@ export class VendorProductController {
     static createProduct = asyncHandler(async (req: Request, res: Response) => {
         const vendorId = req.auth!.role_entity._id.toString();
         const input = CreateProductSchema.parse(req.body);
-        const product = await productDraftService.execute({ vendorId, type: input.type, title: input.title, category: input.category, tags: input.tags });
-        res.status(201).json({ success: true, data: product, message: 'Product created successfully' });
+        const product = await productDraftService.execute({
+            vendorId,
+            type: input.type,
+            title: input.title,
+            description: input.description,
+            category: input.category,
+            tags: input.tags,
+            seoTitle: input.seoTitle,
+            seoDescription: input.seoDescription,
+            fileIds: input.fileIds,
+        });
+        const detail = await enrichProduct(product, fileRepository, storageProvider);
+
+        // Return response immediately — vectorisation is async and must not block
+        res.status(201).json({ success: true, data: detail, message: 'Product created successfully' });
+
+        // Fire-and-forget: run after response is sent
+        void vectorisationService.vectoriseSingle(product.id);
     });
 
     /**
      * PATCH /api/vendor/products/:id
-     * Update product (images replace full array)
+     * Update product — fileIds is a full array replacement.
+     *
+     * If the body includes `vectorisationEnabled`, the update routes through
+     * vectorisationService.setEnabled after the content update so vendors can
+     * toggle opt-in in the same request. Otherwise the existing re-vectorise-
+     * if-eligible behaviour runs.
      */
     static updateProduct = asyncHandler(async (req: Request, res: Response) => {
         const vendorId = req.auth!.role_entity._id.toString();
         const { id } = req.params;
         const input = UpdateProductSchema.parse(req.body);
-        const product = await productUpdateService.execute(id, vendorId, { title: input.title, description: input.description, category: input.category, tags: input.tags, seoTitle: input.seoTitle, seoDescription: input.seoDescription, digitalConfig: input.digitalConfig, serviceConfig: input.serviceConfig });
-        res.json({ success: true, data: product, message: 'Product updated successfully' });
+        const product = await productUpdateService.execute(id, vendorId, {
+            title: input.title,
+            description: input.description,
+            category: input.category,
+            tags: input.tags,
+            seoTitle: input.seoTitle,
+            seoDescription: input.seoDescription,
+            fileIds: input.fileIds,
+            digitalConfig: input.digitalConfig,
+            serviceConfig: input.serviceConfig,
+            delivery: input.delivery,
+        });
+
+        // If the update broke the active-state invariant (description cleared,
+        // delivery agency removed, serviceConfig dropped, …) demote to draft.
+        const demoted = await productStatusValidationService.revalidateActiveStatus(id, vendorId);
+        const finalProduct = demoted
+            ? (await productRepository.findById(id, vendorId)) ?? product
+            : product;
+        const detail = await enrichProduct(finalProduct, fileRepository, storageProvider);
+
+        // Return response immediately — vectorisation is async and must not block
+        res.json({ success: true, data: detail, message: 'Product updated successfully' });
+
+        // Vectorisation side-effect, after response.
+        if (input.vectorisationEnabled !== undefined) {
+            try {
+                const result = await vectorisationService.setEnabled(
+                    id,
+                    vendorId,
+                    input.vectorisationEnabled,
+                );
+                if (result.outcome === 'enabled' && result.payload) {
+                    void vectorisationService.executePreparedVectorisation(id, result.payload);
+                } else if (result.outcome === 'disabled') {
+                    void vectorisationService.deleteVectorisation(id);
+                }
+            } catch (err: any) {
+                console.error(JSON.stringify({
+                    timestamp: new Date().toISOString(),
+                    service: 'VendorProductController',
+                    level: 'error',
+                    message: 'updateProduct: post-response vectorisation toggle failed',
+                    productId: id,
+                    error: err?.message,
+                }));
+            }
+        } else {
+            // Content may have changed — re-vectorise if currently eligible.
+            void vectorisationService.vectoriseSingle(product.id);
+        }
     });
 
     /**
@@ -96,12 +192,37 @@ export class VendorProductController {
     static changeStatus = asyncHandler(async (req: Request, res: Response) => {
         const vendorId = req.auth!.role_entity._id.toString();
         const { id } = req.params;
-        const input = ChangeProductStatusSchema.parse(req.body);
+        const input = VendorChangeProductStatusSchema.parse(req.body);
         const product = await productRepository.findById(id, vendorId);
         if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
-        productStatusValidationService.validate(product, input.status);
+        await productStatusValidationService.validate(product, input.status);
         const updatedProduct = await productRepository.update(id, vendorId, { status: input.status });
+
+        // Return response immediately
         res.json({ success: true, data: updatedProduct, message: `Product status changed to ${input.status}` });
+
+        // Fire-and-forget: only metadata change — use the lighter status endpoint
+        void vectorisationService.notifyStatusChange(id, input.status);
+    });
+
+    /**
+     * PATCH /api/vendor/products/:id/default-variant
+     * Set the default variant for a product (used for display and pricing)
+     */
+    static setDefaultVariant = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id } = req.params;
+        const input = SetDefaultVariantSchema.parse(req.body);
+
+        const product = await productRepository.findById(id, vendorId);
+        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+
+        const variant = await variantRepository.findById(input.variantId);
+        if (!variant || variant.productId !== id || variant.status !== 'active')
+            throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404, 'Variant not found, archived, or does not belong to this product');
+
+        await productRepository.update(id, vendorId, { defaultVariantId: input.variantId });
+        res.json({ success: true, message: 'Default variant updated successfully' });
     });
 
     /**
@@ -143,10 +264,177 @@ export class VendorProductController {
      */
     static bulkStatusChange = asyncHandler(async (req: Request, res: Response) => {
         const vendorId = req.auth!.role_entity._id.toString();
-        const input = BulkStatusChangeSchema.parse(req.body);
+        const input = VendorBulkStatusChangeSchema.parse(req.body);
         const result = input.status === 'active'
             ? await productBulkOperationsService.bulkStatusChangeWithValidation(input.productIds, vendorId, input.status)
             : await productBulkOperationsService.bulkStatusChange(input.productIds, vendorId, input.status);
+
+        // Return response immediately
         res.json({ success: true, data: result, message: `Updated ${result.success} of ${result.total} products` });
+
+        // Fire-and-forget: notify vectoriser about each product's new status
+        for (const productId of input.productIds) {
+            void vectorisationService.notifyStatusChange(productId, input.status);
+        }
+    });
+
+    /**
+     * GET /api/vendor/products/:id/vectorisation/status
+     * Read the current vectorisation snapshot for a product.
+     */
+    static getVectorisationStatus = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id } = req.params;
+
+        const product = await productRepository.findById(id, vendorId);
+        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+
+        res.json({
+            success: true,
+            data: {
+                productId: product.id,
+                vectorisationEnabled: product.vectorisationEnabled,
+                vectorisationStatus: product.vectorisationStatus,
+                vectorisedDataId: product.vectorisedDataId,
+            },
+        });
+    });
+
+    /**
+     * PATCH /api/vendor/products/:id/vectorisation
+     * Body: { enabled: boolean }
+     *
+     * Consolidated toggle — replaces the previous /enable and /disable routes.
+     * Idempotent: sending the current state returns 200 with a no-op message.
+     * For an enable that produces a payload, responds 202 and fires the upstream
+     * vectoriser call after the response. For a disable, responds 202 and fires
+     * the upstream delete after the response.
+     */
+    static setVectorisation = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id } = req.params;
+        const { enabled } = SetVectorisationSchema.parse(req.body);
+
+        const { outcome, state, payload } = await vectorisationService.setEnabled(
+            id,
+            vendorId,
+            enabled,
+        );
+
+        if (outcome === 'noop') {
+            res.json({
+                success: true,
+                data: { productId: id, ...state },
+                message: `Vectorisation is already ${enabled ? 'enabled' : 'disabled'}.`,
+            });
+            return;
+        }
+
+        if (outcome === 'ineligible') {
+            res.json({
+                success: true,
+                data: { productId: id, ...state },
+                message:
+                    'Product is not eligible for vectorisation. Vectorisation has been disabled — make the product active and ensure it has a title, description, and category, then re-enable.',
+            });
+            return;
+        }
+
+        res.status(202).json({
+            success: true,
+            data: { productId: id, ...state },
+            message: outcome === 'enabled'
+                ? 'Vectorisation enabled. The vectoriser is being called in the background.'
+                : 'Vectorisation disabled. External cleanup is running in the background.',
+        });
+
+        if (outcome === 'enabled' && payload) {
+            void vectorisationService.executePreparedVectorisation(id, payload);
+        } else if (outcome === 'disabled') {
+            void vectorisationService.deleteVectorisation(id);
+        }
+    });
+
+    /**
+     * POST /api/vendor/products/:id/vectorisation/retry
+     *
+     * Resubmit the full product payload to the vectoriser. Typically used after
+     * a 'failed' status. The product must already be opted in.
+     *
+     * Flow:
+     *  1. prepareForVectorisation runs the eligibility check + sets 'pending' +
+     *     builds the payload. On ineligibility it disables vectorisation and
+     *     returns a null payload.
+     *  2. If no payload: return 422 — the retry can't proceed.
+     *  3. Otherwise respond 202 with accurate state, then fire-and-forget the
+     *     external call.
+     */
+    static retryVectorisation = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id } = req.params;
+
+        const product = await productRepository.findById(id, vendorId);
+        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+
+        const { payload, state } = await vectorisationService.prepareForVectorisation(id);
+
+        if (!payload) {
+            // prepareForVectorisation has already flipped vectorisationEnabled=false
+            // (and reset status) if the product was ineligible — the state object
+            // reflects the post-prep DB row.
+            throw createAppError(
+                ERROR_CODES.CATALOG_PRODUCT_VECTORISATION_NOT_ELIGIBLE,
+                422,
+                'Product is not eligible for vectorisation. Vectorisation has been disabled — ensure the product is active and has a title, description, and category, then re-enable vectorisation.',
+                { state },
+            );
+        }
+
+        res.status(202).json({
+            success: true,
+            data: { productId: id, ...state },
+            message: 'Retry scheduled. The vectoriser is being called in the background.',
+        });
+
+        void vectorisationService.executePreparedVectorisation(id, payload);
+    });
+
+    /**
+     * POST /api/admin/products/bulk-vectorise
+     * Admin: Trigger bulk vectorisation for a list of product IDs.
+     *
+     * Body: { productIds?: string[] }
+     *   - Omit productIds (or pass an empty array) to vectorise ALL eligible products
+     *     across all vendors (use with caution on large catalogues).
+     *
+     * This endpoint AWAITS the result and returns a summary — it is intentionally
+     * synchronous so the caller knows what happened.
+     */
+    static bulkVectorise = asyncHandler(async (req: Request, res: Response) => {
+        const input = BulkVectoriseSchema.parse(req.body);
+
+        let productIds: string[];
+
+        if (input.productIds && input.productIds.length > 0) {
+            productIds = input.productIds;
+        } else {
+            // No IDs provided — find all active, vectorisation-enabled, non-completed products
+            const { ProductModel } = await import('../models/product.model');
+            const docs = await ProductModel.find({
+                status: 'active',
+                vectorisationEnabled: true,
+                vectorisationStatus: { $in: ['not_started', 'pending', 'failed'] },
+                deletedAt: null,
+            }).select('_id').lean();
+            productIds = docs.map((d: any) => d._id.toString());
+        }
+
+        const result = await vectorisationService.vectoriseBulk(productIds);
+
+        res.json({
+            success: true,
+            data: result,
+            message: `Vectorisation complete: ${result.succeeded} succeeded, ${result.failed} failed out of ${result.total} total`,
+        });
     });
 }

@@ -43,7 +43,7 @@ router.post('/upload', uploadMultiple, FileUploadController.uploadFiles);
 
 /**
  * GET /api/files/orphans
- * List orphaned files (usageCount = 0, older than specified date)
+ * List orphaned files (no live references, older than specified date)
  * Admin only
  * MUST be before /:id route to avoid routing conflict
  */
@@ -51,7 +51,9 @@ router.get('/orphans', requireRole(['admin']), FileManagementController.listOrph
 
 /**
  * GET /api/files
- * List user's uploaded files with pagination
+ * List user's uploaded files with pagination, name search, characteristic
+ * filtering (mimeType/category, provider, ownerType, size & date ranges) and
+ * sorting. See ListFilesQuerySchema for the supported query parameters.
  */
 router.get('/', FileManagementController.listFiles);
 
@@ -70,7 +72,7 @@ router.patch('/:id', FileManagementController.updateFile);
 /**
  * DELETE /api/files/:id
  * Soft delete file (mark for garbage collection)
- * Only works if usageCount = 0
+ * Only works if the file has no live references
  */
 router.delete('/:id', FileManagementController.deleteFile);
 

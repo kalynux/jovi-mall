@@ -41,7 +41,7 @@ export class VendorOrderNoteRepository {
 
     /**
      * Find notes by order with vendor ownership check
-     * 
+     *
      * Returns notes in chronological order (oldest first).
      * Ownership enforced in query.
      */
@@ -54,6 +54,20 @@ export class VendorOrderNoteRepository {
             .sort({ created_at: 1 })  // Chronological order
             .lean()
             .exec();
+    }
 
+    /**
+     * Find a single note by ID with vendor ownership check.
+     *
+     * Returns null if not found or not owned by this vendor.
+     */
+    async findById(noteId: string, vendorId: string): Promise<IVendorOrderNoteData | null> {
+        return await VendorOrderNoteModel
+            .findOne({
+                _id: noteId,
+                vendor_id: vendorId  // CRITICAL: Ownership check
+            })
+            .lean()
+            .exec() as IVendorOrderNoteData | null;
     }
 }

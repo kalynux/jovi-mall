@@ -4,6 +4,7 @@ import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../cor
 export type ProductType = 'physical' | 'digital' | 'service';
 export type ProductStatus = 'draft' | 'active' | 'archived' | 'pending_review' | 'suspended';
 export type BookingMode = 'calendar' | 'manual' | 'capacity';
+export type VectorisationStatus = 'not_started' | 'pending' | 'completed' | 'failed';
 
 export interface ServiceConfig {
   durationMinutes: number;
@@ -13,10 +14,20 @@ export interface ServiceConfig {
 }
 
 export interface DigitalConfig {
-  assetId: Types.ObjectId;        // Reference to DigitalAsset
-  maxDownloads: number | null;     // null = unlimited
-  expiresAfterDays: number | null; // null = never expires
-  isActive: boolean;               // Can be toggled without deleting
+  // Product-wide download kill switch. Per-variant asset/maxDownloads/expiresAfterDays
+  // live on ProductVariant.digitalConfig. When false, no entitlements are granted
+  // for any variant of this product, regardless of variant state.
+  isActive: boolean;
+}
+
+/**
+ * Per-product delivery configuration. Only meaningful for physical products.
+ * When `agency_id` is null, the order pipeline falls back to the vendor's
+ * `default_delivery_agency_id`. If both are unset, the product cannot be
+ * activated (see ProductStatusValidationService).
+ */
+export interface DeliveryConfig {
+  agency_id: Types.ObjectId | null;
 }
 
 export interface IProduct extends IBaseDocument {
@@ -46,6 +57,17 @@ export interface IProduct extends IBaseDocument {
 
   // Digital-specific configuration
   digitalConfig?: DigitalConfig;
+
+  // Physical-specific delivery configuration. Read by OrderService.createOrderFromCart.
+  delivery?: DeliveryConfig;
+
+  // ─── Vectorisation tracking ───────────────────────────────────────────────
+  /** Opt-in flag: vendor must explicitly enable vectorisation. Defaults to false. */
+  vectorisationEnabled: boolean;
+  /** Current pipeline state. Managed exclusively by VectorisationService. */
+  vectorisationStatus: VectorisationStatus;
+  /** External ID returned by the vectoriser service once completed. Null until then. */
+  vectorisedDataId: string | null;
 }
 
 const ProductSchema = new Schema<IProduct>({
@@ -79,6 +101,16 @@ const ProductSchema = new Schema<IProduct>({
 
   fileIds: [{ type: Schema.Types.ObjectId, ref: 'File' }],
 
+  // ─── Vectorisation tracking ───────────────────────────────────────────────
+  vectorisationEnabled: { type: Boolean, default: false, index: true },
+  vectorisationStatus: {
+    type: String,
+    enum: ['not_started', 'pending', 'completed', 'failed'],
+    default: 'not_started',
+    index: true,
+  },
+  vectorisedDataId: { type: String, default: null },
+
   // Service-specific configuration
   serviceConfig: {
     type: {
@@ -94,24 +126,10 @@ const ProductSchema = new Schema<IProduct>({
     required: false,
   },
 
-  // Digital-specific configuration
+  // Digital-specific configuration (product-wide toggle only).
+  // Per-variant asset/maxDownloads/expiresAfterDays live on ProductVariant.digitalConfig.
   digitalConfig: {
     type: {
-      assetId: {
-        type: Schema.Types.ObjectId,
-        ref: 'DigitalAsset',
-        required: true
-      },
-      maxDownloads: {
-        type: Number,
-        default: null,
-        min: 1
-      },
-      expiresAfterDays: {
-        type: Number,
-        default: null,
-        min: 1
-      },
       isActive: {
         type: Boolean,
         default: true
@@ -120,11 +138,23 @@ const ProductSchema = new Schema<IProduct>({
     required: false,
   },
 
+  // Physical-specific delivery config. Optional — falls back to vendor.default_delivery_agency_id at order time.
+  delivery: {
+    type: {
+      agency_id: {
+        type: Schema.Types.ObjectId,
+        ref: 'DeliveryAgency',
+        default: null,
+      },
+    },
+    required: false,
+    default: undefined,
+  },
+
   ...BaseSchemaFields
 }, BaseSchemaOptions);
 
-// Validation: Service products must have serviceConfig
-// Validation: Service products must have serviceConfig
+// Pre-save validation: enforce type-specific config requirements for non-draft products
 ProductSchema.pre('save', function (next) {
   // CONFIG VALIDATION ONLY APPLIES TO NON-DRAFT PRODUCTS
   if (this.status === 'draft') {
@@ -141,11 +171,8 @@ ProductSchema.pre('save', function (next) {
     return;
   }
 
-  // Validation: Digital products must have digitalConfig
-  if (this.type === 'digital' && !this.digitalConfig) {
-    next(new Error('Digital products must have digitalConfig defined before activation'));
-    return;
-  }
+  // Per-variant asset enforcement happens in ProductStatusValidationService at activation time.
+  // The product-level digitalConfig now only carries the `isActive` kill switch.
   if (this.type !== 'digital' && this.digitalConfig) {
     next(new Error('Only digital products can have digitalConfig'));
     return;

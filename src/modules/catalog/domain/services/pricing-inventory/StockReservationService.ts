@@ -7,6 +7,7 @@ import { IStockReservationRepository } from '../../../repositories/interfaces/st
 import { IDigitalAssetRepository } from '../../../repositories/interfaces/digital-asset.repository.interface';
 import { IAvailabilityRepository } from '../../../repositories/interfaces/availability.repository.interface';
 import { StockReservation } from '../../../repositories/mappers/stock-reservation.mapper';
+import { Variant } from '../../../repositories/mappers/variant.mapper';
 import { ReservationType } from '../../../models/stock-reservation.model';
 
 export interface ReserveStockCommand {
@@ -26,7 +27,9 @@ export class StockReservationService {
     private readonly productRepository: IProductRepository,
     private readonly variantRepository: IVariantRepository,
     private readonly reservationRepository: IStockReservationRepository,
-    private readonly digitalAssetRepository: IDigitalAssetRepository,
+    // DEPRECATED: digital-asset reservation is now sourced from variant.digitalConfig.assetId.
+    // Kept in constructor for backward compat with wiring; not read by reserveDigitalStock.
+    private readonly _digitalAssetRepository: IDigitalAssetRepository,
     private readonly availabilityRepository: IAvailabilityRepository,
     private readonly transactionManager: TransactionManager
   ) { }
@@ -77,7 +80,7 @@ export class StockReservationService {
         await this.reservePhysicalStock(variant.id, command.quantity, variant.isInfiniteStock, session);
       } else if (product.type === 'digital') {
         reservationType = 'digital';
-        digitalAssetId = await this.reserveDigitalStock(command.productId, command.quantity, session);
+        digitalAssetId = await this.reserveDigitalStock(variant);
       } else if (product.type === 'service') {
         reservationType = 'service';
         availabilitySlotId = await this.reserveServiceCapacity(command.productId, command.quantity, session);
@@ -124,17 +127,14 @@ export class StockReservationService {
     }
   }
 
-  private async reserveDigitalStock(productId: string, quantity: number, session: any): Promise<string | undefined> {
-    const digitalAssets = await this.digitalAssetRepository.findByProduct(productId, { session });
-
-    if (digitalAssets.length === 0) {
+  private async reserveDigitalStock(variant: Variant): Promise<string> {
+    if (!variant.digitalConfig?.assetId) {
       throw createAppError(ERROR_CODES.CATALOG_VARIANT_NO_DIGITAL_ASSET, 422);
     }
-
-    return digitalAssets[0].id;
+    return variant.digitalConfig.assetId;
   }
 
-  private async reserveServiceCapacity(productId: string, quantity: number, session: any): Promise<string | undefined> {
+  private async reserveServiceCapacity(_productId: string, _quantity: number, _session: any): Promise<string | undefined> {
     return undefined;
   }
 }

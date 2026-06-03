@@ -68,25 +68,66 @@ router.patch('/profile/password', VendorProfileController.updatePassword);
  */
 router.get('/delivery-agencies', VendorProfileController.listDeliveryAgencies);
 
+/**
+ * GET /api/vendor/profile/default-delivery-agency
+ *
+ * Returns the vendor's currently-configured default delivery agency (or null).
+ * Used by the frontend to show the agency in profile settings and preselect it
+ * on the product editor.
+ */
+router.get('/profile/default-delivery-agency', VendorProfileController.getDefaultDeliveryAgency);
+
+/**
+ * PUT /api/vendor/profile/default-delivery-agency
+ *
+ * Set or change the vendor's default delivery agency outside the onboarding flow.
+ * Body: { agencyId: string }
+ */
+router.put('/profile/default-delivery-agency', VendorProfileController.setDefaultDeliveryAgency);
+
+/**
+ * DELETE /api/vendor/profile/default-delivery-agency
+ *
+ * Clear the vendor's default delivery agency.
+ */
+router.delete('/profile/default-delivery-agency', VendorProfileController.clearDefaultDeliveryAgency);
+
 // ─── Onboarding ───────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/vendor/onboarding/status
+ * Rich onboarding status: steps[], progressPercent, completedFields, warnings.
+ * Frontend uses this to render the step indicator and route to the correct screen.
+ */
+router.get('/onboarding/status', VendorProfileController.getOnboardingStatus);
 
 /**
  * PUT /api/vendor/onboarding/basic-setup
  * Step 1 (Required): country, timezone, payout_details
+ * Optional: { version } for optimistic concurrency
  */
 router.put('/onboarding/basic-setup', VendorProfileController.completeBasicSetup);
 
 /**
  * PUT /api/vendor/onboarding/delivery-linking
  * Step 2 (Optional/Skippable): { skip?: boolean, default_delivery_agency_id? }
+ * Optional: { version } for optimistic concurrency
  */
 router.put('/onboarding/delivery-linking', VendorProfileController.completeDeliveryLinking);
 
 /**
  * PUT /api/vendor/onboarding/branding
  * Step 3 (Optional/Skippable): { skip?: boolean, branding?, business_addresses? }
+ * Optional: { version } for optimistic concurrency
  */
 router.put('/onboarding/branding', VendorProfileController.completeBrandingSetup);
+
+/**
+ * PUT /api/vendor/onboarding/policy-setup
+ * Step 4 (Optional/Skippable): { skip?: boolean, return_policy?, cancellation_policy?, support_policy? }
+ * Optional: { version } for optimistic concurrency
+ */
+router.put('/onboarding/policy-setup', VendorProfileController.completePolicySetup);
 
 
 /**
@@ -154,6 +195,12 @@ router.post('/orders/:id/notes', VendorOrderController.addNote);
  * Get vendor-internal notes
  */
 router.get('/orders/:id/notes', VendorOrderController.getNotes);
+
+/**
+ * GET /api/vendor/orders/:id/notes/:noteId
+ * Get a single vendor-internal note by ID (useful when following a timeline noteId reference)
+ */
+router.get('/orders/:id/notes/:noteId', VendorOrderController.getNote);
 
 /**
  * PATCH /api/vendor/orders/:id/delivery-agency
