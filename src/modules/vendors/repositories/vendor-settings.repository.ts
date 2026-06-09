@@ -1,0 +1,132 @@
+import { Types } from 'mongoose';
+import {
+    VendorSettingsModel,
+    IVendorSettings,
+    IVendorCustomerFlagSub
+} from '../models/vendor-settings.model';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
+
+/**
+ * VendorSettingsRepository - Persistence for the per-vendor settings document.
+ *
+ * Currently exposes CRUD over the vendor's embedded customer flags. The settings
+ * document is created lazily (upsert) the first time it is read or written.
+ * All flag operations are vendor-scoped and ignore soft-deleted flags.
+ */
+export class VendorSettingsRepository {
+    /** Fetch the vendor's settings document, creating an empty one if absent. */
+    async getOrCreate(vendorId: string): Promise<IVendorSettings> {
+        const settings = await VendorSettingsModel.findOneAndUpdate(
+            { vendor_id: new Types.ObjectId(vendorId) },
+            { $setOnInsert: { vendor_id: new Types.ObjectId(vendorId), customer_flags: [] } },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        ).exec();
+        return settings!;
+    }
+
+    // ─── Customer flags ────────────────────────────────────────────────────────
+
+    /** All non-deleted flags for the vendor, oldest first. */
+    async listFlags(vendorId: string): Promise<IVendorCustomerFlagSub[]> {
+        const settings = await this.getOrCreate(vendorId);
+        return settings.customer_flags
+            .filter((f) => !f.deletedAt)
+            .sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
+    }
+
+    async createFlag(
+        vendorId: string,
+        data: { name: string; color: string; description?: string | null }
+    ): Promise<IVendorCustomerFlagSub> {
+        const settings = await this.getOrCreate(vendorId);
+        this.assertNameAvailable(settings, data.name, null);
+
+        const flags = settings.customer_flags as any;
+        const created = flags.create({
+            name: data.name,
+            color: data.color,
+            description: data.description ?? null
+        });
+        flags.push(created);
+        await settings.save();
+        return created;
+    }
+
+    /** Find a single non-deleted flag by id (vendor-scoped). */
+    async findFlagById(vendorId: string, flagId: string): Promise<IVendorCustomerFlagSub | null> {
+        if (!Types.ObjectId.isValid(flagId)) return null;
+        const settings = await this.getOrCreate(vendorId);
+        const flag = (settings.customer_flags as any).id(flagId) as IVendorCustomerFlagSub | null;
+        return flag && !flag.deletedAt ? flag : null;
+    }
+
+    async updateFlag(
+        vendorId: string,
+        flagId: string,
+        updates: { name?: string; color?: string; description?: string | null }
+    ): Promise<IVendorCustomerFlagSub | null> {
+        if (!Types.ObjectId.isValid(flagId)) return null;
+        const settings = await this.getOrCreate(vendorId);
+        const flag = (settings.customer_flags as any).id(flagId) as IVendorCustomerFlagSub | null;
+        if (!flag || flag.deletedAt) return null;
+
+        if (updates.name !== undefined) {
+            this.assertNameAvailable(settings, updates.name, flagId);
+            flag.name = updates.name;
+        }
+        if (updates.color !== undefined) flag.color = updates.color;
+        if (updates.description !== undefined) flag.description = updates.description ?? null;
+
+        await settings.save();
+        return flag;
+    }
+
+    /** Soft-delete a flag. Returns true if a non-deleted flag was found and deleted. */
+    async softDeleteFlag(vendorId: string, flagId: string): Promise<boolean> {
+        if (!Types.ObjectId.isValid(flagId)) return false;
+        const settings = await this.getOrCreate(vendorId);
+        const flag = (settings.customer_flags as any).id(flagId) as IVendorCustomerFlagSub | null;
+        if (!flag || flag.deletedAt) return false;
+        flag.deletedAt = new Date();
+        await settings.save();
+        return true;
+    }
+
+    /**
+     * Return the subset of the given flag ids that exist, belong to the vendor,
+     * and are not soft-deleted. Used to validate flag assignment.
+     */
+    async findOwnedFlagIds(vendorId: string, flagIds: string[]): Promise<string[]> {
+        const valid = new Set(flagIds.filter((id) => Types.ObjectId.isValid(id)));
+        if (valid.size === 0) return [];
+        const settings = await this.getOrCreate(vendorId);
+        return settings.customer_flags
+            .filter((f) => !f.deletedAt && valid.has(f._id.toString()))
+            .map((f) => f._id.toString());
+    }
+
+    // ─── Helpers ────────────────────────────────────────────────────────────────
+
+    /** Reject a name already used by another non-deleted flag (case-insensitive). */
+    private assertNameAvailable(
+        settings: IVendorSettings,
+        name: string,
+        excludeFlagId: string | null
+    ): void {
+        const normalized = name.trim().toLowerCase();
+        const clash = settings.customer_flags.find(
+            (f) =>
+                !f.deletedAt &&
+                f._id.toString() !== excludeFlagId &&
+                f.name.trim().toLowerCase() === normalized
+        );
+        if (clash) {
+            throw createAppError(
+                ERROR_CODES.VENDOR_CUSTOMER_FLAG_DUPLICATE,
+                409,
+                'A flag with this name already exists'
+            );
+        }
+    }
+}

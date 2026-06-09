@@ -4,6 +4,7 @@ import { VendorProfileController } from './controller/vendor-profile.controller'
 import { VendorCalendarController } from './controller/vendor-calendar.controller';
 import { VendorOrderController } from './controller/vendor-order.controller';
 import { VendorNotificationController } from './controller/vendor-notification.controller';
+import { VendorCustomerController } from './controller/vendor-customer.controller';
 
 const router = Router();
 
@@ -209,6 +210,19 @@ router.get('/orders/:id/notes/:noteId', VendorOrderController.getNote);
 router.patch('/orders/:id/delivery-agency', VendorOrderController.updateDeliveryAgency);
 
 /**
+ * GET /api/vendor/orders/:id/refund-eligibility
+ * Check whether the order can be refunded (vendor return policy + order state)
+ */
+router.get('/orders/:id/refund-eligibility', VendorOrderController.getRefundEligibility);
+
+/**
+ * POST /api/vendor/orders/:id/refund
+ * Action a refund on a paid, refundable order.
+ * Body: { amount?, reason? } — amount defaults to the policy-computed maximum.
+ */
+router.post('/orders/:id/refund', VendorOrderController.refundOrder);
+
+/**
  * GET /api/vendor/orders/:id/entitlements
  * Get digital entitlements for order (NEW: Phase 2)
  */
@@ -225,6 +239,40 @@ router.post('/entitlements/:id/revoke', VendorOrderController.revokeEntitlement)
  * Restore revoked digital entitlement (NEW: Phase 2)
  */
 router.post('/entitlements/:id/restore', VendorOrderController.restoreEntitlement);
+
+/**
+ * ==========================================
+ * CUSTOMER MANAGEMENT
+ * ==========================================
+ */
+
+/**
+ * Vendor-defined customer flags (customizable color-coded tags/groups).
+ *
+ * GET    /api/vendor/customer-flags        List flags
+ * POST   /api/vendor/customer-flags        Create flag  { name, color, description? }
+ * PATCH  /api/vendor/customer-flags/:id    Update flag  { name?, color?, description? }
+ * DELETE /api/vendor/customer-flags/:id    Soft-delete flag (and detach from customers)
+ */
+router.get('/customer-flags', VendorCustomerController.listFlags);
+router.post('/customer-flags', VendorCustomerController.createFlag);
+router.patch('/customer-flags/:id', VendorCustomerController.updateFlag);
+router.delete('/customer-flags/:id', VendorCustomerController.deleteFlag);
+
+/**
+ * Customers who have ordered from this vendor (derived from orders).
+ *
+ * GET   /api/vendor/customers              List customers  ?search=&flagId=&page=&limit=&sortBy=&sortOrder=
+ * GET   /api/vendor/customers/:id          Customer detail (profile + stats + flags)
+ * PATCH /api/vendor/customers/:id/name     Set/clear vendor-local name override  { displayName }
+ * PUT   /api/vendor/customers/:id/flags    Replace the customer's assigned flags  { flagIds }
+ *
+ * To view a customer's orders, call GET /api/vendor/orders?customerId=:id
+ */
+router.get('/customers', VendorCustomerController.listCustomers);
+router.get('/customers/:id', VendorCustomerController.getCustomerDetail);
+router.patch('/customers/:id/name', VendorCustomerController.updateCustomerName);
+router.put('/customers/:id/flags', VendorCustomerController.setCustomerFlags);
 
 /**
  * ==========================================

@@ -12,11 +12,14 @@ import { MyCoolPayGateway } from '../gateways/mycoolpay.gateway';
 import { StripeGateway } from '../gateways/stripe.gateway';
 import { OrderRepository } from '../../orders/order.repository';
 import { OrderService } from '../../orders/order.service';
+import { OrderModel } from '../../orders/order.model';
 import { Booking, IBooking } from '../../booking/models/booking.model';
 import { BookingCalendarSyncService } from '../../booking/services/booking-calendar-sync.service';
+import { RefundTransactionModel } from '../models/refund-transaction.model';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
+import { transactionManager } from '../../../core/database/transaction.manager';
 
 /**
  * PaymentOrchestratorService - Gateway-agnostic payment orchestration
@@ -215,6 +218,151 @@ export class PaymentOrchestratorService {
 
       throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, { cause: error.message });
     }
+  }
+
+  /**
+   * Refund a paid order (full or partial).
+   *
+   * Eligibility against the vendor's return policy is the CALLER's responsibility
+   * (see VendorRefundService); this method enforces the money invariants and
+   * orchestrates the gateway call + persistence:
+   *
+   * 1. Resolve the SUCCEEDED PaymentTransaction for the order.
+   * 2. Validate the requested amount against the remaining refundable balance.
+   * 3. Create a pending RefundTransaction.
+   * 4. Call the gateway's refund API (outside any DB transaction).
+   * 5. On success: atomically finalize the refund, bump totalRefunded /
+   *    hasPartialRefund, flip the payment + order status to refunded when fully
+   *    refunded. On failure: mark the refund failed and throw.
+   *
+   * @returns A summary of the refund outcome.
+   */
+  async refundPayment(params: {
+    orderId: string;
+    vendorId: string;
+    initiatedBy: string;   // vendor user id
+    amount: number;        // amount to refund (already resolved by caller)
+    reason?: string;
+  }): Promise<{
+    refundId: string;
+    status: 'completed' | 'failed';
+    amount: number;
+    currency: string;
+    totalRefunded: number;
+    fullyRefunded: boolean;
+  }> {
+    const { orderId, vendorId, initiatedBy, amount, reason } = params;
+
+    // 1. Resolve the successful payment for this order.
+    const paymentTx = await PaymentTransactionModel.findOne({
+      orderId: new Types.ObjectId(orderId),
+      status: 'SUCCEEDED'
+    });
+    if (!paymentTx) {
+      throw createAppError(ERROR_CODES.REFUND_PAYMENT_NOT_FOUND, 404);
+    }
+
+    // 2. Validate amount against remaining refundable balance.
+    const remaining = paymentTx.amountSnapshot - paymentTx.totalRefunded;
+    if (remaining <= 0) {
+      throw createAppError(ERROR_CODES.REFUND_ALREADY_FULLY_REFUNDED, 409);
+    }
+    if (amount <= 0 || amount > remaining) {
+      throw createAppError(ERROR_CODES.REFUND_AMOUNT_EXCEEDS_MAX, 400, undefined, {
+        requested: amount,
+        remaining
+      });
+    }
+
+    // 3. Resolve the gateway adapter; not all support refunds yet.
+    const gatewayInstance = this.gateways.get(paymentTx.gateway);
+    if (!gatewayInstance || typeof gatewayInstance.refundPayment !== 'function') {
+      throw createAppError(ERROR_CODES.REFUND_GATEWAY_NOT_SUPPORTED, 400, undefined, {
+        gateway: paymentTx.gateway
+      });
+    }
+
+    // 4. Create the refund record in 'pending' state (audit trail before gateway call).
+    const refund = await RefundTransactionModel.create({
+      paymentTransactionId: paymentTx._id,
+      orderId: new Types.ObjectId(orderId),
+      vendorId: new Types.ObjectId(vendorId),
+      userId: paymentTx.userId,
+      refundAmount: amount,
+      currency: paymentTx.currencySnapshot,
+      reason,
+      status: 'pending',
+      gateway: paymentTx.gateway,
+      initiatedBy: new Types.ObjectId(initiatedBy),
+      initiatedByRole: 'vendor'
+    });
+
+    // 5. Call the gateway (external; kept outside the DB transaction).
+    const gatewayResult = await gatewayInstance.refundPayment({
+      gatewayRef: paymentTx.gatewayRef,
+      amount,
+      reason,
+      metadata: { orderId, vendorId, refundId: refund._id.toString() }
+    });
+
+    if (!gatewayResult.success) {
+      refund.status = 'failed';
+      await refund.save();
+      throw createAppError(ERROR_CODES.REFUND_GATEWAY_FAILED, 502, undefined, {
+        error: gatewayResult.error
+      });
+    }
+
+    // 6. Finalize atomically: refund record + payment totals + order status.
+    const newTotalRefunded = paymentTx.totalRefunded + amount;
+    const fullyRefunded = newTotalRefunded >= paymentTx.amountSnapshot;
+
+    await transactionManager.runInTransaction(async (session) => {
+      refund.status = 'completed';
+      refund.completedAt = new Date();
+      refund.gatewayRefundRef = gatewayResult.refundRef;
+      await refund.save({ session });
+
+      paymentTx.totalRefunded = newTotalRefunded;
+      paymentTx.hasPartialRefund = !fullyRefunded && newTotalRefunded > 0;
+      if (fullyRefunded) {
+        paymentTx.status = 'REFUNDED';
+      }
+      await paymentTx.save({ session });
+
+      // Order payment_status only flips to 'refunded' on a full refund.
+      if (fullyRefunded) {
+        await OrderModel.updateOne(
+          { _id: new Types.ObjectId(orderId) },
+          { $set: { payment_status: 'refunded', updated_at: new Date() } },
+          { session }
+        );
+      }
+    });
+
+    // 7. Emit a domain event (fire-and-forget).
+    eventBus.publish('payment.refunded', {
+      eventType: 'payment.refunded',
+      aggregateId: orderId,
+      payload: {
+        orderId,
+        vendorId,
+        refundId: refund._id.toString(),
+        amount,
+        currency: paymentTx.currencySnapshot,
+        fullyRefunded
+      },
+      occurredAt: new Date()
+    }).catch(() => { /* non-blocking */ });
+
+    return {
+      refundId: refund._id.toString(),
+      status: 'completed',
+      amount,
+      currency: paymentTx.currencySnapshot,
+      totalRefunded: newTotalRefunded,
+      fullyRefunded
+    };
   }
 
   /**

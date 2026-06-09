@@ -21,6 +21,7 @@ export interface OrderFilters {
     status?: string;
     paymentStatus?: string;
     orderType?: 'physical' | 'digital';  // NEW: Filter by order type
+    customerId?: string;                  // NEW: Scope to a single customer (Customer Management)
     dateFrom?: Date;
     dateTo?: Date;
     q?: string;  // Search order number or customer email
@@ -53,6 +54,11 @@ export class VendorOrderRepository {
         // NEW: Order type filter
         if (filters.orderType) {
             query.order_type = filters.orderType;
+        }
+
+        // NEW: Customer scope (Customer Management → "View Orders")
+        if (filters.customerId) {
+            query.customer_id = filters.customerId;
         }
 
         if (filters.dateFrom || filters.dateTo) {

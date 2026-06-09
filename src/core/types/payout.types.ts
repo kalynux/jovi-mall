@@ -137,9 +137,9 @@ export const PayoutMethodZodSchema = z
 
 /**
  * Validates an ordered array of payout methods.
- * - Minimum 1 entry required.
+ * - Minimum 1 entry required, maximum 3.
  * - The FIRST entry is treated as the preferred/default payout method.
- * - No duplicate methods allowed (enforced by refine).
+ * - Multiple mobile_money and/or bank entries are allowed.
  */
 export const PayoutDetailsZodSchema = z
     .array(PayoutMethodZodSchema)

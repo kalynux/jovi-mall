@@ -411,7 +411,7 @@ export class VendorProfileService {
     const step1Complete =
       !!vendor.country &&
       !!vendor.timezone &&
-      !!vendor.payout_details;
+      !!vendor.payout_details?.length;
 
     if (!step1Complete) return VendorOnboardingStep.BASIC_SETUP;
 
@@ -438,7 +438,7 @@ export class VendorProfileService {
     const missing: string[] = [];
 
     if (!vendor.country) missing.push('country');
-    if (!vendor.payout_details) missing.push('payout_details');
+    if (!vendor.payout_details?.length) missing.push('payout_details');
     // default_delivery_agency_id is optional — not flagged as a missing required field
 
     const step = vendor.onboarding_step;

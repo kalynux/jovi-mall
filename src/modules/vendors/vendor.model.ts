@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
-import { PayoutDetailsSchema, IPayoutDetails } from '../../core/types/payout.types';
+import { PayoutMethodSchema, IPayoutDetails } from '../../core/types/payout.types';
 import { VendorOnboardingStep } from '../../core/constants/onboarding-steps';
 
 // ─── Vendor Policy Sub-Schemas ────────────────────────────────────────────────
@@ -298,7 +298,9 @@ const VendorSchema = new Schema<IVendor>(
     branding: { type: BrandingSchema, default: () => ({ logo_url: null, cover_image_url: null }) },
     business_addresses: { type: [BusinessAddressSchema], default: [] },
     operating_hours: { type: [OperatingHoursSchema], default: [] },
-    payout_details: { type: PayoutDetailsSchema, default: null },
+    // Ordered array of payout methods (max 3). The FIRST entry is the preferred one.
+    // A vendor may have multiple mobile_money and/or bank entries.
+    payout_details: { type: [PayoutMethodSchema], default: [] },
     kyc_details: {
       type: VendorKycDetailsSchema,
       default: () => ({ national_id_number: null, legit_verified: false }),

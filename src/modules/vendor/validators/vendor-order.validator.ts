@@ -12,6 +12,7 @@ export const ListOrdersQuerySchema = z.object({
     status: z.enum(['pending', 'processing', 'shipped', 'delivered', 'fulfilled', 'cancelled']).optional(),
     paymentStatus: z.enum(['pending', 'AWAITING_PAYMENT', 'paid', 'failed', 'refunded']).optional(),
     orderType: z.enum(['physical', 'digital']).optional(),  // NEW: Filter by order type
+    customerId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid customer ID').optional(),  // NEW: Scope to one customer
     dateFrom: z.string().datetime().optional(),  // ISO 8601
     dateTo: z.string().datetime().optional(),    // ISO 8601
     q: z.string().max(100).optional(),  // Search query
@@ -68,6 +69,15 @@ export const CreateNoteSchema = z.object({
 });
 
 export type CreateNoteDto = z.infer<typeof CreateNoteSchema>;
+
+// Refund an order (Customer Management → order detail)
+export const RefundRequestSchema = z.object({
+    // Optional: defaults to the policy-computed maximum when omitted.
+    amount: z.number().positive('Amount must be greater than zero').optional(),
+    reason: z.string().max(500, 'Reason cannot exceed 500 characters').optional()
+});
+
+export type RefundRequestDto = z.infer<typeof RefundRequestSchema>;
 
 // Timeline query parameters
 export const TimelineQuerySchema = z.object({

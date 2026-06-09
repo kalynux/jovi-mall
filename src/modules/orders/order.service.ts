@@ -10,6 +10,7 @@ import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.repository.mongo';
 import { VariantRepositoryMongo } from '../catalog/repositories/mongo/variant.repository.mongo';
+import { VendorCustomerSyncService } from '../vendors/services/vendor-customer-sync.service';
 import { eventBus } from '../../core/events/event-bus';
 
 /**
@@ -39,6 +40,7 @@ export class OrderService {
   private vendorRepo: VendorRepository;
   private productRepo: ProductRepositoryMongo;
   private variantRepo: VariantRepositoryMongo;
+  private vendorCustomerSync: VendorCustomerSyncService;
 
   constructor() {
     this.orderRepo = new OrderRepository();
@@ -47,6 +49,23 @@ export class OrderService {
     this.vendorRepo = new VendorRepository();
     this.productRepo = new ProductRepositoryMongo();
     this.variantRepo = new VariantRepositoryMongo();
+    this.vendorCustomerSync = new VendorCustomerSyncService();
+  }
+
+  /**
+   * Maintain the first-class vendor↔customer relation + denormalized stats.
+   * Secondary side-effect: never let a stats failure break the order flow.
+   */
+  private async syncVendorCustomerOrderPlaced(order: IOrder): Promise<void> {
+    try {
+      await this.vendorCustomerSync.recordOrderPlaced(
+        order.vendor_id,
+        order.customer_id,
+        order.created_at
+      );
+    } catch (error) {
+      console.error('[OrderService] Failed to sync vendor customer on order placed:', error);
+    }
   }
 
   /**
@@ -251,6 +270,9 @@ export class OrderService {
       // Emit order.created event
       await this.emitOrderCreatedEvent(order);
 
+      // Record/refresh the vendor↔customer relation + stats
+      await this.syncVendorCustomerOrderPlaced(order);
+
       // Clear cart after successful order creation
       await this.cartService.clearCart(customerId);
 
@@ -274,6 +296,9 @@ export class OrderService {
 
       // Emit order.created event
       await this.emitOrderCreatedEvent(order);
+
+      // Record/refresh the vendor↔customer relation + stats
+      await this.syncVendorCustomerOrderPlaced(order);
 
       // Clear cart after successful order creation
       await this.cartService.clearCart(customerId);
@@ -343,6 +368,18 @@ export class OrderService {
     }
 
     await order.save();
+
+    // Add the paid total to the customer's denormalized lifetime spend.
+    try {
+      await this.vendorCustomerSync.recordPaymentPaid(
+        order.vendor_id,
+        order.customer_id,
+        order.total_amount
+      );
+    } catch (error) {
+      console.error('[OrderService] Failed to sync vendor customer on payment success:', error);
+    }
+
     console.log(`[OrderService] Order ${orderId} payment success handled. Payment: ${order.payment_status}, Fulfillment: ${order.fulfillment_status}`);
   }
 

@@ -87,22 +87,24 @@ function maskAccountNumber(account: string): string {
 }
 
 function sanitizePayoutDetails(payout: IPayoutDetails | null): VendorPayoutDetailsSanitized | null {
-  if (!payout) return null;
+  // payout_details is an ordered array of methods; the FIRST entry is the preferred one.
+  if (!payout || payout.length === 0) return null;
+  const preferred = payout[0];
   return {
-    method: payout.method,
-    mobile_money: payout.mobile_money
+    method: preferred.method,
+    mobile_money: preferred.mobile_money
       ? {
-        provider: payout.mobile_money.provider,
-        phone_number_masked: maskPhoneNumber(payout.mobile_money.phone_number),
-        account_name: payout.mobile_money.account_name,
+        provider: preferred.mobile_money.provider,
+        phone_number_masked: maskPhoneNumber(preferred.mobile_money.phone_number),
+        account_name: preferred.mobile_money.account_name,
       }
       : null,
-    bank: payout.bank
+    bank: preferred.bank
       ? {
-        bank_name: payout.bank.bank_name,
-        account_number_masked: maskAccountNumber(payout.bank.account_number),
-        account_name: payout.bank.account_name,
-        country: payout.bank.country,
+        bank_name: preferred.bank.bank_name,
+        account_number_masked: maskAccountNumber(preferred.bank.account_number),
+        account_name: preferred.bank.account_name,
+        country: preferred.bank.country,
       }
       : null,
   };
@@ -153,10 +155,10 @@ export class VendorProfileMapper {
     const step = vendor.onboarding_step;
 
     const stepDefs = [
-      { step: 1, label: 'Basic Setup',                 required: true  },
+      { step: 1, label: 'Basic Setup', required: true },
       { step: 2, label: 'Delivery Linking (Optional)', required: false },
-      { step: 3, label: 'Branding (Optional)',         required: false },
-      { step: 4, label: 'Policy Setup (Optional)',     required: false },
+      { step: 3, label: 'Branding (Optional)', required: false },
+      { step: 4, label: 'Policy Setup (Optional)', required: false },
     ];
 
     const stepStatus = (n: number): 'completed' | 'current' | 'pending' => {
@@ -174,7 +176,7 @@ export class VendorProfileMapper {
 
     if (vendor.country) completedFields.push('country'); else missingFields.push('country');
     if (vendor.timezone) completedFields.push('timezone');
-    if (vendor.payout_details) completedFields.push('payout_details'); else missingFields.push('payout_details');
+    if (vendor.payout_details?.length) completedFields.push('payout_details'); else missingFields.push('payout_details');
     if (vendor.default_delivery_agency_id) completedFields.push('default_delivery_agency_id');
 
     const stepLabels: Record<number, string> = {

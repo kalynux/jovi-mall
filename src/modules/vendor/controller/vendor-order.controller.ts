@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { ZodError } from 'zod';
 import { VendorOrderService } from '../../orders/vendor-order.service';
+import { VendorRefundService } from '../service/vendor-refund.service';
 import {
     ListOrdersQuerySchema,
     UpdateFulfillmentStatusSchema,
@@ -8,11 +9,13 @@ import {
     RevokeEntitlementSchema,
     RestoreEntitlementSchema,
     CreateNoteSchema,
-    TimelineQuerySchema
+    TimelineQuerySchema,
+    RefundRequestSchema
 } from '../validators/vendor-order.validator';
 import { AppError } from '../../../core/errors';
 
 const vendorOrderService = new VendorOrderService();
+const vendorRefundService = new VendorRefundService();
 
 /**
  * Vendor Order Controller
@@ -48,6 +51,7 @@ export class VendorOrderController {
             if (query.status) filters.status = query.status;
             if (query.paymentStatus) filters.paymentStatus = query.paymentStatus;
             if (query.orderType) filters.orderType = query.orderType;  // NEW: Order type filter
+            if (query.customerId) filters.customerId = query.customerId;  // NEW: Scope to one customer
             if (query.dateFrom) filters.dateFrom = new Date(query.dateFrom);
             if (query.dateTo) filters.dateTo = new Date(query.dateTo);
             if (query.q) filters.q = query.q;
@@ -353,8 +357,56 @@ export class VendorOrderController {
     }
 
     /**
+     * GET /api/vendor/orders/:id/refund-eligibility
+     *
+     * Returns whether the order can be refunded under the vendor's return policy
+     * and order state, plus the policy-allowed maximum. Frontend uses this to
+     * show/hide the refund action and prefill the amount.
+     */
+    static async getRefundEligibility(req: Request, res: Response): Promise<void> {
+        try {
+            const vendorId = req.auth!.role_entity._id.toString();
+            const orderId = req.params.id;
+
+            const eligibility = await vendorRefundService.getEligibility(vendorId, orderId);
+
+            res.json({ success: true, data: eligibility });
+        } catch (error) {
+            VendorOrderController.handleError(error, res);
+        }
+    }
+
+    /**
+     * POST /api/vendor/orders/:id/refund
+     *
+     * Action a refund on a paid, refundable order. Amount defaults to the
+     * policy-computed maximum and may be overridden downward within that max.
+     */
+    static async refundOrder(req: Request, res: Response): Promise<void> {
+        try {
+            const vendorId = req.auth!.role_entity._id.toString();
+            const initiatedBy = req.auth!.user._id.toString();
+            const orderId = req.params.id;
+
+            const input = RefundRequestSchema.parse(req.body);
+
+            const result = await vendorRefundService.refund(vendorId, orderId, input, initiatedBy);
+
+            res.json({
+                success: true,
+                data: result,
+                message: result.fullyRefunded
+                    ? 'Order fully refunded'
+                    : 'Partial refund processed'
+            });
+        } catch (error) {
+            VendorOrderController.handleError(error, res);
+        }
+    }
+
+    /**
      * Centralized error handler
-     * 
+     *
      * Provides consistent error response format.
      * Handles different error types appropriately.
      */
