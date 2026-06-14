@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 /**
  * Order Model
@@ -95,7 +96,7 @@ const OrderItemSchema = new Schema({
   // Variant data (first-class)
   variant_id: {
     type: Schema.Types.ObjectId,
-    ref: 'ProductVariant',
+    ref: MODELS.PRODUCT_VARIANT,
     required: true  // REQUIRED - variant is the sellable unit
   },
   sku: {
@@ -114,7 +115,7 @@ const OrderItemSchema = new Schema({
   // Product data (context)
   product_id: {
     type: Schema.Types.ObjectId,
-    ref: 'Product',
+    ref: MODELS.PRODUCT,
     required: true
   },
   title: {
@@ -123,7 +124,7 @@ const OrderItemSchema = new Schema({
   },
   vendor_id: {
     type: Schema.Types.ObjectId,
-    ref: 'Vendor',
+    ref: MODELS.VENDOR,
     required: true
   },
   product_type: {
@@ -151,8 +152,8 @@ const OrderItemSchema = new Schema({
   // Delivery (optional - only for physical orders)
   delivery: {
     type: {
-      agency_id: { type: Schema.Types.ObjectId, ref: 'DeliveryAgency', required: true },
-      shipment_id: { type: Schema.Types.ObjectId, ref: 'Shipment', default: null },
+      agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, required: true },
+      shipment_id: { type: Schema.Types.ObjectId, ref: MODELS.SHIPMENT, default: null },
       status: {
         type: String,
         enum: ['pending', 'assigned', 'picked_up', 'in_transit', 'delivered', 'failed', 'returned'],
@@ -181,7 +182,7 @@ const OrderSchema = new Schema<IOrder>({
   // Vendor (CRITICAL: Each order belongs to exactly ONE vendor)
   vendor_id: {
     type: Schema.Types.ObjectId,
-    ref: 'Vendor',
+    ref: MODELS.VENDOR,
     required: true,
     index: true  // For vendor order queries
   },
@@ -189,7 +190,7 @@ const OrderSchema = new Schema<IOrder>({
   // Customer
   customer_id: {
     type: Schema.Types.ObjectId,
-    ref: 'Customer',
+    ref: MODELS.CUSTOMER,
     required: true,
     index: true  // For customer order history queries
   },
@@ -282,4 +283,4 @@ OrderSchema.index({ vendor_id: 1, created_at: -1 });  // Vendor order history
 OrderSchema.index({ vendor_id: 1, fulfillment_status: 1 });  // Vendor fulfillment queries
 OrderSchema.index({ vendor_id: 1, payment_status: 1 });  // Vendor payment queries
 
-export const OrderModel = mongoose.model<IOrder>('Order', OrderSchema);
+export const OrderModel = mongoose.model<IOrder>(MODELS.ORDER, OrderSchema, COLLECTIONS.ORDER);

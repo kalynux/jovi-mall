@@ -1,5 +1,6 @@
 import mongoose, { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * ShippingConfig - Product-level shipping configuration
@@ -31,14 +32,14 @@ export interface IShippingConfig extends IBaseDocument {
 const ShippingConfigSchema = new Schema<IShippingConfig>({
     productId: {
         type: Schema.Types.ObjectId,
-        ref: 'Product',
+        ref: MODELS.PRODUCT,
         required: true,
         index: true,
         unique: true,
     },
     vendorId: {
         type: Schema.Types.ObjectId,
-        ref: 'Vendor',
+        ref: MODELS.VENDOR,
         required: true,
         index: true,
     },
@@ -88,4 +89,4 @@ const ShippingConfigSchema = new Schema<IShippingConfig>({
 
 export const ShippingConfigModel =
     (mongoose.models.ShippingConfig as mongoose.Model<IShippingConfig>) ||
-    model<IShippingConfig>('ShippingConfig', ShippingConfigSchema);
+    model<IShippingConfig>(MODELS.SHIPPING_CONFIG, ShippingConfigSchema, COLLECTIONS.SHIPPING_CONFIG);

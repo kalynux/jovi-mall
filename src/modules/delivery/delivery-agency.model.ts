@@ -2,6 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 // No geo types needed
 import { PayoutMethodSchema, IPayoutMethod } from '../../core/types/payout.types';
 import { AgencyOnboardingStep } from '../../core/constants/onboarding-steps';
+import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 // ─── Policies Sub-Schemas ─────────────────────────────────────────────────────
 
@@ -249,7 +250,7 @@ export interface IDeliveryAgency extends Document {
 
 const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
   {
-    user_id: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+    user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true, unique: true },
     email: { type: String, trim: true, lowercase: true },
     email_verified: { type: Boolean, default: false },
     phone: { type: String, trim: true },
@@ -295,4 +296,4 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
 
 // Geospatial indexes were removed as location data is now string-based.
 
-export const DeliveryAgencyModel = mongoose.model<IDeliveryAgency>('DeliveryAgency', DeliveryAgencySchema);
+export const DeliveryAgencyModel = mongoose.model<IDeliveryAgency>(MODELS.DELIVERY_AGENCY, DeliveryAgencySchema, COLLECTIONS.DELIVERY_AGENCY);

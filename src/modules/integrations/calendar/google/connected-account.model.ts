@@ -1,4 +1,5 @@
 import mongoose, { Document, Schema } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../../../core/database/collections';
 
 export interface IConnectedCalendarAccount extends Document {
   userId: mongoose.Types.ObjectId;
@@ -20,12 +21,12 @@ const ConnectedCalendarAccountSchema = new Schema<IConnectedCalendarAccount>(
   {
     userId: {
       type: Schema.Types.ObjectId,
-      ref: 'User', // Assuming a User model exists
+      ref: MODELS.USER, // Assuming a User model exists
       required: true,
     },
     vendorId: {
       type: Schema.Types.ObjectId,
-      ref: 'Vendor',
+      ref: MODELS.VENDOR,
       required: false,
     },
     provider: {
@@ -84,7 +85,4 @@ ConnectedCalendarAccountSchema.index({ googleAccountId: 1 });
 // Index for fast vendor calendar lookups
 ConnectedCalendarAccountSchema.index({ vendorId: 1, provider: 1 });
 
-export const ConnectedCalendarAccount = mongoose.model<IConnectedCalendarAccount>(
-  'ConnectedCalendarAccount',
-  ConnectedCalendarAccountSchema
-);
+export const ConnectedCalendarAccount = mongoose.model<IConnectedCalendarAccount>(MODELS.CONNECTED_CALENDAR_ACCOUNT, ConnectedCalendarAccountSchema, COLLECTIONS.CONNECTED_CALENDAR_ACCOUNT);

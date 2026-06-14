@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../middlewares/auth.middleware';
-import { FileUploadController, uploadMultiple } from '../controllers/file-upload.controller';
+import { FileUploadController, uploadMultiple, uploadVideos } from '../controllers/file-upload.controller';
 import { FileManagementController } from '../controllers/file-management.controller';
 
 const router = Router();
@@ -38,6 +38,23 @@ router.use(requireAuth);
  * - 413: File exceeds role limit
  */
 router.post('/upload', uploadMultiple, FileUploadController.uploadFiles);
+
+/**
+ * POST /api/files/upload/video
+ * Upload video files on a dedicated route (mp4, mov, webm).
+ *
+ * Per-file size limit: 70 MB.
+ * Per-actor count limit: customers max 1, all other actors max 3.
+ *
+ * Form data:
+ * - videos: File[] (field name "videos")
+ *
+ * Responses:
+ * - 201: Videos uploaded successfully
+ * - 400: No files, too many files, unsupported type
+ * - 413: A video exceeds the 70 MB limit
+ */
+router.post('/upload/video', uploadVideos, FileUploadController.uploadVideos);
 
 // === CRUD MANAGEMENT ===
 

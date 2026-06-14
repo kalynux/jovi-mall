@@ -3,6 +3,7 @@ import { BaseRepository, RepositoryOptions } from '../../../../core/repositories
 import { IProductVariant, ProductVariantModel } from '../../models';
 import { IVariantRepository } from '../interfaces/variant.repository.interface';
 import { Variant, VariantMapper } from '../mappers/variant.mapper';
+import { COLLECTIONS } from '../../../../core/database/collections';
 
 export class VariantRepositoryMongo extends BaseRepository<IProductVariant, Variant> implements IVariantRepository {
   constructor() {
@@ -100,7 +101,7 @@ export class VariantRepositoryMongo extends BaseRepository<IProductVariant, Vari
       // Lookup product to get vendorId
       {
         $lookup: {
-          from: 'products',
+          from: COLLECTIONS.PRODUCT,
           localField: 'productId',
           foreignField: '_id',
           as: 'product'

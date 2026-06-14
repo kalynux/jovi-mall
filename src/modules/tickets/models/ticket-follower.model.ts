@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { ActorRole, ACTOR_ROLE_VALUES } from '../types/ticket.types';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * TicketFollower Model
@@ -32,13 +33,13 @@ export interface ITicketFollower extends Document {
 const TicketFollowerSchema = new Schema<ITicketFollower>({
     ticket_id: {
         type: Schema.Types.ObjectId,
-        ref: 'Ticket',
+        ref: MODELS.TICKET,
         required: true,
         index: true
     },
     user_id: {
         type: Schema.Types.ObjectId,
-        ref: 'User',
+        ref: MODELS.USER,
         required: true,
         index: true
     },
@@ -54,7 +55,7 @@ const TicketFollowerSchema = new Schema<ITicketFollower>({
     },
     added_by_user_id: {
         type: Schema.Types.ObjectId,
-        ref: 'User',
+        ref: MODELS.USER,
         required: true
     },
     added_at: {
@@ -74,4 +75,4 @@ TicketFollowerSchema.index({ ticket_id: 1, added_at: 1 });
 // Query non-admin followers (for 5-user limit enforcement)
 TicketFollowerSchema.index({ ticket_id: 1, is_admin: 1 });
 
-export const TicketFollowerModel = mongoose.model<ITicketFollower>('TicketFollower', TicketFollowerSchema);
+export const TicketFollowerModel = mongoose.model<ITicketFollower>(MODELS.TICKET_FOLLOWER, TicketFollowerSchema, COLLECTIONS.TICKET_FOLLOWER);

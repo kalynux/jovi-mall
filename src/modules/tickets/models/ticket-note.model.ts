@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { ActorRole, NoteVisibility, ACTOR_ROLE_VALUES, NOTE_VISIBILITY_VALUES } from '../types/ticket.types';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * TicketNote Model
@@ -38,13 +39,13 @@ export interface ITicketNote extends Document {
 const TicketNoteSchema = new Schema<ITicketNote>({
     ticket_id: {
         type: Schema.Types.ObjectId,
-        ref: 'Ticket',
+        ref: MODELS.TICKET,
         required: true,
         index: true
     },
     author_user_id: {
         type: Schema.Types.ObjectId,
-        ref: 'User',
+        ref: MODELS.USER,
         required: true
     },
     author_role: {
@@ -55,7 +56,7 @@ const TicketNoteSchema = new Schema<ITicketNote>({
     content: {
         type: String,
         required: true,
-        maxlength: 5000
+        maxlength: 300
     },
     visibility: {
         type: String,
@@ -69,7 +70,7 @@ const TicketNoteSchema = new Schema<ITicketNote>({
     },
     visible_to_user_ids: [{
         type: Schema.Types.ObjectId,
-        ref: 'User'
+        ref: MODELS.USER
     }]
 }, {
     timestamps: { createdAt: 'created_at', updatedAt: false } // Append-only
@@ -105,4 +106,4 @@ TicketNoteSchema.pre('deleteMany', function (next) {
     next(new Error('Ticket notes cannot be deleted'));
 });
 
-export const TicketNoteModel = mongoose.model<ITicketNote>('TicketNote', TicketNoteSchema);
+export const TicketNoteModel = mongoose.model<ITicketNote>(MODELS.TICKET_NOTE, TicketNoteSchema, COLLECTIONS.TICKET_NOTE);

@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * PaymentTransaction - Enterprise-grade payment tracking
@@ -78,17 +79,17 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
   // Order/Booking linkage
   orderId: {
     type: Schema.Types.ObjectId,
-    ref: 'Order',
+    ref: MODELS.ORDER,
     index: true  // Fast lookup by order
   },
   bookingId: {
     type: Schema.Types.ObjectId,
-    ref: 'Booking',
+    ref: MODELS.BOOKING,
     index: true  // Fast lookup by booking
   },
   userId: {
     type: Schema.Types.ObjectId,
-    ref: 'Customer',
+    ref: MODELS.CUSTOMER,
     required: true,
     index: true  // Customer payment history
   },
@@ -188,7 +189,4 @@ PaymentTransactionSchema.virtual('netAmount').get(function () {
   return this.amountSnapshot - this.totalRefunded;
 });
 
-export const PaymentTransactionModel = mongoose.model<IPaymentTransaction>(
-  'PaymentTransaction',
-  PaymentTransactionSchema
-);
+export const PaymentTransactionModel = mongoose.model<IPaymentTransaction>(MODELS.PAYMENT_TRANSACTION, PaymentTransactionSchema, COLLECTIONS.PAYMENT_TRANSACTION);

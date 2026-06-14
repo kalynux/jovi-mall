@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * RefundTransaction - Track partial and full refunds
@@ -34,26 +35,26 @@ const RefundTransactionSchema = new Schema<IRefundTransaction>(
     {
         paymentTransactionId: {
             type: Schema.Types.ObjectId,
-            ref: 'PaymentTransaction',
+            ref: MODELS.PAYMENT_TRANSACTION,
             required: true
         },
         orderId: {
             type: Schema.Types.ObjectId,
-            ref: 'Order'
+            ref: MODELS.ORDER
         },
         bookingId: {
             type: Schema.Types.ObjectId,
-            ref: 'Booking'
+            ref: MODELS.BOOKING
         },
         vendorId: {
             type: Schema.Types.ObjectId,
-            ref: 'Vendor',
+            ref: MODELS.VENDOR,
             required: true,
             index: true // For vendor-scoped analytics queries
         },
         userId: {
             type: Schema.Types.ObjectId,
-            ref: 'User',
+            ref: MODELS.USER,
             required: true
         },
         refundAmount: {
@@ -121,7 +122,4 @@ RefundTransactionSchema.index({ bookingId: 1 });
  * This should be enforced in the service layer before creating refund
  */
 
-export const RefundTransactionModel = mongoose.model<IRefundTransaction>(
-    'RefundTransaction',
-    RefundTransactionSchema
-);
+export const RefundTransactionModel = mongoose.model<IRefundTransaction>(MODELS.REFUND_TRANSACTION, RefundTransactionSchema, COLLECTIONS.REFUND_TRANSACTION);

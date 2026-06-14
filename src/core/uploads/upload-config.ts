@@ -271,6 +271,68 @@ export function getDigitalAssetUploadConfig(): UploadPolicyConfig {
 }
 
 /**
+ * Upload configuration for video uploads (served by the dedicated
+ * `POST /api/files/upload/video` route).
+ *
+ * Kept separate from the default image/doc config so enabling video never
+ * loosens the general `/api/files/upload` allowlist. Like the digital-asset
+ * config, videos carry NO transforms — they are stored byte-for-byte. Every
+ * file still passes magic-byte sniffing, virus scanning and fingerprinting, so
+ * a spoofed file fails the allowlist on its real sniffed type.
+ *
+ * Per-file cap is 70MB. The per-request total accommodates the largest allowed
+ * batch (3 videos), with the per-actor count enforced in the controller.
+ */
+export function getVideoUploadConfig(): UploadPolicyConfig {
+  const noTransform = (maxSizeBytes: number): MimeTypePolicy => ({
+    allowed: true,
+    maxSizeBytes,
+  });
+
+  const MB = 1024 * 1024;
+  const PER_VIDEO_MAX = 70 * MB;
+
+  return {
+    maxFilesPerRequest: 3,
+    maxTotalSizeBytes: 3 * PER_VIDEO_MAX, // 210MB — largest allowed batch (3 × 70MB)
+
+    perMimeType: {
+      'video/mp4': noTransform(PER_VIDEO_MAX),
+      'video/quicktime': noTransform(PER_VIDEO_MAX), // .mov
+      'video/webm': noTransform(PER_VIDEO_MAX),
+    },
+
+    virusScan: {
+      enabled: true,
+      provider: 'mock',
+      blockOnFailure: true,
+    },
+
+    // Videos count against the same per-user media quota as images/docs.
+    userQuotas: {
+      enabled: true,
+      maxFilesTotal: 1000,
+      maxStorageBytes: 5 * 1024 * 1024 * 1024, // 5GB
+    },
+
+    fingerprinting: {
+      algorithm: 'sha256',
+      enabled: true,
+    },
+
+    duplicateDetection: {
+      enabled: true,
+      blockDuplicates: false, // Return existing file reference instead of rejecting
+    },
+
+    observability: {
+      enabled: true,
+      logLevel: 'info',
+    },
+  };
+}
+
+/**
  * Load upload configuration from environment variables
  * Falls back to defaults for missing values
  */

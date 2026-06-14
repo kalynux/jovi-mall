@@ -1,5 +1,6 @@
 import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 export interface IServiceAvailability extends IBaseDocument {
   serviceConfigId: Types.ObjectId;
@@ -12,7 +13,7 @@ export interface IServiceAvailability extends IBaseDocument {
 }
 
 const ServiceAvailabilitySchema = new Schema<IServiceAvailability>({
-  serviceConfigId: { type: Schema.Types.ObjectId, ref: 'ServiceConfig', required: true, index: true },
+  serviceConfigId: { type: Schema.Types.ObjectId, ref: MODELS.SERVICE_CONFIG, required: true, index: true },
   
   dayOfWeek: { type: Number, required: true, min: 0, max: 6 },
   startTime: { type: String, required: true },
@@ -23,4 +24,4 @@ const ServiceAvailabilitySchema = new Schema<IServiceAvailability>({
   ...BaseSchemaFields
 }, BaseSchemaOptions);
 
-export const ServiceAvailabilityModel = model<IServiceAvailability>('ServiceAvailability', ServiceAvailabilitySchema);
+export const ServiceAvailabilityModel = model<IServiceAvailability>(MODELS.SERVICE_AVAILABILITY, ServiceAvailabilitySchema, COLLECTIONS.SERVICE_AVAILABILITY);

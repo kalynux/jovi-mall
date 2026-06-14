@@ -1,5 +1,6 @@
 import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 export interface IPricingRule {
   durationMinutes: number;
@@ -18,7 +19,7 @@ export interface IServiceConfig extends IBaseDocument {
 }
 
 const ServiceConfigSchema = new Schema<IServiceConfig>({
-  productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true, index: true },
+  productId: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT, required: true, index: true },
   
   slotDurationMinutes: { type: Number, required: true },
   bufferTimeMinutes: { type: Number, default: 0 },
@@ -33,4 +34,4 @@ const ServiceConfigSchema = new Schema<IServiceConfig>({
   ...BaseSchemaFields
 }, BaseSchemaOptions);
 
-export const ServiceConfigModel = model<IServiceConfig>('ServiceConfig', ServiceConfigSchema);
+export const ServiceConfigModel = model<IServiceConfig>(MODELS.SERVICE_CONFIG, ServiceConfigSchema, COLLECTIONS.SERVICE_CONFIG);

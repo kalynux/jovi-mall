@@ -1,4 +1,5 @@
 import mongoose, { Document, Schema } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 export interface ITelegramLink extends Document {
     userId: mongoose.Types.ObjectId;
@@ -17,7 +18,7 @@ const TelegramLinkSchema = new Schema<ITelegramLink>(
     {
         userId: {
             type: Schema.Types.ObjectId,
-            ref: 'User',
+            ref: MODELS.USER,
             required: true,
             unique: true,
             index: true,
@@ -60,4 +61,4 @@ const TelegramLinkSchema = new Schema<ITelegramLink>(
     }
 );
 
-export const TelegramLink = mongoose.model<ITelegramLink>('TelegramLink', TelegramLinkSchema);
+export const TelegramLink = mongoose.model<ITelegramLink>(MODELS.TELEGRAM_LINK, TelegramLinkSchema, COLLECTIONS.TELEGRAM_LINK);

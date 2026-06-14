@@ -1,5 +1,6 @@
 import mongoose, { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 export type StorageProvider = 'local' | 's3' | 'gcs' | 'r2' | 'firebase' | 'cloudinary';
 export type FileOwnerType = 'vendor' | 'admin' | 'customer' | 'agent' | 'agency' | 'system';
@@ -58,4 +59,4 @@ FileSchema.index({ ownerId: 1, checksum: 1 }); // Per-vendor duplicate detection
 
 export const FileModel =
   (mongoose.models.File as mongoose.Model<IFile>) ||
-  model<IFile>('File', FileSchema);
+  model<IFile>(MODELS.FILE, FileSchema, COLLECTIONS.FILE);

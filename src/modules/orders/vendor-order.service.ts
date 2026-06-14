@@ -8,6 +8,7 @@ import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { eventBus } from '../../core/events/event-bus';
 import { CustomerModel } from '../customers/customer.model';
+import { COLLECTIONS } from '../../core/database/collections';
 
 /**
  * Vendor Order Service
@@ -212,20 +213,20 @@ export class VendorOrderService {
         // Look up agency name and contact in parallel with shipment lookup
         const [agency, shipment] = await Promise.all([
             deliveryData.agency_id
-                ? db.collection('deliveryagencies').findOne(
+                ? db.collection(COLLECTIONS.DELIVERY_AGENCY).findOne(
                     { _id: deliveryData.agency_id },
                     { projection: { agency_name: 1, phone: 1, email: 1 } }
                 )
                 : Promise.resolve(null),
             deliveryData.shipment_id
-                ? db.collection('shipments').findOne({ _id: deliveryData.shipment_id })
+                ? db.collection(COLLECTIONS.SHIPMENT).findOne({ _id: deliveryData.shipment_id })
                 : Promise.resolve(null)
         ]);
 
         // Look up agent from shipment
         let agent: any = null;
         if (shipment?.agent_id) {
-            const agentDoc = await db.collection('deliveryagents').findOne(
+            const agentDoc = await db.collection(COLLECTIONS.DELIVERY_AGENT).findOne(
                 { _id: shipment.agent_id },
                 { projection: { name: 1, phone: 1, avatar_url: 1 } }
             );
@@ -533,7 +534,7 @@ export class VendorOrderService {
 
         const [vendors, customers] = await Promise.all([
             vendorIds.length > 0 && db
-                ? db.collection('vendors')
+                ? db.collection(COLLECTIONS.VENDOR)
                     .find({ _id: { $in: vendorIds } })
                     .project({ business_name: 1 })
                     .toArray()
@@ -696,7 +697,7 @@ export class VendorOrderService {
             throw createAppError(ERROR_CODES.DATABASE_CONNECTION_ERROR, 500);
         }
 
-        const agencyExists = await mongoose.connection.db.collection('deliveryagencies').findOne({
+        const agencyExists = await mongoose.connection.db.collection(COLLECTIONS.DELIVERY_AGENCY).findOne({
             _id: new mongoose.Types.ObjectId(deliveryAgencyId)
         });
 
@@ -766,7 +767,7 @@ export class VendorOrderService {
         }
 
         const entitlements = await mongoose.connection.db
-            .collection('customerdigitalentitlements')
+            .collection(COLLECTIONS.CUSTOMER_DIGITAL_ENTITLEMENT)
             .aggregate([
                 {
                     $match: {
@@ -777,7 +778,7 @@ export class VendorOrderService {
                 },
                 {
                     $lookup: {
-                        from: 'products',
+                        from: COLLECTIONS.PRODUCT,
                         localField: 'productId',
                         foreignField: '_id',
                         as: 'product'
@@ -785,7 +786,7 @@ export class VendorOrderService {
                 },
                 {
                     $lookup: {
-                        from: 'files',
+                        from: COLLECTIONS.FILE,
                         localField: 'assetId',
                         foreignField: '_id',
                         as: 'asset'
@@ -793,7 +794,7 @@ export class VendorOrderService {
                 },
                 {
                     $lookup: {
-                        from: 'productvariants',
+                        from: COLLECTIONS.PRODUCT_VARIANT,
                         localField: 'variantId',
                         foreignField: '_id',
                         as: 'variant'
@@ -877,7 +878,7 @@ export class VendorOrderService {
         }
 
         const entitlement = await mongoose.connection.db
-            .collection('customerdigitalentitlements')
+            .collection(COLLECTIONS.CUSTOMER_DIGITAL_ENTITLEMENT)
             .findOne({
                 _id: new mongoose.Types.ObjectId(entitlementId),
                 vendorId: new mongoose.Types.ObjectId(vendorId),
@@ -895,7 +896,7 @@ export class VendorOrderService {
 
         // 3. Revoke entitlement
         await mongoose.connection.db
-            .collection('customerdigitalentitlements')
+            .collection(COLLECTIONS.CUSTOMER_DIGITAL_ENTITLEMENT)
             .updateOne(
                 { _id: new mongoose.Types.ObjectId(entitlementId) },
                 {
@@ -955,7 +956,7 @@ export class VendorOrderService {
         }
 
         const entitlement = await mongoose.connection.db
-            .collection('customerdigitalentitlements')
+            .collection(COLLECTIONS.CUSTOMER_DIGITAL_ENTITLEMENT)
             .findOne({
                 _id: new mongoose.Types.ObjectId(entitlementId),
                 vendorId: new mongoose.Types.ObjectId(vendorId),
@@ -983,7 +984,7 @@ export class VendorOrderService {
 
         // 4. Restore entitlement
         await mongoose.connection.db
-            .collection('customerdigitalentitlements')
+            .collection(COLLECTIONS.CUSTOMER_DIGITAL_ENTITLEMENT)
             .updateOne(
                 { _id: new mongoose.Types.ObjectId(entitlementId) },
                 {

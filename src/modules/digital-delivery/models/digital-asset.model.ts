@@ -1,5 +1,6 @@
 import mongoose, { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * DigitalAsset - Vendor-owned file for digital products
@@ -20,13 +21,13 @@ export interface IDigitalAsset extends IBaseDocument {
 const DigitalAssetSchema = new Schema<IDigitalAsset>({
   vendorId: { 
     type: Schema.Types.ObjectId, 
-    ref: 'Vendor', 
+    ref: MODELS.VENDOR, 
     required: true, 
     index: true 
   },
   fileId: { 
     type: Schema.Types.ObjectId, 
-    ref: 'File', 
+    ref: MODELS.FILE, 
     required: true,
     index: true
   },
@@ -44,4 +45,4 @@ const DigitalAssetSchema = new Schema<IDigitalAsset>({
 
 export const DigitalAssetModel = 
   (mongoose.models.DigitalAsset as mongoose.Model<IDigitalAsset>) || 
-  model<IDigitalAsset>('DigitalAsset', DigitalAssetSchema);
+  model<IDigitalAsset>(MODELS.DIGITAL_ASSET, DigitalAssetSchema, COLLECTIONS.DIGITAL_ASSET);

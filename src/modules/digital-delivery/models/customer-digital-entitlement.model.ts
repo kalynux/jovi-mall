@@ -1,5 +1,6 @@
 import mongoose, { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * CustomerDigitalEntitlement - Customer's right to download
@@ -29,7 +30,7 @@ export interface ICustomerDigitalEntitlement extends IBaseDocument {
 const CustomerDigitalEntitlementSchema = new Schema<ICustomerDigitalEntitlement>({
   orderId: { 
     type: Schema.Types.ObjectId, 
-    ref: 'Order', 
+    ref: MODELS.ORDER, 
     required: true,
   },
   orderItemId: { 
@@ -38,29 +39,29 @@ const CustomerDigitalEntitlementSchema = new Schema<ICustomerDigitalEntitlement>
   },
   productId: {
     type: Schema.Types.ObjectId,
-    ref: 'Product',
+    ref: MODELS.PRODUCT,
     required: true
   },
   variantId: {
     type: Schema.Types.ObjectId,
-    ref: 'ProductVariant',
+    ref: MODELS.PRODUCT_VARIANT,
     required: true,
     index: true,
   },
   assetId: {
     type: Schema.Types.ObjectId,
-    ref: 'DigitalAsset',
+    ref: MODELS.DIGITAL_ASSET,
     required: true
   },
   customerId: { 
     type: Schema.Types.ObjectId, 
-    ref: 'Customer', 
+    ref: MODELS.CUSTOMER, 
     required: true,
     index: true
   },
   vendorId: { 
     type: Schema.Types.ObjectId, 
-    ref: 'Vendor', 
+    ref: MODELS.VENDOR, 
     required: true 
   },
   
@@ -95,4 +96,4 @@ CustomerDigitalEntitlementSchema.index({ orderId: 1 });
 
 export const CustomerDigitalEntitlementModel = 
   (mongoose.models.CustomerDigitalEntitlement as mongoose.Model<ICustomerDigitalEntitlement>) || 
-  model<ICustomerDigitalEntitlement>('CustomerDigitalEntitlement', CustomerDigitalEntitlementSchema);
+  model<ICustomerDigitalEntitlement>(MODELS.CUSTOMER_DIGITAL_ENTITLEMENT, CustomerDigitalEntitlementSchema, COLLECTIONS.CUSTOMER_DIGITAL_ENTITLEMENT);

@@ -1,47 +1,41 @@
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response } from 'express';
 import { TicketAttachmentService } from '../services/ticket-attachment.service';
+import { TicketEnrichmentService } from '../services/ticket-enrichment.service';
+import { AttachFileSchema } from '../validators/ticket-attachment.validator';
 import { ActorRole } from '../types/ticket.types';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
-import { createAppError } from '../../../core/errors';
-import { ERROR_CODES } from '../../../core/error-codes';
 
 const attachmentService = new TicketAttachmentService();
+const enrichmentService = new TicketEnrichmentService();
 
 export class TicketAttachmentController {
 
-    static uploadAttachment = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    static attachFile = asyncHandler(async (req: Request, res: Response) => {
         const ticketId = req.params.ticketId;
         const userId = req.auth!.user.id;
         const role = req.auth!.role as ActorRole;
+        const actorEntityId = req.auth!.role_entity?._id?.toString() ?? req.auth!.role_entity?.id;
 
-        if (!req.file) {
-            return next(createAppError(ERROR_CODES.TICKET_ATTACHMENT_MISSING, 400));
-        }
+        const { fileId, visibility, visibleToUserIds } = AttachFileSchema.parse(req.body);
 
-        const visibility = (req.body.visibility || 'PUBLIC') as 'PUBLIC' | 'PRIVATE';
-        const visibleToUserIds = req.body.visibleToUserIds
-            ? JSON.parse(req.body.visibleToUserIds)
-            : undefined;
-
-        const attachment = await attachmentService.uploadAttachment(
-            ticketId, req.file, userId, role, visibility, visibleToUserIds
+        const attachment = await attachmentService.attachFile(
+            ticketId, fileId, userId, role, actorEntityId, visibility, visibleToUserIds
         );
 
         const url = await attachmentService.getAttachmentUrl(attachment);
 
-        res.status(201).json({
-            success: true,
-            data: {
-                id: attachment.id,
-                fileName: attachment.file_name,
-                fileSize: attachment.file_size,
-                mimeType: attachment.mime_type,
-                url,
-                uploadedBy: attachment.uploaded_by_user_id,
-                uploadedByRole: attachment.uploaded_by_role,
-                createdAt: attachment.createdAt
-            }
-        });
+        const [enriched] = await enrichmentService.enrichAttachments([{
+            id: attachment.id,
+            fileName: attachment.file_name,
+            fileSize: attachment.file_size,
+            mimeType: attachment.mime_type,
+            url,
+            uploadedBy: attachment.uploaded_by_user_id,
+            uploadedByRole: attachment.uploaded_by_role,
+            createdAt: attachment.createdAt
+        }]);
+
+        res.status(201).json({ success: true, data: enriched });
     });
 
     static listAttachments = asyncHandler(async (req: Request, res: Response) => {
@@ -64,7 +58,8 @@ export class TicketAttachmentController {
             }))
         );
 
-        res.status(200).json({ success: true, data: attachmentsWithUrls });
+        const enriched = await enrichmentService.enrichAttachments(attachmentsWithUrls);
+        res.status(200).json({ success: true, data: enriched });
     });
 
     static deleteAttachment = asyncHandler(async (req: Request, res: Response) => {

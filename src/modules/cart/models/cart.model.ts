@@ -1,4 +1,5 @@
 import mongoose, { Schema, model, Types } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * Cart Model
@@ -47,7 +48,7 @@ const CartItemSchema = new Schema<ICartItem>({
   // Variant data (first-class)
   variantId: { 
     type: Schema.Types.ObjectId, 
-    ref: 'ProductVariant', 
+    ref: MODELS.PRODUCT_VARIANT, 
     required: true  // REQUIRED - variant is the sellable unit
   },
   sku: { 
@@ -66,7 +67,7 @@ const CartItemSchema = new Schema<ICartItem>({
   // Product data (context)
   productId: { 
     type: Schema.Types.ObjectId, 
-    ref: 'Product', 
+    ref: MODELS.PRODUCT, 
     required: true 
   },
   title: { 
@@ -75,7 +76,7 @@ const CartItemSchema = new Schema<ICartItem>({
   },
   vendorId: { 
     type: Schema.Types.ObjectId, 
-    ref: 'Vendor', 
+    ref: MODELS.VENDOR, 
     required: true 
   },
   productType: { 
@@ -121,4 +122,4 @@ const CartSchema = new Schema<ICart>({
 
 export const CartModel = 
   (mongoose.models.Cart as mongoose.Model<ICart>) || 
-  model<ICart>('Cart', CartSchema);
+  model<ICart>(MODELS.CART, CartSchema, COLLECTIONS.CART);

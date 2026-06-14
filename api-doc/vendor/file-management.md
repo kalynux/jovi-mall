@@ -1,7 +1,7 @@
 # File Management Service API Documentation
 
-**Version:** 1.1  
-**Last Updated:** 2026-06-03  
+**Version:** 1.2  
+**Last Updated:** 2026-06-11  
 **Audience:** Frontend Developers, Backend Engineers, Platform Documentation
 
 ---
@@ -28,6 +28,7 @@ The **File Management Service** is an enterprise-grade, multi-tenant file storag
 
 - **Provider-agnostic storage** (local, S3, GCS, R2, Firebase, Cloudinary)
 - **Role-based upload limits** (100MB - 2GB per file)
+- **Dedicated video upload route** (`/api/files/upload/video`, mp4/mov/webm, 70MB per video)
 - **Reference-counted file lifecycle** with safe garbage collection
 - **Multi-tenant isolation** with ownership tracking
 - **File sharing** across products, variants, and digital assets
@@ -276,6 +277,139 @@ per-file UI messaging rather than the generic top-level `message`.
 3. `usageCount` initialized to 0
 4. `ownerType` and `ownerId` set based on authenticated user
 5. Upload security pipeline executed (sniffing, fingerprinting, virus scan)
+
+> **Videos are NOT accepted here.** The general `/api/files/upload` allowlist
+> only covers images, documents, archives, and audio. Upload videos through the
+> dedicated [`POST /api/files/upload/video`](#post-apifilesuploadvideo) route
+> below. Everything *after* upload (reading, updating, deleting, attaching to a
+> ticket/product) is identical — a video produces a normal `File` with a `fileId`.
+
+---
+
+#### POST /api/files/upload/video
+
+Upload **video** files on a dedicated route. Kept separate from
+`POST /api/files/upload` so enabling video never loosens the general image/doc
+allowlist. A successful upload returns the same `File` objects as the general
+endpoint, so the resulting `fileId`(s) are read, updated, deleted, and attached
+to tickets/products through the exact same endpoints documented elsewhere in
+this file.
+
+**Authentication:** Required (all authenticated users)
+
+**Request Headers:**
+```
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+```
+
+**Request Body (FormData):**
+```
+videos: File[]   (field name MUST be "videos")
+```
+
+**Accepted formats** (validated by magic-byte sniffing, not the filename or the
+client `Content-Type`):
+
+| Format | MIME type         | Extension |
+|--------|-------------------|-----------|
+| MP4    | `video/mp4`       | `.mp4`    |
+| QuickTime | `video/quicktime` | `.mov` |
+| WebM   | `video/webm`      | `.webm`   |
+
+**Limits:**
+
+| Constraint            | Value                                            |
+|-----------------------|--------------------------------------------------|
+| Max size **per video**| **70 MB**                                        |
+| Videos per request    | **Customers: 1**, all other actors (vendor, agent, agency, admin): **3** |
+
+**Success Response (201):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "65f1a2b3c4d5e6f7a8b9c0d1",
+      "key": "videos/2026/06/13/550e8400-e29b-41d4-a716-446655440000.mp4",
+      "provider": "local",
+      "mimeType": "video/mp4",
+      "size": 51457280,
+      "checksum": "d41d8cd98f00b204e9800998ecf8427e",
+      "originalName": "demo-clip.mp4",
+      "usageCount": 0,
+      "ownerType": "vendor",
+      "ownerId": "65e1a2b3c4d5e6f7a8b9c0d1",
+      "createdAt": "2026-06-13T06:13:51Z",
+      "updatedAt": "2026-06-13T06:13:51Z"
+    }
+  ],
+  "message": "Successfully uploaded 1 video(s)",
+  "meta": {
+    "count": 1,
+    "perFileLimit": "70 MB"
+  }
+}
+```
+
+**Error Responses:**
+
+**400 - No Files Uploaded:**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "NO_FILES_UPLOADED",
+    "message": "At least one video file is required (field name \"videos\")"
+  }
+}
+```
+
+**400 - Too Many Files** (exceeds the per-actor count):
+```json
+{
+  "success": false,
+  "error": {
+    "code": "TOO_MANY_FILES",
+    "message": "Maximum 1 video(s) per request for customer"
+  }
+}
+```
+
+**400 - Unsupported Type** (claimed type is not mp4/mov/webm):
+```json
+{
+  "success": false,
+  "error": {
+    "code": "FILE_TYPE_INVALID",
+    "message": "File \"notes.pdf\" (application/pdf) is not a supported video. Allowed: mp4, mov, webm"
+  }
+}
+```
+
+**413 - File Too Large** (a video exceeds 70 MB). Returned either directly by the
+controller or, when the stream is aborted mid-parse, normalised from a multer
+`LIMIT_FILE_SIZE` error by the global error handler (so this variant carries the
+standard `requestId`/`statusCode` envelope):
+```json
+{
+  "success": false,
+  "error": {
+    "code": "FILE_TOO_LARGE",
+    "message": "Video \"big.mp4\" exceeds the 70 MB limit"
+  }
+}
+```
+
+**400 - Upload Policy Violation:** Identical shape and `details.violations[]`
+semantics as `POST /api/files/upload` — see that section above. A file that
+**claims** a video MIME type but **sniffs** to something else (e.g. an `.exe`
+renamed `.mp4`) is rejected here with `MIME_NOT_ALLOWED` / `MIME_TYPE_MISMATCH`.
+
+**Side Effects:** Same as `POST /api/files/upload` — the file is stored under the
+`videos/` folder, a `File` record is created with the **detected** MIME type, and
+the full security pipeline (sniffing, fingerprinting, virus scan, quota, dedup)
+runs. Videos count against the same per-user storage quota as other media.
 
 ---
 
@@ -1459,6 +1593,9 @@ const signedUrl = await api.getSignedUrl(fileId); // Short-lived
 | No files in upload request            | 400         | NO_FILES_UPLOADED           | At least one file is required                               | Include files in FormData                 |
 | More than 10 files uploaded           | 400         | TOO_MANY_FILES              | Maximum 10 files per request                                | Upload in batches                         |
 | File exceeds role limit               | 413         | FILE_TOO_LARGE              | File "X" exceeds ROLE limit of Y MB                         | Reduce file size or contact admin         |
+| Too many videos (`/upload/video`)     | 400         | TOO_MANY_FILES              | Maximum N video(s) per request for ROLE                    | Customers: 1 video; other actors: 3       |
+| Unsupported video type (`/upload/video`) | 400      | FILE_TYPE_INVALID           | File "X" is not a supported video. Allowed: mp4, mov, webm | Use mp4/mov/webm                          |
+| Video exceeds 70 MB (`/upload/video`) | 413         | FILE_TOO_LARGE              | Video "X" exceeds the 70 MB limit                          | Reduce video size                         |
 | Upload policy violation               | 400         | UPLOAD_POLICY_VIOLATION     | Upload policy violations found (see `details.violations[]`) | Read per-file `violations`; fix flagged file(s) |
 | File not found (GET)                  | 404         | NOT_FOUND                   | File not found                                              | Verify file ID is correct                 |
 | Access denied (non-owner)             | 403         | FORBIDDEN                   | You do not have access to this file                        | Request owner or admin to share           |
@@ -1727,6 +1864,54 @@ const productData = {
 await axios.post('/api/vendor/products', productData);
 ```
 
+### Uploading Videos
+
+Videos go to a **separate endpoint** with the field name `videos` (not `files`).
+The response shape is identical to `/api/files/upload`, so the returned `fileId`s
+are attached to tickets/products and read/deleted exactly the same way.
+
+```typescript
+const VIDEO_MAX_BYTES = 70 * 1024 * 1024;            // 70 MB per video
+const VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/webm'];
+const maxVideos = userRole === 'customer' ? 1 : 3;   // customers: 1, others: 3
+
+async function uploadVideos(videos: File[]) {
+  // Client-side guards (server re-validates by sniffing the bytes)
+  if (videos.length > maxVideos) {
+    throw new Error(`Maximum ${maxVideos} video(s) per upload`);
+  }
+  for (const v of videos) {
+    if (v.size > VIDEO_MAX_BYTES) throw new Error(`"${v.name}" exceeds 70 MB`);
+    if (v.type && !VIDEO_TYPES.includes(v.type)) {
+      throw new Error(`"${v.name}" is not an mp4/mov/webm video`);
+    }
+  }
+
+  const formData = new FormData();
+  videos.forEach(v => formData.append('videos', v)); // field name: "videos"
+
+  const { data } = await axios.post('/api/files/upload/video', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: e => setProgress((e.loaded / (e.total ?? 1)) * 100),
+  });
+
+  return data.data;            // File[] — keep data[i].id to attach later
+}
+
+// Attaching an uploaded video to a ticket (same flow as any other file):
+async function attachVideoToTicket(ticketId: string, fileId: string) {
+  await axios.post(`/api/vendor/tickets/${ticketId}/attachments`, {
+    fileId,                    // id from the upload response above
+    visibility: 'PUBLIC',
+  });
+}
+```
+
+> Error handling is the same as the image/doc flow: a `413` means a video
+> exceeded 70 MB, a `400 TOO_MANY_FILES` / `FILE_TYPE_INVALID` is a count/type
+> rejection, and a `400 UPLOAD_POLICY_VIOLATION` carries per-file
+> `details.violations[]` (use `fileIndex` to map each back to its video).
+
 ### Progress Tracking
 
 **Using Axios:**
@@ -1977,6 +2162,6 @@ This File Management Service provides a robust, enterprise-grade solution for ha
 
 ---
 
-**Document Version:** 1.1  
-**Last Updated:** 2026-06-03  
+**Document Version:** 1.2  
+**Last Updated:** 2026-06-11  
 **Maintained By:** Backend Architecture Team

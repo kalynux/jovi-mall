@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { ActorRole, ACTOR_ROLE_VALUES } from '../types/ticket.types';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * TicketAttachment Model
@@ -37,13 +38,13 @@ export interface ITicketAttachment extends Document {
 const TicketAttachmentSchema = new Schema<ITicketAttachment>({
     ticket_id: {
         type: Schema.Types.ObjectId,
-        ref: 'Ticket',
+        ref: MODELS.TICKET,
         required: true,
         index: true
     },
     uploaded_by_user_id: {
         type: Schema.Types.ObjectId,
-        ref: 'User',
+        ref: MODELS.USER,
         required: true
     },
     uploaded_by_role: {
@@ -53,7 +54,7 @@ const TicketAttachmentSchema = new Schema<ITicketAttachment>({
     },
     file_id: {
         type: Schema.Types.ObjectId,
-        ref: 'File',
+        ref: MODELS.FILE,
         required: true
     },
     file_name: {
@@ -77,7 +78,7 @@ const TicketAttachmentSchema = new Schema<ITicketAttachment>({
     },
     visible_to_user_ids: [{
         type: Schema.Types.ObjectId,
-        ref: 'User'
+        ref: MODELS.USER
     }]
 }, {
     timestamps: { createdAt: 'created_at', updatedAt: false } // Immutable after upload
@@ -89,4 +90,4 @@ TicketAttachmentSchema.index({ ticket_id: 1, created_at: 1 });
 // Visibility filtering
 TicketAttachmentSchema.index({ ticket_id: 1, visibility: 1 });
 
-export const TicketAttachmentModel = mongoose.model<ITicketAttachment>('TicketAttachment', TicketAttachmentSchema);
+export const TicketAttachmentModel = mongoose.model<ITicketAttachment>(MODELS.TICKET_ATTACHMENT, TicketAttachmentSchema, COLLECTIONS.TICKET_ATTACHMENT);

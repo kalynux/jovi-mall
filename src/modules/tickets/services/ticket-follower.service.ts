@@ -157,6 +157,18 @@ export class TicketFollowerService {
     }
 
     /**
+     * Whether the ticket has at least one follower with the given role.
+     *
+     * Creator and assignee are auto-added as followers, so this reflects every
+     * party currently participating in the ticket. Used to validate that a
+     * "waiting on <role>" status targets someone actually on the ticket.
+     */
+    async hasParticipantWithRole(ticketId: string, role: ActorRole): Promise<boolean> {
+        const followers = await this.followerRepo.getFollowers(ticketId);
+        return followers.some(f => f.role === role);
+    }
+
+    /**
      * Get follower count for a ticket
      */
     async getFollowerCount(ticketId: string): Promise<{ total: number; nonAdminCount: number }> {

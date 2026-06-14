@@ -58,16 +58,39 @@ Body:
     "_id": "string",
     "subject": "Payment integration issue",
     "description": "Customers are unable to complete checkout...",
-    "type": "technical",
+    "type": "PAYMENT_ISSUE",
     "importance": "urgent",
-    "priority": "medium",
+    "priority": "normal",
     "status": "open",
-    "entityType": "order",
-    "entityId": "string",
+    "entity_type": "ORDER",
+    "entity_id": "string",
+    "entity": {
+      "type": "ORDER",
+      "id": "string",
+      "label": "Order ORD-2026-001003",
+      "reference": "ORD-2026-001003"
+    },
     "created_by_user_id": "string",
     "created_by_role": "vendor",
-    "assigned_to_role": "admin",
+    "created_by": {
+      "user_id": "string",
+      "role": "vendor",
+      "name": "Acme Store",
+      "avatar_url": null
+    },
+    "assigned_to_role": null,
+    "assigned_to": null,
+    "assigned_admin_id": null,
+    "assigned_admin": null,
     "priority_locked": false,
+    "followers": [
+      {
+        "user_id": "string",
+        "role": "vendor",
+        "name": "Acme Store",
+        "avatar_url": null
+      }
+    ],
     "createdAt": "2026-02-11T19:00:00.000Z",
     "updatedAt": "2026-02-11T19:00:00.000Z"
   },
@@ -92,7 +115,7 @@ Body:
 **Path Parameters**: None
 
 **Query Parameters**:
-- `status` (string, optional) - Filter by status. Enum: `open`, `in_progress`, `waiting_on_customer`, `waiting_on_admin`, `resolved`, `closed`
+- `status` (string, optional) - Filter by status. Enum: `open`, `in_progress`, `waiting_on_admin`, `waiting_on_vendor`, `waiting_on_customer`, `waiting_on_agency`, `waiting_on_agent`, `resolved`, `closed`
 - `priority` (string, optional) - Filter by priority. Enum: `low`, `medium`, `high`, `critical`
 - `type` (string, optional) - Filter by type. Enum: `technical`, `billing`, `feature_request`, `bug_report`, `other`
 - `entityType` (string, optional) - Filter by entity type
@@ -115,18 +138,43 @@ Body:
   "data": [
     {
       "_id": "string",
-      "subject": "Payment integration issue",
+      "subject": "Payment integration fails at checkout for WhatsApp orders",
+      "description": "Several customers report that the 'Pay now' button...",
       "status": "in_progress",
       "priority": "high",
-      "type": "technical",
-      "entityType": "order",
+      "importance": "urgent",
+      "type": "PAYMENT_ISSUE",
+      "entity_type": "ORDER",
+      "entity_id": "string",
+      "entity": {
+        "type": "ORDER",
+        "id": "string",
+        "label": "Order ORD-2026-001003",
+        "reference": "ORD-2026-001003"
+      },
+      "created_by_user_id": "string",
+      "created_by_role": "vendor",
+      "created_by": {
+        "user_id": "string",
+        "role": "vendor",
+        "name": "Acme Store",
+        "avatar_url": null
+      },
+      "assigned_to_role": "admin",
+      "assigned_to": null,
       "assigned_admin_id": "string",
-      "priority_locked": false,
+      "assigned_admin": {
+        "user_id": "string",
+        "role": "admin",
+        "name": "Kofi Mensah",
+        "avatar_url": null
+      },
+      "priority_locked": true,
       "createdAt": "2026-02-11T19:00:00.000Z",
       "updatedAt": "2026-02-11T19:00:00.000Z"
     }
   ],
-  "meta": {
+  "pagination": {
     "total": 25,
     "page": 1,
     "limit": 20,
@@ -166,19 +214,52 @@ Body:
   "success": true,
   "data": {
     "_id": "string",
-    "subject": "Payment integration issue",
-    "description": "Customers are unable to complete checkout...",
-    "type": "technical",
+    "subject": "Payment integration fails at checkout for WhatsApp orders",
+    "description": "Several customers report that the 'Pay now' button...",
+    "type": "PAYMENT_ISSUE",
     "importance": "urgent",
     "priority": "high",
     "status": "in_progress",
-    "entityType": "order",
-    "entityId": "string",
+    "entity_type": "ORDER",
+    "entity_id": "string",
+    "entity": {
+      "type": "ORDER",
+      "id": "string",
+      "label": "Order ORD-2026-001003",
+      "reference": "ORD-2026-001003"
+    },
     "created_by_user_id": "string",
     "created_by_role": "vendor",
+    "created_by": {
+      "user_id": "string",
+      "role": "vendor",
+      "name": "Acme Store",
+      "avatar_url": null
+    },
     "assigned_to_role": "admin",
+    "assigned_to": null,
     "assigned_admin_id": "string",
+    "assigned_admin": {
+      "user_id": "string",
+      "role": "admin",
+      "name": "Kofi Mensah",
+      "avatar_url": "https://.../kofi.png"
+    },
     "priority_locked": true,
+    "followers": [
+      {
+        "user_id": "string",
+        "role": "vendor",
+        "name": "Acme Store",
+        "avatar_url": null
+      },
+      {
+        "user_id": "string",
+        "role": "agent",
+        "name": "Lena Park",
+        "avatar_url": null
+      }
+    ],
     "createdAt": "2026-02-11T19:00:00.000Z",
     "updatedAt": "2026-02-11T19:00:00.000Z"
   }
@@ -256,7 +337,7 @@ Body:
 **Request Body**:
 ```json
 {
-  "status": "string (required) - New status. Enum: open, in_progress, waiting_on_customer, waiting_on_admin, resolved, closed"
+  "status": "string (required) - New status. Enum: open, in_progress, waiting_on_admin, waiting_on_vendor, waiting_on_customer, waiting_on_agency, waiting_on_agent, resolved, closed"
 }
 ```
 
@@ -281,6 +362,7 @@ Body:
 - `404` – `NOT_FOUND` – Ticket not found
 - `403` – `FORBIDDEN` – Only ticket followers can update status
 - `400` – `VALIDATION_ERROR` – Invalid status value or invalid state transition
+- `400` – `TICKET_WAITING_TARGET_NOT_PARTICIPANT` – A `waiting_on_<role>` status was requested but no participant with that role is on the ticket (does not apply to `waiting_on_admin`)
 
 ---
 
@@ -452,11 +534,19 @@ Body:
   "data": {
     "_id": "string",
     "ticket_id": "string",
-    "message": "Working on resolving this issue",
-    "visibility": "PUBLIC",
+    "content": "Working on resolving this issue",
+    "visibility": "public",
+    "is_system_note": false,
     "author_user_id": "string",
     "author_role": "vendor",
-    "createdAt": "2026-02-11T19:30:00.000Z"
+    "author": {
+      "user_id": "string",
+      "role": "vendor",
+      "name": "Acme Store",
+      "avatar_url": null
+    },
+    "visible_to_user_ids": [],
+    "created_at": "2026-02-11T19:30:00.000Z"
   },
   "message": "Note created successfully"
 }
@@ -496,21 +586,36 @@ Body:
     {
       "_id": "string",
       "ticket_id": "string",
-      "message": "Working on resolving this issue",
-      "visibility": "PUBLIC",
+      "content": "Thanks for flagging — I can reproduce on the staging gateway.",
+      "visibility": "public",
+      "is_system_note": false,
       "author_user_id": "string",
-      "author_role": "vendor",
-      "createdAt": "2026-02-11T19:30:00.000Z"
+      "author_role": "admin",
+      "author": {
+        "user_id": "string",
+        "role": "admin",
+        "name": "Kofi Mensah",
+        "avatar_url": "https://.../kofi.png"
+      },
+      "visible_to_user_ids": [],
+      "created_at": "2026-02-11T19:30:00.000Z"
     },
     {
       "_id": "string",
       "ticket_id": "string",
-      "message": "Internal note for admins",
-      "visibility": "PRIVATE",
-      "visible_to_user_ids": ["admin1", "admin2"],
+      "content": "Internal note for admins",
+      "visibility": "private",
+      "is_system_note": false,
       "author_user_id": "string",
       "author_role": "admin",
-      "createdAt": "2026-02-11T19:31:00.000Z"
+      "author": {
+        "user_id": "string",
+        "role": "admin",
+        "name": "Kofi Mensah",
+        "avatar_url": "https://.../kofi.png"
+      },
+      "visible_to_user_ids": ["admin1", "admin2"],
+      "created_at": "2026-02-11T19:31:00.000Z"
     }
   ]
 }
@@ -523,29 +628,34 @@ Body:
 
 ### POST /api/vendor/tickets/:ticketId/attachments
 
-**Description**: Upload a file attachment to a ticket. Attachments can be PUBLIC (visible to all followers) or PRIVATE (visible to uploader, admins, and specific users).
+**Description**: Attach an already-uploaded file to a ticket. The file is **not**
+uploaded here — first upload it via `POST /api/files/upload` (images, documents,
+archives, audio) **or, for videos, `POST /api/files/upload/video`** (mp4/mov/webm,
+70 MB max — see [file-management.md](./file-management.md#post-apifilesuploadvideo)),
+then send the returned `fileId` to this route to link it to the ticket. This
+mirrors how product images are attached. Attachments can be PUBLIC (visible to
+all followers) or PRIVATE (visible to uploader, admins, and specific users).
+Max 5 attachments per ticket.
 
-**Authorization**: Vendor access required.
+**Authorization**: Vendor access required. The file must be owned by the caller
+or be system-owned (admins can attach any file).
 
 **Request Headers**:
 - `Authorization: Bearer <token>`
-- `Content-Type: multipart/form-data`
+- `Content-Type: application/json`
 
 **Path Parameters**:
 - `ticketId` (string, required) - Ticket ID
 
 **Query Parameters**: None
 
-**Request Body** (multipart/form-data):
-- `file` (file, required) - File to upload (max 5 attachments per ticket)
-- `visibility` (string, optional, default: PUBLIC) - Enum: `PUBLIC`, `PRIVATE`
-- `visibleToUserIds` (JSON array string, optional) - User IDs for private attachment visibility
-
-Example:
-```
-file: [binary file data]
-visibility: PRIVATE
-visibleToUserIds: ["user123", "user456"]
+**Request Body** (application/json):
+```json
+{
+  "fileId": "string (required) - ID returned by POST /api/files/upload",
+  "visibility": "string (optional, default: PUBLIC) - Enum: PUBLIC, PRIVATE",
+  "visibleToUserIds": ["string (optional) - user IDs for private attachment visibility"]
+}
 ```
 
 **Success Response**:
@@ -558,21 +668,29 @@ Body:
   "success": true,
   "data": {
     "id": "string",
-    "fileName": "screenshot.png",
+    "fileName": "checkout-error.png",
     "fileSize": 245678,
     "mimeType": "image/png",
     "url": "http://localhost:3000/storage/ticket-attachments/...",
     "uploadedBy": "string",
     "uploadedByRole": "vendor",
+    "uploadedByActor": {
+      "user_id": "string",
+      "role": "vendor",
+      "name": "Acme Store",
+      "avatar_url": null
+    },
     "createdAt": "2026-02-11T19:30:00.000Z"
   }
 }
 ```
 
 **Error Responses**:
-- `404` – `NOT_FOUND` – Ticket not found
-- `400` – `NO_FILE` – No file provided
-- `400` – `ATTACHMENT_LIMIT_EXCEEDED` – Maximum 5 attachments per ticket reached
+- `404` – `TICKET_NOT_FOUND` – Ticket not found
+- `404` – `TICKET_ATTACHMENT_MISSING` – `fileId` does not reference an existing file
+- `403` – `TICKET_ACCESS_DENIED` – The file belongs to another user (only the file owner or an admin can attach it)
+- `422` – `TICKET_ATTACHMENT_LIMIT_EXCEEDED` – Maximum 5 attachments per ticket reached
+- `400` – `VALIDATION_ERROR` – Missing/invalid `fileId` or visibility parameters
 
 ---
 
@@ -603,12 +721,18 @@ Body:
   "data": [
     {
       "id": "string",
-      "fileName": "screenshot.png",
+      "fileName": "checkout-error.png",
       "fileSize": 245678,
       "mimeType": "image/png",
       "url": "http://localhost:3000/storage/ticket-attachments/...",
       "uploadedBy": "string",
       "uploadedByRole": "vendor",
+      "uploadedByActor": {
+        "user_id": "string",
+        "role": "vendor",
+        "name": "Acme Store",
+        "avatar_url": null
+      },
       "createdAt": "2026-02-11T19:30:00.000Z"
     }
   ]
@@ -622,23 +746,75 @@ Body:
 
 ## Notes & Constraints
 
+### Populated / Enriched References
+
+Every endpoint that returns a ticket, note or attachment also resolves the raw
+ObjectId references into ready-to-render summary objects. The original `*_id`
+fields are **kept** for backward compatibility; the populated objects are added
+alongside them, so the frontend never has to issue follow-up lookups to display
+a name, avatar or entity label.
+
+**Actor summary** — used for `created_by`, `assigned_to`, `assigned_admin`,
+each entry in `followers`, the note `author`, and the attachment
+`uploadedByActor`:
+
+```json
+{
+  "user_id": "string",
+  "role": "vendor",
+  "name": "Acme Store",
+  "avatar_url": "https://.../logo.png"
+}
+```
+
+- `name` is resolved from the role-specific profile: admin/customer/agent → `name`, vendor → `display_name` (falls back to `business_name`), agency → `agency_name`.
+- `avatar_url` is the profile photo / logo where one exists, otherwise `null`.
+- If a reference cannot be resolved (deleted profile, etc.), `name` falls back to the capitalised role (e.g. `"Vendor"`) and `avatar_url` is `null`.
+- A `null` value (e.g. `assigned_to: null`, `assigned_admin: null`) means the corresponding `*_id` is unset.
+
+**Entity summary** — used for the ticket `entity` field:
+
+```json
+{
+  "type": "ORDER",
+  "id": "string",
+  "label": "Order ORD-2026-001003",
+  "reference": "ORD-2026-001003"
+}
+```
+
+- `label` is a display-ready string (e.g. `Order ORD-2026-001003`, the product title, `Booking on 2026-02-11`).
+- `reference` is the human reference where one exists (order number, product slug) or the entity id as a fallback.
+- `ORDER`, `PRODUCT` and `BOOKING` are fully resolved; other entity types degrade to a generic label built from the type and a short id suffix.
+- `entity` is `null` only when the ticket has no linked entity.
+
 ### Ticket Status Values
 
 Valid status values and typical flow:
 
 ```
-open → in_progress → waiting_on_admin → resolved → closed
-                  ↘ waiting_on_customer ↗
+open → in_progress → waiting_on_<role> → resolved → closed
+                     (admin | vendor | customer | agency | agent)
 ```
 
 | Status | Description |
 |--------|-------------|
 | `open` | Ticket created, awaiting action |
 | `in_progress` | Actively being worked on |
-| `waiting_on_customer` | Waiting for customer response |
 | `waiting_on_admin` | Waiting for admin action |
+| `waiting_on_vendor` | Waiting for vendor response |
+| `waiting_on_customer` | Waiting for customer response |
+| `waiting_on_agency` | Waiting for delivery agency response |
+| `waiting_on_agent` | Waiting for delivery agent response |
 | `resolved` | Issue resolved, awaiting confirmation |
 | `closed` | Ticket closed, no further action |
+
+**Waiting status rule**: a `waiting_on_<role>` status can only be set when a
+participant (follower) with that role is on the ticket — you cannot wait on a
+party that is not involved. The ticket creator and assignee count as
+participants. `waiting_on_admin` is the exception: it is always allowed because
+platform admin support is implicit. Violations return
+`400 TICKET_WAITING_TARGET_NOT_PARTICIPANT`.
 
 ### Priority Locking
 

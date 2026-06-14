@@ -1,5 +1,6 @@
 import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 export interface IAvailabilityRule extends IBaseDocument {
   productId: Types.ObjectId;
@@ -17,13 +18,13 @@ const AvailabilityRuleSchema = new Schema<IAvailabilityRule>(
   {
     productId: {
       type: Schema.Types.ObjectId,
-      ref: 'Product',
+      ref: MODELS.PRODUCT,
       required: true,
       index: true,
     },
     vendorId: {
       type: Schema.Types.ObjectId,
-      ref: 'Vendor',
+      ref: MODELS.VENDOR,
       required: true,
       index: true,
     },
@@ -74,7 +75,4 @@ const AvailabilityRuleSchema = new Schema<IAvailabilityRule>(
 AvailabilityRuleSchema.index({ productId: 1, isActive: 1 });
 AvailabilityRuleSchema.index({ vendorId: 1, isActive: 1 });
 
-export const AvailabilityRule = model<IAvailabilityRule>(
-  'AvailabilityRule',
-  AvailabilityRuleSchema
-);
+export const AvailabilityRule = model<IAvailabilityRule>(MODELS.AVAILABILITY_RULE, AvailabilityRuleSchema, COLLECTIONS.AVAILABILITY_RULE);

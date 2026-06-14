@@ -8,7 +8,9 @@
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
     "lint": "eslint src --max-warnings 0",
-    "aggregate:analytics": "ts-node scripts/populate-vendor-analytics.ts"
+    "aggregate:analytics": "ts-node scripts/populate-vendor-analytics.ts",
+    "seed:tickets": "ts-node scripts/seed/seed-tickets.ts",
+    "seed:tickets:clean": "ts-node scripts/seed/seed-tickets.ts --clean"
   },
   "keywords": [],
   "author": "",

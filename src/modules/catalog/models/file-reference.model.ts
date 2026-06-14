@@ -1,13 +1,14 @@
 import mongoose, { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
 import { FileOwnerType } from './file.model';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * Entities that can reference a File. Extend this union (and the schema enum)
  * when a new feature starts attaching files — e.g. 'ticket', 'store', 'kyc_doc'.
  * Nothing else in the file layer needs to change to support a new type.
  */
-export type FileReferenceEntityType = 'product' | 'variant' | 'digital_asset';
+export type FileReferenceEntityType = 'product' | 'variant' | 'digital_asset' | 'ticket';
 
 /**
  * FileReference — junction record linking a File to the entity that uses it.
@@ -33,10 +34,10 @@ export interface IFileReference extends IBaseDocument {
 }
 
 const FileReferenceSchema = new Schema<IFileReference>({
-  fileId: { type: Schema.Types.ObjectId, ref: 'File', required: true },
+  fileId: { type: Schema.Types.ObjectId, ref: MODELS.FILE, required: true },
   entityType: {
     type: String,
-    enum: ['product', 'variant', 'digital_asset'],
+    enum: ['product', 'variant', 'digital_asset', 'ticket'],
     required: true,
   },
   entityId: { type: Schema.Types.ObjectId, required: true },
@@ -66,4 +67,4 @@ FileReferenceSchema.index({ ownerType: 1, ownerId: 1, deletedAt: 1 });
 
 export const FileReferenceModel =
   (mongoose.models.FileReference as mongoose.Model<IFileReference>) ||
-  model<IFileReference>('FileReference', FileReferenceSchema);
+  model<IFileReference>(MODELS.FILE_REFERENCE, FileReferenceSchema, COLLECTIONS.FILE_REFERENCE);

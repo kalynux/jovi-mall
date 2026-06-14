@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * Vendor Notification Preferences
@@ -42,7 +43,7 @@ const VendorNotificationPreferenceSchema = new Schema<IVendorNotificationPrefere
     {
         vendorId: {
             type: Schema.Types.ObjectId,
-            ref: 'Vendor',
+            ref: MODELS.VENDOR,
             required: true,
             unique: true,
             index: true
@@ -104,8 +105,8 @@ const VendorNotificationPreferenceSchema = new Schema<IVendorNotificationPrefere
         }
     },
     {
-        timestamps: { createdAt: false, updatedAt: true },
-        collection: 'vendor_notification_preferences'
+        timestamps: { createdAt: false, updatedAt: true }
+        // Physical collection name is set centrally via COLLECTIONS (3rd model() arg).
     }
 );
 
@@ -119,4 +120,4 @@ VendorNotificationPreferenceSchema.pre('save', function (next) {
 
 export const VendorNotificationPreferenceModel =
     (mongoose.models.VendorNotificationPreference as mongoose.Model<IVendorNotificationPreference>) ||
-    mongoose.model<IVendorNotificationPreference>('VendorNotificationPreference', VendorNotificationPreferenceSchema);
+    mongoose.model<IVendorNotificationPreference>(MODELS.VENDOR_NOTIFICATION_PREFERENCE, VendorNotificationPreferenceSchema, COLLECTIONS.VENDOR_NOTIFICATION_PREFERENCE);

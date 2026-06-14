@@ -1,6 +1,7 @@
 import { TicketNoteRepository } from '../repositories/ticket-note.repository';
 import { TicketFollowerRepository } from '../repositories/ticket-follower.repository';
-import { ActorRole, NoteVisibility } from '../types/ticket.types';
+import { TicketRepository } from '../repositories/ticket.repository';
+import { ActorRole, NoteVisibility, TicketStatus } from '../types/ticket.types';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { ITicketNote } from '../models/ticket-note.model';
@@ -25,10 +26,12 @@ import mongoose from 'mongoose';
 export class TicketNoteService {
     private noteRepo: TicketNoteRepository;
     private followerRepo: TicketFollowerRepository;
+    private ticketRepo: TicketRepository;
 
     constructor() {
         this.noteRepo = new TicketNoteRepository();
         this.followerRepo = new TicketFollowerRepository();
+        this.ticketRepo = new TicketRepository();
     }
 
     /**
@@ -49,6 +52,15 @@ export class TicketNoteService {
         visibility: NoteVisibility = NoteVisibility.PUBLIC,
         visibleToUserIds: string[] = []
     ): Promise<ITicketNote> {
+        // Closed tickets are terminal; no new notes until reopened
+        const ticket = await this.ticketRepo.findById(ticketId);
+        if (!ticket) {
+            throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
+        }
+        if (ticket.status === TicketStatus.CLOSED) {
+            throw createAppError(ERROR_CODES.TICKET_CLOSED, 409, 'Cannot add notes to a closed ticket');
+        }
+
         // Validate user is follower or admin
         const isFollower = await this.followerRepo.isFollower(ticketId, authorUserId);
         if (!isFollower && authorRole !== ActorRole.ADMIN) {

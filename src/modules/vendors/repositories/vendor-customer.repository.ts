@@ -1,5 +1,6 @@
 import { Types, PipelineStage } from 'mongoose';
 import { VendorCustomerModel, IVendorCustomer } from '../models/vendor-customer.model';
+import { COLLECTIONS } from '../../../core/database/collections';
 
 function escapeRegex(input: string): string {
     return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -64,7 +65,7 @@ export class VendorCustomerRepository {
             { $match: match },
             {
                 $lookup: {
-                    from: 'customers',
+                    from: COLLECTIONS.CUSTOMER,
                     localField: 'customer_id',
                     foreignField: '_id',
                     as: 'customer'

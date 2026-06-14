@@ -104,7 +104,7 @@ Body:
 **Path Parameters**: None
 
 **Query Parameters**:
-- `status` (string, optional) - Filter by status
+- `status` (string, optional) - Filter by status. Enum: `open`, `in_progress`, `waiting_on_admin`, `waiting_on_vendor`, `waiting_on_customer`, `waiting_on_agency`, `waiting_on_agent`, `resolved`, `closed`
 - `priority` (string, optional) - Filter by priority
 - `type` (string, optional) - Filter by type
 - `entityType` (string, optional) - Filter by entity type
@@ -270,7 +270,7 @@ Body:
 **Request Body**:
 ```json
 {
-  "status": "string (required) - New status. Enum: open, in_progress, waiting_on_customer, waiting_on_admin, resolved, closed"
+  "status": "string (required) - New status. Enum: open, in_progress, waiting_on_admin, waiting_on_vendor, waiting_on_customer, waiting_on_agency, waiting_on_agent, resolved, closed"
 }
 ```
 
@@ -296,6 +296,7 @@ Body:
 - `404` – `NOT_FOUND` – Ticket not found
 - `403` – `FORBIDDEN` – Ticket is locked to another admin
 - `400` – `VALIDATION_ERROR` – Invalid status value
+- `400` – `TICKET_WAITING_TARGET_NOT_PARTICIPANT` – A `waiting_on_<role>` status was requested but no participant with that role is on the ticket (does not apply to `waiting_on_admin`)
 
 ---
 
@@ -666,23 +667,32 @@ Body:
 
 ### POST /api/admin/tickets/:ticketId/attachments
 
-**Description**: Upload a file attachment to a ticket. Attachments can be PUBLIC or PRIVATE.
+**Description**: Attach an already-uploaded file to a ticket. The file is **not**
+uploaded here — first upload it via `POST /api/files/upload` (images, documents,
+archives, audio) **or, for videos, `POST /api/files/upload/video`** (mp4/mov/webm,
+70 MB max — see [file-management.md](../vendor/file-management.md#post-apifilesuploadvideo)),
+then send the returned `fileId` to this route (same pattern as product images).
+Attachments can be PUBLIC or PRIVATE. Max 5 attachments per ticket.
 
-**Authorization**: Admin access required.
+**Authorization**: Admin access required. Admins may attach any file.
 
 **Request Headers**:
 - `Authorization: Bearer <token>`
-- `Content-Type: multipart/form-data`
+- `Content-Type: application/json`
 
 **Path Parameters**:
 - `ticketId` (string, required) - Ticket ID
 
 **Query Parameters**: None
 
-**Request Body** (multipart/form-data):
-- `file` (file, required) - File to upload
-- `visibility` (string, optional, default: PUBLIC) - Enum: `PUBLIC`, `PRIVATE`
-- `visibleToUserIds` (JSON array string, optional) - User IDs for private attachment visibility
+**Request Body** (application/json):
+```json
+{
+  "fileId": "string (required) - ID returned by POST /api/files/upload",
+  "visibility": "string (optional, default: PUBLIC) - Enum: PUBLIC, PRIVATE",
+  "visibleToUserIds": ["string (optional) - user IDs for private attachment visibility"]
+}
+```
 
 **Success Response**:
 
@@ -706,9 +716,10 @@ Body:
 ```
 
 **Error Responses**:
-- `404` – `NOT_FOUND` – Ticket not found
-- `400` – `NO_FILE` – No file provided
-- `400` – `ATTACHMENT_LIMIT_EXCEEDED` – Maximum 5 attachments per ticket
+- `404` – `TICKET_NOT_FOUND` – Ticket not found
+- `404` – `TICKET_ATTACHMENT_MISSING` – `fileId` does not reference an existing file
+- `422` – `TICKET_ATTACHMENT_LIMIT_EXCEEDED` – Maximum 5 attachments per ticket
+- `400` – `VALIDATION_ERROR` – Missing/invalid `fileId` or visibility parameters
 
 ---
 
@@ -849,11 +860,16 @@ The following cannot be modified:
 
 Valid status flow:
 ```
-open → in_progress → waiting_on_admin → resolved → closed
-                  ↘ waiting_on_customer ↗
-                  
+open → in_progress → waiting_on_<role> → resolved → closed
+                     (admin | vendor | customer | agency | agent)
+
 closed → open (via reopen endpoint, admin only)
 ```
+
+**Waiting status rule**: a `waiting_on_<role>` status can only be set when a
+participant (follower) with that role is on the ticket. The creator and assignee
+count as participants. `waiting_on_admin` is always allowed (platform admin
+support is implicit). Violations return `400 TICKET_WAITING_TARGET_NOT_PARTICIPANT`.
 
 ### Timestamps
 

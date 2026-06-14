@@ -1,5 +1,6 @@
 import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 export interface IProductOptionValue extends IBaseDocument {
   optionId: Types.ObjectId;
@@ -7,7 +8,7 @@ export interface IProductOptionValue extends IBaseDocument {
 }
 
 const ProductOptionValueSchema = new Schema<IProductOptionValue>({
-  optionId: { type: Schema.Types.ObjectId, ref: 'ProductOption', required: true, index: true },
+  optionId: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT_OPTION, required: true, index: true },
   value: { type: String, required: true },
 
   ...BaseSchemaFields
@@ -19,4 +20,4 @@ ProductOptionValueSchema.index(
   { unique: true, collation: { locale: 'en', strength: 2 } }
 );
 
-export const ProductOptionValueModel = model<IProductOptionValue>('ProductOptionValue', ProductOptionValueSchema);
+export const ProductOptionValueModel = model<IProductOptionValue>(MODELS.PRODUCT_OPTION_VALUE, ProductOptionValueSchema, COLLECTIONS.PRODUCT_OPTION_VALUE);

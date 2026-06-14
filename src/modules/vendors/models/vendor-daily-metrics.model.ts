@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * VendorDailyMetrics - Daily aggregation table for vendor analytics
@@ -102,7 +103,7 @@ const VendorDailyMetricsSchema = new Schema<IVendorDailyMetrics>(
     {
         vendorId: {
             type: Schema.Types.ObjectId,
-            ref: 'Vendor',
+            ref: MODELS.VENDOR,
             required: true,
             index: true
         },
@@ -161,7 +162,4 @@ VendorDailyMetricsSchema.index({ vendorId: 1, date: 1 }, { unique: true });
 // Versioning (future migration support)
 // VendorDailyMetricsSchema.index({ aggregationVersion: 1 });
 
-export const VendorDailyMetricsModel = mongoose.model<IVendorDailyMetrics>(
-    'VendorDailyMetrics',
-    VendorDailyMetricsSchema
-);
+export const VendorDailyMetricsModel = mongoose.model<IVendorDailyMetrics>(MODELS.VENDOR_DAILY_METRICS, VendorDailyMetricsSchema, COLLECTIONS.VENDOR_DAILY_METRICS);

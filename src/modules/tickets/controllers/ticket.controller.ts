@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { TicketService } from '../services/ticket.service';
 import { TicketFollowerService } from '../services/ticket-follower.service';
+import { TicketEnrichmentService } from '../services/ticket-enrichment.service';
 import {
     CreateTicketSchema,
     UpdateTicketSchema,
@@ -16,6 +17,7 @@ import { ERROR_CODES } from '../../../core/error-codes';
 
 const ticketService = new TicketService();
 const followerService = new TicketFollowerService();
+const enrichmentService = new TicketEnrichmentService();
 
 export class TicketController {
 
@@ -35,7 +37,8 @@ export class TicketController {
             createdByRole: role
         });
 
-        res.status(201).json({ success: true, data: ticket });
+        const enriched = await enrichmentService.enrichTicket(ticket);
+        res.status(201).json({ success: true, data: enriched });
     });
 
     static listTickets = asyncHandler(async (req: Request, res: Response) => {
@@ -62,7 +65,8 @@ export class TicketController {
 
         const result = await ticketService.listTicketsForUser(userId, role, filters, pagination);
 
-        res.status(200).json({ success: true, data: result.data, pagination: result.pagination });
+        const enriched = await enrichmentService.enrichTickets(result.data);
+        res.status(200).json({ success: true, data: enriched, pagination: result.pagination });
     });
 
     static getTicketDetails = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
@@ -88,7 +92,8 @@ export class TicketController {
             }
         }
 
-        res.status(200).json({ success: true, data: ticket });
+        const enriched = await enrichmentService.enrichTicket(ticket);
+        res.status(200).json({ success: true, data: enriched });
     });
 
     static updateTicket = asyncHandler(async (req: Request, res: Response) => {

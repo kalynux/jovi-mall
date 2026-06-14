@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * VendorCustomer - First-class vendor↔customer relationship record.
@@ -42,13 +43,13 @@ const VendorCustomerSchema = new Schema<IVendorCustomer>(
     {
         vendor_id: {
             type: Schema.Types.ObjectId,
-            ref: 'Vendor',
+            ref: MODELS.VENDOR,
             required: true,
             index: true
         },
         customer_id: {
             type: Schema.Types.ObjectId,
-            ref: 'Customer',
+            ref: MODELS.CUSTOMER,
             required: true,
             index: true
         },
@@ -100,7 +101,4 @@ VendorCustomerSchema.index({ vendor_id: 1, last_order_at: -1 });
 VendorCustomerSchema.index({ vendor_id: 1, total_spent: -1 });
 VendorCustomerSchema.index({ vendor_id: 1, order_count: -1 });
 
-export const VendorCustomerModel = mongoose.model<IVendorCustomer>(
-    'VendorCustomer',
-    VendorCustomerSchema
-);
+export const VendorCustomerModel = mongoose.model<IVendorCustomer>(MODELS.VENDOR_CUSTOMER, VendorCustomerSchema, COLLECTIONS.VENDOR_CUSTOMER);

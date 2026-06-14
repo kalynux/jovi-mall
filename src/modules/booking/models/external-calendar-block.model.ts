@@ -1,5 +1,6 @@
 import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * ExternalCalendarBlock - Persisted busy times from external calendars
@@ -31,7 +32,7 @@ const ExternalCalendarBlockSchema = new Schema<IExternalCalendarBlock>(
     {
         vendorId: {
             type: Schema.Types.ObjectId,
-            ref: 'Vendor',
+            ref: MODELS.VENDOR,
             required: true,
             index: true,
         },
@@ -100,7 +101,4 @@ ExternalCalendarBlockSchema.index({
     endTime: 1,
 });
 
-export const ExternalCalendarBlock = model<IExternalCalendarBlock>(
-    'ExternalCalendarBlock',
-    ExternalCalendarBlockSchema
-);
+export const ExternalCalendarBlock = model<IExternalCalendarBlock>(MODELS.EXTERNAL_CALENDAR_BLOCK, ExternalCalendarBlockSchema, COLLECTIONS.EXTERNAL_CALENDAR_BLOCK);

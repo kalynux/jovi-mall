@@ -1,5 +1,6 @@
 import mongoose, { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 export interface IDigitalAsset extends IBaseDocument {
     productId: Types.ObjectId;
@@ -10,8 +11,8 @@ export interface IDigitalAsset extends IBaseDocument {
 }
 
 const DigitalAssetSchema = new Schema<IDigitalAsset>({
-    productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true, index: true },
-    mediaId: { type: Schema.Types.ObjectId, ref: 'File', required: true },
+    productId: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT, required: true, index: true },
+    mediaId: { type: Schema.Types.ObjectId, ref: MODELS.FILE, required: true },
     downloadLimit: { type: Number },
     isUnlimited: { type: Boolean, default: false },
     expiresAt: { type: Date },
@@ -22,4 +23,4 @@ const DigitalAssetSchema = new Schema<IDigitalAsset>({
 // Using 'CatalogDigitalAsset' to be safe from collision with digital-delivery module
 export const DigitalAssetModel =
     (mongoose.models.CatalogDigitalAsset as mongoose.Model<IDigitalAsset>) ||
-    model<IDigitalAsset>('CatalogDigitalAsset', DigitalAssetSchema);
+    model<IDigitalAsset>(MODELS.CATALOG_DIGITAL_ASSET, DigitalAssetSchema, COLLECTIONS.CATALOG_DIGITAL_ASSET);

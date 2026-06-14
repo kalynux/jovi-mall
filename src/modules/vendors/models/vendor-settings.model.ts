@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * VendorSettings - Per-vendor settings document (one per vendor).
@@ -69,7 +70,7 @@ const VendorSettingsSchema = new Schema<IVendorSettings>(
     {
         vendor_id: {
             type: Schema.Types.ObjectId,
-            ref: 'Vendor',
+            ref: MODELS.VENDOR,
             required: true,
             unique: true
         },
@@ -83,7 +84,4 @@ const VendorSettingsSchema = new Schema<IVendorSettings>(
     }
 );
 
-export const VendorSettingsModel = mongoose.model<IVendorSettings>(
-    'VendorSettings',
-    VendorSettingsSchema
-);
+export const VendorSettingsModel = mongoose.model<IVendorSettings>(MODELS.VENDOR_SETTINGS, VendorSettingsSchema, COLLECTIONS.VENDOR_SETTINGS);

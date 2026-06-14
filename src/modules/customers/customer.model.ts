@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
 import { FixedOnboardingStep } from '../../core/constants/onboarding-steps';
+import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 // ─── Saved Address Sub-Schema ─────────────────────────────────────────────────
 
@@ -124,7 +125,7 @@ export interface ICustomer extends Document {
 
 const CustomerSchema = new Schema<ICustomer>(
   {
-    user_id: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+    user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true, unique: true },
     email: { type: String, trim: true, lowercase: true },
     email_verified: { type: Boolean, default: false },
     phone: { type: String, trim: true },
@@ -173,4 +174,4 @@ const CustomerSchema = new Schema<ICustomer>(
 // Geospatial index for customer saved addresses
 CustomerSchema.index({ 'saved_addresses.location': '2dsphere' }, { sparse: true });
 
-export const CustomerModel = mongoose.model<ICustomer>('Customer', CustomerSchema);
+export const CustomerModel = mongoose.model<ICustomer>(MODELS.CUSTOMER, CustomerSchema, COLLECTIONS.CUSTOMER);

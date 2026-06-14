@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 export type UserRole = 'admin' | 'vendor' | 'agency' | 'agent' | 'customer';
 export type UserStatus = 'active' | 'suspended';
@@ -34,4 +35,4 @@ const UserSchema = new Schema<IUser>(
   }
 );
 
-export const UserModel = mongoose.model<IUser>('User', UserSchema);
+export const UserModel = mongoose.model<IUser>(MODELS.USER, UserSchema, COLLECTIONS.USER);

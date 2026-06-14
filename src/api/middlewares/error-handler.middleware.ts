@@ -120,7 +120,33 @@ export const errorHandlerMiddleware = (
         return;
     }
 
-    // ── 5. Unknown / unexpected error ─────────────────────────────────────────
+    // ── 5. Multer errors (file size/count limits hit during multipart parsing) ─
+    if (isMulterError(err)) {
+        const code = (err as any).code as string;
+        const isSize = code === 'LIMIT_FILE_SIZE';
+        const isCount = code === 'LIMIT_FILE_COUNT' || code === 'LIMIT_UNEXPECTED_FILE';
+        const statusCode = isSize ? 413 : 400;
+        console.warn(`[${requestId}] MulterError [${code}] at ${req.method} ${req.path}`);
+
+        res.status(statusCode).json({
+            success: false,
+            requestId,
+            error: {
+                code: isSize
+                    ? ERROR_CODES.CATALOG_FILE_TOO_LARGE
+                    : ERROR_CODES.VALIDATION_ERROR,
+                message: isSize
+                    ? 'Uploaded file exceeds the maximum allowed size'
+                    : isCount
+                        ? 'Too many files or unexpected field in the upload'
+                        : (err as Error).message,
+                statusCode,
+            },
+        });
+        return;
+    }
+
+    // ── 6. Unknown / unexpected error ─────────────────────────────────────────
     const unknownErr = err instanceof Error ? err : new Error(String(err));
     console.error(
         `[${requestId}] Unhandled error at ${req.method} ${req.path}`,
@@ -145,6 +171,14 @@ function isMongooseCastError(err: unknown): err is { name: string; value: unknow
         typeof err === 'object' &&
         err !== null &&
         (err as any).name === 'CastError'
+    );
+}
+
+function isMulterError(err: unknown): boolean {
+    return (
+        typeof err === 'object' &&
+        err !== null &&
+        (err as any).name === 'MulterError'
     );
 }
 

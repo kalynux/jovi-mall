@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 /**
  * OrderTimeline Model
@@ -57,7 +58,7 @@ export interface IOrderTimeline extends Document {
 const OrderTimelineSchema = new Schema<IOrderTimeline>({
     order_id: {
         type: Schema.Types.ObjectId,
-        ref: 'Order',
+        ref: MODELS.ORDER,
         required: true,
         index: true  // Critical for order timeline queries
     },
@@ -120,4 +121,4 @@ OrderTimelineSchema.pre('deleteMany', function (next) {
     next(new Error('Timeline entries cannot be deleted'));
 });
 
-export const OrderTimelineModel = mongoose.model<IOrderTimeline>('OrderTimeline', OrderTimelineSchema);
+export const OrderTimelineModel = mongoose.model<IOrderTimeline>(MODELS.ORDER_TIMELINE, OrderTimelineSchema, COLLECTIONS.ORDER_TIMELINE);

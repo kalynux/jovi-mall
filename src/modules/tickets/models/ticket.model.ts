@@ -14,6 +14,7 @@ import {
     ACTOR_ROLE_VALUES,
     ENTITY_TYPE_VALUES
 } from '../types/ticket.types';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * Ticket Model
@@ -85,7 +86,7 @@ const TicketSchema = new Schema<ITicket>({
     description: {
         type: String,
         required: true,
-        maxlength: 10000
+        maxlength: 700
     },
     type: {
         type: String,
@@ -118,7 +119,7 @@ const TicketSchema = new Schema<ITicket>({
     },
     priority_locked_by: {
         type: Schema.Types.ObjectId,
-        ref: 'User'
+        ref: MODELS.USER
     },
     priority_locked_at: {
         type: Date
@@ -141,7 +142,7 @@ const TicketSchema = new Schema<ITicket>({
     },
     created_by_user_id: {
         type: Schema.Types.ObjectId,
-        ref: 'User',
+        ref: MODELS.USER,
         required: true,
         index: true
     },
@@ -151,16 +152,16 @@ const TicketSchema = new Schema<ITicket>({
     },
     assigned_to_user_id: {
         type: Schema.Types.ObjectId,
-        ref: 'User'
+        ref: MODELS.USER
     },
     assigned_admin_id: {
         type: Schema.Types.ObjectId,
-        ref: 'Admin',
+        ref: MODELS.ADMIN,
         index: true // For admin exclusivity queries
     },
     updated_by: [{
         type: Schema.Types.ObjectId,
-        ref: 'User'
+        ref: MODELS.USER
     }],
     ...BaseSchemaFields
 }, {
@@ -188,4 +189,4 @@ TicketSchema.index({ type: 1, createdAt: -1 });
 // Soft delete filtering (from base schema)
 // TicketSchema.index({ deletedAt: 1 });
 
-export const TicketModel = mongoose.model<ITicket>('Ticket', TicketSchema);
+export const TicketModel = mongoose.model<ITicket>(MODELS.TICKET, TicketSchema, COLLECTIONS.TICKET);

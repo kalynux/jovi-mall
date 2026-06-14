@@ -1,5 +1,6 @@
 import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 export type ReservationType = 'physical' | 'digital' | 'service';
 export type ReservationStatus = 'active' | 'released' | 'committed' | 'expired';
@@ -30,13 +31,13 @@ const StockReservationSchema = new Schema<IStockReservation>({
   },
   productId: { 
     type: Schema.Types.ObjectId, 
-    ref: 'Product', 
+    ref: MODELS.PRODUCT, 
     required: true, 
     index: true 
   },
   variantId: { 
     type: Schema.Types.ObjectId, 
-    ref: 'ProductVariant', 
+    ref: MODELS.PRODUCT_VARIANT, 
     required: true, 
     index: true 
   },
@@ -63,7 +64,7 @@ const StockReservationSchema = new Schema<IStockReservation>({
   },
   vendorId: { 
     type: Schema.Types.ObjectId, 
-    ref: 'Vendor', 
+    ref: MODELS.VENDOR, 
     required: true,
     index: true
   },
@@ -71,11 +72,11 @@ const StockReservationSchema = new Schema<IStockReservation>({
   // Optional context for restoration
   availabilitySlotId: { 
     type: Schema.Types.ObjectId, 
-    ref: 'ServiceAvailability' 
+    ref: MODELS.SERVICE_AVAILABILITY 
   },
   digitalAssetId: { 
     type: Schema.Types.ObjectId, 
-    ref: 'DigitalAsset' 
+    ref: MODELS.DIGITAL_ASSET 
   },
   
   ...BaseSchemaFields
@@ -89,4 +90,4 @@ StockReservationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 StockReservationSchema.index({ variantId: 1, status: 1 });
 StockReservationSchema.index({ productId: 1, status: 1 });
 
-export const StockReservationModel = model<IStockReservation>('StockReservation', StockReservationSchema);
+export const StockReservationModel = model<IStockReservation>(MODELS.STOCK_RESERVATION, StockReservationSchema, COLLECTIONS.STOCK_RESERVATION);

@@ -1,5 +1,6 @@
 import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 export interface IProductVariant extends IBaseDocument {
   productId: Types.ObjectId;
@@ -45,7 +46,7 @@ export interface IProductVariant extends IBaseDocument {
 }
 
 const ProductVariantSchema = new Schema<IProductVariant>({
-  productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true, index: true },
+  productId: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT, required: true, index: true },
   sku: { type: String, required: true }, // Index defined below
   name: { type: String }, // Optional at schema level, validated at service level for digital/service products
 
@@ -67,19 +68,19 @@ const ProductVariantSchema = new Schema<IProductVariant>({
   width: { type: Number },
   height: { type: Number },
 
-  optionValueIds: [{ type: Schema.Types.ObjectId, ref: 'ProductOptionValue' }],
-  fileIds: [{ type: Schema.Types.ObjectId, ref: 'File' }],
+  optionValueIds: [{ type: Schema.Types.ObjectId, ref: MODELS.PRODUCT_OPTION_VALUE }],
+  fileIds: [{ type: Schema.Types.ObjectId, ref: MODELS.FILE }],
 
   deliveryAgencyId: {
     type: Schema.Types.ObjectId,
-    ref: 'DeliveryAgency',
+    ref: MODELS.DELIVERY_AGENCY,
     required: false,
     index: true,
   },
 
   digitalConfig: {
     type: {
-      assetId: { type: Schema.Types.ObjectId, ref: 'DigitalAsset', required: false },
+      assetId: { type: Schema.Types.ObjectId, ref: MODELS.DIGITAL_ASSET, required: false },
       maxDownloads: { type: Number, default: null, min: 1 },
       expiresAfterDays: { type: Number, default: null, min: 1 },
     },
@@ -97,4 +98,4 @@ ProductVariantSchema.index({ sku: 1 }, { unique: true });
 ProductVariantSchema.index({ productId: 1, optionSignature: 1 }, { unique: true });
 ProductVariantSchema.index({ productId: 1, status: 1 });
 
-export const ProductVariantModel = model<IProductVariant>('ProductVariant', ProductVariantSchema);
+export const ProductVariantModel = model<IProductVariant>(MODELS.PRODUCT_VARIANT, ProductVariantSchema, COLLECTIONS.PRODUCT_VARIANT);

@@ -13,7 +13,7 @@ export type UserRole = 'admin' | 'vendor' | 'user';
 /**
  * Upload folder destinations
  */
-export type UploadFolder = 'products' | 'variants' | 'digital' | 'system';
+export type UploadFolder = 'products' | 'variants' | 'digital' | 'videos' | 'system';
 
 /**
  * Upload request context - who is uploading

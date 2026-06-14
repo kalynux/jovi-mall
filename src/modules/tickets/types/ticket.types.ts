@@ -74,7 +74,11 @@ export enum TicketType {
 export enum TicketStatus {
     OPEN = 'open',
     IN_PROGRESS = 'in_progress',
-    WAITING = 'waiting',
+    WAITING_ON_ADMIN = 'waiting_on_admin',
+    WAITING_ON_VENDOR = 'waiting_on_vendor',
+    WAITING_ON_CUSTOMER = 'waiting_on_customer',
+    WAITING_ON_AGENCY = 'waiting_on_agency',
+    WAITING_ON_AGENT = 'waiting_on_agent',
     RESOLVED = 'resolved',
     CLOSED = 'closed'
 }
@@ -144,6 +148,28 @@ export const TICKET_TYPE_VALUES = Object.values(TicketType);
  * Helper to get all status values
  */
 export const TICKET_STATUS_VALUES = Object.values(TicketStatus);
+
+/**
+ * Maps each actor-specific "waiting" status to the ActorRole it is waiting on.
+ *
+ * Used by the status update flow to enforce that a ticket can only be marked as
+ * waiting on a party that actually participates in it. `waiting_on_admin` is the
+ * exception: it is always allowed because platform admin support is implicit.
+ */
+export const WAITING_STATUS_TARGET_ROLE: Partial<Record<TicketStatus, ActorRole>> = {
+    [TicketStatus.WAITING_ON_ADMIN]: ActorRole.ADMIN,
+    [TicketStatus.WAITING_ON_VENDOR]: ActorRole.VENDOR,
+    [TicketStatus.WAITING_ON_CUSTOMER]: ActorRole.CUSTOMER,
+    [TicketStatus.WAITING_ON_AGENCY]: ActorRole.AGENCY,
+    [TicketStatus.WAITING_ON_AGENT]: ActorRole.AGENT
+};
+
+/**
+ * Whether a status is one of the actor-specific waiting statuses.
+ */
+export function isWaitingStatus(status: TicketStatus): boolean {
+    return status in WAITING_STATUS_TARGET_ROLE;
+}
 
 /**
  * Helper to get all priority values

@@ -1,5 +1,6 @@
 import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 export type ProductType = 'physical' | 'digital' | 'service';
 export type ProductStatus = 'draft' | 'active' | 'archived' | 'pending_review' | 'suspended';
@@ -71,7 +72,7 @@ export interface IProduct extends IBaseDocument {
 }
 
 const ProductSchema = new Schema<IProduct>({
-  vendorId: { type: Schema.Types.ObjectId, ref: 'Vendor', required: true, index: true },
+  vendorId: { type: Schema.Types.ObjectId, ref: MODELS.VENDOR, required: true, index: true },
   type: {
     type: String,
     enum: ['physical', 'digital', 'service'],
@@ -97,9 +98,9 @@ const ProductSchema = new Schema<IProduct>({
   },
 
   hasVariants: { type: Boolean, default: false },
-  defaultVariantId: { type: Schema.Types.ObjectId, ref: 'ProductVariant' },
+  defaultVariantId: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT_VARIANT },
 
-  fileIds: [{ type: Schema.Types.ObjectId, ref: 'File' }],
+  fileIds: [{ type: Schema.Types.ObjectId, ref: MODELS.FILE }],
 
   // ─── Vectorisation tracking ───────────────────────────────────────────────
   vectorisationEnabled: { type: Boolean, default: false, index: true },
@@ -143,7 +144,7 @@ const ProductSchema = new Schema<IProduct>({
     type: {
       agency_id: {
         type: Schema.Types.ObjectId,
-        ref: 'DeliveryAgency',
+        ref: MODELS.DELIVERY_AGENCY,
         default: null,
       },
     },
@@ -186,4 +187,4 @@ ProductSchema.index({ vendorId: 1, slug: 1 }, { unique: true });
 // ProductSchema.index({ fileIds: 1 }); // Optional: for finding products by file
 // ProductSchema.index({ deletedAt: 1 });
 
-export const ProductModel = model<IProduct>('Product', ProductSchema);
+export const ProductModel = model<IProduct>(MODELS.PRODUCT, ProductSchema, COLLECTIONS.PRODUCT);

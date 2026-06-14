@@ -1,6 +1,7 @@
 import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
 import { BookingStatus } from '../types/booking.types';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 export type BookingPaymentStatus =
   | 'unpaid'
@@ -37,19 +38,19 @@ const BookingSchema = new Schema<IBooking>(
   {
     productId: {
       type: Schema.Types.ObjectId,
-      ref: 'Product',
+      ref: MODELS.PRODUCT,
       required: true,
       index: true,
     },
     userId: {
       type: Schema.Types.ObjectId,
-      ref: 'User',
+      ref: MODELS.USER,
       required: true,
       index: true,
     },
     vendorId: {
       type: Schema.Types.ObjectId,
-      ref: 'Vendor',
+      ref: MODELS.VENDOR,
       required: true,
       index: true,
     },
@@ -98,7 +99,7 @@ const BookingSchema = new Schema<IBooking>(
     },
     paymentTransactionId: {
       type: Schema.Types.ObjectId,
-      ref: 'PaymentTransaction',
+      ref: MODELS.PAYMENT_TRANSACTION,
       index: true,
     },
     paidAt: {
@@ -138,4 +139,4 @@ BookingSchema.pre('save', function (next) {
   next();
 });
 
-export const Booking = model<IBooking>('Booking', BookingSchema);
+export const Booking = model<IBooking>(MODELS.BOOKING, BookingSchema, COLLECTIONS.BOOKING);

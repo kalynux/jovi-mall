@@ -9,7 +9,7 @@ import { NOTE_VISIBILITY_VALUES } from '../types/ticket.types';
 export const CreateNoteSchema = z.object({
     content: z.string()
         .min(1, 'Note content cannot be empty')
-        .max(5000, 'Note content cannot exceed 5000 characters'),
+        .max(300, 'Note content cannot exceed 300 characters'),
     visibility: z.enum(NOTE_VISIBILITY_VALUES as [string, ...string[]], {
         errorMap: () => ({ message: 'Invalid visibility setting' })
     }).default('public'),

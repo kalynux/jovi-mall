@@ -17,7 +17,7 @@ import {
 // Create ticket
 export const CreateTicketSchema = z.object({
     subject: z.string().min(1, 'Subject is required').max(200, 'Subject too long'),
-    description: z.string().min(1, 'Description is required').max(10000, 'Description too long'),
+    description: z.string().min(1, 'Description is required').max(700, 'Description too long'),
     type: z.enum(TICKET_TYPE_VALUES as [string, ...string[]], {
         errorMap: () => ({ message: 'Invalid ticket type' })
     }),

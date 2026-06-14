@@ -1,7 +1,7 @@
 import { TicketRepository, TicketFilters, PaginationOptions } from '../repositories/ticket.repository';
 import { TicketFollowerService } from './ticket-follower.service';
 import { TicketNoteService } from './ticket-note.service';
-import { TicketStatus, TicketPriority, ActorRole, EntityType, TicketImportance } from '../types/ticket.types';
+import { TicketStatus, TicketPriority, ActorRole, EntityType, TicketImportance, isWaitingStatus, WAITING_STATUS_TARGET_ROLE } from '../types/ticket.types';
 import { ITicket } from '../models/ticket.model';
 import { AppError, createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -199,6 +199,9 @@ export class TicketService {
         // Validate status transition (basic validation)
         this.validateStatusTransition(oldStatus, newStatus);
 
+        // For actor-specific waiting statuses, ensure the targeted party participates
+        await this.assertWaitingTargetParticipates(ticketId, newStatus);
+
         // Update status
         const updatedTicket = await this.ticketRepo.updateStatus(ticketId, newStatus, userId);
         if (!updatedTicket) {
@@ -348,6 +351,11 @@ export class TicketService {
         const ticket = await this.ticketRepo.findById(ticketId);
         if (!ticket) {
             throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
+        }
+
+        // Closed tickets are terminal; priority cannot be modified until reopened
+        if (ticket.status === TicketStatus.CLOSED) {
+            throw createAppError(ERROR_CODES.TICKET_CLOSED, 409, 'Cannot update priority of a closed ticket');
         }
 
         // Validate active admin permission FIRST (exclusive locking)
@@ -568,8 +576,37 @@ export class TicketService {
     }
 
     /**
+     * Enforce that an actor-specific waiting status targets a party that actually
+     * participates in the ticket.
+     *
+     * - `waiting_on_admin` is always allowed (platform admin support is implicit).
+     * - Every other `waiting_on_<role>` requires a follower with that role on the
+     *   ticket (creator and assignee are auto-followers, so they count).
+     * - Non-waiting statuses are a no-op.
+     */
+    private async assertWaitingTargetParticipates(ticketId: string, newStatus: TicketStatus): Promise<void> {
+        if (!isWaitingStatus(newStatus)) {
+            return;
+        }
+
+        const targetRole = WAITING_STATUS_TARGET_ROLE[newStatus];
+        if (!targetRole || targetRole === ActorRole.ADMIN) {
+            return;
+        }
+
+        const hasParticipant = await this.followerService.hasParticipantWithRole(ticketId, targetRole);
+        if (!hasParticipant) {
+            throw createAppError(
+                ERROR_CODES.TICKET_WAITING_TARGET_NOT_PARTICIPANT,
+                400,
+                `Cannot set status to "${newStatus}": no ${targetRole} participates in this ticket`
+            );
+        }
+    }
+
+    /**
      * Validate status transition
-     * 
+     *
      * Basic implementation - can be extended with state machine rules
      */
     private validateStatusTransition(from: TicketStatus, to: TicketStatus): void {

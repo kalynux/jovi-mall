@@ -1,6 +1,7 @@
 import { TicketModel, ITicket } from '../models/ticket.model';
 import { TicketStatus, TicketPriority, ActorRole, EntityType } from '../types/ticket.types';
 import mongoose from 'mongoose';
+import { COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * TicketRepository
@@ -194,7 +195,7 @@ export class TicketRepository {
             // Join with followers
             {
                 $lookup: {
-                    from: 'ticketfollowers',
+                    from: COLLECTIONS.TICKET_FOLLOWER,
                     localField: '_id',
                     foreignField: 'ticket_id',
                     as: 'followers'

@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
-import { uploadDigitalAsset } from '../../../api/middlewares/upload.middleware';
 import { TicketController } from '../controllers/ticket.controller';
 import { TicketNoteController } from '../controllers/ticket-note.controller';
 import { TicketAttachmentController } from '../controllers/ticket-attachment.controller';
@@ -31,7 +30,7 @@ router.post('/:ticketId/notes', TicketNoteController.createNote);
 router.get('/:ticketId/notes', TicketNoteController.listNotes);
 
 // Attachments
-router.post('/:ticketId/attachments', uploadDigitalAsset.single('file'), TicketAttachmentController.uploadAttachment);
+router.post('/:ticketId/attachments', TicketAttachmentController.attachFile);
 router.get('/:ticketId/attachments', TicketAttachmentController.listAttachments);
 
 export default router;

@@ -2,6 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
 import { PayoutMethodSchema, IPayoutDetails } from '../../core/types/payout.types';
 import { VendorOnboardingStep } from '../../core/constants/onboarding-steps';
+import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 // ─── Vendor Policy Sub-Schemas ────────────────────────────────────────────────
 
@@ -286,7 +287,7 @@ export interface IVendor extends Document {
 
 const VendorSchema = new Schema<IVendor>(
   {
-    user_id: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+    user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true, unique: true },
     business_name: { type: String, required: true },
     display_name: { type: String },
     business_description: { type: String, default: null },
@@ -316,7 +317,7 @@ const VendorSchema = new Schema<IVendor>(
      * Remove this field after all existing reads are updated.
      */
     legit_verified: { type: Boolean, default: false },
-    default_delivery_agency_id: { type: Schema.Types.ObjectId, ref: 'DeliveryAgency', default: null },
+    default_delivery_agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, default: null },
     wa: {
       verified: { type: Boolean, default: false },
       wa_phone_id: { type: String },
@@ -349,4 +350,4 @@ const VendorSchema = new Schema<IVendor>(
 // Geospatial index for vendor business address locations
 VendorSchema.index({ 'business_addresses.location': '2dsphere' }, { sparse: true });
 
-export const VendorModel = mongoose.model<IVendor>('Vendor', VendorSchema);
+export const VendorModel = mongoose.model<IVendor>(MODELS.VENDOR, VendorSchema, COLLECTIONS.VENDOR);

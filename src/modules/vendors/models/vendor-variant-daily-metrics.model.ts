@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * VendorVariantDailyMetrics - Per-variant daily metrics for flexible analytics
@@ -42,13 +43,13 @@ const VendorVariantDailyMetricsSchema = new Schema<IVendorVariantDailyMetrics>(
     {
         vendorId: {
             type: Schema.Types.ObjectId,
-            ref: 'Vendor',
+            ref: MODELS.VENDOR,
             required: true,
             index: true
         },
         variantId: {
             type: Schema.Types.ObjectId,
-            ref: 'Variant',
+            ref: MODELS.PRODUCT_VARIANT,
             required: true,
             index: true
         },
@@ -112,7 +113,4 @@ VendorVariantDailyMetricsSchema.index({ vendorId: 1, date: 1, revenue: -1 });
 // Top by quantity query
 VendorVariantDailyMetricsSchema.index({ vendorId: 1, date: 1, quantity: -1 });
 
-export const VendorVariantDailyMetricsModel = mongoose.model<IVendorVariantDailyMetrics>(
-    'VendorVariantDailyMetrics',
-    VendorVariantDailyMetricsSchema
-);
+export const VendorVariantDailyMetricsModel = mongoose.model<IVendorVariantDailyMetrics>(MODELS.VENDOR_VARIANT_DAILY_METRICS, VendorVariantDailyMetricsSchema, COLLECTIONS.VENDOR_VARIANT_DAILY_METRICS);

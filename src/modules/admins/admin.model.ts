@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { FixedOnboardingStep } from '../../core/constants/onboarding-steps';
+import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 export interface IAdmin extends Document {
   user_id: mongoose.Types.ObjectId;
@@ -22,7 +23,7 @@ export interface IAdmin extends Document {
 
 const AdminSchema = new Schema<IAdmin>(
   {
-    user_id: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+    user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true, unique: true },
     name: { type: String, required: true },
     email: { type: String, trim: true, lowercase: true },
     avatar_url: { type: String, default: null },
@@ -46,4 +47,4 @@ const AdminSchema = new Schema<IAdmin>(
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );
 
-export const AdminModel = mongoose.model<IAdmin>('Admin', AdminSchema);
+export const AdminModel = mongoose.model<IAdmin>(MODELS.ADMIN, AdminSchema, COLLECTIONS.ADMIN);

@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * Store Interface
@@ -39,7 +40,7 @@ const StoreSchema = new Schema<IStore>(
   {
     vendor_id: {
       type: Schema.Types.ObjectId,
-      ref: 'Vendor',
+      ref: MODELS.VENDOR,
       required: true,
       unique: true, // One store per vendor
       index: true,
@@ -111,4 +112,4 @@ const StoreSchema = new Schema<IStore>(
 // Compound index for future: when we support multiple stores per vendor
 // StoreSchema.index({ vendor_id: 1, slug: 1 });
 
-export const StoreModel = mongoose.model<IStore>('Store', StoreSchema);
+export const StoreModel = mongoose.model<IStore>(MODELS.STORE, StoreSchema, COLLECTIONS.STORE);

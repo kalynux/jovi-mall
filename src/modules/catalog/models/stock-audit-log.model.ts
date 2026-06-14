@@ -1,5 +1,6 @@
 import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 export type StockOperation = 'manual' | 'bulk' | 'reservation' | 'release' | 'order' | 'adjustment';
 export type ActorType = 'vendor' | 'system' | 'admin';
@@ -32,19 +33,19 @@ export interface IStockAuditLog extends IBaseDocument {
 const StockAuditLogSchema = new Schema<IStockAuditLog>({
     variantId: {
         type: Schema.Types.ObjectId,
-        ref: 'ProductVariant',
+        ref: MODELS.PRODUCT_VARIANT,
         required: true,
         index: true
     },
     productId: {
         type: Schema.Types.ObjectId,
-        ref: 'Product',
+        ref: MODELS.PRODUCT,
         required: true,
         index: true
     },
     vendorId: {
         type: Schema.Types.ObjectId,
-        ref: 'Vendor',
+        ref: MODELS.VENDOR,
         required: true,
         index: true
     },
@@ -78,7 +79,7 @@ const StockAuditLogSchema = new Schema<IStockAuditLog>({
     },
 
     metadata: {
-        orderId: { type: Schema.Types.ObjectId, ref: 'Order' },
+        orderId: { type: Schema.Types.ObjectId, ref: MODELS.ORDER },
         reservationId: { type: String },
         batchId: { type: String, index: true }, // For bulk operations
         reason: { type: String }
@@ -108,4 +109,4 @@ StockAuditLogSchema.pre('findOneAndDelete', function (next) {
     next(new Error('Stock audit logs are append-only and cannot be deleted'));
 });
 
-export const StockAuditLogModel = model<IStockAuditLog>('StockAuditLog', StockAuditLogSchema);
+export const StockAuditLogModel = model<IStockAuditLog>(MODELS.STOCK_AUDIT_LOG, StockAuditLogSchema, COLLECTIONS.STOCK_AUDIT_LOG);

@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 /**
  * VendorOrderNote Model
@@ -41,19 +42,19 @@ export interface IVendorOrderNote extends Document {
 const VendorOrderNoteSchema = new Schema<IVendorOrderNote>({
     order_id: {
         type: Schema.Types.ObjectId,
-        ref: 'Order',
+        ref: MODELS.ORDER,
         required: true,
         index: true  // For fetching notes by order
     },
     vendor_id: {
         type: Schema.Types.ObjectId,
-        ref: 'Vendor',
+        ref: MODELS.VENDOR,
         required: true,
         index: true  // For ownership validation
     },
     author_id: {
         type: Schema.Types.ObjectId,
-        ref: 'User',  // Points to vendor's user account
+        ref: MODELS.USER,  // Points to vendor's user account
         required: true
     },
     message: {
@@ -89,4 +90,4 @@ VendorOrderNoteSchema.pre('deleteMany', function (next) {
     next(new Error('Vendor notes cannot be deleted'));
 });
 
-export const VendorOrderNoteModel = mongoose.model<IVendorOrderNote>('VendorOrderNote', VendorOrderNoteSchema);
+export const VendorOrderNoteModel = mongoose.model<IVendorOrderNote>(MODELS.VENDOR_ORDER_NOTE, VendorOrderNoteSchema, COLLECTIONS.VENDOR_ORDER_NOTE);

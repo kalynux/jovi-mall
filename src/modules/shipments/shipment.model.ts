@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 export interface IShipmentItem {
   order_item_id: mongoose.Types.ObjectId;
@@ -17,9 +18,9 @@ export interface IShipment extends Document {
 }
 
 const ShipmentSchema = new Schema<IShipment>({
-  order_id: { type: Schema.Types.ObjectId, ref: 'Order', required: true },
-  agency_id: { type: Schema.Types.ObjectId, ref: 'DeliveryAgency', required: true },
-  agent_id: { type: Schema.Types.ObjectId, ref: 'DeliveryAgent', default: null },
+  order_id: { type: Schema.Types.ObjectId, ref: MODELS.ORDER, required: true },
+  agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, required: true },
+  agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, default: null },
   status: { 
     type: String, 
     enum: ['pending', 'assigned', 'picked_up', 'in_transit', 'delivered', 'failed', 'returned'],
@@ -27,11 +28,11 @@ const ShipmentSchema = new Schema<IShipment>({
   },
   items: [{
     order_item_id: { type: Schema.Types.ObjectId, required: true },
-    product_id: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
+    product_id: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT, required: true },
     quantity: { type: Number, required: true }
   }]
 }, {
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' }
 });
 
-export const ShipmentModel = mongoose.model<IShipment>('Shipment', ShipmentSchema);
+export const ShipmentModel = mongoose.model<IShipment>(MODELS.SHIPMENT, ShipmentSchema, COLLECTIONS.SHIPMENT);

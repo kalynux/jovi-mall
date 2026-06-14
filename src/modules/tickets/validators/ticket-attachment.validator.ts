@@ -1,13 +1,16 @@
 import { z } from 'zod';
 
 /**
- * Upload Attachment Validator
- * 
- * Validates visibility parameters when uploading attachments.
- * Supports PUBLIC (default) and PRIVATE visibility with explicit user list.
+ * Attach Attachment Validator
+ *
+ * Validates the body when attaching a file to a ticket. The file must already
+ * have been uploaded via POST /api/files/upload; only its returned `fileId` is
+ * sent here (same pattern as product images). Supports PUBLIC (default) and
+ * PRIVATE visibility with an explicit user list.
  */
 
-export const UploadAttachmentSchema = z.object({
+export const AttachFileSchema = z.object({
+    fileId: z.string().min(1, 'fileId is required'),
     visibility: z.enum(['PUBLIC', 'PRIVATE']).default('PUBLIC'),
     visibleToUserIds: z.array(z.string()).optional()
         .refine(
@@ -16,4 +19,4 @@ export const UploadAttachmentSchema = z.object({
         )
 });
 
-export type UploadAttachmentInput = z.infer<typeof UploadAttachmentSchema>;
+export type AttachFileInput = z.infer<typeof AttachFileSchema>;

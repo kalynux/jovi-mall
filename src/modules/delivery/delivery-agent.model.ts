@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
 import { AgentOnboardingStep } from '../../core/constants/onboarding-steps';
+import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 // ─── Vehicle Info Sub-Schema ──────────────────────────────────────────────────
 
@@ -109,8 +110,8 @@ export interface IDeliveryAgent extends Document {
 
 const DeliveryAgentSchema = new Schema<IDeliveryAgent>(
   {
-    user_id: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
-    agency_id: { type: Schema.Types.ObjectId, ref: 'DeliveryAgency' },
+    user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true, unique: true },
+    agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY },
     email: { type: String, trim: true, lowercase: true },
     email_verified: { type: Boolean, default: false },
     phone: { type: String, trim: true },
@@ -152,4 +153,4 @@ const DeliveryAgentSchema = new Schema<IDeliveryAgent>(
 // Geospatial index for live location tracking
 DeliveryAgentSchema.index({ 'live_state.last_known_location': '2dsphere' }, { sparse: true });
 
-export const DeliveryAgentModel = mongoose.model<IDeliveryAgent>('DeliveryAgent', DeliveryAgentSchema);
+export const DeliveryAgentModel = mongoose.model<IDeliveryAgent>(MODELS.DELIVERY_AGENT, DeliveryAgentSchema, COLLECTIONS.DELIVERY_AGENT);
