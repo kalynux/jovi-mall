@@ -1,4 +1,4 @@
-import { ProductType, ProductStatus, ServiceConfig, DigitalConfig } from '../models/product.model';
+import { ProductType, ProductStatus, DigitalConfig } from '../models/product.model';
 
 /**
  * DTO for creating a new product
@@ -13,9 +13,8 @@ export interface CreateProductDto {
     seoTitle?: string;
     seoDescription?: string;
 
-    // Type-specific configs
+    // Type-specific configs (service config + price live on the service variant)
     digitalConfig?: Partial<DigitalConfig>;
-    serviceConfig?: ServiceConfig;
 }
 
 /**
@@ -31,9 +30,8 @@ export interface UpdateProductDto {
     seoTitle?: string;
     seoDescription?: string;
 
-    // Type-specific configs
+    // Type-specific configs (service config + price live on the service variant)
     digitalConfig?: Partial<DigitalConfig>;
-    serviceConfig?: Partial<ServiceConfig>;
 }
 
 /**

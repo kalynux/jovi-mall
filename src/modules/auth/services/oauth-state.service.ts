@@ -37,7 +37,7 @@ export class OAuthStateService {
         try {
             const decoded = jwt.verify(state, OAUTH_STATE_SECRET) as any;
 
-            if (!decoded.userId || !decoded.sessionId) {
+            if (!decoded.userId && !decoded.sessionId) {
                 throw createAppError(ERROR_CODES.AUTH_OAUTH_STATE_INVALID, 400, 'Invalid state payload');
             }
 

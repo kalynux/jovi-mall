@@ -2,6 +2,8 @@
 
 Complete API reference for managing bookings in the multi-vendor ecommerce platform.
 
+> **Booking system docs:** [Implementation guide](../booking-implementation-guide.md) · [Service product setup](./products.md#service-products) · [Availability rules](./availability-rules.md) · [Google Calendar](./calendar.md) · [Customer booking flow](../customer/bookings.md) · **Vendor booking management** (this doc)
+
 > [!IMPORTANT]
 > **Authentication Required**
 > All endpoints require:
@@ -17,6 +19,7 @@ Complete API reference for managing bookings in the multi-vendor ecommerce platf
 - [Get Booking](#get-booking)
 - [Calendar View](#calendar-view)
 - [Update Booking Status](#update-booking-status)
+- [Complete Booking (settle final price)](#complete-booking-settle-final-price)
 - [Mark Cash Booking as Paid](#mark-cash-booking-as-paid)
 - [Reschedule Booking](#reschedule-booking)
 - [Cancel Booking](#cancel-booking)
@@ -75,6 +78,9 @@ List all bookings for the authenticated vendor with filtering and pagination.
 }
 ```
 
+> [!NOTE]
+> **`priceSnapshot`** is captured when the booking is created, computed by the backend from the service product's single default variant: `variant.price` is the base price per `serviceConfig.durationMinutes`, prorated by the booked slot duration, plus any peak-hours surcharge. On completion it can be recomputed from the actual elapsed duration — see [Complete Booking](#complete-booking-settle-final-price).
+
 ---
 
 ## Get Booking
@@ -87,7 +93,7 @@ Retrieve a single booking by ID.
 
 **Error Responses:**
 
-- `404 NOT_FOUND`: Booking not found or doesn't belong to vendor
+- `404 BOOKING_NOT_FOUND`: Booking not found or doesn't belong to vendor
 
 ---
 
@@ -103,8 +109,11 @@ Returns bookings grouped by date for calendar display. Single query, no N+1.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `startDate` | ISO datetime | **Yes** | Start of range (inclusive) |
-| `endDate` | ISO datetime | **Yes** | End of range (inclusive, max 90 days from startDate) |
+| `startDate` | ISO datetime | **Yes** | Start of range (inclusive). Filters on the booking's `startAt`. |
+| `endDate` | ISO datetime | **Yes** | End of range (inclusive, max 90 days from startDate). Filters on the booking's `startAt`. |
+
+> [!NOTE]
+> A booking is included when its **`startAt`** falls within `[startDate, endDate]`, regardless of when it ends. Results are grouped under the `YYYY-MM-DD` (UTC) of each booking's `startAt`.
 
 **Response:**
 
@@ -165,8 +174,58 @@ Update booking status with automatic calendar synchronization.
 
 **Error Responses:**
 
-- `400 INVALID_STATUS_TRANSITION`: Transition not allowed by state machine
-- `404 NOT_FOUND`: Booking not found
+- `400 VALIDATION_ERROR`: Invalid `status` value
+- `400 BOOKING_INVALID_STATUS_TRANSITION`: Transition not allowed by state machine
+- `404 BOOKING_NOT_FOUND`: Booking not found
+
+---
+
+## Complete Booking (settle final price)
+
+```http
+POST /api/vendor/bookings/:id/complete
+```
+
+Mark a service appointment **completed** and settle its final price. The price is recomputed from the **actual elapsed duration** (the service variant's base price per `serviceConfig.durationMinutes`, prorated, plus any peak-hours surcharge), or taken as a flat `fixedPrice`. Transitions the booking `confirmed → completed` (the state machine still applies).
+
+**Request Body** *(all optional; at most one pricing mode):*
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `actualEndAt` | string (ISO) | The time the service actually ended. Price is recomputed for `[startAt, actualEndAt]`. |
+| `additionalMinutes` | number | Extra minutes beyond the booked end. Price is recomputed for the extended interval. |
+| `fixedPrice` | number | A flat final price, regardless of duration. Cannot be combined with `actualEndAt`/`additionalMinutes`. |
+
+Omitting all three settles at the originally booked duration.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "booking": { "...": "...", "status": "completed" },
+    "priceSnapshot": 5000,
+    "finalPrice": 12500,
+    "additionalAmountDue": 7500,
+    "breakdown": { "basePrice": 12500, "peakHoursSurcharge": 0 }
+  },
+  "message": "Booking completed"
+}
+```
+
+- `priceSnapshot` — the originally booked estimate.
+- `finalPrice` — the recomputed (or flat) price; also recorded under `booking.metadata.completion`.
+- `additionalAmountDue` — `max(0, finalPrice − priceSnapshot)`.
+
+> [!WARNING]
+> **The additional-payment request is currently STUBBED.** When `additionalAmountDue > 0`, the shortfall is recorded on the booking and returned, but **no payment charge or customer notification is created yet**. Treat `additionalAmountDue` as informational until this is implemented.
+
+**Error Responses:**
+
+- `400 VALIDATION_ERROR`: Invalid body, or `actualEndAt` not after the booking start
+- `400 BOOKING_INVALID_STATUS_TRANSITION`: Booking is not `confirmed` (only confirmed bookings complete)
+- `404 BOOKING_NOT_FOUND`: Booking not found
 
 ---
 
@@ -202,9 +261,10 @@ Manually mark a cash booking as paid. Updates calendar color automatically.
 
 **Error Responses:**
 
-- `400 VALIDATION_ERROR`: Booking doesn't require payment, or has a non-cash payment method
-- `409 CONFLICT`: Booking is already marked as paid
-- `404 NOT_FOUND`: Booking not found
+- `400 BOOKING_PAYMENT_NOT_REQUIRED`: Booking's `requiresPayment` is `false`
+- `400 BOOKING_INVALID_PAYMENT_METHOD`: Booking has a non-cash payment method
+- `409 BOOKING_ALREADY_PAID`: Booking is already marked as paid
+- `404 BOOKING_NOT_FOUND`: Booking not found
 
 ---
 
@@ -231,9 +291,13 @@ Reschedule a booking to a new time slot. Updates the Google Calendar event.
 
 **Error Responses:**
 
-- `400 VALIDATION_ERROR`: `newSlotId` missing or slot not locked
-- `409 INVALID_STATE`: Booking status doesn't allow rescheduling
-- `404 NOT_FOUND`: Booking not found
+- `400 VALIDATION_ERROR`: `newSlotId` missing
+- `404 BOOKING_NOT_FOUND`: Booking not found
+- `409 BOOKING_NOT_RESCHEDULABLE`: Booking status doesn't allow rescheduling (must be `pending` or `confirmed`)
+- `409 BOOKING_SLOT_NOT_LOCKED`: New slot is not locked, or the lock has expired
+- `403 BOOKING_UNAUTHORIZED`: New slot is locked by a different owner
+- `409 BOOKING_ALREADY_CANCELLED`: Booking is already cancelled
+- `500 BOOKING_CALENDAR_SYNC_FAILED`: Calendar event update failed
 
 ---
 
@@ -272,8 +336,9 @@ Cancel a booking with an optional reason. Deletes the calendar event and emits a
 
 **Error Responses:**
 
-- `409 CONFLICT`: Booking is already cancelled, completed, or no-show
-- `404 NOT_FOUND`: Booking not found
+- `404 BOOKING_NOT_FOUND`: Booking not found
+- `409 BOOKING_ALREADY_CANCELLED`: Booking is already cancelled
+- `409 BOOKING_TERMINAL_STATE`: Booking is `completed` or `no-show` and cannot be cancelled
 
 ---
 
@@ -308,11 +373,19 @@ stateDiagram-v2
 
 | Code | HTTP Status | Description |
 |------|-------------|-------------|
-| `VALIDATION_ERROR` | 400 | Request validation failed |
-| `INVALID_STATUS_TRANSITION` | 400 | Status transition not allowed by state machine |
-| `INVALID_STATE` | 409 | Booking is in a state that doesn't allow this operation |
-| `CONFLICT` | 409 | Double-cancel or already-paid attempt |
-| `NOT_FOUND` | 404 | Booking not found or doesn't belong to vendor |
+| `VALIDATION_ERROR` | 400 | Request body/query validation failed (`details.fields` lists offending fields) |
+| `BOOKING_NOT_FOUND` | 404 | Booking not found or doesn't belong to vendor |
+| `BOOKING_INVALID_STATUS_TRANSITION` | 400 | Status transition not allowed by the state machine |
+| `BOOKING_NOT_RESCHEDULABLE` | 409 | Booking is not `pending`/`confirmed`, so it cannot be rescheduled |
+| `BOOKING_SLOT_FULL` | 409 | Capacity-mode slot is full (`maxBookings` reached) — surfaced on the customer book endpoint |
+| `BOOKING_PAYMENT_NOT_REQUIRED` | 400 | `requiresPayment` is `false`, so it cannot be marked paid |
+| `BOOKING_INVALID_PAYMENT_METHOD` | 400 | Booking has a non-cash payment method |
+| `BOOKING_ALREADY_PAID` | 409 | Booking is already marked as paid |
+| `BOOKING_ALREADY_CANCELLED` | 409 | Booking is already cancelled |
+| `BOOKING_TERMINAL_STATE` | 409 | Booking is `completed`/`no-show` and cannot be cancelled |
+| `BOOKING_SLOT_NOT_LOCKED` | 409 | New slot is not locked, or the lock expired (reschedule) |
+| `BOOKING_UNAUTHORIZED` | 403 | New slot is locked by a different owner (reschedule) |
+| `BOOKING_CALENDAR_SYNC_FAILED` | 500 | Calendar event update failed (reschedule) |
 | `INTERNAL_ERROR` | 500 | Unexpected server error |
 
 **Error Response Format:**
@@ -339,3 +412,4 @@ stateDiagram-v2
 5. **Cash Payments**: `paidAt` is persisted when a cash booking is manually marked as paid
 6. **Calendar View**: Returns bookings grouped by `YYYY-MM-DD` (UTC), max 90-day range
 7. **Reschedule**: Requires the vendor to hold a slot lock via the existing slot-locking mechanism
+8. **Capacity bookings**: For service products with `serviceConfig.bookingMode: "capacity"`, multiple customers book the same slot (up to `maxBookings`). All seats for a slot share **one** Google Calendar event titled `[x/N] <Product>`, updated as seats fill. Each seat is a separate booking row, visible here and in the calendar view; cancelling one frees a seat. Per-seat payment/status is tracked per booking as usual.

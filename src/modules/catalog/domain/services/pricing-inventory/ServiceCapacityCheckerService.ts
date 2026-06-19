@@ -5,9 +5,13 @@ import { ERROR_CODES } from '../../../../../core/error-codes';
 
 /**
  * ServiceCapacityCheckerService: Ensure service bookings don't exceed capacity
- * 
+ *
+ * DEPRECATED / UNUSED: capacity enforcement for service bookings now lives in
+ * `BookingService.createCapacityBooking` (per-slot mutex + booking count vs
+ * `serviceConfig.maxBookings`). This class is not wired into the booking flow.
+ *
  * Integration: Works through StockReservationService
- * 
+ *
  * Business Rules:
  * - ServiceAvailability has maxBookings or capacity
  * - Track current bookings (active + committed reservations)

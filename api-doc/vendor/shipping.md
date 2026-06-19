@@ -74,8 +74,8 @@ Body:
 ```
 
 **Error Responses**:
-- `404` – `NOT_FOUND` – Product not found or does not belong to vendor
-- `400` – `INVALID_PRODUCT_TYPE` – Only physical products can have shipping configuration
+- `404` – `CATALOG_PRODUCT_NOT_FOUND` – Product not found or does not belong to vendor
+- `400` – `CATALOG_PRODUCT_INVALID_TYPE` – Only physical products can have shipping configuration
 - `400` – `VALIDATION_ERROR` – Invalid request body (e.g., negative dimensions, invalid zip code)
 
 ---
@@ -121,7 +121,8 @@ Body:
 ```
 
 **Error Responses**:
-- `404` – `NOT_FOUND` – Product not found or shipping configuration does not exist
+- `404` – `CATALOG_PRODUCT_NOT_FOUND` – Product not found or does not belong to vendor
+- `404` – `CATALOG_SHIPPING_NOT_FOUND` – No shipping configuration exists for this product
 
 ---
 
@@ -154,7 +155,7 @@ Body:
 ```
 
 **Error Responses**:
-- `404` – `NOT_FOUND` – Product not found or does not belong to vendor
+- `404` – `CATALOG_PRODUCT_NOT_FOUND` – Product not found or does not belong to vendor
 
 ---
 
@@ -200,7 +201,7 @@ Only **physical products** can have shipping configuration. Attempting to config
 {
   "success": false,
   "error": {
-    "code": "INVALID_PRODUCT_TYPE",
+    "code": "CATALOG_PRODUCT_INVALID_TYPE",
     "message": "Only physical products can have shipping configuration"
   }
 }

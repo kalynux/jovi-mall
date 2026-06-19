@@ -11,10 +11,13 @@ import { enrichVariant, enrichVariants } from '../read-models/enrich-product-det
 import { ProductStatusValidationService } from '../domain/services/ProductStatusValidationService';
 import { FileReferenceService } from '../domain/services/media/FileReferenceService';
 import { assertVariantImageLimit } from '../domain/services/media/image-limits';
+import { DEFAULT_VARIANT_SIGNATURE } from '../domain/services/variants/constants';
+import { Variant } from '../repositories/mappers/variant.mapper';
 import {
     ChangeVariantStatusSchema,
     CreateVariantSchema,
     UpdateVariantSchema,
+    UpdateVariantServiceConfigSchema,
     VariantQuerySchema,
 } from '../validators/variant.validator';
 
@@ -49,18 +52,59 @@ export class VendorVariantController {
         const product = await productRepository.findById(productId, vendorId);
         if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
 
-        // Service products manage pricing through booking configuration, not variants
-        if (product.type === 'service')
-            throw createAppError(
-                ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
-                400,
-                'Service products manage pricing through booking configuration, not variants'
-            );
-
         const input = CreateVariantSchema.parse(req.body);
 
         // Cap variant images per parent product type (physical 3 / digital 1).
         if (input.fileIds) assertVariantImageLimit(product.type, input.fileIds.length);
+
+        // serviceConfig is only valid on service products.
+        if (product.type !== 'service' && input.serviceConfig)
+            throw createAppError(
+                ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
+                400,
+                'serviceConfig only applies to service products',
+            );
+
+        // Service products: pricing + scheduling live on a single mandatory variant.
+        // It carries serviceConfig, must be the lone 'default' variant, and cannot have
+        // options, dimensions, a delivery agency, or digitalConfig.
+        if (product.type === 'service') {
+            if (!input.serviceConfig)
+                throw createAppError(
+                    ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
+                    400,
+                    'Service products require serviceConfig on their variant',
+                );
+            if (input.optionValueIds && input.optionValueIds.length > 0)
+                throw createAppError(
+                    ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
+                    400,
+                    'Service products cannot have option-based variants',
+                );
+            if (input.deliveryAgencyId)
+                throw createAppError(
+                    ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
+                    400,
+                    'Delivery agency only applies to physical products',
+                );
+            if (input.weight || input.length || input.width || input.height)
+                throw createAppError(
+                    ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
+                    400,
+                    'Dimensions (weight, length, width, height) only apply to physical products',
+                );
+            if (input.digitalConfig)
+                throw createAppError(
+                    ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
+                    400,
+                    'digitalConfig only applies to digital products',
+                );
+
+            // Exactly one variant per service product.
+            const existingForProduct = await variantRepository.findByProduct(productId);
+            if (existingForProduct.length > 0)
+                throw createAppError(ERROR_CODES.CATALOG_SERVICE_VARIANT_EXISTS, 409);
+        }
 
         // Digital product restrictions — only pricing variants, no physical attributes
         if (product.type === 'digital') {
@@ -106,14 +150,17 @@ export class VendorVariantController {
         if (existingVariant) throw createAppError(ERROR_CODES.CATALOG_VARIANT_SKU_EXISTS, 409, undefined, { sku: input.sku });
 
         // Option-based variants get a deterministic signature from their option values.
-        // Option-less variants (all digital variants, plus physical products without options)
-        // fall back to the SKU: it's required and globally unique, so it satisfies both the
-        // schema's `required` constraint and the unique { productId, optionSignature } index —
-        // the latter being why a constant like '' or 'default' can't be used when a product
-        // is allowed multiple option-less variants (digital products permit up to 5).
-        const optionSignature = input.optionValueIds && input.optionValueIds.length > 0
-            ? input.optionValueIds.sort().join('|')
-            : input.sku;
+        // Service products have exactly one variant, so it takes the canonical 'default'
+        // signature that BookingPriceResolver looks up. Option-less variants (digital, plus
+        // physical products without options) fall back to the SKU: it's required and globally
+        // unique, so it satisfies both the schema's `required` constraint and the unique
+        // { productId, optionSignature } index — the latter being why a constant like '' or
+        // 'default' can't be used when a product is allowed multiple option-less variants.
+        const optionSignature = product.type === 'service'
+            ? DEFAULT_VARIANT_SIGNATURE
+            : input.optionValueIds && input.optionValueIds.length > 0
+                ? input.optionValueIds.sort().join('|')
+                : input.sku;
 
         // Digital variants start as 'archived' — they cannot be active until an asset is
         // uploaded (which transitions them to 'active' via VariantDigitalService).
@@ -144,6 +191,16 @@ export class VendorVariantController {
                 ? {
                     maxDownloads: input.digitalConfig.maxDownloads ?? null,
                     expiresAfterDays: input.digitalConfig.expiresAfterDays ?? null,
+                }
+                : undefined,
+            serviceConfig: product.type === 'service' && input.serviceConfig
+                ? {
+                    durationMinutes: input.serviceConfig.durationMinutes,
+                    bufferBeforeMinutes: input.serviceConfig.bufferBeforeMinutes,
+                    bufferAfterMinutes: input.serviceConfig.bufferAfterMinutes,
+                    bookingMode: input.serviceConfig.bookingMode,
+                    maxBookings: input.serviceConfig.maxBookings,
+                    peakHours: input.serviceConfig.peakHours,
                 }
                 : undefined,
             deletedAt: null,
@@ -236,8 +293,16 @@ export class VendorVariantController {
 
         const input = UpdateVariantSchema.parse(req.body);
 
-        // Block physical-only fields for digital products
-        if (product.type === 'digital') {
+        // serviceConfig is only valid on service products; digitalConfig only on digital.
+        if (product.type !== 'service' && input.serviceConfig)
+            throw createAppError(
+                ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
+                400,
+                'serviceConfig only applies to service products',
+            );
+
+        // Block physical-only fields for digital/service products
+        if (product.type === 'digital' || product.type === 'service') {
             if (input.deliveryAgencyId)
                 throw createAppError(
                     ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
@@ -250,7 +315,8 @@ export class VendorVariantController {
                     400,
                     'Dimensions only apply to physical products'
                 );
-        } else if (input.digitalConfig) {
+        }
+        if (product.type !== 'digital' && input.digitalConfig) {
             throw createAppError(
                 ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
                 400,
@@ -281,7 +347,26 @@ export class VendorVariantController {
             });
         }
 
-        const updatedVariant = await variantRepository.update(variantId, input);
+        // Build the persistence payload. serviceConfig is merged over the existing config so
+        // a partial PATCH doesn't drop untouched fields (the repository $set replaces the whole
+        // sub-document). A null peakHours clears the surcharge.
+        const { serviceConfig: scInput, ...restInput } = input;
+        const updates: Partial<Variant> = { ...restInput };
+        if (scInput) {
+            const existing = existingVariant.serviceConfig;
+            updates.serviceConfig = {
+                durationMinutes: scInput.durationMinutes ?? existing?.durationMinutes ?? 0,
+                bufferBeforeMinutes: scInput.bufferBeforeMinutes ?? existing?.bufferBeforeMinutes ?? 0,
+                bufferAfterMinutes: scInput.bufferAfterMinutes ?? existing?.bufferAfterMinutes ?? 0,
+                bookingMode: scInput.bookingMode ?? existing?.bookingMode ?? 'calendar',
+                maxBookings: scInput.maxBookings ?? existing?.maxBookings,
+                peakHours: scInput.peakHours === null
+                    ? undefined
+                    : (scInput.peakHours ?? existing?.peakHours),
+            };
+        }
+
+        const updatedVariant = await variantRepository.update(variantId, updates);
         if (!updatedVariant) throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
 
         // Variant fields like price feed into the product's active-state gate
@@ -301,7 +386,8 @@ export class VendorVariantController {
      * then re-activate it once restocked — without having to re-create the variant.
      *
      * Activation gate is enforced by ProductStatusValidationService.validateVariantActivation
-     * (price > 0, digital variants require an uploaded asset, no variants on service products).
+     * (price > 0, digital variants require an uploaded asset, service variants require a
+     * serviceConfig duration).
      *
      * Archiving is always allowed; same default-variant reassignment / product
      * demotion side-effects as DELETE.
@@ -378,5 +464,50 @@ export class VendorVariantController {
         await productStatusValidationService.revalidateActiveStatus(productId, vendorId);
 
         res.json({ success: true, message: 'Variant archived successfully' });
+    });
+
+    /**
+     * PATCH /api/vendor/products/:productId/variants/:variantId/service/config
+     * Update the service variant's scheduling + peak-hours config (not the price —
+     * use the variant update endpoint for that). Partial: omitted fields are kept;
+     * a null `peakHours` clears the surcharge.
+     */
+    static updateServiceConfig = asyncHandler(async (req: Request, res: Response) => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { productId, variantId } = req.params;
+        const input = UpdateVariantServiceConfigSchema.parse(req.body);
+
+        const product = await productRepository.findById(productId, vendorId);
+        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+        if (product.type !== 'service')
+            throw createAppError(
+                ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
+                400,
+                'serviceConfig only applies to service products',
+            );
+
+        const existingVariant = await variantRepository.findById(variantId);
+        if (!existingVariant || existingVariant.productId !== productId)
+            throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
+
+        // Merge over the existing config so the repository's whole-object $set keeps
+        // untouched fields. A null peakHours clears the surcharge.
+        const existing = existingVariant.serviceConfig;
+        const merged: Variant['serviceConfig'] = {
+            durationMinutes: input.durationMinutes ?? existing?.durationMinutes ?? 0,
+            bufferBeforeMinutes: input.bufferBeforeMinutes ?? existing?.bufferBeforeMinutes ?? 0,
+            bufferAfterMinutes: input.bufferAfterMinutes ?? existing?.bufferAfterMinutes ?? 0,
+            bookingMode: input.bookingMode ?? existing?.bookingMode ?? 'calendar',
+            maxBookings: input.maxBookings ?? existing?.maxBookings,
+            peakHours: input.peakHours === null
+                ? undefined
+                : (input.peakHours ?? existing?.peakHours),
+        };
+
+        const updated = await variantRepository.update(variantId, { serviceConfig: merged });
+        if (!updated) throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
+
+        const detail = await enrichVariant(updated, fileRepository, storageProvider, product.title);
+        res.json({ success: true, data: detail, message: 'Service config updated' });
     });
 }

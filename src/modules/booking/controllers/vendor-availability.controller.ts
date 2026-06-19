@@ -1,7 +1,9 @@
 import { Request, Response } from 'express';
-import { z, ZodError } from 'zod';
+import { z } from 'zod';
 import { Types } from 'mongoose';
-import { AppError } from '../../../core/errors';
+import { asyncHandler } from '../../../api/middlewares/async-handler';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product.repository.mongo';
 import { AvailabilityRule } from '../models/availability-rule.model';
 
@@ -13,244 +15,230 @@ const CreateAvailabilityRuleSchema = z.object({
     startTime: z.string().regex(/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/, 'Invalid time format (HH:mm)'),
     endTime: z.string().regex(/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/, 'Invalid time format (HH:mm)'),
     timezone: z.string().default('UTC'),
-    bufferBefore: z.number().int().min(0).default(0),
-    bufferAfter: z.number().int().min(0).default(0),
     isActive: z.boolean().default(false), // Draft by default
 });
 
 // Update schema: exclude isActive (use toggle endpoint instead)
 const UpdateAvailabilityRuleSchema = CreateAvailabilityRuleSchema.omit({ isActive: true }).partial();
 
+// Toggle schema: explicitly set the active state via request body
+const ToggleAvailabilityRuleSchema = z.object({
+    isActive: z.boolean(),
+});
+
 
 /**
  * VendorAvailabilityController
- * 
+ *
  * Manages availability rules for service products.
  * Includes draft/publish workflow via isActive flag.
+ *
+ * Errors are raised with createAppError and propagated to the global error
+ * handler via asyncHandler — never written inline.
  */
 export class VendorAvailabilityController {
     /**
      * POST /api/vendor/products/:id/availability-rules
-     * Create a new availability rule (starts as draft)
+     * Create one or more availability rules in a single request (each starts as draft).
+     *
+     * Accepts either a single rule object (backward compatible) or an array of rules,
+     * so the frontend can define a full weekly schedule in one call instead of one
+     * request per day. All rules are validated up front; if any rule is invalid or
+     * overlaps (against existing rules OR another rule in the same batch) the whole
+     * request is rejected and nothing is persisted.
      */
-    static async createRule(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id: productId } = req.params;
+    static createRule = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id: productId } = req.params;
 
-            // Validate product
-            const product = await productRepository.findById(productId, vendorId);
-            if (!product) {
-                res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Product not found' } });
-                return;
-            }
+        // Validate product
+        const product = await productRepository.findById(productId, vendorId);
+        if (!product) {
+            throw createAppError(ERROR_CODES.AVAILABILITY_PRODUCT_NOT_FOUND, 404, 'Product not found');
+        }
 
-            if (product.type !== 'service') {
-                res.status(400).json({ success: false, error: { code: 'INVALID_PRODUCT_TYPE', message: 'Only service products can have availability rules' } });
-                return;
-            }
+        if (product.type !== 'service') {
+            throw createAppError(ERROR_CODES.AVAILABILITY_INVALID_PRODUCT_TYPE, 400, 'Only service products can have availability rules');
+        }
 
-            const input = CreateAvailabilityRuleSchema.parse(req.body);
+        // Normalise the body into a list: accept a bare array, a `{ rules: [...] }`
+        // wrapper, or a single rule object.
+        const rawRules = Array.isArray(req.body)
+            ? req.body
+            : Array.isArray(req.body?.rules)
+                ? req.body.rules
+                : [req.body];
 
-            // Validate time range
+        const inputs = z
+            .array(CreateAvailabilityRuleSchema)
+            .min(1, 'At least one availability rule is required')
+            .parse(rawRules);
+
+        // Validate each rule's time range
+        for (const input of inputs) {
             if (input.startTime >= input.endTime) {
-                res.status(400).json({ success: false, error: { code: 'INVALID_TIME_RANGE', message: 'Start time must be before end time' } });
-                return;
+                throw createAppError(
+                    ERROR_CODES.AVAILABILITY_INVALID_TIME_RANGE,
+                    400,
+                    `Start time must be before end time (dayOfWeek ${input.dayOfWeek})`
+                );
             }
+        }
 
-            // Check for overlaps (same day, overlapping hours, active=true)
-            const overlapping = await AvailabilityRule.findOne({
-                productId: new Types.ObjectId(productId),
-                dayOfWeek: input.dayOfWeek,
-                deletedAt: null,
-                $or: [
-                    { startTime: { $lt: input.endTime }, endTime: { $gt: input.startTime } }
-                ]
-            });
+        // Detect overlaps within the incoming batch (same day, overlapping hours)
+        for (let i = 0; i < inputs.length; i++) {
+            for (let j = i + 1; j < inputs.length; j++) {
+                const a = inputs[i];
+                const b = inputs[j];
+                if (a.dayOfWeek === b.dayOfWeek && a.startTime < b.endTime && a.endTime > b.startTime) {
+                    throw createAppError(
+                        ERROR_CODES.AVAILABILITY_TIME_OVERLAP,
+                        409,
+                        `Two rules in the request overlap (dayOfWeek ${a.dayOfWeek})`
+                    );
+                }
+            }
+        }
 
+        // Detect overlaps against existing non-deleted rules for this product
+        const daysInBatch = [...new Set(inputs.map((r) => r.dayOfWeek))];
+        const existingRules = await AvailabilityRule.find({
+            productId: new Types.ObjectId(productId),
+            dayOfWeek: { $in: daysInBatch },
+            deletedAt: null,
+        });
+
+        for (const input of inputs) {
+            const overlapping = existingRules.find(
+                (rule) =>
+                    rule.dayOfWeek === input.dayOfWeek &&
+                    rule.startTime < input.endTime &&
+                    rule.endTime > input.startTime
+            );
             if (overlapping) {
-                res.status(409).json({ success: false, error: { code: 'TIME_OVERLAP', message: 'Time range overlaps with existing rule' } });
-                return;
+                throw createAppError(
+                    ERROR_CODES.AVAILABILITY_TIME_OVERLAP,
+                    409,
+                    `Time range overlaps with existing rule (dayOfWeek ${input.dayOfWeek})`
+                );
             }
+        }
 
-            const result = await AvailabilityRule.create({
+        const results = await AvailabilityRule.insertMany(
+            inputs.map((input) => ({
                 productId: new Types.ObjectId(productId),
                 vendorId: new Types.ObjectId(vendorId),
                 ...input,
-            });
+            }))
+        );
 
-            res.status(201).json({ success: true, data: result, message: 'Availability rule created' });
-        } catch (error) {
-            VendorAvailabilityController.handleError(error, res);
-        }
-    }
+        res.status(201).json({
+            success: true,
+            data: results,
+            message: `${results.length} availability rule${results.length === 1 ? '' : 's'} created`,
+        });
+    });
 
     /**
      * GET /api/vendor/products/:id/availability-rules
      * List all availability rules for a product
      */
-    static async listRules(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id: productId } = req.params;
+    static listRules = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id: productId } = req.params;
 
-            const product = await productRepository.findById(productId, vendorId);
-            if (!product) {
-                res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Product not found' } });
-                return;
-            }
-
-            const rules = await AvailabilityRule.find({
-                productId: new Types.ObjectId(productId),
-                deletedAt: null,
-            }).sort({ dayOfWeek: 1, startTime: 1 });
-
-            res.json({ success: true, data: rules });
-        } catch (error) {
-            VendorAvailabilityController.handleError(error, res);
+        const product = await productRepository.findById(productId, vendorId);
+        if (!product) {
+            throw createAppError(ERROR_CODES.AVAILABILITY_PRODUCT_NOT_FOUND, 404, 'Product not found');
         }
-    }
+
+        const rules = await AvailabilityRule.find({
+            productId: new Types.ObjectId(productId),
+            deletedAt: null,
+        }).sort({ dayOfWeek: 1, startTime: 1 });
+
+        res.json({ success: true, data: rules });
+    });
 
     /**
-     * PATCH /api/vendor/availability-rules/:ruleId
+     * PATCH /api/vendor/products/availability-rules/:ruleId
      * Update an availability rule
      */
-    static async updateRule(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { ruleId } = req.params;
+    static updateRule = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { ruleId } = req.params;
 
-            const rule = await AvailabilityRule.findOne({ _id: ruleId, deletedAt: null });
-            if (!rule) {
-                res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Availability rule not found' } });
-                return;
-            }
-
-            if (rule.vendorId.toString() !== vendorId) {
-                res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Unauthorized' } });
-                return;
-            }
-
-            const input = UpdateAvailabilityRuleSchema.parse(req.body);
-
-            // Validate time range if both times provided
-            if (input.startTime && input.endTime && input.startTime >= input.endTime) {
-                res.status(400).json({ success: false, error: { code: 'INVALID_TIME_RANGE', message: 'Start time must be before end time' } });
-                return;
-            }
-
-            Object.assign(rule, input);
-            await rule.save();
-
-            res.json({ success: true, data: rule, message: 'Availability rule updated' });
-        } catch (error) {
-            VendorAvailabilityController.handleError(error, res);
+        const rule = await AvailabilityRule.findOne({ _id: ruleId, deletedAt: null });
+        if (!rule) {
+            throw createAppError(ERROR_CODES.AVAILABILITY_RULE_NOT_FOUND, 404, 'Availability rule not found');
         }
-    }
+
+        if (rule.vendorId.toString() !== vendorId) {
+            throw createAppError(ERROR_CODES.AVAILABILITY_FORBIDDEN, 403, 'Unauthorized');
+        }
+
+        const input = UpdateAvailabilityRuleSchema.parse(req.body);
+
+        // Validate time range if both times provided
+        if (input.startTime && input.endTime && input.startTime >= input.endTime) {
+            throw createAppError(ERROR_CODES.AVAILABILITY_INVALID_TIME_RANGE, 400, 'Start time must be before end time');
+        }
+
+        Object.assign(rule, input);
+        await rule.save();
+
+        res.json({ success: true, data: rule, message: 'Availability rule updated' });
+    });
 
     /**
-     * PATCH /api/vendor/availability-rules/:ruleId/activate
-     * Activate (publish) an availability rule
+     * PATCH /api/vendor/products/availability-rules/:ruleId/toggle
+     * Set the active state of an availability rule from the `isActive` flag in the request body.
      */
-    static async activateRule(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { ruleId } = req.params;
+    static toggleRule = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { ruleId } = req.params;
 
-            const rule = await AvailabilityRule.findOne({ _id: ruleId, deletedAt: null });
-            if (!rule) {
-                res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Availability rule not found' } });
-                return;
-            }
-
-            if (rule.vendorId.toString() !== vendorId) {
-                res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Unauthorized' } });
-                return;
-            }
-
-            rule.isActive = true;
-            await rule.save();
-
-            res.json({ success: true, data: rule, message: 'Availability rule activated' });
-        } catch (error) {
-            VendorAvailabilityController.handleError(error, res);
+        const rule = await AvailabilityRule.findOne({ _id: ruleId, deletedAt: null });
+        if (!rule) {
+            throw createAppError(ERROR_CODES.AVAILABILITY_RULE_NOT_FOUND, 404, 'Availability rule not found');
         }
-    }
+
+        if (rule.vendorId.toString() !== vendorId) {
+            throw createAppError(ERROR_CODES.AVAILABILITY_FORBIDDEN, 403, 'Unauthorized');
+        }
+
+        const { isActive } = ToggleAvailabilityRuleSchema.parse(req.body);
+
+        rule.isActive = isActive;
+        await rule.save();
+
+        res.json({
+            success: true,
+            data: rule,
+            message: `Availability rule ${rule.isActive ? 'activated' : 'deactivated'}`
+        });
+    });
 
     /**
-     * PATCH /api/vendor/availability-rules/:ruleId/toggle
-     * Toggle availability rule active state
-     */
-    static async toggleRule(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { ruleId } = req.params;
-
-            const rule = await AvailabilityRule.findOne({ _id: ruleId, deletedAt: null });
-            if (!rule) {
-                res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Availability rule not found' } });
-                return;
-            }
-
-            if (rule.vendorId.toString() !== vendorId) {
-                res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Unauthorized' } });
-                return;
-            }
-
-            // Toggle isActive
-            rule.isActive = !rule.isActive;
-            await rule.save();
-
-            res.json({
-                success: true,
-                data: rule,
-                message: `Availability rule ${rule.isActive ? 'activated' : 'deactivated'}`
-            });
-        } catch (error) {
-            VendorAvailabilityController.handleError(error, res);
-        }
-    }
-
-
-    /**
-     * DELETE /api/vendor/availability-rules/:ruleId
+     * DELETE /api/vendor/products/availability-rules/:ruleId
      * Delete an availability rule (soft delete)
      */
-    static async deleteRule(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { ruleId } = req.params;
+    static deleteRule = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { ruleId } = req.params;
 
-            const rule = await AvailabilityRule.findOne({ _id: ruleId, deletedAt: null });
-            if (!rule) {
-                res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Availability rule not found' } });
-                return;
-            }
-
-            if (rule.vendorId.toString() !== vendorId) {
-                res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Unauthorized' } });
-                return;
-            }
-
-            rule.deletedAt = new Date();
-            await rule.save();
-
-            res.json({ success: true, message: 'Availability rule deleted' });
-        } catch (error) {
-            VendorAvailabilityController.handleError(error, res);
+        const rule = await AvailabilityRule.findOne({ _id: ruleId, deletedAt: null });
+        if (!rule) {
+            throw createAppError(ERROR_CODES.AVAILABILITY_RULE_NOT_FOUND, 404, 'Availability rule not found');
         }
-    }
 
-    private static handleError(error: any, res: Response): void {
-        if (error instanceof ZodError) {
-            res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid input', details: error.errors } });
-            return;
+        if (rule.vendorId.toString() !== vendorId) {
+            throw createAppError(ERROR_CODES.AVAILABILITY_FORBIDDEN, 403, 'Unauthorized');
         }
-        if (error instanceof AppError) {
-            res.status(error.statusCode).json({ success: false, error: { code: error.code, message: error.message } });
-            return;
-        }
-        console.error('[VendorAvailabilityController]', error);
-        res.status(500).json({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Unexpected error' } });
-    }
+
+        rule.deletedAt = new Date();
+        await rule.save();
+
+        res.json({ success: true, message: 'Availability rule deleted' });
+    });
 }

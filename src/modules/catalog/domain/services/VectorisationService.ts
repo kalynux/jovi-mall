@@ -15,11 +15,17 @@
  *    observability and debugging.
  */
 
+import { Types } from 'mongoose';
 import { vectoriserConfig } from '../../../../config/vectoriser.config';
 import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
+import { getStorageProvider } from '../../../../core/storage/storage.instance';
 import { ProductModel, VectorisationStatus } from '../../models/product.model';
 import { ProductVariantModel } from '../../models/product-variant.model';
+import { ProductOptionModel } from '../../models/product-option.model';
+import { ProductOptionValueModel } from '../../models/product-option-value.model';
+import { FileModel } from '../../models/file.model';
+import { DigitalAssetModel } from '../../../digital-delivery/models/digital-asset.model';
 import { VendorModel } from '../../../vendors/vendor.model';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -51,7 +57,9 @@ interface VectoriserPayloadEntry {
     agency: Record<string, unknown> | null;
     source: 'product' | 'vendor_default' | null;
   } | null;
-  serviceConfig?: Record<string, unknown>;
+  /** Resolved product-gallery images (URLs + metadata), never raw file IDs. */
+  images?: Record<string, unknown>[];
+  /** Product-wide digital kill switch (`isActive`). Per-variant asset/limits live on each variant. */
   digitalConfig?: Record<string, unknown>;
 }
 
@@ -265,20 +273,142 @@ export class VectorisationService {
       deletedAt: null,
     }).lean();
 
-    const variants: Record<string, unknown>[] = variantDocs.map(v => ({
-      id: v._id.toString(),
-      sku: v.sku,
-      name: v.name,
-      price: v.price,
-      compareAtPrice: v.compareAtPrice,
-      stock: v.stock,
-      isInfiniteStock: v.isInfiniteStock,
-      weight: v.weight,
-      length: v.length,
-      width: v.width,
-      height: v.height,
-      optionSignature: v.optionSignature,
-    }));
+    // 3a. Resolve every ID reference into human-readable data. The AI indexer
+    //     cannot interpret raw ObjectIds, so option values, images, digital
+    //     assets, and variant delivery agencies are all populated below. Lookups
+    //     are batched across the whole variant set to avoid N+1 queries.
+    const storage = getStorageProvider();
+    const uniq = (ids: string[]) => [...new Set(ids)];
+
+    // Files — product gallery + every variant's images, resolved to URLs.
+    const productFileIds = (product.fileIds ?? []).map(id => id.toString());
+    const allFileIds = uniq([
+      ...productFileIds,
+      ...variantDocs.flatMap(v => (v.fileIds ?? []).map(id => id.toString())),
+    ]);
+    const fileMap = new Map<string, Record<string, unknown>>();
+    if (allFileIds.length > 0) {
+      const fileDocs = await FileModel.find({ _id: { $in: allFileIds }, deletedAt: null }).lean();
+      for (const f of fileDocs) {
+        fileMap.set(f._id.toString(), {
+          id: f._id.toString(),
+          url: storage.getPublicUrl(f.key),
+          mimeType: f.mimeType,
+          size: f.size,
+          originalName: f.originalName ?? null,
+        });
+      }
+    }
+    const filesFor = (ids: Types.ObjectId[] = []) =>
+      ids.map(id => fileMap.get(id.toString())).filter((f): f is Record<string, unknown> => !!f);
+
+    // Option values → { option: <option name>, value } pairs (e.g. Size → "M").
+    const allOptionValueIds = uniq(
+      variantDocs.flatMap(v => (v.optionValueIds ?? []).map(id => id.toString())),
+    );
+    const optionValueMap = new Map<string, Record<string, unknown>>();
+    if (allOptionValueIds.length > 0) {
+      const valueDocs = await ProductOptionValueModel.find({ _id: { $in: allOptionValueIds }, deletedAt: null }).lean();
+      const optionIds = uniq(valueDocs.map(v => v.optionId.toString()));
+      const optionDocs = await ProductOptionModel.find({ _id: { $in: optionIds }, deletedAt: null }).lean();
+      const optionNameById = new Map(optionDocs.map(o => [o._id.toString(), o.name]));
+      for (const v of valueDocs) {
+        optionValueMap.set(v._id.toString(), {
+          option: optionNameById.get(v.optionId.toString()) ?? null,
+          value: v.value,
+        });
+      }
+    }
+    const optionsFor = (ids: Types.ObjectId[] = []) =>
+      ids.map(id => optionValueMap.get(id.toString())).filter((o): o is Record<string, unknown> => !!o);
+
+    // Digital assets referenced by digital variants → name/type/size (not raw id).
+    const allAssetIds = uniq(
+      variantDocs
+        .map(v => v.digitalConfig?.assetId)
+        .filter((id): id is Types.ObjectId => !!id)
+        .map(id => id.toString()),
+    );
+    const assetMap = new Map<string, Record<string, unknown>>();
+    if (allAssetIds.length > 0) {
+      const assetDocs = await DigitalAssetModel.find({ _id: { $in: allAssetIds }, deletedAt: null }).lean();
+      for (const a of assetDocs) {
+        assetMap.set(a._id.toString(), {
+          id: a._id.toString(),
+          originalName: a.originalName,
+          mimeType: a.mimeType,
+          size: a.size,
+        });
+      }
+    }
+
+    // Variant-level delivery agencies (physical variants that override the default).
+    const allVariantAgencyIds = uniq(
+      variantDocs
+        .map(v => v.deliveryAgencyId)
+        .filter((id): id is Types.ObjectId => !!id)
+        .map(id => id.toString()),
+    );
+    const variantAgencyMap = new Map<string, Record<string, unknown>>();
+    if (allVariantAgencyIds.length > 0) {
+      try {
+        const { DeliveryAgencyModel } = await import('../../../delivery/delivery-agency.model');
+        const agencyDocs = await DeliveryAgencyModel.find({ _id: { $in: allVariantAgencyIds } }).lean();
+        for (const a of agencyDocs) {
+          variantAgencyMap.set(a._id.toString(), {
+            id: a._id.toString(),
+            name: (a as any).name,
+            country: (a as any).country,
+          });
+        }
+      } catch {
+        log('warn', 'buildPayload: could not load DeliveryAgencyModel for variants', { productId });
+      }
+    }
+
+    // 3b. Build rich variant objects. Each variant carries its own resolved
+    //     options, images, delivery agency, and — when set — its full
+    //     digitalConfig / serviceConfig block. Type-specific config lives ON the
+    //     variant that owns it, not hoisted to the product.
+    const variants: Record<string, unknown>[] = variantDocs.map(v => {
+      const variant: Record<string, unknown> = {
+        id: v._id.toString(),
+        sku: v.sku,
+        name: v.name ?? null,
+        price: v.price,
+        compareAtPrice: v.compareAtPrice ?? null,
+        stock: v.stock,
+        isInfiniteStock: v.isInfiniteStock,
+        weight: v.weight ?? null,
+        length: v.length ?? null,
+        width: v.width ?? null,
+        height: v.height ?? null,
+        optionSignature: v.optionSignature,
+        options: optionsFor(v.optionValueIds),
+        files: filesFor(v.fileIds),
+      };
+
+      const variantAgency = v.deliveryAgencyId ? variantAgencyMap.get(v.deliveryAgencyId.toString()) : undefined;
+      if (variantAgency) {
+        variant.deliveryAgency = variantAgency;
+      }
+
+      if (v.digitalConfig) {
+        variant.digitalConfig = {
+          maxDownloads: v.digitalConfig.maxDownloads ?? null,
+          expiresAfterDays: v.digitalConfig.expiresAfterDays ?? null,
+          asset: v.digitalConfig.assetId ? assetMap.get(v.digitalConfig.assetId.toString()) ?? null : null,
+        };
+      }
+
+      if (v.serviceConfig) {
+        variant.serviceConfig = v.serviceConfig;
+      }
+
+      return variant;
+    });
+
+    const productImages = filesFor(product.fileIds);
 
     // 4. Resolve product-level delivery agency. Delivery is set per product, not per variant.
     //    Fallback chain: product.delivery.agency_id → vendor.default_delivery_agency_id.
@@ -329,8 +459,8 @@ export class VectorisationService {
       seo: product.seo ?? {},
       vendor,
       variants,
+      images: productImages,
       delivery,
-      ...(product.serviceConfig ? { serviceConfig: product.serviceConfig as Record<string, unknown> } : {}),
       ...(product.digitalConfig ? { digitalConfig: product.digitalConfig as Record<string, unknown> } : {}),
     };
   }
@@ -774,7 +904,7 @@ export class VectorisationService {
     }
 
     // 4. POST batch to vectoriser with retry
-    let responses: VectoriserSingleResponse[] = [];
+    let responses: VectoriserSingleResponse[];
     try {
       const raw = await withRetry(
         () =>

@@ -90,17 +90,18 @@ This is the full shape of a product object returned by all read endpoints.
 >
 > See the dedicated **[Digital Products — Multi-Variant Guide](./digital-products.md)** for the full model, per-variant asset upload endpoints, the variant `status ⇔ asset` invariant, the 1–5 variant cap, and frontend UI guidance. The per-variant asset shape is documented on the variant object (`variant.digital.asset`) in [variants.md](./variants.md).
 
-**Service product — additional fields:**
-```json
-{
-  "serviceConfig": {
-    "durationMinutes": 60,
-    "bufferBeforeMinutes": 10,
-    "bufferAfterMinutes": 10,
-    "bookingMode": "calendar"
-  }
-}
-```
+> [!IMPORTANT]
+> **Service config + pricing live on the variant, not the product.** A service product has **exactly one** variant that carries its `price` and `serviceConfig` (slot duration, buffers, booking mode, optional peak-hours surcharge). The product itself has no `serviceConfig`. Create the variant via `POST /products/:id/variants` — see [variants.md](./variants.md).
+
+<a id="service-products"></a>
+> [!NOTE]
+> **Service products & bookings.** A service product is the bookable unit. The end-to-end lifecycle is:
+> 1. **Connect Google Calendar** — see [Google Calendar connection](./calendar.md). Required before customers can book (booking writes a calendar event); also lets the system block the vendor's existing busy times.
+> 2. **Create** the product with `type: "service"` (`POST /api/vendor/products`).
+> 3. **Create the service variant** via `POST /api/vendor/products/:id/variants` with `price` + `serviceConfig` (`durationMinutes` required). `price` is the base price per `durationMinutes`. See [variants.md](./variants.md).
+> 4. **Define availability** with one or more [availability rules](./availability-rules.md) and activate them.
+> 5. **Activate** the product (it needs one active default variant with `serviceConfig.durationMinutes` and `price > 0` — see [Change Product Status](#change-product-status)).
+> 6. Customers then discover slots and book via the [Customer Booking Flow](../customer/bookings.md); vendors manage incoming bookings via [Booking Management](./bookings.md).
 
 ---
 
@@ -126,7 +127,7 @@ GET /api/vendor/products
 
 > [!IMPORTANT]
 > **The list endpoint returns a trimmed payload tailored to the products grid/list UI.**
-> Only the fields the grid/list view and row actions consume are included. To get the full product object — `vendorId`, `slug`, `description`, `tags`, `seo`, `defaultVariantId`, `digitalConfig`, `serviceConfig`, `delivery`, `vectorisedDataId`, `createdAt`, `updatedAt`, etc. — call `GET /api/vendor/products/:id`.
+> Only the fields the grid/list view and row actions consume are included. To get the full product object — `vendorId`, `slug`, `description`, `tags`, `seo`, `defaultVariantId`, `digitalConfig`, `delivery`, `vectorisedDataId`, `createdAt`, `updatedAt`, etc. — call `GET /api/vendor/products/:id`. (Service config + price live on the variant.)
 >
 > File performance: `fileIds` is populated with full `FileDetail` objects (id, key, url, mimeType, size, originalName), resolved in a **single batched query** across the whole page — no N+1 lookups.
 
@@ -239,7 +240,7 @@ All products start in `draft` status. The `type` cannot be changed after creatio
 | `seoDescription` | string | No | Max 160 characters |
 | `fileIds` | string[] | No | Product images. Array of file ObjectIds; **must be unique** (duplicates rejected). Subject to the per-type image cap below. |
 
-> **Do not** pass `digitalConfig` or `serviceConfig` here. Both are set via `PATCH /products/:id` after the product exists.
+> **Do not** pass `digitalConfig` or `serviceConfig` here. `digitalConfig` is set via `PATCH /products/:id`; service config + price live on the service variant (`POST /products/:id/variants`).
 
 > [!IMPORTANT]
 > **Image limit (per product, by type):** physical **7**, service **7**, digital **1**. Exceeding the cap returns `400 CATALOG_IMAGE_LIMIT_EXCEEDED`. Duplicate file IDs in the same array are rejected with `400 VALIDATION_ERROR`.
@@ -318,8 +319,10 @@ Partial update — only provided fields are changed. Allowed on `draft` and `act
 | `seoDescription` | string | No | Max 160 characters |
 | `fileIds` | string[] | No | **Full replacement** — send complete desired array of file ObjectIds. Must be unique; capped per type (physical/service **7**, digital **1**). |
 | `digitalConfig` | object | No | Digital products only — product-wide toggle. Only `{ isActive }` is accepted (strict). Per-variant asset/limits live on the variant. |
-| `serviceConfig` | object | No | Service products only — merged with existing config |
 | `vectorisationEnabled` | boolean | No | Toggle vectorisation opt-in. When provided, the backend runs the enable or disable flow after the content update — see [Vectorisation](#vectorisation). For quick toggles only, use `PATCH /:id/vectorisation`. |
+
+> [!NOTE]
+> `serviceConfig` is **no longer accepted on the product** (neither create nor update). Service config + price live on the service variant — set them via `POST /products/:id/variants` or `PATCH /products/:productId/variants/:variantId/service/config`. See [variants.md](./variants.md).
 
 > [!WARNING]
 > **`fileIds` is a full array replacement, not an append operation.**
@@ -335,15 +338,6 @@ Partial update — only provided fields are changed. Allowed on `draft` and `act
 
 > [!IMPORTANT]
 > `digitalConfig` on the product accepts **only** `isActive` (the schema is strict). `maxDownloads`, `expiresAfterDays`, and `assetId` are **per-variant** now — set them via the variant endpoints. Sending them here returns `400 VALIDATION_ERROR`. See [Digital Products Guide](./digital-products.md).
-
-**`serviceConfig` sub-fields (merged with existing):**
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `durationMinutes` | number | Service duration in minutes (min: 1, required for activation) |
-| `bufferBeforeMinutes` | number | Prep time before service in minutes |
-| `bufferAfterMinutes` | number | Cleanup time after service in minutes |
-| `bookingMode` | string | `calendar`, `manual`, or `capacity` |
 
 **Cannot be updated:** `type`, `slug` (auto-generated from title), `vendorId`
 
@@ -405,7 +399,7 @@ PATCH /api/vendor/products/:id/status
 > Additionally, per product type:
 > - **Physical**: a delivery agency must be resolvable — either set directly on the product (`delivery.agencyId`) or configured as the vendor's default (`vendor.default_delivery_agency_id`). Without one of these, the backend will reject activation.
 > - **Digital**: **every active variant must have an uploaded asset**, and there must be **no more than 5** active variants. (Digital variants without an asset are auto-archived, so this normally passes by construction.) See [Digital Products Guide](./digital-products.md).
-> - **Service**: `serviceConfig.durationMinutes` must be set (min: 1)
+> - **Service**: the single default variant must have a `serviceConfig.durationMinutes` (min: 1) and `price > 0` — the config + price live on the variant. If its `bookingMode` is `capacity`, it must also have `serviceConfig.maxBookings` (≥ 1).
 
 **Response `200`:**
 
@@ -431,6 +425,7 @@ PATCH /api/vendor/products/:id/status
 | `CATALOG_VARIANT_NO_DIGITAL_ASSET` | A digital product's active variant has no uploaded asset (details include the variant name/sku) |
 | `CATALOG_DIGITAL_VARIANT_LIMIT_EXCEEDED` | Digital product has more than 5 active variants |
 | `CATALOG_PRODUCT_SERVICE_NO_DURATION` | Service product has no `durationMinutes` |
+| `CATALOG_PRODUCT_SERVICE_NO_CAPACITY` | Service product in `capacity` mode has no `maxBookings` (≥ 1) |
 
 ---
 
@@ -472,7 +467,7 @@ Creates an independent copy of the product in `draft` status.
 | `defaultVariantId` | Always `null` — must create new variants for the clone |
 | Digital: `digitalConfig.isActive` | Always `false` |
 | Digital: variants & per-variant assets/limits | **NOT copied** — variants aren't cloned, so the vendor must re-create each format variant and re-upload its asset |
-| Service: `serviceConfig` | Copied as-is |
+| Service: variant (`serviceConfig` + price) | **NOT copied** — variants aren't cloned, so the vendor must re-create the service variant with its config + price |
 | `vectorisationEnabled` | Always `false` — must be explicitly re-enabled on the clone |
 | `vectorisationStatus` | Always `not_started` |
 | `vectorisedDataId` | Always `null` |
@@ -887,6 +882,23 @@ A product is automatically vectorised (or re-vectorised) when **all three** cond
 | `vectorisationEnabled === true` | Set via `PATCH /:id` — update the `vectorisationEnabled` field |
 | Product is complete | `title`, `description`, and `category` must all be present |
 
+> [!NOTE]
+> **Vectorisation applies to all product types — `physical`, `digital`, and `service` alike.** The `vectorisationEnabled` opt-in flag and the entire enable/disable/retry flow below behave identically regardless of type; eligibility never checks `product.type`.
+
+#### What gets indexed
+
+The payload sent to the vectoriser is **fully populated** — no raw ObjectIds, because the AI indexer cannot interpret IDs. Everything is resolved into human-readable data:
+
+- **Product** — `title`, `description`, `category`, `tags`, `seo`, the resolved `vendor`, the product `images` (gallery files with public URLs), and the resolved `delivery` agency. Digital products also carry the product-wide `digitalConfig` (`isActive` kill switch).
+- **Each variant** carries its **own** resolved data and config — config lives on the variant that owns it, not hoisted to the product:
+  - `options` — resolved `{ option, value }` pairs (e.g. `{ "option": "Size", "value": "M" }`), not option-value IDs.
+  - `files` — the variant's images with public URLs, not file IDs.
+  - `deliveryAgency` — the resolved agency when the variant overrides the default.
+  - `digitalConfig` (digital variants) — `maxDownloads`, `expiresAfterDays`, and the resolved `asset` (`originalName`, `mimeType`, `size`), not the asset ID.
+  - `serviceConfig` (service variants) — `durationMinutes`, buffers, `bookingMode`, `maxBookings`, and the optional peak-hours surcharge.
+
+So a service variant is indexed with its full booking config, a digital variant with its asset details and limits, and a physical variant with its options/dimensions/agency — each on the variant it belongs to.
+
 ### Enabling / Disabling Vectorisation
 
 Vectorisation is **opt-in** — it defaults to `false` on all new and duplicated products. There are two ways to toggle it:
@@ -1118,7 +1130,7 @@ Summary of what the backend validates when changing status to `active`. Frontend
 
 | Requirement | Error Code | Description |
 |-------------|------------|-------------|
-| `serviceConfig.durationMinutes` is set | `CATALOG_PRODUCT_SERVICE_NO_DURATION` | Set duration via `PATCH /products/:id` with `serviceConfig` |
+| The default variant has `serviceConfig.durationMinutes` | `CATALOG_PRODUCT_SERVICE_NO_DURATION` | Create the service variant (with `serviceConfig`) via `POST /products/:id/variants` |
 
 ---
 

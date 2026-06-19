@@ -55,8 +55,8 @@ Phase 4: TYPE-SPECIFIC CONFIGURATION
      • Create 1–5 format variants (PDF, ZIP, EPUB, …) with pricing
      • POST /products/:id/variants/:variantId/digital/asset (upload file per variant → variant becomes active)
    Service:
-     • PATCH /api/vendor/products/:id with serviceConfig
-     • Create pricing variants (Basic, Premium tier, etc.)
+     • Create the single service variant (POST /products/:id/variants) with price + serviceConfig
+       (durationMinutes, bookingMode, buffers, optional peakHours surcharge)
      • Create availability rules
 
 Phase 5: VALIDATION & PUBLISHING
@@ -170,8 +170,9 @@ Content-Type: application/json
 | `seoDescription` | string | Max 160 chars |
 | `fileIds` | string[] | **Full replacement** — see [Media Handling](#media-handling) |
 | `digitalConfig` | object | Digital products only — merged with existing |
-| `serviceConfig` | object | Service products only — merged with existing |
 | `delivery` | object | Physical products only — configure default delivery agency (contains `agencyId`) |
+
+> Service config + price are **not** on the product — they live on the service variant (`POST /products/:id/variants`). `PATCH /products/:id` does not accept `serviceConfig`.
 
 > [!WARNING]
 > **`fileIds` is a full replacement, not an append.** To add an image: fetch current `fileIds`, append new id, send merged array. To remove: exclude the id from the array.
@@ -804,8 +805,7 @@ All product types require at least one variant to be activated. There is no "var
 - `title`, `description`, `category`, `tags`
 - `seo`
 - `fileIds` (product gallery images)
-- `digitalConfig` (asset reference, download limits)
-- `serviceConfig` (duration, booking mode)
+- `digitalConfig` (`isActive` kill switch only)
 - `hasVariants`, `defaultVariantId`
 
 **Variant Level:**
@@ -817,6 +817,8 @@ All product types require at least one variant to be activated. There is no "var
 - `optionValueIds` (physical only)
 - `fileIds` (variant-specific images)
 - `deliveryAgencyId` (physical only)
+- `digitalConfig` (asset reference, download limits — digital only)
+- `serviceConfig` (duration, buffers, booking mode, peak-hours surcharge — service only)
 
 ---
 
@@ -916,7 +918,9 @@ PATCH /api/vendor/products/:id/status
 |------|------------------------|------------|
 | Digital | Every active variant has an uploaded asset | `CATALOG_VARIANT_NO_DIGITAL_ASSET` |
 | Digital | No more than 5 active variants | `CATALOG_DIGITAL_VARIANT_LIMIT_EXCEEDED` |
-| Service | `serviceConfig.durationMinutes` is set | `CATALOG_PRODUCT_SERVICE_NO_DURATION` |
+| Service | The default variant has `serviceConfig.durationMinutes` | `CATALOG_PRODUCT_SERVICE_NO_DURATION` |
+| Service | Capacity mode (`bookingMode: "capacity"`) has `serviceConfig.maxBookings >= 1` | `CATALOG_PRODUCT_SERVICE_NO_CAPACITY` |
+| Service | At least one **active** availability rule exists | `CATALOG_PRODUCT_SERVICE_NO_AVAILABILITY` |
 | Physical | None beyond universal | — |
 
 ### Pre-validation Checklist (Frontend)
@@ -948,8 +952,13 @@ function getActivationErrors(product, variants) {
     errors.push('Digital asset must be uploaded before publishing');
   }
 
-  if (product.type === 'service' && !product.serviceConfig?.durationMinutes) {
-    errors.push('Service duration must be set before publishing');
+  if (product.type === 'service' && !defaultVariant?.serviceConfig?.durationMinutes) {
+    errors.push('Service duration must be set on the variant before publishing');
+  }
+
+  // Note: requires loading the product's availability rules separately.
+  if (product.type === 'service' && (product.activeAvailabilityRuleCount ?? 0) === 0) {
+    errors.push('Add at least one active availability rule before publishing');
   }
 
   return errors;
@@ -1007,7 +1016,7 @@ Step 5: Review & Publish
 
 ### Auto-Save Strategy
 
-All product-level changes (description, tags, SEO, fileIds, digitalConfig, serviceConfig) can be auto-saved:
+All product-level changes (description, tags, SEO, fileIds, digitalConfig) can be auto-saved (service config + price are saved on the variant):
 - Trigger: field blur or 1-second debounce after last keystroke
 - Show "Saving..." then "Saved" indicator
 - On network failure: buffer locally and retry with exponential backoff (for 4xx errors except 422, stop retrying)
@@ -1085,12 +1094,16 @@ if (errors.length > 0) { showValidationErrors(errors); return; }
 await changeStatus('active');
 ```
 
-**6. Deriving price from service duration:**
+**6. Service pricing — the variant price is a per-unit base rate:**
 ```javascript
-// ❌ WRONG — price is never calculated from duration
-const price = serviceConfig.durationMinutes * ratePerMinute;
+// The vendor enters an explicit base price on the service variant. It is the price
+// for ONE `serviceConfig.durationMinutes` unit (e.g. 5000 for a 60-min unit).
+variant.price = 5000;            // explicit user input — base price per 60 min
+variant.serviceConfig.durationMinutes = 60;
 
-// ✅ CORRECT — price is always explicit user input on the variant
+// At booking/completion time the BACKEND prorates by the actual elapsed duration and
+// adds any peak-hours surcharge — the frontend does NOT compute the final booking price.
+// e.g. a 2h30 booking of the above ⇒ 5000 × 2.5 = 12500 (+ peak surcharge if any).
 ```
 
 ---

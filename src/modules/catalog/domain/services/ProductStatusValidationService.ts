@@ -5,6 +5,7 @@ import { Variant } from '../../repositories/mappers/variant.mapper';
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
 import { IVariantRepository } from '../../repositories/interfaces/variant.repository.interface';
 import { VendorRepository } from '../../../vendors/vendor.repository';
+import { AvailabilityRule } from '../../../booking/models/availability-rule.model';
 
 /**
  * ProductStatusValidationService: Validates product status transitions based on business rules.
@@ -13,6 +14,10 @@ import { VendorRepository } from '../../../vendors/vendor.repository';
  * either set on the product (product.delivery.agencyId) or on the vendor profile
  * (vendor.default_delivery_agency_id). Without one of these, OrderService.createOrderFromCart
  * would refuse the order at checkout.
+ *
+ * Activation gate for `service` products: the default variant's serviceConfig must carry a
+ * duration (and a seat count for capacity mode), and the product must have at least one active
+ * availability rule — without one, the booking availability window is always empty.
  */
 export class ProductStatusValidationService {
     constructor(
@@ -88,8 +93,24 @@ export class ProductStatusValidationService {
         }
 
         if (product.type === 'service') {
-            if (!product.serviceConfig?.durationMinutes) {
+            // Service config + price live on the single default variant.
+            if (!defaultVariant.serviceConfig?.durationMinutes) {
                 throw createAppError(ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_DURATION, 422);
+            }
+            // Capacity mode needs a seat count to be bookable.
+            if (defaultVariant.serviceConfig.bookingMode === 'capacity'
+                && !(defaultVariant.serviceConfig.maxBookings && defaultVariant.serviceConfig.maxBookings >= 1)) {
+                throw createAppError(ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_CAPACITY, 422);
+            }
+            // A service is only bookable if it has at least one active availability
+            // rule defining when customers can book; otherwise availability is empty.
+            const activeRules = await AvailabilityRule.countDocuments({
+                productId: product.id,
+                isActive: true,
+                deletedAt: null,
+            });
+            if (activeRules === 0) {
+                throw createAppError(ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_AVAILABILITY, 422);
             }
         }
     }
@@ -101,21 +122,13 @@ export class ProductStatusValidationService {
      * surprising failures later when the product is recomputed.
      *
      * Rules for activating a variant:
-     *   - Service products do not support variants at all.
      *   - Variant price must be > 0.
      *   - Digital variants require an uploaded asset (`digitalConfig.assetId`).
+     *   - Service variants require a serviceConfig with a duration.
      *
      * Archiving is always allowed and has no preconditions here.
      */
     async validateVariantActivation(product: Product, variant: Variant): Promise<void> {
-        if (product.type === 'service') {
-            throw createAppError(
-                ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE,
-                400,
-                'Service products do not support variants',
-            );
-        }
-
         if (variant.price <= 0) {
             throw createAppError(
                 ERROR_CODES.CATALOG_PRODUCT_VARIANT_ZERO_PRICE,
@@ -128,6 +141,26 @@ export class ProductStatusValidationService {
         if (product.type === 'digital' && !variant.digitalConfig?.assetId) {
             throw createAppError(
                 ERROR_CODES.CATALOG_VARIANT_NO_DIGITAL_ASSET,
+                422,
+                undefined,
+                { variant: variant.name || variant.sku },
+            );
+        }
+
+        if (product.type === 'service' && !variant.serviceConfig?.durationMinutes) {
+            throw createAppError(
+                ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_DURATION,
+                422,
+                undefined,
+                { variant: variant.name || variant.sku },
+            );
+        }
+
+        if (product.type === 'service'
+            && variant.serviceConfig?.bookingMode === 'capacity'
+            && !(variant.serviceConfig.maxBookings && variant.serviceConfig.maxBookings >= 1)) {
+            throw createAppError(
+                ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_CAPACITY,
                 422,
                 undefined,
                 { variant: variant.name || variant.sku },

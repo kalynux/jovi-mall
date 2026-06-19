@@ -54,9 +54,8 @@ export class ProductDuplicateService {
             };
         }
 
-        if (originalProduct.type === 'service' && originalProduct.serviceConfig) {
-            clonedData.serviceConfig = { ...originalProduct.serviceConfig };
-        }
+        // Service config + price live on the variant, which (like digital assets) is not
+        // copied — the vendor recreates the service variant on the clone.
 
         const duplicate = await this.productRepository.create(clonedData);
 

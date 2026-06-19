@@ -47,6 +47,14 @@ router.get('/:id', VendorBookingController.getBooking);
 router.patch('/:id/status', VendorBookingController.updateBookingStatus);
 
 /**
+ * POST /api/vendor/bookings/:id/complete
+ * Mark a service appointment completed and settle its final price (recomputed from the
+ * actual elapsed duration, or a flat fixedPrice).
+ * Body (all optional): { actualEndAt?: ISO, additionalMinutes?: number, fixedPrice?: number }
+ */
+router.post('/:id/complete', VendorBookingController.completeBooking);
+
+/**
  * PATCH /api/vendor/bookings/:id/payment-status
  * Mark a cash booking as paid.
  * Rules: paymentMethod must be 'cash' or unset, booking must be unpaid.

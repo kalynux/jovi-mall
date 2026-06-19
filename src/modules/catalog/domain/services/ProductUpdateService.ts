@@ -12,13 +12,6 @@ export interface UpdateDigitalConfigDto {
   isActive?: boolean;
 }
 
-export interface UpdateServiceConfigDto {
-  durationMinutes?: number;
-  bufferBeforeMinutes?: number;
-  bufferAfterMinutes?: number;
-  bookingMode?: 'calendar' | 'manual' | 'capacity';
-}
-
 export interface UpdateDeliveryConfigDto {
   agencyId: string | null;
 }
@@ -32,7 +25,6 @@ export interface UpdateProductCommand {
   seoTitle?: string;
   seoDescription?: string;
   digitalConfig?: UpdateDigitalConfigDto;
-  serviceConfig?: UpdateServiceConfigDto;
   delivery?: UpdateDeliveryConfigDto;
   regenerateSlug?: boolean;
 }
@@ -95,10 +87,6 @@ export class ProductUpdateService {
 
     if (command.digitalConfig !== undefined && product.type === 'digital') {
       updates.digitalConfig = { ...product.digitalConfig, ...command.digitalConfig } as any;
-    }
-
-    if (command.serviceConfig !== undefined && product.type === 'service') {
-      updates.serviceConfig = { ...product.serviceConfig, ...command.serviceConfig } as any;
     }
 
     if (command.delivery !== undefined) {

@@ -97,9 +97,9 @@ For validation errors, an additional `details` field is included:
 | `FORBIDDEN` | 403 | Valid token but insufficient permissions |
 | `NOT_FOUND` | 404 | Resource does not exist or does not belong to vendor |
 | `VALIDATION_ERROR` | 400 | Request body or query parameters failed validation |
-| `INVALID_PRODUCT_TYPE` | 400 | Operation not applicable to product type (e.g., variants on service products) |
+| `INVALID_PRODUCT_TYPE` | 400 | Operation not applicable to product type (e.g., dimensions on a service variant, or `digitalConfig` on a non-digital variant) |
 | `SKU_ALREADY_EXISTS` | 409 | SKU must be unique across all variants |
-| `TIME_OVERLAP` | 409 | Availability rule conflicts with existing rule |
+| `AVAILABILITY_TIME_OVERLAP` | 409 | Availability rule conflicts with existing rule |
 | `INTERNAL_ERROR` | 500 | Unexpected server error |
 
 ## Rate Limiting
@@ -124,7 +124,7 @@ All timestamp fields are returned in ISO 8601 format:
 ### Product Type Constraints
 
 Certain endpoints are only applicable to specific product types:
-- **Variants**: Physical and digital products (digital: 1–5 format variants, each with its own asset)
+- **Variants**: All product types (physical: option matrix; digital: 1–5 format variants, each with its own asset; service: exactly one variant carrying `serviceConfig` + price)
 - **Options**: Physical products only
 - **Shipping**: Physical products only
 - **Availability Rules**: Service products only

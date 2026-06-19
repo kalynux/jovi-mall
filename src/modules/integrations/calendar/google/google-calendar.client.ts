@@ -168,7 +168,7 @@ export class GoogleCalendarClient implements ICalendarClient {
   private async getAuthenticatedClient(): Promise<Auth.OAuth2Client> {
     const clientId = process.env.GOOGLE_CLIENT_ID || "822716717666-5i8g21sbvl9pk02cu703vjgoln7i67hv.apps.googleusercontent.com";
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET || "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";
-    const redirectUri = process.env.GOOGLE_REDIRECT_URI || "http://localhost:3000/api/integrations/google/callback";
+    const redirectUri = process.env.GOOGLE_REDIRECT_URI || "http://localhost:8022/api/integrations/google/callback";
 
     if (!clientId || !clientSecret || !redirectUri) {
       throw createAppError(ERROR_CODES.GOOGLE_MISSING_CLIENT_ID, 500, 'Google Calendar credentials not configured');

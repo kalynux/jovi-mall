@@ -30,13 +30,7 @@ export interface Product {
   defaultVariantId?: string;
   fileIds: string[];  // File references converted to string IDs
 
-  // Service-specific config
-  serviceConfig?: {
-    durationMinutes: number;
-    bufferBeforeMinutes?: number;
-    bufferAfterMinutes?: number;
-    bookingMode: 'calendar' | 'manual' | 'capacity';
-  };
+  // Service config + pricing live on the single service variant (Variant.serviceConfig).
 
   // Digital-specific config (product-wide kill switch only; per-variant asset/limits live on the variant)
   digitalConfig?: {
@@ -76,7 +70,6 @@ export class ProductMapper implements IMapper<Product, IProduct> {
       hasVariants: doc.hasVariants,
       defaultVariantId: doc.defaultVariantId?.toString(),
       fileIds: doc.fileIds?.map((id: any) => id.toString()) || [],
-      serviceConfig: doc.serviceConfig,
       digitalConfig: doc.digitalConfig ? {
         isActive: doc.digitalConfig.isActive ?? true,
       } : undefined,

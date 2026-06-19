@@ -1,5 +1,6 @@
+import { Types } from 'mongoose';
 import { Booking, IBooking } from '../models/booking.model';
-import { CreateBookingInput, BookingStatus, CalendarDayBooking } from '../types/booking.types';
+import { CreateBookingInput, BookingStatus, CalendarDayBooking, TimeWindow } from '../types/booking.types';
 import { SlotLockService } from './slot-lock.service';
 import { SlotGeneratorService } from './slot-generator.service';
 import { CalendarClientFactory } from '../../integrations/calendar/calendar-client.factory';
@@ -29,7 +30,7 @@ export class BookingService {
    * @returns Created booking
    */
   async createBooking(input: CreateBookingInput, lockOwnerId: string): Promise<IBooking> {
-    const { slotId, userId, productId, vendorId, metadata, priceSnapshot, currency, requiresPayment } = input;
+    const { slotId, userId, productId, vendorId, metadata, priceSnapshot, currency, requiresPayment, bookingMode } = input;
 
     const product = await ProductModel.findById(productId);
     if (!product) {
@@ -46,32 +47,42 @@ export class BookingService {
     // Step 2: Parse slot to get start/end times
     const { start, end } = this.slotGenerator.parseSlotId(slotId);
 
-    // Step 3: Get calendar client for vendor (not customer)
-    const calendarClient = await CalendarClientFactory.forVendor(vendorId);
-
     // Determine payment status for calendar title and color
     const needsPayment = requiresPayment !== false; // Default to true
     const paymentPrefix = needsPayment ? '[UNPAID]' : '[FREE]';
     const paymentStatus = needsPayment ? 'unpaid' : 'paid';
     const colorId = getCalendarColorIdByStatus(paymentStatus);
 
-    // Step 4: Create calendar event
-    const eventInput: CalendarEventInput = {
-      title: `${paymentPrefix} ${product.title} `,
-      description: `Booked by ${user.login_email} \nPrice: ${priceSnapshot} ${currency} \nNotes: ${metadata?.notes}`,
-      start,
-      end,
-      colorId, // Apply color based on payment status
-      metadata: {
-        ...metadata,
-        bookingUserId: userId,
-        bookingProductId: productId,
-      },
-    };
+    // Manual-mode bookings land as PENDING with no calendar event; the vendor confirms them
+    // later (PATCH /bookings/:id/status → confirmed), which creates the calendar event.
+    // 'calendar' (and the not-yet-implemented 'capacity') confirm immediately.
+    const isManual = bookingMode === 'manual';
 
-    const calendarEvent = await calendarClient.createEvent(eventInput, {
-      idempotencyKey: slotId, // Use slotId for idempotency
-    });
+    let externalCalendarEventId: string | undefined;
+
+    if (!isManual) {
+      // Step 3: Get calendar client for vendor (not customer)
+      const calendarClient = await CalendarClientFactory.forVendor(vendorId);
+
+      // Step 4: Create calendar event
+      const eventInput: CalendarEventInput = {
+        title: `${paymentPrefix} ${product.title} `,
+        description: `Booked by ${user.login_email} \nPrice: ${priceSnapshot} ${currency} \nNotes: ${metadata?.notes}`,
+        start,
+        end,
+        colorId, // Apply color based on payment status
+        metadata: {
+          ...metadata,
+          bookingUserId: userId,
+          bookingProductId: productId,
+        },
+      };
+
+      const calendarEvent = await calendarClient.createEvent(eventInput, {
+        idempotencyKey: slotId, // Use slotId for idempotency
+      });
+      externalCalendarEventId = calendarEvent.externalId;
+    }
 
     // Step 5: Create booking record
     const booking = await Booking.create({
@@ -80,8 +91,8 @@ export class BookingService {
       vendorId,
       startAt: start,
       endAt: end,
-      status: BookingStatus.CONFIRMED,
-      externalCalendarEventId: calendarEvent.externalId,
+      status: isManual ? BookingStatus.PENDING : BookingStatus.CONFIRMED,
+      externalCalendarEventId,
       metadata,
       priceSnapshot,
       currency: currency || 'XAF',
@@ -95,6 +106,167 @@ export class BookingService {
     await this.emitBookingCreatedEvent(booking, product.title);
 
     return booking;
+  }
+
+  /**
+   * Creates a booking for a capacity-mode slot, where up to `maxBookings` seats may be
+   * booked for the same time window. Unlike createBooking:
+   * - Multiple bookings share ONE calendar event per slot, whose title shows `[x/N]`.
+   * - There is no exclusive slot lock; capacity is enforced here under a short per-slot
+   *   mutex so concurrent commits can't oversell.
+   * - Bookings are confirmed immediately.
+   *
+   * @param input Booking details
+   * @param maxBookings Seats per slot (from serviceConfig.maxBookings)
+   * @param holdOwnerId Owner of the per-user checkout hold to release on completion
+   */
+  async createCapacityBooking(
+    input: CreateBookingInput,
+    maxBookings: number,
+    holdOwnerId: string
+  ): Promise<IBooking> {
+    const { slotId, userId, productId, vendorId, metadata, priceSnapshot, currency, requiresPayment } = input;
+
+    const product = await ProductModel.findById(productId);
+    if (!product) {
+      throw createAppError(ERROR_CODES.BOOKING_PRODUCT_NOT_FOUND, 404, 'Product not found');
+    }
+
+    const user = await UserModel.findById(userId);
+    if (!user) {
+      throw createAppError(ERROR_CODES.BOOKING_USER_NOT_FOUND, 404, 'User not found');
+    }
+
+    const { start, end } = this.slotGenerator.parseSlotId(slotId);
+    const needsPayment = requiresPayment !== false;
+
+    // Serialise the count-and-create critical section for this slot.
+    const token = await this.acquireCapacityMutexWithRetry(slotId);
+    if (!token) {
+      throw createAppError(ERROR_CODES.BOOKING_SLOT_FULL, 409, 'Slot is busy, please retry');
+    }
+
+    try {
+      // Count current active bookings for this exact window.
+      const existing = await Booking.find({
+        productId,
+        startAt: start,
+        endAt: end,
+        status: { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
+        deletedAt: null,
+      });
+
+      if (existing.length >= maxBookings) {
+        throw createAppError(ERROR_CODES.BOOKING_SLOT_FULL, 409, `This slot is full (${maxBookings} seats)`);
+      }
+
+      const newCount = existing.length + 1;
+
+      // Shared calendar event: reuse the slot's event if one exists, else create it.
+      // Calendar sync is best-effort for capacity — booking proceeds even if it fails.
+      let sharedEventId = existing.find((b) => b.externalCalendarEventId)?.externalCalendarEventId;
+      try {
+        const calendarClient = await CalendarClientFactory.forVendor(vendorId);
+        const title = `[${newCount}/${maxBookings}] ${product.title}`;
+        const description = `Capacity booking — ${newCount}/${maxBookings} seats filled`;
+
+        if (sharedEventId) {
+          await calendarClient.updateEvent(sharedEventId, { title, description, start, end });
+        } else {
+          const event = await calendarClient.createEvent(
+            { title, description, start, end },
+            { idempotencyKey: slotId }
+          );
+          sharedEventId = event.externalId;
+        }
+      } catch (calendarError) {
+        console.error('[BookingService] Capacity calendar sync error:', calendarError);
+      }
+
+      const booking = await Booking.create({
+        productId,
+        userId,
+        vendorId,
+        startAt: start,
+        endAt: end,
+        status: BookingStatus.CONFIRMED,
+        externalCalendarEventId: sharedEventId,
+        metadata,
+        priceSnapshot,
+        currency: currency || 'XAF',
+        requiresPayment: needsPayment,
+      });
+
+      await this.emitBookingCreatedEvent(booking, product.title);
+      return booking;
+    } finally {
+      await this.slotLockService.releaseCapacityMutex(slotId, token);
+      // Release the per-user checkout hold (best-effort).
+      await this.slotLockService.release(slotId, holdOwnerId, true);
+    }
+  }
+
+  /**
+   * Counts active bookings (pending|confirmed) grouped by their exact slot window for a
+   * product within [fromDate, toDate]. Lets capacity availability be computed in one query.
+   * @returns Map keyed by `${startMs}-${endMs}` → booking count.
+   */
+  async getActiveBookingCountsForWindows(
+    productId: string,
+    fromDate: Date,
+    toDate: Date
+  ): Promise<Map<string, number>> {
+    const rows = await Booking.aggregate<{ _id: { start: Date; end: Date }; count: number }>([
+      {
+        $match: {
+          productId: new Types.ObjectId(productId),
+          status: { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
+          deletedAt: null,
+          startAt: { $gte: fromDate, $lte: toDate },
+        },
+      },
+      {
+        $group: {
+          _id: { start: '$startAt', end: '$endAt' },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const map = new Map<string, number>();
+    for (const row of rows) {
+      const key = `${new Date(row._id.start).getTime()}-${new Date(row._id.end).getTime()}`;
+      map.set(key, row.count);
+    }
+    return map;
+  }
+
+  /**
+   * Builds the set of time windows a product already has active bookings in. Used by the
+   * availability service to exclude a capacity product's own shared calendar events from
+   * busy-time subtraction (so a booked-but-not-full slot stays bookable).
+   */
+  windowsFromCountMap(counts: Map<string, number>): TimeWindow[] {
+    const windows: TimeWindow[] = [];
+    for (const key of counts.keys()) {
+      const [startMs, endMs] = key.split('-').map(Number);
+      windows.push({ start: new Date(startMs), end: new Date(endMs) });
+    }
+    return windows;
+  }
+
+  /** Tries to acquire the per-slot capacity mutex, retrying briefly under contention. */
+  private async acquireCapacityMutexWithRetry(
+    slotId: string,
+    attempts = 5,
+    delayMs = 100
+  ): Promise<string | null> {
+    for (let i = 0; i < attempts; i++) {
+      const token = await this.slotLockService.acquireCapacityMutex(slotId);
+      if (token) return token;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    return null;
   }
 
   /**
@@ -184,9 +356,20 @@ export class BookingService {
         // Preserve payment status color when rescheduling
         const colorId = getCalendarColorIdByStatus(booking.paymentStatus);
 
+        // Rebuild the event title/description to match createBooking's formatting,
+        // so a reschedule doesn't degrade '[UNPAID] Haircut' into raw ObjectIds.
+        const [product, user] = await Promise.all([
+          ProductModel.findById(booking.productId),
+          UserModel.findById(booking.userId),
+        ]);
+        const paymentPrefix = booking.requiresPayment ? '[UNPAID]' : '[FREE]';
+        const title = product
+          ? `${paymentPrefix} ${product.title} `
+          : `${paymentPrefix} Booking`;
+
         await calendarClient.updateEvent(booking.externalCalendarEventId, {
-          title: `Booking for Product ${booking.productId}`,
-          description: `Rescheduled booking by user ${booking.userId}`,
+          title,
+          description: `Rescheduled booking by ${user?.login_email || 'Unknown'}\nBooking #${booking._id}`,
           start,
           end,
           colorId, // Preserve payment status color
@@ -466,8 +649,10 @@ export class BookingService {
   ): Promise<{ date: string; bookings: CalendarDayBooking[] }[]> {
     const bookings = await Booking.find({
       vendorId,
-      startAt: { $gte: startDate },
-      endAt: { $lte: endDate },
+      // Filter on startAt only: results are grouped by the booking's start date,
+      // so a booking starting within the range must never be dropped because it
+      // ends after endDate.
+      startAt: { $gte: startDate, $lte: endDate },
       deletedAt: null,
     })
       .sort({ startAt: 1 })

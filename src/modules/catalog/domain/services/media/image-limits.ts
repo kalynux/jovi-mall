@@ -19,7 +19,8 @@ export const PRODUCT_IMAGE_LIMITS: Record<ProductType, number> = {
 
 /**
  * Max images allowed on a single variant, keyed by the *parent product* type.
- * Service products do not support variants, so their limit is 0.
+ * A service product's single variant carries only config + price — its visuals live
+ * on the product media, so the variant image limit is 0.
  */
 export const VARIANT_IMAGE_LIMITS: Record<ProductType, number> = {
   physical: 3,

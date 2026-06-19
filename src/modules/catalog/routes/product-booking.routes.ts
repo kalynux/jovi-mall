@@ -28,7 +28,9 @@ const productBookingService = new ProductBookingService(
   availabilityService,
   slotGenerator,
   bookingService,
-  priceResolver
+  priceResolver,
+  variantRepository,
+  slotLockFacade
 );
 
 /**
@@ -38,32 +40,23 @@ const productBookingService = new ProductBookingService(
  * Query params: fromDate (ISO string), toDate (ISO string)
  */
 router.get('/:productId/availability', asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { productId } = req.params;
-    const { fromDate, toDate } = req.query;
+  const { productId } = req.params;
+  const { fromDate, toDate } = req.query;
 
-    if (!fromDate || !toDate) {
-      return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'fromDate and toDate query parameters are required'));
-    }
-
-    const from = new Date(fromDate as string);
-    const to = new Date(toDate as string);
-
-    if (isNaN(from.getTime()) || isNaN(to.getTime())) {
-      return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'Invalid date format. Use ISO 8601 format'));
-    }
-
-    const slots = await productBookingService.getAvailability(productId, from, to);
-
-    res.json({ slots });
-  } catch (error: any) {
-    if (error.name === 'ValidationError') {
-      return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, error.message));
-    }
-
-    console.error('Error fetching availability:', error);
-    next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to fetch availability'));
+  if (!fromDate || !toDate) {
+    return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'fromDate and toDate query parameters are required'));
   }
+
+  const from = new Date(fromDate as string);
+  const to = new Date(toDate as string);
+
+  if (isNaN(from.getTime()) || isNaN(to.getTime())) {
+    return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'Invalid date format. Use ISO 8601 format'));
+  }
+
+  const slots = await productBookingService.getAvailability(productId, from, to);
+
+  res.json({ success: true, data: { slots } });
 }));
 
 /**
@@ -72,32 +65,31 @@ router.get('/:productId/availability', asyncHandler(async (req: Request, res: Re
  * Lock a slot for booking (requires authentication)
  */
 router.post('/:productId/slots/:slotId/lock', requireAuth, asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { slotId } = req.params;
-    const userId = req.auth?.user?.id;
+  const { slotId } = req.params;
+  const userId = req.auth?.user?.id;
 
-    if (!userId) {
-      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'User not authenticated'));
-    }
+  if (!userId) {
+    return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'User not authenticated'));
+  }
 
-    const locked = await slotLockFacade.lockSlot(slotId, userId);
+  const { productId } = req.params;
+  const locked = await productBookingService.lockSlot(productId, slotId, userId);
 
-    if (!locked) {
-      return next(createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 409, 'This slot is already locked by another user'));
-    }
+  if (!locked) {
+    return next(createAppError(ERROR_CODES.BOOKING_SLOT_LOCKED, 409, 'This slot is already locked by another user'));
+  }
 
-    // Calculate expiration time (15 minutes from now)
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+  // Calculate expiration time (15 minutes from now)
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    res.json({
+  res.json({
+    success: true,
+    data: {
       locked: true,
       slotId,
       expiresAt,
-    });
-  } catch (error) {
-    console.error('Error locking slot:', error);
-    next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to lock slot'));
-  }
+    },
+  });
 }));
 
 /**
@@ -107,48 +99,34 @@ router.post('/:productId/slots/:slotId/lock', requireAuth, asyncHandler(async (r
  * Body: { slotId, metadata? }
  */
 router.post('/:productId/book', requireAuth, asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { productId } = req.params;
-    const { slotId, metadata } = req.body;
-    
-    const userId = req.auth?.user?.id;
+  const { productId } = req.params;
+  const { slotId, metadata } = req.body;
 
-    if (!userId) {
-      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'User not authenticated'));
-    }
+  const userId = req.auth?.user?.id;
 
-    if (!slotId) {
-      return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'slotId is required in request body'));
-    }
+  if (!userId) {
+    return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'User not authenticated'));
+  }
 
-    const result = await productBookingService.bookProduct(
-      productId,
-      slotId,
-      userId,
-      userId, // lockOwnerId is same as userId
-      metadata
-    );
+  if (!slotId) {
+    return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'slotId is required in request body'));
+  }
 
-    res.status(201).json({
+  const result = await productBookingService.bookProduct(
+    productId,
+    slotId,
+    userId,
+    userId, // lockOwnerId is same as userId
+    metadata
+  );
+
+  res.status(201).json({
+    success: true,
+    data: {
       booking: result.booking,
       price: result.price,
-    });
-  } catch (error: any) {
-    if (error.name === 'ValidationError') {
-      return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, error.message));
-    }
-
-    if (error.message?.includes('not locked')) {
-      return next(createAppError(ERROR_CODES.BOOKING_SLOT_NOT_LOCKED, 409, 'Slot must be locked before booking'));
-    }
-
-    if (error.message?.includes('locked by another')) {
-      return next(createAppError(ERROR_CODES.BOOKING_FORBIDDEN, 409, 'Slot is locked by another user'));
-    }
-
-    console.error('Error creating booking:', error);
-    next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to create booking'));
-  }
+    },
+  });
 }));
 
 /**
@@ -157,25 +135,24 @@ router.post('/:productId/book', requireAuth, asyncHandler(async (req: Request, r
  * Release a slot lock (requires authentication)
  */
 router.post('/:productId/slots/:slotId/unlock', requireAuth, asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { slotId } = req.params;
-    
-    const userId = req.auth?.user?.id;
+  const { slotId } = req.params;
 
-    if (!userId) {
-      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'User not authenticated'));
-    }
+  const userId = req.auth?.user?.id;
 
-    const released = await slotLockFacade.releaseSlot(slotId, userId);
+  if (!userId) {
+    return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'User not authenticated'));
+  }
 
-    res.json({
+  const { productId } = req.params;
+  const released = await productBookingService.unlockSlot(productId, slotId, userId);
+
+  res.json({
+    success: true,
+    data: {
       released,
       slotId,
-    });
-  } catch (error) {
-    console.error('Error releasing slot lock:', error);
-    next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to release slot lock'));
-  }
+    },
+  });
 }));
 
 export const productBookingRouter = router;

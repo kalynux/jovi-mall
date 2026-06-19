@@ -9,8 +9,6 @@ export interface IAvailabilityRule extends IBaseDocument {
   startTime: string; // HH:mm format
   endTime: string; // HH:mm format
   timezone: string; // IANA timezone (e.g., 'America/New_York')
-  bufferBefore: number; // Minutes before slot
-  bufferAfter: number; // Minutes after slot
   isActive: boolean;
 }
 
@@ -49,22 +47,10 @@ const AvailabilityRuleSchema = new Schema<IAvailabilityRule>(
       required: true,
       default: 'UTC',
     },
-    bufferBefore: {
-      type: Number,
-      required: true,
-      default: 0,
-      min: 0,
-    },
-    bufferAfter: {
-      type: Number,
-      required: true,
-      default: 0,
-      min: 0,
-    },
     isActive: {
       type: Boolean,
       required: true,
-      default: true,
+      default: false,
     },
     ...BaseSchemaFields,
   },

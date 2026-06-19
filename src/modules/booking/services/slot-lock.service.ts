@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { getRedisClient, SLOT_LOCK_DB } from '../../../infra/redis/redis.factory';
 import { SlotLockData } from '../types/booking.types';
 import { createAppError } from '../../../core/errors';
@@ -5,14 +6,25 @@ import { ERROR_CODES } from '../../../core/error-codes';
 
 export class SlotLockService {
   private static readonly DEFAULT_TTL = 900; // 15 minutes in seconds
+  private static readonly CAPACITY_MUTEX_TTL = 10; // seconds — short critical section
 
   /**
    * Attempts to lock a slot for the specified owner.
    * Returns true if lock acquired, false if already locked.
+   *
+   * @param scopeToOwner When true, the lock key is namespaced by ownerId
+   *   (`slot:lock:{slotId}:{ownerId}`) so multiple distinct owners can each hold
+   *   their own hold on the same slot — used for capacity-mode checkout holds.
+   *   When false (default), the key is exclusive per slot (calendar/manual).
    */
-  async lock(slotId: string, ownerId: string, ttlSeconds: number = SlotLockService.DEFAULT_TTL): Promise<boolean> {
+  async lock(
+    slotId: string,
+    ownerId: string,
+    ttlSeconds: number = SlotLockService.DEFAULT_TTL,
+    scopeToOwner = false
+  ): Promise<boolean> {
     const redis = await getRedisClient(SLOT_LOCK_DB);
-    const key = this.getKey(slotId);
+    const key = this.getKey(slotId, scopeToOwner ? ownerId : undefined);
 
     const lockData: SlotLockData = {
       ownerId,
@@ -32,9 +44,9 @@ export class SlotLockService {
    * Releases a lock if owned by the specified owner.
    * Returns true if released, false if not owned or doesn't exist.
    */
-  async release(slotId: string, ownerId: string): Promise<boolean> {
+  async release(slotId: string, ownerId: string, scopeToOwner = false): Promise<boolean> {
     const redis = await getRedisClient(SLOT_LOCK_DB);
-    const key = this.getKey(slotId);
+    const key = this.getKey(slotId, scopeToOwner ? ownerId : undefined);
 
     const value = await redis.get(key);
     if (!value) {
@@ -54,9 +66,9 @@ export class SlotLockService {
    * Asserts that the slot is locked by the specified owner.
    * Throws an error if not locked or locked by someone else.
    */
-  async assertLocked(slotId: string, ownerId: string): Promise<void> {
+  async assertLocked(slotId: string, ownerId: string, scopeToOwner = false): Promise<void> {
     const redis = await getRedisClient(SLOT_LOCK_DB);
-    const key = this.getKey(slotId);
+    const key = this.getKey(slotId, scopeToOwner ? ownerId : undefined);
 
     const value = await redis.get(key);
     if (!value) {
@@ -72,6 +84,39 @@ export class SlotLockService {
     if (lockData.expiresAt < Date.now()) {
       await redis.del(key);
       throw createAppError(ERROR_CODES.BOOKING_SLOT_NOT_LOCKED, 409, `Slot ${slotId} lock has expired`);
+    }
+  }
+
+  /**
+   * Acquires a short-lived exclusive mutex over a slot's capacity commit section.
+   * Distinct from the per-user checkout hold: this serialises the count-and-create
+   * critical section so concurrent finalisations can't oversell a capacity slot.
+   *
+   * @returns A release token if acquired, or null if another commit is in progress.
+   */
+  async acquireCapacityMutex(
+    slotId: string,
+    ttlSeconds: number = SlotLockService.CAPACITY_MUTEX_TTL
+  ): Promise<string | null> {
+    const redis = await getRedisClient(SLOT_LOCK_DB);
+    const key = this.getCapacityMutexKey(slotId);
+    const token = crypto.randomUUID();
+
+    const result = await redis.set(key, token, { NX: true, EX: ttlSeconds });
+    return result === 'OK' ? token : null;
+  }
+
+  /**
+   * Releases a capacity mutex, but only if the caller still holds it (token match),
+   * so a slow caller whose mutex already expired can't delete a newer holder's lock.
+   */
+  async releaseCapacityMutex(slotId: string, token: string): Promise<void> {
+    const redis = await getRedisClient(SLOT_LOCK_DB);
+    const key = this.getCapacityMutexKey(slotId);
+
+    const value = await redis.get(key);
+    if (value === token) {
+      await redis.del(key);
     }
   }
 
@@ -108,7 +153,11 @@ export class SlotLockService {
     return exists === 1;
   }
 
-  private getKey(slotId: string): string {
-    return `slot:lock:${slotId}`;
+  private getKey(slotId: string, ownerId?: string): string {
+    return ownerId ? `slot:lock:${slotId}:${ownerId}` : `slot:lock:${slotId}`;
+  }
+
+  private getCapacityMutexKey(slotId: string): string {
+    return `slot:capacity-mutex:${slotId}`;
   }
 }

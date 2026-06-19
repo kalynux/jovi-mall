@@ -290,6 +290,17 @@ router.get('/:productId/variants/:variantId', VendorVariantController.getVariant
 router.patch('/:productId/variants/:variantId', requireProductEditable, VendorVariantController.updateVariant);
 
 /**
+ * PATCH /api/vendor/products/:productId/variants/:variantId/service/config
+ * Update the service variant's scheduling + peak-hours config (service products only).
+ * Body: partial { durationMinutes?, bufferBeforeMinutes?, bufferAfterMinutes?, bookingMode?, peakHours?|null }
+ */
+router.patch(
+    '/:productId/variants/:variantId/service/config',
+    requireProductEditable,
+    VendorVariantController.updateServiceConfig,
+);
+
+/**
  * PATCH /api/vendor/products/:productId/variants/:variantId/status
  * Toggle variant between active and archived (e.g. vendor temporarily disabling
  * a variant during a stock shortage). Activation enforces the same rules as
@@ -450,14 +461,8 @@ router.get('/:id/availability-rules', VendorAvailabilityController.listRules);
 router.patch('/availability-rules/:ruleId', VendorAvailabilityController.updateRule);
 
 /**
- * PATCH /api/vendor/availability-rules/:ruleId/activate
- * Activate (publish) availability rule
- */
-router.patch('/availability-rules/:ruleId/activate', VendorAvailabilityController.activateRule);
-
-/**
  * PATCH /api/vendor/availability-rules/:ruleId/toggle
- * Toggle availability rule active state
+ * Set availability rule active state (body: { isActive: boolean })
  */
 router.patch('/availability-rules/:ruleId/toggle', VendorAvailabilityController.toggleRule);
 

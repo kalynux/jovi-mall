@@ -20,8 +20,8 @@ export class SlotLockFacade {
    * @param ttlSeconds - Time-to-live for the lock in seconds (default: 900 = 15 minutes)
    * @returns true if locked successfully, false if already locked
    */
-  async lockSlot(slotId: string, ownerId: string, ttlSeconds?: number): Promise<boolean> {
-    return this.slotLockService.lock(slotId, ownerId, ttlSeconds);
+  async lockSlot(slotId: string, ownerId: string, ttlSeconds?: number, scopeToOwner = false): Promise<boolean> {
+    return this.slotLockService.lock(slotId, ownerId, ttlSeconds, scopeToOwner);
   }
 
   /**
@@ -30,8 +30,8 @@ export class SlotLockFacade {
    * @param ownerId - ID of the entity that owns the lock
    * @returns true if released, false if not owned or doesn't exist
    */
-  async releaseSlot(slotId: string, ownerId: string): Promise<boolean> {
-    return this.slotLockService.release(slotId, ownerId);
+  async releaseSlot(slotId: string, ownerId: string, scopeToOwner = false): Promise<boolean> {
+    return this.slotLockService.release(slotId, ownerId, scopeToOwner);
   }
 
   /**

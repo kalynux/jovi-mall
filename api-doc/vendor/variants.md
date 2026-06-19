@@ -2,12 +2,12 @@
 
 ## Overview
 
-Variants are the SKU-level entities that hold **price**, **stock**, and **physical attributes** for a product. Every product — physical or digital — must have at least one variant before it can be activated.
+Variants are the SKU-level entities that hold **price**, **stock**, **physical attributes**, and (for services) **booking configuration** for a product. Every product — physical, digital, or service — must have at least one variant before it can be activated.
 
 **Key rules:**
 - **Physical products**: Support full variant features — option-based matrix (Size × Color), dimensions, delivery agency assignment
 - **Digital products**: Support **1–5 variants**, each representing a downloadable **format** (PDF, ZIP, EPUB, …) with its own asset, price, SKU, name, and download limits. No option values, no dimensions, no delivery agency. A digital variant is `active` only when it has an uploaded asset — see [Digital Products Guide](./digital-products.md).
-- **Service products**: Do not support variants. Service pricing is managed via booking configuration
+- **Service products**: Have **exactly one** variant that carries the service's **price** and **`serviceConfig`** (slot duration, buffers, booking mode, and optional peak-hours surcharge). No option values, no dimensions, no delivery agency, no `digitalConfig`. `price` is the base price **per `serviceConfig.durationMinutes`** (e.g. `5000` for a 60-min unit); the booking price is prorated by the actual elapsed duration. Attempting to create a second variant returns `409 CATALOG_SERVICE_VARIANT_EXISTS`.
 
 **Default Variant Auto-assignment:**
 When the **first** variant is created for any product, the backend automatically sets `product.defaultVariantId` to that variant's ID and sets `product.hasVariants = true`. Use `PATCH /products/:id/default-variant` to manually reassign afterward.
@@ -100,6 +100,33 @@ For variants of a `type: "digital"` product, read endpoints also return a `displ
 }
 ```
 
+**Service variant — additional fields:**
+
+For the single variant of a `type: "service"` product, read endpoints also return a `serviceConfig` block. `price` is the base price per `serviceConfig.durationMinutes`.
+
+```json
+{
+  "name": "Booking",
+  "price": 5000,
+  "optionSignature": "default",
+  "serviceConfig": {
+    "durationMinutes": 60,
+    "bufferBeforeMinutes": 0,
+    "bufferAfterMinutes": 0,
+    "bookingMode": "calendar",
+    "peakHours": {
+      "daysOfWeek": [0, 6],
+      "startTime": "18:00",
+      "endTime": "21:00",
+      "priceType": "percentage",
+      "value": 20
+    }
+  }
+}
+```
+
+`peakHours` is optional. When present, the surcharge applies **only to the minutes of a booking that overlap `[startTime, endTime)` on the listed `daysOfWeek`** (empty `daysOfWeek` = every day). `priceType: "percentage"` scales the peak-portion price by `value` percent; `priceType: "fixed"` adds a flat `value` when any peak overlap exists.
+
 **Field reference:**
 
 | Field | Type | Description |
@@ -111,6 +138,7 @@ For variants of a `type: "digital"` product, read endpoints also return a `displ
 | `displayName` | string | Computed label, always present. Fallback: `name` → `"<asset> - <format> - <size>"` → product title → sku |
 | `status` | `"active"` \| `"archived"` | Archived variants are excluded from listings. For digital variants, `active` requires an uploaded asset |
 | `digital` | object \| undefined | Digital variants only. `{ asset?, maxDownloads, expiresAfterDays }`. `asset` is `{ id, originalName, mimeType, size }` once uploaded; the raw download URL is never exposed here |
+| `serviceConfig` | object \| undefined | Service variant only. `{ durationMinutes, bufferBeforeMinutes, bufferAfterMinutes, bookingMode, maxBookings?, peakHours? }`. `price` is the base price per `durationMinutes`. `maxBookings` is the seats-per-slot, present only for capacity mode |
 | `optionSignature` | string | System-generated — pipe-joined sorted optionValueIds. Empty string `""` for variants with no options |
 | `price` | number | Selling price |
 | `compareAtPrice` | number \| undefined | Original/MSRP price — show as "was" price if > price |
@@ -176,6 +204,37 @@ Create a new variant for a product.
 }
 ```
 
+**Request Body — Service Product:**
+
+```json
+{
+  "sku": "svc-haircut-001",
+  "name": "Booking",
+  "price": 5000,
+  "serviceConfig": {
+    "durationMinutes": 60,
+    "bufferBeforeMinutes": 0,
+    "bufferAfterMinutes": 0,
+    "bookingMode": "calendar",
+    "peakHours": {
+      "daysOfWeek": [0, 6],
+      "startTime": "18:00",
+      "endTime": "21:00",
+      "priceType": "percentage",
+      "value": 20
+    }
+  }
+}
+```
+
+> [!IMPORTANT]
+> **Service products have exactly one variant**, which carries `serviceConfig` + `price`. Key rules:
+> - `serviceConfig` is **required** for the service variant. `price` is the base price **per `durationMinutes`** — the booking price is prorated by the actual elapsed duration.
+> - Creating a **second** variant returns `409 CATALOG_SERVICE_VARIANT_EXISTS`.
+> - `optionValueIds`, `deliveryAgencyId`, dimensions (`weight`/`length`/`width`/`height`), and `digitalConfig` are **rejected** (`400 CATALOG_PRODUCT_INVALID_TYPE`).
+> - `peakHours` is optional; the surcharge applies only to booking minutes overlapping the window on the listed `daysOfWeek`.
+> - Update the scheduling/peak config later via `PATCH /products/:productId/variants/:variantId/service/config`, or the price via the variant `PATCH` endpoint.
+
 > [!IMPORTANT]
 > **Digital variants** represent downloadable formats (1–5 per product). Key rules:
 > - The created variant comes back with `status: "archived"` — it flips to `"active"` only after you **upload its asset** via `POST /products/:productId/variants/:variantId/digital/asset` (see [Digital Products Guide](./digital-products.md)).
@@ -205,6 +264,8 @@ Create a new variant for a product.
 | `deliveryAgencyId` | string | No | Valid 24-char ObjectId | Physical only |
 | `fileIds` | string[] | No | Variant images. Array of valid 24-char ObjectIds; **must be unique**. Capped per parent product type (physical **3**, digital **1**) | All |
 | `digitalConfig` | object | No | `{ maxDownloads?, expiresAfterDays? }` (each integer >= 1 or `null`) | Digital only |
+| `serviceConfig` | object | ✅ (service) | `{ durationMinutes (int ≥ 1), bufferBeforeMinutes?, bufferAfterMinutes?, bookingMode ('calendar'\|'manual'\|'capacity'), maxBookings? (int ≥ 1, required when bookingMode='capacity'), peakHours? }` | Service only |
+| `serviceConfig.peakHours` | object | No | `{ daysOfWeek (int[0–6]), startTime ('HH:mm'), endTime ('HH:mm' > startTime), priceType ('fixed'\|'percentage'), value (≥ 0) }` | Service only |
 
 > [!IMPORTANT]
 > **Variant images can be set at creation time** (and via PATCH). The flow mirrors product media: the referenced files must be owned by the vendor (or be system files) or the request is rejected `403`. Caps: a **physical** variant allows **3** images, a **digital** variant allows **1**. Exceeding the cap → `400 CATALOG_IMAGE_LIMIT_EXCEEDED`; duplicate IDs → `400 VALIDATION_ERROR`. The create response returns fully populated `files` (not bare `fileIds`), same as the GET/PATCH endpoints.
@@ -253,7 +314,8 @@ Create a new variant for a product.
 | Status | Code | Reason |
 |--------|------|--------|
 | 404 | `CATALOG_PRODUCT_NOT_FOUND` | Product not found or not owned by vendor |
-| 400 | `CATALOG_PRODUCT_INVALID_TYPE` | Product is `type: "service"` (not supported); or digital product restriction violated |
+| 400 | `CATALOG_PRODUCT_INVALID_TYPE` | Type restriction violated (e.g. service variant missing `serviceConfig`, or service/digital variant given physical-only fields) |
+| 409 | `CATALOG_SERVICE_VARIANT_EXISTS` | Service product already has its single variant |
 | 400 | `CATALOG_DIGITAL_VARIANT_LIMIT_EXCEEDED` | Digital product already has 5 variants (max) |
 | 400 | `CATALOG_IMAGE_LIMIT_EXCEEDED` | More images than the per-type cap (physical 3, digital 1) |
 | 403 | `CATALOG_PRODUCT_ACCESS_DENIED` | A `fileId` is not owned by this vendor |
@@ -512,7 +574,7 @@ Toggle a variant between `"active"` and `"archived"`. Designed for the **fronten
 
 - The variant's `price` must be `> 0`. A variant priced at `0` cannot be activated → `422 CATALOG_PRODUCT_VARIANT_ZERO_PRICE`.
 - For a **digital** product, the variant must already have an uploaded asset (`digitalConfig.assetId`) → otherwise `422 CATALOG_VARIANT_NO_DIGITAL_ASSET`. Upload the asset via `POST /products/:productId/variants/:variantId/digital/asset` first.
-- **Service** products do not support variants at all → `400 CATALOG_PRODUCT_INVALID_TYPE` (this case won't normally arise since variant creation is already blocked for service products).
+- For a **service** product, the variant must have a `serviceConfig` with a `durationMinutes` → otherwise `422 CATALOG_PRODUCT_SERVICE_NO_DURATION`.
 
 Sending the variant's **current** status is a no-op and returns `200` with `"Variant is already <status>"`.
 
@@ -545,9 +607,9 @@ Sending the variant's **current** status is a no-op and returns `200` with `"Var
 |--------|------|--------|
 | 404 | `CATALOG_PRODUCT_NOT_FOUND` | Product not found or not owned by vendor |
 | 404 | `CATALOG_VARIANT_NOT_FOUND` | Variant not found, or does not belong to the specified product |
-| 400 | `CATALOG_PRODUCT_INVALID_TYPE` | Product is `type: "service"` (does not support variants) |
 | 422 | `CATALOG_PRODUCT_VARIANT_ZERO_PRICE` | Cannot activate a variant whose price is `0` |
 | 422 | `CATALOG_VARIANT_NO_DIGITAL_ASSET` | Cannot activate a digital variant without an uploaded asset |
+| 422 | `CATALOG_PRODUCT_SERVICE_NO_DURATION` | Cannot activate a service variant without a `serviceConfig.durationMinutes` |
 | 409 | `CATALOG_PRODUCT_VECTORISATION_PENDING` | Product is currently being vectorised; retry after it completes |
 | 400 | `VALIDATION_ERROR` | Body missing `status` or value is not `"active"` / `"archived"` |
 
@@ -594,17 +656,32 @@ Archive a variant (soft delete). Sets `status` to `"archived"`. Data is preserve
 
 | Feature | Physical | Digital | Service |
 |---------|----------|---------|---------|
-| Variants supported | ✅ | ✅ (1–5) | ❌ |
+| Variants supported | ✅ | ✅ (1–5) | ✅ (exactly 1) |
 | `optionValueIds` | ✅ | ❌ | ❌ |
 | Dimensions (`weight`, `length`, `width`, `height`) | ✅ | ❌ | ❌ |
 | `deliveryAgencyId` | ✅ | ❌ | ❌ |
 | `digitalConfig` (per-variant asset/limits) | ❌ | ✅ | ❌ |
-| Max variants | unlimited | **5** | N/A |
-| Max images per variant | **3** | **1** | N/A |
-| Images settable on create | ✅ | ✅ | N/A |
-| Created as | `active` | `archived` (until asset uploaded) | N/A |
-| `isInfiniteStock` | ✅ | ✅ (typically `true`) | N/A |
-| `stock` tracking | ✅ | No (ignored if `isInfiniteStock`) | N/A |
+| `serviceConfig` (duration/buffers/bookingMode/peakHours) | ❌ | ❌ | ✅ (required) |
+| Max variants | unlimited | **5** | **1** |
+| Max images per variant | **3** | **1** | **0** (use product media) |
+| Images settable on create | ✅ | ✅ | ❌ |
+| Created as | `active` | `archived` (until asset uploaded) | `active` |
+| `isInfiniteStock` | ✅ | ✅ (typically `true`) | ✅ (typically `true`) |
+| `stock` tracking | ✅ | No (ignored if `isInfiniteStock`) | No |
+
+### Service `bookingMode`
+
+`serviceConfig.bookingMode` controls what happens when a customer books a slot on this service product:
+
+| Mode | Behavior |
+|------|----------|
+| `calendar` | **Default.** Single-occupancy. Booking is created `confirmed` and a Google Calendar event is created immediately. This is the standard slot-based flow. |
+| `manual` | Single-occupancy. Booking is created `pending` with **no** calendar event. The vendor must accept it (`PATCH /api/vendor/bookings/:id/status` → `confirmed`), which then creates the calendar event. Use this when the vendor wants to approve each request before committing. |
+| `capacity` | **Multi-occupancy.** Up to `maxBookings` customers can book the same slot (e.g. a class with N seats). Each booking is `confirmed` immediately. All seats for a slot share **one** Google Calendar event whose title shows the fill level, e.g. `[3/10] Yoga`. The slot stays bookable until full; the `(N+1)`th booking is rejected with `409 BOOKING_SLOT_FULL`. Requires `serviceConfig.maxBookings` (≥ 1). |
+
+`maxBookings` (integer ≥ 1) is **required when `bookingMode` is `capacity`** and ignored otherwise. It is enforced at variant creation and again at product activation.
+
+Slot discovery, pricing, and payment are identical across all modes. What differs: booking `status` on create (`manual` → `pending`), calendar-event timing/sharing, and whether a slot is single- or multi-occupancy.
 
 ### Digital Variants (Formats)
 
@@ -717,9 +794,11 @@ Validation errors include a `details` array:
 | `CATALOG_VARIANT_NOT_FOUND` | 404 | Variant not found, not active, or does not belong to specified product |
 | `CATALOG_VARIANT_SKU_EXISTS` | 409 | SKU already in use globally |
 | `CATALOG_PRODUCT_NOT_FOUND` | 404 | Parent product not found or not owned by vendor |
-| `CATALOG_PRODUCT_INVALID_TYPE` | 400 | Service products do not support variants; physical-only field sent for digital; or `digitalConfig` sent for non-digital |
+| `CATALOG_PRODUCT_INVALID_TYPE` | 400 | Type restriction violated — service variant missing `serviceConfig`; physical-only field sent for digital/service; `digitalConfig`/`serviceConfig` sent for the wrong type |
+| `CATALOG_SERVICE_VARIANT_EXISTS` | 409 | Service product already has its single variant |
 | `CATALOG_DIGITAL_VARIANT_LIMIT_EXCEEDED` | 400 | Digital product already has 5 variants (max) |
-| `CATALOG_IMAGE_LIMIT_EXCEEDED` | 400 | Too many variant images — physical max 3, digital max 1 |
+| `CATALOG_IMAGE_LIMIT_EXCEEDED` | 400 | Too many variant images — physical max 3, digital max 1, service 0 |
 | `CATALOG_PRODUCT_VARIANT_ZERO_PRICE` | 422 | Status change rejected — cannot activate a variant with `price = 0` |
 | `CATALOG_VARIANT_NO_DIGITAL_ASSET` | 422 | Status change rejected — digital variant has no uploaded asset |
+| `CATALOG_PRODUCT_SERVICE_NO_DURATION` | 422 | Status change rejected — service variant has no `serviceConfig.durationMinutes` |
 | `VALIDATION_ERROR` | 400 | Zod schema validation failed |

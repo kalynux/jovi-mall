@@ -43,13 +43,7 @@ export const CreateProductSchema = z.object({
         isActive: z.boolean().optional(),
     }).strict().optional(),
 
-    // Service config
-    serviceConfig: z.object({
-        durationMinutes: z.number().int().min(1, 'Duration must be at least 1 minute'),
-        bufferBeforeMinutes: z.number().int().min(0).optional(),
-        bufferAfterMinutes: z.number().int().min(0).optional(),
-        bookingMode: z.enum(['calendar', 'manual', 'capacity']),
-    }).optional(),
+    // Service config + price live on the service variant (see variant.validator).
 });
 
 /**
@@ -83,13 +77,7 @@ export const UpdateProductSchema = z.object({
         isActive: z.boolean().optional(),
     }).strict().optional(),
 
-    // Service config
-    serviceConfig: z.object({
-        durationMinutes: z.number().int().min(1).optional(),
-        bufferBeforeMinutes: z.number().int().min(0).optional(),
-        bufferAfterMinutes: z.number().int().min(0).optional(),
-        bookingMode: z.enum(['calendar', 'manual', 'capacity']).optional(),
-    }).optional(),
+    // Service config + price live on the service variant (see variant.validator).
 
     // Physical delivery config — agencyId may be null to clear the per-product agency.
     delivery: z.object({

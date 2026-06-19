@@ -13,6 +13,23 @@ const provider = new GoogleCalendarProvider();
 const oauthStateService = new OAuthStateService();
 
 /**
+ * After the OAuth callback completes, hand control back to the frontend by
+ * redirecting to GOOGLE_OAUTH_FRONTEND_REDIRECT_URL with a result query string
+ * (e.g. `?calendar=connected` or `?calendar=error&reason=...`).
+ *
+ * Returns true if it redirected; false when no frontend URL is configured, in
+ * which case the caller falls back to a JSON response / error (non-breaking).
+ */
+function redirectOAuthResult(res: Response, params: Record<string, string>): boolean {
+  const base = process.env.GOOGLE_OAUTH_FRONTEND_REDIRECT_URL;
+  if (!base) return false;
+  const url = new URL(base);
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  res.redirect(url.toString());
+  return true;
+}
+
+/**
  * GET /integrations/google/connect
  * Redirects the user to Google's OAuth consent screen.
  * Requires browser cookie authentication (access_token JWT cookie).
@@ -45,15 +62,13 @@ router.get(
     const { code, state } = req.query;
     const userId = req.auth!.user.id;
 
-    console.log({ code, userId });
-
     if (!code || typeof code !== 'string') {
-      console.log('Missing or invalid authorization code');
+      if (redirectOAuthResult(res, { calendar: 'error', reason: 'missing_code' })) return;
       return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'Missing or invalid authorization code'));
     }
 
     if (!state || typeof state !== 'string') {
-      console.log('Missing OAuth state');
+      if (redirectOAuthResult(res, { calendar: 'error', reason: 'missing_state' })) return;
       return next(createAppError(ERROR_CODES.AUTH_OAUTH_STATE_INVALID, 400, 'Missing OAuth state'));
     }
 
@@ -63,11 +78,11 @@ router.get(
 
       // Verify userId in state matches the authenticated user from cookie
       if (stateUserId !== userId) {
-        console.log('User ID mismatch between OAuth state and cookie auth');
+        if (redirectOAuthResult(res, { calendar: 'error', reason: 'state_mismatch' })) return;
         return next(createAppError(ERROR_CODES.AUTH_OAUTH_STATE_INVALID, 403, 'Invalid OAuth state: user mismatch'));
       }
     } catch (error: any) {
-      console.log('State validation failed:', error.message);
+      if (redirectOAuthResult(res, { calendar: 'error', reason: 'invalid_state' })) return;
       return next(createAppError(ERROR_CODES.AUTH_OAUTH_STATE_EXPIRED, 403, 'Invalid or expired OAuth state'));
     }
 
@@ -75,10 +90,14 @@ router.get(
     const vendor = await VendorModel.findOne({ user_id: userId });
     const vendorId = vendor?._id.toString();
 
-    await provider.handleCallback(code, userId, vendorId);
+    try {
+      await provider.handleCallback(code, userId, vendorId);
+    } catch (error) {
+      if (redirectOAuthResult(res, { calendar: 'error', reason: 'connection_failed' })) return;
+      throw error;
+    }
 
-    console.log('Google Calendar connected successfully');
-
+    if (redirectOAuthResult(res, { calendar: 'connected' })) return;
     res.json({ success: true, message: 'Google Calendar connected successfully' });
   })
 );

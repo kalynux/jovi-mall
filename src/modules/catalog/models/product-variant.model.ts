@@ -43,6 +43,28 @@ export interface IProductVariant extends IBaseDocument {
     maxDownloads: number | null;     // null = unlimited
     expiresAfterDays: number | null; // null = never expires
   };
+
+  // Service-specific config — only set on the single variant of a service product.
+  // `price` is the base price per `durationMinutes` (e.g. 5000 for a 60-min unit);
+  // the booking price is prorated by the actual elapsed duration. Enforced by
+  // vendor-variant.controller (exactly one default service variant).
+  serviceConfig?: {
+    durationMinutes: number;
+    bufferBeforeMinutes: number;
+    bufferAfterMinutes: number;
+    bookingMode: 'calendar' | 'manual' | 'capacity';
+    // Seats per slot for capacity mode. Required when bookingMode === 'capacity'.
+    maxBookings?: number;
+    // Optional peak-hours surcharge. Applies only to the portion of a booking that
+    // overlaps [startTime, endTime] on the selected daysOfWeek.
+    peakHours?: {
+      daysOfWeek: number[];                 // 0-6 (Sun-Sat); empty = every day
+      startTime: string;                    // 'HH:mm'
+      endTime: string;                      // 'HH:mm'
+      priceType: 'fixed' | 'percentage';
+      value: number;                        // % of the peak-portion price, or a flat amount
+    };
+  };
 }
 
 const ProductVariantSchema = new Schema<IProductVariant>({
@@ -83,6 +105,33 @@ const ProductVariantSchema = new Schema<IProductVariant>({
       assetId: { type: Schema.Types.ObjectId, ref: MODELS.DIGITAL_ASSET, required: false },
       maxDownloads: { type: Number, default: null, min: 1 },
       expiresAfterDays: { type: Number, default: null, min: 1 },
+    },
+    required: false,
+    default: undefined,
+  },
+
+  serviceConfig: {
+    type: {
+      durationMinutes: { type: Number, required: true, min: 1 },
+      bufferBeforeMinutes: { type: Number, default: 0, min: 0 },
+      bufferAfterMinutes: { type: Number, default: 0, min: 0 },
+      bookingMode: {
+        type: String,
+        enum: ['calendar', 'manual', 'capacity'],
+        required: true,
+      },
+      maxBookings: { type: Number, required: false, min: 1 },
+      peakHours: {
+        type: {
+          daysOfWeek: { type: [Number], default: [] },
+          startTime: { type: String, required: true },
+          endTime: { type: String, required: true },
+          priceType: { type: String, enum: ['fixed', 'percentage'], required: true },
+          value: { type: Number, required: true, min: 0 },
+        },
+        required: false,
+        default: undefined,
+      },
     },
     required: false,
     default: undefined,

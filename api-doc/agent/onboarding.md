@@ -139,7 +139,7 @@ If an invalid step is provided:
 {
   "success": false,
   "error": {
-    "code": "INVALID_STEP",
+    "code": "DELIVERY_ONBOARDING_STEP_INVALID",
     "message": "Unknown onboarding step: 3"
   }
 }

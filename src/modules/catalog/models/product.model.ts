@@ -7,13 +7,6 @@ export type ProductStatus = 'draft' | 'active' | 'archived' | 'pending_review' |
 export type BookingMode = 'calendar' | 'manual' | 'capacity';
 export type VectorisationStatus = 'not_started' | 'pending' | 'completed' | 'failed';
 
-export interface ServiceConfig {
-  durationMinutes: number;
-  bufferBeforeMinutes?: number;
-  bufferAfterMinutes?: number;
-  bookingMode: BookingMode;
-}
-
 export interface DigitalConfig {
   // Product-wide download kill switch. Per-variant asset/maxDownloads/expiresAfterDays
   // live on ProductVariant.digitalConfig. When false, no entitlements are granted
@@ -53,8 +46,8 @@ export interface IProduct extends IBaseDocument {
 
   fileIds: Types.ObjectId[];  // References to File model
 
-  // Service-specific configuration
-  serviceConfig?: ServiceConfig;
+  // Service configuration + pricing now live on the single service variant
+  // (ProductVariant.serviceConfig). See vendor-variant.controller.
 
   // Digital-specific configuration
   digitalConfig?: DigitalConfig;
@@ -112,20 +105,8 @@ const ProductSchema = new Schema<IProduct>({
   },
   vectorisedDataId: { type: String, default: null },
 
-  // Service-specific configuration
-  serviceConfig: {
-    type: {
-      durationMinutes: { type: Number, required: true, min: 1 },
-      bufferBeforeMinutes: { type: Number, default: 0, min: 0 },
-      bufferAfterMinutes: { type: Number, default: 0, min: 0 },
-      bookingMode: {
-        type: String,
-        enum: ['calendar', 'manual', 'capacity'],
-        required: true
-      },
-    },
-    required: false,
-  },
+  // Service configuration + pricing live on the single service variant
+  // (ProductVariant.serviceConfig) — not on the product.
 
   // Digital-specific configuration (product-wide toggle only).
   // Per-variant asset/maxDownloads/expiresAfterDays live on ProductVariant.digitalConfig.
@@ -163,14 +144,8 @@ ProductSchema.pre('save', function (next) {
     return;
   }
 
-  if (this.type === 'service' && !this.serviceConfig) {
-    next(new Error('Service products must have serviceConfig defined before activation'));
-    return;
-  }
-  if (this.type !== 'service' && this.serviceConfig) {
-    next(new Error('Only service products can have serviceConfig'));
-    return;
-  }
+  // Service activation requirements (a single variant carrying serviceConfig + price)
+  // are enforced in ProductStatusValidationService at activation time.
 
   // Per-variant asset enforcement happens in ProductStatusValidationService at activation time.
   // The product-level digitalConfig now only carries the `isActive` kill switch.

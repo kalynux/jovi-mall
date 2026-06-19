@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
-import { z, ZodError } from 'zod';
-import { AppError } from '../../../core/errors';
+import { z } from 'zod';
+import { asyncHandler } from '../../../api/middlewares/async-handler';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
 import { ProductRepositoryMongo } from '../repositories/mongo/product.repository.mongo';
 import { ProductShippingService } from '../domain/services/shipping/ProductShippingService';
 
@@ -20,180 +22,96 @@ const ShippingConfigSchema = z.object({
 
 /**
  * VendorShippingController
- * 
- *  Manages shipping configuration for physical products.
+ *
+ * Manages shipping configuration for physical products.
+ *
+ * Errors are raised with createAppError and propagated to the global error
+ * handler via asyncHandler — never written inline.
  */
 export class VendorShippingController {
     /**
      * POST /api/vendor/products/:id/shipping
      * Create or update shipping configuration
      */
-    static async upsertShippingConfig(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id: productId } = req.params;
+    static upsertShippingConfig = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id: productId } = req.params;
 
-            // Validate product exists and belongs to vendor
-            const product = await productRepository.findById(productId, vendorId);
-            if (!product) {
-                res.status(404).json({
-                    success: false,
-                    error: {
-                        code: 'NOT_FOUND',
-                        message: 'Product not found',
-                    },
-                });
-                return;
-            }
-
-            // Validate product is physical type
-            if (product.type !== 'physical') {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'INVALID_PRODUCT_TYPE',
-                        message: 'Only physical products can have shipping configuration',
-                    },
-                });
-                return;
-            }
-
-            // Validate request body
-            const input = ShippingConfigSchema.parse(req.body);
-
-            // Create or update shipping config
-            const shippingConfig = await shippingService.createOrUpdateShippingConfig(
-                productId,
-                vendorId,
-                input
-            );
-
-            res.status(200).json({
-                success: true,
-                data: shippingConfig,
-                message: 'Shipping configuration saved successfully',
-            });
-        } catch (error) {
-            VendorShippingController.handleError(error, res);
+        // Validate product exists and belongs to vendor
+        const product = await productRepository.findById(productId, vendorId);
+        if (!product) {
+            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404, 'Product not found');
         }
-    }
+
+        // Validate product is physical type
+        if (product.type !== 'physical') {
+            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE, 400, 'Only physical products can have shipping configuration');
+        }
+
+        // Validate request body
+        const input = ShippingConfigSchema.parse(req.body);
+
+        // Create or update shipping config
+        const shippingConfig = await shippingService.createOrUpdateShippingConfig(
+            productId,
+            vendorId,
+            input
+        );
+
+        res.status(200).json({
+            success: true,
+            data: shippingConfig,
+            message: 'Shipping configuration saved successfully',
+        });
+    });
 
     /**
      * GET /api/vendor/products/:id/shipping
      * Get shipping configuration
      */
-    static async getShippingConfig(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id: productId } = req.params;
+    static getShippingConfig = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id: productId } = req.params;
 
-            // Validate product exists and belongs to vendor
-            const product = await productRepository.findById(productId, vendorId);
-            if (!product) {
-                res.status(404).json({
-                    success: false,
-                    error: {
-                        code: 'NOT_FOUND',
-                        message: 'Product not found',
-                    },
-                });
-                return;
-            }
-
-            // Get shipping config
-            const shippingConfig = await shippingService.getShippingConfig(productId, vendorId);
-
-            if (!shippingConfig) {
-                res.status(404).json({
-                    success: false,
-                    error: {
-                        code: 'NOT_FOUND',
-                        message: 'Shipping configuration not found',
-                    },
-                });
-                return;
-            }
-
-            res.json({
-                success: true,
-                data: shippingConfig,
-            });
-        } catch (error) {
-            VendorShippingController.handleError(error, res);
+        // Validate product exists and belongs to vendor
+        const product = await productRepository.findById(productId, vendorId);
+        if (!product) {
+            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404, 'Product not found');
         }
-    }
+
+        // Get shipping config
+        const shippingConfig = await shippingService.getShippingConfig(productId, vendorId);
+
+        if (!shippingConfig) {
+            throw createAppError(ERROR_CODES.CATALOG_SHIPPING_NOT_FOUND, 404, 'Shipping configuration not found');
+        }
+
+        res.json({
+            success: true,
+            data: shippingConfig,
+        });
+    });
 
     /**
      * DELETE /api/vendor/products/:id/shipping
      * Delete shipping configuration
      */
-    static async deleteShippingConfig(req: Request, res: Response): Promise<void> {
-        try {
-            const vendorId = req.auth!.role_entity._id.toString();
-            const { id: productId } = req.params;
+    static deleteShippingConfig = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { id: productId } = req.params;
 
-            // Validate product exists and belongs to vendor
-            const product = await productRepository.findById(productId, vendorId);
-            if (!product) {
-                res.status(404).json({
-                    success: false,
-                    error: {
-                        code: 'NOT_FOUND',
-                        message: 'Product not found',
-                    },
-                });
-                return;
-            }
-
-            // Delete shipping config
-            await shippingService.deleteShippingConfig(productId, vendorId);
-
-            res.json({
-                success: true,
-                message: 'Shipping configuration deleted successfully',
-            });
-        } catch (error) {
-            VendorShippingController.handleError(error, res);
-        }
-    }
-
-    /**
-     * Centralized error handler
-     */
-    private static handleError(error: any, res: Response): void {
-        if (error instanceof ZodError) {
-            res.status(400).json({
-                success: false,
-                error: {
-                    code: 'VALIDATION_ERROR',
-                    message: 'Request validation failed',
-                    details: error.errors.map((e) => ({
-                        field: e.path.join('.'),
-                        message: e.message,
-                    })),
-                },
-            });
-            return;
+        // Validate product exists and belongs to vendor
+        const product = await productRepository.findById(productId, vendorId);
+        if (!product) {
+            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404, 'Product not found');
         }
 
-        if (error instanceof AppError) {
-            res.status(error.statusCode).json({
-                success: false,
-                error: {
-                    code: error.code,
-                    message: error.message,
-                },
-            });
-            return;
-        }
+        // Delete shipping config
+        await shippingService.deleteShippingConfig(productId, vendorId);
 
-        console.error('[VendorShippingController] Unexpected error:', error);
-        res.status(500).json({
-            success: false,
-            error: {
-                code: 'INTERNAL_ERROR',
-                message: 'An unexpected error occurred',
-            },
+        res.json({
+            success: true,
+            message: 'Shipping configuration deleted successfully',
         });
-    }
+    });
 }

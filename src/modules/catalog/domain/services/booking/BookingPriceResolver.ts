@@ -6,8 +6,8 @@ import { ERROR_CODES } from '../../../../../core/error-codes';
 
 export interface PriceBreakdown {
   basePrice: number;
+  peakHoursSurcharge?: number;
   // Future extensions:
-  // peakHoursSurcharge?: number;
   // staffPremium?: number;
   // durationDiscount?: number;
   // promoDiscount?: number;
@@ -21,44 +21,44 @@ export interface ResolvedPrice {
 
 /**
  * BookingPriceResolver - Centralized pricing logic for service bookings
- * 
- * Current phase: Variant-based base price resolution with duration multiplier
- * Future: Dynamic pricing based on time, staff, demand, etc.
+ *
+ * The service config + base price live on the product's single default variant
+ * (`variant.serviceConfig`, `variant.price`). The base price is the cost per
+ * `serviceConfig.durationMinutes`; the booking price is prorated by the booking's
+ * actual elapsed duration, plus an optional peak-hours surcharge applied only to the
+ * minutes overlapping the configured peak window.
+ *
+ * The same method serves both booking-time estimation (the booked slot) and
+ * completion-time recalculation (the actual elapsed interval) — callers pass the
+ * relevant { start, end }.
  */
 export class BookingPriceResolver {
   constructor(private readonly variantRepository: IVariantRepository) { }
 
   /**
-   * Resolves the price for a booking based on product variant and slot duration.
-   * 
-   * Pricing Logic:
-   * - Fetches the default variant for the product
-   * - Uses variant.price as the base price for the configured service duration
-   * - Applies duration multiplier: actualPrice = variantPrice × (slotDuration / configuredDuration)
-   * - Currency is the system default ('XAF')
-   * 
+   * Resolves the price for a booking interval.
+   *
    * @param product - The service product being booked
-   * @param slot - The time slot being booked
+   * @param slot - The interval being priced ({ start, end }); pass the booked slot at
+   *               booking time, or the actual elapsed interval at completion time
    * @param userId - Optional user ID for user-specific pricing (not used in this phase)
    * @returns Resolved price with breakdown
-   * @throws ValidationError if product has no default variant or variant price is invalid
+   * @throws AppError if the product has no default service variant, the price is invalid,
+   *         or the variant has no serviceConfig
    */
   async resolvePrice(
     product: Product,
     slot: { start: Date; end: Date },
     userId?: string
   ): Promise<ResolvedPrice> {
-    // 1. Fetch all variants for the product
+    // 1. Fetch the default active variant — it carries the service config + base price.
     const variants = await this.variantRepository.findByProduct(product.id);
-
-    // 2. Filter for active variants only
     const activeVariants = variants.filter(v => v.status === 'active');
 
     if (activeVariants.length === 0) {
       throw createAppError(ERROR_CODES.CATALOG_BOOKING_INVALID_PRICE, 422, undefined, { productId: product.id, reason: 'no_active_variants' });
     }
 
-    // 3. Find the default variant
     const defaultVariant = activeVariants.find(
       v => v.optionSignature === DEFAULT_VARIANT_SIGNATURE
     );
@@ -67,71 +67,86 @@ export class BookingPriceResolver {
       throw createAppError(ERROR_CODES.CATALOG_BOOKING_INVALID_PRICE, 422, undefined, { productId: product.id, reason: 'no_default_variant' });
     }
 
-    // 4. Validate variant price
     if (defaultVariant.price < 0) {
       throw createAppError(ERROR_CODES.CATALOG_BOOKING_INVALID_PRICE, 422, undefined, { productId: product.id, reason: 'negative_price' });
     }
 
-    // 5. Calculate duration multiplier
-    // The variant price represents the cost for the configured service duration.
-    // If the actual slot duration differs, we prorate the price accordingly.
-    const slotDurationMinutes = (slot.end.getTime() - slot.start.getTime()) / (1000 * 60);
-
-    if (!product.serviceConfig) {
+    const serviceConfig = defaultVariant.serviceConfig;
+    if (!serviceConfig) {
       throw createAppError(ERROR_CODES.CATALOG_BOOKING_MISSING_SERVICE_CONFIG, 422, undefined, { productId: product.id });
     }
 
-    const configuredDurationMinutes = product.serviceConfig.durationMinutes;
-
+    const configuredDurationMinutes = serviceConfig.durationMinutes;
     if (configuredDurationMinutes <= 0) {
       throw createAppError(ERROR_CODES.CATALOG_BOOKING_INVALID_PRICE, 422, undefined, { productId: product.id, reason: 'invalid_duration' });
     }
 
-    const durationMultiplier = slotDurationMinutes / configuredDurationMinutes;
+    // 2. Base price prorated by the actual elapsed duration. The variant price is the
+    //    cost for one configured-duration unit (e.g. 5000 / 60 min); a 2h30 booking of a
+    //    per-hour service costs 5000 × 2.5.
+    const pricePerMinute = defaultVariant.price / configuredDurationMinutes;
+    const actualMinutes = (slot.end.getTime() - slot.start.getTime()) / (1000 * 60);
+    const baseAmount = pricePerMinute * actualMinutes;
 
-    // 6. Calculate final price
-    const basePrice = Math.round(defaultVariant.price * durationMultiplier);
+    // 3. Peak surcharge — applies only to the minutes overlapping the peak window on the
+    //    selected days. Percentage surcharges scale the peak-portion price; fixed surcharges
+    //    add a flat amount when any peak overlap exists.
+    let surcharge = 0;
+    const peak = serviceConfig.peakHours;
+    if (peak) {
+      const peakMinutes = this.peakOverlapMinutes(slot.start, slot.end, peak);
+      if (peakMinutes > 0) {
+        surcharge = peak.priceType === 'percentage'
+          ? (pricePerMinute * peakMinutes) * (peak.value / 100)
+          : peak.value;
+      }
+    }
 
-    // 7. Resolve currency (system default)
-    const currency = 'XAF';
+    const basePrice = Math.round(baseAmount);
+    const peakHoursSurcharge = Math.round(surcharge);
+    const amount = basePrice + peakHoursSurcharge;
 
-    const breakdown: PriceBreakdown = {
-      basePrice,
-    };
+    const breakdown: PriceBreakdown = { basePrice };
+    if (peakHoursSurcharge > 0) breakdown.peakHoursSurcharge = peakHoursSurcharge;
 
     return {
-      amount: basePrice,
-      currency,
+      amount,
+      currency: 'XAF',
       breakdown,
     };
-
-    // Future extensions (Phase 9+):
-    // - Check if slot is during peak hours (weekend, evening)
-    // - Apply staff-based pricing multiplier
-    // - Apply promotional discounts
-    // - Check user-specific pricing (VIP, loyalty)
-    // - Apply demand-based surge pricing
   }
 
   /**
-   * Checks if a given time slot falls within peak hours.
+   * Counts how many minutes of [start, end) fall inside the configured peak window
+   * (time-of-day [startTime, endTime) on the selected daysOfWeek; empty daysOfWeek
+   * means every day). Walks the interval minute-by-minute so multi-day bookings and
+   * day boundaries are handled correctly.
+   *
+   * NOTE: time-of-day is evaluated in the server's local timezone. A per-service
+   * timezone is not yet modelled — TODO when availability timezones are unified.
    * @private
-   * @note Currently unused - reserved for future peak pricing implementation
    */
-  private isPeakHours(slot: { start: Date; end: Date }): boolean {
-    const dayOfWeek = slot.start.getDay();
-    const hour = slot.start.getHours();
+  private peakOverlapMinutes(
+    start: Date,
+    end: Date,
+    peak: { daysOfWeek: number[]; startTime: string; endTime: string },
+  ): number {
+    const toMinutes = (hhmm: string): number => {
+      const [h, m] = hhmm.split(':').map(Number);
+      return h * 60 + m;
+    };
+    const windowStart = toMinutes(peak.startTime);
+    const windowEnd = toMinutes(peak.endTime);
+    const days = new Set(peak.daysOfWeek);
+    const everyDay = days.size === 0;
 
-    // Weekend
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
-      return true;
+    let count = 0;
+    for (let t = start.getTime(); t < end.getTime(); t += 60_000) {
+      const d = new Date(t);
+      if (!everyDay && !days.has(d.getDay())) continue;
+      const minuteOfDay = d.getHours() * 60 + d.getMinutes();
+      if (minuteOfDay >= windowStart && minuteOfDay < windowEnd) count++;
     }
-
-    // Weekday evenings (6 PM - 9 PM)
-    if (hour >= 18 && hour < 21) {
-      return true;
-    }
-
-    return false;
+    return count;
   }
 }

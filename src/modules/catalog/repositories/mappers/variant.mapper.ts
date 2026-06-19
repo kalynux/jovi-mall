@@ -28,6 +28,22 @@ export interface Variant {
     maxDownloads?: number | null;
     expiresAfterDays?: number | null;
   };
+  // Service config + pricing — only set on the single variant of a service product.
+  // `price` is the base price per `serviceConfig.durationMinutes`.
+  serviceConfig?: {
+    durationMinutes: number;
+    bufferBeforeMinutes: number;
+    bufferAfterMinutes: number;
+    bookingMode: 'calendar' | 'manual' | 'capacity';
+    maxBookings?: number;
+    peakHours?: {
+      daysOfWeek: number[];
+      startTime: string;
+      endTime: string;
+      priceType: 'fixed' | 'percentage';
+      value: number;
+    };
+  };
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;
@@ -61,6 +77,20 @@ export class VariantMapper implements IMapper<Variant, IProductVariant> {
         assetId: doc.digitalConfig.assetId?.toString(),
         maxDownloads: doc.digitalConfig.maxDownloads ?? null,
         expiresAfterDays: doc.digitalConfig.expiresAfterDays ?? null,
+      } : undefined,
+      serviceConfig: doc.serviceConfig ? {
+        durationMinutes: doc.serviceConfig.durationMinutes,
+        bufferBeforeMinutes: doc.serviceConfig.bufferBeforeMinutes ?? 0,
+        bufferAfterMinutes: doc.serviceConfig.bufferAfterMinutes ?? 0,
+        bookingMode: doc.serviceConfig.bookingMode,
+        maxBookings: doc.serviceConfig.maxBookings,
+        peakHours: doc.serviceConfig.peakHours ? {
+          daysOfWeek: doc.serviceConfig.peakHours.daysOfWeek ?? [],
+          startTime: doc.serviceConfig.peakHours.startTime,
+          endTime: doc.serviceConfig.peakHours.endTime,
+          priceType: doc.serviceConfig.peakHours.priceType,
+          value: doc.serviceConfig.peakHours.value,
+        } : undefined,
       } : undefined,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,

@@ -11,13 +11,19 @@ export class AvailabilityService {
    * @param vendorId Vendor ID (owns the calendar)
    * @param fromDate Start of date range
    * @param toDate End of date range
+   * @param excludeWindows Busy windows to ignore (e.g. a capacity product's own slot events)
+   * @param bufferBeforeMinutes Padding before each busy slot (from the variant's serviceConfig)
+   * @param bufferAfterMinutes Padding after each busy slot (from the variant's serviceConfig)
    * @returns Array of free time windows
    */
   async getAvailability(
     productId: string,
     vendorId: string,
     fromDate: Date,
-    toDate: Date
+    toDate: Date,
+    excludeWindows: TimeWindow[] = [],
+    bufferBeforeMinutes = 0,
+    bufferAfterMinutes = 0
   ): Promise<TimeWindow[]> {
     // Step 1: Load availability rules
     const rules = await AvailabilityRule.find({
@@ -70,8 +76,29 @@ export class AvailabilityService {
       }
     }
 
-    // Step 4: Subtract busy slots + apply buffers
-    const freeWindows = this.subtractBusySlots(theoreticalWindows, busySlots, rules);
+    // For capacity products, drop busy slots that exactly match the product's own
+    // shared capacity events: a partially-booked capacity slot must stay bookable, so
+    // its own calendar event must not subtract it from availability. Matched by exact
+    // [start,end] equality (capacity events live at the deterministic slot window).
+    // NOTE: a vendor personal event coinciding exactly with a slot window would also be
+    // excluded here — rare and acceptable.
+    const effectiveBusySlots = excludeWindows.length === 0
+      ? busySlots
+      : busySlots.filter(
+          (busy) =>
+            !excludeWindows.some(
+              (w) => w.start.getTime() === busy.start.getTime() && w.end.getTime() === busy.end.getTime()
+            )
+        );
+
+    // Step 4: Subtract busy slots + apply buffers (buffers come from the
+    // variant's serviceConfig, passed in by the caller).
+    const freeWindows = this.subtractBusySlots(
+      theoreticalWindows,
+      effectiveBusySlots,
+      bufferBeforeMinutes,
+      bufferAfterMinutes
+    );
 
     return freeWindows;
   }
@@ -122,7 +149,8 @@ export class AvailabilityService {
   private subtractBusySlots(
     windows: TimeWindow[],
     busySlots: BusySlot[],
-    rules: any[]
+    bufferBeforeMinutes: number,
+    bufferAfterMinutes: number
   ): TimeWindow[] {
     const freeWindows: TimeWindow[] = [];
 
@@ -134,7 +162,7 @@ export class AvailabilityService {
         const temp: TimeWindow[] = [];
 
         for (const candidate of current) {
-          const result = this.splitWindow(candidate, busy, rules);
+          const result = this.splitWindow(candidate, busy, bufferBeforeMinutes, bufferAfterMinutes);
           temp.push(...result);
         }
 
@@ -150,15 +178,19 @@ export class AvailabilityService {
   /**
    * Splits a time window around a busy slot, applying buffers.
    */
-  private splitWindow(window: TimeWindow, busy: BusySlot, rules: any[]): TimeWindow[] {
+  private splitWindow(
+    window: TimeWindow,
+    busy: BusySlot,
+    bufferBeforeMinutes: number,
+    bufferAfterMinutes: number
+  ): TimeWindow[] {
     const busyStart = busy.start.getTime();
     const busyEnd = busy.end.getTime();
     const windowStart = window.start.getTime();
     const windowEnd = window.end.getTime();
 
-    // Get buffer from first matching rule (assumes consistent buffers)
-    const bufferBefore = (rules[0]?.bufferBefore || 0) * 60 * 1000;
-    const bufferAfter = (rules[0]?.bufferAfter || 0) * 60 * 1000;
+    const bufferBefore = bufferBeforeMinutes * 60 * 1000;
+    const bufferAfter = bufferAfterMinutes * 60 * 1000;
 
     const busyStartWithBuffer = busyStart - bufferBefore;
     const busyEndWithBuffer = busyEnd + bufferAfter;

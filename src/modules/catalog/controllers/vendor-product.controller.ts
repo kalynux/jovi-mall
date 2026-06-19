@@ -141,7 +141,6 @@ export class VendorProductController {
             seoDescription: input.seoDescription,
             fileIds: input.fileIds,
             digitalConfig: input.digitalConfig,
-            serviceConfig: input.serviceConfig,
             delivery: input.delivery,
         });
 
