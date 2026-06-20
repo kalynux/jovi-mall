@@ -5,7 +5,7 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 export type ProductType = 'physical' | 'digital' | 'service';
 export type ProductStatus = 'draft' | 'active' | 'archived' | 'pending_review' | 'suspended';
 export type BookingMode = 'calendar' | 'manual' | 'capacity';
-export type VectorisationStatus = 'not_started' | 'pending' | 'completed' | 'failed';
+export type VectorisationStatus = 'not_started' | 'pending' | 'completed' | 'failed' | 'skipped_no_credits';
 
 export interface DigitalConfig {
   // Product-wide download kill switch. Per-variant asset/maxDownloads/expiresAfterDays
@@ -99,7 +99,7 @@ const ProductSchema = new Schema<IProduct>({
   vectorisationEnabled: { type: Boolean, default: false, index: true },
   vectorisationStatus: {
     type: String,
-    enum: ['not_started', 'pending', 'completed', 'failed'],
+    enum: ['not_started', 'pending', 'completed', 'failed', 'skipped_no_credits'],
     default: 'not_started',
     index: true,
   },

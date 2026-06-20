@@ -53,6 +53,18 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
     return !!doc;
   }
 
+  /**
+   * Count a vendor's active products for plan-limit enforcement. "Active" here
+   * means any non-archived, non-deleted product (it occupies a catalog slot).
+   */
+  async countActiveByVendor(vendorId: string): Promise<number> {
+    return this.model.countDocuments({
+      vendorId,
+      deletedAt: null,
+      status: { $ne: 'archived' },
+    });
+  }
+
   async update(id: string, vendorId: string, updates: Partial<Product>, options?: RepositoryOptions): Promise<Product | null> {
     if (!Types.ObjectId.isValid(id)) return null;
 

@@ -52,6 +52,14 @@ router.use('/vendor/products', vendorProductsRoutes);
 import vendorInventoryRoutes from '../modules/catalog/routes/vendor-inventory.routes';
 router.use('/vendor/inventory', vendorInventoryRoutes);
 
+// Billing: vendor pricing plans & credit wallet.
+// Mounted at the role roots so endpoints read as /vendor/plans, /vendor/credits,
+// /admin/plans, /admin/vendors/:vendorId/plan (no extra /billing segment).
+import vendorBillingRoutes from '../modules/billing/routes/vendor-billing.routes';
+import adminBillingRoutes from '../modules/billing/routes/admin-billing.routes';
+router.use('/vendor', vendorBillingRoutes);
+router.use('/admin', adminBillingRoutes);
+
 // Ticketing Module Routes
 import {
     adminTicketRoutes,

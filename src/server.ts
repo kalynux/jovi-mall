@@ -2,6 +2,8 @@ import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import { app } from './app';
 import { initAggregationScheduler } from './core/jobs/aggregation-scheduler';
+import { planExpiryWorker } from './modules/billing/workers/plan-expiry.worker';
+import { registerPlanNotificationConsumer } from './modules/billing/events/plan-notification.consumer';
 
 dotenv.config();
 
@@ -16,6 +18,10 @@ async function startServer() {
 
     // Initialize scheduled jobs
     initAggregationScheduler();
+
+    // Billing: plan-expiry handover/downgrade sweep + expiry notifications
+    registerPlanNotificationConsumer();
+    planExpiryWorker.start();
 
     app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);

@@ -1,0 +1,497 @@
+# Vendor Billing API
+
+Vendor-facing endpoints for pricing plans, the credit wallet, top-up purchases
+and billing settings. Read [overview.md](./overview.md) first for concepts and
+shared data shapes.
+
+## Base Path
+```
+/api/vendor
+```
+
+## Authentication
+All requests require a valid Bearer token with the **vendor** role:
+```
+Authorization: Bearer <access_token>
+```
+Every endpoint is automatically scoped to the authenticated vendor.
+
+---
+
+## Endpoints summary
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/vendor/plans` | List purchasable plans (catalog) |
+| GET | `/api/vendor/plan` | The vendor's current active + pending plan |
+| POST | `/api/vendor/plans/:planId/purchase` | Buy a plan (self-serve; auto-activates/queues on payment) |
+| POST | `/api/vendor/plan-purchases/:id/verify` | Verify & apply a plan purchase after payment |
+| GET | `/api/vendor/plan-purchases` | Plan purchase history |
+| GET | `/api/vendor/credits` | Current credit balance |
+| GET | `/api/vendor/credits/ledger` | Paginated credit transaction history |
+| GET | `/api/vendor/credits/packs` | List buyable credit top-up packs |
+| GET | `/api/vendor/credits/topups` | Paginated top-up purchase history |
+| POST | `/api/vendor/credits/topups` | Start a credit top-up purchase |
+| POST | `/api/vendor/credits/topups/:id/verify` | Verify/complete a top-up after payment |
+| GET | `/api/vendor/settings` | Read billing settings (expiry-notice window) |
+| PATCH | `/api/vendor/settings` | Update billing settings |
+
+---
+
+### GET /api/vendor/plans
+
+**Description**: List the **active** vendor pricing plans (the catalog the vendor can buy). Sorted by `sort_order`, then `price`. Inactive/archived plans are excluded.
+
+**Request Headers**: `Authorization: Bearer <token>`
+
+**Query Parameters**: None
+
+**Request Body**: None
+
+**Success Response** — `200 OK`:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "665f0001",
+      "role": "vendor",
+      "code": "starter",
+      "name": "Starter",
+      "price": 0,
+      "currency": "XAF",
+      "term_days": null,
+      "credit_allowance": 1000,
+      "max_active_products": 15,
+      "commission_percent": 7,
+      "is_active": true,
+      "sort_order": 1,
+      "created_at": "2026-06-19T10:00:00.000Z",
+      "updated_at": "2026-06-19T10:00:00.000Z"
+    },
+    { "code": "growth", "price": 5000, "credit_allowance": 10000, "max_active_products": 150, "commission_percent": 5, "term_days": 30, "... ": "..." },
+    { "code": "business", "price": 25000, "credit_allowance": 50000, "max_active_products": null, "commission_percent": 3, "term_days": 30, "... ": "..." }
+  ]
+}
+```
+
+**Error Responses**: `401 UNAUTHORIZED`, `403 FORBIDDEN` (non-vendor token).
+
+---
+
+### GET /api/vendor/plan
+
+**Description**: Return the vendor's current plan situation: the `active` plan and the `pending_activation` plan (if any), each with its resolved catalog `plan`. If the vendor has never had a plan, the free Starter is created on the fly and returned as `active` (and the 1,000-credit signup allowance is granted).
+
+**Request Headers**: `Authorization: Bearer <token>`
+
+**Query Parameters**: None
+
+**Request Body**: None
+
+**Success Response** — `200 OK`:
+```json
+{
+  "success": true,
+  "data": {
+    "active": {
+      "plan": {
+        "_id": "665f0002", "code": "growth", "name": "Growth", "price": 5000,
+        "currency": "XAF", "term_days": 30, "credit_allowance": 10000,
+        "max_active_products": 150, "commission_percent": 5, "is_active": true
+      },
+      "vendorPlan": {
+        "_id": "667a0001", "vendor_id": "6601", "plan_id": "665f0002",
+        "plan_code": "growth", "status": "active",
+        "started_at": "2026-06-19T10:00:00.000Z",
+        "expires_at": "2026-07-19T10:00:00.000Z",
+        "assigned_by": "60a1", "payment_reference": "notch_tx_abc123",
+        "allowance_granted": true
+      }
+    },
+    "pending": {
+      "plan": { "_id": "665f0003", "code": "business", "name": "Business", "price": 25000, "term_days": 30, "credit_allowance": 50000, "max_active_products": null, "commission_percent": 3 },
+      "vendorPlan": {
+        "_id": "667a0002", "plan_code": "business", "status": "pending_activation",
+        "started_at": "2026-07-19T10:00:00.000Z",
+        "expires_at": "2026-08-18T10:00:00.000Z",
+        "allowance_granted": false
+      }
+    }
+  }
+}
+```
+`pending` is `null` when nothing is queued. For the free tier, `active.vendorPlan.expires_at` is `null`.
+
+**Error Responses**: `401`, `403`. `404 BILLING_PLAN_NOT_FOUND` only if the `starter` plan has not been seeded (run `npm run seed:plans`).
+
+---
+
+### POST /api/vendor/plans/:planId/purchase
+
+**Description**: Vendor **self-serve** purchase of a paid plan. Creates a `pending` purchase and starts a gateway payment, returning the gateway `instructions`. After the vendor pays, call the **verify** endpoint — on confirmation the plan is **assigned/activated automatically** (no admin step), applying the two-plan rule:
+- if the current active plan is **free / never-expiring** (or none) → the bought plan **activates immediately** and its credit allowance is granted;
+- if a **paid** plan is still running → the bought plan is **queued** as `pending_activation`, starting exactly when the current one expires (allowance granted on activation).
+
+Free plans (`price = 0`) cannot be purchased — they are the default tier.
+
+**Request Headers**: `Authorization: Bearer <token>`, `Content-Type: application/json`
+
+**Path Parameters**:
+- `planId` (string, **required**) — `_id` of an active vendor plan from `GET /vendor/plans`.
+
+**Request Body**:
+```json
+{
+  "gateway": "NOTCHPAY",
+  "channel": {
+    "phoneNumber": "+237650000000",
+    "phoneOperator": "MTN",
+    "customerEmail": "vendor@example.com",
+    "customerName": "Jane's Store"
+  }
+}
+```
+- `gateway` (string, **required**) — one of `NOTCHPAY`, `MYCOOLPAY`, `STRIPE`.
+- `channel` (object, optional, defaults `{}`) — same shape as the top-up channel: `phoneNumber` + `phoneOperator` (`MTN`|`ORANGE`|`MOOV`) for mobile money, or `cardToken` for Stripe; optional `customerEmail`, `customerName`.
+
+**Success Response** — `201 Created`:
+```json
+{
+  "success": true,
+  "data": {
+    "purchase": {
+      "_id": "66cc01", "plan_code": "growth", "price": 5000, "currency": "XAF",
+      "status": "pending", "gateway": "NOTCHPAY", "gateway_ref": "notch_tx_p1",
+      "vendor_plan_id": null,
+      "created_at": "2026-06-19T14:00:00.000Z", "updated_at": "2026-06-19T14:00:00.000Z"
+    },
+    "instructions": { "ussdCode": "*126#", "message": "Dial to approve", "expiresAt": "2026-06-19T14:15:00.000Z" }
+  },
+  "message": "Plan purchase initiated"
+}
+```
+`instructions` is gateway-specific and may be `null` (mobile money: `{ ussdCode?, message?, expiresAt? }`; card: `{ clientSecret?, message?, expiresAt? }`). If the gateway confirms at initiation, the plan is applied immediately and `purchase.status` is `paid`.
+
+**Error Responses**:
+- `400 VALIDATION_ERROR` — bad `gateway`/`channel`.
+- `404 BILLING_PLAN_NOT_FOUND` — `planId` unknown.
+- `409 BILLING_PLAN_INACTIVE` — plan archived/inactive.
+- `409 BILLING_PLAN_ROLE_MISMATCH` — not a vendor plan.
+- `409 BILLING_PLAN_NOT_PURCHASABLE` — plan is free (price 0).
+- `409 BILLING_PENDING_PLAN_EXISTS` — a plan is already queued (can't buy a second in advance).
+- `400 PAYMENT_GATEWAY_NOT_SUPPORTED` / `502 PAYMENT_INITIATION_FAILED` — gateway issues.
+- `401`, `403`.
+
+---
+
+### POST /api/vendor/plan-purchases/:id/verify
+
+**Description**: Verify a plan purchase against the gateway and apply it. **Idempotent** — safe to poll. On confirmed success the purchase becomes `paid` and the plan is assigned/activated (or queued); the resulting `VendorPlan` is returned. On gateway failure/cancellation it becomes `failed`; while processing it stays `pending`.
+
+**Request Headers**: `Authorization: Bearer <token>`
+
+**Path Parameters**:
+- `id` (string, **required**) — the plan-purchase `_id`.
+
+**Request Body**: None
+
+**Success Response** — `200 OK`:
+```json
+{
+  "success": true,
+  "data": {
+    "purchase": {
+      "_id": "66cc01", "plan_code": "growth", "price": 5000, "currency": "XAF",
+      "status": "paid", "gateway": "NOTCHPAY", "gateway_ref": "notch_tx_p1",
+      "vendor_plan_id": "667a0005",
+      "created_at": "2026-06-19T14:00:00.000Z", "updated_at": "2026-06-19T14:03:00.000Z"
+    },
+    "vendorPlan": {
+      "_id": "667a0005", "plan_code": "growth", "status": "active",
+      "started_at": "2026-06-19T14:03:00.000Z", "expires_at": "2026-07-19T14:03:00.000Z",
+      "allowance_granted": true, "payment_reference": "notch_tx_p1"
+    }
+  }
+}
+```
+- `purchase.status`: `paid` → applied (read `vendorPlan` / refresh `GET /vendor/plan`); `pending` → keep polling (`vendorPlan` is `null`); `failed` → show retry.
+- `vendorPlan.status` is `active` (activated now) or `pending_activation` (queued behind the current paid plan). On an idempotent re-call after it was already paid, `vendorPlan` may be `null` — read `GET /vendor/plan` for the current state.
+
+**Error Responses**:
+- `404 BILLING_PLAN_PURCHASE_NOT_FOUND` — id unknown / not owned by this vendor.
+- `409 BILLING_PURCHASE_INVALID_STATE` — no gateway reference yet.
+- `409 BILLING_PENDING_PLAN_EXISTS` — could not queue the plan (a pending plan appeared after purchase); resolve and retry.
+- `401`, `403`.
+
+**Polling guidance**: after `POST /plans/:planId/purchase` returns `pending`, poll this endpoint every 3–5s until `purchase.status` is `paid` or `failed` (timeout ~2–3 min for mobile money).
+
+---
+
+### GET /api/vendor/plan-purchases
+
+**Description**: Paginated, newest-first history of the vendor's plan purchases.
+
+**Request Headers**: `Authorization: Bearer <token>`
+
+**Query Parameters**: `page` (default `1`), `limit` (default `20`, max `100`).
+
+**Success Response** — `200 OK`:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "66cc01", "plan_code": "growth", "price": 5000, "currency": "XAF",
+      "status": "paid", "gateway": "NOTCHPAY", "gateway_ref": "notch_tx_p1",
+      "vendor_plan_id": "667a0005",
+      "created_at": "2026-06-19T14:00:00.000Z", "updated_at": "2026-06-19T14:03:00.000Z"
+    }
+  ],
+  "meta": { "total": 1, "page": 1, "limit": 20, "totalPages": 1 }
+}
+```
+
+**Error Responses**: `400 VALIDATION_ERROR`, `401`, `403`.
+
+---
+
+### GET /api/vendor/credits
+
+**Description**: Current credit balance. Creates an empty wallet (balance 0) on first read if none exists.
+
+**Request Headers**: `Authorization: Bearer <token>`
+
+**Success Response** — `200 OK`:
+```json
+{ "success": true, "data": { "balance": 9985 } }
+```
+
+**Error Responses**: `401`, `403`.
+
+---
+
+### GET /api/vendor/credits/ledger
+
+**Description**: Paginated, newest-first history of every credit movement (allowances, top-ups, debits, refunds, adjustments).
+
+**Request Headers**: `Authorization: Bearer <token>`
+
+**Query Parameters**:
+- `page` (integer, optional, default `1`) — 1-indexed page number.
+- `limit` (integer, optional, default `20`, max `100`).
+
+**Success Response** — `200 OK`:
+```json
+{
+  "success": true,
+  "data": [
+    { "_id": "66aa01", "type": "debit", "amount": -10, "balance_after": 9985, "reason_code": "vectorisation", "ref": "prod_123", "created_at": "2026-06-19T11:00:00.000Z" },
+    { "_id": "66aa00", "type": "allowance", "amount": 10000, "balance_after": 9995, "reason_code": "plan_allowance", "ref": "665f0002", "created_at": "2026-06-19T10:00:00.000Z" }
+  ],
+  "meta": { "total": 2, "page": 1, "limit": 20, "totalPages": 1 }
+}
+```
+
+**Error Responses**: `400 VALIDATION_ERROR` (bad `page`/`limit`), `401`, `403`.
+
+---
+
+### GET /api/vendor/credits/packs
+
+**Description**: List the credit packs available for purchase. Use this to render the top-up options (don't hardcode prices).
+
+**Request Headers**: `Authorization: Bearer <token>`
+
+**Success Response** — `200 OK`:
+```json
+{
+  "success": true,
+  "data": [
+    { "code": "pack_5k", "credits": 5000, "price": 2500, "currency": "XAF" },
+    { "code": "pack_15k", "credits": 15000, "price": 6000, "currency": "XAF" }
+  ]
+}
+```
+
+**Error Responses**: `401`, `403`.
+
+---
+
+### GET /api/vendor/credits/topups
+
+**Description**: Paginated, newest-first history of the vendor's top-up purchases.
+
+**Request Headers**: `Authorization: Bearer <token>`
+
+**Query Parameters**: `page` (default `1`), `limit` (default `20`, max `100`).
+
+**Success Response** — `200 OK`:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "66bb01", "pack_code": "pack_5k", "credits": 5000, "price": 2500,
+      "currency": "XAF", "status": "paid", "gateway": "NOTCHPAY",
+      "gateway_ref": "notch_tx_abc123", "payment_transaction_id": null,
+      "created_at": "2026-06-19T11:05:00.000Z", "updated_at": "2026-06-19T11:07:00.000Z"
+    }
+  ],
+  "meta": { "total": 1, "page": 1, "limit": 20, "totalPages": 1 }
+}
+```
+
+**Error Responses**: `400 VALIDATION_ERROR`, `401`, `403`.
+
+---
+
+### POST /api/vendor/credits/topups
+
+**Description**: Start a credit top-up purchase. Creates a `pending` top-up and initiates a payment with the chosen gateway. Returns the top-up and the gateway `instructions` (USSD prompt for mobile money, or a client secret for cards) the frontend should act on. After the user pays, call the **verify** endpoint to credit the wallet.
+
+**Request Headers**: `Authorization: Bearer <token>`, `Content-Type: application/json`
+
+**Request Body**:
+```json
+{
+  "packCode": "pack_5k",
+  "gateway": "NOTCHPAY",
+  "channel": {
+    "phoneNumber": "+237650000000",
+    "phoneOperator": "MTN",
+    "customerEmail": "vendor@example.com",
+    "customerName": "Jane's Store"
+  }
+}
+```
+
+Field rules:
+- `packCode` (string, **required**) — must match a `code` from `GET /credits/packs`.
+- `gateway` (string, **required**) — one of `NOTCHPAY`, `MYCOOLPAY`, `STRIPE`.
+- `channel` (object, optional, defaults `{}`) — payment channel details:
+  - `phoneNumber` (string) and `phoneOperator` (`MTN` | `ORANGE` | `MOOV`) — for mobile money (NotchPay/MyCoolPay).
+  - `cardToken` (string) — for Stripe card payments.
+  - `customerEmail` (string, email), `customerName` (string) — optional, passed to the gateway.
+
+**Success Response** — `201 Created`:
+```json
+{
+  "success": true,
+  "data": {
+    "topup": {
+      "_id": "66bb02", "pack_code": "pack_5k", "credits": 5000, "price": 2500,
+      "currency": "XAF", "status": "pending", "gateway": "NOTCHPAY",
+      "gateway_ref": "notch_tx_def456", "payment_transaction_id": null,
+      "created_at": "2026-06-19T12:00:00.000Z", "updated_at": "2026-06-19T12:00:00.000Z"
+    },
+    "instructions": {
+      "ussdCode": "*126#",
+      "message": "Dial the USSD code to approve the payment",
+      "expiresAt": "2026-06-19T12:15:00.000Z"
+    }
+  },
+  "message": "Top-up initiated"
+}
+```
+`instructions` shape varies by gateway and may be `null`:
+- Mobile money: `{ ussdCode?, message?, expiresAt? }`
+- Card (Stripe): `{ clientSecret?, message?, expiresAt? }`
+
+> If the gateway reports the payment already succeeded at initiation (rare for mobile money), the wallet is credited immediately and the returned `topup.status` is `paid`.
+
+**Error Responses**:
+- `400 VALIDATION_ERROR` — missing/invalid `packCode`, `gateway`, or `channel`.
+- `404 BILLING_TOPUP_PACK_NOT_FOUND` — unknown `packCode`.
+- `400 PAYMENT_GATEWAY_NOT_SUPPORTED` — unsupported `gateway`.
+- `502 PAYMENT_INITIATION_FAILED` — gateway rejected the initiation.
+- `401`, `403`.
+
+---
+
+### POST /api/vendor/credits/topups/:id/verify
+
+**Description**: Verify a top-up against the gateway and finalize it. **Idempotent** — safe to call repeatedly (e.g. while polling). On a confirmed success the wallet is credited and the top-up becomes `paid`; on gateway failure/cancellation it becomes `failed`; while still processing it stays `pending`.
+
+**Request Headers**: `Authorization: Bearer <token>`
+
+**Path Parameters**:
+- `id` (string, **required**) — the top-up `_id` (24-char hex).
+
+**Request Body**: None
+
+**Success Response** — `200 OK`:
+```json
+{
+  "success": true,
+  "data": {
+    "_id": "66bb02", "pack_code": "pack_5k", "credits": 5000, "price": 2500,
+    "currency": "XAF", "status": "paid", "gateway": "NOTCHPAY",
+    "gateway_ref": "notch_tx_def456",
+    "created_at": "2026-06-19T12:00:00.000Z", "updated_at": "2026-06-19T12:03:00.000Z"
+  }
+}
+```
+Read `data.status` to decide UI: `paid` → credited (refresh balance), `pending` → keep polling, `failed` → show retry.
+
+**Error Responses**:
+- `404 BILLING_TOPUP_NOT_FOUND` — id unknown or not owned by this vendor.
+- `409 BILLING_TOPUP_INVALID_STATE` — top-up has no gateway reference yet.
+- `401`, `403`.
+
+**Polling guidance**: after `POST /topups` returns `pending`, poll this endpoint every few seconds (e.g. 3–5s) until `status` becomes `paid` or `failed`, with a sensible timeout (~2–3 min for mobile money).
+
+---
+
+### GET /api/vendor/settings
+
+**Description**: Read the vendor's billing settings. Currently exposes the plan-expiry notification window. Defaults to `7` if never set.
+
+**Request Headers**: `Authorization: Bearer <token>`
+
+**Success Response** — `200 OK`:
+```json
+{ "success": true, "data": { "notifyDaysBeforeExpiry": 7 } }
+```
+
+**Error Responses**: `401`, `403`.
+
+---
+
+### PATCH /api/vendor/settings
+
+**Description**: Update billing settings. How many days before plan expiry the vendor wants to be notified.
+
+**Request Headers**: `Authorization: Bearer <token>`, `Content-Type: application/json`
+
+**Request Body**:
+```json
+{ "notifyDaysBeforeExpiry": 14 }
+```
+- `notifyDaysBeforeExpiry` (integer, **required**) — `0`–`90`.
+
+**Success Response** — `200 OK`:
+```json
+{ "success": true, "data": { "notifyDaysBeforeExpiry": 14 }, "message": "Settings updated" }
+```
+
+**Error Responses**: `400 VALIDATION_ERROR` (out of range / wrong type), `401`, `403`.
+
+---
+
+## Related: how credits get spent (no direct endpoint)
+
+Credits are consumed as a side effect of other vendor actions — there is no
+"spend credits" endpoint:
+
+- **Vectorisation (10 cr / product)** happens when a vendor creates/updates a product, enables vectorisation, or retries it (see the catalog product docs). If credits are insufficient the product still saves but its `vectorisationStatus` is `skipped_no_credits` — surface a "top up to enable AI search" hint when you see that status.
+- **WhatsApp template (5 cr / message)** is charged when a billable vendor→customer template is sent. If the balance is too low the send is rejected with `402 BILLING_INSUFFICIENT_CREDITS`.
+
+## Related: plan product limit
+
+Creating a product is blocked with `403 BILLING_LIMIT_EXCEEDED` once the vendor
+reaches their plan's `max_active_products` cap (response `details: { limit, current }`).
+Use `GET /vendor/plan` + the product count to show remaining slots and prompt an
+upgrade. Vendors **upgrade themselves** via `POST /vendor/plans/:planId/purchase`
+(auto-activates on payment). Admins can also assign a plan manually for
+comps/overrides (see the admin billing doc).

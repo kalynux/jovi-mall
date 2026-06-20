@@ -25,6 +25,21 @@ export class VendorSettingsRepository {
         return settings!;
     }
 
+    // ─── Plan expiry notification preference ─────────────────────────────────────
+
+    /** Days before plan expiry to notify the vendor (defaults to 7). */
+    async getNotifyDaysBeforeExpiry(vendorId: string): Promise<number> {
+        const settings = await this.getOrCreate(vendorId);
+        return settings.notify_days_before_expiry ?? 7;
+    }
+
+    async setNotifyDaysBeforeExpiry(vendorId: string, days: number): Promise<number> {
+        const settings = await this.getOrCreate(vendorId);
+        settings.notify_days_before_expiry = days;
+        await settings.save();
+        return settings.notify_days_before_expiry;
+    }
+
     // ─── Customer flags ────────────────────────────────────────────────────────
 
     /** All non-deleted flags for the vendor, oldest first. */

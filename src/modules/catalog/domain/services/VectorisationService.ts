@@ -27,6 +27,8 @@ import { ProductOptionValueModel } from '../../models/product-option-value.model
 import { FileModel } from '../../models/file.model';
 import { DigitalAssetModel } from '../../../digital-delivery/models/digital-asset.model';
 import { VendorModel } from '../../../vendors/vendor.model';
+import { creditWalletService } from '../../../billing/services/credit-wallet.service';
+import { VECTORISATION_COST } from '../../../billing/config/credit.config';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -559,6 +561,36 @@ export class VectorisationService {
   async executePreparedVectorisation(productId: string, payload: VectoriserPayloadEntry): Promise<void> {
     const ctx = { productId };
 
+    // Resolve the owning vendor so the vectorisation can be billed in credits.
+    const product = await ProductModel.findById(productId).select('vendorId').lean();
+    if (!product) {
+      log('warn', 'executePreparedVectorisation: product not found', ctx);
+      return;
+    }
+    const vendorId = product.vendorId.toString();
+
+    // Charge credits up-front so unpaid usage can't slip through. If the vendor
+    // can't cover it, skip vectorisation and surface a distinct status the
+    // frontend can use to prompt a top-up. (Refunded below if the call fails.)
+    try {
+      await creditWalletService.debit('vendor', vendorId, VECTORISATION_COST, 'vectorisation', productId);
+    } catch (err: any) {
+      if (err?.code === ERROR_CODES.BILLING_INSUFFICIENT_CREDITS) {
+        await ProductModel.updateOne(
+          { _id: productId },
+          { $set: { vectorisationStatus: 'skipped_no_credits' } },
+        ).catch(() => undefined);
+        log('warn', 'executePreparedVectorisation: skipped — insufficient credits', { ...ctx, vendorId });
+        return;
+      }
+      await ProductModel.updateOne(
+        { _id: productId },
+        { $set: { vectorisationStatus: 'failed' } },
+      ).catch(() => undefined);
+      log('error', 'executePreparedVectorisation: credit debit failed', { ...ctx, error: err.message });
+      return;
+    }
+
     try {
       const response = await withRetry(
         () =>
@@ -587,6 +619,10 @@ export class VectorisationService {
         vectorisedDataId: response.vectorised_id,
       });
     } catch (err: any) {
+      // The vendor shouldn't pay for a failed vectorisation — refund the credit.
+      await creditWalletService
+        .credit('vendor', vendorId, VECTORISATION_COST, 'refund', 'vectorisation', productId)
+        .catch(() => undefined);
       try {
         await ProductModel.updateOne(
           { _id: productId },
@@ -827,6 +863,13 @@ export class VectorisationService {
    *
    * Unlike vectoriseSingle, this method returns a result object (callers
    * such as the reconciliation script and the admin endpoint need the summary).
+   *
+   * BILLING: intentionally NOT credit-debited. This is an admin-only platform
+   * maintenance operation (POST /api/admin/products/bulk-vectorise) that can span
+   * every vendor's catalogue — vendors must not be charged for re-vectorisation
+   * they did not initiate. Every vendor-facing path (create/update/toggle/retry)
+   * funnels through executePreparedVectorisation, which IS debited, so no
+   * vendor-accessible route bypasses credits.
    *
    * @param productIds - Array of product IDs to attempt vectorisation for.
    */

@@ -87,6 +87,14 @@ export const MODELS = Object.freeze({
   // Integrations
   CONNECTED_CALENDAR_ACCOUNT: 'ConnectedCalendarAccount',
   TELEGRAM_LINK: 'TelegramLink',
+
+  // Billing (pricing plans & credit wallet)
+  PRICING_PLAN: 'PricingPlan',
+  VENDOR_PLAN: 'VendorPlan',
+  CREDIT_WALLET: 'CreditWallet',
+  CREDIT_TRANSACTION: 'CreditTransaction',
+  CREDIT_TOPUP: 'CreditTopup',
+  PLAN_PURCHASE: 'PlanPurchase',
 } as const);
 
 export const COLLECTIONS = Object.freeze({
@@ -158,6 +166,14 @@ export const COLLECTIONS = Object.freeze({
   // Integrations
   CONNECTED_CALENDAR_ACCOUNT: 'connected_calendar_accounts',
   TELEGRAM_LINK: 'telegram_links',
+
+  // Billing (pricing plans & credit wallet)
+  PRICING_PLAN: 'pricing_plans',
+  VENDOR_PLAN: 'vendor_plans',
+  CREDIT_WALLET: 'credit_wallets',
+  CREDIT_TRANSACTION: 'credit_transactions',
+  CREDIT_TOPUP: 'credit_topups',
+  PLAN_PURCHASE: 'plan_purchases',
 } as const);
 
 export type ModelName = (typeof MODELS)[keyof typeof MODELS];

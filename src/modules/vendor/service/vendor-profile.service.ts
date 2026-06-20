@@ -73,14 +73,11 @@ export class VendorProfileService {
       }
     }
 
-    // POLICY: Feature flags for notification preferences
+    // POLICY: Feature flags for notification preferences.
+    // WhatsApp is available on ALL plans — usage is metered via credits at send
+    // time (see CreditWalletService), not gated here. Phone/SMS remains disabled
+    // platform-wide (no SMS provider integrated yet).
     if (input.notificationPreferences) {
-      if (
-        input.notificationPreferences.whatsapp &&
-        !VendorConfig.ENABLE_WHATSAPP_NOTIFICATIONS
-      ) {
-        throw createAppError(ERROR_CODES.AUTH_FORBIDDEN, 403, 'WhatsApp notifications are not available on your current plan.');
-      }
       if (
         input.notificationPreferences.phone &&
         !VendorConfig.ENABLE_PHONE_NOTIFICATIONS

@@ -31,6 +31,8 @@ export interface IVendorCustomerFlagSub {
 export interface IVendorSettings extends Document {
     vendor_id: mongoose.Types.ObjectId;
     customer_flags: IVendorCustomerFlagSub[];
+    /** Days before plan expiry to notify the vendor. Defaults to 7. */
+    notify_days_before_expiry: number;
     created_at: Date;
     updated_at: Date;
 }
@@ -77,6 +79,12 @@ const VendorSettingsSchema = new Schema<IVendorSettings>(
         customer_flags: {
             type: [VendorCustomerFlagSubSchema],
             default: []
+        },
+        notify_days_before_expiry: {
+            type: Number,
+            default: 7,
+            min: 0,
+            max: 90
         }
     },
     {

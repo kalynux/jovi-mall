@@ -28,6 +28,7 @@ import {
     SetVectorisationSchema,
 } from '../validators/product.validator';
 import { vectorisationService } from '../domain/services/VectorisationService';
+import { entitlementService } from '../../billing/services/entitlement.service';
 
 const BulkVectoriseSchema = z.object({
     productIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId')).optional(),
@@ -99,6 +100,11 @@ export class VendorProductController {
     static createProduct = asyncHandler(async (req: Request, res: Response) => {
         const vendorId = req.auth!.role_entity._id.toString();
         const input = CreateProductSchema.parse(req.body);
+
+        // Enforce the plan's active-product cap before creating.
+        const activeCount = await productRepository.countActiveByVendor(vendorId);
+        await entitlementService.assertCanAddProduct(vendorId, activeCount);
+
         const product = await productDraftService.execute({
             vendorId,
             type: input.type,

@@ -12,6 +12,8 @@ import { WhatsAppPolicyValidator } from '../validation/policy-validator';
 import { WhatsAppProvider } from '../providers/provider.interface';
 import { MetaWhatsAppCloudProvider } from '../providers/meta-cloud.provider';
 import { getRedisClient, WA_IDEMPOTENCY_DB } from '../../../infra/redis/redis.factory';
+import { creditWalletService } from '../../billing/services/credit-wallet.service';
+import { WHATSAPP_TEMPLATE_COST } from '../../billing/config/credit.config';
 
 // Import all handlers
 import { TextMessageHandler } from '../handlers/text-message.handler';
@@ -123,6 +125,24 @@ export class WhatsAppMessagingService {
             // Step 5: Validate policy
             this.policyValidator.validatePolicy(payload.type, sendContext);
 
+            // Step 5b: Credit pre-check for billable template sends.
+            // Fail fast before the provider call so we don't send a message we
+            // can't bill. The authoritative charge happens post-send (Step 11b).
+            if (this.isBillable(payload)) {
+                const balance = await creditWalletService.getBalance(
+                    payload.billing!.ownerType,
+                    payload.billing!.ownerId,
+                );
+                if (balance < WHATSAPP_TEMPLATE_COST) {
+                    throw createAppError(
+                        ERROR_CODES.BILLING_INSUFFICIENT_CREDITS,
+                        402,
+                        'Not enough credits to send this WhatsApp template',
+                        { balance, requested: WHATSAPP_TEMPLATE_COST },
+                    );
+                }
+            }
+
             // Step 6: Resolve handler by type
             const handler = this.handlerRegistry.get(payload.type);
 
@@ -148,6 +168,26 @@ export class WhatsAppMessagingService {
             // Step 11: Store idempotency key in Redis (with TTL)
             if (payload.meta?.idempotencyKey && result.success && result.messageId) {
                 await this.storeIdempotencyKey(payload.meta.idempotencyKey, result.messageId);
+            }
+
+            // Step 11b: Debit credits for a successful billable template send.
+            // The message is already delivered; a debit failure here (e.g. a rare
+            // race after the pre-check) is logged but never fails the send.
+            if (this.isBillable(payload) && result.success && result.messageId) {
+                try {
+                    await creditWalletService.debit(
+                        payload.billing!.ownerType,
+                        payload.billing!.ownerId,
+                        WHATSAPP_TEMPLATE_COST,
+                        'whatsapp_template',
+                        result.messageId,
+                    );
+                } catch (billingErr) {
+                    console.error(
+                        `[WhatsAppMessagingService] [${traceId}] template sent but credit debit failed:`,
+                        billingErr,
+                    );
+                }
             }
 
             // Step 12: Add trace ID to result
@@ -326,5 +366,14 @@ export class WhatsAppMessagingService {
      */
     private generateTraceId(): string {
         return `wa_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    }
+
+    /**
+     * A send is billable when the caller attached billing attribution AND the
+     * message is a template (the only WhatsApp category we meter in credits).
+     * System sends (verification codes, agency dispatch) omit `billing`.
+     */
+    private isBillable(payload: WhatsAppSendPayload): boolean {
+        return !!payload.billing && payload.type === 'template';
     }
 }

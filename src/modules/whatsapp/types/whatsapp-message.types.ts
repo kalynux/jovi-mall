@@ -420,6 +420,16 @@ export interface WhatsAppSendPayload {
     meta: MessageMetadata;
 
     /**
+     * Optional billing attribution. When set, a successful send debits the
+     * owner's credit wallet (see CreditWalletService). Omit for system/exempt
+     * sends (verification codes, agency dispatch, etc.).
+     */
+    billing?: {
+        ownerType: 'vendor' | 'agency';
+        ownerId: string;
+    };
+
+    /**
      * Policy context (COMPUTED by service, DO NOT provide as caller)
      * @internal
      */
