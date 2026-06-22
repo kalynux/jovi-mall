@@ -3,13 +3,17 @@ import { IOrder, OrderType } from './order.model';
 import { OrderRepository } from './order.repository';
 import { CartService } from '../cart/services/cart.service';
 import { ShipmentRepository } from '../shipments/shipment.repository';
+import { OrderTimelineRepository } from './order-timeline.repository';
 import { VendorRepository } from '../vendors/vendor.repository';
+import { VendorSettingsRepository } from '../vendors/repositories/vendor-settings.repository';
 import { IVendor } from '../vendors/vendor.model';
 import { OrderNumberGenerator } from './utils/order-number-generator';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.repository.mongo';
 import { VariantRepositoryMongo } from '../catalog/repositories/mongo/variant.repository.mongo';
+import { ProductModel } from '../catalog/models/product.model';
+import { ProductVariantModel } from '../catalog/models/product-variant.model';
 import { VendorCustomerSyncService } from '../vendors/services/vendor-customer-sync.service';
 import { eventBus } from '../../core/events/event-bus';
 
@@ -37,7 +41,9 @@ export class OrderService {
   private orderRepo: OrderRepository;
   private cartService: CartService;
   private shipmentRepo: ShipmentRepository;
+  private timelineRepo: OrderTimelineRepository;
   private vendorRepo: VendorRepository;
+  private vendorSettingsRepo: VendorSettingsRepository;
   private productRepo: ProductRepositoryMongo;
   private variantRepo: VariantRepositoryMongo;
   private vendorCustomerSync: VendorCustomerSyncService;
@@ -46,7 +52,9 @@ export class OrderService {
     this.orderRepo = new OrderRepository();
     this.cartService = new CartService();
     this.shipmentRepo = new ShipmentRepository();
+    this.timelineRepo = new OrderTimelineRepository();
     this.vendorRepo = new VendorRepository();
+    this.vendorSettingsRepo = new VendorSettingsRepository();
     this.productRepo = new ProductRepositoryMongo();
     this.variantRepo = new VariantRepositoryMongo();
     this.vendorCustomerSync = new VendorCustomerSyncService();
@@ -69,8 +77,54 @@ export class OrderService {
   }
 
   /**
+   * Auto-dispatch a paid physical order to the agency in charge.
+   *
+   * Gated by the vendor's `auto_redirect_orders_to_agency` setting:
+   * - OFF (default): no-op — shipments stay `pending` for manual dispatch.
+   * - ON: advance the order's `pending` shipments to `assigned`, mirror the
+   *   status onto each physical order item's `delivery`, and log a timeline
+   *   event for the audit trail.
+   *
+   * The order's agency_id was already resolved at creation time, so this only
+   * performs the hand-off — it never (re)selects an agency. Mutates `order`
+   * in-memory; the caller persists it with `order.save()`. Best-effort: a
+   * dispatch failure is logged but never breaks payment recording.
+   */
+  private async maybeDispatchToAgencies(order: IOrder): Promise<void> {
+    try {
+      const autoRedirect = await this.vendorSettingsRepo.getAutoRedirectOrdersToAgency(
+        order.vendor_id.toString()
+      );
+      if (!autoRedirect) return;
+
+      const assignedCount = await this.shipmentRepo.assignPendingByOrderId(order._id.toString());
+      if (assignedCount === 0) return; // Nothing pending (e.g. already dispatched)
+
+      // Mirror the hand-off onto the order items so vendor/customer views agree.
+      for (const item of order.items) {
+        if (item.delivery && item.delivery.status === 'pending') {
+          item.delivery.status = 'assigned';
+        }
+      }
+
+      await this.timelineRepo.appendEvent({
+        orderId: order._id.toString(),
+        eventType: 'delivery.agency_updated',
+        description: 'Order auto-dispatched to the delivery agency in charge',
+        metadata: { auto: true, shipmentsAssigned: assignedCount },
+        actorType: 'system',
+        actorId: null
+      });
+
+      console.log(`[OrderService] Order ${order._id} auto-dispatched: ${assignedCount} shipment(s) assigned.`);
+    } catch (error) {
+      console.error('[OrderService] Failed to auto-dispatch order to agency:', error);
+    }
+  }
+
+  /**
    * Create order from customer's cart
-   * 
+   *
    * DEFENSE IN DEPTH:
    * - Re-validates all cart business rules
    * - Ensures no service products
@@ -340,8 +394,9 @@ export class OrderService {
 
       console.log(`[OrderService] Physical order ${orderId} paid. Fulfillment delegated to delivery system.`);
 
-      // TODO: Trigger shipment assignment/dispatch
-      // This would call delivery/shipment services to start the fulfillment process
+      // Auto-dispatch to the agency in charge when the vendor has opted in.
+      // Otherwise shipments stay `pending` for the vendor to dispatch manually.
+      await this.maybeDispatchToAgencies(order);
 
     } else if (order.order_type === 'digital') {
       // Digital: Grant entitlements via the shared fulfillment helper.
@@ -369,6 +424,10 @@ export class OrderService {
 
     await order.save();
 
+    // Refresh product/variant inactivity clocks so the file-cleanup sweep never
+    // detaches media from a product that just sold. Non-critical: log on failure.
+    await this.markProductsOrdered(order);
+
     // Add the paid total to the customer's denormalized lifetime spend.
     try {
       await this.vendorCustomerSync.recordPaymentPaid(
@@ -384,10 +443,34 @@ export class OrderService {
   }
 
   /**
+   * Stamp `lastOrderedAt = now` on every product/variant in a freshly-paid
+   * order. This is the activity signal the file-cleanup inactivity clock reads,
+   * so a product that sells today is never swept for media detachment.
+   *
+   * Best-effort: a failure here must not fail payment processing.
+   */
+  private async markProductsOrdered(order: IOrder): Promise<void> {
+    try {
+      const now = new Date();
+      const productIds = [...new Set(order.items.map((i) => i.product_id.toString()))]
+        .map((id) => new mongoose.Types.ObjectId(id));
+      const variantIds = [...new Set(order.items.map((i) => i.variant_id.toString()))]
+        .map((id) => new mongoose.Types.ObjectId(id));
+
+      await Promise.all([
+        ProductModel.updateMany({ _id: { $in: productIds } }, { $set: { lastOrderedAt: now } }),
+        ProductVariantModel.updateMany({ _id: { $in: variantIds } }, { $set: { lastOrderedAt: now } }),
+      ]);
+    } catch (error) {
+      console.error('[OrderService] Failed to update lastOrderedAt:', error);
+    }
+  }
+
+  /**
    * Emit order.created event
-   * 
+   *
    * Called after order is successfully created to notify vendors.
-   * 
+   *
    * @param order - Created order
    */
   private async emitOrderCreatedEvent(order: IOrder): Promise<void> {

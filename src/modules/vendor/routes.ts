@@ -93,6 +93,22 @@ router.put('/profile/default-delivery-agency', VendorProfileController.setDefaul
  */
 router.delete('/profile/default-delivery-agency', VendorProfileController.clearDefaultDeliveryAgency);
 
+/**
+ * GET /api/vendor/profile/auto-redirect-orders
+ *
+ * Returns whether paid physical orders auto-dispatch to the agency in charge.
+ * Response: { autoRedirectOrdersToAgency: boolean }
+ */
+router.get('/profile/auto-redirect-orders', VendorProfileController.getAutoRedirectOrders);
+
+/**
+ * PUT /api/vendor/profile/auto-redirect-orders
+ *
+ * Enable/disable auto-dispatch of paid physical orders to their agency.
+ * Body: { enabled: boolean }
+ */
+router.put('/profile/auto-redirect-orders', VendorProfileController.setAutoRedirectOrders);
+
 // ─── Onboarding ───────────────────────────────────────────────────────────────
 
 /**

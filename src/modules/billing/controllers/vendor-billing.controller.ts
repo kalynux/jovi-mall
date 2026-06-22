@@ -13,6 +13,8 @@ import {
   ExpiryNoticeSchema,
 } from '../validators/billing.validators';
 import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
+import { entitlementService } from '../services/entitlement.service';
+import { mediaStorageService } from '../../catalog/domain/services/media/MediaStorageService';
 
 const vendorSettingsRepository = new VendorSettingsRepository();
 
@@ -28,8 +30,18 @@ export class VendorBillingController {
 
   static getMyPlan = asyncHandler(async (req: Request, res: Response) => {
     const vendorId = req.auth!.role_entity._id.toString();
-    const view = await vendorPlanService.getVendorPlanView(vendorId);
-    res.json({ success: true, data: view });
+    const [view, entitlements, usedBytes] = await Promise.all([
+      vendorPlanService.getVendorPlanView(vendorId),
+      entitlementService.getEntitlements(vendorId),
+      mediaStorageService.getUsedBytes('vendor', vendorId),
+    ]);
+    const limitBytes = entitlements.maxStorageBytes;
+    const storage = {
+      limitBytes,
+      usedBytes,
+      remainingBytes: Math.max(0, limitBytes - usedBytes),
+    };
+    res.json({ success: true, data: { ...view, storage } });
   });
 
   static purchasePlan = asyncHandler(async (req: Request, res: Response) => {

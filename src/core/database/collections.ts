@@ -40,6 +40,7 @@ export const MODELS = Object.freeze({
   STOCK_AUDIT_LOG: 'StockAuditLog',
   FILE: 'File',
   FILE_REFERENCE: 'FileReference',
+  FILE_CLEANUP_AUDIT: 'FileCleanupAudit',
   CATALOG_DIGITAL_ASSET: 'CatalogDigitalAsset',
 
   // Cart
@@ -58,6 +59,7 @@ export const MODELS = Object.freeze({
   // Payments
   PAYMENT_TRANSACTION: 'PaymentTransaction',
   REFUND_TRANSACTION: 'RefundTransaction',
+  USER_PAYMENT_METHOD: 'UserPaymentMethod',
 
   // Booking
   BOOKING: 'Booking',
@@ -119,6 +121,7 @@ export const COLLECTIONS = Object.freeze({
   STOCK_AUDIT_LOG: 'stock_audit_logs',
   FILE: 'files',
   FILE_REFERENCE: 'file_references',
+  FILE_CLEANUP_AUDIT: 'file_cleanup_audit',
   CATALOG_DIGITAL_ASSET: 'catalog_digital_assets',
 
   // Cart
@@ -137,6 +140,7 @@ export const COLLECTIONS = Object.freeze({
   // Payments
   PAYMENT_TRANSACTION: 'payment_transactions',
   REFUND_TRANSACTION: 'refund_transactions',
+  USER_PAYMENT_METHOD: 'user_payment_methods',
 
   // Booking
   BOOKING: 'bookings',

@@ -33,6 +33,13 @@ export interface IVendorSettings extends Document {
     customer_flags: IVendorCustomerFlagSub[];
     /** Days before plan expiry to notify the vendor. Defaults to 7. */
     notify_days_before_expiry: number;
+    /**
+     * When true, paid physical orders are automatically dispatched to the
+     * agency in charge (shipments advance from `pending` → `assigned`) without
+     * the vendor having to confirm. When false (default), shipments stay
+     * `pending` until the vendor dispatches them manually. Defaults to false.
+     */
+    auto_redirect_orders_to_agency: boolean;
     created_at: Date;
     updated_at: Date;
 }
@@ -85,6 +92,10 @@ const VendorSettingsSchema = new Schema<IVendorSettings>(
             default: 7,
             min: 0,
             max: 90
+        },
+        auto_redirect_orders_to_agency: {
+            type: Boolean,
+            default: false
         }
     },
     {

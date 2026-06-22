@@ -67,6 +67,13 @@ router.post('/upload/video', uploadVideos, FileUploadController.uploadVideos);
 router.get('/orphans', requireRole(['admin']), FileManagementController.listOrphans);
 
 /**
+ * GET /api/files/storage
+ * Storage usage + plan limit summary for the authenticated owner.
+ * MUST be before /:id to avoid routing conflict.
+ */
+router.get('/storage', FileManagementController.getStorageSummary);
+
+/**
  * GET /api/files
  * List user's uploaded files with pagination, name search, characteristic
  * filtering (mimeType/category, provider, ownerType, size & date ranges) and

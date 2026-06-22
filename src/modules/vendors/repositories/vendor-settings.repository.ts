@@ -40,6 +40,21 @@ export class VendorSettingsRepository {
         return settings.notify_days_before_expiry;
     }
 
+    // ─── Auto-redirect orders to agency ──────────────────────────────────────────
+
+    /** Whether paid physical orders auto-dispatch to their agency (defaults to false). */
+    async getAutoRedirectOrdersToAgency(vendorId: string): Promise<boolean> {
+        const settings = await this.getOrCreate(vendorId);
+        return settings.auto_redirect_orders_to_agency ?? false;
+    }
+
+    async setAutoRedirectOrdersToAgency(vendorId: string, enabled: boolean): Promise<boolean> {
+        const settings = await this.getOrCreate(vendorId);
+        settings.auto_redirect_orders_to_agency = enabled;
+        await settings.save();
+        return settings.auto_redirect_orders_to_agency;
+    }
+
     // ─── Customer flags ────────────────────────────────────────────────────────
 
     /** All non-deleted flags for the vendor, oldest first. */

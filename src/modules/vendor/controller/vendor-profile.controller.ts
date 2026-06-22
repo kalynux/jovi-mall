@@ -11,13 +11,19 @@ import {
   VendorOnboardingStep4Schema,
 } from '../validators/vendor-onboarding.validator';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
+import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
 
 const SetDefaultDeliveryAgencySchema = z.object({
   agencyId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId'),
 });
 
+const SetAutoRedirectOrdersSchema = z.object({
+  enabled: z.boolean(),
+});
+
 const vendorProfileService = new VendorProfileService();
 const userService = new UserService();
+const vendorSettingsRepository = new VendorSettingsRepository();
 
 export class VendorProfileController {
   // ─── Profile ──────────────────────────────────────────────────────────────
@@ -137,6 +143,25 @@ export class VendorProfileController {
     const vendorId = req.auth!.role_entity._id.toString();
     await vendorProfileService.clearDefaultDeliveryAgency(vendorId);
     res.json({ success: true, message: 'Default delivery agency cleared' });
+  });
+
+  // ─── Auto-redirect Orders To Agency ─────────────────────────────────────
+
+  static getAutoRedirectOrders = asyncHandler(async (req: Request, res: Response) => {
+    const vendorId = req.auth!.role_entity._id.toString();
+    const enabled = await vendorSettingsRepository.getAutoRedirectOrdersToAgency(vendorId);
+    res.json({ success: true, data: { autoRedirectOrdersToAgency: enabled } });
+  });
+
+  static setAutoRedirectOrders = asyncHandler(async (req: Request, res: Response) => {
+    const vendorId = req.auth!.role_entity._id.toString();
+    const { enabled } = SetAutoRedirectOrdersSchema.parse(req.body);
+    const updated = await vendorSettingsRepository.setAutoRedirectOrdersToAgency(vendorId, enabled);
+    res.json({
+      success: true,
+      data: { autoRedirectOrdersToAgency: updated },
+      message: 'Auto-redirect orders setting updated',
+    });
   });
 }
 

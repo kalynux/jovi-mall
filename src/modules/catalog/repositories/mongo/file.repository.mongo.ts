@@ -83,6 +83,33 @@ export class FileRepositoryMongo extends BaseRepository<IFile, File> implements 
     return docs.map(doc => this.mapper.toDomain(doc));
   }
 
+  async findLonely(cutoff: Date, limit: number, options?: RepositoryOptions): Promise<File[]> {
+    // Lonely = no live references. Compute the referenced set first, then take
+    // its complement among files whose lonely clock has elapsed. The clock is
+    // orphanedAt (stamped when the last reference was removed) and falls back to
+    // createdAt for files that were uploaded but never attached.
+    const referencedIds = await FileReferenceModel.find({ deletedAt: null })
+      .distinct('fileId')
+      .session(options?.session ?? null)
+      .exec();
+
+    const query = this.model.find({
+      _id: { $nin: referencedIds },
+      deletedAt: null,
+      $or: [
+        { orphanedAt: { $ne: null, $lt: cutoff } },
+        { orphanedAt: null, createdAt: { $lt: cutoff } },
+      ],
+    }).limit(limit);
+
+    if (options?.session) {
+      query.session(options.session);
+    }
+
+    const docs = await query.exec();
+    return docs.map(doc => this.mapper.toDomain(doc));
+  }
+
   async update(id: string, updates: Partial<File>, options?: RepositoryOptions): Promise<File | null> {
     if (!Types.ObjectId.isValid(id)) return null;
 

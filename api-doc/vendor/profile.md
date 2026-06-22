@@ -90,7 +90,14 @@ Authorization: Bearer <jwt_token>
 
 ### PATCH /api/vendor/profile
 
-Update the authenticated vendor's profile.
+Update the authenticated vendor's profile. **This is the endpoint to use for all post-onboarding edits** — including fields the vendor originally set during onboarding (payout details, branding, policies, country/timezone, etc.).
+
+> [!IMPORTANT]
+> **When to use this vs. the onboarding endpoints.**
+> The `PUT /api/vendor/onboarding/*` step endpoints are for the **first-time onboarding flow only**. Once onboarding is complete (`onboarding_step === 0`) they all return `409 VENDOR_ONBOARDING_ALREADY_COMPLETED`.
+> To let a vendor change a previously-entered onboarding value from the **Settings UI**, send it here instead. See [Onboarding docs](./onboarding.md) for the original first-time flow.
+>
+> **One exception:** the default delivery agency (onboarding Step 2) is **not** editable through this endpoint — use the dedicated [`PUT/DELETE /api/vendor/profile/default-delivery-agency`](#put-apivendorprofiledefault-delivery-agency) routes documented below.
 
 #### Authentication
 
@@ -104,32 +111,59 @@ Authorization: Bearer <jwt_token>
 Content-Type: application/json
 ```
 
-#### Request Body
+#### How to send
+
+- **Partial update**: send **only** the fields you want to change. Omitted fields are left untouched.
+- **`version` is always required** (optimistic locking — see [Optimistic Locking](#optimistic-locking)). Read it from `GET /api/vendor/profile` first.
+- **Object/array fields are a full replace, not a merge.** When you send `payout_details`, `business_addresses`, `operating_hours`, `branding`, `social_links`, or `policies`, the value you send **replaces** the entire stored value. To edit one entry, send the complete desired array/object (including the parts you want to keep). Omitting a field entirely leaves it unchanged — sending it with a partial value overwrites the rest.
+
+#### Request Body (example — edit several fields at once)
 
 ```json
 {
   "displayName": "TechSolutions",
-  "email": "newemail@example.com",
   "phone": "+237698765432",
-  "notificationPreferences": {
-    "email": true,
-    "whatsapp": false,
-    "phone": false
-  },
+  "country": "CM",
+  "timezone": "Africa/Douala",
+  "payout_details": [
+    {
+      "method": "mobile_money",
+      "mobile_money": {
+        "provider": "MTN Mobile Money",
+        "phone_number": "+237670000000",
+        "account_name": "Tech Solutions Sarl"
+      },
+      "bank": null
+    }
+  ],
+  "notificationPreferences": { "email": true, "whatsapp": false, "phone": false },
   "version": 3
 }
 ```
 
-**Fields**:
+#### Field Reference
 
-- `displayName` (optional, string, 2-100 chars): User-facing display name
-- `email` (optional, string, valid email): Vendor email address
-- `phone` (optional, string, 8-20 chars): Vendor phone number
-- `notificationPreferences` (optional, object):
-  - `email` (optional, boolean): Enable/disable email notifications
-  - `whatsapp` (optional, boolean): Enable/disable WhatsApp notifications (feature-flagged)
-  - `phone` (optional, boolean): Enable/disable phone notifications (feature-flagged)
-- `version` (**required**, number): Current profile version for optimistic locking
+All fields are **optional except `version`**. Every field below maps to a profile/onboarding concept; send only what changed.
+
+| Field | Type | Validation | Onboarding step it maps to | Notes |
+|-------|------|------------|----------------------------|-------|
+| `displayName` | `string` | 2–100 chars | — (general) | User-facing display name. |
+| `businessDescription` | `string \| null` | Max 1000 chars | — (general) | Short business description. |
+| `email` | `string` | Valid email | — (general) | **Feature-gated** — rejected with `403` when `ALLOW_EMAIL_CHANGE=false`. |
+| `phone` | `string` | 8–20 chars | — (general) | Contact phone. |
+| `country` | `string` | Exactly 2 chars, ISO-2 (auto-uppercased) | Step 1 (Basic Setup) | Editable independently here (onboarding required it alongside timezone + payout). |
+| `timezone` | `string` | Min 1 char, IANA tz | Step 1 (Basic Setup) | E.g. `"Africa/Douala"`. |
+| `payout_details` | `object[]` | 1–3 entries, ordered (index 0 = preferred) | Step 1 (Basic Setup) | Full replace. Sub-schema (`method`, `mobile_money`, `bank`) is identical to onboarding — see [Step 1 field reference](./onboarding.md#step-1-basic-setup-required). |
+| `branding` | `object` | `logo_url`, `cover_image_url` — valid URLs or `null` | Step 3 (Branding) | Full replace. See [Step 3 field reference](./onboarding.md#step-3-branding-optional--skippable). |
+| `business_addresses` | `object[]` | See onboarding sub-schema | Step 3 (Branding) | Full replace. See [Step 3 field reference](./onboarding.md#step-3-branding-optional--skippable). |
+| `operating_hours` | `object[]` | Per-day `{ day, open_time "HH:MM", close_time "HH:MM", is_closed }` | — (general) | Full replace. |
+| `policies` | `object \| null` | `{ return_policy?, cancellation_policy?, support_policy? }` (each nullable) | Step 4 (Policy Setup) | Full replace of the **whole** `policies` object — include every sub-policy you want to keep. See [Step 4 field reference](./onboarding.md#step-4-policy-setup-optional--skippable). |
+| `kyc_details` | `object` | `{ national_id_number }` | — (general) | `legit_verified` is **admin-only** and ignored if sent. |
+| `social_links` | `object` | `instagram`, `facebook`, `twitter` — valid URLs or `null` | — (general) | Full replace. |
+| `notificationPreferences` | `object` | `{ email?, whatsapp?, phone? }` booleans | — (general) | `whatsapp`/`phone` are feature-flagged (see below). |
+| `version` | `number` (integer) | **Required**, must match current profile `version` | — | Optimistic-locking guard. Mismatch → `409`. |
+
+> **Not editable here:** `default_delivery_agency_id` (onboarding Step 2). Use the dedicated delivery-agency routes below. `legit_verified`, `status`, and `onboarding_step` are server/admin-controlled.
 
 #### Response
 
@@ -228,6 +262,8 @@ Content-Type: application/json
 
 #### Notes
 
+- **Editing onboarding fields**: After onboarding completes, this endpoint is the **only** way to change values originally captured in the onboarding flow (payout, branding, policies, country/timezone). The onboarding step endpoints are locked (`409`). The exception is the default delivery agency — use its dedicated routes.
+- **Full-replace semantics**: `payout_details`, `business_addresses`, `operating_hours`, `branding`, `social_links`, and `policies` overwrite the stored value wholesale. Always send the complete desired value, not a delta.
 - **Optimistic Locking**: The `version` field prevents concurrent update conflicts. Always include the current version number from the GET response.
 - **Email Changes**: If `ALLOW_EMAIL_CHANGE=false`, email updates are rejected. Contact support to change email.
 - **Notification Preferences**: Only `email` notifications are available. `whatsapp` and `phone` are feature-flagged for future pricing tiers.
@@ -715,5 +751,36 @@ curl -X PATCH https://api.example.com/api/vendor/profile \
       "email": true
     },
     "version": 5
+  }'
+```
+
+### Change Payout Details (post-onboarding, from Settings)
+
+Onboarding is already complete, so `PUT /onboarding/basic-setup` would return `409`. Edit via the profile endpoint instead. Send the **complete** payout array (full replace):
+
+```bash
+# 1. Read current version
+curl -X GET https://api.example.com/api/vendor/profile \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+# Response: { "data": { "version": 7, ... } }
+
+# 2. Replace payout details
+curl -X PATCH https://api.example.com/api/vendor/profile \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "payout_details": [
+      {
+        "method": "bank",
+        "mobile_money": null,
+        "bank": {
+          "bank_name": "Afriland First Bank",
+          "account_number": "10005000123456",
+          "account_name": "Tech Solutions Sarl",
+          "country": "CM"
+        }
+      }
+    ],
+    "version": 7
   }'
 ```

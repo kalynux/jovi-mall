@@ -1,6 +1,7 @@
 import { Types } from 'mongoose';
 import { RepositoryOptions } from '../../../../core/repositories/base.repository';
 import { FileReferenceModel, IFileReference, FileReferenceEntityType } from '../../models/file-reference.model';
+import { FileModel } from '../../models/file.model';
 import {
   IFileReferenceRepository,
   AddFileReferenceInput,
@@ -38,6 +39,9 @@ export class FileReferenceRepositoryMongo implements IFileReferenceRepository {
       },
       { upsert: true, session: options?.session },
     ).exec();
+
+    // The file is now referenced — clear any lonely clock.
+    await this.clearOrphaned(input.fileId, options);
   }
 
   async remove(
@@ -61,6 +65,9 @@ export class FileReferenceRepositoryMongo implements IFileReferenceRepository {
       { $set: { deletedAt: new Date() } },
       { session: options?.session },
     ).exec();
+
+    // If that was the file's last reference, start the lonely clock.
+    await this.stampOrphanedIfUnreferenced(fileId, options);
   }
 
   async removeAllForEntity(
@@ -85,13 +92,37 @@ export class FileReferenceRepositoryMongo implements IFileReferenceRepository {
       { session: options?.session },
     ).exec();
 
-    return (detached as Types.ObjectId[]).map((id) => id.toString());
+    const detachedIds = (detached as Types.ObjectId[]).map((id) => id.toString());
+
+    // Start the lonely clock for any of these files that now have no references.
+    for (const fileId of detachedIds) {
+      await this.stampOrphanedIfUnreferenced(fileId, options);
+    }
+
+    return detachedIds;
   }
 
   async findByFile(fileId: string, options?: RepositoryOptions): Promise<FileReferenceLink[]> {
     if (!Types.ObjectId.isValid(fileId)) return [];
     const query = FileReferenceModel.find({
       fileId: new Types.ObjectId(fileId),
+      deletedAt: null,
+    }).lean();
+    if (options?.session) query.session(options.session);
+
+    const docs = await query.exec();
+    return docs.map((d) => this.toLink(d as any));
+  }
+
+  async findByEntity(
+    entityType: FileReferenceEntityType,
+    entityId: string,
+    options?: RepositoryOptions,
+  ): Promise<FileReferenceLink[]> {
+    if (!Types.ObjectId.isValid(entityId)) return [];
+    const query = FileReferenceModel.find({
+      entityType,
+      entityId: new Types.ObjectId(entityId),
       deletedAt: null,
     }).lean();
     if (options?.session) query.session(options.session);
@@ -116,6 +147,33 @@ export class FileReferenceRepositoryMongo implements IFileReferenceRepository {
       .session(options?.session ?? null)
       .exec();
     return (ids as Types.ObjectId[]).map((id) => id.toString());
+  }
+
+  /**
+   * Stamp File.orphanedAt = now if the file has no live references left. Only
+   * sets the clock when it is currently null, so an already-running grace period
+   * is never reset. Single funnel for every detach path (product/variant/ticket
+   * and the cleanup sweep), keeping loneliness deterministic.
+   */
+  private async stampOrphanedIfUnreferenced(fileId: string, options?: RepositoryOptions): Promise<void> {
+    if (!Types.ObjectId.isValid(fileId)) return;
+    const liveCount = await this.countByFile(fileId, options);
+    if (liveCount > 0) return;
+    await FileModel.updateOne(
+      { _id: new Types.ObjectId(fileId), orphanedAt: null },
+      { $set: { orphanedAt: new Date() } },
+      { session: options?.session },
+    ).exec();
+  }
+
+  /** Clear File.orphanedAt — the file is referenced again. */
+  private async clearOrphaned(fileId: string, options?: RepositoryOptions): Promise<void> {
+    if (!Types.ObjectId.isValid(fileId)) return;
+    await FileModel.updateOne(
+      { _id: new Types.ObjectId(fileId), orphanedAt: { $ne: null } },
+      { $set: { orphanedAt: null } },
+      { session: options?.session },
+    ).exec();
   }
 
   private toLink(doc: IFileReference & { _id: Types.ObjectId }): FileReferenceLink {

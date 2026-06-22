@@ -40,13 +40,15 @@ All billing endpoints use the platform-standard envelope.
 
 Plans are an **admin-managed catalog** stored in the database (not hardcoded), scoped by `role`. Only the `vendor` role is in use today. The three seeded vendor tiers:
 
-| Plan (`code`) | Price (`price`) | Credit allowance | Max active products | Commission % | Term |
-|---|---|---|---|---|---|
-| `starter` | 0 XAF | 1,000 | 15 | 7 | never expires (`term_days: null`) |
-| `growth` | 5,000 XAF | 10,000 | 150 | 5 | 30 days |
-| `business` | 25,000 XAF | 50,000 | unlimited (`null`) | 3 | 30 days |
+| Plan (`code`) | Price (`price`) | Credit allowance | Max active products | Max media storage | Commission % | Term |
+|---|---|---|---|---|---|---|
+| `starter` | 0 XAF | 50 | 15 | 1 GB | 7 | never expires (`term_days: null`) |
+| `growth` | 5,000 XAF | 850 | 150 | 10 GB | 5 | 30 days |
+| `business` | 25,000 XAF | 4,500 | unlimited (`null`) | 100 GB | 3 | 30 days |
 
-**All other capabilities are identical across plans** — every plan can sell physical / digital / service products, send WhatsApp notifications (metered by credits, not by plan), use Google Calendar sync, see analytics and duplicate products. Plans differ **only** by the four columns above.
+**All other capabilities are identical across plans** — every plan can sell physical / digital / service products, send WhatsApp notifications (metered by credits, not by plan), use Google Calendar sync, see analytics and duplicate products. Plans differ **only** by the five columns above.
+
+**Media storage limit** (`max_storage_bytes`) caps the total bytes of **product media** a vendor can store — product/variant images, product videos, and any docs/audio/archives uploaded via the file endpoints. **Digital-product assets are excluded**: they have their own fixed cap of **500 MB per asset on every plan** and never count toward this limit. The limit is admin-editable per plan (e.g. raising Business). See storage analytics on the media endpoints and `GET /vendor/plan`. **Full guide: [Vendor Media Storage](./storage.md).**
 
 Admins can create/edit/archive plans, so prices and limits may change without a deploy. Always read the live catalog (`GET /vendor/plans`) for display rather than hardcoding.
 
@@ -74,14 +76,14 @@ Each vendor has **one** credit wallet. Credits **never expire or reset** — the
 
 A new (pending) plan's allowance is added **only when it activates**, not when it is queued/purchased.
 
-> The free Starter grants its 1,000 credits **once**, the first time a vendor's plan is resolved (effectively at signup). A later downgrade back to free does **not** re-grant credits.
+> The free Starter grants its 50 credits **once**, the first time a vendor's plan is resolved (effectively at signup). A later downgrade back to free does **not** re-grant credits.
 
 ### 4. What credits are spent on
 
 | Action | Cost (credits) | Who triggers it |
 |---|---|---|
-| Vectorise one product (AI search indexing) | **10** | Vendor — on product create / update / enabling vectorisation / retry |
-| Send one WhatsApp **template** message to a customer | **5** | Vendor-initiated outbound templates |
+| Vectorise one product (AI search indexing) | **1** | Vendor — on product create / update / enabling vectorisation / retry |
+| Send one WhatsApp **template** message to a customer | **1** | Vendor-initiated outbound templates |
 
 Notes:
 - Vendor-facing vectorisation is charged automatically; if the balance is too low the product still saves but its `vectorisationStatus` becomes `skipped_no_credits` (no error to the request). A failed external vectorisation is **refunded**.
@@ -101,8 +103,10 @@ Seeded packs (read live via `GET /vendor/credits/packs`):
 
 | `code` | Credits | Price |
 |---|---|---|
-| `pack_5k` | 5,000 | 2,500 XAF |
-| `pack_15k` | 15,000 | 6,000 XAF |
+| `pack_100` | 100 | 600 XAF |
+| `pack_320` | 320 | 1,800 XAF |
+| `pack_1100` | 1,100 | 6,000 XAF |
+| `pack_2250` | 2,250 | 12,000 XAF |
 
 ### 6. Expiry notifications
 
@@ -122,8 +126,9 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
   "price": 5000,
   "currency": "XAF",
   "term_days": 30,
-  "credit_allowance": 10000,
+  "credit_allowance": 850,
   "max_active_products": 150,
+  "max_storage_bytes": 10737418240,
   "commission_percent": 5,
   "is_active": true,
   "sort_order": 2,
@@ -160,8 +165,8 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
   "owner_type": "vendor",
   "owner_id": "6601...",
   "type": "debit",
-  "amount": -10,
-  "balance_after": 990,
+  "amount": -1,
+  "balance_after": 849,
   "reason_code": "vectorisation",
   "ref": "<productId | messageId | topupId | planId>",
   "created_at": "2026-06-19T11:00:00.000Z"
@@ -174,9 +179,9 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
 {
   "_id": "66bb...",
   "vendor_id": "6601...",
-  "pack_code": "pack_5k",
-  "credits": 5000,
-  "price": 2500,
+  "pack_code": "pack_100",
+  "credits": 100,
+  "price": 600,
   "currency": "XAF",
   "status": "pending",
   "gateway": "NOTCHPAY",
@@ -209,7 +214,7 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
 
 ### `CreditPack` (catalog item)
 ```json
-{ "code": "pack_5k", "credits": 5000, "price": 2500, "currency": "XAF" }
+{ "code": "pack_100", "credits": 100, "price": 600, "currency": "XAF" }
 ```
 
 ---

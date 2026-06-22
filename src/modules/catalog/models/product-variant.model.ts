@@ -31,6 +31,13 @@ export interface IProductVariant extends IBaseDocument {
   optionValueIds: Types.ObjectId[];
   fileIds: Types.ObjectId[];
 
+  /**
+   * Timestamp of the most recent paid order containing this variant. Maintained
+   * on payment success and back-fillable. Null = never ordered. Mirrors
+   * Product.lastOrderedAt for per-variant activity (file-cleanup module).
+   */
+  lastOrderedAt?: Date | null;
+
   // Delivery agency for variant fulfillment (physical products only)
   // undefined = use vendor's default_delivery_agency_id
   deliveryAgencyId?: Types.ObjectId;
@@ -92,6 +99,9 @@ const ProductVariantSchema = new Schema<IProductVariant>({
 
   optionValueIds: [{ type: Schema.Types.ObjectId, ref: MODELS.PRODUCT_OPTION_VALUE }],
   fileIds: [{ type: Schema.Types.ObjectId, ref: MODELS.FILE }],
+
+  // Last paid-order timestamp (file-cleanup inactivity clock).
+  lastOrderedAt: { type: Date, default: null, index: true },
 
   deliveryAgencyId: {
     type: Schema.Types.ObjectId,

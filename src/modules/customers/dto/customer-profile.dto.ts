@@ -1,4 +1,4 @@
-import { ICustomer, ICustomerSavedAddress, ICustomerPreferences, ICustomerSavedPaymentMethod } from '../customer.model';
+import { ICustomer, ICustomerSavedAddress, ICustomerPreferences } from '../customer.model';
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
@@ -48,11 +48,17 @@ export class CustomerProfileMapper {
     /**
      * Map Customer domain model to sanitized response DTO.
      *
+     * Saved payment methods are sourced from the unified payment-method store
+     * (passed in by the service), not the deprecated embedded array.
+     *
      * SECURITY:
      * - gateway_customer_id and gateway_instrument_id are NEVER included
      * - Only display_label, provider, method_type, is_default exposed
      */
-    static toResponseDto(customer: ICustomer): GetCustomerProfileResponseDto {
+    static toResponseDto(
+        customer: ICustomer,
+        savedPaymentMethods: CustomerPaymentMethodDto[]
+    ): GetCustomerProfileResponseDto {
         return {
             id: customer._id.toString(),
             name: customer.name,
@@ -66,15 +72,7 @@ export class CustomerProfileMapper {
             dateOfBirth: customer.date_of_birth,
             preferences: customer.preferences,
             recentProductCode: customer.recent_product_code,
-            savedPaymentMethods: customer.saved_payment_methods.map(
-                (m: ICustomerSavedPaymentMethod): CustomerPaymentMethodDto => ({
-                    id: m._id.toString(),
-                    provider: m.provider,
-                    display_label: m.display_label,
-                    method_type: m.method_type,
-                    is_default: m.is_default,
-                })
-            ),
+            savedPaymentMethods,
             wa: customer.wa
                 ? { verified: customer.wa.verified, name: customer.wa.name }
                 : null,

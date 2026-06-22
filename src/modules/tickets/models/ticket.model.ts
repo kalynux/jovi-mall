@@ -67,6 +67,14 @@ export interface ITicket extends Document {
     // Audit Trail
     updated_by: mongoose.Types.ObjectId[]; // All users who modified ticket
 
+    /**
+     * When the ticket entered a terminal status (resolved/closed). Set on the
+     * transition into a terminal state and cleared when reopened. Unlike
+     * updatedAt (bumped by any edit), this is a stable clock for the
+     * attachment-cleanup grace period. See file-cleanup module.
+     */
+    terminalAt?: Date | null;
+
     // Soft Delete (from BaseSchemaFields)
     deletedAt?: Date | null;
     purgeAt?: Date | null;
@@ -163,6 +171,10 @@ const TicketSchema = new Schema<ITicket>({
         type: Schema.Types.ObjectId,
         ref: MODELS.USER
     }],
+    terminalAt: {
+        type: Date,
+        default: null
+    },
     ...BaseSchemaFields
 }, {
     ...BaseSchemaOptions,
@@ -176,6 +188,9 @@ TicketSchema.index({ entity_type: 1, entity_id: 1 });
 
 // Status filtering with time ordering
 TicketSchema.index({ status: 1, createdAt: -1 });
+
+// Terminal-status attachment cleanup sweep (file-cleanup module)
+TicketSchema.index({ status: 1, terminalAt: 1 });
 
 // Assignment queries
 TicketSchema.index({ assigned_to_role: 1, assigned_to_user_id: 1 });

@@ -502,6 +502,8 @@ export function createAppError(
     [ERROR_CODES.CUSTOMER_NOT_FOUND]: 'customer not found',
     [ERROR_CODES.CUSTOMER_ADDRESS_NOT_FOUND]: 'customer address not found',
     [ERROR_CODES.CUSTOMER_PAYMENT_METHOD_NOT_FOUND]: 'customer payment method not found',
+    [ERROR_CODES.PAYMENT_METHOD_NOT_FOUND]: 'Payment method not found',
+    [ERROR_CODES.PAYMENT_METHOD_LIMIT_REACHED]: 'You have reached the maximum number of saved payment methods',
     [ERROR_CODES.USER_NOT_FOUND]: 'user not found',
     [ERROR_CODES.USER_INVALID_PASSWORD]: 'user invalid password',
     [ERROR_CODES.STORE_NOT_FOUND]: 'store not found',

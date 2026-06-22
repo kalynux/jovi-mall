@@ -34,6 +34,7 @@ export interface IVendorNotificationPreference extends Document {
         bookingCancelled: boolean;
         paymentReceivedPartial: boolean;
         paymentReceivedFull: boolean;
+        storageAlert: boolean;
     };
 
     updatedAt: Date;
@@ -99,6 +100,10 @@ const VendorNotificationPreferenceSchema = new Schema<IVendorNotificationPrefere
                 default: true
             },
             paymentReceivedFull: {
+                type: Boolean,
+                default: true
+            },
+            storageAlert: {
                 type: Boolean,
                 default: true
             }

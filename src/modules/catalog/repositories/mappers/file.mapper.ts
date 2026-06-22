@@ -18,6 +18,8 @@ export interface File {
   ownerType?: 'vendor' | 'admin' | 'customer' | 'agent' | 'agency' | 'system';
   ownerId?: string;
 
+  orphanedAt?: Date | null;
+
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;
@@ -42,6 +44,7 @@ export class FileMapper implements IMapper<File, IFile> {
       originalName: doc.originalName,
       ownerType: doc.ownerType,
       ownerId: doc.ownerId?.toString(),
+      orphanedAt: doc.orphanedAt,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       deletedAt: doc.deletedAt,

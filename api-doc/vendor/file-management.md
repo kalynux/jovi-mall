@@ -258,7 +258,7 @@ per-file UI messaging rather than the generic top-level `message`.
 | `FILE_TOO_LARGE`      | A file exceeds the configured size limit.                               |
 | `MIME_NOT_ALLOWED`    | The detected MIME type is not in the allow-list.                        |
 | `TOO_MANY_FILES`      | More files than the per-request limit.                                  |
-| `QUOTA_EXCEEDED`      | The actor's storage quota would be exceeded.                            |
+| `QUOTA_EXCEEDED`      | The actor's storage quota would be exceeded. For vendors this is the plan's `max_storage_bytes` (digital-product assets excluded). |
 | `VIRUS_DETECTED`      | Virus scanner flagged the file.                                         |
 | `PERMISSION_DENIED`   | The actor is not permitted to upload this file.                         |
 | `TOTAL_SIZE_EXCEEDED` | Combined size of all files in the request exceeds the limit.            |
@@ -492,6 +492,19 @@ GET /api/files?ownerType=vendor&provider=cloudinary
         "updatedAt": "2026-02-13T06:00:00Z"
       }
     ],
+    "storage": {
+      "limitBytes": 10737418240,
+      "usedBytes": 2147483648,
+      "remainingBytes": 8589934592,
+      "byCategory": {
+        "image":    { "bytes": 1048576000, "count": 320 },
+        "video":    { "bytes": 1090519040, "count": 12 },
+        "document": { "bytes": 8388608,    "count": 5 },
+        "audio":    { "bytes": 0,          "count": 0 },
+        "archive":  { "bytes": 0,          "count": 0 },
+        "other":    { "bytes": 0,          "count": 0 }
+      }
+    },
     "pagination": {
       "page": 1,
       "limit": 20,
@@ -502,11 +515,43 @@ GET /api/files?ownerType=vendor&provider=cloudinary
 }
 ```
 
+**`storage` block:** owner-scoped media usage analytics, returned for **vendor / customer / agent** callers (and **omitted — `null` — for admins**, whose listing is global). See the **[Vendor Media Storage guide](./storage.md)** for the full storage feature (limits, alerts, quota errors, lifecycle). `usedBytes` is the total of `byCategory` bytes. For **vendors**, `limitBytes` is the active plan's media storage limit (`max_storage_bytes`) and `remainingBytes = max(0, limitBytes − usedBytes)`; for other roles `limitBytes`/`remainingBytes` are `null`. **Digital-product asset files are excluded** from these figures (they have their own 500 MB/asset cap, independent of plan). Categories follow the same `category` mapping used for filtering.
+
 **Authorization Rules:**
 - **Vendors**: See only files where `ownerType === 'vendor'` and `ownerId === vendorId`
 - **Customers**: See only files where `ownerType === 'customer'` and `ownerId === userId`
 - **Agents**: See only files where `ownerType === 'agent'` and `ownerId === agentId`
 - **Admins**: See ALL files (no ownership filter)
+
+---
+
+#### GET /api/files/storage
+
+Lightweight storage usage + plan limit summary for the authenticated owner — the same `storage` object embedded in `GET /api/files`, without the file list. Use it for a storage usage widget.
+
+**Authentication:** Required (vendor / customer / agent). Admins receive `403 FORBIDDEN` (no owner scope).
+
+**Success Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "limitBytes": 10737418240,
+    "usedBytes": 2147483648,
+    "remainingBytes": 8589934592,
+    "byCategory": {
+      "image":    { "bytes": 1048576000, "count": 320 },
+      "video":    { "bytes": 1090519040, "count": 12 },
+      "document": { "bytes": 8388608,    "count": 5 },
+      "audio":    { "bytes": 0, "count": 0 },
+      "archive":  { "bytes": 0, "count": 0 },
+      "other":    { "bytes": 0, "count": 0 }
+    }
+  }
+}
+```
+
+For vendors, `limitBytes` is the plan's `max_storage_bytes`; for customer/agent it is `null`. When a vendor's media upload would exceed `limitBytes`, the upload is rejected with a `QUOTA_EXCEEDED` policy violation.
 
 ---
 

@@ -18,6 +18,7 @@ export function initializeVendorNotificationEventConsumers(): void {
     eventBus.subscribe('booking.cancelled', handler.handleBookingCancelled.bind(handler));
     eventBus.subscribe('payment.received.partial', handler.handlePaymentReceivedPartial.bind(handler));
     eventBus.subscribe('payment.received.full', handler.handlePaymentReceivedFull.bind(handler));
+    eventBus.subscribe('vendor.storage.alert', handler.handleStorageAlert.bind(handler));
 
     console.log('[VendorNotifications] Event handlers registered successfully');
 }

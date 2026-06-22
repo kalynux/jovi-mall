@@ -275,6 +275,59 @@ export class VendorNotificationEventHandler {
     }
 
     /**
+     * Handle vendor.storage.alert event
+     *
+     * Fired by the file-cleanup worker when a vendor's media storage usage
+     * crosses a configured threshold. The worker computes a stable idempotency
+     * key (vendor + threshold + period) so a given threshold alerts once per
+     * period even though the sweep runs daily.
+     */
+    async handleStorageAlert(event: DomainEvent): Promise<void> {
+        try {
+            const { vendorId, usageBytes, limitBytes, percentUsed, threshold, idempotencyKey } = event.payload;
+
+            const prefs = await this.preferenceRepo.getByVendor(vendorId);
+            if (prefs.preferences.storageAlert === false) return; // Opted out
+
+            const deliveredVia = await this.determineDeliveryChannels(vendorId, prefs);
+
+            const title = `Storage ${percentUsed}% full`;
+            const message =
+                `Your media storage is at ${percentUsed}% of your plan limit ` +
+                `(${this.formatBytes(usageBytes)} of ${this.formatBytes(limitBytes)}). ` +
+                `Remove unused product media or upgrade your plan to free up space.`;
+
+            await this.notificationRepo.createIfNotExists({
+                vendorId,
+                type: 'storage.alert',
+                title,
+                message,
+                aggregateType: 'storage',
+                aggregateId: vendorId,
+                deliveredVia,
+                idempotencyKey: idempotencyKey ?? `storage.alert:${vendorId}:${threshold}`
+            });
+
+            await this.deliverToSecondaryChannels(vendorId, deliveredVia, {
+                subject: title,
+                body: message,
+                templateContext: { usageBytes, limitBytes, percentUsed, threshold }
+            });
+
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle storage.alert:', error);
+        }
+    }
+
+    /** Human-readable byte size (B/KB/MB/GB). */
+    private formatBytes(bytes: number): string {
+        if (!Number.isFinite(bytes) || bytes < 1024) return `${bytes ?? 0} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+        return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    }
+
+    /**
      * Determine delivery channels based on preferences and verification status
      * 
      * Rules:

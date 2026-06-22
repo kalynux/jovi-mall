@@ -10,6 +10,7 @@ export const CreatePlanSchema = z.object({
   term_days: z.number().int().min(1).nullable(),
   credit_allowance: z.number().int().min(0),
   max_active_products: z.number().int().min(0).nullable(),
+  max_storage_bytes: z.number().int().min(0),
   commission_percent: z.number().min(0).max(100),
   is_active: z.boolean().optional(),
   sort_order: z.number().int().optional(),

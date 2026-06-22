@@ -150,6 +150,21 @@ export const TICKET_TYPE_VALUES = Object.values(TicketType);
 export const TICKET_STATUS_VALUES = Object.values(TicketStatus);
 
 /**
+ * Terminal statuses — a ticket here is considered done. Entering one stamps
+ * `terminalAt`; leaving it (reopen) clears it. The file-cleanup module uses
+ * `terminalAt` as the grace clock for detaching ticket attachments.
+ */
+export const TERMINAL_TICKET_STATUSES: ReadonlyArray<TicketStatus> = [
+    TicketStatus.RESOLVED,
+    TicketStatus.CLOSED,
+];
+
+/** Whether a status is terminal (resolved/closed). */
+export function isTerminalStatus(status: TicketStatus): boolean {
+    return TERMINAL_TICKET_STATUSES.includes(status);
+}
+
+/**
  * Maps each actor-specific "waiting" status to the ActorRole it is waiting on.
  *
  * Used by the status update flow to enforce that a ticket can only be marked as

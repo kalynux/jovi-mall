@@ -64,6 +64,17 @@ export interface IFileReferenceRepository {
   findByFile(fileId: string, options?: RepositoryOptions): Promise<FileReferenceLink[]>;
 
   /**
+   * All live references held by a single entity (e.g. one product or ticket).
+   * Used by the cleanup sweep to detach each reference individually while
+   * honoring per-file guards.
+   */
+  findByEntity(
+    entityType: FileReferenceEntityType,
+    entityId: string,
+    options?: RepositoryOptions,
+  ): Promise<FileReferenceLink[]>;
+
+  /**
    * Number of live references to a file (the derived replacement for usageCount).
    */
   countByFile(fileId: string, options?: RepositoryOptions): Promise<number>;

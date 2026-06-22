@@ -12,14 +12,15 @@ export type NotificationType =
     | 'booking.created'
     | 'booking.cancelled'
     | 'payment.received.partial'
-    | 'payment.received.full';
+    | 'payment.received.full'
+    | 'storage.alert';
 
 /**
  * Aggregate Types
- * 
+ *
  * The domain entity that triggered this notification.
  */
-export type AggregateType = 'order' | 'booking' | 'payment';
+export type AggregateType = 'order' | 'booking' | 'payment' | 'storage';
 
 /**
  * Delivery Channels
@@ -64,7 +65,8 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
                 'booking.created',
                 'booking.cancelled',
                 'payment.received.partial',
-                'payment.received.full'
+                'payment.received.full',
+                'storage.alert'
             ],
             required: true
         },
@@ -82,7 +84,7 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
         },
         aggregateType: {
             type: String,
-            enum: ['order', 'booking', 'payment'],
+            enum: ['order', 'booking', 'payment', 'storage'],
             required: true
         },
         aggregateId: {

@@ -46,6 +46,14 @@ export interface IProduct extends IBaseDocument {
 
   fileIds: Types.ObjectId[];  // References to File model
 
+  /**
+   * Timestamp of the most recent paid order containing this product. Maintained
+   * on payment success (OrderService.handlePaymentSuccess) and back-fillable.
+   * Null = never ordered (the file-cleanup inactivity clock falls back to
+   * createdAt). Drives product-media detachment. See file-cleanup module.
+   */
+  lastOrderedAt?: Date | null;
+
   // Service configuration + pricing now live on the single service variant
   // (ProductVariant.serviceConfig). See vendor-variant.controller.
 
@@ -94,6 +102,9 @@ const ProductSchema = new Schema<IProduct>({
   defaultVariantId: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT_VARIANT },
 
   fileIds: [{ type: Schema.Types.ObjectId, ref: MODELS.FILE }],
+
+  // Last paid-order timestamp (file-cleanup inactivity clock). Indexed for the sweep.
+  lastOrderedAt: { type: Date, default: null, index: true },
 
   // ─── Vectorisation tracking ───────────────────────────────────────────────
   vectorisationEnabled: { type: Boolean, default: false, index: true },

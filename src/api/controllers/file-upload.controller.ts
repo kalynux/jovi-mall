@@ -6,6 +6,8 @@ import { getAcceptableClaimedMimeTypes, isAcceptableClaimedMimeType } from '../.
 import { getStorageProvider } from '../../core/storage';
 import { FileRepositoryMongo } from '../../modules/catalog/repositories/mongo/file.repository.mongo';
 import { IUploadObserver, IVirusScanner } from '../../core/uploads/upload-policy.types';
+import { entitlementService } from '../../modules/billing/services/entitlement.service';
+import { mediaStorageService } from '../../modules/catalog/domain/services/media/MediaStorageService';
 
 // Role-based file size limits (in bytes)
 const ROLE_UPLOAD_LIMITS = {
@@ -25,6 +27,23 @@ const VIDEO_MAX_FILES_CUSTOMER = 1;
 const ACCEPTABLE_VIDEO_CLAIMED_TYPES = getAcceptableClaimedMimeTypes(
     Object.keys(getVideoUploadConfig().perMimeType),
 );
+
+/**
+ * Resolve the vendor's plan-driven storage limit and current media usage so the
+ * upload pipeline can enforce it. Returns an empty object for non-vendors (their
+ * uploads fall back to the static config quota). Kept here (api layer) so
+ * `core/uploads` stays decoupled from the billing module.
+ */
+async function resolveVendorStorageContext(
+    vendorId?: string,
+): Promise<{ storageLimitBytes?: number; currentUsageBytes?: number }> {
+    if (!vendorId) return {};
+    const [entitlements, currentUsageBytes] = await Promise.all([
+        entitlementService.getEntitlements(vendorId),
+        mediaStorageService.getUsedBytes('vendor', vendorId),
+    ]);
+    return { storageLimitBytes: entitlements.maxStorageBytes, currentUsageBytes };
+}
 
 // No-op implementations for observer and scanner
 class NoOpUploadObserver implements IUploadObserver { }
@@ -139,6 +158,9 @@ export class FileUploadController {
                 virusScanner
             );
 
+            // Resolve plan-driven storage limit + current usage for vendors.
+            const storageCtx = await resolveVendorStorageContext(vendorId);
+
             // Execute upload
             const uploadedFiles = await uploadIntakeService.execute({
                 folder: 'products',
@@ -146,6 +168,7 @@ export class FileUploadController {
                     userId,
                     vendorId,
                     role: userRole === 'admin' ? 'admin' : userRole === 'vendor' ? 'vendor' : 'user',
+                    ...storageCtx,
                 },
                 files: req.files.map(file => ({
                     buffer: file.buffer,
@@ -251,6 +274,9 @@ export class FileUploadController {
                 virusScanner
             );
 
+            // Resolve plan-driven storage limit + current usage for vendors.
+            const storageCtx = await resolveVendorStorageContext(vendorId);
+
             // Execute upload
             const uploadedFiles = await uploadIntakeService.execute({
                 folder: 'videos',
@@ -258,6 +284,7 @@ export class FileUploadController {
                     userId,
                     vendorId,
                     role: userRole === 'admin' ? 'admin' : userRole === 'vendor' ? 'vendor' : 'user',
+                    ...storageCtx,
                 },
                 files: req.files.map(file => ({
                     buffer: file.buffer,

@@ -49,7 +49,7 @@ Body:
   "data": [
     {
       "id": "string",
-      "type": "order_created",
+      "type": "order.created",
       "title": "New Order Received",
       "message": "You have received a new order #ORD-12345",
       "isRead": false,
@@ -98,7 +98,7 @@ Body:
   "success": true,
   "data": {
     "id": "string",
-    "type": "order_created",
+    "type": "order.created",
     "title": "New Order Received",
     "message": "You have received a new order #ORD-12345",
     "aggregateType": "order",
@@ -189,7 +189,8 @@ Body:
       "bookingCreated": true,
       "bookingCancelled": true,
       "paymentReceivedPartial": true,
-      "paymentReceivedFull": true
+      "paymentReceivedFull": true,
+      "storageAlert": true
     }
   }
 }
@@ -225,7 +226,8 @@ Body:
     "bookingCreated": "boolean (optional)",
     "bookingCancelled": "boolean (optional)",
     "paymentReceivedPartial": "boolean (optional)",
-    "paymentReceivedFull": "boolean (optional)"
+    "paymentReceivedFull": "boolean (optional)",
+    "storageAlert": "boolean (optional) - Alerts when media storage nears the plan limit"
   }
 }
 ```
@@ -252,7 +254,8 @@ Body:
       "bookingCreated": false,
       "bookingCancelled": false,
       "paymentReceivedPartial": true,
-      "paymentReceivedFull": true
+      "paymentReceivedFull": true,
+      "storageAlert": true
     }
   },
   "message": "Preferences updated successfully"
@@ -282,16 +285,17 @@ All error responses follow this format:
 
 ### Notification Types
 
-Supported notification types:
+Supported notification types. The `type` value is **dot-delimited** (match on these exact strings):
 
-| Type | Description |
-|------|-------------|
-| `order_created` | New order received |
-| `order_cancelled` | Order was cancelled |
-| `booking_created` | New service booking received |
-| `booking_cancelled` | Service booking was cancelled |
-| `payment_received_partial` | Partial payment received |
-| `payment_received_full` | Full payment received |
+| Type | `aggregateType` | Description |
+|------|------|-------------|
+| `order.created` | `order` | New order received |
+| `order.cancelled` | `order` | Order was cancelled |
+| `booking.created` | `booking` | New service booking received |
+| `booking.cancelled` | `booking` | Service booking was cancelled |
+| `payment.received.partial` | `payment` | Partial payment received |
+| `payment.received.full` | `payment` | Full payment received |
+| `storage.alert` | `storage` | Media storage usage crossed a threshold (80% / 90% / 100% of the plan limit). `aggregateId` is the vendor's id. See [Storage](./storage.md). |
 
 ### Delivery Channels
 
@@ -348,6 +352,8 @@ The `limit` parameter for listing notifications has a maximum value of `50` (low
 Notifications include `aggregateType` and `aggregateId` fields that reference the related entity:
 - `aggregateType: "order"` with `aggregateId: "..."` links to an order
 - `aggregateType: "booking"` with `aggregateId: "..."` links to a booking
+- `aggregateType: "payment"` with `aggregateId: "..."` links to a payment
+- `aggregateType: "storage"` with `aggregateId: "<vendorId>"` — a storage alert; deeplink to the storage/usage screen (see [Storage](./storage.md))
 
 These fields are useful for deeplinks in the frontend.
 

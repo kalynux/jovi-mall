@@ -572,23 +572,26 @@ export class VectorisationService {
     // Charge credits up-front so unpaid usage can't slip through. If the vendor
     // can't cover it, skip vectorisation and surface a distinct status the
     // frontend can use to prompt a top-up. (Refunded below if the call fails.)
-    try {
-      await creditWalletService.debit('vendor', vendorId, VECTORISATION_COST, 'vectorisation', productId);
-    } catch (err: any) {
-      if (err?.code === ERROR_CODES.BILLING_INSUFFICIENT_CREDITS) {
+    // VECTORISATION_COST = 0 means free — skip billing entirely (no ledger noise).
+    if (VECTORISATION_COST > 0) {
+      try {
+        await creditWalletService.debit('vendor', vendorId, VECTORISATION_COST, 'vectorisation', productId);
+      } catch (err: any) {
+        if (err?.code === ERROR_CODES.BILLING_INSUFFICIENT_CREDITS) {
+          await ProductModel.updateOne(
+            { _id: productId },
+            { $set: { vectorisationStatus: 'skipped_no_credits' } },
+          ).catch(() => undefined);
+          log('warn', 'executePreparedVectorisation: skipped — insufficient credits', { ...ctx, vendorId });
+          return;
+        }
         await ProductModel.updateOne(
           { _id: productId },
-          { $set: { vectorisationStatus: 'skipped_no_credits' } },
+          { $set: { vectorisationStatus: 'failed' } },
         ).catch(() => undefined);
-        log('warn', 'executePreparedVectorisation: skipped — insufficient credits', { ...ctx, vendorId });
+        log('error', 'executePreparedVectorisation: credit debit failed', { ...ctx, error: err.message });
         return;
       }
-      await ProductModel.updateOne(
-        { _id: productId },
-        { $set: { vectorisationStatus: 'failed' } },
-      ).catch(() => undefined);
-      log('error', 'executePreparedVectorisation: credit debit failed', { ...ctx, error: err.message });
-      return;
     }
 
     try {
@@ -619,10 +622,13 @@ export class VectorisationService {
         vectorisedDataId: response.vectorised_id,
       });
     } catch (err: any) {
-      // The vendor shouldn't pay for a failed vectorisation — refund the credit.
-      await creditWalletService
-        .credit('vendor', vendorId, VECTORISATION_COST, 'refund', 'vectorisation', productId)
-        .catch(() => undefined);
+      // The vendor shouldn't pay for a failed vectorisation — refund the credit
+      // (only when vectorisation is actually billed).
+      if (VECTORISATION_COST > 0) {
+        await creditWalletService
+          .credit('vendor', vendorId, VECTORISATION_COST, 'refund', 'vectorisation', productId)
+          .catch(() => undefined);
+      }
       try {
         await ProductModel.updateOne(
           { _id: productId },

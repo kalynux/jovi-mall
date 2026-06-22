@@ -7,6 +7,8 @@ export interface VendorEntitlements {
   planCode: string;
   /** Max active products, or `null` for unlimited. */
   maxActiveProducts: number | null;
+  /** Max total product-media storage in bytes (excludes digital-product assets). */
+  maxStorageBytes: number;
   commissionPercent: number;
 }
 
@@ -32,6 +34,7 @@ export class EntitlementService {
     return {
       planCode: plan.code,
       maxActiveProducts: plan.max_active_products,
+      maxStorageBytes: plan.max_storage_bytes,
       commissionPercent: plan.commission_percent,
     };
   }

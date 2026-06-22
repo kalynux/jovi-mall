@@ -10,6 +10,15 @@ import {
     UpdateFileSchema,
     OrphansQuerySchema,
 } from '../validators/file-management.validator';
+import {
+    MEDIA_CATEGORY_MATCHERS,
+    MediaCategory,
+} from '../../modules/catalog/domain/services/media/media-category';
+import {
+    mediaStorageService,
+    StorageOwnerType,
+} from '../../modules/catalog/domain/services/media/MediaStorageService';
+import { entitlementService } from '../../modules/billing/services/entitlement.service';
 
 /**
  * File Management Controller
@@ -74,7 +83,7 @@ export class FileManagementController {
         if (query.mimeType) {
             filters.mimeType = query.mimeType;
         } else if (query.category) {
-            filters.mimeType = FileManagementController.MEDIA_CATEGORY_MATCHERS[query.category];
+            filters.mimeType = MEDIA_CATEGORY_MATCHERS[query.category as MediaCategory];
         }
 
         if (query.provider) {
@@ -129,10 +138,18 @@ export class FileManagementController {
         const mapper = new FileMapper();
         const domainFiles = files.map(f => mapper.toDomain(f as any));
 
+        // Storage analytics for owner-scoped (non-admin) callers.
+        const storage = await FileManagementController.buildStorageSummary(
+            userRole,
+            userId,
+            userRoleEntity,
+        );
+
         res.json({
             success: true,
             data: {
                 files: domainFiles,
+                storage,
                 pagination: {
                     page: query.page,
                     limit: query.limit,
@@ -142,6 +159,77 @@ export class FileManagementController {
             },
         });
     });
+
+    /**
+     * GET /api/files/storage
+     * Lightweight storage usage + limit summary for the authenticated owner
+     * (vendor/customer/agent). Same `storage` shape embedded in the file list.
+     */
+    static getStorageSummary = asyncHandler(async (req: Request, res: Response) => {
+        const userRole = req.auth!.role;
+        const userId = req.auth!.user._id.toString();
+        const userRoleEntity = req.auth!.role_entity;
+
+        const storage = await FileManagementController.buildStorageSummary(
+            userRole,
+            userId,
+            userRoleEntity,
+        );
+
+        if (!storage) {
+            throw createAppError(
+                ERROR_CODES.AUTH_FORBIDDEN,
+                403,
+                'Storage analytics are only available for vendor, customer or agent accounts',
+            );
+        }
+
+        res.json({ success: true, data: storage });
+    });
+
+    /**
+     * Build the per-owner storage summary: total used, per-category breakdown,
+     * and (for vendors) the plan storage limit + remaining. Returns `null` for
+     * admins (unscoped/global) and any role without an owner scope.
+     */
+    private static async buildStorageSummary(
+        role: string,
+        userId: string,
+        roleEntity: any,
+    ): Promise<{
+        limitBytes: number | null;
+        usedBytes: number;
+        remainingBytes: number | null;
+        byCategory: Record<string, { bytes: number; count: number }>;
+    } | null> {
+        let ownerType: StorageOwnerType;
+        let ownerId: string;
+
+        if (role === 'vendor') {
+            ownerType = 'vendor';
+            ownerId = roleEntity._id.toString();
+        } else if (role === 'customer') {
+            ownerType = 'customer';
+            ownerId = userId;
+        } else if (role === 'agent') {
+            ownerType = 'agent';
+            ownerId = roleEntity._id.toString();
+        } else {
+            // Admin (global scope) or any other role: no owner-scoped summary.
+            return null;
+        }
+
+        const usage = await mediaStorageService.getUsageBreakdown(ownerType, ownerId);
+
+        let limitBytes: number | null = null;
+        if (ownerType === 'vendor') {
+            const entitlements = await entitlementService.getEntitlements(ownerId);
+            limitBytes = entitlements.maxStorageBytes;
+        }
+        const remainingBytes = limitBytes === null ? null : Math.max(0, limitBytes - usage.total);
+
+        return { limitBytes, usedBytes: usage.total, remainingBytes, byCategory: usage.byCategory };
+    }
 
     /**
      * GET /api/files/:id
@@ -416,49 +504,6 @@ export class FileManagementController {
             },
         });
     });
-
-    /**
-     * Maps a broad media category to a MongoDB MIME-type matcher. Image / video /
-     * audio match on the MIME prefix; document / archive match a curated set of
-     * common types; `other` is the negation of all the known prefixes/types so
-     * it catches anything not covered above.
-     */
-    private static readonly MEDIA_CATEGORY_MATCHERS: Record<string, any> = {
-        image: { $regex: '^image/', $options: 'i' },
-        video: { $regex: '^video/', $options: 'i' },
-        audio: { $regex: '^audio/', $options: 'i' },
-        document: {
-            $in: [
-                'application/pdf',
-                'application/msword',
-                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                'application/vnd.ms-excel',
-                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                'application/vnd.ms-powerpoint',
-                'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-                'application/rtf',
-                'text/plain',
-                'text/csv',
-            ],
-        },
-        archive: {
-            $in: [
-                'application/zip',
-                'application/x-zip-compressed',
-                'application/x-rar-compressed',
-                'application/vnd.rar',
-                'application/x-7z-compressed',
-                'application/x-tar',
-                'application/gzip',
-            ],
-        },
-        other: {
-            $not: {
-                $regex: '^(image|video|audio)/|^application/(pdf|msword|rtf|zip|x-zip-compressed|x-rar-compressed|vnd\\.rar|x-7z-compressed|x-tar|gzip|vnd\\.(ms-excel|ms-powerpoint|openxmlformats-officedocument\\.(wordprocessingml\\.document|spreadsheetml\\.sheet|presentationml\\.presentation)))$|^text/(plain|csv)$',
-                $options: 'i',
-            },
-        },
-    };
 
     /**
      * Escape user-supplied input so it is matched literally inside a MongoDB

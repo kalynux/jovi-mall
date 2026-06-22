@@ -12,6 +12,7 @@ export interface CreatePlanInput {
   term_days: number | null;
   credit_allowance: number;
   max_active_products: number | null;
+  max_storage_bytes: number;
   commission_percent: number;
   is_active?: boolean;
   sort_order?: number;

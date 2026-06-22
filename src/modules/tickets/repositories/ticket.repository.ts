@@ -1,5 +1,5 @@
 import { TicketModel, ITicket } from '../models/ticket.model';
-import { TicketStatus, TicketPriority, ActorRole, EntityType } from '../types/ticket.types';
+import { TicketStatus, TicketPriority, ActorRole, EntityType, isTerminalStatus } from '../types/ticket.types';
 import mongoose from 'mongoose';
 import { COLLECTIONS } from '../../../core/database/collections';
 
@@ -252,14 +252,18 @@ export class TicketRepository {
      * Update ticket status
      */
     async updateStatus(ticketId: string, newStatus: TicketStatus, userId: string): Promise<ITicket | null> {
-        return await TicketModel.findByIdAndUpdate(
-            ticketId,
-            {
-                status: newStatus,
-                $addToSet: { updated_by: userId }
-            },
-            { new: true }
-        );
+        // Maintain `terminalAt`: stamp it when entering a terminal state, clear it
+        // on reopen. This is the stable clock the file-cleanup module reads to
+        // decide when a closed ticket's attachments may be detached.
+        const update: Record<string, unknown> = {
+            status: newStatus,
+            $addToSet: { updated_by: userId },
+            ...(isTerminalStatus(newStatus)
+                ? { terminalAt: new Date() }
+                : { terminalAt: null }),
+        };
+
+        return await TicketModel.findByIdAndUpdate(ticketId, update, { new: true });
     }
 
     /**

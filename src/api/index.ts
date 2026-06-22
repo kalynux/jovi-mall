@@ -91,6 +91,10 @@ router.use('/agent', agentRoutes);
 import adminRoutes from '../modules/admins/routes';
 router.use('/admin', adminRoutes);
 
+// Saved payment methods (shared across all roles, resolved from req.auth)
+import paymentMethodRoutes from '../modules/payment-methods/routes';
+router.use('/me/payment-methods', paymentMethodRoutes);
+
 // File upload and management routes
 import fileRoutes from './routes/file-upload.routes';
 import path from "path";

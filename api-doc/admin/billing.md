@@ -41,7 +41,7 @@ Authorization: Bearer <access_token>
   "data": [
     {
       "_id": "665f0001", "role": "vendor", "code": "starter", "name": "Starter",
-      "price": 0, "currency": "XAF", "term_days": null, "credit_allowance": 1000,
+      "price": 0, "currency": "XAF", "term_days": null, "credit_allowance": 50,
       "max_active_products": 15, "commission_percent": 7, "is_active": true, "sort_order": 1,
       "created_at": "2026-06-19T10:00:00.000Z", "updated_at": "2026-06-19T10:00:00.000Z"
     }
@@ -68,7 +68,7 @@ Authorization: Bearer <access_token>
   "price": 12000,
   "currency": "XAF",
   "term_days": 30,
-  "credit_allowance": 25000,
+  "credit_allowance": 600,
   "max_active_products": 400,
   "commission_percent": 4,
   "is_active": true,
@@ -112,7 +112,7 @@ Field rules:
 
 **Request Body** (all fields optional; same rules as create, minus `code`/`role`):
 ```json
-{ "price": 6000, "credit_allowance": 12000, "is_active": false }
+{ "price": 6000, "credit_allowance": 300, "is_active": false }
 ```
 
 **Success Response** — `200 OK`:

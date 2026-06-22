@@ -44,6 +44,13 @@ export interface IFileRepository {
   findOrphans(olderThan: Date, options?: RepositoryOptions): Promise<File[]>;
 
   /**
+   * Find "lonely" files eligible for permanent deletion: those with no live
+   * references whose lonely clock (orphanedAt, falling back to createdAt for
+   * never-attached uploads) is older than `cutoff`. Capped at `limit`.
+   */
+  findLonely(cutoff: Date, limit: number, options?: RepositoryOptions): Promise<File[]>;
+
+  /**
    * Update file metadata
    */
   update(id: string, updates: Partial<File>, options?: RepositoryOptions): Promise<File | null>;

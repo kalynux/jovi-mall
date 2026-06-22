@@ -22,6 +22,14 @@ export interface UploadRequestContext {
   userId: string;
   vendorId?: string;
   role: UserRole;
+  /**
+   * Plan-driven storage cap (bytes) for this owner. When set, the
+   * UserQuotaValidator enforces it instead of the static config default.
+   * Resolved by the caller (api layer) so `core/` stays decoupled from billing.
+   */
+  storageLimitBytes?: number;
+  /** Owner's current media usage (bytes) at request time, paired with the limit above. */
+  currentUsageBytes?: number;
 }
 
 /**

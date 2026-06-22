@@ -29,6 +29,8 @@ export interface IPricingPlan extends Document {
   credit_allowance: number;
   /** Max active products allowed. `null` = unlimited. */
   max_active_products: number | null;
+  /** Max total product-media storage in bytes (excludes digital-product assets). */
+  max_storage_bytes: number;
   /** Marketplace commission percentage applied to the vendor's sales. */
   commission_percent: number;
   is_active: boolean;
@@ -48,6 +50,7 @@ const PricingPlanSchema = new Schema<IPricingPlan>(
     term_days: { type: Number, default: null, min: 1 },
     credit_allowance: { type: Number, required: true, min: 0 },
     max_active_products: { type: Number, default: null, min: 0 },
+    max_storage_bytes: { type: Number, required: true, default: 1024 * 1024 * 1024, min: 0 },
     commission_percent: { type: Number, required: true, min: 0, max: 100 },
     is_active: { type: Boolean, default: true },
     sort_order: { type: Number, default: 0 },

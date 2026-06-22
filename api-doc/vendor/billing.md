@@ -61,7 +61,7 @@ Every endpoint is automatically scoped to the authenticated vendor.
       "price": 0,
       "currency": "XAF",
       "term_days": null,
-      "credit_allowance": 1000,
+      "credit_allowance": 50,
       "max_active_products": 15,
       "commission_percent": 7,
       "is_active": true,
@@ -69,8 +69,8 @@ Every endpoint is automatically scoped to the authenticated vendor.
       "created_at": "2026-06-19T10:00:00.000Z",
       "updated_at": "2026-06-19T10:00:00.000Z"
     },
-    { "code": "growth", "price": 5000, "credit_allowance": 10000, "max_active_products": 150, "commission_percent": 5, "term_days": 30, "... ": "..." },
-    { "code": "business", "price": 25000, "credit_allowance": 50000, "max_active_products": null, "commission_percent": 3, "term_days": 30, "... ": "..." }
+    { "code": "growth", "price": 5000, "credit_allowance": 850, "max_active_products": 150, "commission_percent": 5, "term_days": 30, "... ": "..." },
+    { "code": "business", "price": 25000, "credit_allowance": 4500, "max_active_products": null, "commission_percent": 3, "term_days": 30, "... ": "..." }
   ]
 }
 ```
@@ -81,7 +81,7 @@ Every endpoint is automatically scoped to the authenticated vendor.
 
 ### GET /api/vendor/plan
 
-**Description**: Return the vendor's current plan situation: the `active` plan and the `pending_activation` plan (if any), each with its resolved catalog `plan`. If the vendor has never had a plan, the free Starter is created on the fly and returned as `active` (and the 1,000-credit signup allowance is granted).
+**Description**: Return the vendor's current plan situation: the `active` plan and the `pending_activation` plan (if any), each with its resolved catalog `plan`. If the vendor has never had a plan, the free Starter is created on the fly and returned as `active` (and the 50-credit signup allowance is granted).
 
 **Request Headers**: `Authorization: Bearer <token>`
 
@@ -97,7 +97,7 @@ Every endpoint is automatically scoped to the authenticated vendor.
     "active": {
       "plan": {
         "_id": "665f0002", "code": "growth", "name": "Growth", "price": 5000,
-        "currency": "XAF", "term_days": 30, "credit_allowance": 10000,
+        "currency": "XAF", "term_days": 30, "credit_allowance": 850,
         "max_active_products": 150, "commission_percent": 5, "is_active": true
       },
       "vendorPlan": {
@@ -110,18 +110,25 @@ Every endpoint is automatically scoped to the authenticated vendor.
       }
     },
     "pending": {
-      "plan": { "_id": "665f0003", "code": "business", "name": "Business", "price": 25000, "term_days": 30, "credit_allowance": 50000, "max_active_products": null, "commission_percent": 3 },
+      "plan": { "_id": "665f0003", "code": "business", "name": "Business", "price": 25000, "term_days": 30, "credit_allowance": 4500, "max_active_products": null, "commission_percent": 3 },
       "vendorPlan": {
         "_id": "667a0002", "plan_code": "business", "status": "pending_activation",
         "started_at": "2026-07-19T10:00:00.000Z",
         "expires_at": "2026-08-18T10:00:00.000Z",
         "allowance_granted": false
       }
+    },
+    "storage": {
+      "limitBytes": 10737418240,
+      "usedBytes": 2147483648,
+      "remainingBytes": 8589934592
     }
   }
 }
 ```
 `pending` is `null` when nothing is queued. For the free tier, `active.vendorPlan.expires_at` is `null`.
+
+`storage` reflects the active plan's media storage limit and the vendor's current product-media usage (bytes). `limitBytes` = the active plan's `max_storage_bytes`; `usedBytes` excludes digital-product assets; `remainingBytes` is clamped at 0. For a full per-category breakdown use the media endpoints (`GET /api/files` / `GET /api/files/storage`).
 
 **Error Responses**: `401`, `403`. `404 BILLING_PLAN_NOT_FOUND` only if the `starter` plan has not been seeded (run `npm run seed:plans`).
 
@@ -264,7 +271,7 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
 
 **Success Response** — `200 OK`:
 ```json
-{ "success": true, "data": { "balance": 9985 } }
+{ "success": true, "data": { "balance": 849 } }
 ```
 
 **Error Responses**: `401`, `403`.
@@ -286,8 +293,8 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
 {
   "success": true,
   "data": [
-    { "_id": "66aa01", "type": "debit", "amount": -10, "balance_after": 9985, "reason_code": "vectorisation", "ref": "prod_123", "created_at": "2026-06-19T11:00:00.000Z" },
-    { "_id": "66aa00", "type": "allowance", "amount": 10000, "balance_after": 9995, "reason_code": "plan_allowance", "ref": "665f0002", "created_at": "2026-06-19T10:00:00.000Z" }
+    { "_id": "66aa01", "type": "debit", "amount": -1, "balance_after": 849, "reason_code": "vectorisation", "ref": "prod_123", "created_at": "2026-06-19T11:00:00.000Z" },
+    { "_id": "66aa00", "type": "allowance", "amount": 850, "balance_after": 850, "reason_code": "plan_allowance", "ref": "665f0002", "created_at": "2026-06-19T10:00:00.000Z" }
   ],
   "meta": { "total": 2, "page": 1, "limit": 20, "totalPages": 1 }
 }
@@ -308,8 +315,10 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
 {
   "success": true,
   "data": [
-    { "code": "pack_5k", "credits": 5000, "price": 2500, "currency": "XAF" },
-    { "code": "pack_15k", "credits": 15000, "price": 6000, "currency": "XAF" }
+    { "code": "pack_100", "credits": 100, "price": 600, "currency": "XAF" },
+    { "code": "pack_320", "credits": 320, "price": 1800, "currency": "XAF" },
+    { "code": "pack_1100", "credits": 1100, "price": 6000, "currency": "XAF" },
+    { "code": "pack_2250", "credits": 2250, "price": 12000, "currency": "XAF" }
   ]
 }
 ```
@@ -332,7 +341,7 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
   "success": true,
   "data": [
     {
-      "_id": "66bb01", "pack_code": "pack_5k", "credits": 5000, "price": 2500,
+      "_id": "66bb01", "pack_code": "pack_100", "credits": 100, "price": 600,
       "currency": "XAF", "status": "paid", "gateway": "NOTCHPAY",
       "gateway_ref": "notch_tx_abc123", "payment_transaction_id": null,
       "created_at": "2026-06-19T11:05:00.000Z", "updated_at": "2026-06-19T11:07:00.000Z"
@@ -355,7 +364,7 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
 **Request Body**:
 ```json
 {
-  "packCode": "pack_5k",
+  "packCode": "pack_100",
   "gateway": "NOTCHPAY",
   "channel": {
     "phoneNumber": "+237650000000",
@@ -380,7 +389,7 @@ Field rules:
   "success": true,
   "data": {
     "topup": {
-      "_id": "66bb02", "pack_code": "pack_5k", "credits": 5000, "price": 2500,
+      "_id": "66bb02", "pack_code": "pack_100", "credits": 100, "price": 600,
       "currency": "XAF", "status": "pending", "gateway": "NOTCHPAY",
       "gateway_ref": "notch_tx_def456", "payment_transaction_id": null,
       "created_at": "2026-06-19T12:00:00.000Z", "updated_at": "2026-06-19T12:00:00.000Z"
@@ -425,7 +434,7 @@ Field rules:
 {
   "success": true,
   "data": {
-    "_id": "66bb02", "pack_code": "pack_5k", "credits": 5000, "price": 2500,
+    "_id": "66bb02", "pack_code": "pack_100", "credits": 100, "price": 600,
     "currency": "XAF", "status": "paid", "gateway": "NOTCHPAY",
     "gateway_ref": "notch_tx_def456",
     "created_at": "2026-06-19T12:00:00.000Z", "updated_at": "2026-06-19T12:03:00.000Z"
@@ -484,8 +493,8 @@ Read `data.status` to decide UI: `paid` → credited (refresh balance), `pending
 Credits are consumed as a side effect of other vendor actions — there is no
 "spend credits" endpoint:
 
-- **Vectorisation (10 cr / product)** happens when a vendor creates/updates a product, enables vectorisation, or retries it (see the catalog product docs). If credits are insufficient the product still saves but its `vectorisationStatus` is `skipped_no_credits` — surface a "top up to enable AI search" hint when you see that status.
-- **WhatsApp template (5 cr / message)** is charged when a billable vendor→customer template is sent. If the balance is too low the send is rejected with `402 BILLING_INSUFFICIENT_CREDITS`.
+- **Vectorisation (1 cr / product)** happens when a vendor creates/updates a product, enables vectorisation, or retries it (see the catalog product docs). If credits are insufficient the product still saves but its `vectorisationStatus` is `skipped_no_credits` — surface a "top up to enable AI search" hint when you see that status.
+- **WhatsApp template (1 cr / message)** is charged when a billable vendor→customer template is sent. If the balance is too low the send is rejected with `402 BILLING_INSUFFICIENT_CREDITS`.
 
 ## Related: plan product limit
 

@@ -29,6 +29,15 @@ export interface IFile extends IBaseDocument {
   // Original uploader - set once on upload, never mutated
   ownerType?: FileOwnerType; // 'vendor', 'admin', 'customer', 'agent', 'agency', or 'system'
   ownerId?: Types.ObjectId;  // actorId (null for 'system' owner type)
+
+  /**
+   * When the file became "lonely" — its live reference count dropped to 0.
+   * Maintained by the file-reference layer: set to now when the last reference
+   * is removed, cleared (null) when a reference is (re)added. Null means the file
+   * is currently referenced (or was never attached — fall back to createdAt).
+   * Drives the lonely-file deletion grace period. See file-cleanup module.
+   */
+  orphanedAt?: Date | null;
 }
 
 const FileSchema = new Schema<IFile>({
@@ -49,12 +58,15 @@ const FileSchema = new Schema<IFile>({
   },
   ownerId: { type: Schema.Types.ObjectId },
 
+  orphanedAt: { type: Date, default: null },
+
   ...BaseSchemaFields
 }, BaseSchemaOptions);
 
 // Indexes
 FileSchema.index({ key: 1, provider: 1 }, { unique: true }); // Unique file per provider
 FileSchema.index({ ownerId: 1, checksum: 1 }); // Per-vendor duplicate detection by content hash
+FileSchema.index({ orphanedAt: 1 }); // Lonely-file deletion sweep (file-cleanup module)
 // FileSchema.index({ deletedAt: 1 }); // Soft delete queries
 
 export const FileModel =

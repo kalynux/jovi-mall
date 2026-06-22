@@ -279,6 +279,10 @@ export const ERROR_CODES = Object.freeze({
     CUSTOMER_ADDRESS_NOT_FOUND: 'CUSTOMER_ADDRESS_NOT_FOUND',
     CUSTOMER_PAYMENT_METHOD_NOT_FOUND: 'CUSTOMER_PAYMENT_METHOD_NOT_FOUND',
 
+    // ── PAYMENT METHODS (per-user saved instruments) ──────────────────────────
+    PAYMENT_METHOD_NOT_FOUND: 'PAYMENT_METHOD_NOT_FOUND',
+    PAYMENT_METHOD_LIMIT_REACHED: 'PAYMENT_METHOD_LIMIT_REACHED',
+
     // ── USER ──────────────────────────────────────────────────────────────────
     USER_NOT_FOUND: 'USER_NOT_FOUND',
     USER_INVALID_PASSWORD: 'USER_INVALID_PASSWORD',
@@ -371,6 +375,8 @@ export const ERROR_CODES = Object.freeze({
     // ── STORAGE ───────────────────────────────────────────────────────────────
     STORAGE_FILE_NOT_FOUND: 'STORAGE_FILE_NOT_FOUND',
     STORAGE_DELETE_FAILED: 'STORAGE_DELETE_FAILED',
+    STORAGE_QUOTA_EXCEEDED: 'STORAGE_QUOTA_EXCEEDED',
+    STORAGE_CLEANUP_FAILED: 'STORAGE_CLEANUP_FAILED',
 
     // ── CATALOG EXTENDED ──────────────────────────────────────────────────────
     CATALOG_DIGITAL_ASSET_ACCESS_DENIED: 'CATALOG_DIGITAL_ASSET_ACCESS_DENIED',
