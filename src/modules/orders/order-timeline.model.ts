@@ -24,6 +24,7 @@ export type TimelineEventType =
     | 'payment.updated'
     | 'fulfillment.updated'
     | 'delivery.agency_updated'      // NEW: Phase 1 - Delivery agency assignment
+    | 'order.completed'              // Customer confirmed delivery/satisfaction (or auto-confirmed)
     | 'note.added'
     | 'entitlement.revoked'          // NEW: Phase 2 - Digital entitlement revoked
     | 'entitlement.restored'         // NEW: Phase 2 - Digital entitlement restored
@@ -69,6 +70,7 @@ const OrderTimelineSchema = new Schema<IOrderTimeline>({
             'payment.updated',
             'fulfillment.updated',
             'delivery.agency_updated',
+            'order.completed',
             'note.added',
             'entitlement.revoked',
             'entitlement.restored',

@@ -12,6 +12,7 @@ import { eventBus } from '../../../core/events/event-bus';
 import { BookingCalendarSyncService } from './booking-calendar-sync.service';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import { earningsCompletionService } from '../../earnings/services/earnings-completion.service';
 import { format } from 'date-fns';
 
 export class BookingService {
@@ -498,6 +499,17 @@ export class BookingService {
     } catch (calendarError) {
       // Log but don't block status update
       console.error('[BookingService] Calendar sync error during status update:', calendarError);
+    }
+
+    // On completion, start the escrow hold window on this booking's held earnings
+    // (service products release only once the customer is satisfied / completed).
+    // Idempotent and best-effort: a no-op when the booking had no paid earnings.
+    if (newStatus === BookingStatus.COMPLETED) {
+      try {
+        await earningsCompletionService.onSourceCompleted('booking', booking._id.toString());
+      } catch (earningsError) {
+        console.error('[BookingService] Failed to mature booking earnings on completion:', earningsError);
+      }
     }
 
     return booking;

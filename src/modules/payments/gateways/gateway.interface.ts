@@ -48,7 +48,9 @@ export interface PaymentInstructions {
   
   // For card (Stripe)
   clientSecret?: string;        // For frontend confirmation
-  
+  chargedAmount?: number;       // Amount actually charged, in chargedCurrency (e.g. USD)
+  chargedCurrency?: string;     // Presentment currency Stripe charges in (e.g. "usd")
+
   // Common
   expiresAt?: Date;             // Payment session expiry
 }

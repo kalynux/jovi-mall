@@ -8,6 +8,7 @@ import { planExpiryWorker } from './modules/billing/workers/plan-expiry.worker';
 import { registerPlanNotificationConsumer } from './modules/billing/events/plan-notification.consumer';
 import { initializeVendorNotificationEventConsumers } from './modules/notifications/vendor-notification-event-consumer';
 import { fileCleanupWorker } from './modules/file-cleanup/workers/file-cleanup.worker';
+import { earningsReleaseWorker } from './modules/earnings/workers/earnings-release.worker';
 
 const PORT = process.env.PORT || 8022;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/jovi-mall';
@@ -30,6 +31,9 @@ async function startServer() {
 
     // Storage lifecycle: daily file-cleanup sweep (detach → delete → alert)
     fileCleanupWorker.start();
+
+    // Earnings: daily auto-confirm of stale deliveries + release of matured escrow holds
+    earningsReleaseWorker.start();
 
     app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);

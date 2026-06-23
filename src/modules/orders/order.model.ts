@@ -87,6 +87,16 @@ export interface IOrder extends Document {
   // Fulfillment tracking
   fulfillment_status: FulfillmentStatus;
 
+  // Completion (customer confirmation of delivery/satisfaction).
+  // Orthogonal to fulfillment_status: it gates the escrow release, NOT the
+  // fulfillment state machine. Set by the customer confirm-delivery endpoint or
+  // by the auto-confirm sweep.
+  completion: {
+    confirmed_at: Date | null;
+    confirmed_by: 'customer' | 'system' | null;
+    auto: boolean;
+  };
+
   // Timestamps
   created_at: Date;
   updated_at: Date;
@@ -232,6 +242,13 @@ const OrderSchema = new Schema<IOrder>({
     enum: ['pending', 'processing', 'shipped', 'delivered', 'fulfilled', 'cancelled'],
     default: 'pending',
     index: true  // For fulfillment status queries
+  },
+
+  // Completion (customer confirmation; gates escrow release).
+  completion: {
+    confirmed_at: { type: Date, default: null },
+    confirmed_by: { type: String, enum: ['customer', 'system', null], default: null },
+    auto: { type: Boolean, default: false }
   }
 }, {
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' }

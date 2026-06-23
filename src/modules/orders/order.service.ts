@@ -16,6 +16,7 @@ import { ProductModel } from '../catalog/models/product.model';
 import { ProductVariantModel } from '../catalog/models/product-variant.model';
 import { VendorCustomerSyncService } from '../vendors/services/vendor-customer-sync.service';
 import { eventBus } from '../../core/events/event-bus';
+import { earningsSplitService } from '../earnings/services/earnings-split.service';
 
 /**
  * OrderService - Cart-aware, payment-ready order management
@@ -427,6 +428,15 @@ export class OrderService {
     // Refresh product/variant inactivity clocks so the file-cleanup sweep never
     // detaches media from a product that just sold. Non-critical: log on failure.
     await this.markProductsOrdered(order);
+
+    // Split the paid amount into held earnings (vendor net, platform commission,
+    // agency delivery fee). Idempotent and best-effort: a failure here must not
+    // fail webhook processing — the daily sweep / a webhook retry will recover.
+    try {
+      await earningsSplitService.splitOrder(order);
+    } catch (error) {
+      console.error('[OrderService] Failed to split earnings on payment success:', error);
+    }
 
     // Add the paid total to the customer's denormalized lifetime spend.
     try {

@@ -29,6 +29,10 @@ app.use(cors({
   credentials: true, // Required for cookies
 }));
 
+// Stripe webhook signature verification needs the raw request bytes, so this
+// path must bypass the JSON body parser. Mounted BEFORE express.json().
+app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }));
+
 app.use(express.json());
 app.use(cookieParser()); // Required for session authentication
 

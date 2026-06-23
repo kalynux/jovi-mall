@@ -160,7 +160,7 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
 }
 ```
 - `gateway` (string, **required**) — one of `NOTCHPAY`, `MYCOOLPAY`, `STRIPE`.
-- `channel` (object, optional, defaults `{}`) — same shape as the top-up channel: `phoneNumber` + `phoneOperator` (`MTN`|`ORANGE`|`MOOV`) for mobile money, or `cardToken` for Stripe; optional `customerEmail`, `customerName`.
+- `channel` (object, optional, defaults `{}`) — same shape as the top-up channel: `phoneNumber` + `phoneOperator` (`MTN`|`ORANGE`|`MOOV`) for mobile money; for **Stripe** send only optional `customerEmail`/`customerName` (do **not** send `cardToken` — cards are collected client-side with the returned `clientSecret`). See [stripe-payments.md](./stripe-payments.md).
 
 **Success Response** — `201 Created`:
 ```json
@@ -178,7 +178,7 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
   "message": "Plan purchase initiated"
 }
 ```
-`instructions` is gateway-specific and may be `null` (mobile money: `{ ussdCode?, message?, expiresAt? }`; card: `{ clientSecret?, message?, expiresAt? }`). If the gateway confirms at initiation, the plan is applied immediately and `purchase.status` is `paid`.
+`instructions` is gateway-specific and may be `null` (mobile money: `{ ussdCode?, message?, expiresAt? }`; **Stripe**: `{ clientSecret?, chargedAmount?, chargedCurrency?, message? }` — note Stripe charges in **USD** while `price`/`currency` stay XAF; see [stripe-payments.md](./stripe-payments.md)). If the gateway confirms at initiation, the plan is applied immediately and `purchase.status` is `paid`.
 
 **Error Responses**:
 - `400 VALIDATION_ERROR` — bad `gateway`/`channel`.
@@ -380,7 +380,7 @@ Field rules:
 - `gateway` (string, **required**) — one of `NOTCHPAY`, `MYCOOLPAY`, `STRIPE`.
 - `channel` (object, optional, defaults `{}`) — payment channel details:
   - `phoneNumber` (string) and `phoneOperator` (`MTN` | `ORANGE` | `MOOV`) — for mobile money (NotchPay/MyCoolPay).
-  - `cardToken` (string) — for Stripe card payments.
+  - For **Stripe**, do **not** send `cardToken` — the card is collected client-side via the returned `clientSecret`. See [stripe-payments.md](./stripe-payments.md).
   - `customerEmail` (string, email), `customerName` (string) — optional, passed to the gateway.
 
 **Success Response** — `201 Created`:
@@ -405,7 +405,7 @@ Field rules:
 ```
 `instructions` shape varies by gateway and may be `null`:
 - Mobile money: `{ ussdCode?, message?, expiresAt? }`
-- Card (Stripe): `{ clientSecret?, message?, expiresAt? }`
+- Card (Stripe): `{ clientSecret?, chargedAmount?, chargedCurrency?, message? }` — Stripe charges the converted **USD** amount (`chargedAmount`/`chargedCurrency`) while `price`/`currency` stay XAF. See [stripe-payments.md](./stripe-payments.md).
 
 > If the gateway reports the payment already succeeded at initiation (rare for mobile money), the wallet is credited immediately and the returned `topup.status` is `paid`.
 

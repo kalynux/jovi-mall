@@ -1,3 +1,4 @@
+import Stripe from 'stripe';
 import {
   PaymentGateway,
   PaymentInitPayload,
@@ -8,227 +9,194 @@ import {
   RefundResult,
   PaymentGatewayStatus
 } from './gateway.interface';
-import { createAppError } from '../../../core/errors';
-import { ERROR_CODES } from '../../../core/error-codes';
-
+import { getStripeClient, toStripeCharge, fromMinorUnit } from './stripe.client';
 
 /**
  * StripeGateway - Card Payment Gateway
- * 
+ *
  * Stripe Payment Intents API for card payments.
- * 
+ *
  * ADAPTER PATTERN:
  * - No business logic
  * - Pure Stripe API wrapper
- * - Normalizes Stripe responses to standard interface
- * 
+ * - Normalizes Stripe responses to the standard PaymentGateway interface
+ *
+ * CURRENCY:
+ * The catalog is priced in XAF, but the WiMall Stripe account settles in USD.
+ * `toStripeCharge` converts the incoming amount to the account's presentment
+ * currency (USD) at a fixed configured rate before charging. The same helper is
+ * used for refunds so amounts stay consistent.
+ *
  * FLOW:
  * 1. Create PaymentIntent (returns client_secret)
- * 2. Frontend confirms payment with Stripe.js
+ * 2. Frontend confirms payment with Stripe.js / Payment Element
  * 3. Webhook notifies backend of status change
  * 4. Backend verifies payment status
- * 
+ *
  * API DOCS: https://stripe.com/docs/payments/payment-intents
  */
 export class StripeGateway implements PaymentGateway {
-  private secretKey: string;
-  private apiVersion: string = '2023-10-16';
-
-  constructor() {
-    this.secretKey = process.env.STRIPE_SECRET_KEY || '';
-
-    if (!this.secretKey) {
-      console.warn('[StripeGateway] STRIPE_SECRET_KEY not configured');
-    }
-  }
-
   /**
-   * Initiate card payment (create PaymentIntent)
+   * Initiate card payment (create PaymentIntent).
    */
   async initiatePayment(payload: PaymentInitPayload): Promise<PaymentInitResult> {
     try {
-      // Create Stripe PaymentIntent
-      const response = await this.callStripeAPI('/payment_intents', {
-        amount: Math.round(payload.amount * 100), // Stripe uses smallest currency unit (cents)
-        currency: payload.currency.toLowerCase(),
-        metadata: {
-          orderId: payload.orderId,
-          userId: payload.userId,
-          ...payload.metadata
-        },
-        description: `Order #${payload.orderId}`,
-        receipt_email: payload.channel.customerEmail,
-        // Automatic payment methods (card, etc.)
-        automatic_payment_methods: {
-          enabled: true
-        }
-      });
+      const stripe = getStripeClient();
+      const { amount, currency } = toStripeCharge(payload.amount, payload.currency);
 
-      // Successful PaymentIntent creation
-      if (response.id) {
-        const status = this.normalizeStripeStatus(response.status);
+      // Stable idempotency key so retries (or double submits) reuse the same intent.
+      const idempotencyKey =
+        payload.metadata?.purchaseId ||
+        payload.metadata?.topupId ||
+        `order_${payload.orderId}`;
 
-        return {
-          success: true,
-          gatewayRef: response.id,
-          status,
-          instructions: {
-            clientSecret: response.client_secret,
-            message: 'Complete payment with card on frontend',
+      const intent = await stripe.paymentIntents.create(
+        {
+          amount,
+          currency,
+          description: `Order #${payload.orderId}`,
+          receipt_email: payload.channel.customerEmail,
+          automatic_payment_methods: { enabled: true },
+          metadata: {
+            orderId: payload.orderId,
+            userId: payload.userId,
+            source_amount: String(payload.amount),
+            source_currency: (payload.currency || '').toLowerCase(),
+            ...(payload.metadata ?? {}),
           },
-          rawResponse: response
-        };
-      }
+        },
+        { idempotencyKey: `pi_${idempotencyKey}` }
+      );
 
-      // Failed creation
+      const status = this.normalizeStripeStatus(intent.status);
+
       return {
-        success: false,
-        gatewayRef: '',
-        status: 'FAILED' as PaymentGatewayStatus,
-        error: response.error?.message || 'Payment intent creation failed',
-        rawResponse: response
+        success: true,
+        gatewayRef: intent.id,
+        status,
+        instructions: {
+          clientSecret: intent.client_secret ?? undefined,
+          // Charged amount in the presentment currency, so the frontend can show dollars.
+          chargedAmount: fromMinorUnit(intent.amount, intent.currency),
+          chargedCurrency: intent.currency,
+          message: `Complete payment of ${fromMinorUnit(intent.amount, intent.currency)} ${intent.currency.toUpperCase()} with card`,
+        },
+        rawResponse: {
+          ...intent,
+          chargedAmount: fromMinorUnit(intent.amount, intent.currency),
+          chargedCurrency: intent.currency,
+        },
       };
-
     } catch (error: any) {
-      console.error('[StripeGateway] Initiate payment error:', error);
-      return {
-        success: false,
-        gatewayRef: '',
-        status: 'FAILED' as PaymentGatewayStatus,
-        error: error.message || 'Gateway communication error',
-        rawResponse: { error: error.message }
-      };
+      return this.toFailure(error, 'initiatePayment');
     }
   }
 
   /**
-   * Verify payment status (retrieve PaymentIntent)
+   * Verify payment status (retrieve PaymentIntent).
    */
   async verifyPayment(payload: PaymentVerifyPayload): Promise<PaymentVerifyResult> {
     try {
-      // Retrieve PaymentIntent from Stripe
-      const response = await this.callStripeAPI(`/payment_intents/${payload.gatewayRef}`, null, 'GET');
-
-      const status = this.normalizeStripeStatus(response.status);
+      const stripe = getStripeClient();
+      const intent = await stripe.paymentIntents.retrieve(payload.gatewayRef);
+      const status = this.normalizeStripeStatus(intent.status);
 
       return {
         success: status === 'SUCCEEDED',
         status,
         transactionDetails: {
-          paymentIntentId: response.id,
-          amount: response.amount / 100, // Convert back from cents
-          currency: response.currency,
-          charges: response.charges?.data || []
+          paymentIntentId: intent.id,
+          amount: fromMinorUnit(intent.amount, intent.currency),
+          currency: intent.currency,
+          latestCharge: intent.latest_charge,
         },
-        rawResponse: response
+        rawResponse: intent,
       };
-
     } catch (error: any) {
-      console.error('[StripeGateway] Verify payment error:', error);
+      console.error('[StripeGateway] Verify payment error:', error?.message ?? error);
       return {
         success: false,
-        status: 'FAILED' as PaymentGatewayStatus,
-        error: error.message || 'Verification failed',
-        rawResponse: { error: error.message }
+        status: 'FAILED',
+        error: error?.message || 'Verification failed',
+        rawResponse: { error: error?.message },
       };
     }
   }
 
   /**
-   * Refund payment
+   * Refund a payment (full or partial). The XAF amount is converted to the
+   * presentment currency with the same fixed rate used at charge time.
    */
   async refundPayment(payload: RefundPayload): Promise<RefundResult> {
     try {
-      // Create refund
-      const response = await this.callStripeAPI('/refunds', {
-        payment_intent: payload.gatewayRef,
-        amount: Math.round(payload.amount * 100), // Convert to cents
-        reason: payload.reason,
-        metadata: payload.metadata
-      });
+      const stripe = getStripeClient();
+      const { amount } = toStripeCharge(payload.amount, payload.metadata?.currency ?? 'xaf');
+
+      const refund = await stripe.refunds.create(
+        {
+          payment_intent: payload.gatewayRef,
+          amount,
+          reason: this.normalizeRefundReason(payload.reason),
+          metadata: payload.metadata as Stripe.MetadataParam | undefined,
+        },
+        { idempotencyKey: `re_${payload.gatewayRef}_${amount}` }
+      );
 
       return {
-        success: response.status === 'succeeded',
-        refundRef: response.id,
-        rawResponse: response
+        success: refund.status === 'succeeded' || refund.status === 'pending',
+        refundRef: refund.id,
+        rawResponse: refund,
       };
-
     } catch (error: any) {
-      console.error('[StripeGateway] Refund error:', error);
+      console.error('[StripeGateway] Refund error:', error?.message ?? error);
       return {
         success: false,
-        error: error.message || 'Refund failed',
-        rawResponse: { error: error.message }
+        error: error?.message || 'Refund failed',
+        rawResponse: { error: error?.message },
       };
     }
   }
 
   /**
-   * Normalize Stripe PaymentIntent status to standard status
+   * Normalize Stripe PaymentIntent status to the standard gateway status.
    */
   private normalizeStripeStatus(stripeStatus: string): PaymentGatewayStatus {
     const statusMap: Record<string, PaymentGatewayStatus> = {
-      'requires_payment_method': 'INITIATED',
-      'requires_confirmation': 'INITIATED',
-      'requires_action': 'PENDING',
-      'processing': 'PENDING',
-      'succeeded': 'SUCCEEDED',
-      'canceled': 'CANCELLED',
-      'requires_capture': 'PENDING', // For manual capture
+      requires_payment_method: 'INITIATED',
+      requires_confirmation: 'INITIATED',
+      requires_action: 'PENDING',
+      processing: 'PENDING',
+      requires_capture: 'PENDING', // manual capture
+      succeeded: 'SUCCEEDED',
+      canceled: 'CANCELLED',
     };
 
     return statusMap[stripeStatus] || 'FAILED';
   }
 
-  /**
-   * Call Stripe API
-   * PLACEHOLDER - Replace with actual Stripe SDK or HTTP client
-   */
-  private async callStripeAPI(
-    endpoint: string,
-    data: any = null,
-    method: 'GET' | 'POST' = 'POST'
-  ): Promise<any> {
-    // PLACEHOLDER IMPLEMENTATION
-    // In production, use Stripe Node SDK or fetch with proper error handling
-
-    console.log(`[StripeGateway] ${method} https://api.stripe.com/v1${endpoint}`, data);
-
-    // If API key is not configured, return mock response
-    if (!this.secretKey) {
-      if (method === 'POST' && endpoint === '/payment_intents') {
-        return {
-          id: `pi_${Date.now()}`,
-          status: 'requires_payment_method',
-          client_secret: `pi_${Date.now()}_secret_${Math.random().toString(36).slice(2)}`,
-          amount: data.amount,
-          currency: data.currency
-        };
-      }
-
-      return {
-        id: `pi_${Date.now()}`,
-        status: 'succeeded',
-        amount: 100000,
-        currency: 'xaf'
-      };
+  private normalizeRefundReason(
+    reason?: string
+  ): Stripe.RefundCreateParams.Reason | undefined {
+    if (reason === 'duplicate' || reason === 'fraudulent' || reason === 'requested_by_customer') {
+      return reason;
     }
+    return reason ? 'requested_by_customer' : undefined;
+  }
 
-    // TODO: Implement actual Stripe SDK call
-    // import Stripe from 'stripe';
-    // const stripe = new Stripe(this.secretKey, { apiVersion: this.apiVersion });
-    // 
-    // if (endpoint === '/payment_intents' && method === 'POST') {
-    //   return await stripe.paymentIntents.create(data);
-    // }
-    // if (endpoint.startsWith('/payment_intents/') && method === 'GET') {
-    //   const id = endpoint.split('/')[2];
-    //   return await stripe.paymentIntents.retrieve(id);
-    // }
-    // if (endpoint === '/refunds' && method === 'POST') {
-    //   return await stripe.refunds.create(data);
-    // }
+  /**
+   * Map a thrown Stripe error to the normalized failure result. Card declines
+   * are surfaced distinctly so callers can map them to PAYMENT_CARD_DECLINED.
+   */
+  private toFailure(error: any, op: string): PaymentInitResult {
+    const isCardError = error?.type === 'StripeCardError' || error instanceof Stripe.errors.StripeCardError;
+    console.error(`[StripeGateway] ${op} error:`, error?.message ?? error);
 
-    throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_IMPLEMENTED, 501, 'Stripe integration not yet implemented. Add STRIPE_SECRET_KEY to .env');
+    return {
+      success: false,
+      gatewayRef: '',
+      status: 'FAILED',
+      error: isCardError ? `card_declined: ${error.message}` : error?.message || 'Gateway communication error',
+      rawResponse: { error: error?.message, code: error?.code, declineCode: error?.decline_code },
+    };
   }
 }
