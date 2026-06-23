@@ -324,6 +324,12 @@ export function createAppError(
     [ERROR_CODES.AUTH_ROLE_PROFILE_NOT_FOUND]: 'Role profile not found',
     [ERROR_CODES.AUTH_WA_PHONE_ID_REQUIRED]: 'wa_phone_id is required',
 
+    [ERROR_CODES.EARNINGS_INVALID_SPLIT]: 'Order fees exceed the paid amount; cannot split earnings',
+    [ERROR_CODES.EARNINGS_ALLOCATION_NOT_FOUND]: 'Earnings allocation not found',
+    [ERROR_CODES.EARNINGS_ALREADY_COMPLETED]: 'This order has already been confirmed',
+    [ERROR_CODES.EARNINGS_ORDER_NOT_CONFIRMABLE]: 'This order cannot be confirmed yet',
+    [ERROR_CODES.EARNINGS_FORBIDDEN]: 'You are not allowed to access these earnings',
+
     [ERROR_CODES.PAYMENT_ORDER_NOT_FOUND]: 'Order not found',
     [ERROR_CODES.PAYMENT_ORDER_ALREADY_PAID]: 'Order is already paid',
     [ERROR_CODES.PAYMENT_INVALID_ORDER_STATUS]: 'Invalid order status for payment',
@@ -340,6 +346,7 @@ export function createAppError(
     [ERROR_CODES.PAYMENT_MISSING_BOOKING_ID]: 'Transaction does not have a bookingId',
     [ERROR_CODES.PAYMENT_GATEWAY_NOT_IMPLEMENTED]: 'Payment gateway not yet implemented',
     [ERROR_CODES.PAYMENT_CARD_DECLINED]: 'Card was declined',
+    [ERROR_CODES.STRIPE_WEBHOOK_SIGNATURE_INVALID]: 'Stripe webhook signature verification failed',
 
     [ERROR_CODES.BOOKING_NOT_FOUND]: 'Booking not found',
     [ERROR_CODES.BOOKING_INVALID_STATUS_TRANSITION]: 'Invalid status transition',

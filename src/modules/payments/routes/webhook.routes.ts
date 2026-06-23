@@ -1,6 +1,9 @@
 import { Router, Request, Response } from 'express';
+import Stripe from 'stripe';
 import { PaymentOrchestratorService } from '../services/payment-orchestrator.service';
-import { PaymentGatewayType } from '../models/payment-transaction.model';
+import { getStripeClient } from '../gateways/stripe.client';
+import { planPurchaseService } from '../../billing/services/plan-purchase.service';
+import { creditTopupService } from '../../billing/services/credit-topup.service';
 
 const router = Router();
 const paymentOrchestrator = new PaymentOrchestratorService();
@@ -20,40 +23,67 @@ const paymentOrchestrator = new PaymentOrchestratorService();
  * - etc.
  */
 router.post('/stripe', async (req: Request, res: Response) => {
+  const signature = req.headers['stripe-signature'] as string | undefined;
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  // Verify the signature against the RAW body (express.raw mounted in app.ts).
+  // Reject (4xx) on bad/missing signature so Stripe retries rather than us
+  // silently dropping the event.
+  let event: Stripe.Event;
   try {
-    const payload = req.body;
-    const signature = req.headers['stripe-signature'] as string;
+    if (!webhookSecret) {
+      console.error('[StripeWebhook] STRIPE_WEBHOOK_SECRET is not configured');
+      res.status(400).send('Webhook secret not configured');
+      return;
+    }
+    if (!signature) {
+      res.status(400).send('Missing stripe-signature header');
+      return;
+    }
+    event = getStripeClient().webhooks.constructEvent(req.body, signature, webhookSecret);
+  } catch (err: any) {
+    console.error('[StripeWebhook] Signature verification failed:', err?.message ?? err);
+    res.status(400).send(`Webhook signature verification failed: ${err?.message ?? 'invalid'}`);
+    return;
+  }
 
-    // TODO: Verify Stripe signature
-    // const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    // if (webhookSecret) {
-    //   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-    //   try {
-    //     stripe.webhooks.constructEvent(req.body, signature, webhookSecret);
-    //   } catch (err) {
-    //     console.error('Stripe webhook signature verification failed:', err);
-    //     return res.status(400).send('Webhook signature verification failed');
-    //   }
-    // }
+  try {
+    console.log('[StripeWebhook] Verified event:', event.type, event.id);
 
-    console.log('[StripeWebhook] Received event:', payload.type);
+    const object = event.data.object as { metadata?: Record<string, string> };
+    const purpose = object?.metadata?.purpose;
+    const isSucceeded = event.type === 'payment_intent.succeeded';
 
-    // Process webhook
-    const result = await paymentOrchestrator.handleWebhook(
-      'STRIPE',
-      payload,
-      signature
-    );
+    // Billing flows (plan purchases, credit top-ups) don't create
+    // PaymentTransactions — route them by metadata.purpose. Both completion
+    // methods are idempotent, so duplicate deliveries are safe.
+    if (purpose === 'plan_purchase') {
+      if (isSucceeded && object.metadata?.purchaseId) {
+        await planPurchaseService.completePurchase(object.metadata.purchaseId);
+      }
+      res.status(200).json({ success: true, handled: purpose, type: event.type });
+      return;
+    }
 
-    // Always return 200 to prevent retries
+    if (purpose === 'credit_topup') {
+      if (isSucceeded && object.metadata?.topupId) {
+        await creditTopupService.completeTopup(object.metadata.topupId);
+      }
+      res.status(200).json({ success: true, handled: purpose, type: event.type });
+      return;
+    }
+
+    // Orders & bookings: the orchestrator dedups by payload hash and updates the
+    // PaymentTransaction looked up via the PaymentIntent id (gatewayRef).
+    const result = await paymentOrchestrator.handleWebhook('STRIPE', event, signature);
     res.status(200).json(result);
-
   } catch (error: any) {
-    console.error('[StripeWebhook] Processing error:', error);
-    // Still return 200 to prevent retries
+    console.error('[StripeWebhook] Processing error:', error?.message ?? error);
+    // Signature already verified — return 200 so Stripe doesn't retry a
+    // poison event indefinitely; the verify/poll path remains a safety net.
     res.status(200).json({
       success: false,
-      message: 'Webhook received but processing failed'
+      message: 'Webhook verified but processing failed'
     });
   }
 });

@@ -20,6 +20,8 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
 import { transactionManager } from '../../../core/database/transaction.manager';
+import { earningsSplitService } from '../../earnings/services/earnings-split.service';
+import { earningsRefundService } from '../../earnings/services/earnings-refund.service';
 
 /**
  * PaymentOrchestratorService - Gateway-agnostic payment orchestration
@@ -339,6 +341,16 @@ export class PaymentOrchestratorService {
         );
       }
     });
+
+    // On a full refund, reverse this order's still-held earnings out of escrow.
+    // Best-effort: a failure must not fail the (already-completed) refund.
+    if (fullyRefunded) {
+      try {
+        await earningsRefundService.onRefund('order', orderId);
+      } catch (error) {
+        console.error('[PaymentOrchestrator] Failed to reverse earnings on refund:', error);
+      }
+    }
 
     // 7. Emit a domain event (fire-and-forget).
     eventBus.publish('payment.refunded', {
@@ -816,6 +828,14 @@ export class PaymentOrchestratorService {
 
     // Sync calendar event with new payment status
     await this.calendarSync.syncBookingPaymentStatus(booking);
+
+    // Split the paid amount into held earnings (vendor net + platform commission).
+    // Idempotent and best-effort: a failure must not fail webhook processing.
+    try {
+      await earningsSplitService.splitBooking(booking);
+    } catch (error) {
+      console.error('[PaymentOrchestrator] Failed to split booking earnings:', error);
+    }
 
     console.log(`[PaymentOrchestrator] Booking ${booking._id} marked as paid and calendar updated`);
   }

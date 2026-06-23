@@ -60,6 +60,18 @@ import adminBillingRoutes from '../modules/billing/routes/admin-billing.routes';
 router.use('/vendor', vendorBillingRoutes);
 router.use('/admin', adminBillingRoutes);
 
+// Earnings: commission/escrow ledger. Vendor sees held vs withdrawable balances;
+// admin sees the platform commission account. Mounted at the role roots →
+// /vendor/earnings, /admin/earnings/platform.
+import vendorEarningsRoutes from '../modules/earnings/routes/vendor-earnings.routes';
+import adminEarningsRoutes from '../modules/earnings/routes/admin-earnings.routes';
+router.use('/vendor', vendorEarningsRoutes);
+router.use('/admin', adminEarningsRoutes);
+
+// Customer order actions (e.g. confirm delivery → completes order, starts escrow hold)
+import customerOrderRoutes from '../modules/orders/customer-order.routes';
+router.use('/customer/orders', customerOrderRoutes);
+
 // Ticketing Module Routes
 import {
     adminTicketRoutes,

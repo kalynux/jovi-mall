@@ -97,6 +97,11 @@ export const MODELS = Object.freeze({
   CREDIT_TRANSACTION: 'CreditTransaction',
   CREDIT_TOPUP: 'CreditTopup',
   PLAN_PURCHASE: 'PlanPurchase',
+
+  // Earnings (commission, escrow & payout ledger)
+  EARNINGS_ACCOUNT: 'EarningsAccount',
+  EARNINGS_ALLOCATION: 'EarningsAllocation',
+  EARNINGS_LEDGER: 'EarningsLedger',
 } as const);
 
 export const COLLECTIONS = Object.freeze({
@@ -178,6 +183,11 @@ export const COLLECTIONS = Object.freeze({
   CREDIT_TRANSACTION: 'credit_transactions',
   CREDIT_TOPUP: 'credit_topups',
   PLAN_PURCHASE: 'plan_purchases',
+
+  // Earnings (commission, escrow & payout ledger)
+  EARNINGS_ACCOUNT: 'earnings_accounts',
+  EARNINGS_ALLOCATION: 'earnings_allocations',
+  EARNINGS_LEDGER: 'earnings_ledgers',
 } as const);
 
 export type ModelName = (typeof MODELS)[keyof typeof MODELS];
