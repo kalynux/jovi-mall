@@ -17,15 +17,13 @@ router.get('/plans', VendorBillingController.listPlans);
 router.get('/plan', VendorBillingController.getMyPlan);
 
 // Self-serve plan purchase (auto-activates / queues on gateway confirmation)
-router.get('/plan-purchases', VendorBillingController.listPlanPurchases);
+// Purchase history moved to the unified GET /vendor/transactions feed.
 router.post('/plans/:planId/purchase', VendorBillingController.purchasePlan);
 router.post('/plan-purchases/:id/verify', VendorBillingController.verifyPlanPurchase);
 
-// Credits
+// Credits. History (ledger + top-ups) moved to GET /vendor/transactions.
 router.get('/credits', VendorBillingController.getBalance);
-router.get('/credits/ledger', VendorBillingController.getLedger);
 router.get('/credits/packs', VendorBillingController.listTopupPacks);
-router.get('/credits/topups', VendorBillingController.listTopups);
 router.post('/credits/topups', VendorBillingController.initiateTopup);
 router.post('/credits/topups/:id/verify', VendorBillingController.verifyTopup);
 

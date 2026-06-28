@@ -11,8 +11,22 @@ import {
 } from '../repositories/vendor-notification-preference.repository';
 import { IVendorNotification } from '../models/vendor-notification.model';
 import { IVendorNotificationPreference } from '../models/vendor-notification-preference.model';
+import { VendorRepository } from '../../vendors/vendor.repository';
+import { TelegramRepository } from '../../telegram/telegram.repository';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+
+/**
+ * Live verification status for a vendor's secondary channels.
+ *
+ * Source of truth is the underlying entities (vendor + telegram link),
+ * not the stored preference flags — those are no longer authoritative.
+ */
+interface ChannelVerification {
+    emailVerified: boolean;
+    telegramVerified: boolean;
+    whatsappVerified: boolean;
+}
 
 export interface ListNotificationsResult {
     notifications: LeanVendorNotification[];
@@ -34,10 +48,14 @@ export interface ListNotificationsResult {
 export class VendorNotificationService {
     private notificationRepo: VendorNotificationRepository;
     private preferenceRepo: VendorNotificationPreferenceRepository;
+    private vendorRepo: VendorRepository;
+    private telegramRepo: TelegramRepository;
 
     constructor() {
         this.notificationRepo = new VendorNotificationRepository();
         this.preferenceRepo = new VendorNotificationPreferenceRepository();
+        this.vendorRepo = new VendorRepository();
+        this.telegramRepo = new TelegramRepository();
     }
 
     /**
@@ -109,32 +127,96 @@ export class VendorNotificationService {
 
     /**
      * Get notification preferences for vendor
-     * 
-     * Creates defaults if not exists.
-     * 
+     *
+     * Creates defaults if not exists. Verification status is computed live
+     * from the underlying entities (vendor + telegram link) and overlaid onto
+     * the returned document — the stored *Verified flags are not authoritative.
+     *
      * @param vendorId - Vendor ID from auth context
-     * @returns Preferences
+     * @returns Preferences with live verification status
      */
     async getPreferences(
         vendorId: string | mongoose.Types.ObjectId
     ): Promise<IVendorNotificationPreference> {
-        return await this.preferenceRepo.getByVendor(vendorId);
+        const [prefs, verification] = await Promise.all([
+            this.preferenceRepo.getByVendor(vendorId),
+            this.computeVerification(vendorId)
+        ]);
+
+        prefs.emailVerified = verification.emailVerified;
+        prefs.telegramVerified = verification.telegramVerified;
+        prefs.whatsappVerified = verification.whatsappVerified;
+
+        return prefs;
     }
 
     /**
      * Update notification preferences
-     * 
-     * Auto-disables other secondary channels when one is enabled.
+     *
+     * A secondary channel can only be enabled if it is currently verified
+     * (checked live). Auto-disables other secondary channels when one is enabled.
      * Priority: email > telegram > whatsapp
-     * 
+     *
      * @param vendorId - Vendor ID from auth context
      * @param updates - Preference updates
-     * @returns Updated preferences
+     * @returns Updated preferences with live verification status
+     * @throws AppError(400) if enabling an unverified channel
      */
     async updatePreferences(
         vendorId: string | mongoose.Types.ObjectId,
         updates: UpdatePreferencesPayload
     ): Promise<IVendorNotificationPreference> {
-        return await this.preferenceRepo.upsertPreferences(vendorId, updates);
+        const verification = await this.computeVerification(vendorId);
+
+        if (updates.emailEnabled === true && !verification.emailVerified) {
+            throw this.channelNotVerifiedError('email');
+        }
+        if (updates.telegramEnabled === true && !verification.telegramVerified) {
+            throw this.channelNotVerifiedError('telegram');
+        }
+        if (updates.whatsappEnabled === true && !verification.whatsappVerified) {
+            throw this.channelNotVerifiedError('whatsapp');
+        }
+
+        const prefs = await this.preferenceRepo.upsertPreferences(vendorId, updates);
+
+        prefs.emailVerified = verification.emailVerified;
+        prefs.telegramVerified = verification.telegramVerified;
+        prefs.whatsappVerified = verification.whatsappVerified;
+
+        return prefs;
+    }
+
+    /**
+     * Resolve live verification status for a vendor's secondary channels.
+     *
+     * - email    → vendor.email_verified
+     * - telegram → an active telegram link for the vendor's user
+     * - whatsapp → vendor.wa.verified
+     */
+    private async computeVerification(
+        vendorId: string | mongoose.Types.ObjectId
+    ): Promise<ChannelVerification> {
+        const vendor = await this.vendorRepo.findById(vendorId.toString());
+        if (!vendor) {
+            return { emailVerified: false, telegramVerified: false, whatsappVerified: false };
+        }
+
+        const telegramLink = await this.telegramRepo.findByUserId(vendor.user_id.toString());
+
+        return {
+            emailVerified: !!vendor.email_verified,
+            telegramVerified: !!(telegramLink && telegramLink.isActive),
+            whatsappVerified: !!vendor.wa?.verified
+        };
+    }
+
+    private channelNotVerifiedError(channel: 'email' | 'telegram' | 'whatsapp') {
+        return createAppError(
+            ERROR_CODES.VENDOR_NOTIFICATION_CHANNEL_NOT_VERIFIED,
+            400,
+            `Cannot enable ${channel} notifications: channel is not verified`,
+            { channel }
+        );
     }
 }

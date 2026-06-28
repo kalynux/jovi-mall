@@ -1,6 +1,9 @@
 import { getRedisClient, WA_WINDOW_DB } from '../../infra/redis/redis.factory';
 
-const WINDOW_TTL = 86400; // 24 hours
+// Track the window for 23h rather than the full 24h Meta allows, so we stop
+// sending free-form text a safe margin before the real window closes (and fall
+// back to a template) instead of risking a rejected out-of-window text send.
+const WINDOW_TTL = 82800; // 23 hours
 
 export class WhatsappService {
   /**

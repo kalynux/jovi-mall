@@ -21,6 +21,7 @@ export interface GetAgentProfileResponseDto {
     liveState: IAgentLiveState;
     wa: { verified: boolean; name?: string } | null;
     timezone: string;
+    preferredLanguage: string;
     status: string;
     onboardingStep: number;
     createdAt: Date;
@@ -57,6 +58,7 @@ export class AgentProfileMapper {
             liveState: agent.live_state,
             wa: agent.wa ? { verified: agent.wa.verified, name: agent.wa.name } : null,
             timezone: agent.timezone,
+            preferredLanguage: agent.preferred_language,
             status: agent.status,
             onboardingStep: agent.onboarding_step,
             createdAt: agent.created_at,
@@ -70,6 +72,7 @@ export class AgentProfileMapper {
         if (input.name !== undefined) payload.name = input.name;
         if (input.avatar_url !== undefined) payload.avatar_url = input.avatar_url as string | null;
         if (input.timezone !== undefined) payload.timezone = input.timezone;
+        if (input.preferred_language !== undefined) payload.preferred_language = input.preferred_language;
         if (input.vehicle_info !== undefined) payload.vehicle_info = input.vehicle_info as IAgentVehicleInfo;
         if (input.legal_identity !== undefined) {
             payload.legal_identity = {

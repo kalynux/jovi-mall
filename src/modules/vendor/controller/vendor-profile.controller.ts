@@ -19,6 +19,11 @@ const SetDefaultDeliveryAgencySchema = z.object({
 
 const SetAutoRedirectOrdersSchema = z.object({
   enabled: z.boolean(),
+  thresholdAmount: z.number().min(0).nullable().optional(),
+});
+
+const SetAutoCancelUnpaidDaysSchema = z.object({
+  days: z.number().int().min(1).max(90),
 });
 
 const vendorProfileService = new VendorProfileService();
@@ -150,17 +155,45 @@ export class VendorProfileController {
   static getAutoRedirectOrders = asyncHandler(async (req: Request, res: Response) => {
     const vendorId = req.auth!.role_entity._id.toString();
     const enabled = await vendorSettingsRepository.getAutoRedirectOrdersToAgency(vendorId);
-    res.json({ success: true, data: { autoRedirectOrdersToAgency: enabled } });
+    const thresholdAmount = await vendorSettingsRepository.getAutoRedirectThresholdAmount(vendorId);
+    res.json({
+      success: true,
+      data: { autoRedirectOrdersToAgency: enabled, autoRedirectThresholdAmount: thresholdAmount },
+    });
   });
 
   static setAutoRedirectOrders = asyncHandler(async (req: Request, res: Response) => {
     const vendorId = req.auth!.role_entity._id.toString();
-    const { enabled } = SetAutoRedirectOrdersSchema.parse(req.body);
+    const { enabled, thresholdAmount } = SetAutoRedirectOrdersSchema.parse(req.body);
     const updated = await vendorSettingsRepository.setAutoRedirectOrdersToAgency(vendorId, enabled);
+    // Only touch the threshold when the caller explicitly provided it (including null to clear it).
+    const threshold =
+      thresholdAmount !== undefined
+        ? await vendorSettingsRepository.setAutoRedirectThresholdAmount(vendorId, thresholdAmount)
+        : await vendorSettingsRepository.getAutoRedirectThresholdAmount(vendorId);
     res.json({
       success: true,
-      data: { autoRedirectOrdersToAgency: updated },
+      data: { autoRedirectOrdersToAgency: updated, autoRedirectThresholdAmount: threshold },
       message: 'Auto-redirect orders setting updated',
+    });
+  });
+
+  // ─── Auto-cancel Unpaid Orders ──────────────────────────────────────────
+
+  static getAutoCancelUnpaidDays = asyncHandler(async (req: Request, res: Response) => {
+    const vendorId = req.auth!.role_entity._id.toString();
+    const days = await vendorSettingsRepository.getAutoCancelUnpaidDays(vendorId);
+    res.json({ success: true, data: { autoCancelUnpaidDays: days } });
+  });
+
+  static setAutoCancelUnpaidDays = asyncHandler(async (req: Request, res: Response) => {
+    const vendorId = req.auth!.role_entity._id.toString();
+    const { days } = SetAutoCancelUnpaidDaysSchema.parse(req.body);
+    const updated = await vendorSettingsRepository.setAutoCancelUnpaidDays(vendorId, days);
+    res.json({
+      success: true,
+      data: { autoCancelUnpaidDays: updated },
+      message: 'Auto-cancel unpaid orders setting updated',
     });
   });
 }

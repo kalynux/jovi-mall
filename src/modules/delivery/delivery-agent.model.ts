@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
 import { AgentOnboardingStep } from '../../core/constants/onboarding-steps';
+import { SUPPORTED_LANGUAGES, Language } from '../../core/constants/languages';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 // ─── Vehicle Info Sub-Schema ──────────────────────────────────────────────────
@@ -96,6 +97,8 @@ export interface IDeliveryAgent extends Document {
     last_seen_at?: Date;
   };
   timezone: string;
+  /** Preferred language for notifications/messaging (ISO 639-1). */
+  preferred_language: Language;
   status: 'active' | 'pending_verification' | 'inactive';
   /**
    * Onboarding progress. See AgentOnboardingStep constants.
@@ -136,6 +139,7 @@ const DeliveryAgentSchema = new Schema<IDeliveryAgent>(
       last_seen_at: Date,
     },
     timezone: { type: String, default: 'Africa/Douala', required: true },
+    preferred_language: { type: String, enum: SUPPORTED_LANGUAGES, default: 'en' },
     status: {
       type: String,
       enum: ['active', 'pending_verification', 'inactive'],

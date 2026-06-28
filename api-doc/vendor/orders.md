@@ -54,8 +54,8 @@ Authorization: Bearer <access_token>
 **Path Parameters**: None
 
 **Query Parameters**:
-- `status` (string, optional) - Filter by order status. Enum: `pending`, `processing`, `shipped`, `delivered`, `fulfilled`, `cancelled`
-- `paymentStatus` (string, optional) - Filter by payment status. Enum: `pending`, `AWAITING_PAYMENT`, `paid`, `failed`, `refunded`
+- `status` (string, optional) - Filter by order status. Enum: `pending`, `processing`, `shipped`, `delivered`, `fulfilled`, `cancelled`, `returned`
+- `paymentStatus` (string, optional) - Filter by payment status. Enum: `pending`, `AWAITING_PAYMENT`, `paid`, `disputed`, `failed`, `refunded`
 - `orderType` (string, optional) - Filter by order type. Enum: `physical`, `digital`
 - `dateFrom` (string, optional) - Filter orders from date (ISO 8601 format)
 - `dateTo` (string, optional) - Filter orders to date (ISO 8601 format)
@@ -264,6 +264,7 @@ The response is the full updated order details object (same shape as `GET /api/v
 - `400` – `VALIDATION_ERROR` – Invalid status value
 - `400` – `INVALID_STATE_TRANSITION` – State transition not allowed (e.g., cannot move from `delivered` to `processing`)
 - `403` – `FORBIDDEN` – Cannot update status (e.g., payment not confirmed)
+- `423` – `ORDER_DISPUTE_HOLD` – **The order is frozen by an open payment dispute and cannot be advanced until it settles.** `details` includes `{ disputeId, reason }`. See "Payment disputes" below.
 
 ---
 
@@ -728,6 +729,7 @@ pending → processing → shipped → delivered
 | `delivered` | Order delivered to customer (physical products) |
 | `fulfilled` | Service completed or digital product delivered |
 | `cancelled` | Order cancelled by vendor or customer |
+| `returned` | **Terminal.** Set automatically when a **paid dispute is lost** on an order that had already shipped/delivered (goods must come back). Vendors cannot set this. |
 
 ### Payment Status Values
 
@@ -736,15 +738,55 @@ pending → processing → shipped → delivered
 | `pending` | Payment not yet initiated |
 | `AWAITING_PAYMENT` | Awaiting payment confirmation |
 | `paid` | Payment completed successfully |
+| `disputed` | **A card payment is under dispute (chargeback). The order is frozen — see "Payment disputes" below.** |
 | `failed` | Payment attempt failed |
-| `refunded` | Payment has been refunded |
+| `refunded` | Payment has been refunded (incl. a lost dispute) |
 
 ### State Transition Rules
 
 The system enforces valid state transitions:
-- Cannot transition from terminal states (`delivered`, `fulfilled`, `cancelled`) to non-terminal states
-- Cannot mark order as `shipped` if payment status is not `paid`
+- Cannot transition from terminal states (`delivered`, `fulfilled`, `cancelled`, `returned`) to non-terminal states
+- Cannot mark order as `shipped`/`processing` if payment status is not `paid`
+- **An order on dispute hold cannot advance at all (see below) — returns `423`.**
 - State machine validation is enforced in the service layer
+
+### Payment disputes & order freeze (dashboard changes)
+
+Card payments (Stripe) can be **disputed** by the customer (a chargeback). The
+backend now reacts to disputes automatically, and the vendor dashboard must
+reflect the frozen state.
+
+**The order object carries a `dispute_hold` field:**
+```jsonc
+"dispute_hold": {
+  "active": true,                 // order is frozen
+  "disputed_at": "2026-06-24T10:00:00.000Z",
+  "resolved_at": null,            // set when won/lost
+  "gateway_dispute_id": "dp_123",
+  "reason": "stripe_dispute"
+}
+```
+
+**Lifecycle the dashboard should render:**
+1. **Dispute opened** → `payment_status` becomes `disputed` and `dispute_hold.active = true`.
+   The order is **frozen**: any call to `PATCH /api/vendor/orders/:id/status` returns
+   **`423 ORDER_DISPUTE_HOLD`**. Disable the status-advance buttons and show a clear
+   "Payment under dispute — frozen" banner.
+2. **Dispute won** → `payment_status` returns to `paid`, `dispute_hold.active = false`.
+   Re-enable the normal fulfilment controls.
+3. **Dispute lost** (or full refund) → `payment_status` becomes `refunded`,
+   `dispute_hold.active = false`, and `fulfillment_status` becomes `returned`
+   (if it had shipped/delivered) or `cancelled` (if not). Vendor earnings for the
+   order are reversed. The order is terminal — show it as closed/returned.
+
+**What to change on the dashboard:**
+- Handle the new `payment_status: "disputed"` and `fulfillment_status: "returned"` values
+  (badges, filters, list columns).
+- When `dispute_hold.active` is true, **disable all fulfilment actions** and don't even
+  attempt the status PATCH; if you do, handle the `423` gracefully (show the banner, not a generic error).
+- Surface the dispute on the order detail view (a "Payment disputed" notice with the date).
+- Resolution is automatic from Stripe webhooks; the vendor cannot act on a frozen order.
+  (Admins can manually resolve via the admin tools if a Stripe event is missed.)
 
 ### Date Filters
 

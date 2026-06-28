@@ -15,6 +15,16 @@ interface SendMessageResponse {
     description?: string;
 }
 
+export interface InlineUrlButton {
+    text: string;
+    url: string;
+}
+
+export interface SendMessageOptions {
+    /** Optional inline URL button rendered under the message. */
+    button?: InlineUrlButton;
+}
+
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 export class TelegramBotService {
@@ -40,12 +50,17 @@ export class TelegramBotService {
      * @param text Message text (max 4096 chars)
      * @returns True if sent successfully
      */
-    async sendMessage(chatId: string, text: string): Promise<boolean> {
+    async sendMessage(chatId: string, text: string, options: SendMessageOptions = {}): Promise<boolean> {
         try {
             const response = await this.api.post<SendMessageResponse>('sendMessage', {
                 chat_id: chatId,
                 text,
                 parse_mode: 'Markdown',
+                ...(options.button && {
+                    reply_markup: {
+                        inline_keyboard: [[{ text: options.button.text, url: options.button.url }]],
+                    },
+                }),
             });
 
             if (response.data.ok) {

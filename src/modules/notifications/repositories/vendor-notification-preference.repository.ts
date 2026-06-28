@@ -15,6 +15,7 @@ export interface UpdatePreferencesPayload {
         bookingCancelled?: boolean;
         paymentReceivedPartial?: boolean;
         paymentReceivedFull?: boolean;
+        storageAlert?: boolean;
     };
 }
 
@@ -52,7 +53,8 @@ export class VendorNotificationPreferenceRepository {
                     bookingCreated: true,
                     bookingCancelled: true,
                     paymentReceivedPartial: true,
-                    paymentReceivedFull: true
+                    paymentReceivedFull: true,
+                    storageAlert: true
                 }
             });
         }
@@ -61,11 +63,11 @@ export class VendorNotificationPreferenceRepository {
     }
 
     /**
-     * Update preferences with auto-disable logic for secondary channels
-     * 
-     * When enabling a secondary channel, others are auto-disabled.
-     * Priority order: email > telegram > whatsapp
-     * 
+     * Update preferences with auto-disable logic for secondary channels.
+     *
+     * Exactly ONE secondary channel may be active at a time: enabling one
+     * auto-disables the others. Priority order: telegram > email > whatsapp.
+     *
      * @param vendorId - Vendor ID
      * @param updates - Partial preference updates
      * @returns Updated preferences
@@ -77,42 +79,41 @@ export class VendorNotificationPreferenceRepository {
         // Get current preferences
         const current = await this.getByVendor(vendorId);
 
-        // Determine which secondary channel to enable (if any)
-        // Priority order: email > telegram > whatsapp
+        // Only one secondary channel can be enabled; enabling one disables the rest.
+        // Priority order when multiple are requested: telegram > email > whatsapp.
         let secondaryChannelUpdate: any = {};
 
-        if (updates.emailEnabled === true) {
+        if (updates.telegramEnabled === true) {
             secondaryChannelUpdate = {
-                emailEnabled: true,
-                telegramEnabled: false,
+                telegramEnabled: true,
+                emailEnabled: false,
                 whatsappEnabled: false
             };
-        } else if (updates.telegramEnabled === true) {
+        } else if (updates.emailEnabled === true) {
             secondaryChannelUpdate = {
-                emailEnabled: false,
-                telegramEnabled: true,
+                telegramEnabled: false,
+                emailEnabled: true,
                 whatsappEnabled: false
             };
         } else if (updates.whatsappEnabled === true) {
             secondaryChannelUpdate = {
-                emailEnabled: false,
                 telegramEnabled: false,
+                emailEnabled: false,
                 whatsappEnabled: true
             };
         } else if (
-            updates.emailEnabled === false &&
             updates.telegramEnabled === false &&
+            updates.emailEnabled === false &&
             updates.whatsappEnabled === false
         ) {
             // All disabled explicitly
             secondaryChannelUpdate = {
-                emailEnabled: false,
                 telegramEnabled: false,
+                emailEnabled: false,
                 whatsappEnabled: false
             };
         }
 
-        // Build update payload
         const updatePayload: any = {
             ...secondaryChannelUpdate
         };
@@ -125,6 +126,7 @@ export class VendorNotificationPreferenceRepository {
             updatePayload['preferences.bookingCancelled'] = updates.preferences.bookingCancelled ?? current.preferences.bookingCancelled;
             updatePayload['preferences.paymentReceivedPartial'] = updates.preferences.paymentReceivedPartial ?? current.preferences.paymentReceivedPartial;
             updatePayload['preferences.paymentReceivedFull'] = updates.preferences.paymentReceivedFull ?? current.preferences.paymentReceivedFull;
+            updatePayload['preferences.storageAlert'] = updates.preferences.storageAlert ?? current.preferences.storageAlert;
         }
 
         const result = await VendorNotificationPreferenceModel.findOneAndUpdate(

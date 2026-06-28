@@ -136,6 +136,7 @@ export class EarningsAccountService {
     };
   }
 
+  /** Paginated earnings ledger (still used by the admin platform-earnings view). */
   async getLedger(ownerType: EarningsOwnerType, ownerId: string | null, page: number, limit: number) {
     return this.ledgerRepo.listByOwner(ownerType, ownerId, page, limit);
   }

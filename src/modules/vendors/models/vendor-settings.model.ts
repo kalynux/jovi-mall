@@ -40,6 +40,19 @@ export interface IVendorSettings extends Document {
      * `pending` until the vendor dispatches them manually. Defaults to false.
      */
     auto_redirect_orders_to_agency: boolean;
+    /**
+     * Max order total (in the order's own currency) for which auto-redirect
+     * applies. When set, a paid physical order whose `total_amount` exceeds this
+     * cap is NOT auto-dispatched — its shipments stay `pending` for manual
+     * dispatch even if `auto_redirect_orders_to_agency` is on. `null` (default)
+     * means no cap: every order is auto-dispatched when the toggle is on.
+     */
+    auto_redirect_threshold_amount: number | null;
+    /**
+     * Number of days an order may remain unpaid before the daily sweep
+     * auto-cancels it. Minimum 1 (cannot be 0). Defaults to 3.
+     */
+    auto_cancel_unpaid_days: number;
     created_at: Date;
     updated_at: Date;
 }
@@ -96,6 +109,17 @@ const VendorSettingsSchema = new Schema<IVendorSettings>(
         auto_redirect_orders_to_agency: {
             type: Boolean,
             default: false
+        },
+        auto_redirect_threshold_amount: {
+            type: Number,
+            default: null,
+            min: 0
+        },
+        auto_cancel_unpaid_days: {
+            type: Number,
+            default: 3,
+            min: 1,
+            max: 90
         }
     },
     {

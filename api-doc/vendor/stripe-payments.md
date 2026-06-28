@@ -208,3 +208,21 @@ from `POST /vendor/credits/topups/:id/verify`.
 - Mobile-money flows (USSD instructions, polling) are untouched.
 - The verify-and-poll pattern is the same; it just tends to resolve faster now
   because the webhook finalizes server-side almost immediately after confirmation.
+
+---
+
+## 6. After the sale: disputes / chargebacks
+
+A card payment can be **disputed** (chargeback) or refunded after it succeeds. The backend now
+reacts automatically, which introduces new statuses the dashboard must render. These live in the
+per-area docs:
+
+- **Orders** — `payment_status: "disputed"` + a `dispute_hold` that **freezes** the order
+  (status updates return `423`), and a `"returned"` fulfilment status on a lost dispute. See the
+  "Payment disputes & order freeze" section in [orders.md](./orders.md).
+- **Bookings** — `paymentStatus: "disputed"` → `refunded`/`cancelled`. See [bookings.md](./bookings.md).
+- **Plan purchases / credit top-ups** — a `"reversed"` status, downgrade-to-free, and a possibly
+  **negative** credit balance. See "Payment disputes / chargebacks" in [billing.md](./billing.md).
+
+No new vendor endpoints — these are all driven by Stripe webhooks; the dashboard only needs to
+display the new states.

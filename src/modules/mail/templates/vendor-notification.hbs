@@ -1,9 +1,9 @@
-\u003c!DOCTYPE html\u003e
-\u003chtml lang="en"\u003e
-\u003chead\u003e
-\u003cmeta charset="UTF-8"\u003e
-\u003cmeta name="viewport" content="width=device-width, initial-scale=1.0"\u003e
-\u003cstyle\u003e
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
 body {
 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
 line-height: 1.6;
@@ -35,6 +35,20 @@ font-size: 16px;
 color: #555;
 margin: 20px 0;
 }
+.cta {
+text-align: center;
+margin: 32px 0 8px 0;
+}
+.cta-button {
+display: inline-block;
+background-color: #4A90E2;
+color: #ffffff !important;
+text-decoration: none;
+font-size: 16px;
+font-weight: 600;
+padding: 14px 28px;
+border-radius: 6px;
+}
 .footer {
 margin-top: 30px;
 padding-top: 20px;
@@ -47,22 +61,27 @@ text-align: center;
 font-weight: 600;
 color: #4A90E2;
 }
-\u003c/style\u003e
-\u003c/head\u003e
-\u003cbody\u003e
-\u003cdiv class="container"\u003e
-\u003cdiv class="header"\u003e
-\u003ch1 class="title"\u003e{{title}}\u003c/h1\u003e
-\u003cp style="margin: 0; color: #888;"\u003eHi \u003cspan
-class="vendor-name"\u003e{{vendorName}}\u003c/span\u003e,\u003c/p\u003e
-\u003c/div\u003e
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header">
+<h1 class="title">{{title}}</h1>
+<p style="margin: 0; color: #888;">Hi <span class="vendor-name">{{vendorName}}</span>,</p>
+</div>
 
-\u003cp class="message"\u003e{{message}}\u003c/p\u003e
+<p class="message">{{message}}</p>
 
-\u003cdiv class="footer"\u003e
-\u003cp\u003eThis is an automated notification from Jovi Mall.\u003c/p\u003e
-\u003cp\u003eYou can manage your notification preferences from your vendor dashboard.\u003c/p\u003e
-\u003c/div\u003e
-\u003c/div\u003e
-\u003c/body\u003e
-\u003c/html\u003e
+{{#if actionUrl}}
+<div class="cta">
+<a class="cta-button" href="{{actionUrl}}" target="_blank" rel="noopener">{{actionLabel}}</a>
+</div>
+{{/if}}
+
+<div class="footer">
+<p>This is an automated notification from Jovi Mall.</p>
+<p>You can manage your notification preferences from your vendor dashboard.</p>
+</div>
+</div>
+</body>
+</html>

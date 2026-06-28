@@ -27,11 +27,28 @@ export type AggregateType = 'order' | 'booking' | 'payment' | 'storage';
  * 
  * Historical snapshot of channels used at notification creation time.
  */
-export type DeliveryChannel = 'in-app' | 'email' | 'telegram' | 'whatsapp';
+export type DeliveryChannel = 'in-app' | 'email' | 'telegram' | 'whatsapp' | 'push';
+
+/**
+ * Notification Action (deep-link)
+ *
+ * The clickable action for a notification, localized in the vendor's language.
+ * Lets the frontend open the relevant page when a notification is clicked —
+ * the same action surfaced as a button on the secondary channels.
+ *
+ * - `label`: localized button text, e.g. "View order"
+ * - `path`:  relative deep-link the SPA can route to, e.g. "orders/665f…"
+ * - `url`:   absolute deep-link (present only when VENDOR_APP_URL is configured)
+ */
+export interface NotificationAction {
+    label: string;
+    path: string;
+    url?: string;
+}
 
 /**
  * Vendor Notification Interface
- * 
+ *
  * In-app notifications are the primary source of truth.
  * Secondary channels (email, telegram, whatsapp) are fire-and-forget.
  */
@@ -42,7 +59,9 @@ export interface IVendorNotification extends Document {
     message: string;
     aggregateType: AggregateType;
     aggregateId: mongoose.Types.ObjectId;
+    action?: NotificationAction;
     deliveredVia: DeliveryChannel[];
+    deliveryErrors?: Array<{ channel: DeliveryChannel; error: string; failedAt: Date }>;
     isRead: boolean;
     readAt: Date | null;
     idempotencyKey: string;
@@ -91,11 +110,39 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
             type: Schema.Types.ObjectId,
             required: true
         },
+        action: {
+            type: new Schema(
+                {
+                    label: { type: String, required: true },
+                    path: { type: String, required: true },
+                    url: { type: String }
+                },
+                { _id: false }
+            ),
+            default: undefined
+        },
         deliveredVia: {
             type: [String],
-            enum: ['in-app', 'email', 'telegram', 'whatsapp'],
+            enum: ['in-app', 'email', 'telegram', 'whatsapp', 'push'],
             default: ['in-app'],
             required: true
+        },
+        deliveryErrors: {
+            type: [
+                new Schema(
+                    {
+                        channel: {
+                            type: String,
+                            enum: ['in-app', 'email', 'telegram', 'whatsapp', 'push'],
+                            required: true
+                        },
+                        error: { type: String, required: true },
+                        failedAt: { type: Date, required: true }
+                    },
+                    { _id: false }
+                )
+            ],
+            default: undefined
         },
         isRead: {
             type: Boolean,

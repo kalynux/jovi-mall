@@ -109,6 +109,13 @@ export interface TemplateMessage {
 
 export interface TemplateComponent {
     type: 'header' | 'body' | 'button';
+    /**
+     * Button sub-type (required by Meta for button components).
+     * e.g. 'url' for a dynamic URL-suffix button, 'quick_reply' for replies.
+     */
+    sub_type?: 'url' | 'quick_reply';
+    /** Zero-based button index (required by Meta for button components). */
+    index?: number;
     /** Component parameters */
     parameters: TemplateParameter[];
 }

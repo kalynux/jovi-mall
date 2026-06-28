@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
 
@@ -43,6 +44,7 @@ export const UpdateAgentProfileSchema = z.object({
     name: z.string().min(1).max(100).trim().optional(),
     avatar_url: z.string().url().nullable().optional(),
     timezone: z.string().min(1).trim().optional(),
+    preferred_language: z.enum(SUPPORTED_LANGUAGES).optional(),
     vehicle_info: VehicleInfoSchema.optional(),
     legal_identity: LegalIdentitySchema.optional(),
     emergency_contact: EmergencyContactSchema.nullable().optional(),

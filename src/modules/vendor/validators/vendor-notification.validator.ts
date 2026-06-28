@@ -48,7 +48,8 @@ export const UpdateNotificationPreferencesSchema = z.object({
         bookingCreated: z.boolean().optional(),
         bookingCancelled: z.boolean().optional(),
         paymentReceivedPartial: z.boolean().optional(),
-        paymentReceivedFull: z.boolean().optional()
+        paymentReceivedFull: z.boolean().optional(),
+        storageAlert: z.boolean().optional()
     }).optional()
 });
 

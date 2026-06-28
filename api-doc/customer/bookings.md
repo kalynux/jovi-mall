@@ -369,6 +369,11 @@ Bookings created through this flow start `unpaid`, and `confirmed` (calendar and
 
 See [vendor/bookings.md](../vendor/bookings.md#booking-status-state-machine) for the status state machine and the vendor-side transitions (confirm, complete, no-show, cancel, reschedule).
 
+> **Cancellation policy.** A customer-initiated booking cancellation is now gated by the
+> vendor's `cancellation_policy` (the `cancellable` flag and `cancellation_deadline`,
+> evaluated against the booking's `startAt`). When the policy disallows it, the cancel
+> request returns `422 CANCELLATION_NOT_ALLOWED` with a `details` object describing the rule.
+
 ---
 
 ## Error Response Format

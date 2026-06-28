@@ -1,8 +1,8 @@
 // Must run before any app module is imported so env-driven config read at import
 // time (e.g. credit pricing in the billing module) sees the .env values.
-// import 'dotenv/config';
-import dotenv from 'dotenv';
-dotenv.config();
+import 'dotenv/config';
+// import dotenv from 'dotenv';
+// dotenv.config();
 import mongoose from 'mongoose';
 import { app } from './app';
 import { initAggregationScheduler } from './core/jobs/aggregation-scheduler';
@@ -11,6 +11,7 @@ import { registerPlanNotificationConsumer } from './modules/billing/events/plan-
 import { initializeVendorNotificationEventConsumers } from './modules/notifications/vendor-notification-event-consumer';
 import { fileCleanupWorker } from './modules/file-cleanup/workers/file-cleanup.worker';
 import { earningsReleaseWorker } from './modules/earnings/workers/earnings-release.worker';
+import { unpaidOrderCancelWorker } from './modules/orders/workers/unpaid-order-cancel.worker';
 
 
 const PORT = process.env.PORT || 8022;
@@ -37,6 +38,9 @@ async function startServer() {
 
     // Earnings: daily auto-confirm of stale deliveries + release of matured escrow holds
     earningsReleaseWorker.start();
+
+    // Orders: daily auto-cancel of orders left unpaid past each vendor's window
+    unpaidOrderCancelWorker.start();
 
     app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);

@@ -13,12 +13,4 @@ export class VendorEarningsController {
     const balances = await earningsAccountService.getBalances('vendor', vendorId);
     res.status(200).json({ success: true, data: balances });
   });
-
-  static getLedger = asyncHandler(async (req: Request, res: Response) => {
-    const vendorId = req.auth!.role_entity._id.toString();
-    const page = Math.max(1, parseInt((req.query.page as string) ?? '1', 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? '20', 10) || 20));
-    const ledger = await earningsAccountService.getLedger('vendor', vendorId, page, limit);
-    res.status(200).json({ success: true, ...ledger });
-  });
 }

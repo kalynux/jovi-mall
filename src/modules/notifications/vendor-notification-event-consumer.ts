@@ -1,5 +1,7 @@
 import { eventBus } from '../../core/events/event-bus';
 import { VendorNotificationEventHandler } from './services/vendor-notification-event-handler.service';
+import { assertCatalogComplete } from './catalog/notification-catalog';
+import { isFcmConfigured } from '../../config/fcm.config';
 
 /**
  * Initialize Vendor Notification Event Consumers
@@ -9,6 +11,9 @@ import { VendorNotificationEventHandler } from './services/vendor-notification-e
  * CRITICAL: Payment events are split into partial and full.
  */
 export function initializeVendorNotificationEventConsumers(): void {
+    // Fail fast on an incomplete localized catalog before wiring handlers.
+    assertCatalogComplete();
+
     const handler = new VendorNotificationEventHandler();
 
     // Subscribe to split payment events
@@ -20,5 +25,7 @@ export function initializeVendorNotificationEventConsumers(): void {
     eventBus.subscribe('payment.received.full', handler.handlePaymentReceivedFull.bind(handler));
     eventBus.subscribe('vendor.storage.alert', handler.handleStorageAlert.bind(handler));
 
-    console.log('[VendorNotifications] Event handlers registered successfully');
+    console.log(
+        `[VendorNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`
+    );
 }

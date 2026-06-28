@@ -68,9 +68,18 @@ import adminEarningsRoutes from '../modules/earnings/routes/admin-earnings.route
 router.use('/vendor', vendorEarningsRoutes);
 router.use('/admin', adminEarningsRoutes);
 
+// Unified vendor transactions feed (merges plan purchases, credit top-ups,
+// credit usage and sales earnings into one history).
+import vendorTransactionRoutes from '../modules/transactions/routes/vendor-transaction.routes';
+router.use('/vendor/transactions', vendorTransactionRoutes);
+
 // Customer order actions (e.g. confirm delivery → completes order, starts escrow hold)
 import customerOrderRoutes from '../modules/orders/customer-order.routes';
 router.use('/customer/orders', customerOrderRoutes);
+
+// Admin order controls (payment-dispute hold: list frozen orders, manual resolve)
+import adminOrderRoutes from '../modules/orders/admin-order.routes';
+router.use('/admin/orders', adminOrderRoutes);
 
 // Ticketing Module Routes
 import {

@@ -33,6 +33,8 @@ export class TicketController {
             importance: validated.importance as TicketImportance,
             entityType: validated.entityType as EntityType,
             entityId: validated.entityId,
+            trackingNumber: validated.trackingNumber,
+            attachments: validated.attachments,
             createdByUserId: userId,
             createdByRole: role
         });

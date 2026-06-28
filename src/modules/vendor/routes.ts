@@ -4,6 +4,7 @@ import { VendorProfileController } from './controller/vendor-profile.controller'
 import { VendorCalendarController } from './controller/vendor-calendar.controller';
 import { VendorOrderController } from './controller/vendor-order.controller';
 import { VendorNotificationController } from './controller/vendor-notification.controller';
+import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
 import { VendorCustomerController } from './controller/vendor-customer.controller';
 
 const router = Router();
@@ -96,18 +97,36 @@ router.delete('/profile/default-delivery-agency', VendorProfileController.clearD
 /**
  * GET /api/vendor/profile/auto-redirect-orders
  *
- * Returns whether paid physical orders auto-dispatch to the agency in charge.
- * Response: { autoRedirectOrdersToAgency: boolean }
+ * Returns whether paid physical orders auto-dispatch to the agency in charge,
+ * plus the optional max-order-total cap.
+ * Response: { autoRedirectOrdersToAgency: boolean, autoRedirectThresholdAmount: number | null }
  */
 router.get('/profile/auto-redirect-orders', VendorProfileController.getAutoRedirectOrders);
 
 /**
  * PUT /api/vendor/profile/auto-redirect-orders
  *
- * Enable/disable auto-dispatch of paid physical orders to their agency.
- * Body: { enabled: boolean }
+ * Enable/disable auto-dispatch of paid physical orders to their agency, and
+ * optionally set the max order total above which auto-dispatch is skipped.
+ * Body: { enabled: boolean, thresholdAmount?: number | null }
  */
 router.put('/profile/auto-redirect-orders', VendorProfileController.setAutoRedirectOrders);
+
+/**
+ * GET /api/vendor/profile/auto-cancel-unpaid-days
+ *
+ * Returns the number of days an order may stay unpaid before auto-cancellation.
+ * Response: { autoCancelUnpaidDays: number }
+ */
+router.get('/profile/auto-cancel-unpaid-days', VendorProfileController.getAutoCancelUnpaidDays);
+
+/**
+ * PUT /api/vendor/profile/auto-cancel-unpaid-days
+ *
+ * Set the days an order may stay unpaid before auto-cancellation (min 1, max 90).
+ * Body: { days: number }
+ */
+router.put('/profile/auto-cancel-unpaid-days', VendorProfileController.setAutoCancelUnpaidDays);
 
 // ─── Onboarding ───────────────────────────────────────────────────────────────
 
@@ -325,6 +344,18 @@ router.get('/notification-preferences', VendorNotificationController.getPreferen
  * Update vendor notification preferences
  */
 router.patch('/notification-preferences', VendorNotificationController.updatePreferences);
+
+/**
+ * POST /api/vendor/devices
+ * Register/refresh an FCM device token for push notifications
+ */
+router.post('/devices', DeviceTokenController.register);
+
+/**
+ * DELETE /api/vendor/devices
+ * Unregister an FCM device token (e.g. on logout)
+ */
+router.delete('/devices', DeviceTokenController.unregister);
 
 /**
  * ==========================================

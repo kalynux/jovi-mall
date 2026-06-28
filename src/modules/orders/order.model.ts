@@ -23,8 +23,8 @@ import { MODELS, COLLECTIONS } from '../../core/database/collections';
  */
 
 export type OrderType = 'physical' | 'digital';
-export type PaymentStatus = 'pending' | 'AWAITING_PAYMENT' | 'paid' | 'failed' | 'refunded';
-export type FulfillmentStatus = 'pending' | 'processing' | 'shipped' | 'delivered' | 'fulfilled' | 'cancelled';
+export type PaymentStatus = 'pending' | 'AWAITING_PAYMENT' | 'paid' | 'disputed' | 'failed' | 'refunded';
+export type FulfillmentStatus = 'pending' | 'processing' | 'shipped' | 'delivered' | 'fulfilled' | 'cancelled' | 'returned';
 
 export interface IPriceBreakdown {
   base: number;      // Subtotal before tax/discount
@@ -86,6 +86,16 @@ export interface IOrder extends Document {
 
   // Fulfillment tracking
   fulfillment_status: FulfillmentStatus;
+
+  // Payment-dispute hold. When a Stripe charge is disputed the order is frozen
+  // (no forward fulfilment) until the dispute settles. Set by the dispute webhook.
+  dispute_hold?: {
+    active: boolean;
+    disputed_at?: Date | null;
+    resolved_at?: Date | null;
+    gateway_dispute_id?: string | null;
+    reason?: string | null;
+  };
 
   // Completion (customer confirmation of delivery/satisfaction).
   // Orthogonal to fulfillment_status: it gates the escrow release, NOT the
@@ -228,7 +238,7 @@ const OrderSchema = new Schema<IOrder>({
   // Payment tracking
   payment_status: {
     type: String,
-    enum: ['pending', 'AWAITING_PAYMENT', 'paid', 'failed', 'refunded'],
+    enum: ['pending', 'AWAITING_PAYMENT', 'paid', 'disputed', 'failed', 'refunded'],
     default: 'pending',
     index: true  // For payment status queries
   },
@@ -239,9 +249,18 @@ const OrderSchema = new Schema<IOrder>({
   // Fulfillment tracking
   fulfillment_status: {
     type: String,
-    enum: ['pending', 'processing', 'shipped', 'delivered', 'fulfilled', 'cancelled'],
+    enum: ['pending', 'processing', 'shipped', 'delivered', 'fulfilled', 'cancelled', 'returned'],
     default: 'pending',
     index: true  // For fulfillment status queries
+  },
+
+  // Payment-dispute hold (set/cleared by the Stripe dispute webhook).
+  dispute_hold: {
+    active: { type: Boolean, default: false },
+    disputed_at: { type: Date, default: null },
+    resolved_at: { type: Date, default: null },
+    gateway_dispute_id: { type: String, default: null },
+    reason: { type: String, default: null }
   },
 
   // Completion (customer confirmation; gates escrow release).

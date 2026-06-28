@@ -42,9 +42,20 @@ Authorization: Bearer <access_token>
   "type": "string (required) - Ticket type. Enum: technical, billing, feature_request, bug_report, other",
   "importance": "string (required) - Importance level. Enum: low, medium, high, urgent",
   "entityType": "string (required) - Related entity type. Enum: order, product, booking, account, other",
-  "entityId": "string (required) - ID of the related entity (e.g., order ID)"
+  "entityId": "string (required) - ID of the related entity (e.g., order ID)",
+  "trackingNumber": "string (optional, max 120) - Required only if the vendor's support policy lists `tracking_number`",
+  "attachments": "string[] (optional, max 10) - File references; required only if the vendor's support policy lists `product_photo_video`"
 }
 ```
+
+> **Entity validation & support policy.** The referenced `entityId` must exist (the
+> backend resolves `order`/`booking`/`product` and returns `404 TICKET_ENTITY_NOT_FOUND`
+> otherwise). If the entity's vendor has a support policy with `required_info`, creation is
+> rejected with `400 TICKET_REQUIRED_INFO_MISSING` (`details.missing[]` lists what's absent)
+> until the requirements are met:
+> - `order_number` → `entityType` must be `order`.
+> - `tracking_number` → `trackingNumber` must be supplied.
+> - `product_photo_video` → at least one `attachments` entry must be supplied.
 
 **Success Response**:
 

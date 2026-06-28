@@ -137,9 +137,49 @@ export class CreditTopupService {
     });
   }
 
-  async listTopups(vendorId: string, page: number, limit: number) {
-    return this.repo.listByVendor(vendorId, page, limit);
+  /**
+   * Reverse a previously-paid top-up (charge-back / refund claw-back).
+   *
+   * Atomically flips `paid → reversed` and debits the granted credits back out
+   * of the wallet. The debit is a FORCED movement (negative credit) — it may
+   * drive the balance negative if the vendor already spent the credits, which is
+   * the correct outcome for a lost dispute. Idempotent: a top-up is only
+   * reversed once (the atomic status claim guards concurrent webhook deliveries).
+   *
+   * Note: this only undoes the internal credit grant. The customer's money is
+   * returned by Stripe itself (the dispute/refund) — we do NOT call the refund API.
+   */
+  async reverseTopup(topupId: string, reason: 'chargeback' | 'refund' = 'chargeback'): Promise<ICreditTopup | null> {
+    return transactionManager.runInTransaction(async (session) => {
+      // Atomic claim: only a currently-`paid` top-up can be reversed, exactly once.
+      const claimed = await CreditTopupModel.findOneAndUpdate(
+        { _id: topupId, status: 'paid' },
+        { $set: { status: 'reversed' } },
+        { new: true, session }
+      );
+      if (!claimed) return null; // not paid / already reversed → no-op
+
+      await this.wallet.creditInSession(
+        'vendor',
+        claimed.vendor_id.toString(),
+        -claimed.credits, // negative = forced claw-back, may go below zero
+        'refund',
+        'topup_reversal',
+        claimed._id.toString(),
+        session
+      );
+      console.log(`[CreditTopup] Reversed top-up ${claimed._id} (${reason}); clawed back ${claimed.credits} credits`);
+      return claimed;
+    });
   }
+
+  /** Reverse a paid top-up located by its gateway PaymentIntent reference. Returns null if none matches. */
+  async reverseByGatewayRef(gatewayRef: string, reason: 'chargeback' | 'refund' = 'chargeback'): Promise<ICreditTopup | null> {
+    const topup = await CreditTopupModel.findOne({ gateway_ref: gatewayRef });
+    if (!topup) return null;
+    return this.reverseTopup(topup._id.toString(), reason);
+  }
+
 }
 
 export const creditTopupService = new CreditTopupService();

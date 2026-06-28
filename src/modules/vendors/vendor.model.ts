@@ -2,6 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
 import { PayoutMethodSchema, IPayoutDetails } from '../../core/types/payout.types';
 import { VendorOnboardingStep } from '../../core/constants/onboarding-steps';
+import { SUPPORTED_LANGUAGES, Language } from '../../core/constants/languages';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 // ─── Vendor Policy Sub-Schemas ────────────────────────────────────────────────
@@ -272,6 +273,8 @@ export interface IVendor extends Document {
   two_factor_enabled: boolean;
   version: number;
   timezone: string;
+  /** Preferred language for notifications/messaging (ISO 639-1). */
+  preferred_language: Language;
   status: 'active' | 'pending_verification' | 'inactive';
   /**
    * Onboarding progress. See VendorOnboardingStep constants.
@@ -316,7 +319,7 @@ const VendorSchema = new Schema<IVendor>(
      * The single source of truth is kyc_details.legit_verified.
      * Remove this field after all existing reads are updated.
      */
-    legit_verified: { type: Boolean, default: false },
+    // legit_verified: { type: Boolean, default: false },
     default_delivery_agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, default: null },
     wa: {
       verified: { type: Boolean, default: false },
@@ -333,6 +336,7 @@ const VendorSchema = new Schema<IVendor>(
     two_factor_enabled: { type: Boolean, default: false },
     version: { type: Number, default: 0 },
     timezone: { type: String, default: 'Africa/Douala', required: true },
+    preferred_language: { type: String, enum: SUPPORTED_LANGUAGES, default: 'en' },
     status: {
       type: String,
       enum: ['active', 'pending_verification', 'inactive'],

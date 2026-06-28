@@ -27,7 +27,10 @@ export const CreateTicketSchema = z.object({
     entityType: z.enum(ENTITY_TYPE_VALUES as [string, ...string[]], {
         errorMap: () => ({ message: 'Invalid entity type' })
     }),
-    entityId: z.string().min(1, 'Entity ID is required')
+    entityId: z.string().min(1, 'Entity ID is required'),
+    // Optional supporting info — required ones are enforced per vendor support policy.
+    trackingNumber: z.string().trim().min(1).max(120).optional(),
+    attachments: z.array(z.string().trim().min(1)).max(10).optional()
 });
 
 export type CreateTicketDto = z.infer<typeof CreateTicketSchema>;

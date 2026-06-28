@@ -55,6 +55,39 @@ export class VendorSettingsRepository {
         return settings.auto_redirect_orders_to_agency;
     }
 
+    // ─── Auto-redirect threshold ─────────────────────────────────────────────────
+
+    /** Max order total for which auto-redirect applies (null = no cap). */
+    async getAutoRedirectThresholdAmount(vendorId: string): Promise<number | null> {
+        const settings = await this.getOrCreate(vendorId);
+        return settings.auto_redirect_threshold_amount ?? null;
+    }
+
+    async setAutoRedirectThresholdAmount(
+        vendorId: string,
+        amount: number | null
+    ): Promise<number | null> {
+        const settings = await this.getOrCreate(vendorId);
+        settings.auto_redirect_threshold_amount = amount;
+        await settings.save();
+        return settings.auto_redirect_threshold_amount ?? null;
+    }
+
+    // ─── Auto-cancel unpaid orders ───────────────────────────────────────────────
+
+    /** Days an order may stay unpaid before auto-cancellation (defaults to 3). */
+    async getAutoCancelUnpaidDays(vendorId: string): Promise<number> {
+        const settings = await this.getOrCreate(vendorId);
+        return settings.auto_cancel_unpaid_days ?? 3;
+    }
+
+    async setAutoCancelUnpaidDays(vendorId: string, days: number): Promise<number> {
+        const settings = await this.getOrCreate(vendorId);
+        settings.auto_cancel_unpaid_days = days;
+        await settings.save();
+        return settings.auto_cancel_unpaid_days;
+    }
+
     // ─── Customer flags ────────────────────────────────────────────────────────
 
     /** All non-deleted flags for the vendor, oldest first. */

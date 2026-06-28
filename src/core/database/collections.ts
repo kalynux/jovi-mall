@@ -85,6 +85,7 @@ export const MODELS = Object.freeze({
   // Notifications
   VENDOR_NOTIFICATION: 'VendorNotification',
   VENDOR_NOTIFICATION_PREFERENCE: 'VendorNotificationPreference',
+  DEVICE_TOKEN: 'DeviceToken',
 
   // Integrations
   CONNECTED_CALENDAR_ACCOUNT: 'ConnectedCalendarAccount',
@@ -171,6 +172,7 @@ export const COLLECTIONS = Object.freeze({
   // Notifications
   VENDOR_NOTIFICATION: 'vendor_notifications',
   VENDOR_NOTIFICATION_PREFERENCE: 'vendor_notification_preferences',
+  DEVICE_TOKEN: 'device_tokens',
 
   // Integrations
   CONNECTED_CALENDAR_ACCOUNT: 'connected_calendar_accounts',

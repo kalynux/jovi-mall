@@ -62,6 +62,51 @@ export class OrderService {
   }
 
   /**
+   * Cancel an order and notify. Single shared path used by the unpaid-order
+   * auto-cancel sweep and the customer order-cancel endpoint.
+   *
+   * Sets `fulfillment_status = 'cancelled'` and (for unpaid orders) marks the
+   * payment `failed`, appends a timeline entry, and publishes `order.cancelled`
+   * (the event vendor notifications already listen for). Idempotent: a no-op if
+   * the order is already cancelled. Applies to physical and digital orders.
+   */
+  async cancelOrder(
+    order: IOrder,
+    opts: { actorType: 'system' | 'customer' | 'vendor'; actorId: string | null; reason?: string }
+  ): Promise<void> {
+    if (order.fulfillment_status === 'cancelled') return; // already terminal
+
+    order.fulfillment_status = 'cancelled';
+    // Unpaid orders never collected funds — mark the intent failed. A paid order
+    // is never routed here (refunds own that path), so don't clobber 'paid'.
+    if (order.payment_status !== 'paid' && order.payment_status !== 'refunded') {
+      order.payment_status = 'failed';
+    }
+    await order.save();
+
+    await this.timelineRepo.appendEvent({
+      orderId: order._id.toString(),
+      eventType: 'fulfillment.updated',
+      description: opts.reason ?? 'Order cancelled',
+      metadata: { newStatus: 'cancelled', reason: opts.reason ?? null },
+      actorType: opts.actorType,
+      actorId: opts.actorId,
+    });
+
+    await eventBus.publish('order.cancelled', {
+      eventType: 'order.cancelled',
+      aggregateId: order._id.toString(),
+      payload: {
+        orderId: order._id.toString(),
+        vendorId: order.vendor_id.toString(),
+        orderNumber: order.order_number,
+        cancelledAt: new Date(),
+      },
+      occurredAt: new Date(),
+    });
+  }
+
+  /**
    * Maintain the first-class vendor↔customer relation + denormalized stats.
    * Secondary side-effect: never let a stats failure break the order flow.
    */
@@ -97,6 +142,18 @@ export class OrderService {
         order.vendor_id.toString()
       );
       if (!autoRedirect) return;
+
+      // Respect the vendor's optional max-order-total cap: orders above it stay
+      // `pending` for manual dispatch even with auto-redirect on. null = no cap.
+      const threshold = await this.vendorSettingsRepo.getAutoRedirectThresholdAmount(
+        order.vendor_id.toString()
+      );
+      if (threshold !== null && order.total_amount > threshold) {
+        console.log(
+          `[OrderService] Order ${order._id} total ${order.total_amount} exceeds auto-redirect cap ${threshold}; left pending for manual dispatch.`
+        );
+        return;
+      }
 
       const assignedCount = await this.shipmentRepo.assignPendingByOrderId(order._id.toString());
       if (assignedCount === 0) return; // Nothing pending (e.g. already dispatched)

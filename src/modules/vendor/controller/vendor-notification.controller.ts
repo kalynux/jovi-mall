@@ -39,6 +39,9 @@ export class VendorNotificationController {
                     type: n.type,
                     title: n.title,
                     message: n.message,
+                    aggregateType: n.aggregateType,
+                    aggregateId: n.aggregateId.toString(),
+                    action: n.action ?? null,
                     isRead: n.isRead,
                     deliveredVia: n.deliveredVia,
                     createdAt: n.createdAt.toISOString()
@@ -74,6 +77,7 @@ export class VendorNotificationController {
                     message: notification.message,
                     aggregateType: notification.aggregateType,
                     aggregateId: notification.aggregateId.toString(),
+                    action: notification.action ?? null,
                     deliveredVia: notification.deliveredVia,
                     isRead: notification.isRead,
                     readAt: notification.readAt?.toISOString() || null,

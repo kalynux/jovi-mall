@@ -44,6 +44,7 @@ export interface GetVendorProfileResponseDto {
     phone: boolean;
   };
   twoFactorEnabled: boolean;
+  preferredLanguage: string;
   status: string;
   onboardingStep: number;
   version: number;
@@ -143,6 +144,7 @@ export class VendorProfileMapper {
         phone: vendor.notification_preferences.phone,
       },
       twoFactorEnabled: vendor.two_factor_enabled,
+      preferredLanguage: vendor.preferred_language,
       status: vendor.status,
       onboardingStep: vendor.onboarding_step,
       version: vendor.version,
@@ -216,6 +218,7 @@ export class VendorProfileMapper {
     if (input.email !== undefined) payload.email = input.email;
     if (input.phone !== undefined) payload.phone = input.phone;
     if (input.timezone !== undefined) payload.timezone = input.timezone;
+    if (input.preferred_language !== undefined) payload.preferred_language = input.preferred_language;
     if (input.country !== undefined) payload.country = input.country;
     if (input.branding !== undefined) payload.branding = input.branding as IVendorBranding;
     if (input.business_addresses !== undefined) payload.business_addresses = input.business_addresses as IVendorBusinessAddress[];

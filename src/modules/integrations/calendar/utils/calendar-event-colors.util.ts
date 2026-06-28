@@ -79,6 +79,7 @@ export function getCalendarColorIdByStatus(status: string): CalendarEventColorId
         'pending': CALENDAR_COLOR.BANANA,    // Yellow
         'refunded': CALENDAR_COLOR.FLAMINGO, // Pink/Salmon
         'failed': CALENDAR_COLOR.TOMATO,     // Red (same as unpaid)
+        'disputed': CALENDAR_COLOR.TANGERINE, // Orange — payment under dispute
 
         // Booking statuses
         'confirmed': CALENDAR_COLOR.BASIL,   // Green (same as paid)
@@ -109,6 +110,7 @@ export function getStatusPrefix(status: string): string {
         'pending': '[PENDING]',
         'paid': '[PAID]',
         'failed': '[FAILED]',
+        'disputed': '[DISPUTED]',
         'refunded': '[REFUNDED]',
         'cancelled': '[CANCELLED]',
         'canceled': '[CANCELLED]',

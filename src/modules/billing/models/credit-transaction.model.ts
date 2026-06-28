@@ -20,6 +20,7 @@ export type CreditTransactionType =
 export type CreditReasonCode =
   | 'plan_allowance'
   | 'topup_purchase'
+  | 'topup_reversal'    // claw-back when a top-up is disputed/refunded
   | 'vectorisation'
   | 'whatsapp_template'
   | 'admin_adjustment';
@@ -52,7 +53,7 @@ const CreditTransactionSchema = new Schema<ICreditTransaction>(
     balance_after: { type: Number, required: true },
     reason_code: {
       type: String,
-      enum: ['plan_allowance', 'topup_purchase', 'vectorisation', 'whatsapp_template', 'admin_adjustment'],
+      enum: ['plan_allowance', 'topup_purchase', 'topup_reversal', 'vectorisation', 'whatsapp_template', 'admin_adjustment'],
       required: true,
     },
     ref: { type: String, default: null },

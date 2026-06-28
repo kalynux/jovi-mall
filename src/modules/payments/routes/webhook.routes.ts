@@ -4,6 +4,7 @@ import { PaymentOrchestratorService } from '../services/payment-orchestrator.ser
 import { getStripeClient } from '../gateways/stripe.client';
 import { planPurchaseService } from '../../billing/services/plan-purchase.service';
 import { creditTopupService } from '../../billing/services/credit-topup.service';
+import { paymentDisputeService } from '../services/dispute.service';
 
 const router = Router();
 const paymentOrchestrator = new PaymentOrchestratorService();
@@ -31,6 +32,7 @@ router.post('/stripe', async (req: Request, res: Response) => {
   // silently dropping the event.
   let event: Stripe.Event;
   try {
+    console.log('[StripeWebhook] Received event:', req.body);
     if (!webhookSecret) {
       console.error('[StripeWebhook] STRIPE_WEBHOOK_SECRET is not configured');
       res.status(400).send('Webhook secret not configured');
@@ -40,6 +42,7 @@ router.post('/stripe', async (req: Request, res: Response) => {
       res.status(400).send('Missing stripe-signature header');
       return;
     }
+    console.log('[StripeWebhook] Verifying signature:', signature);
     event = getStripeClient().webhooks.constructEvent(req.body, signature, webhookSecret);
   } catch (err: any) {
     console.error('[StripeWebhook] Signature verification failed:', err?.message ?? err);
@@ -49,6 +52,43 @@ router.post('/stripe', async (req: Request, res: Response) => {
 
   try {
     console.log('[StripeWebhook] Verified event:', event.type, event.id);
+
+    // ── Dispute / refund events (money pulled back from us) ──────────────────
+    // Dispute objects (Dispute/Charge) carry the PaymentIntent id but NOT the
+    // PaymentIntent's metadata, so the coordinator locates the source order/plan/
+    // top-up by its PI ref. Freeze on open, resume on win, unwind on loss/refund.
+    if (
+      event.type === 'charge.dispute.created' ||
+      event.type === 'charge.dispute.closed' ||
+      event.type === 'charge.refunded'
+    ) {
+      const obj = event.data.object as {
+        id?: string;
+        payment_intent?: string;
+        status?: string;
+        refunded?: boolean;
+      };
+      const piId = obj.payment_intent;
+
+      if (!piId) {
+        console.warn(`[StripeWebhook] ${event.type} had no payment_intent — skipped`);
+      } else if (event.type === 'charge.dispute.created') {
+        await paymentDisputeService.onDisputeCreated(piId, obj.id ?? null);
+      } else if (event.type === 'charge.dispute.closed') {
+        // Only act on a definitive outcome; ignore any non-final close status.
+        if (obj.status === 'won') await paymentDisputeService.onDisputeClosed(piId, 'won', obj.id ?? null);
+        else if (obj.status === 'lost') await paymentDisputeService.onDisputeClosed(piId, 'lost', obj.id ?? null);
+      } else if (obj.refunded === true) {
+        // charge.refunded — only unwind on a FULL refund. Partial refunds (and the
+        // platform's own refund flow) manage their own accounting.
+        await paymentDisputeService.onRefunded(piId);
+      } else {
+        console.log(`[StripeWebhook] partial charge.refunded for PI ${piId} — no full unwind`);
+      }
+
+      res.status(200).json({ success: true, handled: 'dispute', type: event.type });
+      return;
+    }
 
     const object = event.data.object as { metadata?: Record<string, string> };
     const purpose = object?.metadata?.purpose;

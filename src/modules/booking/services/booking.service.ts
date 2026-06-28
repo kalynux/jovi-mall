@@ -13,15 +13,20 @@ import { BookingCalendarSyncService } from './booking-calendar-sync.service';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { earningsCompletionService } from '../../earnings/services/earnings-completion.service';
+import { VendorRepository } from '../../vendors/vendor.repository';
+import { assertCancellationAllowed } from '../../vendors/utils/cancellation-policy.util';
 import { format } from 'date-fns';
 
 export class BookingService {
   private slotLockService: SlotLockService;
   private slotGenerator: SlotGeneratorService;
 
+  private vendorRepo: VendorRepository;
+
   constructor() {
     this.slotLockService = new SlotLockService();
     this.slotGenerator = new SlotGeneratorService();
+    this.vendorRepo = new VendorRepository();
   }
 
   /**
@@ -294,6 +299,14 @@ export class BookingService {
     if (booking.status === BookingStatus.CANCELLED) {
       throw createAppError(ERROR_CODES.BOOKING_ALREADY_CANCELLED, 409, 'Booking is already cancelled');
     }
+
+    // Enforce the vendor's cancellation policy (customer-initiated cancellation).
+    const vendor = await this.vendorRepo.findById(booking.vendorId.toString());
+    assertCancellationAllowed(vendor?.policies?.cancellation_policy ?? null, {
+      createdAt: booking.createdAt,
+      serviceOrDeliveryAt: booking.startAt,
+      isPending: booking.status === BookingStatus.PENDING,
+    });
 
     // Delete from calendar if exists
     if (booking.externalCalendarEventId) {

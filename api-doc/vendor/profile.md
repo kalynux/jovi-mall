@@ -556,6 +556,114 @@ Authorization: Bearer <jwt_token>
 
 ---
 
+## Order Automation Settings
+
+Per-vendor automation toggles stored on the vendor settings document. Created lazily
+on first read/write, so defaults apply until a vendor changes them.
+
+### GET /api/vendor/profile/auto-redirect-orders
+
+Returns whether paid physical orders auto-dispatch to the agency in charge, plus the
+optional max-order-total cap.
+
+#### Authentication
+
+- **Required**: Yes
+- **Role**: `vendor`
+
+#### Response
+
+**Success (200 OK)**:
+```json
+{
+  "success": true,
+  "data": {
+    "autoRedirectOrdersToAgency": false,
+    "autoRedirectThresholdAmount": null
+  }
+}
+```
+
+- `autoRedirectOrdersToAgency` *(boolean)* — when `true`, a paid physical order's
+  shipments advance `pending → assigned` automatically. Default `false`.
+- `autoRedirectThresholdAmount` *(number | null)* — max order `total_amount` (in the
+  order's own currency) for which auto-redirect applies. Orders above this cap stay
+  `pending` for manual dispatch even when the toggle is on. `null` (default) = no cap.
+
+### PUT /api/vendor/profile/auto-redirect-orders
+
+Enable/disable auto-dispatch and optionally set the cap.
+
+#### Request Body
+
+```json
+{
+  "enabled": true,
+  "thresholdAmount": 50000
+}
+```
+
+- `enabled` *(boolean, required)*.
+- `thresholdAmount` *(number ≥ 0 | null, optional)* — omit to leave the existing cap
+  unchanged; send `null` to clear it (no cap); send a number to set the cap.
+
+#### Response
+
+**Success (200 OK)**:
+```json
+{
+  "success": true,
+  "data": {
+    "autoRedirectOrdersToAgency": true,
+    "autoRedirectThresholdAmount": 50000
+  },
+  "message": "Auto-redirect orders setting updated"
+}
+```
+
+### GET /api/vendor/profile/auto-cancel-unpaid-days
+
+Returns the number of days an order may remain unpaid before a daily background sweep
+auto-cancels it (sets `fulfillment_status='cancelled'`, `payment_status='failed'`, and
+notifies via the `order.cancelled` event).
+
+#### Response
+
+**Success (200 OK)**:
+```json
+{
+  "success": true,
+  "data": { "autoCancelUnpaidDays": 3 }
+}
+```
+
+- `autoCancelUnpaidDays` *(number)* — default `3`.
+
+### PUT /api/vendor/profile/auto-cancel-unpaid-days
+
+Set the unpaid-order auto-cancel window.
+
+#### Request Body
+
+```json
+{ "days": 5 }
+```
+
+- `days` *(integer, required)* — minimum `1` (cannot be `0`), maximum `90`.
+
+#### Response
+
+**Success (200 OK)**:
+```json
+{
+  "success": true,
+  "data": { "autoCancelUnpaidDays": 5 },
+  "message": "Auto-cancel unpaid orders setting updated"
+}
+```
+
+---
+
 ## Feature Flags & Configuration
 
 ### Email Change Lock

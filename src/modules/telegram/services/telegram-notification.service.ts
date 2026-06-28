@@ -5,6 +5,8 @@ export interface SendNotificationParams {
     userId?: string;
     chatId?: string;
     message: string;
+    /** Optional inline URL button rendered under the message. */
+    button?: { label: string; url: string };
 }
 
 export interface SendNotificationResult {
@@ -60,8 +62,10 @@ export class TelegramNotificationService {
             };
         }
 
-        // Send message via bot
-        const sent = await this.botService.sendMessage(chatId, params.message);
+        // Send message via bot (with optional inline URL button)
+        const sent = await this.botService.sendMessage(chatId, params.message, {
+            button: params.button ? { text: params.button.label, url: params.button.url } : undefined,
+        });
 
         if (sent) {
             console.log(`[TelegramNotification] Notification sent to chat ${chatId}`);

@@ -107,10 +107,6 @@ export class CreditWalletService {
     const wallet = await this.walletRepo.getOrCreate(ownerType, ownerId);
     return wallet.balance;
   }
-
-  async getLedger(ownerType: WalletOwnerType, ownerId: string, page: number, limit: number) {
-    return this.ledgerRepo.listByOwner(ownerType, ownerId, page, limit);
-  }
 }
 
 export const creditWalletService = new CreditWalletService();

@@ -33,7 +33,8 @@ const FULFILLMENT_STATE_MACHINE: Record<FulfillmentStatus, FulfillmentStatus[]> 
     'shipped': ['delivered', 'cancelled'],
     'delivered': [],  // Terminal state
     'fulfilled': ['cancelled'],  // Legacy support
-    'cancelled': []   // Terminal state
+    'cancelled': [],  // Terminal state
+    'returned': []    // Terminal state — set only by the dispute-lost handler, not by vendors
 };
 
 export class VendorOrderService {
@@ -392,6 +393,20 @@ export class VendorOrderService {
                 422,
                 undefined,
                 { paymentStatus: order.payment_status }
+            );
+        }
+
+        // 4b. Dispute hold — a disputed charge freezes the order. No forward
+        // transition (vendor or admin) is allowed until the dispute settles.
+        if (order.dispute_hold?.active) {
+            throw createAppError(
+                ERROR_CODES.ORDER_DISPUTE_HOLD,
+                423,
+                undefined,
+                {
+                    disputeId: order.dispute_hold.gateway_dispute_id,
+                    reason: order.dispute_hold.reason
+                }
             );
         }
 

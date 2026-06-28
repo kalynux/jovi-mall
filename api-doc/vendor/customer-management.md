@@ -313,10 +313,16 @@ Read-only. Never errors on ineligibility — it returns `eligible: false` plus a
     "maxRefundable": 145000,   // most you may refund right now (policy + balance)
     "remaining": 145000,       // un-refunded balance of the payment
     "currency": "XAF",         // or null if no payment found
+    "refundProcessingDays": 7, // policy: expected settle window (null if no policy)
+    "returnShippingPayer": "customer", // policy: who pays return shipping (null if no policy)
     "reasonCode": "REFUND_WINDOW_EXPIRED"  // present only when eligible === false
   }
 }
 ```
+
+> `refundProcessingDays` and `returnShippingPayer` are echoed from the vendor's return
+> policy for display only — they carry no money movement. `returnShippingPayer` is one of
+> `vendor` | `customer` | `customer_reimbursed_if_defect`, or `null` when no policy is set.
 
 **`reasonCode` values (when `eligible: false`)**
 | Code | Meaning |
@@ -350,7 +356,9 @@ Action a refund. Calls the payment gateway live (Stripe is fully supported today
     "amount": 145000,
     "currency": "XAF",
     "totalRefunded": 145000,   // cumulative across all refunds on this payment
-    "fullyRefunded": true       // when true, order.payment_status becomes "refunded"
+    "fullyRefunded": true,      // when true, order.payment_status becomes "refunded"
+    "refundProcessingDays": 7,  // policy: expected settle window (null if no policy)
+    "returnShippingPayer": "customer" // policy: who pays return shipping (null if no policy)
   },
   "message": "Order fully refunded"   // or "Partial refund processed"
 }

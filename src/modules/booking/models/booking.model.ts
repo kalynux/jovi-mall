@@ -7,6 +7,7 @@ export type BookingPaymentStatus =
   | 'unpaid'
   | 'pending'
   | 'paid'
+  | 'disputed'
   | 'failed'
   | 'refunded';
 
@@ -88,7 +89,7 @@ const BookingSchema = new Schema<IBooking>(
     // Payment tracking
     paymentStatus: {
       type: String,
-      enum: ['unpaid', 'pending', 'paid', 'failed', 'refunded'],
+      enum: ['unpaid', 'pending', 'paid', 'disputed', 'failed', 'refunded'],
       required: true,
       default: 'unpaid',
       index: true,

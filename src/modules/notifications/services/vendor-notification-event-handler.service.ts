@@ -1,23 +1,65 @@
 import mongoose from 'mongoose';
 import { VendorNotificationRepository } from '../repositories/vendor-notification.repository';
 import { VendorNotificationPreferenceRepository } from '../repositories/vendor-notification-preference.repository';
+import { FcmPushService } from './fcm-push.service';
 import { VendorRepository } from '../../vendors/vendor.repository';
+import { IVendor } from '../../vendors/vendor.model';
 import { TelegramRepository } from '../../telegram/telegram.repository';
 import { MailService } from '../../mail/mail.service';
 import { TelegramNotificationService } from '../../telegram/services/telegram-notification.service';
-import { DeliveryChannel } from '../models/vendor-notification.model';
+import { getWhatsAppMessagingService } from '../../whatsapp/services/whatsapp-messaging.service';
+import { WaServiceMessage } from '../../whatsapp/builders/service-message.builder';
+import { WhatsappService } from '../../whatsapp/whatsapp.service';
+import { TemplateComponent } from '../../whatsapp/types/whatsapp-message.types';
+import {
+    DeliveryChannel,
+    IVendorNotification,
+    NotificationType,
+    AggregateType,
+    NotificationAction
+} from '../models/vendor-notification.model';
+import { IVendorNotificationPreference } from '../models/vendor-notification-preference.model';
+import {
+    renderInApp,
+    renderChannelText,
+    renderWhatsAppTemplateParams,
+    renderButton,
+    whatsAppTemplateName,
+    ChannelText
+} from '../catalog/notification-catalog';
+import { Language, resolveLanguage, META_LANGUAGE_CODE } from '../catalog/notification-i18n';
+import { RenderContext } from '../catalog/message-renderer';
 import { DomainEvent } from '../../../core/events/event-bus';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
+
+/**
+ * Parameters for dispatching a single notification situation.
+ */
+interface DispatchParams {
+    situation: NotificationType;
+    prefs: IVendorNotificationPreference;
+    vendorId: string | mongoose.Types.ObjectId;
+    aggregateType: AggregateType;
+    aggregateId: string | mongoose.Types.ObjectId;
+    idempotencyKey: string;
+    /** Placeholder values for catalog rendering. */
+    context: RenderContext;
+}
 
 /**
  * VendorNotificationEventHandler
- * 
- * Event-driven notification creation with multi-channel delivery.
- * 
+ *
+ * Event-driven notification creation with multi-channel, multi-language delivery.
+ *
  * CRITICAL Rules:
  * - Idempotency enforced via unique idempotencyKey
  * - in-app delivery is MANDATORY
- * - Only ONE secondary channel per notification
- * - Secondary channel failures MUST NOT break flow
+ * - At most ONE secondary channel per notification
+ * - Secondary-channel priority: telegram > email > whatsapp
+ * - Secondary channel failures MUST NOT break flow (recorded on the notification)
+ * - All copy comes from the localized catalog (no inline strings)
+ * - Rendered in the recipient's preferred language
  * - No DB enrichment - use event payload only
  */
 export class VendorNotificationEventHandler {
@@ -27,6 +69,8 @@ export class VendorNotificationEventHandler {
     private telegramRepo: TelegramRepository;
     private mailService: MailService;
     private telegramService: TelegramNotificationService;
+    private whatsappWindow: WhatsappService;
+    private fcmPushService: FcmPushService;
 
     constructor() {
         this.notificationRepo = new VendorNotificationRepository();
@@ -35,11 +79,18 @@ export class VendorNotificationEventHandler {
         this.telegramRepo = new TelegramRepository();
         this.mailService = new MailService();
         this.telegramService = new TelegramNotificationService();
+        this.whatsappWindow = new WhatsappService();
+        this.fcmPushService = new FcmPushService();
     }
 
-    /**
-     * Handle order.created event
-     */
+    /** True when the WhatsApp Cloud API provider can be constructed and used. */
+    private isWhatsAppProviderConfigured(): boolean {
+        return !!(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
+    }
+
+    // ─── Event handlers ──────────────────────────────────────────────────────
+
+    /** Handle order.created event */
     async handleOrderCreated(event: DomainEvent): Promise<void> {
         try {
             const { orderId, vendorId, orderNumber, totalAmount, currency } = event.payload;
@@ -47,40 +98,27 @@ export class VendorNotificationEventHandler {
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.orderCreated) return; // Disabled
 
-            const idempotencyKey = `order.created:${orderId}:${vendorId}`;
-
-            const deliveredVia = await this.determineDeliveryChannels(vendorId, prefs);
-
-            const title = `New Order #${orderNumber}`;
-            const message = `You received a new order for ${currency} ${totalAmount.toLocaleString()}`;
-
-            await this.notificationRepo.createIfNotExists({
+            await this.dispatch({
+                situation: 'order.created',
+                prefs,
                 vendorId,
-                type: 'order.created',
-                title,
-                message,
                 aggregateType: 'order',
                 aggregateId: orderId,
-                deliveredVia,
-                idempotencyKey
+                idempotencyKey: `order.created:${orderId}:${vendorId}`,
+                context: {
+                    orderNumber,
+                    currency,
+                    amountFormatted: Number(totalAmount).toLocaleString(),
+                    orderId
+                }
             });
-
-            // Trigger secondary channel delivery (fire-and-forget)
-            await this.deliverToSecondaryChannels(vendorId, deliveredVia, {
-                subject: title,
-                body: message,
-                templateContext: { orderNumber, totalAmount, currency, orderId }
-            });
-
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle order.created:', error);
             // Do not throw - event processing must continue
         }
     }
 
-    /**
-     * Handle order.cancelled event
-     */
+    /** Handle order.cancelled event */
     async handleOrderCancelled(event: DomainEvent): Promise<void> {
         try {
             const { orderId, vendorId, orderNumber } = event.payload;
@@ -88,38 +126,21 @@ export class VendorNotificationEventHandler {
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.orderCancelled) return;
 
-            const idempotencyKey = `order.cancelled:${orderId}:${vendorId}`;
-
-            const deliveredVia = await this.determineDeliveryChannels(vendorId, prefs);
-
-            const title = `Order Cancelled #${orderNumber}`;
-            const message = `Order #${orderNumber} has been cancelled`;
-
-            await this.notificationRepo.createIfNotExists({
+            await this.dispatch({
+                situation: 'order.cancelled',
+                prefs,
                 vendorId,
-                type: 'order.cancelled',
-                title,
-                message,
                 aggregateType: 'order',
                 aggregateId: orderId,
-                deliveredVia,
-                idempotencyKey
+                idempotencyKey: `order.cancelled:${orderId}:${vendorId}`,
+                context: { orderNumber, orderId }
             });
-
-            await this.deliverToSecondaryChannels(vendorId, deliveredVia, {
-                subject: title,
-                body: message,
-                templateContext: { orderNumber, orderId }
-            });
-
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle order.cancelled:', error);
         }
     }
 
-    /**
-     * Handle booking.created event
-     */
+    /** Handle booking.created event */
     async handleBookingCreated(event: DomainEvent): Promise<void> {
         try {
             const { bookingId, vendorId, bookingNumber, serviceName, startTime } = event.payload;
@@ -127,39 +148,26 @@ export class VendorNotificationEventHandler {
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.bookingCreated) return;
 
-            const idempotencyKey = `booking.created:${bookingId}:${vendorId}`;
-
-            const deliveredVia = await this.determineDeliveryChannels(vendorId, prefs);
-
-            const startDate = new Date(startTime).toLocaleString();
-            const title = `New Booking #${bookingNumber}`;
-            const message = `New booking for ${serviceName} scheduled on ${startDate}`;
-
-            await this.notificationRepo.createIfNotExists({
+            await this.dispatch({
+                situation: 'booking.created',
+                prefs,
                 vendorId,
-                type: 'booking.created',
-                title,
-                message,
                 aggregateType: 'booking',
                 aggregateId: bookingId,
-                deliveredVia,
-                idempotencyKey
+                idempotencyKey: `booking.created:${bookingId}:${vendorId}`,
+                context: {
+                    bookingNumber,
+                    serviceName,
+                    startDate: new Date(startTime).toLocaleString(),
+                    bookingId
+                }
             });
-
-            await this.deliverToSecondaryChannels(vendorId, deliveredVia, {
-                subject: title,
-                body: message,
-                templateContext: { bookingNumber, serviceName, startDate, bookingId }
-            });
-
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle booking.created:', error);
         }
     }
 
-    /**
-     * Handle booking.cancelled event
-     */
+    /** Handle booking.cancelled event */
     async handleBookingCancelled(event: DomainEvent): Promise<void> {
         try {
             const { bookingId, vendorId, bookingNumber } = event.payload;
@@ -167,38 +175,21 @@ export class VendorNotificationEventHandler {
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.bookingCancelled) return;
 
-            const idempotencyKey = `booking.cancelled:${bookingId}:${vendorId}`;
-
-            const deliveredVia = await this.determineDeliveryChannels(vendorId, prefs);
-
-            const title = `Booking Cancelled #${bookingNumber}`;
-            const message = `Booking #${bookingNumber} has been cancelled`;
-
-            await this.notificationRepo.createIfNotExists({
+            await this.dispatch({
+                situation: 'booking.cancelled',
+                prefs,
                 vendorId,
-                type: 'booking.cancelled',
-                title,
-                message,
                 aggregateType: 'booking',
                 aggregateId: bookingId,
-                deliveredVia,
-                idempotencyKey
+                idempotencyKey: `booking.cancelled:${bookingId}:${vendorId}`,
+                context: { bookingNumber, bookingId }
             });
-
-            await this.deliverToSecondaryChannels(vendorId, deliveredVia, {
-                subject: title,
-                body: message,
-                templateContext: { bookingNumber, bookingId }
-            });
-
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle booking.cancelled:', error);
         }
     }
 
-    /**
-     * Handle payment.received.partial event
-     */
+    /** Handle payment.received.partial event */
     async handlePaymentReceivedPartial(event: DomainEvent): Promise<void> {
         try {
             const { paymentId, vendorId, amount, currency, orderId } = event.payload;
@@ -206,38 +197,26 @@ export class VendorNotificationEventHandler {
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.paymentReceivedPartial) return;
 
-            const idempotencyKey = `payment.received.partial:${paymentId}:${vendorId}`;
-
-            const deliveredVia = await this.determineDeliveryChannels(vendorId, prefs);
-
-            const title = `Partial Payment Received`;
-            const message = `Received partial payment of ${currency} ${amount.toLocaleString()}`;
-
-            await this.notificationRepo.createIfNotExists({
+            await this.dispatch({
+                situation: 'payment.received.partial',
+                prefs,
                 vendorId,
-                type: 'payment.received.partial',
-                title,
-                message,
                 aggregateType: 'payment',
                 aggregateId: paymentId,
-                deliveredVia,
-                idempotencyKey
+                idempotencyKey: `payment.received.partial:${paymentId}:${vendorId}`,
+                context: {
+                    currency,
+                    amountFormatted: Number(amount).toLocaleString(),
+                    paymentId,
+                    orderId
+                }
             });
-
-            await this.deliverToSecondaryChannels(vendorId, deliveredVia, {
-                subject: title,
-                body: message,
-                templateContext: { amount, currency, paymentId, orderId }
-            });
-
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle payment.received.partial:', error);
         }
     }
 
-    /**
-     * Handle payment.received.full event
-     */
+    /** Handle payment.received.full event */
     async handlePaymentReceivedFull(event: DomainEvent): Promise<void> {
         try {
             const { paymentId, vendorId, amount, currency, orderId } = event.payload;
@@ -245,30 +224,20 @@ export class VendorNotificationEventHandler {
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.paymentReceivedFull) return;
 
-            const idempotencyKey = `payment.received.full:${paymentId}:${vendorId}`;
-
-            const deliveredVia = await this.determineDeliveryChannels(vendorId, prefs);
-
-            const title = `Payment Received`;
-            const message = `Received full payment of ${currency} ${amount.toLocaleString()}`;
-
-            await this.notificationRepo.createIfNotExists({
+            await this.dispatch({
+                situation: 'payment.received.full',
+                prefs,
                 vendorId,
-                type: 'payment.received.full',
-                title,
-                message,
                 aggregateType: 'payment',
                 aggregateId: paymentId,
-                deliveredVia,
-                idempotencyKey
+                idempotencyKey: `payment.received.full:${paymentId}:${vendorId}`,
+                context: {
+                    currency,
+                    amountFormatted: Number(amount).toLocaleString(),
+                    paymentId,
+                    orderId
+                }
             });
-
-            await this.deliverToSecondaryChannels(vendorId, deliveredVia, {
-                subject: title,
-                body: message,
-                templateContext: { amount, currency, paymentId, orderId }
-            });
-
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle payment.received.full:', error);
         }
@@ -289,33 +258,114 @@ export class VendorNotificationEventHandler {
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (prefs.preferences.storageAlert === false) return; // Opted out
 
-            const deliveredVia = await this.determineDeliveryChannels(vendorId, prefs);
-
-            const title = `Storage ${percentUsed}% full`;
-            const message =
-                `Your media storage is at ${percentUsed}% of your plan limit ` +
-                `(${this.formatBytes(usageBytes)} of ${this.formatBytes(limitBytes)}). ` +
-                `Remove unused product media or upgrade your plan to free up space.`;
-
-            await this.notificationRepo.createIfNotExists({
+            await this.dispatch({
+                situation: 'storage.alert',
+                prefs,
                 vendorId,
-                type: 'storage.alert',
-                title,
-                message,
                 aggregateType: 'storage',
                 aggregateId: vendorId,
-                deliveredVia,
-                idempotencyKey: idempotencyKey ?? `storage.alert:${vendorId}:${threshold}`
+                idempotencyKey: idempotencyKey ?? `storage.alert:${vendorId}:${threshold}`,
+                context: {
+                    percentUsed,
+                    usageFormatted: this.formatBytes(usageBytes),
+                    limitFormatted: this.formatBytes(limitBytes),
+                    threshold
+                }
             });
-
-            await this.deliverToSecondaryChannels(vendorId, deliveredVia, {
-                subject: title,
-                body: message,
-                templateContext: { usageBytes, limitBytes, percentUsed, threshold }
-            });
-
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle storage.alert:', error);
+        }
+    }
+
+    // ─── Dispatch + delivery ─────────────────────────────────────────────────
+
+    /**
+     * Create the in-app notification (mandatory) and fan out to the selected
+     * secondary channel, all rendered in the vendor's preferred language.
+     */
+    private async dispatch(params: DispatchParams): Promise<void> {
+        const vendor = await this.vendorRepo.findById(params.vendorId.toString());
+        const lang = resolveLanguage(vendor);
+
+        const deliveredVia: DeliveryChannel[] = vendor
+            ? await this.determineDeliveryChannels(vendor, params.prefs)
+            : ['in-app'];
+
+        const inApp = renderInApp(params.situation, lang, params.context);
+
+        // The clickable action (deep-link), localized. Carried on the in-app
+        // notification AND the push so the frontend can open the relevant page
+        // when the notification is clicked — same action as the channel buttons.
+        const action = this.resolveAction(params.situation, lang, params.context);
+
+        const notification = await this.notificationRepo.createIfNotExists({
+            vendorId: params.vendorId,
+            type: params.situation,
+            title: inApp.title,
+            message: inApp.message,
+            aggregateType: params.aggregateType,
+            aggregateId: params.aggregateId,
+            action: action ?? undefined,
+            deliveredVia,
+            idempotencyKey: params.idempotencyKey
+        });
+
+        if (vendor) {
+            // Push is a companion transport for the in-app notification (not a
+            // mutually-exclusive secondary channel). Fire it for every vendor
+            // that has registered devices, always-on.
+            await this.deliverPush(notification, params.situation, inApp, action, vendor);
+
+            await this.deliverToSecondaryChannels(
+                notification,
+                deliveredVia,
+                params.situation,
+                lang,
+                vendor,
+                params.context
+            );
+        }
+    }
+
+    /**
+     * Deliver the notification to the vendor's registered devices via FCM.
+     *
+     * Always-on companion to the in-app notification: best-effort, never throws.
+     * Records 'push' on deliveredVia when at least one device was targeted, and
+     * captures a deliveryErrors entry on total failure (in-app stays the source
+     * of truth).
+     */
+    private async deliverPush(
+        notification: IVendorNotification,
+        situation: NotificationType,
+        inApp: { title: string; message: string },
+        action: NotificationAction | null,
+        vendor: IVendor
+    ): Promise<void> {
+        try {
+            const targeted = await this.fcmPushService.sendToUser(vendor.user_id.toString(), {
+                title: inApp.title,
+                body: inApp.message,
+                data: {
+                    type: situation,
+                    aggregateType: notification.aggregateType,
+                    aggregateId: notification.aggregateId.toString(),
+                    path: action?.path,
+                    url: action?.url
+                }
+            });
+
+            if (targeted > 0) {
+                await this.notificationRepo.addDeliveredChannel(notification._id as any, 'push');
+            }
+        } catch (error: any) {
+            const message = error?.message || String(error);
+            console.error('[NotificationHandler] push delivery failed:', message);
+            try {
+                await this.notificationRepo.recordDeliveryError(notification._id as any, 'push', message);
+            } catch (recordErr) {
+                console.error('[NotificationHandler] Failed to record push delivery error:', recordErr);
+            }
         }
     }
 
@@ -328,82 +378,151 @@ export class VendorNotificationEventHandler {
     }
 
     /**
-     * Determine delivery channels based on preferences and verification status
-     * 
+     * Determine delivery channels based on preferences and live verification.
+     *
      * Rules:
      * - in-app is ALWAYS included (mandatory)
-     * - Only ONE secondary channel
-     * - Secondary channels require verification
-     * - Priority: email > telegram > whatsapp
+     * - At most ONE secondary channel
+     * - The channel must be both enabled in preferences AND verified
+     * - Platform priority: telegram > email > whatsapp (first available wins)
      */
     private async determineDeliveryChannels(
-        vendorId: string | mongoose.Types.ObjectId,
-        prefs: any
+        vendor: IVendor,
+        prefs: IVendorNotificationPreference
     ): Promise<DeliveryChannel[]> {
         const channels: DeliveryChannel[] = ['in-app']; // Always included
 
-        // Get vendor for verification status
-        const vendor = await this.vendorRepo.findById(vendorId.toString());
-        if (!vendor) return channels;
-
-        // Check secondary channels in priority order
-        if (prefs.emailEnabled && vendor.email_verified) {
-            channels.push('email');
-        } else if (prefs.telegramEnabled) {
-            // Check telegram link verification
+        // Priority order: telegram > email > whatsapp. Pick the first that is
+        // both enabled and verified.
+        if (prefs.telegramEnabled) {
             const telegramLink = await this.telegramRepo.findByUserId(vendor.user_id.toString());
             if (telegramLink && telegramLink.isActive) {
                 channels.push('telegram');
+                return channels;
             }
-        } else if (prefs.whatsappEnabled && vendor.wa?.verified) {
+        }
+
+        if (prefs.emailEnabled && vendor.email_verified) {
+            channels.push('email');
+            return channels;
+        }
+
+        if (prefs.whatsappEnabled && vendor.wa?.verified) {
             channels.push('whatsapp');
+            return channels;
         }
 
         return channels;
     }
 
     /**
-     * Deliver notification to secondary channels (fire-and-forget)
-     * 
-     * Failures are logged but do NOT break the flow.
+     * Deliver notification to the selected secondary channel(s) using localized
+     * catalog copy.
+     *
+     * Each send is awaited so failures can be recorded against the notification
+     * (deliveryErrors). In-app remains the source of truth, so a secondary-channel
+     * failure is captured but never breaks the flow.
      */
     private async deliverToSecondaryChannels(
-        vendorId: string | mongoose.Types.ObjectId,
+        notification: IVendorNotification,
         channels: DeliveryChannel[],
-        content: {
-            subject: string;
-            body: string;
-            templateContext: any;
-        }
+        situation: NotificationType,
+        lang: Language,
+        vendor: IVendor,
+        context: RenderContext
     ): Promise<void> {
-        if (channels.includes('email')) {
-            this.sendEmail(vendorId, content).catch(err =>
-                console.error('[NotificationHandler] Email failed:', err)
+        const button = this.resolveButton(situation, lang, context);
+
+        if (channels.includes('telegram')) {
+            const content = renderChannelText(situation, 'telegram', lang, context);
+            await this.attemptDelivery(notification, 'telegram', () =>
+                this.sendTelegram(vendor, content, button)
             );
         }
 
-        if (channels.includes('telegram')) {
-            this.sendTelegram(vendorId, content).catch(err =>
-                console.error('[NotificationHandler] Telegram failed:', err)
+        if (channels.includes('email')) {
+            const content = renderChannelText(situation, 'email', lang, context);
+            await this.attemptDelivery(notification, 'email', () =>
+                this.sendEmail(vendor, content, button, context)
             );
         }
 
         if (channels.includes('whatsapp')) {
-            this.sendWhatsApp(vendorId, content).catch(err =>
-                console.error('[NotificationHandler] WhatsApp failed:', err)
+            await this.attemptDelivery(notification, 'whatsapp', () =>
+                this.sendWhatsApp(vendor, notification, situation, lang, context)
             );
         }
     }
 
     /**
-     * Send email notification
+     * Resolve the situation's localized action button (label + absolute URL) when
+     * a deep-link base URL (VENDOR_APP_URL) is configured. Used as a native button
+     * on every channel (Telegram inline keyboard, email CTA, WhatsApp cta_url).
      */
-    private async sendEmail(
-        vendorId: string | mongoose.Types.ObjectId,
-        content: any
+    private resolveButton(
+        situation: NotificationType,
+        lang: Language,
+        context: RenderContext
+    ): { label: string; url: string } | null {
+        const baseUrl = process.env.VENDOR_APP_URL;
+        if (!baseUrl) return null;
+
+        const button = renderButton(situation, lang, context, baseUrl);
+        return button ? { label: button.label, url: button.url } : null;
+    }
+
+    /**
+     * Resolve the situation's localized action for the in-app/push channel.
+     *
+     * Unlike resolveButton (secondary channels, which need an absolute URL and
+     * thus VENDOR_APP_URL), this always returns the relative `path` so the SPA
+     * can route internally; `url` is added only when VENDOR_APP_URL is set.
+     */
+    private resolveAction(
+        situation: NotificationType,
+        lang: Language,
+        context: RenderContext
+    ): NotificationAction | null {
+        const baseUrl = process.env.VENDOR_APP_URL;
+        const button = renderButton(situation, lang, context, baseUrl);
+        if (!button) return null;
+
+        return {
+            label: button.label,
+            path: button.urlSuffix,
+            url: baseUrl ? button.url : undefined
+        };
+    }
+
+    /**
+     * Run one channel send, recording a deliveryErrors entry only on failure.
+     */
+    private async attemptDelivery(
+        notification: IVendorNotification,
+        channel: DeliveryChannel,
+        send: () => Promise<void>
     ): Promise<void> {
-        const vendor = await this.vendorRepo.findById(vendorId.toString());
-        if (!vendor || !vendor.email_verified || !vendor.email) return;
+        try {
+            await send();
+        } catch (error: any) {
+            const message = error?.message || String(error);
+            console.error(`[NotificationHandler] ${channel} delivery failed:`, message);
+            try {
+                await this.notificationRepo.recordDeliveryError(notification._id as any, channel, message);
+            } catch (recordErr) {
+                console.error('[NotificationHandler] Failed to record delivery error:', recordErr);
+            }
+        }
+    }
+
+    /** Send a preformatted email notification with an optional CTA button. */
+    private async sendEmail(
+        vendor: IVendor,
+        content: ChannelText,
+        button: { label: string; url: string } | null,
+        context: RenderContext
+    ): Promise<void> {
+        if (!vendor.email_verified || !vendor.email) return;
 
         await this.mailService.send({
             to: vendor.email,
@@ -414,44 +533,133 @@ export class VendorNotificationEventHandler {
                 vendorName: vendor.business_name,
                 title: content.subject,
                 message: content.body,
-                ...content.templateContext
+                actionLabel: button?.label ?? null,
+                actionUrl: button?.url ?? null,
+                ...context
             }
         });
     }
 
-    /**
-     * Send Telegram notification
-     */
+    /** Send a preformatted Telegram notification with an optional inline URL button. */
     private async sendTelegram(
-        vendorId: string | mongoose.Types.ObjectId,
-        content: any
+        vendor: IVendor,
+        content: ChannelText,
+        button: { label: string; url: string } | null
     ): Promise<void> {
-        const vendor = await this.vendorRepo.findById(vendorId.toString());
-        if (!vendor) return;
-
-        // Format message for Telegram (markdown)
         const message = `*${content.subject}*\n\n${content.body}`;
 
-        await this.telegramService.send({
+        const result = await this.telegramService.send({
             userId: vendor.user_id.toString(),
-            message
+            message,
+            button: button ?? undefined
         });
+
+        if (!result.success) {
+            throw createAppError(
+                ERROR_CODES.VENDOR_NOTIFICATION_DELIVERY_FAILED,
+                502,
+                result.error || 'Telegram delivery failed'
+            );
+        }
     }
 
     /**
-     * Send WhatsApp notification
-     * 
-     * Note: This is a placeholder. WhatsApp API integration required.
+     * Send a WhatsApp notification in the vendor's language.
+     *
+     * Chooses the deliverable format for Meta's policy:
+     * - Inside the 24h window → free-form preformatted text (+ action link)
+     * - Outside the window    → the situation's approved template (catalog),
+     *   sent with the matching Meta language code and an optional URL button.
+     * Sent as a free system message (no billing attribution).
      */
     private async sendWhatsApp(
-        vendorId: string | mongoose.Types.ObjectId,
-        content: any
+        vendor: IVendor,
+        notification: IVendorNotification,
+        situation: NotificationType,
+        lang: Language,
+        context: RenderContext
     ): Promise<void> {
-        const vendor = await this.vendorRepo.findById(vendorId.toString());
-        if (!vendor || !vendor.wa?.verified) return;
+        if (!this.isWhatsAppProviderConfigured()) {
+            console.log('[NotificationHandler] WhatsApp not configured; skipping delivery');
+            return;
+        }
 
-        // TODO: Implement WhatsApp message sending via WhatsApp Business API
-        // For now, just log
-        console.log(`[NotificationHandler] WhatsApp delivery for vendor ${vendorId}:`, content.subject);
+        if (!vendor.wa?.verified || !vendor.wa.wa_phone_id) return;
+
+        const waPhoneId = vendor.wa.wa_phone_id;
+        const to = waPhoneId.startsWith('+') ? waPhoneId : `+${waPhoneId}`;
+
+        const withinWindow = await this.whatsappWindow.canSendFreeMessage(waPhoneId);
+
+        let result;
+        if (withinWindow) {
+            // Inside the 24h window we can send free-form service messages. When the
+            // situation has an action button, send an interactive CTA-URL message
+            // (tappable button); otherwise fall back to plain text.
+            const content = renderChannelText(situation, 'whatsapp', lang, context);
+            const button = process.env.VENDOR_APP_URL
+                ? renderButton(situation, lang, context, process.env.VENDOR_APP_URL)
+                : null;
+
+            if (button) {
+                result = await getWhatsAppMessagingService().send(
+                    WaServiceMessage.ctaUrl({
+                        to,
+                        header: content.subject,
+                        body: content.body,
+                        displayText: button.label,
+                        url: button.url
+                    })
+                );
+            } else {
+                result = await getWhatsAppMessagingService().send(
+                    WaServiceMessage.text({ to, body: `${content.subject}\n\n${content.body}` })
+                );
+            }
+        } else {
+            // Outside the window only approved templates are deliverable.
+            const components: TemplateComponent[] = [
+                {
+                    type: 'body',
+                    parameters: renderWhatsAppTemplateParams(situation, lang, context).map(text => ({
+                        type: 'text' as const,
+                        text
+                    }))
+                }
+            ];
+
+            const button = renderButton(situation, lang, context, process.env.VENDOR_APP_URL);
+            if (button) {
+                components.push({
+                    type: 'button',
+                    sub_type: 'url',
+                    index: 0,
+                    parameters: [{ type: 'text', text: button.urlSuffix }]
+                });
+            }
+
+            result = await getWhatsAppMessagingService().send({
+                to,
+                type: 'template',
+                message: {
+                    type: 'template',
+                    name: whatsAppTemplateName(situation),
+                    language: META_LANGUAGE_CODE[lang],
+                    components
+                },
+                meta: {
+                    // Templates require an idempotency key; derive a stable one per notification.
+                    idempotencyKey: `notif:${notification.idempotencyKey}:whatsapp`
+                }
+            });
+        }
+
+        if (!result.success) {
+            throw createAppError(
+                ERROR_CODES.VENDOR_NOTIFICATION_DELIVERY_FAILED,
+                502,
+                result.error?.message || 'WhatsApp delivery failed'
+            );
+        }
     }
 }

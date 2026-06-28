@@ -1,6 +1,7 @@
 import { z } from 'zod';
 // No geo types exported here
 import { PayoutDetailsZodSchema } from '../../../core/types/payout.types';
+import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
 
@@ -138,6 +139,7 @@ export const UpdateAgencyProfileSchema = z.object({
     agency_name: z.string().min(1).max(200).trim().optional(),
     logo_url: z.string().url().nullable().optional(),
     timezone: z.string().min(1).trim().optional(),
+    preferred_language: z.enum(SUPPORTED_LANGUAGES).optional(),
     coverage_areas: z.array(z.string().min(1).trim()).min(1).optional(),
     headquarters_addresses: z.array(HeadquartersAddressSchema).min(1).optional(),
     payout_details: PayoutDetailsZodSchema.optional(), // array of IPayoutMethod

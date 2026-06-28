@@ -16,6 +16,11 @@ import { ERROR_CODES } from '../../core/error-codes';
 
 const EMAIL_VERIFY_EXPIRE = 86400; // 24 hours
 
+// Public base URL of this API, used to build links emailed to users (e.g. the
+// email-verification link). Defaults to localhost for local dev; set
+// API_PUBLIC_URL in non-local environments. Trailing slashes are stripped.
+const API_PUBLIC_URL = (process.env.API_PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/+$/, '');
+
 // ─── Token TTLs (in seconds) ─────────────────────────────────────────────────
 const ACCESS_TOKEN_TTL_S = parseInt(process.env.AUTH_ACCESS_TOKEN_TTL || '900');     // 15 min
 const REFRESH_TOKEN_TTL_S = parseInt(process.env.AUTH_REFRESH_TOKEN_TTL || '2592000'); // 30 days
@@ -305,7 +310,7 @@ export class AuthService {
     const value = JSON.stringify({ userId, role });
     await redis.set(`email_verify:${token}`, value, { EX: EMAIL_VERIFY_EXPIRE });
 
-    const verifyLink = `http://localhost:${process.env.PORT || 3000}/api/auth/verify-email?token=${token}`;
+    const verifyLink = `${API_PUBLIC_URL}/api/auth/verify-email?token=${token}`;
 
     await this.mailService.send({
       to: email,

@@ -41,7 +41,7 @@ List all bookings for the authenticated vendor with filtering and pagination.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `status` | string | No | Filter by booking status: `pending`, `confirmed`, `completed`, `no-show`, `cancelled` |
-| `paymentStatus` | string | No | Filter by payment state: `unpaid`, `pending`, `paid`, `failed`, `refunded` |
+| `paymentStatus` | string | No | Filter by payment state: `unpaid`, `pending`, `paid`, `disputed`, `failed`, `refunded` |
 | `productId` | string | No | Filter by product (service) ID |
 | `startDate` | ISO datetime | No | Bookings starting at or after this date |
 | `endDate` | ISO datetime | No | Bookings starting at or before this date |
@@ -400,6 +400,23 @@ stateDiagram-v2
   }
 }
 ```
+
+---
+
+## Payment disputes (card bookings)
+
+Online card bookings (Stripe) can be disputed by the customer. The backend reacts
+automatically; the dashboard just needs to render the new `paymentStatus`:
+
+- **Dispute opened** → `paymentStatus` becomes **`disputed`** (payment is undecided).
+  Show it distinctly (the calendar event is also recoloured to orange `[DISPUTED]`).
+- **Dispute won** → `paymentStatus` returns to `paid`.
+- **Dispute lost** (or full refund) → `paymentStatus` becomes `refunded`, the booking
+  `status` becomes `cancelled` (with `cancelledReason`), and vendor earnings are reversed.
+
+No vendor action is required or possible on a disputed booking — resolution is driven by
+Stripe. Just add `disputed` to your payment-status badges/filters and treat a
+`disputed → refunded`/`cancelled` booking as closed.
 
 ---
 

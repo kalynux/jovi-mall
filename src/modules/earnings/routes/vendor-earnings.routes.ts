@@ -10,7 +10,7 @@ const router = Router();
 router.use(requireAuth);
 router.use(requireRole(['vendor']));
 
+// Balances only. Earnings history moved to the unified GET /vendor/transactions feed.
 router.get('/earnings', VendorEarningsController.getEarnings);
-router.get('/earnings/ledger', VendorEarningsController.getLedger);
 
 export default router;

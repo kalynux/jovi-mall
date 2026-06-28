@@ -8,7 +8,7 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
  * payment webhook (which then credits the wallet) or `failed` on gateway failure.
  */
 
-export type CreditTopupStatus = 'pending' | 'paid' | 'failed';
+export type CreditTopupStatus = 'pending' | 'paid' | 'failed' | 'reversed';
 
 /** Gateways reused from the payments module for charging a top-up. */
 export type CreditTopupGateway = 'NOTCHPAY' | 'MYCOOLPAY' | 'STRIPE';
@@ -35,7 +35,7 @@ const CreditTopupSchema = new Schema<ICreditTopup>(
     credits: { type: Number, required: true, min: 1 },
     price: { type: Number, required: true, min: 0 },
     currency: { type: String, required: true, trim: true, uppercase: true },
-    status: { type: String, enum: ['pending', 'paid', 'failed'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'paid', 'failed', 'reversed'], default: 'pending' },
     gateway: { type: String, enum: ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'], default: null },
     gateway_ref: { type: String, default: null },
     payment_transaction_id: { type: Schema.Types.ObjectId, ref: MODELS.PAYMENT_TRANSACTION, default: null },

@@ -12,6 +12,12 @@ export class VendorPlanRepository {
     return doc;
   }
 
+  async findById(id: string | Types.ObjectId, session?: ClientSession): Promise<IVendorPlan | null> {
+    const query = VendorPlanModel.findById(id);
+    if (session) query.session(session);
+    return query.exec();
+  }
+
   async findByVendorAndStatus(
     vendorId: string,
     status: VendorPlanStatus,

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { GeoPointZodSchema } from '../../../core/types/geo.types';
 import { PayoutDetailsZodSchema } from '../../../core/types/payout.types';
+import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
 
@@ -179,6 +180,7 @@ export const UpdateVendorProfileSchema = z.object({
     email: z.string().email().optional(),
     phone: z.string().min(8).max(20).optional(),
     timezone: z.string().min(1).trim().optional(),
+    preferred_language: z.enum(SUPPORTED_LANGUAGES).optional(),
     country: z.string().length(2).toUpperCase().optional(),
     branding: BrandingSchema.optional(),
     business_addresses: z.array(BusinessAddressSchema).optional(),

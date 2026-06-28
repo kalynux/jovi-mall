@@ -6,6 +6,10 @@ import { ITicket } from '../models/ticket.model';
 import { AppError, createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
+import { OrderModel } from '../../orders/order.model';
+import { Booking } from '../../booking/models/booking.model';
+import { ProductModel } from '../../catalog/models/product.model';
+import { VendorRepository } from '../../vendors/vendor.repository';
 import mongoose from 'mongoose';
 
 /**
@@ -35,11 +39,13 @@ export class TicketService {
     private ticketRepo: TicketRepository;
     private followerService: TicketFollowerService;
     private noteService: TicketNoteService;
+    private vendorRepo: VendorRepository;
 
     constructor() {
         this.ticketRepo = new TicketRepository();
         this.followerService = new TicketFollowerService();
         this.noteService = new TicketNoteService();
+        this.vendorRepo = new VendorRepository();
     }
 
     /**
@@ -115,11 +121,16 @@ export class TicketService {
         importance: TicketImportance;
         entityType: EntityType;
         entityId: string;
+        trackingNumber?: string;
+        attachments?: string[];
         createdByUserId: string;
         createdByRole: ActorRole;
     }): Promise<ITicket> {
-        // Polymorphic entity validation
-        await this.validateEntityReference(input.entityType, input.entityId);
+        // Polymorphic entity validation → also resolves the vendor behind the entity.
+        const vendorId = await this.validateEntityReference(input.entityType, input.entityId);
+
+        // Enforce the vendor's support policy required_info (customer-facing support).
+        await this.enforceSupportRequiredInfo(vendorId, input);
 
         // Create ticket
         const ticket = await this.ticketRepo.create({
@@ -559,20 +570,77 @@ export class TicketService {
      * - Check if PRODUCT exists in ProductModel
      * - etc.
      */
-    private async validateEntityReference(entityType: EntityType, entityId: string): Promise<void> {
-        // TODO: Implement actual validation based on entityType
-        // For now, just basic validation
-        if (!entityId || entityId.trim() === '') {
-            throw createAppError(ERROR_CODES.TICKET_GENERAL_UPDATE_FAILED, 400, 'Entity ID is required');
+    private async validateEntityReference(
+        entityType: EntityType,
+        entityId: string
+    ): Promise<string | null> {
+        if (!entityId || !mongoose.Types.ObjectId.isValid(entityId)) {
+            throw createAppError(ERROR_CODES.TICKET_ENTITY_NOT_FOUND, 400, 'Invalid entity reference');
         }
 
-        // Example validation (implement for each entity type):
-        // if (entityType === EntityType.ORDER) {
-        //   const orderExists = await OrderModel.findById(entityId);
-        //   if (!orderExists) {
-        //     throw new NotFoundError('Referenced order not found');
-        //   }
-        // }
+        // Resolve the referenced entity, confirm it exists, and return the vendor
+        // it belongs to (used to apply that vendor's support policy).
+        switch (entityType) {
+            case EntityType.ORDER: {
+                const order = await OrderModel.findById(entityId).select('vendor_id').lean();
+                if (!order) throw createAppError(ERROR_CODES.TICKET_ENTITY_NOT_FOUND, 404, 'Referenced order not found');
+                return order.vendor_id?.toString() ?? null;
+            }
+            case EntityType.BOOKING: {
+                const booking = await Booking.findById(entityId).select('vendorId').lean();
+                if (!booking) throw createAppError(ERROR_CODES.TICKET_ENTITY_NOT_FOUND, 404, 'Referenced booking not found');
+                return booking.vendorId?.toString() ?? null;
+            }
+            case EntityType.PRODUCT: {
+                const product = await ProductModel.findById(entityId).select('vendorId').lean();
+                if (!product) throw createAppError(ERROR_CODES.TICKET_ENTITY_NOT_FOUND, 404, 'Referenced product not found');
+                return product.vendorId?.toString() ?? null;
+            }
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * Enforce the vendor's support-policy `required_info` on ticket creation.
+     *
+     * - `order_number` → the ticket must reference a valid ORDER entity.
+     * - `tracking_number` → a `trackingNumber` must be supplied.
+     * - `product_photo_video` → at least one attachment must be supplied.
+     *
+     * No-op when the vendor cannot be resolved or has no support policy. The
+     * `channels` / `availability` / `languages` fields stay informational —
+     * tickets are their own in-app channel.
+     */
+    private async enforceSupportRequiredInfo(
+        vendorId: string | null,
+        input: { entityType: EntityType; trackingNumber?: string; attachments?: string[] }
+    ): Promise<void> {
+        if (!vendorId) return;
+
+        const vendor = await this.vendorRepo.findById(vendorId);
+        const required = vendor?.policies?.support_policy?.required_info ?? [];
+        if (required.length === 0) return;
+
+        const missing: string[] = [];
+        if (required.includes('order_number') && input.entityType !== EntityType.ORDER) {
+            missing.push('order_number');
+        }
+        if (required.includes('tracking_number') && !input.trackingNumber) {
+            missing.push('tracking_number');
+        }
+        if (required.includes('product_photo_video') && (input.attachments?.length ?? 0) === 0) {
+            missing.push('product_photo_video');
+        }
+
+        if (missing.length > 0) {
+            throw createAppError(
+                ERROR_CODES.TICKET_REQUIRED_INFO_MISSING,
+                400,
+                'This vendor requires additional information to open a support ticket',
+                { missing }
+            );
+        }
     }
 
     /**
@@ -616,4 +684,37 @@ export class TicketService {
             throw createAppError(ERROR_CODES.TICKET_INVALID_STATUS_TRANSITION, 400, 'Status is already set to this value');
         }
     }
+
+    /**
+     * Open a ticket on behalf of the platform (no human creator), e.g. from a
+     * Stripe dispute webhook. Uses the configured `SUPPORT_ADMIN_USER_ID` as the
+     * admin actor. Best-effort: if that env is unset/invalid this returns null
+     * (callers must treat ticket creation as non-fatal) rather than throwing.
+     */
+    async createSystemTicket(input: {
+        type: string;
+        entityType: EntityType;
+        entityId: string;
+        subject: string;
+        description: string;
+        importance?: TicketImportance;
+    }): Promise<ITicket | null> {
+        const actorId = process.env.SUPPORT_ADMIN_USER_ID;
+        if (!actorId || !mongoose.Types.ObjectId.isValid(actorId)) {
+            console.warn('[TicketService] SUPPORT_ADMIN_USER_ID not configured — skipping system ticket creation');
+            return null;
+        }
+        return this.createTicket({
+            subject: input.subject,
+            description: input.description,
+            type: input.type,
+            importance: input.importance ?? TicketImportance.HIGH,
+            entityType: input.entityType,
+            entityId: input.entityId,
+            createdByUserId: actorId,
+            createdByRole: ActorRole.ADMIN,
+        });
+    }
 }
+
+export const ticketService = new TicketService();

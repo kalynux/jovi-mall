@@ -44,6 +44,7 @@ export interface GetAgencyProfileResponseDto {
     policies: IAgencyPolicies | null;
     wa: { verified: boolean; name?: string } | null;
     timezone: string;
+    preferredLanguage: string;
     status: string;
     onboardingStep: number;
     version: number;
@@ -186,6 +187,7 @@ export class AgencyProfileMapper {
             policies: agency.policies ?? null,
             wa: agency.wa ? { verified: agency.wa.verified, name: agency.wa.name } : null,
             timezone: agency.timezone,
+            preferredLanguage: agency.preferred_language,
             status: agency.status,
             onboardingStep: agency.onboarding_step,
             version: agency.version,
@@ -266,6 +268,7 @@ export class AgencyProfileMapper {
         if (input.agency_name !== undefined) payload.agency_name = input.agency_name;
         if (input.logo_url !== undefined) payload.logo_url = input.logo_url as string | null;
         if (input.timezone !== undefined) payload.timezone = input.timezone;
+        if (input.preferred_language !== undefined) payload.preferred_language = input.preferred_language;
         if (input.coverage_areas !== undefined) payload.coverage_areas = input.coverage_areas as string[];
         if (input.headquarters_addresses !== undefined) payload.headquarters_addresses = input.headquarters_addresses as IAgencyHeadquartersAddress[];
         if (input.payout_details !== undefined) payload.payout_details = input.payout_details as IPayoutMethod[];

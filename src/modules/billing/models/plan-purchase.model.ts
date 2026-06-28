@@ -10,7 +10,7 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
  * `vendor_plan_id` records the resulting VendorPlan (active or queued pending).
  */
 
-export type PlanPurchaseStatus = 'pending' | 'paid' | 'failed';
+export type PlanPurchaseStatus = 'pending' | 'paid' | 'failed' | 'reversed';
 export type PlanPurchaseGateway = 'NOTCHPAY' | 'MYCOOLPAY' | 'STRIPE';
 
 export interface IPlanPurchase extends Document {
@@ -35,7 +35,7 @@ const PlanPurchaseSchema = new Schema<IPlanPurchase>(
     plan_code: { type: String, required: true, trim: true },
     price: { type: Number, required: true, min: 0 },
     currency: { type: String, required: true, trim: true, uppercase: true },
-    status: { type: String, enum: ['pending', 'paid', 'failed'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'paid', 'failed', 'reversed'], default: 'pending' },
     gateway: { type: String, enum: ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'], default: null },
     gateway_ref: { type: String, default: null },
     vendor_plan_id: { type: Schema.Types.ObjectId, ref: MODELS.VENDOR_PLAN, default: null },

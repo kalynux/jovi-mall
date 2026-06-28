@@ -17,6 +17,9 @@ export interface RefundEligibilityDto {
     remaining: number;           // Remaining un-refunded balance of the payment
     currency: string | null;
     reasonCode?: string;         // Why it's not eligible (when eligible === false)
+    // Policy info surfaced for the UI/notification (no money movement here).
+    refundProcessingDays: number | null;                  // Expected settle window per policy
+    returnShippingPayer: IVendorReturnPolicy['return_shipping_payer'] | null; // Who pays return shipping
 }
 
 export interface RefundResultDto {
@@ -26,6 +29,9 @@ export interface RefundResultDto {
     currency: string;
     totalRefunded: number;
     fullyRefunded: boolean;
+    // Echoed from the vendor return policy so the client can inform the customer.
+    refundProcessingDays: number | null;
+    returnShippingPayer: IVendorReturnPolicy['return_shipping_payer'] | null;
 }
 
 /**
@@ -127,7 +133,9 @@ export class VendorRefundService {
             amount: result.amount,
             currency: result.currency,
             totalRefunded: result.totalRefunded,
-            fullyRefunded: result.fullyRefunded
+            fullyRefunded: result.fullyRefunded,
+            refundProcessingDays: returnPolicy?.refund_processing_days ?? null,
+            returnShippingPayer: returnPolicy?.return_shipping_payer ?? null
         };
     }
 
@@ -158,7 +166,14 @@ export class VendorRefundService {
     ): RefundEligibilityDto {
         const currency = paymentTx?.currencySnapshot ?? order.currency ?? null;
         const remaining = paymentTx ? paymentTx.amountSnapshot - paymentTx.totalRefunded : 0;
-        const base: RefundEligibilityDto = { eligible: false, maxRefundable: 0, remaining, currency };
+        const base: RefundEligibilityDto = {
+            eligible: false,
+            maxRefundable: 0,
+            remaining,
+            currency,
+            refundProcessingDays: returnPolicy?.refund_processing_days ?? null,
+            returnShippingPayer: returnPolicy?.return_shipping_payer ?? null,
+        };
 
         // Policy gate
         if (!returnPolicy || !returnPolicy.return_eligible || returnPolicy.refund_type === 'none') {
@@ -195,7 +210,7 @@ export class VendorRefundService {
             return { ...base, reasonCode: ERROR_CODES.REFUND_NOT_ELIGIBLE };
         }
 
-        return { eligible: true, maxRefundable, remaining, currency };
+        return { ...base, eligible: true, maxRefundable, remaining, currency };
     }
 
     private statusForReason(reasonCode?: string): number {

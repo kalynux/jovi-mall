@@ -177,8 +177,34 @@ export class PlanPurchaseService {
     }
   }
 
-  async listPurchases(vendorId: string, page: number, limit: number) {
-    return this.repo.listByVendor(vendorId, page, limit);
+  /**
+   * Reverse a paid plan purchase located by its gateway PaymentIntent reference
+   * (charge-back / refund). Marks the purchase `reversed` and unwinds the plan:
+   * if the resulting VendorPlan is still `active` it is downgraded to the free
+   * tier; if it was only queued (`pending_activation`) it is cancelled. Idempotent
+   * — a non-paid purchase is a no-op. An admin can re-assign the paid plan later
+   * via the admin billing endpoint if the dispute is resolved in the vendor's favour.
+   *
+   * Returns the affected purchase, or null if none matches the reference.
+   */
+  async reverseByGatewayRef(gatewayRef: string): Promise<IPlanPurchase | null> {
+    const purchase = await this.repo.findByGatewayRef(gatewayRef);
+    if (!purchase) return null;
+    if (purchase.status !== 'paid') return purchase; // idempotent: only a paid purchase reverses
+
+    // Unwind the granted plan, if any.
+    if (purchase.vendor_plan_id) {
+      const vendorPlan = await this.vendorPlanRepo.findById(purchase.vendor_plan_id);
+      if (vendorPlan && vendorPlan.status === 'active') {
+        await this.vendorPlans.downgradeToFree(purchase.vendor_id.toString(), vendorPlan._id);
+      } else if (vendorPlan && vendorPlan.status === 'pending_activation') {
+        await this.vendorPlanRepo.setStatus(vendorPlan._id, { status: 'cancelled' });
+      }
+    }
+
+    const reversed = (await this.repo.setStatus(purchase._id, 'reversed')) ?? purchase;
+    console.log(`[PlanPurchase] Reversed purchase ${purchase._id} (${gatewayRef}); vendor downgraded to free`);
+    return reversed;
   }
 }
 

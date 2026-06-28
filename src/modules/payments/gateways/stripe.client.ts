@@ -19,6 +19,7 @@ export function getStripeClient(): Stripe {
   if (client) return client;
 
   const key = process.env.STRIPE_SECRET_KEY;
+  console.log({key});
   if (!key) {
     throw createAppError(
       ERROR_CODES.PAYMENT_GATEWAY_NOT_IMPLEMENTED,

@@ -12,6 +12,11 @@ export class PlanPurchaseRepository {
     return PlanPurchaseModel.findById(id);
   }
 
+  /** Locate a purchase by its gateway PaymentIntent reference (for dispute/refund routing). */
+  async findByGatewayRef(gatewayRef: string): Promise<IPlanPurchase | null> {
+    return PlanPurchaseModel.findOne({ gateway_ref: gatewayRef });
+  }
+
   async setStatus(
     id: Types.ObjectId,
     status: PlanPurchaseStatus,

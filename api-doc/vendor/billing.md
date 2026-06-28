@@ -26,15 +26,16 @@ Every endpoint is automatically scoped to the authenticated vendor.
 | GET | `/api/vendor/plan` | The vendor's current active + pending plan |
 | POST | `/api/vendor/plans/:planId/purchase` | Buy a plan (self-serve; auto-activates/queues on payment) |
 | POST | `/api/vendor/plan-purchases/:id/verify` | Verify & apply a plan purchase after payment |
-| GET | `/api/vendor/plan-purchases` | Plan purchase history |
 | GET | `/api/vendor/credits` | Current credit balance |
-| GET | `/api/vendor/credits/ledger` | Paginated credit transaction history |
 | GET | `/api/vendor/credits/packs` | List buyable credit top-up packs |
-| GET | `/api/vendor/credits/topups` | Paginated top-up purchase history |
 | POST | `/api/vendor/credits/topups` | Start a credit top-up purchase |
 | POST | `/api/vendor/credits/topups/:id/verify` | Verify/complete a top-up after payment |
 | GET | `/api/vendor/settings` | Read billing settings (expiry-notice window) |
 | PATCH | `/api/vendor/settings` | Update billing settings |
+
+> **History endpoints moved.** Plan-purchase, credit-ledger and top-up histories are now served
+> by the unified **[transactions feed](./transactions.md)** (`GET /api/vendor/transactions`).
+> `GET /plan-purchases`, `GET /credits/ledger` and `GET /credits/topups` have been **removed**.
 
 ---
 
@@ -222,7 +223,7 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
   }
 }
 ```
-- `purchase.status`: `paid` → applied (read `vendorPlan` / refresh `GET /vendor/plan`); `pending` → keep polling (`vendorPlan` is `null`); `failed` → show retry.
+- `purchase.status`: `paid` → applied (read `vendorPlan` / refresh `GET /vendor/plan`); `pending` → keep polling (`vendorPlan` is `null`); `failed` → show retry; **`reversed` → the card payment was charged back/refunded after the fact and the plan was undone — the vendor was dropped to the free tier (see "Payment disputes" below).**
 - `vendorPlan.status` is `active` (activated now) or `pending_activation` (queued behind the current paid plan). On an idempotent re-call after it was already paid, `vendorPlan` may be `null` — read `GET /vendor/plan` for the current state.
 
 **Error Responses**:
@@ -232,34 +233,6 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
 - `401`, `403`.
 
 **Polling guidance**: after `POST /plans/:planId/purchase` returns `pending`, poll this endpoint every 3–5s until `purchase.status` is `paid` or `failed` (timeout ~2–3 min for mobile money).
-
----
-
-### GET /api/vendor/plan-purchases
-
-**Description**: Paginated, newest-first history of the vendor's plan purchases.
-
-**Request Headers**: `Authorization: Bearer <token>`
-
-**Query Parameters**: `page` (default `1`), `limit` (default `20`, max `100`).
-
-**Success Response** — `200 OK`:
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "_id": "66cc01", "plan_code": "growth", "price": 5000, "currency": "XAF",
-      "status": "paid", "gateway": "NOTCHPAY", "gateway_ref": "notch_tx_p1",
-      "vendor_plan_id": "667a0005",
-      "created_at": "2026-06-19T14:00:00.000Z", "updated_at": "2026-06-19T14:03:00.000Z"
-    }
-  ],
-  "meta": { "total": 1, "page": 1, "limit": 20, "totalPages": 1 }
-}
-```
-
-**Error Responses**: `400 VALIDATION_ERROR`, `401`, `403`.
 
 ---
 
@@ -274,33 +247,11 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
 { "success": true, "data": { "balance": 849 } }
 ```
 
+> **The balance can be negative.** If a credit top-up is charged back/refunded after the
+> credits were already spent, the claw-back drives the wallet below zero. Render negative
+> balances (and block credit-spending actions until the vendor tops back up).
+
 **Error Responses**: `401`, `403`.
-
----
-
-### GET /api/vendor/credits/ledger
-
-**Description**: Paginated, newest-first history of every credit movement (allowances, top-ups, debits, refunds, adjustments).
-
-**Request Headers**: `Authorization: Bearer <token>`
-
-**Query Parameters**:
-- `page` (integer, optional, default `1`) — 1-indexed page number.
-- `limit` (integer, optional, default `20`, max `100`).
-
-**Success Response** — `200 OK`:
-```json
-{
-  "success": true,
-  "data": [
-    { "_id": "66aa01", "type": "debit", "amount": -1, "balance_after": 849, "reason_code": "vectorisation", "ref": "prod_123", "created_at": "2026-06-19T11:00:00.000Z" },
-    { "_id": "66aa00", "type": "allowance", "amount": 850, "balance_after": 850, "reason_code": "plan_allowance", "ref": "665f0002", "created_at": "2026-06-19T10:00:00.000Z" }
-  ],
-  "meta": { "total": 2, "page": 1, "limit": 20, "totalPages": 1 }
-}
-```
-
-**Error Responses**: `400 VALIDATION_ERROR` (bad `page`/`limit`), `401`, `403`.
 
 ---
 
@@ -324,34 +275,6 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
 ```
 
 **Error Responses**: `401`, `403`.
-
----
-
-### GET /api/vendor/credits/topups
-
-**Description**: Paginated, newest-first history of the vendor's top-up purchases.
-
-**Request Headers**: `Authorization: Bearer <token>`
-
-**Query Parameters**: `page` (default `1`), `limit` (default `20`, max `100`).
-
-**Success Response** — `200 OK`:
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "_id": "66bb01", "pack_code": "pack_100", "credits": 100, "price": 600,
-      "currency": "XAF", "status": "paid", "gateway": "NOTCHPAY",
-      "gateway_ref": "notch_tx_abc123", "payment_transaction_id": null,
-      "created_at": "2026-06-19T11:05:00.000Z", "updated_at": "2026-06-19T11:07:00.000Z"
-    }
-  ],
-  "meta": { "total": 1, "page": 1, "limit": 20, "totalPages": 1 }
-}
-```
-
-**Error Responses**: `400 VALIDATION_ERROR`, `401`, `403`.
 
 ---
 
@@ -441,7 +364,7 @@ Field rules:
   }
 }
 ```
-Read `data.status` to decide UI: `paid` → credited (refresh balance), `pending` → keep polling, `failed` → show retry.
+Read `data.status` to decide UI: `paid` → credited (refresh balance), `pending` → keep polling, `failed` → show retry. A top-up may later become **`reversed`** if its card payment is charged back/refunded — the credits are clawed back (see "Payment disputes" below).
 
 **Error Responses**:
 - `404 BILLING_TOPUP_NOT_FOUND` — id unknown or not owned by this vendor.
@@ -504,3 +427,22 @@ Use `GET /vendor/plan` + the product count to show remaining slots and prompt an
 upgrade. Vendors **upgrade themselves** via `POST /vendor/plans/:planId/purchase`
 (auto-activates on payment). Admins can also assign a plan manually for
 comps/overrides (see the admin billing doc).
+
+## Payment disputes / chargebacks (dashboard changes)
+
+Card payments (Stripe) can be disputed/refunded after the fact. When a billing charge is
+**lost/refunded**, the backend automatically unwinds it — the dashboard just needs to render
+the new states:
+
+- **Plan purchase** → `status` becomes `reversed` and the vendor is **downgraded to the free
+  `starter` tier**. After a chargeback, `GET /vendor/plan` will show the free plan as active.
+  Surface a notice ("your plan was reversed due to a payment dispute — re-purchase or contact
+  support") and let them buy again. An admin can restore the paid plan manually if the dispute
+  is resolved in the vendor's favour.
+- **Credit top-up** → `status` becomes `reversed` and the granted credits are **clawed back**
+  via a `refund` ledger entry (`reason_code: topup_reversal`). The wallet **balance can go
+  negative**; show it and gate credit-spending until they top back up.
+
+These transitions are driven by Stripe webhooks — there is no vendor action/endpoint. Just add
+the `reversed` status to plan-purchase and top-up history views, handle negative balances, and
+show the `topup_reversal` ledger rows.

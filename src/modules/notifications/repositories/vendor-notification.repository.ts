@@ -4,7 +4,8 @@ import {
     IVendorNotification,
     NotificationType,
     AggregateType,
-    DeliveryChannel
+    DeliveryChannel,
+    NotificationAction
 } from '../models/vendor-notification.model';
 
 export interface CreateNotificationPayload {
@@ -14,6 +15,7 @@ export interface CreateNotificationPayload {
     message: string;
     aggregateType: AggregateType;
     aggregateId: mongoose.Types.ObjectId | string;
+    action?: NotificationAction;
     deliveredVia: DeliveryChannel[];
     idempotencyKey: string;
 }
@@ -38,7 +40,9 @@ export type LeanVendorNotification = {
     message: string;
     aggregateType: AggregateType;
     aggregateId: mongoose.Types.ObjectId;
+    action?: NotificationAction;
     deliveredVia: DeliveryChannel[];
+    deliveryErrors?: Array<{ channel: DeliveryChannel; error: string; failedAt: Date }>;
     isRead: boolean;
     readAt: Date | null;
     idempotencyKey: string;
@@ -84,6 +88,7 @@ export class VendorNotificationRepository {
                     message: payload.message,
                     aggregateType: payload.aggregateType,
                     aggregateId: new mongoose.Types.ObjectId(payload.aggregateId),
+                    action: payload.action,
                     deliveredVia: payload.deliveredVia,
                     isRead: false,
                     readAt: null
@@ -197,8 +202,56 @@ export class VendorNotificationRepository {
     }
 
     /**
+     * Record a secondary-channel delivery failure on a notification.
+     *
+     * Appends one entry to deliveryErrors. Best-effort: in-app remains the
+     * source of truth, so failures here never block the flow.
+     *
+     * @param notificationId - Notification ID
+     * @param channel - Channel that failed
+     * @param message - Error message
+     */
+    async recordDeliveryError(
+        notificationId: string | mongoose.Types.ObjectId,
+        channel: DeliveryChannel,
+        message: string
+    ): Promise<void> {
+        await VendorNotificationModel.updateOne(
+            { _id: new mongoose.Types.ObjectId(notificationId) },
+            {
+                $push: {
+                    deliveryErrors: {
+                        channel,
+                        error: message,
+                        failedAt: new Date()
+                    }
+                }
+            }
+        );
+    }
+
+    /**
+     * Add a delivery channel to a notification's deliveredVia snapshot.
+     *
+     * Uses $addToSet so it is idempotent. Used for channels resolved after
+     * creation (e.g. push, which depends on whether the user has devices).
+     *
+     * @param notificationId - Notification ID
+     * @param channel - Channel to record as delivered
+     */
+    async addDeliveredChannel(
+        notificationId: string | mongoose.Types.ObjectId,
+        channel: DeliveryChannel
+    ): Promise<void> {
+        await VendorNotificationModel.updateOne(
+            { _id: new mongoose.Types.ObjectId(notificationId) },
+            { $addToSet: { deliveredVia: channel } }
+        );
+    }
+
+    /**
      * Count unread notifications for vendor
-     * 
+     *
      * @param vendorId - Vendor ID
      * @returns Unread count
      */

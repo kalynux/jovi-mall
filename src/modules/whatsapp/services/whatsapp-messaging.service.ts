@@ -377,3 +377,20 @@ export class WhatsAppMessagingService {
         return !!payload.billing && payload.type === 'template';
     }
 }
+
+/**
+ * Lazily-constructed shared instance.
+ *
+ * The provider throws at construction when WHATSAPP_ACCESS_TOKEN /
+ * WHATSAPP_PHONE_NUMBER_ID are unset, so we only build on first real use (when
+ * configured). Reuse this instead of `new WhatsAppMessagingService()` to avoid
+ * re-registering the handler set on every send.
+ */
+let sharedMessagingService: WhatsAppMessagingService | null = null;
+
+export function getWhatsAppMessagingService(): WhatsAppMessagingService {
+    if (!sharedMessagingService) {
+        sharedMessagingService = new WhatsAppMessagingService();
+    }
+    return sharedMessagingService;
+}

@@ -74,43 +74,39 @@ export class TemplateRegistry {
     }
 
     /**
-     * Register default templates
-     * 
-     * TODO: Move this to configuration or database
+     * Register default templates.
+     *
+     * Vendor notification templates (UTILITY) are registered for every supported
+     * language. These must be approved with the same name + language in WhatsApp
+     * Business Manager — see api-doc/notifications/whatsapp-templates.md.
      */
     private registerDefaultTemplates(): void {
-        // Example templates (these should be configured per environment)
+        // Meta language codes the notification templates are approved in.
+        const languages = ['en', 'fr', 'pt_PT', 'es', 'ar'];
 
-        // this.register({
-        //   name: 'booking_confirmation',
-        //   language: 'en',
-        //   category: 'UTILITY',
-        //   components: {
-        //     body: 3, // vendor_name, booking_date, booking_id
-        //   },
-        //   description: 'Booking confirmation message for vendors/customers',
-        // });
+        // [name, body param count, has URL button, description]
+        const notificationTemplates: Array<[string, number, boolean, string]> = [
+            ['vendor_order_created', 3, true, 'Vendor: new order received'],
+            ['vendor_order_cancelled', 1, true, 'Vendor: order cancelled'],
+            ['vendor_booking_created', 3, true, 'Vendor: new booking received'],
+            ['vendor_booking_cancelled', 1, true, 'Vendor: booking cancelled'],
+            ['vendor_payment_partial', 2, true, 'Vendor: partial payment received'],
+            ['vendor_payment_full', 2, true, 'Vendor: full payment received'],
+            ['vendor_storage_alert', 3, true, 'Vendor: media storage threshold alert']
+        ];
 
-        // this.register({
-        //   name: 'order_status_update',
-        //   language: 'en',
-        //   category: 'UTILITY',
-        //   components: {
-        //     body: 2, // order_id, status
-        //   },
-        //   description: 'Order status update notification',
-        //});
+        for (const [name, body, hasButton, description] of notificationTemplates) {
+            for (const language of languages) {
+                this.register({
+                    name,
+                    language,
+                    category: 'UTILITY',
+                    components: { body, buttons: hasButton ? 1 : 0 },
+                    description
+                });
+            }
+        }
 
-        // this.register({
-        //   name: 'payment_confirmation',
-        //   language: 'en',
-        //   category: 'UTILITY',
-        //   components: {
-        //     body: 3, // amount, order_id, payment_method
-        //   },
-        //   description: 'Payment confirmation for customers',
-        // });
-
-        console.log('[TemplateRegistry] Default templates registered');
+        console.log(`[TemplateRegistry] Registered ${this.templates.size} template entries`);
     }
 }

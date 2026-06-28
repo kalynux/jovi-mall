@@ -9,7 +9,6 @@ import { CREDIT_TOPUP_PACKS } from '../config/credit.config';
 import {
   InitiateTopupSchema,
   InitiatePlanPurchaseSchema,
-  PaginationQuerySchema,
   ExpiryNoticeSchema,
 } from '../validators/billing.validators';
 import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
@@ -57,32 +56,10 @@ export class VendorBillingController {
     res.json({ success: true, data: result });
   });
 
-  static listPlanPurchases = asyncHandler(async (req: Request, res: Response) => {
-    const vendorId = req.auth!.role_entity._id.toString();
-    const { page, limit } = PaginationQuerySchema.parse(req.query);
-    const { data, total } = await planPurchaseService.listPurchases(vendorId, page, limit);
-    res.json({
-      success: true,
-      data,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
-    });
-  });
-
   static getBalance = asyncHandler(async (req: Request, res: Response) => {
     const vendorId = req.auth!.role_entity._id.toString();
     const balance = await creditWalletService.getBalance('vendor', vendorId);
     res.json({ success: true, data: { balance } });
-  });
-
-  static getLedger = asyncHandler(async (req: Request, res: Response) => {
-    const vendorId = req.auth!.role_entity._id.toString();
-    const { page, limit } = PaginationQuerySchema.parse(req.query);
-    const { data, total } = await creditWalletService.getLedger('vendor', vendorId, page, limit);
-    res.json({
-      success: true,
-      data,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
-    });
   });
 
   static listTopupPacks = asyncHandler(async (_req: Request, res: Response) => {
@@ -100,17 +77,6 @@ export class VendorBillingController {
     const vendorId = req.auth!.role_entity._id.toString();
     const topup = await creditTopupService.verifyAndComplete(vendorId, req.params.id);
     res.json({ success: true, data: topup });
-  });
-
-  static listTopups = asyncHandler(async (req: Request, res: Response) => {
-    const vendorId = req.auth!.role_entity._id.toString();
-    const { page, limit } = PaginationQuerySchema.parse(req.query);
-    const { data, total } = await creditTopupService.listTopups(vendorId, page, limit);
-    res.json({
-      success: true,
-      data,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
-    });
   });
 
   static getSettings = asyncHandler(async (req: Request, res: Response) => {

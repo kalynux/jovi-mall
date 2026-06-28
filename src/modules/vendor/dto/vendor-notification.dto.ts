@@ -25,7 +25,7 @@ export interface VendorNotificationDetailsDTO {
     type: NotificationType;
     title: string;
     message: string;
-    aggregateType: 'order' | 'booking' | 'payment';
+    aggregateType: 'order' | 'booking' | 'payment' | 'storage';
     aggregateId: string;
     deliveredVia: DeliveryChannel[];
     isRead: boolean;
@@ -88,6 +88,7 @@ export interface VendorNotificationPreferencesDTO {
             bookingCancelled: boolean;
             paymentReceivedPartial: boolean;
             paymentReceivedFull: boolean;
+            storageAlert: boolean;
         };
     };
 }
