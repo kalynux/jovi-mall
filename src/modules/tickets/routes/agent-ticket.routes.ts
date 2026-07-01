@@ -3,6 +3,7 @@ import { requireAuth, requireRole } from '../../../api/middlewares/auth.middlewa
 import { TicketController } from '../controllers/ticket.controller';
 import { TicketNoteController } from '../controllers/ticket-note.controller';
 import { TicketAttachmentController } from '../controllers/ticket-attachment.controller';
+import { TicketReferenceController } from '../controllers/ticket-reference.controller';
 
 /**
  * Agent Ticket Routes
@@ -18,6 +19,11 @@ router.use(requireRole(['agent']));
 // Ticket Management
 router.post('/', TicketController.createTicket);
 router.get('/', TicketController.listTickets);
+
+// Reference lookups for the ticket-creation form (declared before `/:id`).
+router.get('/reference/orders', TicketReferenceController.listOrders);
+router.get('/reference/products', TicketReferenceController.listProducts);
+
 router.get('/:id', TicketController.getTicketDetails);
 router.patch('/:id', TicketController.updateTicket);
 router.patch('/:id/status', TicketController.updateStatus);

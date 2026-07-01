@@ -35,8 +35,12 @@ export const UpdateFulfillmentStatusSchema = z.object({
 
 export type UpdateFulfillmentStatusDto = z.infer<typeof UpdateFulfillmentStatusSchema>;
 
-// Update delivery agency (physical orders only)
+// Reassign the delivery agency for a SINGLE order item (physical orders only).
+// Scoped to one item so an order can be split across multiple agencies — changing
+// one item's agency must never overwrite the others.
 export const UpdateDeliveryAgencySchema = z.object({
+    itemId: z.string()
+        .regex(/^[0-9a-fA-F]{24}$/, 'Invalid order item ID'),
     deliveryAgencyId: z.string()
         .regex(/^[0-9a-fA-F]{24}$/, 'Invalid delivery agency ID')
 });

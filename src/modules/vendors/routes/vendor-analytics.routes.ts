@@ -1,18 +1,21 @@
 import { Router } from 'express';
 import { VendorAnalyticsController } from '../controllers/vendor-analytics.controller';
-import { requireAuth } from '../../../api/middlewares/auth.middleware';
+import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
 
 /**
  * Vendor Analytics Routes
- * 
+ *
  * All routes require vendor authentication and use vendor-scoped data
  */
 
 const router = Router();
 const controller = new VendorAnalyticsController();
 
-// All routes require authentication
+// All routes require authentication and the vendor role. The role guard is
+// declared locally (not only inherited from the parent vendor router) so these
+// endpoints stay vendor-only regardless of where the router is mounted.
 router.use(requireAuth);
+router.use(requireRole(['vendor']));
 
 /**
  * GET /api/vendor/analytics/dashboard

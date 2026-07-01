@@ -3,6 +3,8 @@ import { VendorVariantDailyMetricsRepository } from '../repositories/vendor-vari
 import { getDateBoundaries } from '../utils/timezone.util';
 import { OrderModel } from '../../orders/order.model';
 import { RefundTransactionModel } from '../../payments/models/refund-transaction.model';
+import { Booking } from '../../booking/models/booking.model';
+import { BookingStatus } from '../../booking/types/booking.types';
 import { Types } from 'mongoose';
 
 /**
@@ -134,22 +136,89 @@ export class VendorAnalyticsAggregationService {
     }
 
     /**
-     * Aggregate booking metrics (placeholder - requires Booking model)
+     * Aggregate booking metrics
+     *
+     * Grouped by booking createdAt (immutable snapshot of bookings made this day),
+     * consistent with how sales groups paid orders by created_at.
+     *
+     * - revenue: sum(priceSnapshot) where paymentStatus = 'paid'
+     * - refunds: sum(priceSnapshot) where paymentStatus = 'refunded'
+     * - conversionRate: (confirmed + completed) / count
+     * - cancellationRate: (cancelled + no-show) / count
      */
     private async aggregateBookingMetrics(
         vendorId: string,
         start: Date,
         end: Date
     ) {
-        // TODO: Implement when Booking model schema is confirmed
-        // For now, return zero metrics
+        const vendorObjectId = new Types.ObjectId(vendorId);
+
+        const [totals] = await Booking.aggregate([
+            {
+                $match: {
+                    vendorId: vendorObjectId,
+                    createdAt: { $gte: start, $lte: end },
+                    deletedAt: null
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    count: { $sum: 1 },
+                    revenue: {
+                        $sum: {
+                            $cond: [{ $eq: ['$paymentStatus', 'paid'] }, '$priceSnapshot', 0]
+                        }
+                    },
+                    refunds: {
+                        $sum: {
+                            $cond: [{ $eq: ['$paymentStatus', 'refunded'] }, '$priceSnapshot', 0]
+                        }
+                    },
+                    confirmedCount: {
+                        $sum: {
+                            $cond: [
+                                { $in: ['$status', [BookingStatus.CONFIRMED, BookingStatus.COMPLETED]] },
+                                1,
+                                0
+                            ]
+                        }
+                    },
+                    cancelledCount: {
+                        $sum: {
+                            $cond: [
+                                { $in: ['$status', [BookingStatus.CANCELLED, BookingStatus.NO_SHOW]] },
+                                1,
+                                0
+                            ]
+                        }
+                    }
+                }
+            }
+        ]);
+
+        if (!totals || totals.count === 0) {
+            return {
+                count: 0,
+                revenue: 0,
+                refunds: 0,
+                netRevenue: 0,
+                conversionRate: 0,
+                cancellationRate: 0
+            };
+        }
+
+        const netRevenue = totals.revenue - totals.refunds;
+        const conversionRate = (totals.confirmedCount / totals.count) * 100;
+        const cancellationRate = (totals.cancelledCount / totals.count) * 100;
+
         return {
-            count: 0,
-            revenue: 0,
-            refunds: 0,
-            netRevenue: 0,
-            conversionRate: 0,
-            cancellationRate: 0
+            count: totals.count,
+            revenue: totals.revenue,
+            refunds: totals.refunds,
+            netRevenue,
+            conversionRate,
+            cancellationRate
         };
     }
 

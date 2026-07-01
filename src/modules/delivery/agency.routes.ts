@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
 import { AgencyProfileController } from './controllers/agency-profile.controller';
+import { ShipmentController } from '../shipments/shipment.controller';
 
 const router = Router();
 
@@ -59,6 +60,15 @@ router.put('/onboarding/branding', AgencyProfileController.completeBrandingSetup
  * Optional: { version } for optimistic concurrency
  */
 router.put('/onboarding/policies', AgencyProfileController.completePolicySetup);
+
+// ─── Shipments ──────────────────────────────────────────────────────────────
+
+/**
+ * PATCH /api/agency/shipments/:id/tracking-number
+ * Record/replace the carrier tracking number on a shipment this agency handles.
+ * Body: { trackingNumber: string }
+ */
+router.patch('/shipments/:id/tracking-number', ShipmentController.setTrackingNumber);
 
 // ─── Legacy / Backward Compatibility ──────────────────────────────────────────
 

@@ -2,7 +2,7 @@
 
 **Base Path:** `/api/vendor/analytics`
 
-**Authentication Required:** Yes (Vendor role)
+**Authentication Required:** Yes — **vendor role only.** Requests from any other role are rejected with `403 AUTH_ROLE_NOT_FOUND`.
 
 **Description:** Analytics endpoints provide aggregated metrics for vendor business intelligence. All endpoints support timezone-aware date ranges and return explicit error codes when data is unavailable.
 
@@ -16,13 +16,13 @@
 - **Format:** ISO 8601 date strings (YYYY-MM-DD)
 
 ### Data Availability Contract
-- **No Silent Zeros:** Returns `503 AGGREGATION_NOT_READY` when data unavailable
+- **No Silent Zeros:** Returns `503` with `error.code = ANALYTICS_AGGREGATION_NOT_READY` when data unavailable
 - **Explicit Staleness:** `lastCalculatedAt` timestamp indicates freshness
 - **Immutable Metrics:** GMV and orderCount never change retroactively
 
 ### Fiscal Calendar
 - **Locked to Gregorian:** Only `'gregorian'` calendar supported
-- **Hard Validation:** Non-gregorian values return `400 INVALID_FISCAL_CALENDAR`
+- **Hard Validation:** Non-gregorian values return `400` (`VALIDATION_ERROR` from the schema enum, or `VENDOR_UNSUPPORTED_FISCAL_CALENDAR` if it reaches the util check)
 
 ---
 
@@ -75,28 +75,47 @@ Get overview metrics for dashboard display.
 - `data.sales.netRevenue` - GMV minus refunds (may be negative)
 - `data.sales.orderCount` - Number of paid orders (immutable)
 - `data.sales.aov` - Average Order Value (netRevenue / orderCount)
-- `data.bookings.*` - Booking-related metrics
+- `data.bookings.count` - Number of bookings created in the range (immutable snapshot)
+- `data.bookings.revenue` - Net booking revenue (paid revenue minus booking refunds) across the range
 - `meta.lastCalculatedAt` - Most recent aggregation timestamp in range
 
 **Error Responses:**
 
+All errors follow the platform-wide envelope: a top-level `success`/`requestId` with a **nested** `error` object (`code`, `message`, `statusCode`, optional `details`). Read `error.code` for programmatic handling — never the HTTP status.
+
 ```json
 // 400 - Invalid date range
 {
-  "error": "INVALID_DATE_RANGE",
-  "message": "Start date must be before or equal to end date"
+  "success": false,
+  "requestId": "req_abc123",
+  "error": {
+    "code": "ANALYTICS_INVALID_DATE_RANGE",
+    "message": "Start date must be before or equal to end date",
+    "statusCode": 400
+  }
 }
 
 // 400 - Range too large
 {
-  "error": "DATE_RANGE_EXCEEDED",
-  "message": "Date range cannot exceed 365 days"
+  "success": false,
+  "requestId": "req_abc123",
+  "error": {
+    "code": "ANALYTICS_DATE_RANGE_EXCEEDED",
+    "message": "Date range cannot exceed 365 days",
+    "statusCode": 400
+  }
 }
 
 // 503 - Data not available
 {
-  "error": "AGGREGATION_NOT_READY",
-  "message": "No analytics data available for vendor XXX in range 2026-02-01 to 2026-02-28. Aggregation may not have run yet or vendor has no data for this period."
+  "success": false,
+  "requestId": "req_abc123",
+  "error": {
+    "code": "ANALYTICS_AGGREGATION_NOT_READY",
+    "message": "No analytics data available for the requested period. Aggregation may not have run yet or the vendor has no data for this period.",
+    "statusCode": 503,
+    "details": { "vendorId": "…", "from": "2026-02-01", "to": "2026-02-28" }
+  }
 }
 ```
 
@@ -313,13 +332,18 @@ Get customer acquisition and retention metrics.
 
 ## Common Error Codes
 
-| Code | HTTP Status | Description |
+All codes below are the exact string values of `error.code` in the response envelope.
+
+| Code (`error.code`) | HTTP Status | Description |
 |------|-------------|-------------|
-| `INVALID_DATE_RANGE` | 400 | Start date after end date, or invalid date format |
-| `DATE_RANGE_EXCEEDED` | 400 | Date range exceeds 365 days |
-| `UNSUPPORTED_TIMEZONE` | 400 | Invalid IANA timezone string |
-| `INVALID_FISCAL_CALENDAR` | 400 | Fiscal calendar must be 'gregorian' |
-| `AGGREGATION_NOT_READY` | 503 | No data available for requested period |
+| `AUTH_MISSING_TOKEN` | 401 | No/invalid authentication token |
+| `AUTH_ROLE_NOT_FOUND` | 403 | Authenticated user is not a vendor (these endpoints are vendor-only) |
+| `ANALYTICS_INVALID_DATE_RANGE` | 400 | Start date after end date, or invalid date format |
+| `ANALYTICS_DATE_RANGE_EXCEEDED` | 400 | Date range exceeds 365 days |
+| `ANALYTICS_UNSUPPORTED_TIMEZONE` | 400 | Invalid IANA timezone string |
+| `VALIDATION_ERROR` | 400 | Query failed schema validation (e.g. `fiscalCalendar` not `'gregorian'`, missing `from`/`to`) |
+| `VENDOR_UNSUPPORTED_FISCAL_CALENDAR` | 400 | Fiscal calendar must be `'gregorian'` (only reachable if the value bypasses the enum check) |
+| `ANALYTICS_AGGREGATION_NOT_READY` | 503 | No data available for requested period |
 
 ---
 
@@ -329,6 +353,16 @@ Get customer acquisition and retention metrics.
 - **Frequency:** Daily at 2:00 AM server time
 - **Scope:** All active vendors
 - **Timezone-Aware:** Each vendor's data aggregated in their timezone
+
+### Booking Metrics
+Booking figures on the dashboard (`data.bookings`) are aggregated per day with the following rules:
+- **Grouping:** By booking `createdAt` (day the booking was made), consistent with how sales groups paid orders — an immutable daily snapshot.
+- **`revenue`:** Sum of `priceSnapshot` for bookings with `paymentStatus = 'paid'`.
+- **`refunds`:** Sum of `priceSnapshot` for bookings with `paymentStatus = 'refunded'`.
+- **`netRevenue`:** `revenue - refunds`.
+- **`conversionRate`:** `(confirmed + completed) / count * 100`.
+- **`cancellationRate`:** `(cancelled + no-show) / count * 100`.
+- **Excludes** soft-deleted bookings.
 
 ### Manual Aggregation
 Backend administrators can backfill data using:
@@ -349,16 +383,26 @@ npm run aggregate:analytics -- --vendorId=XXX --from=YYYY-MM-DD --to=YYYY-MM-DD
 
 1. **Handle 503 Gracefully:**
    ```javascript
-   try {
-     const response = await fetch('/api/vendor/analytics/dashboard?from=2026-02-01&to=2026-02-28');
-     if (response.status === 503) {
-       // Show "Data not yet available" message
+   const response = await fetch('/api/vendor/analytics/dashboard?from=2026-02-01&to=2026-02-28');
+   const body = await response.json();
+
+   if (!response.ok) {
+     // Errors use the nested envelope: { success, requestId, error: { code, message, statusCode } }
+     const { code, message } = body.error;
+     if (code === 'ANALYTICS_AGGREGATION_NOT_READY') {
+       // Show "Data not yet available" message (also detectable via response.status === 503)
        return;
      }
-     const data = await response.json();
-   } catch (error) {
-     // Handle network errors
+     if (code === 'ANALYTICS_INVALID_DATE_RANGE' || code === 'ANALYTICS_DATE_RANGE_EXCEEDED') {
+       // Surface the friendly, human-readable message
+       showError(message);
+       return;
+     }
+     // Fall through for AUTH_ROLE_NOT_FOUND, VALIDATION_ERROR, etc.
+     return;
    }
+
+   const { data, meta } = body;
    ```
 
 2. **Use Vendor Timezone:**

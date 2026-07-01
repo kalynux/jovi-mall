@@ -3,6 +3,7 @@ import { requireAuth, requireRole } from '../../../api/middlewares/auth.middlewa
 import { TicketController } from '../controllers/ticket.controller';
 import { TicketNoteController } from '../controllers/ticket-note.controller';
 import { TicketAttachmentController } from '../controllers/ticket-attachment.controller';
+import { TicketReferenceController } from '../controllers/ticket-reference.controller';
 
 /**
  * Admin Ticket Routes
@@ -37,6 +38,14 @@ router.post('/', TicketController.createTicket);
  * List tickets with filters and pagination
  */
 router.get('/', TicketController.listTickets);
+
+/**
+ * GET /api/admin/tickets/reference/orders
+ * GET /api/admin/tickets/reference/products
+ * Reference lookups for the ticket-creation form (declared before `/:id`).
+ */
+router.get('/reference/orders', TicketReferenceController.listOrders);
+router.get('/reference/products', TicketReferenceController.listProducts);
 
 /**
  * GET /api/admin/tickets/:id

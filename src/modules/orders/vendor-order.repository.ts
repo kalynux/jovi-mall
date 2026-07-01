@@ -147,29 +147,38 @@ export class VendorOrderRepository {
     }
 
     /**
-     * Update delivery agency for all items in an order
-     * 
-     * NEW: For Phase 1 - Physical order delivery agency assignment
-     * 
+     * Reassign the delivery agency for a SINGLE order item.
+     *
+     * Uses the positional `$` operator so only the matched item is touched —
+     * other items keep their own agency, which is what lets one order be split
+     * across several delivery agencies. The item's shipment_id and delivery
+     * status are updated to reflect its new shipment (resolved by the caller).
+     *
      * RULES:
-     * - Updates all order items with new delivery agency
-     * - Ownership enforced in query
-     * - Returns updated order or null if not found/not owned
+     * - Ownership enforced in query (vendor_id)
+     * - Item must belong to the order (matched via items._id)
+     * - Returns updated order or null if not found / not owned / item missing
      */
-    async updateDeliveryAgency(
+    async reassignItemDeliveryAgency(
         orderId: string,
         vendorId: string,
-        deliveryAgencyId: string
+        itemId: string,
+        deliveryAgencyId: string,
+        shipmentId: string,
+        deliveryStatus: string
     ): Promise<IOrder | null> {
         return await OrderModel
             .findOneAndUpdate(
                 {
                     _id: orderId,
-                    vendor_id: vendorId  // CRITICAL: Ownership check
+                    vendor_id: vendorId,        // CRITICAL: Ownership check
+                    'items._id': new Types.ObjectId(itemId)
                 },
                 {
                     $set: {
-                        'items.$[].delivery.agency_id': new Types.ObjectId(deliveryAgencyId),
+                        'items.$.delivery.agency_id': new Types.ObjectId(deliveryAgencyId),
+                        'items.$.delivery.shipment_id': new Types.ObjectId(shipmentId),
+                        'items.$.delivery.status': deliveryStatus,
                         updated_at: new Date()
                     }
                 },

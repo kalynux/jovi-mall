@@ -29,6 +29,18 @@ Admins have special privileges in the ticketing system:
 - **Delete Attachments**: Only admins can delete attachments
 - **Full Visibility**: Admins see all notes and attachments (including private ones)
 
+## Reference Lookups
+
+For populating the ticket-creation form, the same cheap, role-scoped lookups documented in
+[vendor/tickets.md](../vendor/tickets.md) are mounted under the admin namespace (admin scope is
+unscoped — all orders / all products):
+
+- `GET /api/admin/tickets/reference/orders`
+- `GET /api/admin/tickets/reference/products`
+
+When `trackingNumber` is supplied on creation it is persisted and returned as `tracking_number`
+on ticket responses (`null` when omitted).
+
 ## Endpoints
 
 ### POST /api/admin/tickets

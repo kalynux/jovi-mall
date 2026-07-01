@@ -42,20 +42,24 @@ Authorization: Bearer <access_token>
   "type": "string (required) - Ticket type. Enum: technical, billing, feature_request, bug_report, other",
   "importance": "string (required) - Importance level. Enum: low, medium, high, urgent",
   "entityType": "string (required) - Related entity type. Enum: order, product, booking, account, other",
-  "entityId": "string (required) - ID of the related entity (e.g., order ID)",
-  "trackingNumber": "string (optional, max 120) - Required only if the vendor's support policy lists `tracking_number`",
-  "attachments": "string[] (optional, max 10) - File references; required only if the vendor's support policy lists `product_photo_video`"
+  "entityId": "string (optional for `other`, required otherwise) - ID of the related entity (e.g., order ID). For `other`, defaults to the requester's own id.",
+  "trackingNumber": "string (optional, max 120) - Required only for ORDER tickets when the vendor's support policy lists `tracking_number`",
+  "attachments": "string[] (optional, max 5) - File references; required for ORDER/PRODUCT tickets when the vendor's support policy lists `product_photo_video`"
 }
 ```
 
-> **Entity validation & support policy.** The referenced `entityId` must exist (the
-> backend resolves `order`/`booking`/`product` and returns `404 TICKET_ENTITY_NOT_FOUND`
-> otherwise). If the entity's vendor has a support policy with `required_info`, creation is
-> rejected with `400 TICKET_REQUIRED_INFO_MISSING` (`details.missing[]` lists what's absent)
-> until the requirements are met:
-> - `order_number` → `entityType` must be `order`.
-> - `tracking_number` → `trackingNumber` must be supplied.
-> - `product_photo_video` → at least one `attachments` entry must be supplied.
+> **Entity validation.** When `entityType` is `order`/`booking`/`product`, the `entityId`
+> must exist or the request returns `404 TICKET_ENTITY_NOT_FOUND`. For `other` (general or
+> policy questions) `entityId` is optional and defaults to the requester's own id.
+>
+> **Support policy `required_info`.** If the entity's vendor has a support policy with
+> `required_info`, creation is rejected with `400 TICKET_REQUIRED_INFO_MISSING`
+> (`details.missing[]` lists what's absent). These items are order/product-centric and are
+> **only** enforced on the relevant ticket contexts — never on booking or `other` tickets
+> (e.g. a billing/payout question is never asked for a tracking number):
+> - `order_number` → satisfied implicitly by filing under an `order` entity.
+> - `tracking_number` → required for `order` tickets only.
+> - `product_photo_video` → required for `order` or `product` tickets (≥ 1 attachment).
 
 **Success Response**:
 
@@ -75,6 +79,7 @@ Body:
     "status": "open",
     "entity_type": "ORDER",
     "entity_id": "string",
+    "tracking_number": "FS-1234567890",
     "entity": {
       "type": "ORDER",
       "id": "string",
@@ -109,8 +114,100 @@ Body:
 }
 ```
 
+> **Tracking number.** When provided, `trackingNumber` is stored on the ticket and returned
+> as `tracking_number` on all ticket responses. It is `null` when omitted (e.g. an ORDER ticket
+> filed before the order is dispatched, when the vendor policy does not require it).
+
 **Error Responses**:
 - `400` – `VALIDATION_ERROR` – Invalid request body (missing required fields, invalid enum values)
+
+---
+
+### GET /api/vendor/tickets/reference/orders
+
+**Description**: Cheap, read-only list of orders the requester can reference when creating a
+ticket — used to populate `entityId` (order id) and `trackingNumber`. Role-scoped: each actor
+sees only their own orders (customer → own orders, vendor → own orders, agency → orders with an
+item assigned to them, agent → orders with a shipment assigned to them).
+
+> This endpoint is mounted under **every** ticket namespace, scoped to the caller's role:
+> `/api/customer/tickets/reference/orders`, `/api/vendor/...`, `/api/agency/...`, `/api/agent/...`,
+> `/api/admin/...` (admin is unscoped).
+
+**Query Parameters**:
+- `page` (integer, optional, default 1)
+- `limit` (integer, optional, default 20, max 50)
+- `q` (string, optional) — server-side search over **order number**, **customer name**, and **tracking number** (case-insensitive).
+
+**Success Response** (`200 OK`):
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "507f1f77bcf86cd799439010",
+      "orderNumber": "ORD-2026-001003",
+      "orderType": "physical",
+      "fulfillmentStatus": "processing",
+      "createdAt": "2026-02-09T23:54:00.000Z",
+      "customerName": "Jane Doe",
+      "customerAvatarUrl": "https://...",
+      "shipments": [
+        {
+          "shipmentId": "507f1f77bcf86cd799439100",
+          "agencyId": "507f1f77bcf86cd799439099",
+          "agencyName": "FastShip Logistics",
+          "agentId": null,
+          "trackingNumber": "FS-1234567890",
+          "status": "assigned"
+        }
+      ]
+    }
+  ],
+  "pagination": { "total": 1, "page": 1, "limit": 20, "pages": 1 }
+}
+```
+
+> - `customerName` / `customerAvatarUrl` are the picker's primary row label and thumbnail; `null` when the customer profile cannot be resolved.
+> - `shipments[].agencyName` labels each tracking number with the agency in charge of that shipment.
+> - `shipments[].trackingNumber` is `null` until the agency/agent records one (order not yet dispatched). An order split across agencies lists multiple shipments — each with its own agency + tracking number.
+
+---
+
+### GET /api/vendor/tickets/reference/products
+
+**Description**: Cheap, read-only list of products the requester can reference when creating a
+ticket — used to populate `entityId` (product id). Role-scoped: vendor → own catalogue; admin →
+all products; customer/agency/agent → products appearing in the orders they can see.
+
+> Mounted under every ticket namespace, scoped to the caller's role (same pattern as
+> `reference/orders`).
+
+**Query Parameters**:
+- `page` (integer, optional, default 1)
+- `limit` (integer, optional, default 20, max 50)
+- `q` (string, optional) — server-side search over **title**, **category**, and **tags** (case-insensitive).
+
+**Success Response** (`200 OK`):
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "507f1f77bcf86cd799439200",
+      "title": "Wireless Headphones",
+      "slug": "wireless-headphones",
+      "category": "Electronics",
+      "tags": ["audio", "bluetooth"],
+      "firstFileUrl": "https://.../headphones-1.jpg"
+    }
+  ],
+  "pagination": { "total": 1, "page": 1, "limit": 20, "pages": 1 }
+}
+```
+
+> `firstFileUrl` is the URL of the product's first image (row thumbnail), or `null` when the
+> product has no files. `category` is `null` and `tags` is `[]` when unset.
 
 ---
 
@@ -157,6 +254,7 @@ Body:
       "type": "PAYMENT_ISSUE",
       "entity_type": "ORDER",
       "entity_id": "string",
+      "tracking_number": "FS-1234567890",
       "entity": {
         "type": "ORDER",
         "id": "string",

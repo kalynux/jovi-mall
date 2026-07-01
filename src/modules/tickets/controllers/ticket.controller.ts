@@ -26,13 +26,18 @@ export class TicketController {
         const userId = req.auth!.user.id;
         const role = req.auth!.role as ActorRole;
 
+        // General/policy questions (`OTHER`) have no related entity — anchor the
+        // polymorphic reference to the requester's own role entity (e.g. customer id).
+        const entityId =
+            validated.entityId ?? req.auth!.role_entity._id.toString();
+
         const ticket = await ticketService.createTicket({
             subject: validated.subject,
             description: validated.description,
             type: validated.type,
             importance: validated.importance as TicketImportance,
             entityType: validated.entityType as EntityType,
-            entityId: validated.entityId,
+            entityId,
             trackingNumber: validated.trackingNumber,
             attachments: validated.attachments,
             createdByUserId: userId,

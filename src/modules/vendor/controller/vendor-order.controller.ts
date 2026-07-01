@@ -202,12 +202,13 @@ export class VendorOrderController {
     /**
      * PATCH /api/vendor/orders/:id/delivery-agency
      *
-     * Update delivery agency for physical order
-     *
-     * NEW: Phase 1 - Delivery agency assignment
+     * Reassign the delivery agency for a single item of a physical order.
      *
      * BUSINESS RULES:
      * - Only for physical orders
+     * - Item-scoped: other items keep their own agency (an order may be split
+     *   across several agencies)
+     * - Item must still be pending/assigned (not already dispatched)
      * - Not allowed for delivered/cancelled orders
      * - Timeline entry created
      */
@@ -216,11 +217,12 @@ export class VendorOrderController {
         const orderId = req.params.id;
 
         // Validate request body
-        const { deliveryAgencyId } = UpdateDeliveryAgencySchema.parse(req.body);
+        const { itemId, deliveryAgencyId } = UpdateDeliveryAgencySchema.parse(req.body);
 
         const order = await vendorOrderService.updateDeliveryAgency(
             orderId,
             vendorId,
+            itemId,
             deliveryAgencyId
         );
 

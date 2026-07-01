@@ -53,6 +53,10 @@ export interface ITicket extends Document {
     entity_type: EntityType;
     entity_id: string;
 
+    // Optional carrier tracking number captured at creation (ORDER tickets).
+    // Null when the related order is not yet dispatched / no number was given.
+    tracking_number?: string | null;
+
     // Creator Information
     created_by_role: ActorRole;
     created_by_user_id: mongoose.Types.ObjectId;
@@ -142,6 +146,11 @@ const TicketSchema = new Schema<ITicket>({
         type: String,
         required: true,
         index: true
+    },
+    tracking_number: {
+        type: String,
+        default: null,
+        trim: true
     },
     created_by_role: {
         type: String,

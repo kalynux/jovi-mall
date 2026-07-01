@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
 import { AgentProfileController } from './controllers/agent-profile.controller';
+import { ShipmentController } from '../shipments/shipment.controller';
 
 const router = Router();
 
@@ -23,5 +24,12 @@ router.get('/profile/completion-status', AgentProfileController.getCompletionSta
  *   Step 2: { skip?: boolean, avatar_url?, timezone? }
  */
 router.patch('/onboarding/step', AgentProfileController.completeOnboardingStep);
+
+/**
+ * PATCH /api/agent/shipments/:id/tracking-number
+ * Record/replace the carrier tracking number on a shipment assigned to this agent.
+ * Body: { trackingNumber: string }
+ */
+router.patch('/shipments/:id/tracking-number', ShipmentController.setTrackingNumber);
 
 export default router;

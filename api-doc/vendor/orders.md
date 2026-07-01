@@ -169,7 +169,21 @@ Body:
         "quantity": 2,
         "price": 50.00,
         "subtotal": 100.00,
-        "currency": "XAF"
+        "currency": "XAF",
+        "delivery": {
+          "agencyId": "507f1f77bcf86cd799439099",
+          "agencyName": "FastShip Logistics",
+          "agencyPhone": "+237600000000",
+          "deliveryStatus": "assigned",
+          "shipmentId": "507f1f77bcf86cd799439100",
+          "trackingNumber": "FS-1234567890",
+          "agent": {
+            "id": "507f1f77bcf86cd799439101",
+            "name": "John Doe",
+            "phone": "+237600000001",
+            "avatarUrl": "https://..."
+          }
+        }
       }
     ],
     "priceBreakdown": {
@@ -181,19 +195,22 @@ Body:
     },
     "totalAmount": 110.00,
     "currency": "XAF",
-    "delivery": {
-      "agencyId": "507f1f77bcf86cd799439099",
-      "agencyName": "FastShip Logistics",
-      "agencyPhone": "+237600000000",
-      "deliveryStatus": "assigned",
-      "shipmentId": "507f1f77bcf86cd799439100",
-      "agent": {
-        "id": "507f1f77bcf86cd799439101",
-        "name": "John Doe",
-        "phone": "+237600000001",
-        "avatarUrl": "https://..."
+    "deliveries": [
+      {
+        "agencyId": "507f1f77bcf86cd799439099",
+        "agencyName": "FastShip Logistics",
+        "agencyPhone": "+237600000000",
+        "deliveryStatus": "assigned",
+        "shipmentId": "507f1f77bcf86cd799439100",
+        "trackingNumber": "FS-1234567890",
+        "agent": {
+          "id": "507f1f77bcf86cd799439101",
+          "name": "John Doe",
+          "phone": "+237600000001",
+          "avatarUrl": "https://..."
+        }
       }
-    },
+    ],
     "notes": [
       {
         "id": "string",
@@ -212,8 +229,10 @@ Body:
 > - `customer.orderCount` and `customer.totalSpent` reflect only orders with **this vendor** (not lifetime totals across all vendors).
 > - `customer.*` fields are `null` if the customer profile cannot be resolved.
 > - `shippingAddress` is derived from the customer's default saved address. It is `null` if the customer has no address on file. Field mapping: `address_line1` → `street`.
-> - `delivery` is `null` for digital orders. `delivery.agent` is `null` until an agent is assigned to the shipment.
-> - `delivery.deliveryStatus` reflects the per-item delivery status: `pending`, `assigned`, `picked_up`, `in_transit`, `delivered`, `failed`, or `returned`.
+> - `items[].delivery` is the authoritative per-item delivery info — an order can be split across several agencies (one per item). It is `null` for digital items, and `delivery.agent` is `null` until an agent is assigned to the item's shipment.
+> - `deliveries` is an order-level overview with one entry per agency/shipment handling the order (de-duplicated by `shipmentId`). It is `null` for digital orders. Use `items[].delivery` when you need to know which agency carries a specific item.
+> - `deliveryStatus` reflects the per-item delivery status: `pending`, `assigned`, `picked_up`, `in_transit`, `delivered`, `failed`, or `returned`.
+> - `trackingNumber` is the carrier tracking number set by the delivery agency/agent for that item's shipment. It is `null` until the agency/agent records one (e.g. the order is not yet dispatched).
 > - `priceBreakdown.shipping` is always `0` — shipping cost tracking is not yet implemented in the order schema.
 
 **Error Responses**:
@@ -469,7 +488,14 @@ Body:
 
 ### PATCH /api/vendor/orders/:id/delivery-agency
 
-**Description**: Assign or change the delivery agency for a physical order.
+**Description**: Reassign the delivery agency for a **single item** of a physical order.
+
+A physical order can be split across several delivery agencies (one per item),
+so reassignment is item-scoped — it moves only the specified item to the new
+agency and leaves every other item untouched. Behind the scenes the item is
+moved between agency shipments: it joins the destination agency's open shipment
+for this order (or a new one is created), and is removed from its previous
+shipment (which is deleted if it becomes empty).
 
 **Authorization**: Vendor access required.
 
@@ -483,9 +509,13 @@ Body:
 **Request Body**:
 ```json
 {
+  "itemId": "507f1f77bcf86cd799439012",
   "deliveryAgencyId": "507f1f77bcf86cd799439099"
 }
 ```
+
+- `itemId` (string, required) — the order item (`items[].id`) to reassign.
+- `deliveryAgencyId` (string, required) — the destination agency.
 
 **Success Response**:
 
@@ -493,7 +523,7 @@ Status: `200 OK`
 
 Body:
 
-The response is the full updated order details object (same shape as `GET /api/vendor/orders/:id`), with the `delivery.agencyId` and `delivery.agencyName` fields now reflecting the new agency.
+The response is the full updated order details object (same shape as `GET /api/vendor/orders/:id`). The reassigned item's `items[].delivery` now points at the new agency, and the order-level `deliveries[]` overview reflects the new shipment split.
 
 ```json
 {
@@ -503,9 +533,15 @@ The response is the full updated order details object (same shape as `GET /api/v
 }
 ```
 
+> **Note:** Requesting the agency the item is already assigned to is a no-op and returns the order unchanged.
+
 **Error Responses**:
-- `404` – `NOT_FOUND` – Order not found or does not belong to vendor
-- `400` – `INVALID_PRODUCT_TYPE` – Order does not contain physical products requiring delivery
+- `404` – `ORDER_NOT_FOUND` – Order not found or does not belong to vendor
+- `404` – `ORDER_ITEM_NOT_FOUND` – No item with that `itemId` exists on the order
+- `404` – `ORDER_DELIVERY_AGENCY_NOT_FOUND` – Destination agency does not exist
+- `400` – `ORDER_WRONG_TYPE` – Order is not a physical order
+- `422` – `ORDER_TERMINAL_STATE` – Order is already delivered or cancelled
+- `422` – `ORDER_ITEM_NOT_REASSIGNABLE` – Item has already been dispatched (picked up / in transit / delivered / returned)
 
 ---
 

@@ -143,6 +143,7 @@ export class TicketService {
             priority_locked: false,
             entity_type: input.entityType,
             entity_id: input.entityId,
+            tracking_number: input.trackingNumber ?? null,
             created_by_role: input.createdByRole,
             created_by_user_id: new mongoose.Types.ObjectId(input.createdByUserId),
             updated_by: [new mongoose.Types.ObjectId(input.createdByUserId)]
@@ -604,13 +605,18 @@ export class TicketService {
     /**
      * Enforce the vendor's support-policy `required_info` on ticket creation.
      *
-     * - `order_number` → the ticket must reference a valid ORDER entity.
-     * - `tracking_number` → a `trackingNumber` must be supplied.
-     * - `product_photo_video` → at least one attachment must be supplied.
+     * The required_info items are order/delivery/product-centric, so they are
+     * only applied to the ticket contexts they make sense for — never to booking
+     * or general (`OTHER`) tickets such as a billing/payout question:
+     * - `order_number` → satisfied implicitly when the ticket references an ORDER;
+     *   not enforced on non-order tickets.
+     * - `tracking_number` → a `trackingNumber` is required for ORDER tickets only.
+     * - `product_photo_video` → at least one attachment is required for ORDER or
+     *   PRODUCT tickets.
      *
-     * No-op when the vendor cannot be resolved or has no support policy. The
-     * `channels` / `availability` / `languages` fields stay informational —
-     * tickets are their own in-app channel.
+     * No-op when the vendor cannot be resolved (e.g. `OTHER` tickets) or the
+     * vendor has no support policy. `channels` / `availability` / `languages`
+     * stay informational — tickets are their own in-app channel.
      */
     private async enforceSupportRequiredInfo(
         vendorId: string | null,
@@ -622,14 +628,18 @@ export class TicketService {
         const required = vendor?.policies?.support_policy?.required_info ?? [];
         if (required.length === 0) return;
 
+        const isOrder = input.entityType === EntityType.ORDER;
+        const isProduct = input.entityType === EntityType.PRODUCT;
+
         const missing: string[] = [];
-        if (required.includes('order_number') && input.entityType !== EntityType.ORDER) {
-            missing.push('order_number');
-        }
-        if (required.includes('tracking_number') && !input.trackingNumber) {
+        if (required.includes('tracking_number') && isOrder && !input.trackingNumber) {
             missing.push('tracking_number');
         }
-        if (required.includes('product_photo_video') && (input.attachments?.length ?? 0) === 0) {
+        if (
+            required.includes('product_photo_video') &&
+            (isOrder || isProduct) &&
+            (input.attachments?.length ?? 0) === 0
+        ) {
             missing.push('product_photo_video');
         }
 

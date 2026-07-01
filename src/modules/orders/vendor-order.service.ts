@@ -9,6 +9,7 @@ import { ERROR_CODES } from '../../core/error-codes';
 import { eventBus } from '../../core/events/event-bus';
 import { CustomerModel } from '../customers/customer.model';
 import { COLLECTIONS } from '../../core/database/collections';
+import { ShipmentRepository } from '../shipments/shipment.repository';
 
 /**
  * Vendor Order Service
@@ -41,11 +42,13 @@ export class VendorOrderService {
     private vendorOrderRepo: VendorOrderRepository;
     private timelineRepo: OrderTimelineRepository;
     private noteRepo: VendorOrderNoteRepository;
+    private shipmentRepo: ShipmentRepository;
 
     constructor() {
         this.vendorOrderRepo = new VendorOrderRepository();
         this.timelineRepo = new OrderTimelineRepository();
         this.noteRepo = new VendorOrderNoteRepository();
+        this.shipmentRepo = new ShipmentRepository();
     }
 
     /**
@@ -118,12 +121,23 @@ export class VendorOrderService {
 
         const customerId = order.customer_id.toString();
 
-        // Fetch delivery info, notes, and customer data in parallel
-        const [delivery, notes, customerData] = await Promise.all([
-            this._resolveDeliveryInfo(order),
+        // Fetch delivery info (per item), notes, and customer data in parallel
+        const [deliveryByItem, notes, customerData] = await Promise.all([
+            this._resolveDeliveryForItems(order),
             this.noteRepo.findByOrder(orderId, vendorId),
             this._resolveCustomerInfo(customerId, vendorId)
         ]);
+
+        // Order-level overview: one entry per shipment (agencies handling this order).
+        const deliveries = order.order_type === 'physical'
+            ? Array.from(
+                new Map(
+                    Array.from(deliveryByItem.values())
+                        .filter(d => d.shipmentId)
+                        .map(d => [d.shipmentId, d])
+                ).values()
+            )
+            : null;
 
         // Transform to detailed DTO
         return {
@@ -145,7 +159,8 @@ export class VendorOrderService {
 
             shippingAddress: customerData?.shippingAddress ?? null,
 
-            // Line items with pricing snapshots
+            // Line items with pricing snapshots. Each physical item carries its
+            // own delivery block, since items can be split across agencies.
             items: order.items.map(item => ({
                 id: item._id?.toString(),
                 productId: item.product_id.toString(),
@@ -157,7 +172,8 @@ export class VendorOrderService {
                 quantity: item.quantity,
                 price: item.price,
                 subtotal: item.price * item.quantity,
-                currency: item.currency
+                currency: item.currency,
+                delivery: deliveryByItem.get(item._id?.toString() ?? '') ?? null
             })),
 
             // Pricing
@@ -176,8 +192,10 @@ export class VendorOrderService {
             paymentStatus: order.payment_status,
             paymentIntentId: order.payment_intent_id,
 
-            // Delivery (physical orders only, null for digital)
-            delivery,
+            // Delivery overview: one entry per agency/shipment handling this order
+            // (physical orders only, null for digital). Per-item agency lives on
+            // each `items[].delivery`.
+            deliveries,
 
             // Vendor-internal notes
             notes: notes.map(note => ({
@@ -190,65 +208,92 @@ export class VendorOrderService {
     }
 
     /**
-     * Resolve delivery agency and agent info for a physical order.
+     * Resolve the delivery agency + agent for every physical order item.
      *
-     * Returns null for digital orders or orders without delivery data.
-     * Looks up agency name and agent details via shipment reference.
+     * An order can be split across several agencies (one per item), so this
+     * resolves each item's delivery independently and returns a map keyed by
+     * the order item id. Agency / shipment / agent lookups are cached within
+     * the call so a shared shipment is fetched only once.
+     *
+     * Returns an empty map for digital orders or items without delivery data.
      */
-    private async _resolveDeliveryInfo(order: any): Promise<any> {
-        if (order.order_type !== 'physical' || !order.items?.length) {
-            return null;
-        }
+    private async _resolveDeliveryForItems(order: any): Promise<Map<string, any>> {
+        const byItem = new Map<string, any>();
 
-        const deliveryData = order.items[0].delivery;
-        if (!deliveryData) {
-            return null;
+        if (order.order_type !== 'physical' || !order.items?.length) {
+            return byItem;
         }
 
         const db = mongoose.connection.db;
-
         if (!db) {
-            return null;
+            return byItem;
         }
 
-        // Look up agency name and contact in parallel with shipment lookup
-        const [agency, shipment] = await Promise.all([
-            deliveryData.agency_id
-                ? db.collection(COLLECTIONS.DELIVERY_AGENCY).findOne(
-                    { _id: deliveryData.agency_id },
-                    { projection: { agency_name: 1, phone: 1, email: 1 } }
-                )
-                : Promise.resolve(null),
-            deliveryData.shipment_id
-                ? db.collection(COLLECTIONS.SHIPMENT).findOne({ _id: deliveryData.shipment_id })
-                : Promise.resolve(null)
-        ]);
+        const agencyCache = new Map<string, any>();
+        const shipmentCache = new Map<string, any>();
+        const agentCache = new Map<string, any>();
 
-        // Look up agent from shipment
-        let agent: any = null;
-        if (shipment?.agent_id) {
-            const agentDoc = await db.collection(COLLECTIONS.DELIVERY_AGENT).findOne(
-                { _id: shipment.agent_id },
-                { projection: { name: 1, phone: 1, avatar_url: 1 } }
-            );
-            if (agentDoc) {
-                agent = {
-                    id: agentDoc._id.toString(),
-                    name: agentDoc.name,
-                    phone: agentDoc.phone || null,
-                    avatarUrl: agentDoc.avatar_url || null
-                };
+        for (const item of order.items) {
+            const deliveryData = item.delivery;
+            if (!deliveryData) continue;
+
+            const agencyId = deliveryData.agency_id?.toString() || null;
+            const shipmentId = deliveryData.shipment_id?.toString() || null;
+
+            // Agency (cached)
+            let agency: any = null;
+            if (agencyId) {
+                if (!agencyCache.has(agencyId)) {
+                    agencyCache.set(agencyId, await db.collection(COLLECTIONS.DELIVERY_AGENCY).findOne(
+                        { _id: deliveryData.agency_id },
+                        { projection: { agency_name: 1, phone: 1, email: 1 } }
+                    ));
+                }
+                agency = agencyCache.get(agencyId);
             }
+
+            // Shipment (cached)
+            let shipment: any = null;
+            if (shipmentId) {
+                if (!shipmentCache.has(shipmentId)) {
+                    shipmentCache.set(shipmentId, await db.collection(COLLECTIONS.SHIPMENT).findOne({ _id: deliveryData.shipment_id }));
+                }
+                shipment = shipmentCache.get(shipmentId);
+            }
+
+            // Agent from shipment (cached)
+            let agent: any = null;
+            if (shipment?.agent_id) {
+                const agentId = shipment.agent_id.toString();
+                if (!agentCache.has(agentId)) {
+                    agentCache.set(agentId, await db.collection(COLLECTIONS.DELIVERY_AGENT).findOne(
+                        { _id: shipment.agent_id },
+                        { projection: { name: 1, phone: 1, avatar_url: 1 } }
+                    ));
+                }
+                const agentDoc = agentCache.get(agentId);
+                if (agentDoc) {
+                    agent = {
+                        id: agentDoc._id.toString(),
+                        name: agentDoc.name,
+                        phone: agentDoc.phone || null,
+                        avatarUrl: agentDoc.avatar_url || null
+                    };
+                }
+            }
+
+            byItem.set(item._id.toString(), {
+                agencyId,
+                agencyName: agency?.agency_name || null,
+                agencyPhone: agency?.phone || null,
+                deliveryStatus: deliveryData.status,
+                shipmentId,
+                trackingNumber: shipment?.tracking_number ?? null,
+                agent
+            });
         }
 
-        return {
-            agencyId: deliveryData.agency_id?.toString() || null,
-            agencyName: agency?.agency_name || null,
-            agencyPhone: agency?.phone || null,
-            deliveryStatus: deliveryData.status,
-            shipmentId: deliveryData.shipment_id?.toString() || null,
-            agent
-        };
+        return byItem;
     }
 
     /**
@@ -681,6 +726,7 @@ export class VendorOrderService {
     async updateDeliveryAgency(
         orderId: string,
         vendorId: string,
+        itemId: string,
         deliveryAgencyId: string
     ): Promise<any> {
         // 1. Validate order ownership and type
@@ -704,8 +750,32 @@ export class VendorOrderService {
             );
         }
 
-        // 3. Validate delivery agency exists
-        // Note: We're doing a simple existence check. Add .findOne({ isActive: true }) if needed
+        // 3. Locate the target item. Reassignment is item-scoped: only this item
+        //    moves agency, the rest of the order is untouched.
+        const item = order.items.find(i => i._id?.toString() === itemId);
+        if (!item || !item.delivery) {
+            throw createAppError(ERROR_CODES.ORDER_ITEM_NOT_FOUND, 404, undefined, { itemId });
+        }
+
+        const previousAgencyId = item.delivery.agency_id?.toString() || null;
+
+        // No-op: item already with the requested agency.
+        if (previousAgencyId === deliveryAgencyId) {
+            return this.getOrderDetails(orderId, vendorId);
+        }
+
+        // 4. An item already picked up / in transit / delivered / returned cannot be
+        //    handed to another agency — only items still pending or assigned can move.
+        if (!['pending', 'assigned'].includes(item.delivery.status)) {
+            throw createAppError(
+                ERROR_CODES.ORDER_ITEM_NOT_REASSIGNABLE,
+                422,
+                'This item has already been dispatched and cannot be reassigned to another agency',
+                { itemId, status: item.delivery.status }
+            );
+        }
+
+        // 5. Validate the destination agency exists.
         const { default: mongoose } = await import('mongoose');
 
         if (!mongoose.connection.db) {
@@ -720,32 +790,67 @@ export class VendorOrderService {
             throw createAppError(ERROR_CODES.ORDER_DELIVERY_AGENCY_NOT_FOUND, 404);
         }
 
-        // 4. Update all order items with new agency
-        const updatedOrder = await this.vendorOrderRepo.updateDeliveryAgency(
+        // 6. Move the item between agency shipments (the dispatch source of truth).
+        //    Reuse the destination agency's open shipment for this order if one
+        //    exists, otherwise create a fresh one.
+        let destShipment = await this.shipmentRepo.findGroupableByOrderAndAgency(orderId, deliveryAgencyId);
+        if (destShipment) {
+            await this.shipmentRepo.addItem(destShipment._id!.toString(), {
+                order_item_id: item._id,
+                product_id: item.product_id,
+                quantity: item.quantity
+            });
+        } else {
+            destShipment = await this.shipmentRepo.create({
+                order_id: order._id as any,
+                agency_id: new mongoose.Types.ObjectId(deliveryAgencyId) as any,
+                status: 'pending',
+                items: [{
+                    order_item_id: item._id,
+                    product_id: item.product_id,
+                    quantity: item.quantity
+                }]
+            });
+        }
+
+        // Detach the item from its previous shipment (deletes it if now empty).
+        const previousShipmentId = item.delivery.shipment_id?.toString() || null;
+        if (previousShipmentId) {
+            await this.shipmentRepo.removeItem(previousShipmentId, itemId);
+        }
+
+        // 7. Point the order item at its new agency + shipment. The item inherits
+        //    the destination shipment's status (pending for a new one).
+        const updatedOrder = await this.vendorOrderRepo.reassignItemDeliveryAgency(
             orderId,
             vendorId,
-            deliveryAgencyId
+            itemId,
+            deliveryAgencyId,
+            destShipment._id!.toString(),
+            destShipment.status
         );
 
         if (!updatedOrder) {
             throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
 
-        // 5. Append timeline entry
+        // 8. Append timeline entry (scoped to the item that moved).
         await this.timelineRepo.appendEvent({
             orderId,
             eventType: 'delivery.agency_updated',
-            description: `Delivery agency changed to ${agencyExists.name || deliveryAgencyId}`,
+            description: `Delivery agency for "${item.title}" changed to ${agencyExists.agency_name || deliveryAgencyId}`,
             metadata: {
+                itemId,
                 newAgencyId: deliveryAgencyId,
-                agencyName: agencyExists.name || 'Unknown',
-                previousAgencyId: order.items[0]?.delivery?.agency_id?.toString() || null
+                agencyName: agencyExists.agency_name || 'Unknown',
+                previousAgencyId,
+                shipmentId: destShipment._id!.toString()
             },
             actorType: 'vendor',
             actorId: vendorId
         });
 
-        // 6. Return updated order
+        // 9. Return updated order
         return this.getOrderDetails(orderId, vendorId);
     }
 

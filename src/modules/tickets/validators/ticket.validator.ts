@@ -5,7 +5,8 @@ import {
     TICKET_PRIORITY_VALUES,
     TICKET_IMPORTANCE_VALUES,
     ACTOR_ROLE_VALUES,
-    ENTITY_TYPE_VALUES
+    ENTITY_TYPE_VALUES,
+    EntityType
 } from '../types/ticket.types';
 
 /**
@@ -27,10 +28,20 @@ export const CreateTicketSchema = z.object({
     entityType: z.enum(ENTITY_TYPE_VALUES as [string, ...string[]], {
         errorMap: () => ({ message: 'Invalid entity type' })
     }),
-    entityId: z.string().min(1, 'Entity ID is required'),
+    // Optional for `OTHER` (general/policy questions have no related entity — the
+    // controller defaults it to the requester's own id). Required otherwise.
+    entityId: z.string().min(1).optional(),
     // Optional supporting info — required ones are enforced per vendor support policy.
     trackingNumber: z.string().trim().min(1).max(120).optional(),
-    attachments: z.array(z.string().trim().min(1)).max(10).optional()
+    attachments: z.array(z.string().trim().min(1)).max(5).optional()
+}).superRefine((data, ctx) => {
+    if (data.entityType !== EntityType.OTHER && !data.entityId) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['entityId'],
+            message: 'Entity ID is required'
+        });
+    }
 });
 
 export type CreateTicketDto = z.infer<typeof CreateTicketSchema>;

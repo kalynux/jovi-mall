@@ -12,6 +12,9 @@ export interface IShipment extends Document {
   agency_id: mongoose.Types.ObjectId;
   agent_id?: mongoose.Types.ObjectId | null;
   status: 'pending' | 'assigned' | 'picked_up' | 'in_transit' | 'delivered' | 'failed' | 'returned';
+  // Carrier tracking number, set by the delivery agency/agent handling the
+  // shipment. Null until the shipment is dispatched and a number is recorded.
+  tracking_number?: string | null;
   items: IShipmentItem[];
   created_at: Date;
   updated_at: Date;
@@ -21,11 +24,12 @@ const ShipmentSchema = new Schema<IShipment>({
   order_id: { type: Schema.Types.ObjectId, ref: MODELS.ORDER, required: true },
   agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, required: true },
   agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, default: null },
-  status: { 
-    type: String, 
+  status: {
+    type: String,
     enum: ['pending', 'assigned', 'picked_up', 'in_transit', 'delivered', 'failed', 'returned'],
     default: 'pending'
   },
+  tracking_number: { type: String, default: null, trim: true },
   items: [{
     order_item_id: { type: Schema.Types.ObjectId, required: true },
     product_id: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT, required: true },
