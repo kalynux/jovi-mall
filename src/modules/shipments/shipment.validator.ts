@@ -11,3 +11,41 @@ export const SetTrackingNumberSchema = z.object({
 });
 
 export type SetTrackingNumberDto = z.infer<typeof SetTrackingNumberSchema>;
+
+// List shipments query parameters (agency self-service list).
+// 'pending' is intentionally excluded — a shipment sits there from order
+// creation, before any vendor review/dispatch; an agency never sees it.
+export const ListShipmentsQuerySchema = z.object({
+    status: z.enum(['assigned', 'picked_up', 'in_transit', 'agent_delivered', 'delivered', 'failed', 'returned', 'rejected', 'pending_agency_reassignment']).optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export type ListShipmentsQuery = z.infer<typeof ListShipmentsQuerySchema>;
+
+// Agency-triggered status transition. Only the subset the agency may set
+// directly — see AGENCY_TRIGGERABLE_TRANSITIONS in shipment.service.ts.
+export const UpdateShipmentStatusSchema = z.object({
+    status: z.enum(['picked_up', 'in_transit', 'agent_delivered', 'failed', 'returned'], {
+        errorMap: () => ({ message: 'Invalid shipment status' })
+    })
+});
+
+export type UpdateShipmentStatusDto = z.infer<typeof UpdateShipmentStatusSchema>;
+
+// Reject an assigned shipment. Fixed reason enum (not free text) — mirrors
+// ProductSuspensionReason's scoped-reason pattern.
+export const RejectShipmentSchema = z.object({
+    reason: z.enum(['out_of_coverage_area', 'capacity_exceeded', 'invalid_address', 'vendor_item_not_ready', 'other'], {
+        errorMap: () => ({ message: 'Invalid rejection reason' })
+    })
+});
+
+export type RejectShipmentDto = z.infer<typeof RejectShipmentSchema>;
+
+// Assign one of the agency's own agents to a shipment.
+export const AssignAgentSchema = z.object({
+    agentId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid agent ID')
+});
+
+export type AssignAgentDto = z.infer<typeof AssignAgentSchema>;

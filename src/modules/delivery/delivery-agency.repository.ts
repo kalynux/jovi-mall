@@ -128,6 +128,13 @@ export class DeliveryAgencyRepository {
     return query.exec();
   }
 
+  /** Admin action: update an agency's status by its own _id (not the underlying user_id). */
+  async updateStatusById(agencyId: string, status: string, session?: ClientSession): Promise<IDeliveryAgency | null> {
+    const query = DeliveryAgencyModel.findByIdAndUpdate(agencyId, { status }, { new: true });
+    if (session) query.session(session);
+    return query.exec();
+  }
+
   async updateProfile(agencyId: string, updates: Partial<IDeliveryAgency>, session?: ClientSession): Promise<IDeliveryAgency | null> {
     const query = DeliveryAgencyModel.findByIdAndUpdate(agencyId, { $set: updates, $inc: { version: 1 } }, { new: true });
     if (session) query.session(session);
@@ -262,6 +269,37 @@ export class DeliveryAgencyRepository {
       DeliveryAgencyModel.countDocuments(filter).exec(),
     ]);
 
+    return { agencies: agencies as unknown as IDeliveryAgency[], total };
+  }
+
+  // ─── Admin-Facing Query ────────────────────────────────────────────────────────
+
+  /**
+   * List all agencies for admin management — unlike findAvailableForVendors, applies
+   * no hard filters (inactive and incomplete-onboarding agencies are included).
+   */
+  async findAllForAdmin(
+    params: { status?: 'active' | 'pending_verification' | 'inactive'; page: number; limit: number },
+    session?: ClientSession,
+  ): Promise<{ agencies: IDeliveryAgency[]; total: number }> {
+    const { status, page, limit } = params;
+    const filter: FilterQuery<IDeliveryAgency> = {};
+    if (status) filter.status = status;
+
+    const findQuery = DeliveryAgencyModel.find(filter)
+      .select('agency_name logo_url status onboarding_step user_id created_at updated_at')
+      .sort({ agency_name: 1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+    const countQuery = DeliveryAgencyModel.countDocuments(filter);
+
+    if (session) {
+      findQuery.session(session);
+      countQuery.session(session);
+    }
+
+    const [agencies, total] = await Promise.all([findQuery.exec(), countQuery.exec()]);
     return { agencies: agencies as unknown as IDeliveryAgency[], total };
   }
 }

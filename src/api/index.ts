@@ -73,6 +73,10 @@ router.use('/admin', adminEarningsRoutes);
 import vendorTransactionRoutes from '../modules/transactions/routes/vendor-transaction.routes';
 router.use('/vendor/transactions', vendorTransactionRoutes);
 
+// Customer shopping cart (add/get/remove/clear; checkout lives under /customer/orders)
+import customerCartRoutes from '../modules/cart/routes';
+router.use('/customer/cart', customerCartRoutes);
+
 // Customer order actions (e.g. confirm delivery → completes order, starts escrow hold)
 import customerOrderRoutes from '../modules/orders/customer-order.routes';
 router.use('/customer/orders', customerOrderRoutes);
@@ -107,6 +111,10 @@ router.use('/agency', agencyRoutes);
 // Delivery Agent profile routes
 import agentRoutes from '../modules/delivery/agent.routes';
 router.use('/agent', agentRoutes);
+
+// Admin delivery agency management (deactivate/reactivate cascades to vendor products)
+import adminAgencyRoutes from '../modules/delivery/admin-agency.routes';
+router.use('/admin', adminAgencyRoutes);
 
 // Admin profile routes
 import adminRoutes from '../modules/admins/routes';

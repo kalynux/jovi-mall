@@ -13,7 +13,8 @@ export interface UpdateDigitalConfigDto {
 }
 
 export interface UpdateDeliveryConfigDto {
-  agencyId: string | null;
+  agencyId?: string | null;
+  freeDelivery?: boolean;
 }
 
 export interface UpdateProductCommand {
@@ -97,8 +98,18 @@ export class ProductUpdateService {
           'Delivery configuration only applies to physical products',
         );
       }
-      // Persistence uses snake_case (agency_id) — see product.model.ts schema.
-      (updates as any).delivery = { agency_id: command.delivery.agencyId };
+      // Each sub-field is independently optional, so merge against the existing
+      // persisted value instead of replacing — otherwise setting one field would
+      // silently wipe the other. Persistence uses snake_case — see product.model.ts schema.
+      const existingDelivery = product.delivery;
+      (updates as any).delivery = {
+        agency_id: command.delivery.agencyId !== undefined
+          ? command.delivery.agencyId
+          : (existingDelivery?.agencyId ?? null),
+        free_delivery: command.delivery.freeDelivery !== undefined
+          ? command.delivery.freeDelivery
+          : (existingDelivery?.freeDelivery ?? false),
+      };
     }
 
     // Keep file references in sync with the replaced media array. Runs before the

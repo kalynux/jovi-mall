@@ -1,4 +1,6 @@
+import { ClientSession } from 'mongoose';
 import { VendorModel, IVendor } from './vendor.model';
+import { PaginationOptions, Page } from '../../core/repositories/base.repository';
 
 export class VendorRepository {
   async create(vendorData: Partial<IVendor>): Promise<IVendor> {
@@ -62,8 +64,19 @@ export class VendorRepository {
    * Update profile without version check.
    * Use only for system-initiated updates (e.g., onboarding step recalculation).
    */
-  async updateProfile(vendorId: string, updates: Partial<IVendor>): Promise<IVendor | null> {
-    return await VendorModel.findByIdAndUpdate(vendorId, updates, { new: true });
+  async updateProfile(vendorId: string, updates: Partial<IVendor>, session?: ClientSession): Promise<IVendor | null> {
+    return await VendorModel.findByIdAndUpdate(vendorId, updates, { new: true, session });
+  }
+
+  /**
+   * Find the ids of every vendor whose default_delivery_agency_id points at the given agency.
+   * Used to fan out the suspend/restore cascade when an agency is deactivated/reactivated.
+   */
+  async findVendorIdsByDefaultAgency(agencyId: string, session?: ClientSession): Promise<string[]> {
+    const query = VendorModel.find({ default_delivery_agency_id: agencyId }, { _id: 1 });
+    if (session) query.session(session);
+    const docs = await query.lean();
+    return docs.map(d => d._id.toString());
   }
 
   /**
@@ -112,6 +125,28 @@ export class VendorRepository {
       },
       { new: true }
     );
+  }
+
+  /**
+   * Paginated vendor summaries for an agency's "who set me as default" view
+   * (requirement #7). Read-only, field-projected — vendors cannot see or change
+   * this from the agency side.
+   */
+  async findByDefaultAgency(agencyId: string, pagination: PaginationOptions = { page: 1, limit: 20 }): Promise<Page<IVendor>> {
+    const { page, limit } = pagination;
+    const filter = { default_delivery_agency_id: agencyId };
+
+    const [total, docs] = await Promise.all([
+      VendorModel.countDocuments(filter).exec(),
+      VendorModel.find(filter)
+        .select('business_name display_name email phone status business_addresses')
+        .sort({ business_name: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .exec(),
+    ]);
+
+    return { data: docs, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
   }
 
   async unlinkWhatsApp(userId: string): Promise<IVendor | null> {

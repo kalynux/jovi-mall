@@ -24,7 +24,12 @@ import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 export type OrderType = 'physical' | 'digital';
 export type PaymentStatus = 'pending' | 'AWAITING_PAYMENT' | 'paid' | 'disputed' | 'failed' | 'refunded';
-export type FulfillmentStatus = 'pending' | 'processing' | 'shipped' | 'delivered' | 'fulfilled' | 'cancelled' | 'returned';
+/**
+ * 'partially_shipped' / 'partially_delivered' / 'shipped' / 'delivered' are
+ * system-derived from the order's shipments (see OrderFulfillmentAggregationService)
+ * — never set directly by a vendor. Vendors only drive pending/processing/cancelled.
+ */
+export type FulfillmentStatus = 'pending' | 'processing' | 'partially_shipped' | 'shipped' | 'partially_delivered' | 'delivered' | 'fulfilled' | 'cancelled' | 'returned';
 
 export interface IPriceBreakdown {
   base: number;      // Subtotal before tax/discount
@@ -57,7 +62,17 @@ export interface IOrderItem {
   delivery?: {
     agency_id: mongoose.Types.ObjectId;
     shipment_id?: mongoose.Types.ObjectId | null;
-    status: 'pending' | 'assigned' | 'picked_up' | 'in_transit' | 'delivered' | 'failed' | 'returned';
+    status: 'pending' | 'assigned' | 'picked_up' | 'in_transit' | 'agent_delivered' | 'delivered' | 'failed' | 'returned' | 'rejected' | 'pending_agency_reassignment';
+    free_delivery: boolean;
+    /**
+     * Set when `status` is forced to 'pending_agency_reassignment' because the
+     * assigned agency (default or product-level override) went inactive with no
+     * replacement configured yet. `agency_id` is left unchanged during hold — only
+     * `status` flips — so the hold/unhold queries can match on it directly. Cleared
+     * (null) once the item resumes, whether via unhold (same agency came back) or
+     * reassignment (moved to a new agency).
+     */
+    hold?: { previousStatus: 'pending' | 'assigned'; heldAt: Date } | null;
   };
 }
 
@@ -65,6 +80,12 @@ export interface IOrder extends Document {
   // Order identification
   order_number: string;                 // Human-readable: ORD-2026-000123
   order_type: OrderType;                // 'physical' | 'digital'
+
+  // Checkout group. A single multi-vendor cart splits into one order per vendor;
+  // every order from the same checkout shares this cart_id (the source cart's _id),
+  // so the customer can view them as one logical order while each vendor sees only
+  // their own single-vendor order.
+  cart_id: mongoose.Types.ObjectId;
 
   // Vendor (CRITICAL: Each order belongs to exactly ONE vendor)
   vendor_id: mongoose.Types.ObjectId;   // Top-level vendor ownership
@@ -176,9 +197,18 @@ const OrderItemSchema = new Schema({
       shipment_id: { type: Schema.Types.ObjectId, ref: MODELS.SHIPMENT, default: null },
       status: {
         type: String,
-        enum: ['pending', 'assigned', 'picked_up', 'in_transit', 'delivered', 'failed', 'returned'],
+        enum: ['pending', 'assigned', 'picked_up', 'in_transit', 'agent_delivered', 'delivered', 'failed', 'returned', 'rejected', 'pending_agency_reassignment'],
         default: 'pending'
-      }
+      },
+      free_delivery: { type: Boolean, default: false },
+      hold: {
+        type: {
+          previousStatus: { type: String, enum: ['pending', 'assigned'], required: true },
+          heldAt: { type: Date, required: true },
+        },
+        required: false,
+        default: null,
+      },
     },
     required: false  // Only required for physical orders
   }
@@ -197,6 +227,14 @@ const OrderSchema = new Schema<IOrder>({
     enum: ['physical', 'digital'],
     required: true,
     index: true
+  },
+
+  // Checkout group (source cart's _id). Shared across all per-vendor orders of one checkout.
+  cart_id: {
+    type: Schema.Types.ObjectId,
+    ref: MODELS.CART,
+    required: true,
+    index: true  // For customer grouped-order queries
   },
 
   // Vendor (CRITICAL: Each order belongs to exactly ONE vendor)
@@ -249,7 +287,7 @@ const OrderSchema = new Schema<IOrder>({
   // Fulfillment tracking
   fulfillment_status: {
     type: String,
-    enum: ['pending', 'processing', 'shipped', 'delivered', 'fulfilled', 'cancelled', 'returned'],
+    enum: ['pending', 'processing', 'partially_shipped', 'shipped', 'partially_delivered', 'delivered', 'fulfilled', 'cancelled', 'returned'],
     default: 'pending',
     index: true  // For fulfillment status queries
   },
@@ -299,6 +337,14 @@ OrderSchema.pre('save', function (next) {
     }
   }
 
+  // Validation: Each order belongs to exactly ONE vendor — every item's vendor
+  // must equal the order's vendor. Defense in depth for the per-vendor cart split.
+  for (const item of this.items) {
+    if (item.vendor_id.toString() !== this.vendor_id.toString()) {
+      return next(new Error(`Vendor mismatch: order vendor is ${this.vendor_id} but item vendor is ${item.vendor_id}`));
+    }
+  }
+
   // Validation: No service products allowed
   for (const item of this.items) {
     if ((item.product_type as string) === 'service') {
@@ -311,6 +357,7 @@ OrderSchema.pre('save', function (next) {
 
 // Additional compound indexes
 OrderSchema.index({ customer_id: 1, created_at: -1 });  // Customer order history
+OrderSchema.index({ customer_id: 1, cart_id: 1 });      // Customer grouped-order (checkout group) view
 OrderSchema.index({ order_type: 1, payment_status: 1 }); // Payment queries
 OrderSchema.index({ order_type: 1, fulfillment_status: 1 }); // Fulfillment queries
 

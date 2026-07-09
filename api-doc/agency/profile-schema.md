@@ -2,6 +2,10 @@
 
 This document is the authoritative reference for the Delivery Agency profile data structure. Use it to build TypeScript interfaces, form schemas, and validation logic in the frontend.
 
+> [!TIP]
+> This is a **data dictionary**, not an endpoint reference. For the actual `GET`/`PATCH`
+> requests, responses, and error codes, see [profile.md](./profile.md).
+
 All monetary values are integers (smallest currency unit, e.g. XAF francs). All fields marked **Required** must be present for onboarding to reach `onboarding_step: 0` (complete).
 
 ---

@@ -179,6 +179,7 @@ export class VendorOrderRepository {
                         'items.$.delivery.agency_id': new Types.ObjectId(deliveryAgencyId),
                         'items.$.delivery.shipment_id': new Types.ObjectId(shipmentId),
                         'items.$.delivery.status': deliveryStatus,
+                        'items.$.delivery.hold': null,
                         updated_at: new Date()
                     }
                 },
@@ -186,6 +187,55 @@ export class VendorOrderRepository {
             )
             .lean()
             .exec() as IOrder | null;
+    }
+
+    /**
+     * Find physical orders for a vendor with at least one item still riding on
+     * the given agency and reassignable (pending/assigned/pending_agency_reassignment
+     * — not yet dispatched). Used to auto-move items when the vendor's default
+     * delivery agency changes. Terminal orders (delivered/cancelled) are excluded
+     * up front.
+     */
+    async findReassignableByVendorAndAgency(vendorId: string, agencyId: string): Promise<IOrder[]> {
+        return await OrderModel
+            .find({
+                vendor_id: vendorId,
+                order_type: 'physical',
+                fulfillment_status: { $nin: ['delivered', 'cancelled'] },
+                items: {
+                    $elemMatch: {
+                        'delivery.agency_id': new Types.ObjectId(agencyId),
+                        'delivery.status': { $in: ['pending', 'assigned', 'pending_agency_reassignment'] },
+                    },
+                },
+            })
+            .lean()
+            .exec() as unknown as IOrder[];
+    }
+
+    /**
+     * Find physical orders for a vendor with at least one item, FOR A SPECIFIC
+     * PRODUCT, still riding on the given agency and reassignable. Used when a
+     * vendor fixes a product's own delivery-agency override (as opposed to
+     * findReassignableByVendorAndAgency, which is triggered by a vendor default
+     * change and applies across all of the vendor's products).
+     */
+    async findReassignableByProductAndAgency(vendorId: string, productId: string, agencyId: string): Promise<IOrder[]> {
+        return await OrderModel
+            .find({
+                vendor_id: vendorId,
+                order_type: 'physical',
+                fulfillment_status: { $nin: ['delivered', 'cancelled'] },
+                items: {
+                    $elemMatch: {
+                        product_id: new Types.ObjectId(productId),
+                        'delivery.agency_id': new Types.ObjectId(agencyId),
+                        'delivery.status': { $in: ['pending', 'assigned', 'pending_agency_reassignment'] },
+                    },
+                },
+            })
+            .lean()
+            .exec() as unknown as IOrder[];
     }
 
     /**

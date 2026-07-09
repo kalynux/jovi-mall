@@ -127,7 +127,7 @@ GET /api/vendor/products
 
 > [!IMPORTANT]
 > **The list endpoint returns a trimmed payload tailored to the products grid/list UI.**
-> Only the fields the grid/list view and row actions consume are included. To get the full product object — `vendorId`, `slug`, `description`, `tags`, `seo`, `defaultVariantId`, `digitalConfig`, `delivery`, `vectorisedDataId`, `createdAt`, `updatedAt`, etc. — call `GET /api/vendor/products/:id`. (Service config + price live on the variant.)
+> Only the fields the grid/list view and row actions consume are included. To get the full product object — `vendorId`, `slug`, `description`, `tags`, `seo`, `defaultVariantId`, `digitalConfig`, `delivery` (`{ agencyId, freeDelivery }`), `vectorisedDataId`, `createdAt`, `updatedAt`, etc. — call `GET /api/vendor/products/:id`. (Service config + price live on the variant.)
 >
 > File performance: `fileIds` is populated with full `FileDetail` objects (id, key, url, mimeType, size, originalName), resolved in a **single batched query** across the whole page — no N+1 lookups.
 
@@ -303,6 +303,10 @@ Partial update — only provided fields are changed. Allowed on `draft` and `act
   "digitalConfig": {
     "isActive": true
   },
+  "delivery": {
+    "agencyId": "683abc1234567890abcdef01",
+    "freeDelivery": false
+  },
   "vectorisationEnabled": true
 }
 ```
@@ -319,7 +323,18 @@ Partial update — only provided fields are changed. Allowed on `draft` and `act
 | `seoDescription` | string | No | Max 160 characters |
 | `fileIds` | string[] | No | **Full replacement** — send complete desired array of file ObjectIds. Must be unique; capped per type (physical/service **7**, digital **1**). |
 | `digitalConfig` | object | No | Digital products only — product-wide toggle. Only `{ isActive }` is accepted (strict). Per-variant asset/limits live on the variant. |
+| `delivery` | object | No | **Physical products only** (`400 CATALOG_PRODUCT_INVALID_TYPE` otherwise). Sets the product's own delivery-agency override — see sub-fields and the important note below. |
 | `vectorisationEnabled` | boolean | No | Toggle vectorisation opt-in. When provided, the backend runs the enable or disable flow after the content update — see [Vectorisation](#vectorisation). For quick toggles only, use `PATCH /:id/vectorisation`. |
+
+**`delivery` sub-fields:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `agencyId` | string \| null | The delivery agency ObjectId this product should use instead of the vendor's default, or `null` to clear the override and fall back to the vendor's default. Either sub-field may be sent independently (merged against the existing value) — at least one of `agencyId`/`freeDelivery` must be present. |
+| `freeDelivery` | boolean | Marketing/order flag, independent of agency resolution. |
+
+> [!IMPORTANT]
+> **Changing `delivery.agencyId` can restore the product and reassign in-flight orders.** If this product was suspended because its previous override agency went inactive, setting it to a **new active** agency (or clearing it back to `null`, falling back to the vendor's active default) automatically restores the product if it's now eligible again, and reassigns any of its still `pending`/`assigned`/held order items from the old agency over to the new one. The response `message` reports how many order items were moved. No agency existence/status validation is performed on write beyond this fixup — an agency id that doesn't resolve to an active agency yet is accepted, but the product will fail activation (`CATALOG_PRODUCT_NO_DELIVERY_AGENCY`) until it does. See [Admin: Delivery Agencies](../admin/delivery-agencies.md) for the full cascade.
 
 > [!NOTE]
 > `serviceConfig` is **no longer accepted on the product** (neither create nor update). Service config + price live on the service variant — set them via `POST /products/:id/variants` or `PATCH /products/:productId/variants/:variantId/service/config`. See [variants.md](./variants.md).
@@ -347,9 +362,12 @@ Partial update — only provided fields are changed. Allowed on `draft` and `act
 {
   "success": true,
   "data": { "...full product object..." },
-  "message": "Product updated successfully"
+  "message": "Product updated successfully. 2 pending order item(s) reassigned to the new agency."
 }
 ```
+The trailing sentence about reassigned order items is only present when `delivery.agencyId`
+changed and at least one order item was moved (see the important note above) — otherwise
+`message` is just `"Product updated successfully"`.
 
 > **Vectorisation on update:**
 > - If the body **omits** `vectorisationEnabled`, the product is saved and the response returns immediately; the backend automatically re-vectorises in the background if the product is `active` and `vectorisationEnabled` is currently `true`. `vectorisationStatus` may briefly be `pending` before returning to `completed`.
@@ -397,7 +415,7 @@ PATCH /api/vendor/products/:id/status
 > 4. **`defaultVariantId` must point to an active variant** — the referenced variant must exist and be active; a dangling or archived reference fails validation
 >
 > Additionally, per product type:
-> - **Physical**: a delivery agency must be resolvable — either set directly on the product (`delivery.agencyId`) or configured as the vendor's default (`vendor.default_delivery_agency_id`). Without one of these, the backend will reject activation.
+> - **Physical**: the vendor's default delivery agency (`vendor.default_delivery_agency_id`) must exist and currently be `active` — this is **always** required, regardless of whether the product has its own override. If the product **also** has its own `delivery.agencyId` override set, that override must **independently** be `active` too — both conditions are checked, not either/or. If either agency is deactivated by an admin later, the product is auto-suspended (and, if it has pending orders, those are put on hold) until a working replacement is configured — see [Admin: Delivery Agencies](../admin/delivery-agencies.md).
 > - **Digital**: **every active variant must have an uploaded asset**, and there must be **no more than 5** active variants. (Digital variants without an asset are auto-archived, so this normally passes by construction.) See [Digital Products Guide](./digital-products.md).
 > - **Service**: the single default variant must have a `serviceConfig.durationMinutes` (min: 1) and `price > 0` — the config + price live on the variant. If its `bookingMode` is `capacity`, it must also have `serviceConfig.maxBookings` (≥ 1).
 
@@ -421,7 +439,7 @@ PATCH /api/vendor/products/:id/status
 | `CATALOG_PRODUCT_NO_VARIANTS` | No variants exist |
 | `CATALOG_PRODUCT_VARIANT_ZERO_PRICE` | An active variant has price = 0 |
 | `CATALOG_PRODUCT_NO_DEFAULT_VARIANT` | `defaultVariantId` missing or points to archived/nonexistent variant |
-| `CATALOG_PRODUCT_NO_DELIVERY_AGENCY` | Physical product has no delivery agency on the product or vendor profile |
+| `CATALOG_PRODUCT_NO_DELIVERY_AGENCY` | Physical product: vendor has no active default delivery agency, or (if set) the product's own override agency isn't active |
 | `CATALOG_VARIANT_NO_DIGITAL_ASSET` | A digital product's active variant has no uploaded asset (details include the variant name/sku) |
 | `CATALOG_DIGITAL_VARIANT_LIMIT_EXCEEDED` | Digital product has more than 5 active variants |
 | `CATALOG_PRODUCT_SERVICE_NO_DURATION` | Service product has no `durationMinutes` |

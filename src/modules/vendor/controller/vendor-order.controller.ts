@@ -116,6 +116,29 @@ export class VendorOrderController {
     });
 
     /**
+     * POST /api/vendor/orders/:id/dispatch
+     *
+     * Explicitly dispatch a reviewed, paid order to its delivery agency —
+     * advances `pending` shipments to `assigned`, making them visible on the
+     * agency's own dashboard. The manual counterpart to the vendor's
+     * `auto_redirect_orders_to_agency` setting.
+     */
+    static dispatchToAgency = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const orderId = req.params.id;
+
+        const result = await vendorOrderService.dispatchToAgency(orderId, vendorId);
+
+        res.json({
+            success: true,
+            data: result,
+            message: result.dispatchedShipments > 0
+                ? `Order dispatched to ${result.dispatchedShipments} shipment(s)' delivery agency`
+                : 'Nothing to dispatch — order already dispatched or has no pending shipments'
+        });
+    });
+
+    /**
      * GET /api/vendor/orders/:id/timeline
      *
      * Get order timeline (audit trail)

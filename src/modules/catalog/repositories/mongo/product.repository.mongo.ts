@@ -4,6 +4,7 @@ import { IProduct, ProductModel } from '../../models';
 import { IProductRepository } from '../interfaces/product.repository.interface';
 import { Product, ProductMapper } from '../mappers/product.mapper';
 import { ProductListProjection } from '../../read-models/product-detail.read-model';
+import { ProductSuspensionReason } from '../../models/product.model';
 
 export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> implements IProductRepository {
   constructor() {
@@ -301,5 +302,162 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
     ).exec();
 
     return result.modifiedCount;
+  }
+
+  /**
+   * Suspend all of a vendor's physical products (any status except already-'suspended'),
+   * capturing each product's own current status via an aggregation-pipeline update so it
+   * can be restored to that exact status later.
+   */
+  async suspendVendorPhysicalProducts(
+    vendorId: string,
+    reason: ProductSuspensionReason,
+    options?: RepositoryOptions,
+  ): Promise<string[]> {
+    const sessionOpt = options?.session ? { session: options.session } : {};
+    const filter: FilterQuery<IProduct> = {
+      vendorId: vendorId as any,
+      type: 'physical',
+      status: { $ne: 'suspended' },
+      deletedAt: null,
+      vectorisationStatus: { $ne: 'pending' },
+    };
+
+    const docs = await this.model.find(filter, { _id: 1 }, sessionOpt).lean();
+    if (docs.length === 0) return [];
+
+    const ids = docs.map(d => d._id);
+    await this.model.updateMany(
+      { _id: { $in: ids } },
+      [
+        {
+          $set: {
+            suspension: { reason, previousStatus: '$status', suspendedAt: '$$NOW' },
+            status: 'suspended',
+            updatedAt: '$$NOW',
+          },
+        },
+      ] as any,
+      sessionOpt,
+    ).exec();
+
+    return ids.map(id => id.toString());
+  }
+
+  /**
+   * Suspend a single physical product (no-op if already suspended), capturing its
+   * current status. Returns whether it was suspended.
+   */
+  async suspendProduct(
+    productId: string,
+    vendorId: string,
+    reason: ProductSuspensionReason,
+    options?: RepositoryOptions,
+  ): Promise<boolean> {
+    if (!Types.ObjectId.isValid(productId)) return false;
+    const sessionOpt = options?.session ? { session: options.session } : {};
+
+    const result = await this.model.updateOne(
+      {
+        _id: productId,
+        vendorId: vendorId as any,
+        type: 'physical',
+        status: { $ne: 'suspended' },
+        deletedAt: null,
+        vectorisationStatus: { $ne: 'pending' },
+      },
+      [
+        {
+          $set: {
+            suspension: { reason, previousStatus: '$status', suspendedAt: '$$NOW' },
+            status: 'suspended',
+            updatedAt: '$$NOW',
+          },
+        },
+      ] as any,
+      sessionOpt,
+    ).exec();
+
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * Find a vendor's physical products currently suspended for any of the given
+   * reasons. Restoration is validated by the caller, not blind — see
+   * ProductDeliveryAgencySuspensionService.
+   */
+  async findSuspendedByVendorAndReasons(
+    vendorId: string,
+    reasons: ProductSuspensionReason[],
+    options?: RepositoryOptions,
+  ): Promise<Product[]> {
+    const sessionOpt = options?.session ? { session: options.session } : {};
+    const filter: FilterQuery<IProduct> = {
+      vendorId: vendorId as any,
+      type: 'physical',
+      status: 'suspended',
+      'suspension.reason': { $in: reasons },
+      deletedAt: null,
+    };
+
+    const query = this.model.find(filter);
+    if (sessionOpt.session) query.session(sessionOpt.session);
+    const docs = await query.exec();
+    return docs.map(doc => this.mapper.toDomain(doc));
+  }
+
+  /**
+   * Find physical products, across ANY vendor, whose OWN delivery.agencyId override
+   * points at the given agency.
+   */
+  async findPhysicalByOwnDeliveryAgency(
+    agencyId: string,
+    options?: RepositoryOptions,
+  ): Promise<Product[]> {
+    if (!Types.ObjectId.isValid(agencyId)) return [];
+    const filter: FilterQuery<IProduct> = {
+      type: 'physical',
+      'delivery.agency_id': agencyId as any,
+      deletedAt: null,
+    };
+
+    const query = this.model.find(filter);
+    if (options?.session) query.session(options.session);
+    const docs = await query.exec();
+    return docs.map(doc => this.mapper.toDomain(doc));
+  }
+
+  /**
+   * An agency's "products I'm set up to deliver" view (requirement #8) —
+   * combined: physical products with an explicit `delivery.agencyId` override to
+   * this agency, OR belonging to a vendor whose `default_delivery_agency_id` is
+   * this agency AND that don't have their own override (which would take
+   * precedence over the vendor default at order time). `vendorIdsUsingAsDefault`
+   * is resolved by the caller via VendorRepository.findVendorIdsByDefaultAgency —
+   * kept out of this repository to avoid a cross-module repo dependency.
+   */
+  async findByEffectiveDeliveryAgency(
+    agencyId: string,
+    vendorIdsUsingAsDefault: string[],
+    pagination: PaginationOptions,
+    options?: RepositoryOptions,
+  ): Promise<Page<Product>> {
+    if (!Types.ObjectId.isValid(agencyId)) {
+      return { data: [], meta: { total: 0, page: pagination.page, limit: pagination.limit, pages: 0 } };
+    }
+
+    const vendorObjIds = vendorIdsUsingAsDefault.filter(id => Types.ObjectId.isValid(id));
+
+    const filter: FilterQuery<IProduct> = {
+      type: 'physical',
+      $or: [
+        { 'delivery.agency_id': agencyId as any },
+        ...(vendorObjIds.length > 0
+          ? [{ vendorId: { $in: vendorObjIds as any[] }, 'delivery.agency_id': null }]
+          : []),
+      ],
+    };
+
+    return this.paginate(filter, pagination, options);
   }
 }

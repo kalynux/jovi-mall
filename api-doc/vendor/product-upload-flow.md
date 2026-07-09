@@ -170,7 +170,7 @@ Content-Type: application/json
 | `seoDescription` | string | Max 160 chars |
 | `fileIds` | string[] | **Full replacement** — see [Media Handling](#media-handling) |
 | `digitalConfig` | object | Digital products only — merged with existing |
-| `delivery` | object | Physical products only — configure default delivery agency (contains `agencyId`) |
+| `delivery` | object | Physical products only — configure delivery agency and/or free-delivery flag (contains `agencyId`, `freeDelivery`). Either sub-field may be sent alone — it's merged against the existing value, not replaced. At least one must be provided. |
 
 > Service config + price are **not** on the product — they live on the service variant (`POST /products/:id/variants`). `PATCH /products/:id` does not accept `serviceConfig`.
 
@@ -432,6 +432,18 @@ PATCH /api/vendor/products/507f1f77bcf86cd799439011
   }
 }
 ```
+
+**Mark a Product as Free Delivery:**
+`freeDelivery` is independent of `agencyId` — it can be set on its own without resending the agency:
+```json
+PATCH /api/vendor/products/507f1f77bcf86cd799439011
+{
+  "delivery": {
+    "freeDelivery": true
+  }
+}
+```
+This does not change agency resolution or fee calculation — it's a durable flag stored on the product and snapshotted onto each order item at checkout (`items[].freeDelivery` in vendor/customer order responses — see [orders.md](./orders.md)).
 
 **Frontend responsibility**: Warn the user if they try to activate a physical product without a product-level delivery agency set AND no default delivery agency configured on their vendor profile.
 

@@ -97,7 +97,7 @@ Update the authenticated vendor's profile. **This is the endpoint to use for all
 > The `PUT /api/vendor/onboarding/*` step endpoints are for the **first-time onboarding flow only**. Once onboarding is complete (`onboarding_step === 0`) they all return `409 VENDOR_ONBOARDING_ALREADY_COMPLETED`.
 > To let a vendor change a previously-entered onboarding value from the **Settings UI**, send it here instead. See [Onboarding docs](./onboarding.md) for the original first-time flow.
 >
-> **One exception:** the default delivery agency (onboarding Step 2) is **not** editable through this endpoint — use the dedicated [`PUT/DELETE /api/vendor/profile/default-delivery-agency`](#put-apivendorprofiledefault-delivery-agency) routes documented below.
+> **One exception:** the default delivery agency (onboarding Step 2) is **not** editable through this endpoint — use the dedicated [`PUT /api/vendor/profile/default-delivery-agency`](#put-apivendorprofiledefault-delivery-agency) route documented below. There is no route to clear it — vendors can only change it to a different agency (see that section for why).
 
 #### Authentication
 
@@ -431,6 +431,13 @@ Same as `GET /api/vendor/profile`.
 
 Set or update the authenticated vendor's default delivery agency outside the onboarding flow.
 
+> [!IMPORTANT]
+> **Vendors can change their default agency but can never clear it to null.** There is no `DELETE` route. A vendor's default only becomes unset if the underlying agency itself is deactivated by an admin — see [Admin: Delivery Agencies](../admin/delivery-agencies.md).
+>
+> **Switching to an active agency restores suspended products.** If the vendor's physical products were suspended because their previous default agency was deactivated, switching to a different **active** agency here immediately restores every one of those products to its own saved prior status (draft → draft, active → active, etc.). Switching to a `pending_verification` agency is accepted as a valid choice but does **not** restore anything yet, since a pending agency doesn't satisfy the physical-product activation gate.
+>
+> **Also auto-reassigns in-flight orders.** Any of the vendor's order items that are still `pending`/`assigned` (not yet picked up) and were riding on the *old* default agency are automatically moved to the new one — same effect as calling the item-level reassignment endpoint for each. An item is skipped (left on the old agency) if its **product** has its own explicit delivery-agency override, since that item was never really "on the default" in the first place. Items already `picked_up` or later are never touched. See `meta.reassignedOrderItems` / `meta.skippedOrderItems` in the response below.
+
 #### Authentication
 
 - **Required**: Yes
@@ -492,7 +499,17 @@ Returns the configured agency details as a vendor-safe `VendorAgencyListItemDto`
       }
     }
   },
-  "message": "Default delivery agency updated successfully"
+  "meta": {
+    "reassignedOrderItems": 2,
+    "skippedOrderItems": [
+      {
+        "orderId": "665f000000000000000000aa",
+        "itemId": "665f000000000000000000bb",
+        "reason": "Product has its own delivery agency override"
+      }
+    ]
+  },
+  "message": "Default delivery agency updated successfully. 2 pending order item(s) reassigned to the new agency."
 }
 ```
 
@@ -524,33 +541,6 @@ Returned if the agency does not exist, is inactive, or has not completed onboard
     "code": "DELIVERY_AGENCY_NOT_FOUND",
     "message": "The selected delivery agency does not exist."
   }
-}
-```
-
----
-
-### DELETE /api/vendor/profile/default-delivery-agency
-
-Clear the authenticated vendor's default delivery agency.
-
-#### Authentication
-
-- **Required**: Yes
-- **Role**: `vendor`
-
-#### Headers
-
-```http
-Authorization: Bearer <jwt_token>
-```
-
-#### Response
-
-**Success (200 OK)**:
-```json
-{
-  "success": true,
-  "message": "Default delivery agency cleared"
 }
 ```
 

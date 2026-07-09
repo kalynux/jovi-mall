@@ -10,14 +10,18 @@ const paymentOrchestrator = new PaymentOrchestratorService();
 
 /**
  * POST /payments/initiate
- * 
- * Initiate payment for an order
- * 
- * IDEMPOTENT: Multiple calls return existing transaction
- * 
+ *
+ * Initiate payment. Provide EITHER:
+ *  - `cartId`  → one payment for a whole checkout group (multi-vendor cart split
+ *                into N per-vendor orders); settlement fans out to every order, OR
+ *  - `orderId` → a single-order payment (legacy path).
+ *
+ * IDEMPOTENT: Multiple calls return the existing transaction.
+ *
  * REQUEST:
  * {
- *   orderId: string,
+ *   cartId?: string,   // preferred for cart checkout
+ *   orderId?: string,  // single-order payment
  *   gateway: 'NOTCHPAY' | 'MYCOOLPAY' | 'STRIPE',
  *   channel: {
  *     phoneNumber?: string,
@@ -27,24 +31,22 @@ const paymentOrchestrator = new PaymentOrchestratorService();
  *     customerName?: string
  *   }
  * }
- * 
+ *
  * RESPONSE:
  * {
  *   success: boolean,
  *   transactionId: string,
  *   status: string,
- *   instructions?: {
- *     ussdCode?: string,
- *     clientSecret?: string,
- *     message?: string
- *   },
+ *   instructions?: { ussdCode?: string, clientSecret?: string, message?: string },
  *   message: string
  * }
  */
 router.post('/initiate', asyncHandler(async (req: Request, res: Response) => {
-  const { orderId, gateway, channel } = req.body;
+  const { cartId, orderId, gateway, channel } = req.body;
 
-  if (!orderId) throw createAppError(ERROR_CODES.PAYMENT_ORDER_NOT_FOUND, 400, 'orderId is required');
+  if (!cartId && !orderId) {
+    throw createAppError(ERROR_CODES.PAYMENT_REFERENCE_REQUIRED, 400, 'Either cartId or orderId is required');
+  }
   if (!gateway) throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, 'gateway is required');
   if (!['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'].includes(gateway)) {
     throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, 'Invalid gateway. Must be NOTCHPAY, MYCOOLPAY, or STRIPE');
@@ -54,11 +56,9 @@ router.post('/initiate', asyncHandler(async (req: Request, res: Response) => {
     throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, 'phoneNumber is required for mobile money payments');
   }
 
-  const result = await paymentOrchestrator.initiatePayment(
-    orderId,
-    gateway as PaymentGatewayType,
-    channel
-  );
+  const result = cartId
+    ? await paymentOrchestrator.initiatePaymentForCart(cartId, gateway as PaymentGatewayType, channel)
+    : await paymentOrchestrator.initiatePayment(orderId, gateway as PaymentGatewayType, channel);
 
   res.status(200).json({ success: result.status !== 'FAILED', ...result });
 }));

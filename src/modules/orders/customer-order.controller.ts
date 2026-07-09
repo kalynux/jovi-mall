@@ -6,12 +6,28 @@ import { ERROR_CODES } from '../../core/error-codes';
 import { OrderModel } from './order.model';
 import { OrderCompletionService, orderCompletionService } from './order-completion.service';
 import { OrderService } from './order.service';
+import { OrderRepository } from './order.repository';
 import { VendorRepository } from '../vendors/vendor.repository';
 import { assertCancellationAllowed } from '../vendors/utils/cancellation-policy.util';
+import { ShipmentService } from '../shipments/shipment.service';
 
 const completionService: OrderCompletionService = orderCompletionService;
 const orderService = new OrderService();
+const orderRepository = new OrderRepository();
 const vendorRepository = new VendorRepository();
+const shipmentService = new ShipmentService();
+
+/**
+ * Collapse a checkout group's per-order payment statuses into one label the
+ * customer UI can show for the logical "order": all paid → paid; none paid →
+ * awaiting_payment; otherwise partially_paid.
+ */
+function aggregatePaymentStatus(statuses: string[]): string {
+  if (statuses.every(s => s === 'paid')) return 'paid';
+  if (statuses.some(s => s === 'paid')) return 'partially_paid';
+  if (statuses.every(s => s === 'AWAITING_PAYMENT' || s === 'pending')) return 'awaiting_payment';
+  return 'mixed';
+}
 
 /** Fulfillment states from which a customer may still cancel (pre-shipment). */
 const CANCELLABLE_FULFILLMENT_STATES = ['pending', 'processing'];
@@ -28,6 +44,118 @@ const CancelOrderSchema = z.object({
  * the order and starts the 7-day escrow hold before funds become withdrawable.
  */
 export class CustomerOrderController {
+  /**
+   * POST /customer/orders/checkout
+   *
+   * Turn the customer's cart into orders — ONE order per vendor. A multi-vendor
+   * cart yields several orders sharing a `cartId`; the customer then pays once
+   * for the whole group via POST /payments/initiate with that cartId.
+   */
+  static checkout = asyncHandler(async (req: Request, res: Response) => {
+    const customerId = req.auth!.role_entity._id.toString();
+
+    const { cartId, orders } = await orderService.createOrdersFromCart(customerId);
+
+    res.status(201).json({
+      success: true,
+      data: {
+        cartId,
+        orders: orders.map(order => ({
+          id: order._id.toString(),
+          orderNumber: order.order_number,
+          vendorId: order.vendor_id.toString(),
+          orderType: order.order_type,
+          total: order.total_amount,
+          currency: order.currency,
+          paymentStatus: order.payment_status,
+          fulfillmentStatus: order.fulfillment_status,
+          itemCount: order.items.length,
+        })),
+      },
+      message: 'Orders created. Complete payment for the cart to proceed.',
+    });
+  });
+
+  /**
+   * GET /customer/orders
+   *
+   * The customer's order history, grouped by checkout group (cartId). Each group
+   * is one logical order that may contain several per-vendor orders.
+   */
+  static listOrderGroups = asyncHandler(async (req: Request, res: Response) => {
+    const customerId = req.auth!.role_entity._id.toString();
+    const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? '20'), 10) || 20));
+
+    const { data, meta } = await orderRepository.findGroupsByCustomer(customerId, { page, limit });
+
+    res.status(200).json({
+      success: true,
+      data: data.map(group => ({
+        cartId: group.cartId,
+        createdAt: group.createdAt,
+        currency: group.currency,
+        totalAmount: group.totalAmount,
+        orderCount: group.orderCount,
+        paymentStatus: aggregatePaymentStatus(group.paymentStatuses),
+        orders: group.orders,
+      })),
+      meta,
+    });
+  });
+
+  /**
+   * GET /customer/orders/groups/:cartId
+   *
+   * One checkout group in detail (all its per-vendor orders with items).
+   * Ownership enforced by scoping to the authenticated customer.
+   */
+  static getOrderGroup = asyncHandler(async (req: Request, res: Response) => {
+    const customerId = req.auth!.role_entity._id.toString();
+    const cartId = req.params.cartId;
+
+    const orders = await orderRepository.findByCartAndCustomer(cartId, customerId);
+    if (orders.length === 0) {
+      throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404, undefined, { cartId });
+    }
+
+    const totalAmount = orders.reduce((sum, o) => sum + o.total_amount, 0);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        cartId,
+        createdAt: orders[0].created_at,
+        currency: orders[0].currency,
+        totalAmount,
+        orderCount: orders.length,
+        paymentStatus: aggregatePaymentStatus(orders.map(o => o.payment_status)),
+        orders: orders.map(order => ({
+          id: order._id.toString(),
+          orderNumber: order.order_number,
+          vendorId: order.vendor_id.toString(),
+          orderType: order.order_type,
+          total: order.total_amount,
+          currency: order.currency,
+          paymentStatus: order.payment_status,
+          fulfillmentStatus: order.fulfillment_status,
+          items: order.items.map(item => ({
+            id: item._id.toString(),
+            productId: item.product_id.toString(),
+            variantId: item.variant_id.toString(),
+            sku: item.sku,
+            title: item.title,
+            variantTitle: item.variant_title,
+            quantity: item.quantity,
+            price: item.price,
+            currency: item.currency,
+            freeDelivery: item.delivery?.free_delivery ?? false,
+          })),
+        })),
+      },
+    });
+  });
+
   /**
    * PATCH /customer/orders/:id/confirm-delivery
    *
@@ -59,6 +187,29 @@ export class CustomerOrderController {
         completed_at: order.completion.confirmed_at,
       },
     });
+  });
+
+  /**
+   * POST /customer/orders/:orderId/shipments/:shipmentId/confirm-delivery
+   *
+   * Per-shipment delivery confirmation for multi-agency orders — confirmable
+   * once THAT shipment (not necessarily the whole order) reaches
+   * `agent_delivered`. Once every shipment of the order is confirmed, the
+   * order's own `fulfillment_status` becomes 'delivered' and its `completion`
+   * (escrow-release gate) fires automatically — no separate order-level click.
+   */
+  static confirmShipmentDelivery = asyncHandler(async (req: Request, res: Response) => {
+    const { orderId, shipmentId } = req.params;
+    const customerId = req.auth!.role_entity._id.toString();
+
+    const result = await shipmentService.confirmDeliveryByCustomer(
+      customerId,
+      orderId,
+      shipmentId,
+      req.auth!.user.id
+    );
+
+    res.status(200).json({ success: true, data: result });
   });
 
   /**

@@ -9,6 +9,10 @@ import { auditLogger } from '../../../core/audit/audit-logger';
 import { VendorOnboardingStep, VendorOnboardingStepValue } from '../../../core/constants/onboarding-steps';
 import { IVendor, IVendorPolicies, IVendorSupportChannel, IVendorSupportPolicy } from '../../vendors/vendor.model';
 import { DeliveryAgencyRepository, AgencyListQueryParams } from '../../delivery/delivery-agency.repository';
+import { TransactionManager, transactionManager } from '../../../core/database/transaction.manager';
+import { ProductDeliveryAgencySuspensionService } from '../../catalog/domain/services/ProductDeliveryAgencySuspensionService';
+import { ProductStatus } from '../../catalog/models/product.model';
+import { VendorOrderService } from '../../orders/vendor-order.service';
 import {
   UpdateVendorProfileInput,
   VendorOnboardingStep1Input,
@@ -32,9 +36,15 @@ import {
  */
 export class VendorProfileService {
   private vendorRepo: VendorRepository;
+  private txManager: TransactionManager;
+  private suspensionService: ProductDeliveryAgencySuspensionService;
+  private vendorOrderService: VendorOrderService;
 
   constructor() {
     this.vendorRepo = new VendorRepository();
+    this.txManager = transactionManager;
+    this.suspensionService = new ProductDeliveryAgencySuspensionService();
+    this.vendorOrderService = new VendorOrderService();
   }
 
   // ─── Read ─────────────────────────────────────────────────────────────────
@@ -496,44 +506,66 @@ export class VendorProfileService {
    * Set the vendor's default delivery agency. The agency must exist, be active,
    * and have completed its own onboarding — matching the rules already enforced
    * in the onboarding flow.
+   *
+   * Vendors can only change their default, never clear it to null — the only way
+   * a default becomes unset is a system cascade (see AdminAgencyService.deactivate).
+   *
+   * If the newly-set agency is active, restores any of the vendor's physical products
+   * that were suspended for 'default_delivery_agency_removed', each back to its own
+   * saved previous status. A pending_verification agency is a valid choice but doesn't
+   * satisfy the activation gate, so no restore fires until it becomes active.
+   *
+   * Also auto-reassigns any of the vendor's still-pending/assigned order items that
+   * were riding on the OLD default agency over to the new one (skipping items whose
+   * product has its own explicit agency override — see
+   * VendorOrderService.reassignItemsFromDefaultAgency). This runs AFTER the
+   * transaction commits — shipment/order writes in that flow aren't session-aware,
+   * matching their existing non-transactional behavior — so it's best-effort and its
+   * outcome is reported back rather than rolled into the atomic vendor/product update.
    */
   async setDefaultDeliveryAgency(
     vendorId: string,
     agencyId: string,
-  ): Promise<VendorAgencyListItemDto> {
-    const vendor = await this.vendorRepo.findById(vendorId);
-    if (!vendor) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor profile not found');
+  ): Promise<{
+    agency: VendorAgencyListItemDto;
+    restoredProducts: { productId: string; status: ProductStatus }[];
+    reassignedOrders: { reassignedCount: number; skipped: { orderId: string; itemId: string; reason: string }[] };
+  }> {
+    let previousAgencyId: string | null = null;
 
-    const agencyRepo = new DeliveryAgencyRepository();
-    const agency = await agencyRepo.findById(agencyId);
-    if (!agency) {
-      throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, 'The selected delivery agency does not exist.');
-    }
-    if (agency.status === 'inactive') {
-      throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 400, 'The selected delivery agency is inactive.');
-    }
-    if (agency.onboarding_step !== 0) {
-      throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 400, 'The selected delivery agency has not completed its onboarding.');
-    }
+    const { agency, restoredProducts } = await this.txManager.runInTransaction(async (session) => {
+      const vendor = await this.vendorRepo.findById(vendorId);
+      if (!vendor) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor profile not found');
+      previousAgencyId = vendor.default_delivery_agency_id?.toString() ?? null;
 
-    await this.vendorRepo.updateProfile(vendorId, {
-      default_delivery_agency_id: agencyId as unknown as IVendor['default_delivery_agency_id'],
+      const agencyRepo = new DeliveryAgencyRepository();
+      const agency = await agencyRepo.findById(agencyId, session);
+      if (!agency) {
+        throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, 'The selected delivery agency does not exist.');
+      }
+      if (agency.status === 'inactive') {
+        throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 400, 'The selected delivery agency is inactive.');
+      }
+      if (agency.onboarding_step !== 0) {
+        throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 400, 'The selected delivery agency has not completed its onboarding.');
+      }
+
+      await this.vendorRepo.updateProfile(vendorId, {
+        default_delivery_agency_id: agencyId as unknown as IVendor['default_delivery_agency_id'],
+      }, session);
+
+      const restoredProducts = agency.status === 'active'
+        ? await this.suspensionService.restoreForVendor(vendorId, { session })
+        : [];
+
+      return { agency: VendorAgencyMapper.toListItemDto(agency), restoredProducts };
     });
 
-    return VendorAgencyMapper.toListItemDto(agency);
-  }
+    const reassignedOrders = (previousAgencyId && previousAgencyId !== agencyId)
+      ? await this.vendorOrderService.reassignItemsFromDefaultAgency(vendorId, previousAgencyId, agencyId)
+      : { reassignedCount: 0, skipped: [] };
 
-  /**
-   * Clear the vendor's default delivery agency. Idempotent — succeeds even if
-   * no default is currently set.
-   */
-  async clearDefaultDeliveryAgency(vendorId: string): Promise<void> {
-    const vendor = await this.vendorRepo.findById(vendorId);
-    if (!vendor) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor profile not found');
-
-    await this.vendorRepo.updateProfile(vendorId, {
-      default_delivery_agency_id: null as unknown as IVendor['default_delivery_agency_id'],
-    });
+    return { agency, restoredProducts, reassignedOrders };
   }
 
   // ─── Agency Listing (Vendor-Facing) ───────────────────────────────────────

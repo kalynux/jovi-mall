@@ -37,9 +37,11 @@ export type PaymentGatewayType =
   | 'STRIPE';       // Card payment gateway
 
 export interface IPaymentTransaction extends Document {
-  // Order/Booking linkage (exactly one must be set)
-  orderId?: Types.ObjectId;         // Source order (for product payments)
+  // Source linkage (exactly one of orderId | bookingId | cartId must be set)
+  orderId?: Types.ObjectId;         // Source order (single-order product payments)
   bookingId?: Types.ObjectId;       // Source booking (for service payments)
+  cartId?: Types.ObjectId;          // Checkout group (multi-vendor cart → N orders, one payment)
+  orderIds?: Types.ObjectId[];      // The group's orders (required when cartId is set)
   userId: Types.ObjectId;           // Customer making payment
 
   // Gateway info
@@ -86,6 +88,16 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
     type: Schema.Types.ObjectId,
     ref: MODELS.BOOKING,
     index: true  // Fast lookup by booking
+  },
+  cartId: {
+    type: Schema.Types.ObjectId,
+    ref: MODELS.CART,
+    index: true  // Fast lookup by checkout group
+  },
+  orderIds: {
+    type: [Schema.Types.ObjectId],
+    ref: MODELS.ORDER,
+    default: undefined  // The group's orders; set only for cart-group payments
   },
   userId: {
     type: Schema.Types.ObjectId,
@@ -164,18 +176,23 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
   timestamps: { createdAt: 'createdAt', updatedAt: 'updatedAt' }
 });
 
-// Validation: Exactly one of orderId or bookingId must be set
+// Validation: Exactly one of orderId | bookingId | cartId must be set.
+// - orderId : single-order product payment (legacy / booking-style single order)
+// - bookingId: service booking payment
+// - cartId  : checkout group — one payment settles every order in orderIds
 PaymentTransactionSchema.pre('validate', function (next) {
-  const hasOrderId = !!this.orderId;
-  const hasBookingId = !!this.bookingId;
+  const sources = [this.orderId, this.bookingId, this.cartId].filter(Boolean);
 
-  if (!hasOrderId && !hasBookingId) {
-    next(new Error('PaymentTransaction must have either orderId or bookingId'));
-  } else if (hasOrderId && hasBookingId) {
-    next(new Error('PaymentTransaction cannot have both orderId and bookingId'));
-  } else {
-    next();
+  if (sources.length === 0) {
+    return next(new Error('PaymentTransaction must have one of orderId, bookingId, or cartId'));
   }
+  if (sources.length > 1) {
+    return next(new Error('PaymentTransaction must have exactly one of orderId, bookingId, or cartId'));
+  }
+  if (this.cartId && (!this.orderIds || this.orderIds.length === 0)) {
+    return next(new Error('PaymentTransaction with cartId must include its orderIds'));
+  }
+  next();
 });
 
 // Composite indexes for common queries

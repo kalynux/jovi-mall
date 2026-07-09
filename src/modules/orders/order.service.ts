@@ -1,7 +1,8 @@
-import mongoose from 'mongoose';
+import mongoose, { ClientSession } from 'mongoose';
 import { IOrder, OrderType } from './order.model';
 import { OrderRepository } from './order.repository';
-import { CartService } from '../cart/services/cart.service';
+import { CartService, CartResponse } from '../cart/services/cart.service';
+import { transactionManager } from '../../core/database/transaction.manager';
 import { ShipmentRepository } from '../shipments/shipment.repository';
 import { OrderTimelineRepository } from './order-timeline.repository';
 import { VendorRepository } from '../vendors/vendor.repository';
@@ -181,27 +182,90 @@ export class OrderService {
   }
 
   /**
-   * Create order from customer's cart
+   * Vendor-triggered manual dispatch: advance this order's `pending` shipments
+   * to `assigned`, making them visible on the agency's dashboard
+   * (`GET /agency/shipments` excludes `pending`). This is the explicit
+   * review/approval gate — independent of the `auto_redirect_orders_to_agency`
+   * setting, which does the same thing automatically on payment success for
+   * vendors who opt in. Returns 0 (no-op) if nothing was pending, e.g. the
+   * order was already dispatched or auto-redirect already handled it.
    *
-   * DEFENSE IN DEPTH:
-   * - Re-validates all cart business rules
-   * - Ensures no service products
-   * - Snapshots all variant + product data from cart
-   * - Branches by order_type (physical vs digital)
-   * 
-   * @param customerId - Customer ID
-   * @param paymentIntentId - Optional payment provider reference
-   * @returns Created order and shipments (if physical)
+   * `actor` is attributed on the timeline entry — 'vendor' for this manual
+   * path, 'system' for the auto-redirect path (see maybeDispatchToAgencies).
    */
-  async createOrderFromCart(
-    customerId: string,
-    paymentIntentId?: string
-  ): Promise<{ order: IOrder; shipments: any[] }> {
+  async dispatchToAgency(orderId: string, actor: { type: 'vendor' | 'system'; id: string | null }): Promise<number> {
+    const order = await this.orderRepo.findById(orderId);
+    if (!order) {
+      throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404, undefined, { orderId });
+    }
+    if (order.order_type !== 'physical') {
+      throw createAppError(ERROR_CODES.ORDER_WRONG_TYPE, 400, 'Only physical orders can be dispatched to a delivery agency');
+    }
+    if (order.payment_status !== 'paid') {
+      throw createAppError(ERROR_CODES.ORDER_PAYMENT_REQUIRED, 422, undefined, { paymentStatus: order.payment_status });
+    }
+    if (order.dispute_hold?.active) {
+      throw createAppError(ERROR_CODES.ORDER_DISPUTE_HOLD, 423, undefined, {
+        disputeId: order.dispute_hold.gateway_dispute_id,
+        reason: order.dispute_hold.reason,
+      });
+    }
+
+    const assignedCount = await this.shipmentRepo.assignPendingByOrderId(orderId);
+    if (assignedCount === 0) return 0;
+
+    for (const item of order.items) {
+      if (item.delivery && item.delivery.status === 'pending') {
+        item.delivery.status = 'assigned';
+      }
+    }
+    await order.save();
+
+    await this.timelineRepo.appendEvent({
+      orderId: order._id.toString(),
+      eventType: 'delivery.agency_updated',
+      description: actor.type === 'vendor'
+        ? 'Vendor dispatched the order to its delivery agency'
+        : 'Order auto-dispatched to the delivery agency in charge',
+      metadata: { auto: actor.type === 'system', shipmentsAssigned: assignedCount },
+      actorType: actor.type,
+      actorId: actor.id,
+    });
+
+    return assignedCount;
+  }
+
+  /**
+   * Create orders from a customer's cart — ONE order per vendor.
+   *
+   * A single cart may hold items from multiple vendors (same product type). At
+   * checkout we split it into one order per vendor, so each vendor owns exactly
+   * one single-vendor order and its normal lifecycle (shipments, earnings split,
+   * events, vendor-customer sync) runs untouched. Every order carries the source
+   * cart's _id as `cart_id`, letting the customer view them as one logical order
+   * while each vendor sees only their own order.
+   *
+   * ATOMICITY: all orders (and their shipments) are created in a single DB
+   * transaction — a partial failure rolls everything back and leaves the cart intact.
+   *
+   * DEFENSE IN DEPTH: re-validates all cart business rules (no service products,
+   * variant-first data, single currency, physical/digital only).
+   *
+   * @param customerId - Customer ID
+   * @returns The checkout-group cart id, created orders, and any shipments
+   */
+  async createOrdersFromCart(
+    customerId: string
+  ): Promise<{ cartId: string; orders: IOrder[]; shipments: any[] }> {
     // 1. VALIDATION PHASE: Fetch and validate cart
     const cart = await this.cartService.getCart(customerId);
 
     if (!cart || cart.items.length === 0) {
       throw createAppError(ERROR_CODES.ORDER_CART_EMPTY, 400, 'Cannot create order from empty cart');
+    }
+
+    if (!cart.cartId) {
+      throw createAppError(ERROR_CODES.ORDER_CART_INVALID, 400, 'Cart is missing an identifier');
     }
 
     if (!cart.productType) {
@@ -239,24 +303,76 @@ export class OrderService {
       throw createAppError(ERROR_CODES.ORDER_CART_INVALID, 400, `Order type must be 'physical' or 'digital', got '${orderType}'`);
     }
 
-    // 2. GENERATE ORDER NUMBER
+    // 2. GROUP CART ITEMS BY VENDOR — one order per vendor (this IS the
+    //    single-vendor-per-order enforcement).
+    const vendorGroups = new Map<string, CartResponse['items']>();
+    for (const item of cart.items) {
+      const group = vendorGroups.get(item.vendorId) ?? [];
+      group.push(item);
+      vendorGroups.set(item.vendorId, group);
+    }
+
+    // 3. CREATE ALL ORDERS ATOMICALLY (one per vendor).
+    const { orders, shipments } = await transactionManager.runInTransaction(async (session) => {
+      const createdOrders: IOrder[] = [];
+      const createdShipments: any[] = [];
+
+      for (const [vendorId, items] of vendorGroups) {
+        const built = await this.buildVendorOrder(
+          { customerId, cartId: cart.cartId!, vendorId, items, orderType, currency },
+          session
+        );
+        createdOrders.push(built.order);
+        createdShipments.push(...built.shipments);
+      }
+
+      return { orders: createdOrders, shipments: createdShipments };
+    });
+
+    // 4. POST-COMMIT SIDE EFFECTS: emit events + sync vendor↔customer, per order.
+    //    Done after commit so a rollback never emits phantom events.
+    for (const order of orders) {
+      await this.emitOrderCreatedEvent(order);
+      await this.syncVendorCustomerOrderPlaced(order);
+    }
+
+    // 5. Clear the cart once, after all orders are committed.
+    await this.cartService.clearCart(customerId);
+
+    return { cartId: cart.cartId, orders, shipments };
+  }
+
+  /**
+   * Build and persist ONE single-vendor order (plus its shipments, for physical
+   * orders) within the given transaction session. Extracted from the cart split
+   * so each vendor group produces an independent order that then runs the normal
+   * vendor-side lifecycle.
+   */
+  private async buildVendorOrder(
+    params: {
+      customerId: string;
+      cartId: string;
+      vendorId: string;
+      items: CartResponse['items'];
+      orderType: OrderType;
+      currency: string;
+    },
+    session: ClientSession
+  ): Promise<{ order: IOrder; shipments: any[] }> {
+    const { customerId, cartId, vendorId, items, orderType, currency } = params;
+
+    // Order number (unique per order)
     const orderNumber = await OrderNumberGenerator.generateOrderNumber();
 
-    // 3. CALCULATE PRICE BREAKDOWN
-    const base = cart.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    // Price breakdown from THIS vendor's items only
+    const base = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     const tax = 0;       // TODO: Implement tax calculation
     const discount = 0;  // TODO: Implement discount calculation
     const total = base + tax - discount;
+    const priceBreakdown = { base, tax, discount, total };
 
-    const priceBreakdown = {
-      base,
-      tax,
-      discount,
-      total
-    };
-
-    // 4. CREATE ORDER ITEMS (snapshot from cart)
-    const orderItemsPayload: any[] = cart.items.map(cartItem => ({
+    // Order items (snapshot from cart)
+    const orderItemsPayload: any[] = items.map(cartItem => ({
       // Variant data (first-class) - from cart snapshot
       variant_id: new mongoose.Types.ObjectId(cartItem.variantId),
       sku: cartItem.sku,
@@ -274,19 +390,18 @@ export class OrderService {
       price: cartItem.price,
       currency: cartItem.currency,
 
-      // Delivery: will be added for physical orders below
+      // Delivery: added for physical orders below
     }));
 
-    // 5. BRANCHING LOGIC: Physical vs Digital
     const shipments: any[] = [];
 
     if (orderType === 'physical') {
-      // GROUP BY DELIVERY AGENCY (for physical products)
+      // GROUP BY DELIVERY AGENCY (within this vendor's items)
       const agencyGroups: Record<string, any[]> = {};
       const vendorCache: Record<string, IVendor> = {};
 
-      for (let i = 0; i < cart.items.length; i++) {
-        const cartItem = cart.items[i];
+      for (let i = 0; i < items.length; i++) {
+        const cartItem = items[i];
         const orderItem = orderItemsPayload[i];
 
         // Fetch product to get delivery agency
@@ -297,19 +412,19 @@ export class OrderService {
         }
 
         let agencyId = product.delivery?.agencyId?.toString();
+        const freeDelivery = product.delivery?.freeDelivery ?? false;
 
         // Fallback to vendor default delivery agency
         if (!agencyId) {
-          const vendorId = cartItem.vendorId;
-          let vendor = vendorCache[vendorId];
+          let vendor = vendorCache[cartItem.vendorId];
 
           if (!vendor) {
-            const v = await this.vendorRepo.findById(vendorId);
+            const v = await this.vendorRepo.findById(cartItem.vendorId);
             if (!v) {
-              throw createAppError(ERROR_CODES.ORDER_VENDOR_NOT_FOUND, 404, undefined, { vendorId });
+              throw createAppError(ERROR_CODES.ORDER_VENDOR_NOT_FOUND, 404, undefined, { vendorId: cartItem.vendorId });
             }
             vendor = v;
-            vendorCache[vendorId] = vendor;
+            vendorCache[cartItem.vendorId] = vendor;
           }
 
           agencyId = vendor.default_delivery_agency_id?.toString();
@@ -323,7 +438,8 @@ export class OrderService {
         orderItem.delivery = {
           agency_id: new mongoose.Types.ObjectId(agencyId),
           shipment_id: null,
-          status: 'pending'
+          status: 'pending',
+          free_delivery: freeDelivery
         };
 
         // Group by agency
@@ -337,20 +453,20 @@ export class OrderService {
       const order = await this.orderRepo.create({
         order_number: orderNumber,
         order_type: orderType,
+        cart_id: new mongoose.Types.ObjectId(cartId),
         customer_id: customerId as any,
-        vendor_id: new mongoose.Types.ObjectId(cart.items[0].vendorId),  // Layer 2: Order Service validation
+        vendor_id: new mongoose.Types.ObjectId(vendorId),
         items: orderItemsPayload as any,
         currency,
         price_breakdown: priceBreakdown,
         total_amount: total,
         payment_status: 'AWAITING_PAYMENT',  // Ready for payment
-        payment_intent_id: paymentIntentId,
         fulfillment_status: 'pending'
-      });
+      }, session);
 
       // CREATE SHIPMENTS & UPDATE ORDER ITEMS
       for (const [agencyId, groupItems] of Object.entries(agencyGroups)) {
-        const shipmentItems = groupItems.map(({ orderItem, index }) => {
+        const shipmentItems = groupItems.map(({ index }) => {
           const savedItem = order.items[index];
           return {
             order_item_id: savedItem._id,
@@ -364,7 +480,7 @@ export class OrderService {
           agency_id: agencyId as any,
           status: 'pending',
           items: shipmentItems
-        });
+        }, session);
 
         shipments.push(shipment);
 
@@ -377,46 +493,27 @@ export class OrderService {
         }
       }
 
-      await order.save();
-
-      // Emit order.created event
-      await this.emitOrderCreatedEvent(order);
-
-      // Record/refresh the vendor↔customer relation + stats
-      await this.syncVendorCustomerOrderPlaced(order);
-
-      // Clear cart after successful order creation
-      await this.cartService.clearCart(customerId);
+      await order.save({ session });
 
       return { order, shipments };
-
-    } else {
-      // DIGITAL ORDER: No delivery, no shipments
-      const order = await this.orderRepo.create({
-        order_number: orderNumber,
-        order_type: orderType,
-        customer_id: customerId as any,
-        vendor_id: new mongoose.Types.ObjectId(cart.items[0].vendorId),  // Layer 2: Order Service validation
-        items: orderItemsPayload as any,
-        currency,
-        price_breakdown: priceBreakdown,
-        total_amount: total,
-        payment_status: 'AWAITING_PAYMENT',  // Ready for payment
-        payment_intent_id: paymentIntentId,
-        fulfillment_status: 'pending'
-      });
-
-      // Emit order.created event
-      await this.emitOrderCreatedEvent(order);
-
-      // Record/refresh the vendor↔customer relation + stats
-      await this.syncVendorCustomerOrderPlaced(order);
-
-      // Clear cart after successful order creation
-      await this.cartService.clearCart(customerId);
-
-      return { order, shipments: [] };
     }
+
+    // DIGITAL ORDER: No delivery, no shipments
+    const order = await this.orderRepo.create({
+      order_number: orderNumber,
+      order_type: orderType,
+      cart_id: new mongoose.Types.ObjectId(cartId),
+      customer_id: customerId as any,
+      vendor_id: new mongoose.Types.ObjectId(vendorId),
+      items: orderItemsPayload as any,
+      currency,
+      price_breakdown: priceBreakdown,
+      total_amount: total,
+      payment_status: 'AWAITING_PAYMENT',  // Ready for payment
+      fulfillment_status: 'pending'
+    }, session);
+
+    return { order, shipments: [] };
   }
 
   /**

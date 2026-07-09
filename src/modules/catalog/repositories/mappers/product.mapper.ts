@@ -3,7 +3,7 @@
 
 import { IMapper } from "../../../../core/database/mapper.interface";
 import { IProduct } from "../../models";
-import { VectorisationStatus } from "../../models/product.model";
+import { ProductSuspension, VectorisationStatus } from "../../models/product.model";
 
 // Domain Entity (Simplified for now, matching IProduct structure but purely decoupled if needed later)
 // For Phase 3, we can reuse the interface logic or define a specific class. 
@@ -40,7 +40,11 @@ export interface Product {
   // Physical-specific delivery config. Null agencyId means the vendor's default applies at order time.
   delivery?: {
     agencyId: string | null;
+    freeDelivery: boolean;
   };
+
+  // System-driven suspension snapshot. Undefined/null unless currently suspended by a cascade.
+  suspension?: ProductSuspension | null;
 
   // ─── Vectorisation tracking ───────────────────────────────────────────────
   vectorisationEnabled: boolean;
@@ -74,8 +78,15 @@ export class ProductMapper implements IMapper<Product, IProduct> {
         isActive: doc.digitalConfig.isActive ?? true,
       } : undefined,
       delivery: doc.delivery
-        ? { agencyId: doc.delivery.agency_id?.toString() ?? null }
+        ? { agencyId: doc.delivery.agency_id?.toString() ?? null, freeDelivery: doc.delivery.free_delivery ?? false }
         : undefined,
+      suspension: doc.suspension
+        ? {
+          reason: doc.suspension.reason,
+          previousStatus: doc.suspension.previousStatus,
+          suspendedAt: doc.suspension.suspendedAt,
+        }
+        : null,
       vectorisationEnabled: doc.vectorisationEnabled ?? false,
       vectorisationStatus: doc.vectorisationStatus ?? 'not_started',
       vectorisedDataId: doc.vectorisedDataId ?? null,

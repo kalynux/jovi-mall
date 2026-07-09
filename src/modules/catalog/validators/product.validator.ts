@@ -80,9 +80,15 @@ export const UpdateProductSchema = z.object({
     // Service config + price live on the service variant (see variant.validator).
 
     // Physical delivery config — agencyId may be null to clear the per-product agency.
+    // Either sub-field may be sent independently (partial update, merged against
+    // the existing value in ProductUpdateService); at least one must be present.
     delivery: z.object({
-        agencyId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId').nullable(),
-    }).optional(),
+        agencyId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId').nullable().optional(),
+        freeDelivery: z.boolean().optional(),
+    }).strict().refine(
+        (d) => d.agencyId !== undefined || d.freeDelivery !== undefined,
+        { message: 'At least one of agencyId or freeDelivery must be provided' }
+    ).optional(),
 
     // Vectorisation opt-in toggle — when provided, the update endpoint will
     // route through VectorisationService.setEnabled after the content update.

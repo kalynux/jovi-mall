@@ -7,6 +7,22 @@ export type ProductStatus = 'draft' | 'active' | 'archived' | 'pending_review' |
 export type BookingMode = 'calendar' | 'manual' | 'capacity';
 export type VectorisationStatus = 'not_started' | 'pending' | 'completed' | 'failed' | 'skipped_no_credits';
 
+/**
+ * Reason a product was system-suspended. Scopes which suspended products a
+ * given restoration cascade is allowed to touch — other reasons must be left alone.
+ */
+export type ProductSuspensionReason = 'default_delivery_agency_removed' | 'product_delivery_agency_removed';
+
+/**
+ * Snapshot captured when a product is force-suspended, so it can be restored
+ * to its exact prior status later (not a hardcoded assumption).
+ */
+export interface ProductSuspension {
+  reason: ProductSuspensionReason;
+  previousStatus: Exclude<ProductStatus, 'suspended'>;
+  suspendedAt: Date;
+}
+
 export interface DigitalConfig {
   // Product-wide download kill switch. Per-variant asset/maxDownloads/expiresAfterDays
   // live on ProductVariant.digitalConfig. When false, no entitlements are granted
@@ -18,10 +34,12 @@ export interface DigitalConfig {
  * Per-product delivery configuration. Only meaningful for physical products.
  * When `agency_id` is null, the order pipeline falls back to the vendor's
  * `default_delivery_agency_id`. If both are unset, the product cannot be
- * activated (see ProductStatusValidationService).
+ * activated (see ProductStatusValidationService). `free_delivery` is
+ * independent of agency resolution — it's a vendor-set marketing/order flag.
  */
 export interface DeliveryConfig {
   agency_id: Types.ObjectId | null;
+  free_delivery: boolean;
 }
 
 export interface IProduct extends IBaseDocument {
@@ -60,8 +78,13 @@ export interface IProduct extends IBaseDocument {
   // Digital-specific configuration
   digitalConfig?: DigitalConfig;
 
-  // Physical-specific delivery configuration. Read by OrderService.createOrderFromCart.
+  // Physical-specific delivery configuration. Read by OrderService.createOrdersFromCart.
   delivery?: DeliveryConfig;
+
+  // System-driven suspension. Null unless status === 'suspended' via a cascade
+  // (e.g. vendor's default delivery agency was deactivated). See
+  // ProductDeliveryAgencySuspensionService.
+  suspension?: ProductSuspension | null;
 
   // ─── Vectorisation tracking ───────────────────────────────────────────────
   /** Opt-in flag: vendor must explicitly enable vectorisation. Defaults to false. */
@@ -139,9 +162,28 @@ const ProductSchema = new Schema<IProduct>({
         ref: MODELS.DELIVERY_AGENCY,
         default: null,
       },
+      free_delivery: {
+        type: Boolean,
+        default: false,
+      },
     },
     required: false,
     default: undefined,
+  },
+
+  // System-driven suspension snapshot. Null unless currently suspended by a cascade.
+  suspension: {
+    type: {
+      reason: { type: String, enum: ['default_delivery_agency_removed', 'product_delivery_agency_removed'], required: true },
+      previousStatus: {
+        type: String,
+        enum: ['draft', 'active', 'archived', 'pending_review'],
+        required: true,
+      },
+      suspendedAt: { type: Date, required: true },
+    },
+    required: false,
+    default: null,
   },
 
   ...BaseSchemaFields
@@ -170,6 +212,9 @@ ProductSchema.pre('save', function (next) {
 
 // Indexes
 ProductSchema.index({ vendorId: 1, slug: 1 }, { unique: true });
+// Cross-vendor lookup of products by their own delivery-agency override —
+// used by the agency deactivate/reactivate cascade (ProductDeliveryAgencySuspensionService).
+ProductSchema.index({ 'delivery.agency_id': 1 });
 // ProductSchema.index({ fileIds: 1 }); // Optional: for finding products by file
 // ProductSchema.index({ deletedAt: 1 });
 

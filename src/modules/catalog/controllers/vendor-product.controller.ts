@@ -29,6 +29,10 @@ import {
 } from '../validators/product.validator';
 import { vectorisationService } from '../domain/services/VectorisationService';
 import { entitlementService } from '../../billing/services/entitlement.service';
+import { ProductDeliveryAgencySuspensionService } from '../domain/services/ProductDeliveryAgencySuspensionService';
+import { VendorRepository } from '../../vendors/vendor.repository';
+import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
+import { VendorOrderService } from '../../orders/vendor-order.service';
 
 const BulkVectoriseSchema = z.object({
     productIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId')).optional(),
@@ -56,6 +60,52 @@ const productBulkOperationsService = new ProductBulkOperationsService(
     productRepository,
     productStatusValidationService
 );
+const productDeliveryAgencySuspensionService = new ProductDeliveryAgencySuspensionService(productRepository);
+const vendorRepository = new VendorRepository();
+const deliveryAgencyRepository = new DeliveryAgencyRepository();
+const vendorOrderService = new VendorOrderService();
+
+/**
+ * When a product's own delivery-agency override changes (set, changed, or cleared),
+ * restore the product if it's now eligible again (no-op if it wasn't suspended for
+ * this reason, or if it's still blocked by something else — e.g. the vendor's
+ * default is also broken), and reassign any of its held/pending order items from
+ * the old agency to the resolved new target: the new override if active, or the
+ * vendor's current active default if the override was cleared.
+ */
+async function handleProductAgencyOverrideChange(
+    productId: string,
+    vendorId: string,
+    previousAgencyId: string | null,
+    newAgencyId: string | null,
+): Promise<{ restored: boolean; reassignedCount: number }> {
+    const { restored } = await productDeliveryAgencySuspensionService.restoreProductOwnAgency(productId, vendorId);
+
+    if (!previousAgencyId) return { restored, reassignedCount: 0 };
+
+    let targetAgencyId: string | null = null;
+    if (newAgencyId) {
+        const agency = await deliveryAgencyRepository.findById(newAgencyId);
+        if (agency?.status === 'active') targetAgencyId = newAgencyId;
+    } else {
+        const vendor = await vendorRepository.findById(vendorId);
+        const defaultId = vendor?.default_delivery_agency_id?.toString();
+        if (defaultId) {
+            const defaultAgency = await deliveryAgencyRepository.findById(defaultId);
+            if (defaultAgency?.status === 'active') targetAgencyId = defaultId;
+        }
+    }
+
+    if (!targetAgencyId) return { restored, reassignedCount: 0 };
+
+    const { reassignedCount } = await vendorOrderService.reassignItemsForProduct(
+        vendorId,
+        productId,
+        previousAgencyId,
+        targetAgencyId,
+    );
+    return { restored, reassignedCount };
+}
 
 /**
  * VendorProductController
@@ -138,6 +188,11 @@ export class VendorProductController {
         const vendorId = req.auth!.role_entity._id.toString();
         const { id } = req.params;
         const input = UpdateProductSchema.parse(req.body);
+
+        const existingProduct = await productRepository.findById(id, vendorId);
+        if (!existingProduct) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+        const previousAgencyId = existingProduct.delivery?.agencyId ?? null;
+
         const product = await productUpdateService.execute(id, vendorId, {
             title: input.title,
             description: input.description,
@@ -153,13 +208,26 @@ export class VendorProductController {
         // If the update broke the active-state invariant (description cleared,
         // delivery agency removed, serviceConfig dropped, …) demote to draft.
         const demoted = await productStatusValidationService.revalidateActiveStatus(id, vendorId);
-        const finalProduct = demoted
+
+        // If the product's own delivery-agency override changed, restore the
+        // product if it's eligible again and reassign its held/pending order
+        // items to the resolved new agency. See handleProductAgencyOverrideChange.
+        let agencyFixup: { restored: boolean; reassignedCount: number } | null = null;
+        if (input.delivery?.agencyId !== undefined && input.delivery.agencyId !== previousAgencyId) {
+            agencyFixup = await handleProductAgencyOverrideChange(id, vendorId, previousAgencyId, input.delivery.agencyId);
+        }
+
+        const finalProduct = (demoted || agencyFixup?.restored)
             ? (await productRepository.findById(id, vendorId)) ?? product
             : product;
         const detail = await enrichProduct(finalProduct, fileRepository, storageProvider);
 
+        const message = agencyFixup && agencyFixup.reassignedCount > 0
+            ? `Product updated successfully. ${agencyFixup.reassignedCount} pending order item(s) reassigned to the new agency.`
+            : 'Product updated successfully';
+
         // Return response immediately — vectorisation is async and must not block
-        res.json({ success: true, data: detail, message: 'Product updated successfully' });
+        res.json({ success: true, data: detail, message });
 
         // Vectorisation side-effect, after response.
         if (input.vectorisationEnabled !== undefined) {

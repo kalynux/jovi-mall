@@ -56,6 +56,10 @@ export class EarningsSplitService {
             ),
           ]
         : [];
+    // NOTE: order items may carry a per-item `delivery.free_delivery` flag, but this
+    // per-agency flat-fee dedup has no item-level granularity to honor it yet (an
+    // agency touched by both a free and a non-free item can't be partially charged).
+    // Revisit once agency fee calculation moves beyond a flat per-agency constant.
     const deliveryFeeEach = EARNINGS_CONFIG.DELIVERY_FLAT_FEE;
     const deliveryTotal = agencyIds.length * deliveryFeeEach;
 

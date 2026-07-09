@@ -208,7 +208,7 @@ export class PaymentDisputeService {
     }
 
     // Goods already in motion must come back; otherwise the order is cancelled.
-    const inMotion: FulfillmentStatus[] = ['shipped', 'delivered', 'fulfilled'];
+    const inMotion: FulfillmentStatus[] = ['partially_shipped', 'shipped', 'partially_delivered', 'delivered', 'fulfilled'];
     const newFulfillment: FulfillmentStatus = inMotion.includes(order.fulfillment_status)
       ? 'returned'
       : 'cancelled';

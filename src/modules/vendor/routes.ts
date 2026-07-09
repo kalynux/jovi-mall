@@ -83,16 +83,11 @@ router.get('/profile/default-delivery-agency', VendorProfileController.getDefaul
  * PUT /api/vendor/profile/default-delivery-agency
  *
  * Set or change the vendor's default delivery agency outside the onboarding flow.
+ * Vendors can only change their default, never clear it — the only way it becomes
+ * unset is a system cascade when the underlying agency is deactivated by an admin.
  * Body: { agencyId: string }
  */
 router.put('/profile/default-delivery-agency', VendorProfileController.setDefaultDeliveryAgency);
-
-/**
- * DELETE /api/vendor/profile/default-delivery-agency
- *
- * Clear the vendor's default delivery agency.
- */
-router.delete('/profile/default-delivery-agency', VendorProfileController.clearDefaultDeliveryAgency);
 
 /**
  * GET /api/vendor/profile/auto-redirect-orders
@@ -213,6 +208,13 @@ router.get('/orders/:id', VendorOrderController.getOrderDetails);
  * Update fulfillment status
  */
 router.patch('/orders/:id/status', VendorOrderController.updateFulfillmentStatus);
+
+/**
+ * POST /api/vendor/orders/:id/dispatch
+ * Explicitly dispatch a reviewed, paid order to its delivery agency (advances
+ * pending shipments to assigned — the vendor's manual review/approval gate).
+ */
+router.post('/orders/:id/dispatch', VendorOrderController.dispatchToAgency);
 
 /**
  * GET /api/vendor/orders/:id/timeline

@@ -22,6 +22,7 @@ import { ERROR_CODES } from '../../../core/error-codes';
  */
 
 export interface CartResponse {
+  cartId?: string;   // Cart document _id — snapshotted onto orders as the checkout-group key
   userId: string;
   productType?: string;
   items: Array<{
@@ -286,6 +287,7 @@ export class CartService {
    */
   private formatCartResponse(cart: ICart): CartResponse {
     return {
+      cartId: (cart as any)._id?.toString(),
       userId: cart.userId,
       productType: cart.productType,
       items: cart.items.map((item) => ({

@@ -19,7 +19,9 @@ const base: CookieOptions = {
     sameSite: 'lax',
     path: '/',
     // Configurable via env (e.g. ".example.com" for subdomain sharing)
-    domain: process.env.AUTH_COOKIE_DOMAIN || undefined,
+    domain: process.env.NODE_ENV === 'production' 
+        ? process.env.AUTH_COOKIE_DOMAIN 
+        : undefined,
 };
 
 // ─── Access Token Cookie (short-lived, default 15 min) ───────────────────────

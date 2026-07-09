@@ -223,6 +223,149 @@ export class PaymentOrchestratorService {
   }
 
   /**
+   * Initiate a SINGLE payment for a whole checkout group (multi-vendor cart).
+   *
+   * A cart splits into one order per vendor sharing a `cart_id`. The customer
+   * pays once for the group total; on success the webhook fans settlement out to
+   * every order (each runs its own earnings split, fulfilment and events).
+   *
+   * IDEMPOTENT: keyed by hash(cartId + userId + groupTotal) — repeated calls
+   * return the existing transaction.
+   *
+   * @param cartId - Checkout group id (cart_id shared by the split orders)
+   * @param gateway - Which gateway to use
+   * @param channel - Payment channel info (phone, card, etc.)
+   */
+  async initiatePaymentForCart(
+    cartId: string,
+    gateway: PaymentGatewayType,
+    channel: PaymentChannelInfo
+  ): Promise<{
+    transactionId: string;
+    status: PaymentStatus;
+    instructions?: any;
+    message: string;
+  }> {
+    // 1. LOAD THE GROUP'S ORDERS
+    const orders = await OrderModel.find({ cart_id: cartId });
+    if (orders.length === 0) {
+      throw createAppError(ERROR_CODES.PAYMENT_CART_NOT_FOUND, 404, undefined, { cartId });
+    }
+
+    // All orders already paid → nothing to do
+    if (orders.every(o => o.payment_status === 'paid')) {
+      throw createAppError(ERROR_CODES.PAYMENT_ORDER_ALREADY_PAID, 409, undefined, { cartId });
+    }
+
+    // Payable = still awaiting payment (never re-charge a paid order)
+    const payable = orders.filter(
+      o => o.payment_status === 'AWAITING_PAYMENT' || o.payment_status === 'pending'
+    );
+    if (payable.length === 0) {
+      throw createAppError(ERROR_CODES.PAYMENT_CART_NO_PAYABLE_ORDERS, 409, undefined, { cartId });
+    }
+
+    // Single currency across the group (guaranteed at checkout, re-checked here)
+    const currencies = [...new Set(payable.map(o => o.currency))];
+    if (currencies.length > 1) {
+      throw createAppError(ERROR_CODES.PAYMENT_CART_MIXED_CURRENCY, 400, undefined, { cartId, currencies });
+    }
+    const currency = currencies[0];
+
+    const userId = payable[0].customer_id.toString();
+    const groupTotal = payable.reduce((sum, o) => sum + o.total_amount, 0);
+    const orderIds = payable.map(o => o._id);
+
+    // 2. IDEMPOTENCY KEY (cartId stands in for orderId)
+    const idempotencyKey = this.generateIdempotencyKey(cartId, userId, groupTotal);
+
+    // 3. CHECK FOR EXISTING TRANSACTION
+    const existingTx = await PaymentTransactionModel.findOne({ idempotencyKey });
+    if (existingTx) {
+      if (existingTx.status === 'SUCCEEDED') {
+        return {
+          transactionId: existingTx._id.toString(),
+          status: existingTx.status,
+          message: 'Payment already completed'
+        };
+      }
+      if (existingTx.status === 'INITIATED' || existingTx.status === 'PENDING') {
+        const lastPayload = existingTx.rawGatewayPayloads[existingTx.rawGatewayPayloads.length - 1];
+        return {
+          transactionId: existingTx._id.toString(),
+          status: existingTx.status,
+          instructions: lastPayload?.instructions,
+          message: 'Payment already initiated. Complete the pending payment.'
+        };
+      }
+      // Failed/cancelled → fall through to a fresh transaction
+    }
+
+    // 4. CREATE NEW PAYMENT TRANSACTION (group)
+    const gatewayInstance = this.gateways.get(gateway);
+    if (!gatewayInstance) {
+      throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, undefined, { gateway });
+    }
+
+    const method = gateway === 'STRIPE' ? 'CARD' : 'MOBILE';
+
+    const transaction = await PaymentTransactionModel.create({
+      cartId: new Types.ObjectId(cartId),
+      orderIds,
+      userId: new Types.ObjectId(userId),
+      gateway,
+      method,
+      status: 'INITIATED',
+      gatewayRef: '',
+      amountSnapshot: groupTotal,
+      currencySnapshot: currency,
+      idempotencyKey,
+      rawGatewayPayloads: []
+    });
+
+    // 5. CALL GATEWAY ONCE for the group total (cartId is the external reference)
+    try {
+      const gatewayResult = await gatewayInstance.initiatePayment({
+        orderId: cartId,
+        userId,
+        amount: groupTotal,
+        currency,
+        channel,
+        metadata: { idempotencyKey, cartId }
+      });
+
+      transaction.gatewayRef = gatewayResult.gatewayRef;
+      transaction.status = gatewayResult.status as PaymentStatus;
+      transaction.rawGatewayPayloads.push({
+        timestamp: new Date(),
+        type: 'initiate',
+        ...gatewayResult.rawResponse
+      });
+      transaction.gatewayPayloadHash = this.hashPayload(gatewayResult.rawResponse);
+      await transaction.save();
+
+      return {
+        transactionId: transaction._id.toString(),
+        status: transaction.status,
+        instructions: gatewayResult.instructions,
+        message: gatewayResult.success
+          ? 'Payment initiated successfully'
+          : gatewayResult.error || 'Payment initiation failed'
+      };
+    } catch (error: any) {
+      transaction.status = 'FAILED';
+      transaction.rawGatewayPayloads.push({
+        timestamp: new Date(),
+        type: 'error',
+        error: error.message
+      });
+      await transaction.save();
+
+      throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, { cause: error.message });
+    }
+  }
+
+  /**
    * Refund a paid order (full or partial).
    *
    * Eligibility against the vendor's return policy is the CALLER's responsibility
@@ -757,7 +900,20 @@ export class PaymentOrchestratorService {
   private async handlePaymentSuccess(transaction: IPaymentTransaction): Promise<void> {
     try {
       // Route based on transaction type
-      if (transaction.orderId) {
+      if (transaction.cartId && transaction.orderIds && transaction.orderIds.length > 0) {
+        // CHECKOUT GROUP: one payment settles every order in the group. Each
+        // order independently flips to paid, splits earnings per its own vendor
+        // commission, dispatches/fulfils and syncs.
+        console.log(`[PaymentOrchestrator] Processing payment success for cart group ${transaction.cartId} (${transaction.orderIds.length} orders)`);
+        for (const orderId of transaction.orderIds) {
+          await this.orderService.handlePaymentSuccess(orderId.toString());
+        }
+
+        // Emit a full-payment event per order (the group total always covers each order's total)
+        await this.emitCartGroupPaymentEvents(transaction);
+
+        console.log(`[PaymentOrchestrator] Payment success handled for cart group ${transaction.cartId}`);
+      } else if (transaction.orderId) {
         console.log(`[PaymentOrchestrator] Processing payment success for order ${transaction.orderId}`);
         await this.orderService.handlePaymentSuccess(transaction.orderId.toString());
 
@@ -958,6 +1114,39 @@ export class PaymentOrchestratorService {
       console.log(`[PaymentOrchestrator] Emitted ${eventType} event for ${type} ${aggregateId}`);
     } catch (error: any) {
       console.error('[PaymentOrchestrator] Failed to emit payment event:', error);
+      // Don't throw - this is a secondary operation
+    }
+  }
+
+  /**
+   * Emit a `payment.received.full` event for every order in a settled checkout
+   * group. The single group payment covers each order's full total, so each
+   * order is a full payment. Keyed per order/vendor so vendor notifications fire
+   * independently. Secondary operation — never throws.
+   */
+  private async emitCartGroupPaymentEvents(transaction: IPaymentTransaction): Promise<void> {
+    try {
+      const orders = await OrderModel.find({ _id: { $in: transaction.orderIds } });
+      for (const order of orders) {
+        await eventBus.publish('payment.received.full', {
+          eventType: 'payment.received.full',
+          aggregateId: order._id.toString(),
+          occurredAt: new Date(),
+          payload: {
+            vendorId: order.vendor_id.toString(),
+            paymentId: transaction._id.toString(),
+            orderId: order._id.toString(),
+            cartId: transaction.cartId?.toString(),
+            amount: order.total_amount,
+            currency: transaction.currencySnapshot,
+            totalAmount: order.total_amount,
+            aggregateType: 'order'
+          }
+        });
+      }
+      console.log(`[PaymentOrchestrator] Emitted payment.received.full for ${orders.length} order(s) in cart group ${transaction.cartId}`);
+    } catch (error: any) {
+      console.error('[PaymentOrchestrator] Failed to emit cart-group payment events:', error);
       // Don't throw - this is a secondary operation
     }
   }

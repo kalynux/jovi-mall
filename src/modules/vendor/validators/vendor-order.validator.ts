@@ -8,8 +8,10 @@ import { z } from 'zod';
 
 // List orders query parameters
 export const ListOrdersQuerySchema = z.object({
-    // Filters
-    status: z.enum(['pending', 'processing', 'shipped', 'delivered', 'fulfilled', 'cancelled']).optional(),
+    // Filters. 'partially_shipped'/'shipped'/'partially_delivered'/'delivered' are
+    // system-derived (see OrderFulfillmentAggregationService) — listed here for
+    // filtering only, never settable via UpdateFulfillmentStatusSchema below.
+    status: z.enum(['pending', 'processing', 'partially_shipped', 'shipped', 'partially_delivered', 'delivered', 'fulfilled', 'cancelled']).optional(),
     paymentStatus: z.enum(['pending', 'AWAITING_PAYMENT', 'paid', 'failed', 'refunded']).optional(),
     orderType: z.enum(['physical', 'digital']).optional(),  // NEW: Filter by order type
     customerId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid customer ID').optional(),  // NEW: Scope to one customer
@@ -26,9 +28,11 @@ export const ListOrdersQuerySchema = z.object({
 
 export type ListOrdersQuery = z.infer<typeof ListOrdersQuerySchema>;
 
-// Update fulfillment status
+// Update fulfillment status. Vendor-triggerable subset only — 'shipped'/
+// 'partially_shipped'/'partially_delivered'/'delivered' are system-derived from
+// shipment states (OrderFulfillmentAggregationService) and rejected here.
 export const UpdateFulfillmentStatusSchema = z.object({
-    status: z.enum(['pending', 'processing', 'shipped', 'delivered', 'cancelled'], {
+    status: z.enum(['pending', 'processing', 'cancelled'], {
         errorMap: () => ({ message: 'Invalid fulfillment status' })
     })
 });

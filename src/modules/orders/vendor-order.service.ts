@@ -10,6 +10,10 @@ import { eventBus } from '../../core/events/event-bus';
 import { CustomerModel } from '../customers/customer.model';
 import { COLLECTIONS } from '../../core/database/collections';
 import { ShipmentRepository } from '../shipments/shipment.repository';
+import { ShipmentService } from '../shipments/shipment.service';
+import { OrderService } from './order.service';
+import { IProductRepository } from '../catalog/repositories/interfaces/product.repository.interface';
+import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.repository.mongo';
 
 /**
  * Vendor Order Service
@@ -27,11 +31,20 @@ import { ShipmentRepository } from '../shipments/shipment.repository';
  * - Domain events emitted (fire-and-forget)
  */
 
-// Fulfillment State Machine
+// Fulfillment State Machine — VENDOR-TRIGGERABLE transitions only.
+//
+// 'partially_shipped' / 'shipped' / 'partially_delivered' / 'delivered' are
+// NEVER reachable here: they are computed exclusively by
+// OrderFulfillmentAggregationService from the order's shipment statuses (agency
+// pickup/transit/delivery actions + customer per-shipment confirmation). A
+// vendor can no longer free-set an order to 'shipped'/'delivered' — doing so
+// used to bypass whether the underlying shipments had actually moved.
 const FULFILLMENT_STATE_MACHINE: Record<FulfillmentStatus, FulfillmentStatus[]> = {
     'pending': ['processing', 'cancelled'],
-    'processing': ['shipped', 'cancelled'],
-    'shipped': ['delivered', 'cancelled'],
+    'processing': ['cancelled'],  // 'shipped'/'partially_shipped' now system-derived only
+    'partially_shipped': [],   // System-derived; terminal from the vendor's perspective
+    'shipped': [],              // System-derived; terminal from the vendor's perspective
+    'partially_delivered': [], // System-derived; terminal from the vendor's perspective
     'delivered': [],  // Terminal state
     'fulfilled': ['cancelled'],  // Legacy support
     'cancelled': [],  // Terminal state
@@ -43,12 +56,18 @@ export class VendorOrderService {
     private timelineRepo: OrderTimelineRepository;
     private noteRepo: VendorOrderNoteRepository;
     private shipmentRepo: ShipmentRepository;
+    private shipmentService: ShipmentService;
+    private orderService: OrderService;
+    private productRepository: IProductRepository;
 
     constructor() {
         this.vendorOrderRepo = new VendorOrderRepository();
         this.timelineRepo = new OrderTimelineRepository();
         this.noteRepo = new VendorOrderNoteRepository();
         this.shipmentRepo = new ShipmentRepository();
+        this.shipmentService = new ShipmentService();
+        this.orderService = new OrderService();
+        this.productRepository = new ProductRepositoryMongo();
     }
 
     /**
@@ -121,11 +140,13 @@ export class VendorOrderService {
 
         const customerId = order.customer_id.toString();
 
-        // Fetch delivery info (per item), notes, and customer data in parallel
-        const [deliveryByItem, notes, customerData] = await Promise.all([
+        // Fetch delivery info (per item), notes, customer data, and the merged
+        // multi-agency shipment timeline in parallel.
+        const [deliveryByItem, notes, customerData, deliveryTimeline] = await Promise.all([
             this._resolveDeliveryForItems(order),
             this.noteRepo.findByOrder(orderId, vendorId),
-            this._resolveCustomerInfo(customerId, vendorId)
+            this._resolveCustomerInfo(customerId, vendorId),
+            order.order_type === 'physical' ? this.shipmentService.getMergedTimelineForOrder(orderId) : Promise.resolve([])
         ]);
 
         // Order-level overview: one entry per shipment (agencies handling this order).
@@ -196,6 +217,10 @@ export class VendorOrderService {
             // (physical orders only, null for digital). Per-item agency lives on
             // each `items[].delivery`.
             deliveries,
+
+            // Merged multi-agency status timeline (every shipment's history,
+            // labeled by agency, chronological). Empty for digital orders.
+            deliveryTimeline,
 
             // Vendor-internal notes
             notes: notes.map(note => ({
@@ -289,7 +314,8 @@ export class VendorOrderService {
                 deliveryStatus: deliveryData.status,
                 shipmentId,
                 trackingNumber: shipment?.tracking_number ?? null,
-                agent
+                agent,
+                freeDelivery: deliveryData.free_delivery ?? false
             });
         }
 
@@ -512,6 +538,31 @@ export class VendorOrderService {
 
         // 8. Return updated order DTO
         return this.getOrderDetails(orderId, vendorId);
+    }
+
+    /**
+     * Vendor explicitly dispatches a reviewed, paid order to its delivery
+     * agency/agencies — the manual counterpart to the vendor's
+     * `auto_redirect_orders_to_agency` setting. Advances the order's `pending`
+     * shipments to `assigned`, which is what makes them visible on
+     * `GET /agency/shipments` (that endpoint excludes `pending`).
+     *
+     * Ownership validated first (vendorOrderRepo.findByIdAndVendor); the
+     * actual dispatch logic is shared with the payment-webhook auto-dispatch
+     * path via OrderService.dispatchToAgency.
+     */
+    async dispatchToAgency(orderId: string, vendorId: string): Promise<any> {
+        const owned = await this.vendorOrderRepo.findByIdAndVendor(orderId, vendorId);
+        if (!owned) {
+            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
+        }
+
+        const dispatchedShipments = await this.orderService.dispatchToAgency(orderId, { type: 'vendor', id: vendorId });
+
+        return {
+            ...(await this.getOrderDetails(orderId, vendorId)),
+            dispatchedShipments,
+        };
     }
 
     /**
@@ -765,8 +816,9 @@ export class VendorOrderService {
         }
 
         // 4. An item already picked up / in transit / delivered / returned cannot be
-        //    handed to another agency — only items still pending or assigned can move.
-        if (!['pending', 'assigned'].includes(item.delivery.status)) {
+        //    handed to another agency — only items still pending, assigned, or held
+        //    (agency vanished, awaiting reassignment) can move.
+        if (!['pending', 'assigned', 'pending_agency_reassignment'].includes(item.delivery.status)) {
             throw createAppError(
                 ERROR_CODES.ORDER_ITEM_NOT_REASSIGNABLE,
                 422,
@@ -852,6 +904,103 @@ export class VendorOrderService {
 
         // 9. Return updated order
         return this.getOrderDetails(orderId, vendorId);
+    }
+
+    /**
+     * Auto-reassign order items riding on the vendor's OLD default delivery agency
+     * over to the NEW one, when the vendor's default agency changes (either the
+     * agency was deactivated and they picked a different one, or they just switched).
+     *
+     * Only items whose PRODUCT has no explicit delivery.agencyId override are
+     * touched — a product with its own agency choice keeps it regardless of the
+     * vendor's default changing; only items that were riding on "no override, use
+     * the default" are considered "assigned to the default agency". Only items
+     * still `pending`/`assigned` (not yet dispatched) are reassignable.
+     *
+     * Best-effort: runs outside any DB transaction (shipment/order writes in
+     * updateDeliveryAgency aren't session-aware, matching that method's existing
+     * behavior), reuses updateDeliveryAgency per item, and collects failures
+     * rather than aborting the whole batch.
+     */
+    async reassignItemsFromDefaultAgency(
+        vendorId: string,
+        fromAgencyId: string,
+        toAgencyId: string,
+    ): Promise<{ reassignedCount: number; skipped: { orderId: string; itemId: string; reason: string }[] }> {
+        const skipped: { orderId: string; itemId: string; reason: string }[] = [];
+        let reassignedCount = 0;
+
+        const candidates = await this.vendorOrderRepo.findReassignableByVendorAndAgency(vendorId, fromAgencyId);
+
+        for (const order of candidates) {
+            const orderId = (order._id as any).toString();
+
+            for (const item of order.items) {
+                if (!item.delivery) continue;
+                if (item.delivery.agency_id?.toString() !== fromAgencyId) continue;
+                if (!['pending', 'assigned', 'pending_agency_reassignment'].includes(item.delivery.status)) continue;
+
+                const itemId = item._id.toString();
+
+                const product = await this.productRepository.findById(item.product_id.toString(), vendorId);
+                if (product?.delivery?.agencyId) {
+                    skipped.push({ orderId, itemId, reason: 'Product has its own delivery agency override' });
+                    continue;
+                }
+
+                try {
+                    await this.updateDeliveryAgency(orderId, vendorId, itemId, toAgencyId);
+                    reassignedCount++;
+                } catch (err: any) {
+                    skipped.push({ orderId, itemId, reason: err.message || 'Unknown error' });
+                }
+            }
+        }
+
+        return { reassignedCount, skipped };
+    }
+
+    /**
+     * Auto-reassign a SINGLE PRODUCT's order items riding on its OLD delivery-agency
+     * override over to the NEW one, when a vendor fixes that product's own override
+     * (as opposed to reassignItemsFromDefaultAgency, which fires on a vendor
+     * default change and applies across every product that has no override).
+     * No product-override check needed here — every candidate item belongs to
+     * this one product, and we already know it has an override (that's why this
+     * path is firing).
+     */
+    async reassignItemsForProduct(
+        vendorId: string,
+        productId: string,
+        fromAgencyId: string,
+        toAgencyId: string,
+    ): Promise<{ reassignedCount: number; skipped: { orderId: string; itemId: string; reason: string }[] }> {
+        const skipped: { orderId: string; itemId: string; reason: string }[] = [];
+        let reassignedCount = 0;
+
+        const candidates = await this.vendorOrderRepo.findReassignableByProductAndAgency(vendorId, productId, fromAgencyId);
+
+        for (const order of candidates) {
+            const orderId = (order._id as any).toString();
+
+            for (const item of order.items) {
+                if (!item.delivery) continue;
+                if (item.product_id.toString() !== productId) continue;
+                if (item.delivery.agency_id?.toString() !== fromAgencyId) continue;
+                if (!['pending', 'assigned', 'pending_agency_reassignment'].includes(item.delivery.status)) continue;
+
+                const itemId = item._id.toString();
+
+                try {
+                    await this.updateDeliveryAgency(orderId, vendorId, itemId, toAgencyId);
+                    reassignedCount++;
+                } catch (err: any) {
+                    skipped.push({ orderId, itemId, reason: err.message || 'Unknown error' });
+                }
+            }
+        }
+
+        return { reassignedCount, skipped };
     }
 
     /**

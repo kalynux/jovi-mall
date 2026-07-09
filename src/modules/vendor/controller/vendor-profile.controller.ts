@@ -12,6 +12,7 @@ import {
 } from '../validators/vendor-onboarding.validator';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
+import { vectorisationService } from '../../catalog/domain/services/VectorisationService';
 
 const SetDefaultDeliveryAgencySchema = z.object({
   agencyId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId'),
@@ -140,14 +141,22 @@ export class VendorProfileController {
   static setDefaultDeliveryAgency = asyncHandler(async (req: Request, res: Response) => {
     const vendorId = req.auth!.role_entity._id.toString();
     const input = SetDefaultDeliveryAgencySchema.parse(req.body);
-    const data = await vendorProfileService.setDefaultDeliveryAgency(vendorId, input.agencyId);
-    res.json({ success: true, data, message: 'Default delivery agency updated successfully' });
-  });
+    const { agency, restoredProducts, reassignedOrders } = await vendorProfileService.setDefaultDeliveryAgency(vendorId, input.agencyId);
 
-  static clearDefaultDeliveryAgency = asyncHandler(async (req: Request, res: Response) => {
-    const vendorId = req.auth!.role_entity._id.toString();
-    await vendorProfileService.clearDefaultDeliveryAgency(vendorId);
-    res.json({ success: true, message: 'Default delivery agency cleared' });
+    const message = reassignedOrders.reassignedCount > 0
+      ? `Default delivery agency updated successfully. ${reassignedOrders.reassignedCount} pending order item(s) reassigned to the new agency.`
+      : 'Default delivery agency updated successfully';
+
+    res.json({
+      success: true,
+      data: agency,
+      meta: { reassignedOrderItems: reassignedOrders.reassignedCount, skippedOrderItems: reassignedOrders.skipped },
+      message,
+    });
+
+    for (const product of restoredProducts) {
+      void vectorisationService.notifyStatusChange(product.productId, product.status);
+    }
   });
 
   // ─── Auto-redirect Orders To Agency ─────────────────────────────────────

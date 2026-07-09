@@ -5,15 +5,17 @@ import { Variant } from '../../repositories/mappers/variant.mapper';
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
 import { IVariantRepository } from '../../repositories/interfaces/variant.repository.interface';
 import { VendorRepository } from '../../../vendors/vendor.repository';
+import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repository';
 import { AvailabilityRule } from '../../../booking/models/availability-rule.model';
 
 /**
  * ProductStatusValidationService: Validates product status transitions based on business rules.
  *
- * Activation gate for `physical` products: there must be a resolvable delivery agency,
- * either set on the product (product.delivery.agencyId) or on the vendor profile
- * (vendor.default_delivery_agency_id). Without one of these, OrderService.createOrderFromCart
- * would refuse the order at checkout.
+ * Activation gate for `physical` products: the vendor must have an active default delivery
+ * agency (vendor.default_delivery_agency_id, resolving to a DeliveryAgency with status
+ * === 'active'). A product-level delivery.agencyId override does NOT bypass this requirement —
+ * the vendor default is always checked. If the product ALSO has its own override set, that
+ * override must independently be active too — both conditions are enforced, not either/or.
  *
  * Activation gate for `service` products: the default variant's serviceConfig must carry a
  * duration (and a seat count for capacity mode), and the product must have at least one active
@@ -24,6 +26,7 @@ export class ProductStatusValidationService {
         private readonly productRepository: IProductRepository,
         private readonly variantRepository: IVariantRepository,
         private readonly vendorRepository: VendorRepository = new VendorRepository(),
+        private readonly deliveryAgencyRepository: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
     ) { }
 
     async validate(product: Product, newStatus: string): Promise<void> {
@@ -56,15 +59,33 @@ export class ProductStatusValidationService {
         }
 
         if (product.type === 'physical') {
-            const hasProductAgency = !!product.delivery?.agencyId;
-            if (!hasProductAgency) {
-                const vendor = await this.vendorRepository.findById(product.vendorId);
-                const hasVendorDefault = !!vendor?.default_delivery_agency_id;
-                if (!hasVendorDefault) {
+            const vendor = await this.vendorRepository.findById(product.vendorId);
+            if (!vendor?.default_delivery_agency_id) {
+                throw createAppError(
+                    ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
+                    422,
+                    'Physical products require an active default delivery agency on your vendor profile.',
+                );
+            }
+
+            const agency = await this.deliveryAgencyRepository.findById(vendor.default_delivery_agency_id.toString());
+            if (!agency || agency.status !== 'active') {
+                throw createAppError(
+                    ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
+                    422,
+                    'Your default delivery agency is not currently active. Set an active default delivery agency to activate physical products.',
+                );
+            }
+
+            // A product's own override, if set, must independently be active too —
+            // it doesn't replace the vendor-default check above, it's an extra one.
+            if (product.delivery?.agencyId) {
+                const overrideAgency = await this.deliveryAgencyRepository.findById(product.delivery.agencyId);
+                if (!overrideAgency || overrideAgency.status !== 'active') {
                     throw createAppError(
                         ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
                         422,
-                        'Physical products require a delivery agency. Set one on the product, or configure a default delivery agency on your vendor profile.',
+                        "This product's own delivery agency is not currently active.",
                     );
                 }
             }
