@@ -33,8 +33,13 @@ export const EARNINGS_CONFIG = {
   AUTO_CONFIRM_DAYS: intEnv('EARNINGS_AUTO_CONFIRM_DAYS', 7),
 
   /**
-   * Flat delivery fee deducted from the order pot per distinct delivery agency,
-   * in minor units. Placeholder until full agency-policy pricing lands.
+   * Defensive fallback fee (minor units) used ONLY when a shipment's agency
+   * has no `policies` configured yet — should not occur in practice, since
+   * agency onboarding Step 4 (policy setup) is required and only
+   * fully-onboarded agencies are selectable by vendors. The real per-shipment
+   * fee is computed from the agency's own `policies.pricing`
+   * (see EarningsSplitService.computeAgencyDeliveryFees). Defaults to 0 —
+   * charge nothing rather than a fabricated number.
    */
   DELIVERY_FLAT_FEE: intEnv('EARNINGS_DELIVERY_FLAT_FEE', 0),
 

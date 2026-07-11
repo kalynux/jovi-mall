@@ -5,6 +5,8 @@ import { VendorRefundService } from '../service/vendor-refund.service';
 import {
     ListOrdersQuerySchema,
     UpdateFulfillmentStatusSchema,
+    BulkUpdateFulfillmentStatusSchema,
+    BulkDispatchToAgencySchema,
     UpdateDeliveryAgencySchema,
     RevokeEntitlementSchema,
     RestoreEntitlementSchema,
@@ -112,6 +114,52 @@ export class VendorOrderController {
             success: true,
             data: order,
             message: `Order status updated to '${status}'`
+        });
+    });
+
+    /**
+     * POST /api/vendor/orders/bulk/status
+     *
+     * Bulk-update fulfillment status for many orders at once. Each order is
+     * validated independently (ownership, state machine, payment coupling,
+     * dispute hold) — orders that fail their own check are reported in
+     * `data.failed` without blocking the rest of the batch. Always returns 200
+     * for a well-formed request; per-order outcomes live in the response body.
+     */
+    static bulkUpdateFulfillmentStatus = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+
+        const { orderIds, status } = BulkUpdateFulfillmentStatusSchema.parse(req.body);
+
+        const result = await vendorOrderService.bulkUpdateFulfillmentStatus(orderIds, vendorId, status);
+
+        res.json({
+            success: true,
+            data: result,
+            message: `${result.succeeded.length} of ${result.total} order(s) updated to '${status}'`
+                + (result.failed.length > 0 ? `, ${result.failed.length} failed` : '')
+        });
+    });
+
+    /**
+     * POST /api/vendor/orders/bulk/dispatch
+     *
+     * Bulk-dispatch many paid physical orders to their delivery agency/agencies.
+     * Orders that aren't dispatchable (unpaid, digital, disputed, not found) are
+     * reported in `data.failed` without blocking the rest of the batch.
+     */
+    static bulkDispatchToAgency = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+
+        const { orderIds } = BulkDispatchToAgencySchema.parse(req.body);
+
+        const result = await vendorOrderService.bulkDispatchToAgency(orderIds, vendorId);
+
+        res.json({
+            success: true,
+            data: result,
+            message: `${result.succeeded.length} of ${result.total} order(s) dispatched`
+                + (result.failed.length > 0 ? `, ${result.failed.length} failed` : '')
         });
     });
 

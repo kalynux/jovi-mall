@@ -125,6 +125,8 @@ const AgencyPoliciesZodSchema = z.object({
     pricing: AgencyPoliciesPricingZodSchema,
     returns: AgencyPoliciesReturnsZodSchema,
     damage: AgencyPoliciesDamageZodSchema,
+    // Additional terms that don't fit the structured fields above (e.g. a signed PDF addendum).
+    documents: z.array(z.string().url()).max(2, 'Maximum 2 documents allowed').optional(),
 });
 
 export const AgencyOnboardingStep4Schema = z.object({

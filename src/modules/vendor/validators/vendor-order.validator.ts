@@ -39,6 +39,30 @@ export const UpdateFulfillmentStatusSchema = z.object({
 
 export type UpdateFulfillmentStatusDto = z.infer<typeof UpdateFulfillmentStatusSchema>;
 
+// Bulk-update fulfillment status for many orders at once. Same vendor-triggerable
+// status subset as UpdateFulfillmentStatusSchema — each order is validated against
+// its own current state independently (see VendorOrderService.bulkUpdateFulfillmentStatus),
+// so some orders in the batch may succeed while others fail.
+export const BulkUpdateFulfillmentStatusSchema = z.object({
+    orderIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid order ID'))
+        .min(1, 'At least one order ID is required')
+        .max(50, 'Cannot update more than 50 orders at once'),
+    status: z.enum(['pending', 'processing', 'cancelled'], {
+        errorMap: () => ({ message: 'Invalid fulfillment status' })
+    })
+});
+
+export type BulkUpdateFulfillmentStatusDto = z.infer<typeof BulkUpdateFulfillmentStatusSchema>;
+
+// Bulk-dispatch many paid physical orders to their delivery agency/agencies.
+export const BulkDispatchToAgencySchema = z.object({
+    orderIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid order ID'))
+        .min(1, 'At least one order ID is required')
+        .max(50, 'Cannot dispatch more than 50 orders at once'),
+});
+
+export type BulkDispatchToAgencyDto = z.infer<typeof BulkDispatchToAgencySchema>;
+
 // Reassign the delivery agency for a SINGLE order item (physical orders only).
 // Scoped to one item so an order can be split across multiple agencies — changing
 // one item's agency must never overwrite the others.

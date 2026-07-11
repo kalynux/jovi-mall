@@ -414,19 +414,20 @@ export class OrderService {
         let agencyId = product.delivery?.agencyId?.toString();
         const freeDelivery = product.delivery?.freeDelivery ?? false;
 
+        // Vendor is needed either for the default-agency fallback or to resolve
+        // the pickup-location address snapshot below — always fetch/cache it.
+        let vendor = vendorCache[cartItem.vendorId];
+        if (!vendor) {
+          const v = await this.vendorRepo.findById(cartItem.vendorId);
+          if (!v) {
+            throw createAppError(ERROR_CODES.ORDER_VENDOR_NOT_FOUND, 404, undefined, { vendorId: cartItem.vendorId });
+          }
+          vendor = v;
+          vendorCache[cartItem.vendorId] = vendor;
+        }
+
         // Fallback to vendor default delivery agency
         if (!agencyId) {
-          let vendor = vendorCache[cartItem.vendorId];
-
-          if (!vendor) {
-            const v = await this.vendorRepo.findById(cartItem.vendorId);
-            if (!v) {
-              throw createAppError(ERROR_CODES.ORDER_VENDOR_NOT_FOUND, 404, undefined, { vendorId: cartItem.vendorId });
-            }
-            vendor = v;
-            vendorCache[cartItem.vendorId] = vendor;
-          }
-
           agencyId = vendor.default_delivery_agency_id?.toString();
         }
 
@@ -434,12 +435,42 @@ export class OrderService {
           throw createAppError(ERROR_CODES.ORDER_NO_DELIVERY_AGENCY, 422, undefined, { product: cartItem.title });
         }
 
+        // Snapshot the product's configured pickup location so a later edit to
+        // the vendor's business addresses doesn't retroactively change history
+        // (see ProductStatusValidationService for how this was validated/required
+        // at activation time). Left null only for pre-feature products that
+        // somehow reached 'active' without one — order creation isn't the place
+        // to re-run the full activation gate.
+        const pickupLocation = product.delivery?.pickupLocation;
+        let pickupLocationSnapshot: any = null;
+        if (pickupLocation?.source === 'agency_storage') {
+          pickupLocationSnapshot = { source: 'agency_storage', vendor_address_id: null, address_snapshot: null };
+        } else if (pickupLocation?.source === 'vendor_address' && pickupLocation.vendorAddressId) {
+          const address = vendor.business_addresses?.find(
+            (a: any) => a._id.toString() === pickupLocation.vendorAddressId,
+          );
+          if (address) {
+            pickupLocationSnapshot = {
+              source: 'vendor_address',
+              vendor_address_id: new mongoose.Types.ObjectId(pickupLocation.vendorAddressId),
+              address_snapshot: {
+                label: address.label,
+                address_line1: address.address_line1,
+                address_line2: address.address_line2 ?? null,
+                city: address.city,
+                state: address.state ?? null,
+              },
+            };
+          }
+        }
+
         // Add delivery info to order item
         orderItem.delivery = {
           agency_id: new mongoose.Types.ObjectId(agencyId),
           shipment_id: null,
           status: 'pending',
-          free_delivery: freeDelivery
+          free_delivery: freeDelivery,
+          pickup_location: pickupLocationSnapshot
         };
 
         // Group by agency

@@ -146,6 +146,22 @@ Only agencies that meet **both** of the following conditions are returned:
 | `pickup_based_enabled` | `boolean` | `true` = agency can collect from vendor's location and deliver to customer. |
 | `notes` | `string \| null` | Free-text pricing terms (bulk discounts, minimums, etc.). |
 
+#### `pickup_based` / `storage_based` and pickup locations
+
+These two flags gate which `delivery.pickupLocation.source` values are valid for a **physical
+product** assigned to this agency (as the vendor's default or as a product-level override) — see
+[Vendor Products — Update Product](./products.md#update-product):
+
+| Product's `pickupLocation.source` | Requires on this agency |
+|---|---|
+| `vendor_address` (collect from one of the vendor's `business_addresses`) | `pickup_based_enabled: true` |
+| `agency_storage` (agency already warehouses this vendor's stock) | `storage_based_enabled: true` |
+
+An agency can offer both (a vendor might warehouse fast-moving SKUs here while doing pickup for
+others), either, or — if both are `false` — neither, in which case no physical product can be
+activated against it. Before presenting the pickup-location picker to a vendor, fetch this agency
+(or the vendor's resolved default/override) and only offer the source(s) whose flag is `true`.
+
 #### `policies.returns`
 
 | Field | Type | Description |
@@ -317,3 +333,6 @@ PUT /api/vendor/onboarding/delivery-linking
 > **Validation**: The backend validates that the selected agency ID exists, is not inactive, and has completed onboarding. If any check fails, a `404` or `400` error is returned with a descriptive message.
 
 See [Vendor Onboarding](./onboarding.md) for the full onboarding flow specification.
+
+> [!IMPORTANT]
+> **This endpoint is browse-only — it does not require a connection.** Any agency meeting the hard filters above shows up here so you can view its policies before deciding. But actually **assigning** an agency (as your default via `PUT /api/vendor/profile/default-delivery-agency`, or as a per-product override via `PATCH /api/vendor/products/:id`) requires an `active` connection with that agency first. See [Agency Connections](./agency-connections.md) for how to search, request, and get approved.

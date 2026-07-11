@@ -6,7 +6,9 @@ import { IProductRepository } from '../../repositories/interfaces/product.reposi
 import { IVariantRepository } from '../../repositories/interfaces/variant.repository.interface';
 import { VendorRepository } from '../../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repository';
+import { ConnectionRepository } from '../../../agency-connections/connection.repository';
 import { AvailabilityRule } from '../../../booking/models/availability-rule.model';
+import { PickupLocationValidationService } from './PickupLocationValidationService';
 
 /**
  * ProductStatusValidationService: Validates product status transitions based on business rules.
@@ -27,6 +29,8 @@ export class ProductStatusValidationService {
         private readonly variantRepository: IVariantRepository,
         private readonly vendorRepository: VendorRepository = new VendorRepository(),
         private readonly deliveryAgencyRepository: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
+        private readonly connectionRepository: ConnectionRepository = new ConnectionRepository(),
+        private readonly pickupLocationValidationService: PickupLocationValidationService = new PickupLocationValidationService(),
     ) { }
 
     async validate(product: Product, newStatus: string): Promise<void> {
@@ -77,8 +81,21 @@ export class ProductStatusValidationService {
                 );
             }
 
+            const defaultConnection = await this.connectionRepository.findByVendorAndAgency(
+                product.vendorId,
+                vendor.default_delivery_agency_id.toString(),
+            );
+            if (!defaultConnection || defaultConnection.status !== 'active') {
+                throw createAppError(
+                    ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
+                    422,
+                    'Your connection with this delivery agency needs to be approved (or reapproved) before this product can be activated.',
+                );
+            }
+
             // A product's own override, if set, must independently be active too —
             // it doesn't replace the vendor-default check above, it's an extra one.
+            let effectiveAgency = agency;
             if (product.delivery?.agencyId) {
                 const overrideAgency = await this.deliveryAgencyRepository.findById(product.delivery.agencyId);
                 if (!overrideAgency || overrideAgency.status !== 'active') {
@@ -88,7 +105,33 @@ export class ProductStatusValidationService {
                         "This product's own delivery agency is not currently active.",
                     );
                 }
+
+                const overrideConnection = await this.connectionRepository.findByVendorAndAgency(
+                    product.vendorId,
+                    product.delivery.agencyId,
+                );
+                if (!overrideConnection || overrideConnection.status !== 'active') {
+                    throw createAppError(
+                        ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
+                        422,
+                        "Your connection with this product's delivery agency needs to be approved (or reapproved) before this product can be activated.",
+                    );
+                }
+                effectiveAgency = overrideAgency;
             }
+
+            // The delivery agency needs to know where to collect this product from.
+            // Checked against whichever agency actually ends up handling delivery
+            // (the product's own override if set, otherwise the vendor default) —
+            // the same resolution order used at order-creation time.
+            if (!product.delivery?.pickupLocation) {
+                throw createAppError(
+                    ERROR_CODES.CATALOG_PRODUCT_NO_PICKUP_LOCATION,
+                    422,
+                    'Physical products require a pickup location before they can be activated.',
+                );
+            }
+            this.pickupLocationValidationService.assertValid(product.delivery.pickupLocation, effectiveAgency, vendor);
         }
 
         if (product.type === 'digital') {

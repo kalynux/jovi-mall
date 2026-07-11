@@ -7,12 +7,18 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
 import { auditLogger } from '../../../core/audit/audit-logger';
 import { VendorOnboardingStep, VendorOnboardingStepValue } from '../../../core/constants/onboarding-steps';
-import { IVendor, IVendorPolicies, IVendorSupportChannel, IVendorSupportPolicy } from '../../vendors/vendor.model';
+import { IVendor, IVendorBranding, IVendorPolicies, IVendorSupportChannel, IVendorSupportPolicy } from '../../vendors/vendor.model';
 import { DeliveryAgencyRepository, AgencyListQueryParams } from '../../delivery/delivery-agency.repository';
 import { TransactionManager, transactionManager } from '../../../core/database/transaction.manager';
 import { ProductDeliveryAgencySuspensionService } from '../../catalog/domain/services/ProductDeliveryAgencySuspensionService';
 import { ProductStatus } from '../../catalog/models/product.model';
+import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product.repository.mongo';
+import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
+import { FileReferenceRepositoryMongo } from '../../catalog/repositories/mongo/file-reference.repository.mongo';
+import { FileReferenceService } from '../../catalog/domain/services/media/FileReferenceService';
+import { getStorageProvider, IStorageProvider } from '../../../core/storage';
 import { VendorOrderService } from '../../orders/vendor-order.service';
+import { ConnectionService } from '../../agency-connections/connection.service';
 import {
   UpdateVendorProfileInput,
   VendorOnboardingStep1Input,
@@ -39,12 +45,95 @@ export class VendorProfileService {
   private txManager: TransactionManager;
   private suspensionService: ProductDeliveryAgencySuspensionService;
   private vendorOrderService: VendorOrderService;
+  private connectionService: ConnectionService;
+  private productRepo: ProductRepositoryMongo;
+  private fileRepository: FileRepositoryMongo;
+  private fileReferenceService: FileReferenceService;
+  private storageProvider: IStorageProvider;
 
   constructor() {
     this.vendorRepo = new VendorRepository();
     this.txManager = transactionManager;
     this.suspensionService = new ProductDeliveryAgencySuspensionService();
     this.vendorOrderService = new VendorOrderService();
+    this.connectionService = new ConnectionService();
+    this.productRepo = new ProductRepositoryMongo();
+    this.fileRepository = new FileRepositoryMongo();
+    this.fileReferenceService = new FileReferenceService(this.fileRepository, new FileReferenceRepositoryMongo());
+    this.storageProvider = getStorageProvider();
+  }
+
+  /**
+   * Keep `file_references` in sync with the vendor's branding slots (logo,
+   * cover image) whenever `branding` is written. Mirrors the reconciliation
+   * ProductUpdateService runs for product media: authorizes every newly
+   * attached file (must be owned by this vendor or be a system file) and
+   * detaches the previous file, if any, from each slot. Runs before the
+   * vendor write so an unauthorized file reference is rejected before it is
+   * ever persisted.
+   */
+  private async reconcileBrandingFileReferences(
+    vendorId: string,
+    previous: IVendorBranding | undefined,
+    next: { logo_file_id?: string | null; cover_image_file_id?: string | null },
+  ): Promise<void> {
+    await this.fileReferenceService.reconcile({
+      previousFileIds: previous?.logo_file_id ? [previous.logo_file_id.toString()] : [],
+      nextFileIds: next.logo_file_id ? [next.logo_file_id] : [],
+      vendorId,
+      entityType: 'vendor',
+      entityId: vendorId,
+      field: 'logo',
+    });
+
+    await this.fileReferenceService.reconcile({
+      previousFileIds: previous?.cover_image_file_id ? [previous.cover_image_file_id.toString()] : [],
+      nextFileIds: next.cover_image_file_id ? [next.cover_image_file_id] : [],
+      vendorId,
+      entityType: 'vendor',
+      entityId: vendorId,
+      field: 'cover',
+    });
+  }
+
+  /**
+   * Blocks removing a business address that's still set as a physical
+   * product's pickup location — otherwise the delivery agency is left with a
+   * dangling address reference. `newAddresses` is the raw (pre-persistence)
+   * request payload: entries being edited carry their existing `_id`, new
+   * entries don't have one yet — either way, any previous id absent from this
+   * set is being removed.
+   */
+  private async assertRemovedAddressesNotInUse(
+    vendorId: string,
+    previousAddresses: IVendor['business_addresses'] | undefined,
+    newAddresses: Array<{ _id?: string }> | undefined,
+  ): Promise<void> {
+    const newIds = new Set((newAddresses ?? []).map(a => a._id).filter((id): id is string => !!id));
+    const removedAddresses = (previousAddresses ?? []).filter(a => !newIds.has(a._id.toString()));
+    if (removedAddresses.length === 0) return;
+
+    const productCounts = await this.productRepo.countPhysicalByVendorAndPickupAddresses(
+      vendorId,
+      removedAddresses.map(a => a._id.toString()),
+    );
+
+    const blockedAddresses = removedAddresses
+      .map(a => ({
+        addressId: a._id.toString(),
+        label: a.label,
+        productCount: productCounts[a._id.toString()] ?? 0,
+      }))
+      .filter(a => a.productCount > 0);
+
+    if (blockedAddresses.length > 0) {
+      throw createAppError(
+        ERROR_CODES.VENDOR_BUSINESS_ADDRESS_IN_USE,
+        409,
+        'One or more business addresses you removed are still set as a pickup location on a product. Reassign or remove that pickup location first.',
+        { blockedAddresses },
+      );
+    }
   }
 
   // ─── Read ─────────────────────────────────────────────────────────────────
@@ -52,7 +141,7 @@ export class VendorProfileService {
   async getProfile(vendorId: string): Promise<GetVendorProfileResponseDto> {
     const vendor = await this.vendorRepo.findById(vendorId);
     if (!vendor) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 404, 'Vendor profile not found');
-    return VendorProfileMapper.toResponseDto(vendor);
+    return VendorProfileMapper.toResponseDto(vendor, this.fileRepository, this.storageProvider);
   }
 
   async getCompletionStatus(vendorId: string): Promise<VendorCompletionStatusDto> {
@@ -96,6 +185,14 @@ export class VendorProfileService {
       }
     }
 
+    if (input.business_addresses !== undefined) {
+      await this.assertRemovedAddressesNotInUse(vendorId, vendor.business_addresses, input.business_addresses);
+    }
+
+    if (input.branding !== undefined) {
+      await this.reconcileBrandingFileReferences(vendorId, vendor.branding, input.branding);
+    }
+
     const updatePayload = VendorProfileMapper.toUpdatePayload(input);
     const updated = await this.vendorRepo.updateProfileWithVersion(
       vendorId,
@@ -114,8 +211,18 @@ export class VendorProfileService {
       updated.onboarding_step = newStep;
     }
 
+    // Policies just changed value — bump the policy-change counter and pause any
+    // active agency connections so the agency is prompted to reapprove. Only pays
+    // the transaction cost when a change is actually detected.
+    if (JSON.stringify(updated.policies) !== JSON.stringify(vendor.policies)) {
+      await this.txManager.runInTransaction(async (session) => {
+        await this.vendorRepo.incrementPolicyVersion(vendorId, session);
+        await this.connectionService.pauseConnectionsForPolicyChange('vendor', vendorId, session);
+      });
+    }
+
     await this.emitUpdateEvent(vendor, updated, vendorId);
-    return VendorProfileMapper.toResponseDto(updated);
+    return VendorProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider);
   }
 
   // ─── Onboarding Steps ─────────────────────────────────────────────────────
@@ -156,7 +263,7 @@ export class VendorProfileService {
       if (!updated) throw createAppError(ERROR_CODES.VENDOR_ONBOARDING_CONCURRENT_MODIFICATION, 409);
       await this.auditOnboardingStep(vendorId, 'BASIC_SETUP_DATA_UPDATED', 1, vendor.onboarding_step);
       return {
-        profile: VendorProfileMapper.toResponseDto(updated),
+        profile: await VendorProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
         completionStatus: this.buildCompletionStatus(updated),
       };
     }
@@ -172,7 +279,7 @@ export class VendorProfileService {
 
     await this.auditOnboardingStep(vendorId, 'BASIC_SETUP', 1, newStep);
     return {
-      profile: VendorProfileMapper.toResponseDto(updated),
+      profile: await VendorProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
       completionStatus: this.buildCompletionStatus(updated),
     };
   }
@@ -180,9 +287,16 @@ export class VendorProfileService {
   /**
    * Step 2: Delivery Linking (Optional/Skippable).
    *
+   * Pure step-advance — no agency data is written here. Vendors search for and
+   * request agencies via the agency-connections endpoints (independent of
+   * onboarding-step completion, since approval is async and can't gate it); the
+   * vendor's default_delivery_agency_id is set automatically the moment their
+   * FIRST connection is approved (see ConnectionService.finalizeApproval). See
+   * setDefaultDeliveryAgency() for how a vendor changes their default later.
+   *
    * Behaviour:
-   * - First time (step === 2): saves agency ID (or skips), advances step to 3 (BRANDING).
-   * - Re-edit (step > 2, not COMPLETED): saves new agency ID (or no-op if skip), keeps current step.
+   * - First time (step === 2): advances step to 3 (BRANDING).
+   * - Re-edit (step > 2, not COMPLETED): no-op, returns current state.
    * - Step 1 not done (step < 2): 400 STEP_INCOMPLETE.
    * - Already COMPLETED: 409.
    */
@@ -205,60 +319,23 @@ export class VendorProfileService {
       );
     }
 
-    // Validate agency eligibility when an ID is provided (applies in both first-time and re-edit).
-    if (!input.skip && input.default_delivery_agency_id) {
-      const agencyRepo = new DeliveryAgencyRepository();
-      const agency = await agencyRepo.findById(input.default_delivery_agency_id);
-      if (!agency) {
-        throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, 'The selected delivery agency does not exist.');
-      }
-      if (agency.status === 'inactive') {
-        throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 400, 'The selected delivery agency is inactive.');
-      }
-      if (agency.onboarding_step !== 0) {
-        throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 400, 'The selected delivery agency has not completed its onboarding.');
-      }
-    }
-
-    // Re-edit mode: already past step 2 (on step 3) — save data, keep current step.
+    // Re-edit mode: already past step 2 (on step 3) — nothing to save anymore.
     if (vendor.onboarding_step > VendorOnboardingStep.DELIVERY_LINKING) {
-      if (!input.skip && input.default_delivery_agency_id) {
-        const updated = await this.vendorRepo.atomicOnboardingUpdate(
-          vendorId,
-          {
-            default_delivery_agency_id: input.default_delivery_agency_id as unknown as IVendor['default_delivery_agency_id'],
-            onboarding_step: vendor.onboarding_step as VendorOnboardingStepValue,
-          },
-          expectedVersion,
-        );
-        if (!updated) throw createAppError(ERROR_CODES.VENDOR_ONBOARDING_CONCURRENT_MODIFICATION, 409);
-        await this.auditOnboardingStep(vendorId, 'DELIVERY_LINKING_DATA_UPDATED', 2, vendor.onboarding_step);
-        return {
-          profile: VendorProfileMapper.toResponseDto(updated),
-          completionStatus: this.buildCompletionStatus(updated),
-        };
-      }
-      // skip=true in re-edit: no data to change, just return current state.
       await this.auditOnboardingStep(vendorId, 'DELIVERY_LINKING_DATA_UPDATED', 2, vendor.onboarding_step);
       return {
-        profile: VendorProfileMapper.toResponseDto(vendor),
+        profile: await VendorProfileMapper.toResponseDto(vendor, this.fileRepository, this.storageProvider),
         completionStatus: this.buildCompletionStatus(vendor),
       };
     }
 
-    // First-time completion: save agency ID (if provided) + advance to BRANDING.
+    // First-time completion: advance to BRANDING.
     const newStep = VendorOnboardingStep.BRANDING;
-    const updateData: Partial<IVendor> & { onboarding_step: VendorOnboardingStepValue } = { onboarding_step: newStep };
-    if (!input.skip && input.default_delivery_agency_id) {
-      updateData.default_delivery_agency_id = input.default_delivery_agency_id as unknown as IVendor['default_delivery_agency_id'];
-    }
-
-    const updated = await this.vendorRepo.atomicOnboardingUpdate(vendorId, updateData, expectedVersion);
+    const updated = await this.vendorRepo.atomicOnboardingUpdate(vendorId, { onboarding_step: newStep }, expectedVersion);
     if (!updated) throw createAppError(ERROR_CODES.VENDOR_ONBOARDING_CONCURRENT_MODIFICATION, 409);
 
     await this.auditOnboardingStep(vendorId, 'DELIVERY_LINKING', 2, newStep);
     return {
-      profile: VendorProfileMapper.toResponseDto(updated),
+      profile: await VendorProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
       completionStatus: this.buildCompletionStatus(updated),
     };
   }
@@ -293,9 +370,16 @@ export class VendorProfileService {
 
     const brandingData: Partial<IVendor> = {};
     if (!input.skip) {
-      if (input.branding) brandingData.branding = input.branding as IVendor['branding'];
-      if (input.business_addresses)
-        brandingData.business_addresses = input.business_addresses as IVendor['business_addresses'];
+      if (input.branding) {
+        brandingData.branding = input.branding as IVendor['branding'];
+        await this.reconcileBrandingFileReferences(vendorId, vendor.branding, input.branding);
+      }
+      if (input.business_addresses) {
+        await this.assertRemovedAddressesNotInUse(vendorId, vendor.business_addresses, input.business_addresses);
+        // `_id` (when provided) is a hex string here — Mongoose casts it to
+        // ObjectId on write, preserving identity instead of minting a new one.
+        brandingData.business_addresses = input.business_addresses as unknown as IVendor['business_addresses'];
+      }
     }
 
     // Re-edit mode: already past step 3 (on step 4) — save data, keep current step.
@@ -308,7 +392,7 @@ export class VendorProfileService {
       if (!updated) throw createAppError(ERROR_CODES.VENDOR_ONBOARDING_CONCURRENT_MODIFICATION, 409);
       await this.auditOnboardingStep(vendorId, 'BRANDING_DATA_UPDATED', 3, vendor.onboarding_step);
       return {
-        profile: VendorProfileMapper.toResponseDto(updated),
+        profile: await VendorProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
         completionStatus: this.buildCompletionStatus(updated),
       };
     }
@@ -325,7 +409,7 @@ export class VendorProfileService {
 
     await this.auditOnboardingStep(vendorId, 'BRANDING', 3, newStep);
     return {
-      profile: VendorProfileMapper.toResponseDto(updated),
+      profile: await VendorProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
       completionStatus: this.buildCompletionStatus(updated),
     };
   }
@@ -391,8 +475,9 @@ export class VendorProfileService {
             languages: input.support_policy.languages ?? [],
           }
           : null,
+        documents: input.documents ?? [],
       };
-      if (policies.return_policy || policies.cancellation_policy || policies.support_policy) {
+      if (policies.return_policy || policies.cancellation_policy || policies.support_policy || (policies.documents?.length ?? 0) > 0) {
         updates.policies = policies;
       }
     }
@@ -400,9 +485,18 @@ export class VendorProfileService {
     const updated = await this.vendorRepo.atomicOnboardingUpdate(vendorId, updates, expectedVersion);
     if (!updated) throw createAppError(ERROR_CODES.VENDOR_ONBOARDING_CONCURRENT_MODIFICATION, 409);
 
+    // Same policy-change hook as updateProfile() — a no-op if no connections
+    // exist yet, which is the common case for a first-time onboarding submit.
+    if (updates.policies) {
+      await this.txManager.runInTransaction(async (session) => {
+        await this.vendorRepo.incrementPolicyVersion(vendorId, session);
+        await this.connectionService.pauseConnectionsForPolicyChange('vendor', vendorId, session);
+      });
+    }
+
     await this.auditOnboardingStep(vendorId, 'POLICY_SETUP', 4, VendorOnboardingStep.COMPLETED);
     return {
-      profile: VendorProfileMapper.toResponseDto(updated),
+      profile: await VendorProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
       completionStatus: this.buildCompletionStatus(updated),
     };
   }
@@ -548,6 +642,15 @@ export class VendorProfileService {
       }
       if (agency.onboarding_step !== 0) {
         throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 400, 'The selected delivery agency has not completed its onboarding.');
+      }
+
+      const connection = await this.connectionService.findByVendorAndAgency(vendorId, agencyId);
+      if (!connection || connection.status !== 'active') {
+        throw createAppError(
+          ERROR_CODES.CONNECTION_NOT_ACTIVE,
+          422,
+          'You need an active, approved connection with this agency before setting it as your default. Send or check your connection request first.',
+        );
       }
 
       await this.vendorRepo.updateProfile(vendorId, {

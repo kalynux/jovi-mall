@@ -8,13 +8,14 @@ import { ProductStatusValidationService } from './ProductStatusValidationService
 
 const DEFAULT_AGENCY_REASON = 'default_delivery_agency_removed' as const;
 const PRODUCT_AGENCY_REASON = 'product_delivery_agency_removed' as const;
-// Both reasons are delivery-agency-related and can each independently block or
+const CONNECTION_PAUSED_REASON = 'agency_connection_paused' as const;
+// All three reasons are delivery-agency-related and can each independently block or
 // unblock the SAME product — a product suspended under one reason must still be
-// discoverable when the OTHER reason's fix runs, otherwise it can get stuck
+// discoverable when another reason's fix runs, otherwise it can get stuck
 // suspended forever even after both underlying issues are resolved. Restoration
 // itself stays safe either way, since restoreEligible always re-validates before
 // flipping to 'active'.
-const DELIVERY_AGENCY_REASONS = [DEFAULT_AGENCY_REASON, PRODUCT_AGENCY_REASON] as const;
+const DELIVERY_AGENCY_REASONS = [DEFAULT_AGENCY_REASON, PRODUCT_AGENCY_REASON, CONNECTION_PAUSED_REASON] as const;
 
 /**
  * Suspends/restores physical products in response to a delivery agency becoming
@@ -38,9 +39,18 @@ export class ProductDeliveryAgencySuspensionService {
         ),
     ) { }
 
-    /** Suspends all of the vendor's physical products, capturing each one's current status. */
-    async suspendForVendor(vendorId: string, options?: RepositoryOptions): Promise<string[]> {
-        return this.productRepository.suspendVendorPhysicalProducts(vendorId, DEFAULT_AGENCY_REASON, options);
+    /**
+     * Suspends all of the vendor's physical products, capturing each one's current status.
+     * `reason` defaults to the vendor-default-agency-removed reason (the original caller,
+     * AdminAgencyService); the agency-connections module passes CONNECTION_PAUSED_REASON
+     * when suspending because a connection needs reapproval instead.
+     */
+    async suspendForVendor(
+        vendorId: string,
+        options?: RepositoryOptions,
+        reason: typeof DEFAULT_AGENCY_REASON | typeof CONNECTION_PAUSED_REASON = DEFAULT_AGENCY_REASON,
+    ): Promise<string[]> {
+        return this.productRepository.suspendVendorPhysicalProducts(vendorId, reason, options);
     }
 
     /**
@@ -59,9 +69,18 @@ export class ProductDeliveryAgencySuspensionService {
         return this.restoreEligible(candidates, options);
     }
 
-    /** Suspends a single product because ITS OWN delivery-agency override went inactive. */
-    async suspendProductOwnAgency(productId: string, vendorId: string, options?: RepositoryOptions): Promise<boolean> {
-        return this.productRepository.suspendProduct(productId, vendorId, PRODUCT_AGENCY_REASON, options);
+    /**
+     * Suspends a single product because ITS OWN delivery-agency override went inactive
+     * (or, when `reason` is overridden, because the connection backing that override
+     * needs reapproval).
+     */
+    async suspendProductOwnAgency(
+        productId: string,
+        vendorId: string,
+        options?: RepositoryOptions,
+        reason: typeof PRODUCT_AGENCY_REASON | typeof CONNECTION_PAUSED_REASON = PRODUCT_AGENCY_REASON,
+    ): Promise<boolean> {
+        return this.productRepository.suspendProduct(productId, vendorId, reason, options);
     }
 
     /**

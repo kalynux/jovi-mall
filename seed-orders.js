@@ -8,100 +8,100 @@ const d = (offsetDays) => new Date(now.getTime() + offsetDays * 86400000);
 
 // ─── ID REGISTRY ─────────────────────────────────────────────────────────────
 const U = {
-  vendorUser:  ObjectId("a00000000000000000000001"),
-  custUser1:   ObjectId("a00000000000000000000002"),
-  custUser2:   ObjectId("a00000000000000000000003"),
-  custUser3:   ObjectId("a00000000000000000000004"),
-  agencyUser:  ObjectId("a00000000000000000000005"),
-  agentUser1:  ObjectId("a00000000000000000000006"),
-  agentUser2:  ObjectId("a00000000000000000000007"),
+  vendorUser: ObjectId("a00000000000000000000001"),
+  custUser1: ObjectId("a00000000000000000000002"),
+  custUser2: ObjectId("a00000000000000000000003"),
+  custUser3: ObjectId("a00000000000000000000004"),
+  agencyUser: ObjectId("a00000000000000000000005"),
+  agentUser1: ObjectId("a00000000000000000000006"),
+  agentUser2: ObjectId("a00000000000000000000007"),
 
-  vendor1:     ObjectId("b00000000000000000000001"),
-  cust1:       ObjectId("b00000000000000000000002"),
-  cust2:       ObjectId("b00000000000000000000003"),
-  cust3:       ObjectId("b00000000000000000000004"),
-  agency1:     ObjectId("b00000000000000000000005"),
-  agent1:      ObjectId("b00000000000000000000006"),
-  agent2:      ObjectId("b00000000000000000000007"),
+  vendor1: ObjectId("b00000000000000000000001"),
+  cust1: ObjectId("b00000000000000000000002"),
+  cust2: ObjectId("b00000000000000000000003"),
+  cust3: ObjectId("b00000000000000000000004"),
+  agency1: ObjectId("b00000000000000000000005"),
+  agent1: ObjectId("b00000000000000000000006"),
+  agent2: ObjectId("b00000000000000000000007"),
 
-  physProd1:   ObjectId("c00000000000000000000001"), // T-Shirt
-  physProd2:   ObjectId("c00000000000000000000002"), // Headphones
-  digProd1:    ObjectId("c00000000000000000000003"), // eBook
-  digProd2:    ObjectId("c00000000000000000000004"), // Software License
+  physProd1: ObjectId("c00000000000000000000001"), // T-Shirt
+  physProd2: ObjectId("c00000000000000000000002"), // Headphones
+  digProd1: ObjectId("c00000000000000000000003"), // eBook
+  digProd2: ObjectId("c00000000000000000000004"), // Software License
 
-  physVar1a:   ObjectId("d00000000000000000000001"), // T-Shirt L/Black
-  physVar1b:   ObjectId("d00000000000000000000002"), // T-Shirt M/White
-  physVar2a:   ObjectId("d00000000000000000000003"), // Headphones
-  digVar1:     ObjectId("d00000000000000000000004"), // eBook default
-  digVar2:     ObjectId("d00000000000000000000005"), // Software License default
+  physVar1a: ObjectId("d00000000000000000000001"), // T-Shirt L/Black
+  physVar1b: ObjectId("d00000000000000000000002"), // T-Shirt M/White
+  physVar2a: ObjectId("d00000000000000000000003"), // Headphones
+  digVar1: ObjectId("d00000000000000000000004"), // eBook default
+  digVar2: ObjectId("d00000000000000000000005"), // Software License default
 
-  asset1:      ObjectId("e00000000000000000000001"),
-  asset2:      ObjectId("e00000000000000000000002"),
+  asset1: ObjectId("e00000000000000000000001"),
+  asset2: ObjectId("e00000000000000000000002"),
 
   // 17 orders
-  ord1:        ObjectId("f00000000000000000000001"), // physical, pending payment
-  ord2:        ObjectId("f00000000000000000000002"), // physical, AWAITING_PAYMENT
-  ord3:        ObjectId("f00000000000000000000003"), // physical, payment failed
-  ord4:        ObjectId("f00000000000000000000004"), // physical, paid+processing, agency only (no agent)
-  ord5:        ObjectId("f00000000000000000000005"), // physical, paid+processing, agency+agent assigned
-  ord6:        ObjectId("f00000000000000000000006"), // physical, paid+shipped (in_transit)
-  ord7:        ObjectId("f00000000000000000000007"), // physical, paid+delivered
-  ord8:        ObjectId("f00000000000000000000008"), // physical, cancelled before payment
-  ord9:        ObjectId("f00000000000000000000009"), // physical, paid then cancelled
-  ord10:       ObjectId("f00000000000000000000010"), // physical, refunded
-  ord11:       ObjectId("f00000000000000000000011"), // digital, pending payment
-  ord12:       ObjectId("f00000000000000000000012"), // digital, paid+fulfilled, active entitlement
-  ord13:       ObjectId("f00000000000000000000013"), // digital, paid+fulfilled, revoked entitlement
-  ord14:       ObjectId("f00000000000000000000014"), // digital, paid+fulfilled, download limit reached
-  ord15:       ObjectId("f00000000000000000000015"), // physical multi-item, paid+processing, agency+agent
-  ord16:       ObjectId("f00000000000000000000016"), // physical, paid+processing, agency only (no agent yet)
-  ord17:       ObjectId("f00000000000000000000017"), // digital multi-item, paid+fulfilled, 2 entitlements
+  ord1: ObjectId("f00000000000000000000001"), // physical, pending payment
+  ord2: ObjectId("f00000000000000000000002"), // physical, AWAITING_PAYMENT
+  ord3: ObjectId("f00000000000000000000003"), // physical, payment failed
+  ord4: ObjectId("f00000000000000000000004"), // physical, paid+processing, agency only (no agent)
+  ord5: ObjectId("f00000000000000000000005"), // physical, paid+processing, agency+agent assigned
+  ord6: ObjectId("f00000000000000000000006"), // physical, paid+shipped (in_transit)
+  ord7: ObjectId("f00000000000000000000007"), // physical, paid+delivered
+  ord8: ObjectId("f00000000000000000000008"), // physical, cancelled before payment
+  ord9: ObjectId("f00000000000000000000009"), // physical, paid then cancelled
+  ord10: ObjectId("f00000000000000000000010"), // physical, refunded
+  ord11: ObjectId("f00000000000000000000011"), // digital, pending payment
+  ord12: ObjectId("f00000000000000000000012"), // digital, paid+fulfilled, active entitlement
+  ord13: ObjectId("f00000000000000000000013"), // digital, paid+fulfilled, revoked entitlement
+  ord14: ObjectId("f00000000000000000000014"), // digital, paid+fulfilled, download limit reached
+  ord15: ObjectId("f00000000000000000000015"), // physical multi-item, paid+processing, agency+agent
+  ord16: ObjectId("f00000000000000000000016"), // physical, paid+processing, agency only (no agent yet)
+  ord17: ObjectId("f00000000000000000000017"), // digital multi-item, paid+fulfilled, 2 entitlements
 
   // Shipments (physical orders only)
-  ship1:       ObjectId("1f0000000000000000000001"), // ord4: pending, no agent
-  ship2:       ObjectId("1f0000000000000000000002"), // ord5: assigned, with agent
-  ship3:       ObjectId("1f0000000000000000000003"), // ord6: in_transit
-  ship4:       ObjectId("1f0000000000000000000004"), // ord7: delivered
-  ship5:       ObjectId("1f0000000000000000000005"), // ord9: returned (cancelled after paid)
-  ship6:       ObjectId("1f0000000000000000000006"), // ord10: returned (refunded)
-  ship7:       ObjectId("1f0000000000000000000007"), // ord15: assigned (multi-item)
-  ship8:       ObjectId("1f0000000000000000000008"), // ord16: pending, no agent
+  ship1: ObjectId("1f0000000000000000000001"), // ord4: pending, no agent
+  ship2: ObjectId("1f0000000000000000000002"), // ord5: assigned, with agent
+  ship3: ObjectId("1f0000000000000000000003"), // ord6: in_transit
+  ship4: ObjectId("1f0000000000000000000004"), // ord7: delivered
+  ship5: ObjectId("1f0000000000000000000005"), // ord9: returned (cancelled after paid)
+  ship6: ObjectId("1f0000000000000000000006"), // ord10: returned (refunded)
+  ship7: ObjectId("1f0000000000000000000007"), // ord15: assigned (multi-item)
+  ship8: ObjectId("1f0000000000000000000008"), // ord16: pending, no agent
 
   // Payment transactions
-  pay1:        ObjectId("2e0000000000000000000001"), // ord2: PENDING (awaiting)
-  pay2:        ObjectId("2e0000000000000000000002"), // ord3: FAILED
-  pay3:        ObjectId("2e0000000000000000000003"), // ord4: SUCCEEDED
-  pay4:        ObjectId("2e0000000000000000000004"), // ord5: SUCCEEDED
-  pay5:        ObjectId("2e0000000000000000000005"), // ord6: SUCCEEDED
-  pay6:        ObjectId("2e0000000000000000000006"), // ord7: SUCCEEDED
-  pay7:        ObjectId("2e0000000000000000000007"), // ord9: SUCCEEDED (later cancelled)
-  pay8:        ObjectId("2e0000000000000000000008"), // ord10: REFUNDED
-  pay9:        ObjectId("2e0000000000000000000009"), // ord12: SUCCEEDED
-  pay10:       ObjectId("2e000000000000000000000a"), // ord13: SUCCEEDED
-  pay11:       ObjectId("2e000000000000000000000b"), // ord14: SUCCEEDED
-  pay12:       ObjectId("2e000000000000000000000c"), // ord15: SUCCEEDED
-  pay13:       ObjectId("2e000000000000000000000d"), // ord16: SUCCEEDED
-  pay14:       ObjectId("2e000000000000000000000e"), // ord17: SUCCEEDED
+  pay1: ObjectId("2e0000000000000000000001"), // ord2: PENDING (awaiting)
+  pay2: ObjectId("2e0000000000000000000002"), // ord3: FAILED
+  pay3: ObjectId("2e0000000000000000000003"), // ord4: SUCCEEDED
+  pay4: ObjectId("2e0000000000000000000004"), // ord5: SUCCEEDED
+  pay5: ObjectId("2e0000000000000000000005"), // ord6: SUCCEEDED
+  pay6: ObjectId("2e0000000000000000000006"), // ord7: SUCCEEDED
+  pay7: ObjectId("2e0000000000000000000007"), // ord9: SUCCEEDED (later cancelled)
+  pay8: ObjectId("2e0000000000000000000008"), // ord10: REFUNDED
+  pay9: ObjectId("2e0000000000000000000009"), // ord12: SUCCEEDED
+  pay10: ObjectId("2e000000000000000000000a"), // ord13: SUCCEEDED
+  pay11: ObjectId("2e000000000000000000000b"), // ord14: SUCCEEDED
+  pay12: ObjectId("2e000000000000000000000c"), // ord15: SUCCEEDED
+  pay13: ObjectId("2e000000000000000000000d"), // ord16: SUCCEEDED
+  pay14: ObjectId("2e000000000000000000000e"), // ord17: SUCCEEDED
 
-  ref1:        ObjectId("3d0000000000000000000001"), // refund for ord10
+  ref1: ObjectId("3d0000000000000000000001"), // refund for ord10
 
-  ent1:        ObjectId("4c0000000000000000000001"), // ord12, active
-  ent2:        ObjectId("4c0000000000000000000002"), // ord13, revoked
-  ent3:        ObjectId("4c0000000000000000000003"), // ord14, download limit hit
-  ent4:        ObjectId("4c0000000000000000000004"), // ord17 item1
-  ent5:        ObjectId("4c0000000000000000000005"), // ord17 item2
+  ent1: ObjectId("4c0000000000000000000001"), // ord12, active
+  ent2: ObjectId("4c0000000000000000000002"), // ord13, revoked
+  ent3: ObjectId("4c0000000000000000000003"), // ord14, download limit hit
+  ent4: ObjectId("4c0000000000000000000004"), // ord17 item1
+  ent5: ObjectId("4c0000000000000000000005"), // ord17 item2
 };
 
 // ─── 1. USERS ─────────────────────────────────────────────────────────────────
 print("Inserting users...");
 db.users.insertMany([
-  { _id: U.vendorUser, login_email: "vendor@jovitest.cm",  password_hash: "$2b$10$testhash_vendor", roles: ["vendor"],   status: "active", created_at: d(-60), updated_at: d(-1) },
-  { _id: U.custUser1,  login_email: "alice@jovitest.cm",   password_hash: "$2b$10$testhash_alice",  roles: ["customer"], status: "active", created_at: d(-30), updated_at: d(-1) },
-  { _id: U.custUser2,  login_email: "bob@jovitest.cm",     password_hash: "$2b$10$testhash_bob",    roles: ["customer"], status: "active", created_at: d(-25), updated_at: d(-1) },
-  { _id: U.custUser3,  login_phone: "+237670000004",        password_hash: "$2b$10$testhash_carol",  roles: ["customer"], status: "active", created_at: d(-20), updated_at: d(-1) },
-  { _id: U.agencyUser, login_email: "agency@jovitest.cm",  password_hash: "$2b$10$testhash_agency", roles: ["agency"],   status: "active", created_at: d(-90), updated_at: d(-1) },
-  { _id: U.agentUser1, login_phone: "+237670000006",        password_hash: "$2b$10$testhash_agent1", roles: ["agent"],    status: "active", created_at: d(-60), updated_at: d(-1) },
-  { _id: U.agentUser2, login_phone: "+237670000007",        password_hash: "$2b$10$testhash_agent2", roles: ["agent"],    status: "active", created_at: d(-55), updated_at: d(-1) },
+  { _id: U.vendorUser, login_email: "vendor@jovitest.cm", password_hash: "$2b$10$testhash_vendor", roles: ["vendor"], status: "active", created_at: d(-60), updated_at: d(-1) },
+  { _id: U.custUser1, login_email: "alice@jovitest.cm", password_hash: "$2b$10$testhash_alice", roles: ["customer"], status: "active", created_at: d(-30), updated_at: d(-1) },
+  { _id: U.custUser2, login_email: "bob@jovitest.cm", password_hash: "$2b$10$testhash_bob", roles: ["customer"], status: "active", created_at: d(-25), updated_at: d(-1) },
+  { _id: U.custUser3, login_phone: "+237670000004", password_hash: "$2b$10$testhash_carol", roles: ["customer"], status: "active", created_at: d(-20), updated_at: d(-1) },
+  { _id: U.agencyUser, login_email: "agency@jovitest.cm", password_hash: "$2b$10$testhash_agency", roles: ["agency"], status: "active", created_at: d(-90), updated_at: d(-1) },
+  { _id: U.agentUser1, login_phone: "+237670000006", password_hash: "$2b$10$testhash_agent1", roles: ["agent"], status: "active", created_at: d(-60), updated_at: d(-1) },
+  { _id: U.agentUser2, login_phone: "+237670000007", password_hash: "$2b$10$testhash_agent2", roles: ["agent"], status: "active", created_at: d(-55), updated_at: d(-1) },
 ]);
 
 // ─── 2. VENDOR ────────────────────────────────────────────────────────────────
@@ -122,14 +122,14 @@ db.vendors.insertOne({
   timezone: "Africa/Douala",
   legit_verified: true,
   kyc_details: { national_id_number: "CM123456789", legit_verified: true },
-  branding: { logo_url: null, cover_image_url: null },
+  branding: { logo_file_id: null, cover_image_file_id: null },
   business_addresses: [{ label: "HQ", address_line1: "Rue de la Joie 12", city: "Douala" }],
   policies: {
     return_policy: { refund_type: "full" },
     cancellation_policy: { cancellation_fee_type: "none" },
     support_policy: { channels: [{ type: "email" }, { type: "whatsapp" }] },
   },
-  onboarding_step: 5,
+  onboarding_step: 0,
   version: 3,
   created_at: d(-60),
   updated_at: d(-1),
@@ -196,7 +196,7 @@ db.deliveryagencies.insertOne({
   },
   status: "active",
   timezone: "Africa/Douala",
-  onboarding_step: 5,
+  onboarding_step: 0,
   version: 1,
   created_at: d(-90), updated_at: d(-1),
 });
@@ -325,6 +325,7 @@ db.productvariants.insertMany([
 // Helper: builds a physical order item with delivery sub-doc
 function physItem(opts) {
   return {
+    _id: new ObjectId(),
     variant_id: opts.variantId,
     sku: opts.sku,
     variant_title: opts.variantTitle,
@@ -347,6 +348,7 @@ function physItem(opts) {
 // Helper: builds a digital order item (no delivery)
 function digItem(opts) {
   return {
+    _id: new ObjectId(),
     variant_id: opts.variantId,
     sku: opts.sku,
     variant_title: opts.variantTitle,
@@ -703,6 +705,13 @@ db.orders.insertMany([
   },
 ]);
 
+// order.model.ts requires cart_id on every order (the checkout group it belongs
+// to). No Cart documents are seeded by this script, so backfill a distinct
+// ObjectId per order — each is its own single-vendor checkout group in this
+// fixture. Without this, any code path that calls order.save() (full-document
+// validation) throws "cart_id: Path `cart_id` is required."
+db.orders.find().forEach(o => db.orders.updateOne({ _id: o._id }, { $set: { cart_id: new ObjectId() } }));
+
 // ─── 9. SHIPMENTS ─────────────────────────────────────────────────────────────
 print("Inserting shipments...");
 db.shipments.insertMany([
@@ -909,81 +918,81 @@ db.customerdigitalentitlements.insertMany([
 print("Inserting order timelines...");
 db.ordertimelines.insertMany([
   // ORD-1
-  { order_id: U.ord1,  event_type: "order.created",        description: "Order placed by customer.",                           metadata: {},                              actor_type: "customer", actor_id: U.custUser1, created_at: d(-10) },
+  { order_id: U.ord1, event_type: "order.created", description: "Order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser1, created_at: d(-10) },
   // ORD-2
-  { order_id: U.ord2,  event_type: "order.created",        description: "Order placed by customer.",                           metadata: {},                              actor_type: "customer", actor_id: U.custUser2, created_at: d(-8) },
-  { order_id: U.ord2,  event_type: "payment.updated",      description: "Payment initiated via NotchPay mobile money.",        metadata: { gateway: "NOTCHPAY", ref: "NP-REF-ORD2-0001" }, actor_type: "system", actor_id: null, created_at: d(-8) },
+  { order_id: U.ord2, event_type: "order.created", description: "Order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser2, created_at: d(-8) },
+  { order_id: U.ord2, event_type: "payment.updated", description: "Payment initiated via NotchPay mobile money.", metadata: { gateway: "NOTCHPAY", ref: "NP-REF-ORD2-0001" }, actor_type: "system", actor_id: null, created_at: d(-8) },
   // ORD-3
-  { order_id: U.ord3,  event_type: "order.created",        description: "Order placed by customer.",                           metadata: {},                              actor_type: "customer", actor_id: U.custUser3, created_at: d(-7) },
-  { order_id: U.ord3,  event_type: "payment.updated",      description: "Payment failed: insufficient funds.",                  metadata: { gateway: "NOTCHPAY", status: "FAILED" }, actor_type: "system", actor_id: null, created_at: d(-7) },
+  { order_id: U.ord3, event_type: "order.created", description: "Order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser3, created_at: d(-7) },
+  { order_id: U.ord3, event_type: "payment.updated", description: "Payment failed: insufficient funds.", metadata: { gateway: "NOTCHPAY", status: "FAILED" }, actor_type: "system", actor_id: null, created_at: d(-7) },
   // ORD-4
-  { order_id: U.ord4,  event_type: "order.created",        description: "Order placed by customer.",                           metadata: {},                              actor_type: "customer", actor_id: U.custUser1, created_at: d(-6) },
-  { order_id: U.ord4,  event_type: "payment.updated",      description: "Payment confirmed via NotchPay.",                     metadata: { gateway: "NOTCHPAY", amount: 43000 }, actor_type: "system", actor_id: null, created_at: d(-6) },
-  { order_id: U.ord4,  event_type: "fulfillment.updated",  description: "Order moved to processing.",                          metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-5) },
-  { order_id: U.ord4,  event_type: "delivery.agency_updated", description: "Delivery agency assigned: Express Delivery Cameroon.", metadata: { agency_id: U.agency1.toString() }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-5) },
+  { order_id: U.ord4, event_type: "order.created", description: "Order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser1, created_at: d(-6) },
+  { order_id: U.ord4, event_type: "payment.updated", description: "Payment confirmed via NotchPay.", metadata: { gateway: "NOTCHPAY", amount: 43000 }, actor_type: "system", actor_id: null, created_at: d(-6) },
+  { order_id: U.ord4, event_type: "fulfillment.updated", description: "Order moved to processing.", metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-5) },
+  { order_id: U.ord4, event_type: "delivery.agency_updated", description: "Delivery agency assigned: Express Delivery Cameroon.", metadata: { agency_id: U.agency1.toString() }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-5) },
   // ORD-5
-  { order_id: U.ord5,  event_type: "order.created",        description: "Order placed by customer.",                           metadata: {},                              actor_type: "customer", actor_id: U.custUser2, created_at: d(-5) },
-  { order_id: U.ord5,  event_type: "payment.updated",      description: "Payment confirmed via MyCoolPay.",                    metadata: { gateway: "MYCOOLPAY", amount: 22500 }, actor_type: "system", actor_id: null, created_at: d(-5) },
-  { order_id: U.ord5,  event_type: "fulfillment.updated",  description: "Order moved to processing.",                          metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-4) },
-  { order_id: U.ord5,  event_type: "delivery.agency_updated", description: "Agent Pierre Ekang assigned to shipment.",         metadata: { agent_id: U.agent1.toString() }, actor_type: "system", actor_id: null, created_at: d(-4) },
+  { order_id: U.ord5, event_type: "order.created", description: "Order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser2, created_at: d(-5) },
+  { order_id: U.ord5, event_type: "payment.updated", description: "Payment confirmed via MyCoolPay.", metadata: { gateway: "MYCOOLPAY", amount: 22500 }, actor_type: "system", actor_id: null, created_at: d(-5) },
+  { order_id: U.ord5, event_type: "fulfillment.updated", description: "Order moved to processing.", metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-4) },
+  { order_id: U.ord5, event_type: "delivery.agency_updated", description: "Agent Pierre Ekang assigned to shipment.", metadata: { agent_id: U.agent1.toString() }, actor_type: "system", actor_id: null, created_at: d(-4) },
   // ORD-6
-  { order_id: U.ord6,  event_type: "order.created",        description: "Order placed by customer.",                           metadata: {},                              actor_type: "customer", actor_id: U.custUser3, created_at: d(-9) },
-  { order_id: U.ord6,  event_type: "payment.updated",      description: "Payment confirmed via Stripe.",                       metadata: { gateway: "STRIPE", amount: 46350 }, actor_type: "system", actor_id: null, created_at: d(-9) },
-  { order_id: U.ord6,  event_type: "fulfillment.updated",  description: "Order moved to processing.",                          metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-8) },
-  { order_id: U.ord6,  event_type: "fulfillment.updated",  description: "Order shipped — package picked up by delivery agent.", metadata: { from: "processing", to: "shipped" }, actor_type: "system", actor_id: null, created_at: d(-3) },
+  { order_id: U.ord6, event_type: "order.created", description: "Order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser3, created_at: d(-9) },
+  { order_id: U.ord6, event_type: "payment.updated", description: "Payment confirmed via Stripe.", metadata: { gateway: "STRIPE", amount: 46350 }, actor_type: "system", actor_id: null, created_at: d(-9) },
+  { order_id: U.ord6, event_type: "fulfillment.updated", description: "Order moved to processing.", metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-8) },
+  { order_id: U.ord6, event_type: "fulfillment.updated", description: "Order shipped — package picked up by delivery agent.", metadata: { from: "processing", to: "shipped" }, actor_type: "system", actor_id: null, created_at: d(-3) },
   // ORD-7
-  { order_id: U.ord7,  event_type: "order.created",        description: "Order placed by customer.",                           metadata: {},                              actor_type: "customer", actor_id: U.custUser1, created_at: d(-15) },
-  { order_id: U.ord7,  event_type: "payment.updated",      description: "Payment confirmed via NotchPay.",                     metadata: { gateway: "NOTCHPAY", amount: 7000 }, actor_type: "system", actor_id: null, created_at: d(-15) },
-  { order_id: U.ord7,  event_type: "fulfillment.updated",  description: "Order moved to processing.",                          metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-14) },
-  { order_id: U.ord7,  event_type: "fulfillment.updated",  description: "Order shipped.",                                      metadata: { from: "processing", to: "shipped" }, actor_type: "system", actor_id: null, created_at: d(-5) },
-  { order_id: U.ord7,  event_type: "fulfillment.updated",  description: "Order delivered successfully.",                       metadata: { from: "shipped", to: "delivered" }, actor_type: "system", actor_id: null, created_at: d(-2) },
+  { order_id: U.ord7, event_type: "order.created", description: "Order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser1, created_at: d(-15) },
+  { order_id: U.ord7, event_type: "payment.updated", description: "Payment confirmed via NotchPay.", metadata: { gateway: "NOTCHPAY", amount: 7000 }, actor_type: "system", actor_id: null, created_at: d(-15) },
+  { order_id: U.ord7, event_type: "fulfillment.updated", description: "Order moved to processing.", metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-14) },
+  { order_id: U.ord7, event_type: "fulfillment.updated", description: "Order shipped.", metadata: { from: "processing", to: "shipped" }, actor_type: "system", actor_id: null, created_at: d(-5) },
+  { order_id: U.ord7, event_type: "fulfillment.updated", description: "Order delivered successfully.", metadata: { from: "shipped", to: "delivered" }, actor_type: "system", actor_id: null, created_at: d(-2) },
   // ORD-8
-  { order_id: U.ord8,  event_type: "order.created",        description: "Order placed by customer.",                           metadata: {},                              actor_type: "customer", actor_id: U.custUser2, created_at: d(-12) },
-  { order_id: U.ord8,  event_type: "fulfillment.updated",  description: "Order cancelled by vendor before payment.",           metadata: { from: "pending", to: "cancelled", reason: "Out of stock" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-12) },
-  { order_id: U.ord8,  event_type: "note.added",           description: "Vendor note: Sorry, item went out of stock.",         metadata: {},                              actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-12) },
+  { order_id: U.ord8, event_type: "order.created", description: "Order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser2, created_at: d(-12) },
+  { order_id: U.ord8, event_type: "fulfillment.updated", description: "Order cancelled by vendor before payment.", metadata: { from: "pending", to: "cancelled", reason: "Out of stock" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-12) },
+  { order_id: U.ord8, event_type: "note.added", description: "Vendor note: Sorry, item went out of stock.", metadata: {}, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-12) },
   // ORD-9
-  { order_id: U.ord9,  event_type: "order.created",        description: "Order placed by customer.",                           metadata: {},                              actor_type: "customer", actor_id: U.custUser3, created_at: d(-18) },
-  { order_id: U.ord9,  event_type: "payment.updated",      description: "Payment confirmed via NotchPay.",                     metadata: { gateway: "NOTCHPAY", amount: 85000 }, actor_type: "system", actor_id: null, created_at: d(-18) },
-  { order_id: U.ord9,  event_type: "fulfillment.updated",  description: "Order moved to processing.",                          metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-17) },
-  { order_id: U.ord9,  event_type: "fulfillment.updated",  description: "Order cancelled post-payment: quality control failure.", metadata: { from: "processing", to: "cancelled" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-6) },
-  { order_id: U.ord9,  event_type: "system.action",        description: "Shipment returned to warehouse.",                     metadata: { shipment_id: U.ship5.toString() }, actor_type: "system", actor_id: null, created_at: d(-6) },
+  { order_id: U.ord9, event_type: "order.created", description: "Order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser3, created_at: d(-18) },
+  { order_id: U.ord9, event_type: "payment.updated", description: "Payment confirmed via NotchPay.", metadata: { gateway: "NOTCHPAY", amount: 85000 }, actor_type: "system", actor_id: null, created_at: d(-18) },
+  { order_id: U.ord9, event_type: "fulfillment.updated", description: "Order moved to processing.", metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-17) },
+  { order_id: U.ord9, event_type: "fulfillment.updated", description: "Order cancelled post-payment: quality control failure.", metadata: { from: "processing", to: "cancelled" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-6) },
+  { order_id: U.ord9, event_type: "system.action", description: "Shipment returned to warehouse.", metadata: { shipment_id: U.ship5.toString() }, actor_type: "system", actor_id: null, created_at: d(-6) },
   // ORD-10
-  { order_id: U.ord10, event_type: "order.created",        description: "Order placed by customer.",                           metadata: {},                              actor_type: "customer", actor_id: U.custUser1, created_at: d(-22) },
-  { order_id: U.ord10, event_type: "payment.updated",      description: "Payment confirmed via MyCoolPay.",                    metadata: { gateway: "MYCOOLPAY", amount: 30000 }, actor_type: "system", actor_id: null, created_at: d(-22) },
-  { order_id: U.ord10, event_type: "fulfillment.updated",  description: "Order moved to processing.",                          metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-21) },
-  { order_id: U.ord10, event_type: "fulfillment.updated",  description: "Order cancelled: customer received damaged goods.",   metadata: { from: "processing", to: "cancelled" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-5) },
-  { order_id: U.ord10, event_type: "payment.updated",      description: "Full refund of 30,000 XAF processed via MyCoolPay.", metadata: { refund_ref: "MCP-REFUND-ORD10-001", amount: 30000 }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-4) },
+  { order_id: U.ord10, event_type: "order.created", description: "Order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser1, created_at: d(-22) },
+  { order_id: U.ord10, event_type: "payment.updated", description: "Payment confirmed via MyCoolPay.", metadata: { gateway: "MYCOOLPAY", amount: 30000 }, actor_type: "system", actor_id: null, created_at: d(-22) },
+  { order_id: U.ord10, event_type: "fulfillment.updated", description: "Order moved to processing.", metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-21) },
+  { order_id: U.ord10, event_type: "fulfillment.updated", description: "Order cancelled: customer received damaged goods.", metadata: { from: "processing", to: "cancelled" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-5) },
+  { order_id: U.ord10, event_type: "payment.updated", description: "Full refund of 30,000 XAF processed via MyCoolPay.", metadata: { refund_ref: "MCP-REFUND-ORD10-001", amount: 30000 }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-4) },
   // ORD-11
-  { order_id: U.ord11, event_type: "order.created",        description: "Digital order placed by customer.",                   metadata: {},                              actor_type: "customer", actor_id: U.custUser2, created_at: d(-3) },
+  { order_id: U.ord11, event_type: "order.created", description: "Digital order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser2, created_at: d(-3) },
   // ORD-12
-  { order_id: U.ord12, event_type: "order.created",        description: "Digital order placed by customer.",                   metadata: {},                              actor_type: "customer", actor_id: U.custUser1, created_at: d(-14) },
-  { order_id: U.ord12, event_type: "payment.updated",      description: "Payment confirmed. Digital entitlement granted.",     metadata: { gateway: "NOTCHPAY", amount: 5000 }, actor_type: "system", actor_id: null, created_at: d(-14) },
-  { order_id: U.ord12, event_type: "fulfillment.updated",  description: "Digital order fulfilled — download link activated.",  metadata: { entitlement_id: U.ent1.toString() }, actor_type: "system", actor_id: null, created_at: d(-14) },
+  { order_id: U.ord12, event_type: "order.created", description: "Digital order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser1, created_at: d(-14) },
+  { order_id: U.ord12, event_type: "payment.updated", description: "Payment confirmed. Digital entitlement granted.", metadata: { gateway: "NOTCHPAY", amount: 5000 }, actor_type: "system", actor_id: null, created_at: d(-14) },
+  { order_id: U.ord12, event_type: "fulfillment.updated", description: "Digital order fulfilled — download link activated.", metadata: { entitlement_id: U.ent1.toString() }, actor_type: "system", actor_id: null, created_at: d(-14) },
   // ORD-13
-  { order_id: U.ord13, event_type: "order.created",        description: "Digital order placed by customer.",                   metadata: {},                              actor_type: "customer", actor_id: U.custUser3, created_at: d(-20) },
-  { order_id: U.ord13, event_type: "payment.updated",      description: "Payment confirmed via Stripe.",                       metadata: { gateway: "STRIPE", amount: 15000 }, actor_type: "system", actor_id: null, created_at: d(-20) },
-  { order_id: U.ord13, event_type: "fulfillment.updated",  description: "Digital order fulfilled — license key activated.",    metadata: { entitlement_id: U.ent2.toString() }, actor_type: "system", actor_id: null, created_at: d(-20) },
-  { order_id: U.ord13, event_type: "entitlement.revoked",  description: "Entitlement revoked: chargeback dispute opened.",     metadata: { entitlement_id: U.ent2.toString(), reason: "Chargeback dispute opened by customer. Access suspended pending resolution." }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-8) },
+  { order_id: U.ord13, event_type: "order.created", description: "Digital order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser3, created_at: d(-20) },
+  { order_id: U.ord13, event_type: "payment.updated", description: "Payment confirmed via Stripe.", metadata: { gateway: "STRIPE", amount: 15000 }, actor_type: "system", actor_id: null, created_at: d(-20) },
+  { order_id: U.ord13, event_type: "fulfillment.updated", description: "Digital order fulfilled — license key activated.", metadata: { entitlement_id: U.ent2.toString() }, actor_type: "system", actor_id: null, created_at: d(-20) },
+  { order_id: U.ord13, event_type: "entitlement.revoked", description: "Entitlement revoked: chargeback dispute opened.", metadata: { entitlement_id: U.ent2.toString(), reason: "Chargeback dispute opened by customer. Access suspended pending resolution." }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-8) },
   // ORD-14
-  { order_id: U.ord14, event_type: "order.created",        description: "Digital order placed by customer.",                   metadata: {},                              actor_type: "customer", actor_id: U.custUser2, created_at: d(-30) },
-  { order_id: U.ord14, event_type: "payment.updated",      description: "Payment confirmed via NotchPay.",                     metadata: { gateway: "NOTCHPAY", amount: 5000 }, actor_type: "system", actor_id: null, created_at: d(-30) },
-  { order_id: U.ord14, event_type: "fulfillment.updated",  description: "Digital order fulfilled — download link activated.",  metadata: { entitlement_id: U.ent3.toString() }, actor_type: "system", actor_id: null, created_at: d(-30) },
-  { order_id: U.ord14, event_type: "system.action",        description: "Download limit reached (5/5). Further downloads blocked.", metadata: { entitlement_id: U.ent3.toString(), downloads_used: 5, max_downloads: 5 }, actor_type: "system", actor_id: null, created_at: d(-10) },
+  { order_id: U.ord14, event_type: "order.created", description: "Digital order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser2, created_at: d(-30) },
+  { order_id: U.ord14, event_type: "payment.updated", description: "Payment confirmed via NotchPay.", metadata: { gateway: "NOTCHPAY", amount: 5000 }, actor_type: "system", actor_id: null, created_at: d(-30) },
+  { order_id: U.ord14, event_type: "fulfillment.updated", description: "Digital order fulfilled — download link activated.", metadata: { entitlement_id: U.ent3.toString() }, actor_type: "system", actor_id: null, created_at: d(-30) },
+  { order_id: U.ord14, event_type: "system.action", description: "Download limit reached (5/5). Further downloads blocked.", metadata: { entitlement_id: U.ent3.toString(), downloads_used: 5, max_downloads: 5 }, actor_type: "system", actor_id: null, created_at: d(-10) },
   // ORD-15
-  { order_id: U.ord15, event_type: "order.created",        description: "Multi-item physical order placed.",                   metadata: {},                              actor_type: "customer", actor_id: U.custUser3, created_at: d(-4) },
-  { order_id: U.ord15, event_type: "payment.updated",      description: "Payment confirmed via NotchPay.",                     metadata: { gateway: "NOTCHPAY", amount: 21000 }, actor_type: "system", actor_id: null, created_at: d(-4) },
-  { order_id: U.ord15, event_type: "fulfillment.updated",  description: "Order moved to processing.",                          metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-3) },
-  { order_id: U.ord15, event_type: "delivery.agency_updated", description: "Agent Samuel Biya assigned to shipment.",          metadata: { agent_id: U.agent2.toString() }, actor_type: "system", actor_id: null, created_at: d(-3) },
-  { order_id: U.ord15, event_type: "note.added",           description: "Fragile items — handle with care. Customer requested specific delivery window: 9am-12pm.", metadata: {}, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-3) },
+  { order_id: U.ord15, event_type: "order.created", description: "Multi-item physical order placed.", metadata: {}, actor_type: "customer", actor_id: U.custUser3, created_at: d(-4) },
+  { order_id: U.ord15, event_type: "payment.updated", description: "Payment confirmed via NotchPay.", metadata: { gateway: "NOTCHPAY", amount: 21000 }, actor_type: "system", actor_id: null, created_at: d(-4) },
+  { order_id: U.ord15, event_type: "fulfillment.updated", description: "Order moved to processing.", metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-3) },
+  { order_id: U.ord15, event_type: "delivery.agency_updated", description: "Agent Samuel Biya assigned to shipment.", metadata: { agent_id: U.agent2.toString() }, actor_type: "system", actor_id: null, created_at: d(-3) },
+  { order_id: U.ord15, event_type: "note.added", description: "Fragile items — handle with care. Customer requested specific delivery window: 9am-12pm.", metadata: {}, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-3) },
   // ORD-16
-  { order_id: U.ord16, event_type: "order.created",        description: "Order placed by customer.",                           metadata: {},                              actor_type: "customer", actor_id: U.custUser1, created_at: d(-2) },
-  { order_id: U.ord16, event_type: "payment.updated",      description: "Payment confirmed via MyCoolPay.",                    metadata: { gateway: "MYCOOLPAY", amount: 45000 }, actor_type: "system", actor_id: null, created_at: d(-2) },
-  { order_id: U.ord16, event_type: "fulfillment.updated",  description: "Order moved to processing.",                          metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-1) },
+  { order_id: U.ord16, event_type: "order.created", description: "Order placed by customer.", metadata: {}, actor_type: "customer", actor_id: U.custUser1, created_at: d(-2) },
+  { order_id: U.ord16, event_type: "payment.updated", description: "Payment confirmed via MyCoolPay.", metadata: { gateway: "MYCOOLPAY", amount: 45000 }, actor_type: "system", actor_id: null, created_at: d(-2) },
+  { order_id: U.ord16, event_type: "fulfillment.updated", description: "Order moved to processing.", metadata: { from: "pending", to: "processing" }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-1) },
   { order_id: U.ord16, event_type: "delivery.agency_updated", description: "Shipment created for Express Delivery Cameroon. Awaiting agent assignment.", metadata: { agency_id: U.agency1.toString() }, actor_type: "vendor", actor_id: U.vendorUser, created_at: d(-1) },
   // ORD-17
-  { order_id: U.ord17, event_type: "order.created",        description: "Multi-item digital order placed.",                    metadata: {},                              actor_type: "customer", actor_id: U.custUser2, created_at: d(-11) },
-  { order_id: U.ord17, event_type: "payment.updated",      description: "Payment confirmed via Stripe. Bundle discount applied.", metadata: { gateway: "STRIPE", amount: 18000, discount: 2000 }, actor_type: "system", actor_id: null, created_at: d(-11) },
-  { order_id: U.ord17, event_type: "fulfillment.updated",  description: "Digital order fulfilled — 2 entitlements granted.",   metadata: { entitlement_ids: [U.ent4.toString(), U.ent5.toString()] }, actor_type: "system", actor_id: null, created_at: d(-11) },
+  { order_id: U.ord17, event_type: "order.created", description: "Multi-item digital order placed.", metadata: {}, actor_type: "customer", actor_id: U.custUser2, created_at: d(-11) },
+  { order_id: U.ord17, event_type: "payment.updated", description: "Payment confirmed via Stripe. Bundle discount applied.", metadata: { gateway: "STRIPE", amount: 18000, discount: 2000 }, actor_type: "system", actor_id: null, created_at: d(-11) },
+  { order_id: U.ord17, event_type: "fulfillment.updated", description: "Digital order fulfilled — 2 entitlements granted.", metadata: { entitlement_ids: [U.ent4.toString(), U.ent5.toString()] }, actor_type: "system", actor_id: null, created_at: d(-11) },
 ]);
 
 // ─── 14. VENDOR ORDER NOTES ───────────────────────────────────────────────────

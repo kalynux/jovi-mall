@@ -277,6 +277,96 @@ export class VendorNotificationEventHandler {
         }
     }
 
+    /** Handle connection.request_received event (agency sent the vendor a request). */
+    async handleConnectionRequestReceived(event: DomainEvent): Promise<void> {
+        try {
+            const { connectionId, vendorId, agencyName } = event.payload;
+
+            const prefs = await this.preferenceRepo.getByVendor(vendorId);
+            if (!prefs.preferences.connectionUpdated) return;
+
+            await this.dispatch({
+                situation: 'connection.request_received',
+                prefs,
+                vendorId,
+                aggregateType: 'connection',
+                aggregateId: connectionId,
+                idempotencyKey: `connection.request_received:${connectionId}`,
+                context: { agencyName, connectionId }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle connection.request_received:', error);
+        }
+    }
+
+    /** Handle connection.approved event (the agency approved/reapproved a request the vendor sent). */
+    async handleConnectionApproved(event: DomainEvent): Promise<void> {
+        try {
+            const { connectionId, vendorId, agencyName } = event.payload;
+
+            const prefs = await this.preferenceRepo.getByVendor(vendorId);
+            if (!prefs.preferences.connectionUpdated) return;
+
+            await this.dispatch({
+                situation: 'connection.approved',
+                prefs,
+                vendorId,
+                aggregateType: 'connection',
+                aggregateId: connectionId,
+                // Distinct key per state-change (not just per connection) since the same
+                // connection can be approved, paused, and reapproved multiple times.
+                idempotencyKey: `connection.approved:${connectionId}:${event.occurredAt.toISOString()}`,
+                context: { agencyName, connectionId }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle connection.approved:', error);
+        }
+    }
+
+    /** Handle connection.rejected event (the agency rejected a request the vendor sent). */
+    async handleConnectionRejected(event: DomainEvent): Promise<void> {
+        try {
+            const { connectionId, vendorId, agencyName } = event.payload;
+
+            const prefs = await this.preferenceRepo.getByVendor(vendorId);
+            if (!prefs.preferences.connectionUpdated) return;
+
+            await this.dispatch({
+                situation: 'connection.rejected',
+                prefs,
+                vendorId,
+                aggregateType: 'connection',
+                aggregateId: connectionId,
+                idempotencyKey: `connection.rejected:${connectionId}:${event.occurredAt.toISOString()}`,
+                context: { agencyName, connectionId }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle connection.rejected:', error);
+        }
+    }
+
+    /** Handle connection.reapproval_needed event (the agency changed its policies; vendor must reapprove). */
+    async handleConnectionReapprovalNeeded(event: DomainEvent): Promise<void> {
+        try {
+            const { connectionId, vendorId, agencyName } = event.payload;
+
+            const prefs = await this.preferenceRepo.getByVendor(vendorId);
+            if (!prefs.preferences.connectionUpdated) return;
+
+            await this.dispatch({
+                situation: 'connection.reapproval_needed',
+                prefs,
+                vendorId,
+                aggregateType: 'connection',
+                aggregateId: connectionId,
+                idempotencyKey: `connection.reapproval_needed:${connectionId}:${event.occurredAt.toISOString()}`,
+                context: { agencyName, connectionId }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle connection.reapproval_needed:', error);
+        }
+    }
+
     // ─── Dispatch + delivery ─────────────────────────────────────────────────
 
     /**

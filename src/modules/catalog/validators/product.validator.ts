@@ -11,6 +11,17 @@ const productFileIdsSchema = z.array(
     { message: 'File IDs must be unique' }
 );
 
+// Where the delivery agency should collect this product from — one of the
+// vendor's own business addresses, or the agency's own storage. `vendorAddressId`
+// is required when `source` is 'vendor_address' (ignored/omitted otherwise).
+const pickupLocationSchema = z.object({
+    source: z.enum(['vendor_address', 'agency_storage']),
+    vendorAddressId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId').nullable().optional(),
+}).strict().refine(
+    (p) => p.source !== 'vendor_address' || !!p.vendorAddressId,
+    { message: 'vendorAddressId is required when source is vendor_address' }
+);
+
 /**
  * Schema for creating a product
  */
@@ -85,9 +96,10 @@ export const UpdateProductSchema = z.object({
     delivery: z.object({
         agencyId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId').nullable().optional(),
         freeDelivery: z.boolean().optional(),
+        pickupLocation: pickupLocationSchema.nullable().optional(),
     }).strict().refine(
-        (d) => d.agencyId !== undefined || d.freeDelivery !== undefined,
-        { message: 'At least one of agencyId or freeDelivery must be provided' }
+        (d) => d.agencyId !== undefined || d.freeDelivery !== undefined || d.pickupLocation !== undefined,
+        { message: 'At least one of agencyId, freeDelivery, or pickupLocation must be provided' }
     ).optional(),
 
     // Vectorisation opt-in toggle — when provided, the update endpoint will

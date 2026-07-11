@@ -42,6 +42,28 @@ Authorization: Bearer <jwt_token>
     "phoneVerified": false,
     "businessName": "Tech Solutions Ltd",
     "displayName": "TechSol",
+    "branding": {
+      "logo": {
+        "id": "507f1f77bcf86cd799439030",
+        "key": "vendors/logo-abc123.png",
+        "url": "https://cdn.example.com/vendors/logo-abc123.png",
+        "mimeType": "image/png",
+        "size": 24576,
+        "originalName": "logo.png"
+      },
+      "coverImage": null
+    },
+    "businessAddresses": [
+      {
+        "_id": "683abc1234567890abcdef02",
+        "label": "Main Office",
+        "address_line1": "123 Commerce Ave, Akwa",
+        "address_line2": "Suite 4B",
+        "city": "Douala",
+        "state": "Littoral",
+        "location": null
+      }
+    ],
     "notificationPreferences": {
       "email": true,
       "whatsapp": false,
@@ -55,6 +77,26 @@ Authorization: Bearer <jwt_token>
   }
 }
 ```
+
+> [!IMPORTANT]
+> **Each `businessAddresses[]` entry is identified by `_id`, not `id`.** Unlike the outer profile
+> object (which is remapped to `id`), address subdocuments are passed through as-is, so they keep
+> Mongoose's default `_id` key. Use this `_id` value as `vendorAddressId` when setting a physical
+> product's pickup location (`PATCH /api/vendor/products/:id`, `delivery.pickupLocation.vendorAddressId`
+> — see [Vendor Products — Update Product](./products.md#update-product)).
+>
+> **UX guidance**: don't show this `_id` to the vendor. Render the address picker using `label`
+> (and `address_line1`/`city` for disambiguation if two addresses share a label), and submit the
+> matching `_id` as the value under the hood — the same pattern as any labeled-option/select
+> control (display text ≠ submitted value).
+
+> [!IMPORTANT]
+> **`branding.logo` / `branding.coverImage` are populated file objects, not URLs.** This mirrors
+> product media (see [Vendor Product Upload Reference — Media Handling](./product-upload-flow.md#media-handling)):
+> the vendor uploads the image via `POST /api/files/upload` and gets back a file `id`; that `id` is
+> what gets submitted (as `branding.logo_file_id` / `branding.cover_image_file_id`) via `PATCH
+> /api/vendor/profile` or the onboarding branding step. Reads always resolve the stored file
+> reference into `{ id, key, url, mimeType, size, originalName }`, or `null` if that slot is unset.
 
 #### Error Responses
 
@@ -136,6 +178,10 @@ Content-Type: application/json
       "bank": null
     }
   ],
+  "branding": {
+    "logo_file_id": "507f1f77bcf86cd799439030",
+    "cover_image_file_id": "507f1f77bcf86cd799439031"
+  },
   "notificationPreferences": { "email": true, "whatsapp": false, "phone": false },
   "version": 3
 }
@@ -154,10 +200,10 @@ All fields are **optional except `version`**. Every field below maps to a profil
 | `country` | `string` | Exactly 2 chars, ISO-2 (auto-uppercased) | Step 1 (Basic Setup) | Editable independently here (onboarding required it alongside timezone + payout). |
 | `timezone` | `string` | Min 1 char, IANA tz | Step 1 (Basic Setup) | E.g. `"Africa/Douala"`. |
 | `payout_details` | `object[]` | 1–3 entries, ordered (index 0 = preferred) | Step 1 (Basic Setup) | Full replace. Sub-schema (`method`, `mobile_money`, `bank`) is identical to onboarding — see [Step 1 field reference](./onboarding.md#step-1-basic-setup-required). |
-| `branding` | `object` | `logo_url`, `cover_image_url` — valid URLs or `null` | Step 3 (Branding) | Full replace. See [Step 3 field reference](./onboarding.md#step-3-branding-optional--skippable). |
-| `business_addresses` | `object[]` | See onboarding sub-schema | Step 3 (Branding) | Full replace. See [Step 3 field reference](./onboarding.md#step-3-branding-optional--skippable). |
+| `branding` | `object` | `logo_file_id`, `cover_image_file_id` — MongoDB ObjectIds of files uploaded via `POST /api/files/upload`, or `null` | Step 3 (Branding) | Full replace — send both sub-fields, including the one unchanged, or it's cleared. See [Step 3 field reference](./onboarding.md#step-3-branding-optional--skippable). |
+| `business_addresses` | `object[]` | See onboarding sub-schema | Step 3 (Branding) | Full replace — **include each existing address's `_id`** (from the `GET` response) to preserve its identity, or a fresh id is generated (and the "old" one is treated as removed — see below). See [Step 3 field reference](./onboarding.md#step-3-branding-optional--skippable). |
 | `operating_hours` | `object[]` | Per-day `{ day, open_time "HH:MM", close_time "HH:MM", is_closed }` | — (general) | Full replace. |
-| `policies` | `object \| null` | `{ return_policy?, cancellation_policy?, support_policy? }` (each nullable) | Step 4 (Policy Setup) | Full replace of the **whole** `policies` object — include every sub-policy you want to keep. See [Step 4 field reference](./onboarding.md#step-4-policy-setup-optional--skippable). |
+| `policies` | `object \| null` | `{ return_policy?, cancellation_policy?, support_policy?, documents? }` (sub-policies nullable) | Step 4 (Policy Setup) | Full replace of the **whole** `policies` object — include every sub-policy you want to keep. `documents` (max 2 URLs) is cleared if omitted. See [Step 4 field reference](./onboarding.md#step-4-policy-setup-optional--skippable). |
 | `kyc_details` | `object` | `{ national_id_number }` | — (general) | `legit_verified` is **admin-only** and ignored if sent. |
 | `social_links` | `object` | `instagram`, `facebook`, `twitter` — valid URLs or `null` | — (general) | Full replace. |
 | `notificationPreferences` | `object` | `{ email?, whatsapp?, phone? }` booleans | — (general) | `whatsapp`/`phone` are feature-flagged (see below). |
@@ -180,6 +226,24 @@ All fields are **optional except `version`**. Every field below maps to a profil
     "phoneVerified": false,
     "businessName": "Tech Solutions Ltd",
     "displayName": "TechSolutions",
+    "branding": {
+      "logo": {
+        "id": "507f1f77bcf86cd799439030",
+        "key": "vendors/logo-abc123.png",
+        "url": "https://cdn.example.com/vendors/logo-abc123.png",
+        "mimeType": "image/png",
+        "size": 24576,
+        "originalName": "logo.png"
+      },
+      "coverImage": {
+        "id": "507f1f77bcf86cd799439031",
+        "key": "vendors/cover-def456.jpg",
+        "url": "https://cdn.example.com/vendors/cover-def456.jpg",
+        "mimeType": "image/jpeg",
+        "size": 184320,
+        "originalName": "cover.jpg"
+      }
+    },
     "notificationPreferences": {
       "email": true,
       "whatsapp": false,
@@ -263,7 +327,23 @@ All fields are **optional except `version`**. Every field below maps to a profil
 #### Notes
 
 - **Editing onboarding fields**: After onboarding completes, this endpoint is the **only** way to change values originally captured in the onboarding flow (payout, branding, policies, country/timezone). The onboarding step endpoints are locked (`409`). The exception is the default delivery agency — use its dedicated routes.
-- **Full-replace semantics**: `payout_details`, `business_addresses`, `operating_hours`, `branding`, `social_links`, and `policies` overwrite the stored value wholesale. Always send the complete desired value, not a delta.
+- **Full-replace semantics**: `payout_details`, `business_addresses`, `operating_hours`, `branding`, `social_links`, and `policies` overwrite the stored value wholesale. Always send the complete desired value, not a delta. For `business_addresses` specifically, echo back each entry's `_id` to preserve its identity — see the note above and [Update Product](./products.md#update-product) for why this matters to pickup locations.
+- **Removing an in-use business address is blocked, not applied.** If the array you send omits (or regenerates the id of) an address that's still set as one or more physical products' `delivery.pickupLocation`, the **entire** `business_addresses` update is rejected with `409 VENDOR_BUSINESS_ADDRESS_IN_USE` — nothing is partially saved. `error.details.blockedAddresses` lists each such address with how many products reference it:
+  ```json
+  {
+    "success": false,
+    "error": {
+      "code": "VENDOR_BUSINESS_ADDRESS_IN_USE",
+      "message": "One or more business addresses you removed are still set as a pickup location on a product. Reassign or remove that pickup location first.",
+      "details": {
+        "blockedAddresses": [
+          { "addressId": "683abc1234567890abcdef02", "label": "Main Shop", "productCount": 3 }
+        ]
+      }
+    }
+  }
+  ```
+  Reassign or clear those products' `delivery.pickupLocation` first (`PATCH /api/vendor/products/:id` — see [Update Product](./products.md#update-product)), then retry the address removal.
 - **Optimistic Locking**: The `version` field prevents concurrent update conflicts. Always include the current version number from the GET response.
 - **Email Changes**: If `ALLOW_EMAIL_CHANGE=false`, email updates are rejected. Contact support to change email.
 - **Notification Preferences**: Only `email` notifications are available. `whatsapp` and `phone` are feature-flagged for future pricing tiers.
@@ -361,6 +441,12 @@ Content-Type: application/json
 
 Retrieve the authenticated vendor's currently-configured default delivery agency details.
 
+> [!NOTE]
+> This may return a non-null agency **even if you never called the `PUT` endpoint below** —
+> the vendor's first-ever approved [agency connection](./agency-connections.md) is automatically
+> set as their default. Onboarding Step 2 (`PUT /api/vendor/onboarding/delivery-linking`) no
+> longer sets this directly; see [Onboarding](./onboarding.md#step-2-delivery-linking-optional--skippable).
+
 #### Authentication
 
 - **Required**: Yes
@@ -429,14 +515,21 @@ Same as `GET /api/vendor/profile`.
 
 ### PUT /api/vendor/profile/default-delivery-agency
 
-Set or update the authenticated vendor's default delivery agency outside the onboarding flow.
+Set or update the authenticated vendor's default delivery agency outside the onboarding flow. Not
+needed for your very first agency — see the auto-assignment note below.
 
 > [!IMPORTANT]
+> **You don't need to call this for your first agency.** The vendor's first-ever approved
+> [connection](./agency-connections.md) is set as the default automatically, no call needed. Use
+> this endpoint to *switch* between multiple active contracts afterward.
+>
 > **Vendors can change their default agency but can never clear it to null.** There is no `DELETE` route. A vendor's default only becomes unset if the underlying agency itself is deactivated by an admin — see [Admin: Delivery Agencies](../admin/delivery-agencies.md).
 >
 > **Switching to an active agency restores suspended products.** If the vendor's physical products were suspended because their previous default agency was deactivated, switching to a different **active** agency here immediately restores every one of those products to its own saved prior status (draft → draft, active → active, etc.). Switching to a `pending_verification` agency is accepted as a valid choice but does **not** restore anything yet, since a pending agency doesn't satisfy the physical-product activation gate.
 >
 > **Also auto-reassigns in-flight orders.** Any of the vendor's order items that are still `pending`/`assigned` (not yet picked up) and were riding on the *old* default agency are automatically moved to the new one — same effect as calling the item-level reassignment endpoint for each. An item is skipped (left on the old agency) if its **product** has its own explicit delivery-agency override, since that item was never really "on the default" in the first place. Items already `picked_up` or later are never touched. See `meta.reassignedOrderItems` / `meta.skippedOrderItems` in the response below.
+>
+> **Requires an active, approved connection with the agency.** You can no longer set any active agency as your default — only one you've sent (or received and accepted) a connection request with, and which is currently `active` (not pending, rejected, or paused for reapproval). Browse agencies and send/manage requests via [Agency Connections](./agency-connections.md). Attempting to set an agency without an active connection returns `422 CONNECTION_NOT_ACTIVE`.
 
 #### Authentication
 
@@ -540,6 +633,18 @@ Returned if the agency does not exist, is inactive, or has not completed onboard
   "error": {
     "code": "DELIVERY_AGENCY_NOT_FOUND",
     "message": "The selected delivery agency does not exist."
+  }
+}
+```
+
+**No Active Connection (422)**:
+Returned if you don't have an `active` connection with this agency (never requested, still `pending`, `rejected`, or `paused_reapproval`).
+```json
+{
+  "success": false,
+  "error": {
+    "code": "CONNECTION_NOT_ACTIVE",
+    "message": "You need an active, approved connection with this agency before setting it as your default. Send or check your connection request first."
   }
 }
 ```

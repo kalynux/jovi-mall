@@ -13,14 +13,18 @@ export type NotificationType =
     | 'booking.cancelled'
     | 'payment.received.partial'
     | 'payment.received.full'
-    | 'storage.alert';
+    | 'storage.alert'
+    | 'connection.request_received'
+    | 'connection.approved'
+    | 'connection.rejected'
+    | 'connection.reapproval_needed';
 
 /**
  * Aggregate Types
  *
  * The domain entity that triggered this notification.
  */
-export type AggregateType = 'order' | 'booking' | 'payment' | 'storage';
+export type AggregateType = 'order' | 'booking' | 'payment' | 'storage' | 'connection';
 
 /**
  * Delivery Channels

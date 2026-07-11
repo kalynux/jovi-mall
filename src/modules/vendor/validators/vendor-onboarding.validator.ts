@@ -6,6 +6,12 @@ import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
 
 const BusinessAddressSchema = z.object({
+    // Optional — omit when adding a new address (a fresh id is generated).
+    // Include the id you were given on read when re-submitting an existing
+    // address unchanged (or edited) in this full-replace array, so physical
+    // products pointing at it via `delivery.pickupLocation.vendorAddressId`
+    // don't get invalidated by an id that changed for no real reason.
+    _id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId').optional(),
     label: z.string().min(1).max(50).trim(),
     address_line1: z.string().min(1).max(200).trim(),
     address_line2: z.string().max(200).trim().nullable().optional(),
@@ -26,8 +32,8 @@ const OperatingHoursSchema = z.object({
 });
 
 const BrandingSchema = z.object({
-    logo_url: z.string().url('logo_url must be a valid URL').nullable().optional(),
-    cover_image_url: z.string().url('cover_image_url must be a valid URL').nullable().optional(),
+    logo_file_id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'logo_file_id must be a valid MongoDB ObjectId').nullable().optional(),
+    cover_image_file_id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'cover_image_file_id must be a valid MongoDB ObjectId').nullable().optional(),
 });
 
 const SocialLinksSchema = z.object({
@@ -58,23 +64,16 @@ export const VendorOnboardingStep1Schema = z.object({
 export type VendorOnboardingStep1Input = z.infer<typeof VendorOnboardingStep1Schema>;
 
 // ─── Step 2: Delivery Linking (OPTIONAL / SKIPPABLE) ──────────────────────────
-//   default_delivery_agency_id — skip if vendor sells services only
+//   Pure step-advance — agency selection now happens exclusively through the
+//   agency-connections endpoints (search/request), independent of this step.
+//   `skip` is accepted but no longer changes behavior (kept for backward
+//   compatibility with existing frontend calls); the vendor's default agency
+//   is set automatically the first time any connection is approved.
 
 export const VendorOnboardingStep2Schema = z.object({
-    /** Set to true to skip this step without selecting a delivery agency. */
+    /** @deprecated No longer changes behavior — kept for backward compatibility. */
     skip: z.boolean().optional().default(false),
-    default_delivery_agency_id: z
-        .string()
-        .min(1, 'A delivery agency ID is required when not skipping')
-        .trim()
-        .optional(),
-}).refine(
-    (data) => data.skip || !!data.default_delivery_agency_id,
-    {
-        message: 'Either skip must be true or a default_delivery_agency_id must be provided',
-        path: ['default_delivery_agency_id'],
-    }
-);
+});
 
 export type VendorOnboardingStep2Input = z.infer<typeof VendorOnboardingStep2Schema>;
 
@@ -167,6 +166,8 @@ export const VendorOnboardingStep4Schema = z.object({
     return_policy: ReturnPolicySchema.optional(),
     cancellation_policy: CancellationPolicySchema.optional(),
     support_policy: SupportPolicySchema.optional(),
+    // Additional terms that don't fit the structured fields above (e.g. a signed PDF addendum).
+    documents: z.array(z.string().url()).max(2, 'Maximum 2 documents allowed').optional(),
 });
 
 export type VendorOnboardingStep4Input = z.infer<typeof VendorOnboardingStep4Schema>;
@@ -192,6 +193,8 @@ export const UpdateVendorProfileSchema = z.object({
         return_policy: ReturnPolicySchema.nullable().optional(),
         cancellation_policy: CancellationPolicySchema.nullable().optional(),
         support_policy: SupportPolicySchema.nullable().optional(),
+        // Additional terms that don't fit the structured fields above (e.g. a signed PDF addendum).
+        documents: z.array(z.string().url()).max(2, 'Maximum 2 documents allowed').optional(),
     }).nullable().optional(),
     notificationPreferences: z
         .object({

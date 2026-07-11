@@ -93,6 +93,23 @@ This is the full shape of a product object returned by all read endpoints.
 > [!IMPORTANT]
 > **Service config + pricing live on the variant, not the product.** A service product has **exactly one** variant that carries its `price` and `serviceConfig` (slot duration, buffers, booking mode, optional peak-hours surcharge). The product itself has no `serviceConfig`. Create the variant via `POST /products/:id/variants` — see [variants.md](./variants.md).
 
+**Physical product — additional fields:**
+```json
+{
+  "delivery": {
+    "agencyId": null,
+    "freeDelivery": false,
+    "pickupLocation": {
+      "source": "vendor_address",
+      "vendorAddressId": "683abc1234567890abcdef02"
+    }
+  }
+}
+```
+
+> [!IMPORTANT]
+> **Physical products require a `delivery.pickupLocation` to activate** — it tells the resolved delivery agency where to collect the item from. `source: "vendor_address"` points at one of your [`business_addresses`](./profile.md) (`vendorAddressId` required); `source: "agency_storage"` means the agency already warehouses your stock for this product (no address needed — `vendorAddressId` is always `null`). Which sources are actually usable depends on the **resolved agency's** own policy — see the note under [Update Product](#update-product) and [Delivery Agencies](./delivery-agencies.md#pickup_based--storage_based-and-pickup-locations).
+
 <a id="service-products"></a>
 > [!NOTE]
 > **Service products & bookings.** A service product is the bookable unit. The end-to-end lifecycle is:
@@ -305,7 +322,11 @@ Partial update — only provided fields are changed. Allowed on `draft` and `act
   },
   "delivery": {
     "agencyId": "683abc1234567890abcdef01",
-    "freeDelivery": false
+    "freeDelivery": false,
+    "pickupLocation": {
+      "source": "vendor_address",
+      "vendorAddressId": "683abc1234567890abcdef02"
+    }
   },
   "vectorisationEnabled": true
 }
@@ -330,11 +351,23 @@ Partial update — only provided fields are changed. Allowed on `draft` and `act
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `agencyId` | string \| null | The delivery agency ObjectId this product should use instead of the vendor's default, or `null` to clear the override and fall back to the vendor's default. Either sub-field may be sent independently (merged against the existing value) — at least one of `agencyId`/`freeDelivery` must be present. |
+| `agencyId` | string \| null | The delivery agency ObjectId this product should use instead of the vendor's default, or `null` to clear the override and fall back to the vendor's default. Either sub-field may be sent independently (merged against the existing value) — at least one of `agencyId`/`freeDelivery`/`pickupLocation` must be present. |
 | `freeDelivery` | boolean | Marketing/order flag, independent of agency resolution. |
+| `pickupLocation` | object \| null | Where the resolved delivery agency should collect this product from. `null` clears it. See sub-fields below. |
+
+**`delivery.pickupLocation` sub-fields:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `source` | `"vendor_address"` \| `"agency_storage"` | Required. `vendor_address` — collect from one of your business addresses. `agency_storage` — the agency already warehouses your stock; nothing to collect. |
+| `vendorAddressId` | string \| null | Required (and must match an entry in your [`business_addresses`](./profile.md)) when `source` is `vendor_address`; ignored/omit when `source` is `agency_storage`. |
 
 > [!IMPORTANT]
-> **Changing `delivery.agencyId` can restore the product and reassign in-flight orders.** If this product was suspended because its previous override agency went inactive, setting it to a **new active** agency (or clearing it back to `null`, falling back to the vendor's active default) automatically restores the product if it's now eligible again, and reassigns any of its still `pending`/`assigned`/held order items from the old agency over to the new one. The response `message` reports how many order items were moved. No agency existence/status validation is performed on write beyond this fixup — an agency id that doesn't resolve to an active agency yet is accepted, but the product will fail activation (`CATALOG_PRODUCT_NO_DELIVERY_AGENCY`) until it does. See [Admin: Delivery Agencies](../admin/delivery-agencies.md) for the full cascade.
+> **Changing `delivery.agencyId` can restore the product and reassign in-flight orders.** If this product was suspended because its previous override agency went inactive, setting it to a **new active** agency (or clearing it back to `null`, falling back to the vendor's active default) automatically restores the product if it's now eligible again, and reassigns any of its still `pending`/`assigned`/held order items from the old agency over to the new one. The response `message` reports how many order items were moved. See [Admin: Delivery Agencies](../admin/delivery-agencies.md) for the full cascade.
+>
+> **Setting a non-null `agencyId` now requires an active, approved connection** between your vendor account and that agency (`422 CONNECTION_NOT_ACTIVE`) — see [Agency Connections](./agency-connections.md). Clearing the override to `null` is always allowed. An agency id that already has an active connection but is itself inactive/unresolvable is still accepted on write; the product simply fails activation (`CATALOG_PRODUCT_NO_DELIVERY_AGENCY`) until the agency comes back.
+>
+> **`pickupLocation` is validated against whichever agency actually ends up handling delivery** — this product's own `agencyId` override if set (including one set in the same request), otherwise your vendor default. `source: "vendor_address"` requires that agency's policy to offer address pickup; `source: "agency_storage"` requires it to offer storage-based fulfillment — an agency offering only one of the two rejects the other (`422 CATALOG_PRODUCT_INVALID_PICKUP_LOCATION`). If neither `agencyId` (override or vendor default) is resolvable yet, you'll get `422 CATALOG_PRODUCT_NO_DELIVERY_AGENCY` — set an agency first. See [Delivery Agencies](./delivery-agencies.md#pickup_based--storage_based-and-pickup-locations) for how to tell which pickup types an agency supports before presenting the picker to the vendor.
 
 > [!NOTE]
 > `serviceConfig` is **no longer accepted on the product** (neither create nor update). Service config + price live on the service variant — set them via `POST /products/:id/variants` or `PATCH /products/:productId/variants/:variantId/service/config`. See [variants.md](./variants.md).
@@ -378,6 +411,9 @@ changed and at least one order item was moved (see the important note above) —
 **Error Responses:**
 - `404 CATALOG_PRODUCT_NOT_FOUND` — Product not found
 - `422 CATALOG_PRODUCT_INVALID_STATE` — Product is `archived` or `suspended`; update not allowed
+- `422 CONNECTION_NOT_ACTIVE` — `delivery.agencyId` was set to an agency you don't have an active, approved connection with. See [Agency Connections](./agency-connections.md).
+- `422 CATALOG_PRODUCT_NO_DELIVERY_AGENCY` — `delivery.pickupLocation` was set but no delivery agency (override or vendor default) is resolvable yet.
+- `422 CATALOG_PRODUCT_INVALID_PICKUP_LOCATION` — `delivery.pickupLocation` doesn't match the resolved agency's policy, or `vendorAddressId` doesn't match one of your business addresses.
 - `400 VALIDATION_ERROR` — Body schema invalid
 
 ---
@@ -415,7 +451,7 @@ PATCH /api/vendor/products/:id/status
 > 4. **`defaultVariantId` must point to an active variant** — the referenced variant must exist and be active; a dangling or archived reference fails validation
 >
 > Additionally, per product type:
-> - **Physical**: the vendor's default delivery agency (`vendor.default_delivery_agency_id`) must exist and currently be `active` — this is **always** required, regardless of whether the product has its own override. If the product **also** has its own `delivery.agencyId` override set, that override must **independently** be `active` too — both conditions are checked, not either/or. If either agency is deactivated by an admin later, the product is auto-suspended (and, if it has pending orders, those are put on hold) until a working replacement is configured — see [Admin: Delivery Agencies](../admin/delivery-agencies.md).
+> - **Physical**: the vendor's default delivery agency (`vendor.default_delivery_agency_id`) must exist, currently be `active`, **and** have an active, approved [connection](./agency-connections.md) with your vendor account — this is **always** required, regardless of whether the product has its own override. If the product **also** has its own `delivery.agencyId` override set, that override must **independently** satisfy the same three conditions (active agency + active connection) too — both are checked, not either/or. On top of that, the product must have a `delivery.pickupLocation` set that's still valid against whichever agency actually ends up handling delivery (the override if set, else the vendor default) — see [Update Product](#update-product) for the sub-fields and policy-matching rules. If any agency/connection/pickup-location condition regresses later (agency deactivated, connection paused, referenced business address removed), the product is auto-suspended or demoted (and, if it has pending orders, those are put on hold) until a working replacement is configured — see [Admin: Delivery Agencies](../admin/delivery-agencies.md).
 > - **Digital**: **every active variant must have an uploaded asset**, and there must be **no more than 5** active variants. (Digital variants without an asset are auto-archived, so this normally passes by construction.) See [Digital Products Guide](./digital-products.md).
 > - **Service**: the single default variant must have a `serviceConfig.durationMinutes` (min: 1) and `price > 0` — the config + price live on the variant. If its `bookingMode` is `capacity`, it must also have `serviceConfig.maxBookings` (≥ 1).
 
@@ -439,7 +475,9 @@ PATCH /api/vendor/products/:id/status
 | `CATALOG_PRODUCT_NO_VARIANTS` | No variants exist |
 | `CATALOG_PRODUCT_VARIANT_ZERO_PRICE` | An active variant has price = 0 |
 | `CATALOG_PRODUCT_NO_DEFAULT_VARIANT` | `defaultVariantId` missing or points to archived/nonexistent variant |
-| `CATALOG_PRODUCT_NO_DELIVERY_AGENCY` | Physical product: vendor has no active default delivery agency, or (if set) the product's own override agency isn't active |
+| `CATALOG_PRODUCT_NO_DELIVERY_AGENCY` | Physical product: vendor has no active default delivery agency, or (if set) the product's own override agency isn't active, or its connection needs (re)approval |
+| `CATALOG_PRODUCT_NO_PICKUP_LOCATION` | Physical product: `delivery.pickupLocation` is not set |
+| `CATALOG_PRODUCT_INVALID_PICKUP_LOCATION` | Physical product: `delivery.pickupLocation` no longer matches the resolved agency's policy, or its referenced business address no longer exists |
 | `CATALOG_VARIANT_NO_DIGITAL_ASSET` | A digital product's active variant has no uploaded asset (details include the variant name/sku) |
 | `CATALOG_DIGITAL_VARIANT_LIMIT_EXCEEDED` | Digital product has more than 5 active variants |
 | `CATALOG_PRODUCT_SERVICE_NO_DURATION` | Service product has no `durationMinutes` |
@@ -1137,6 +1175,15 @@ Summary of what the backend validates when changing status to `active`. Frontend
 | All active variants have `price > 0` | `CATALOG_PRODUCT_VARIANT_ZERO_PRICE` | Update variant price |
 | `defaultVariantId` points to an active variant | `CATALOG_PRODUCT_NO_DEFAULT_VARIANT` | First variant is auto-set; use `/default-variant` to reassign |
 
+**Physical products only:**
+
+| Requirement | Error Code | Description |
+|-------------|------------|-------------|
+| Vendor has an active default delivery agency, with an active connection | `CATALOG_PRODUCT_NO_DELIVERY_AGENCY` | Set one via `PUT /profile/default-delivery-agency` — see [profile.md](./profile.md) |
+| If set, the product's own `delivery.agencyId` override is independently active, with an active connection | `CATALOG_PRODUCT_NO_DELIVERY_AGENCY` | Clear the override or point it at a working agency via `PATCH /:id` |
+| `delivery.pickupLocation` is set | `CATALOG_PRODUCT_NO_PICKUP_LOCATION` | Set it via `PATCH /:id` — see [Update Product](#update-product) |
+| `delivery.pickupLocation` matches the resolved agency's policy (`pickup_based`/`storage_based`) and, for `vendor_address`, still references an existing business address | `CATALOG_PRODUCT_INVALID_PICKUP_LOCATION` | Re-pick a valid pickup location for the resolved agency |
+
 **Digital products only:**
 
 | Requirement | Error Code | Description |
@@ -1193,6 +1240,9 @@ Validation errors include a `details` array:
 | `CATALOG_PRODUCT_NO_VARIANTS` | 422 | Activation blocked — no variants exist |
 | `CATALOG_PRODUCT_VARIANT_ZERO_PRICE` | 422 | Activation blocked — an active variant has `price = 0` |
 | `CATALOG_PRODUCT_NO_DEFAULT_VARIANT` | 422 | Activation blocked — `defaultVariantId` not set or points to archived variant |
+| `CATALOG_PRODUCT_NO_DELIVERY_AGENCY` | 422 | Activation blocked (or `delivery.pickupLocation` update rejected) — physical product has no resolvable active delivery agency/connection |
+| `CATALOG_PRODUCT_NO_PICKUP_LOCATION` | 422 | Activation blocked — physical product has no `delivery.pickupLocation` set |
+| `CATALOG_PRODUCT_INVALID_PICKUP_LOCATION` | 422 | `delivery.pickupLocation` doesn't match the resolved agency's policy, or its business address no longer exists |
 | `CATALOG_VARIANT_NO_DIGITAL_ASSET` | 422 | Activation blocked — a digital variant has no uploaded asset |
 | `CATALOG_DIGITAL_VARIANT_LIMIT_EXCEEDED` | 400/422 | Digital product exceeds 5 variants (400 on create, 422 on activation) |
 | `CATALOG_PRODUCT_SERVICE_NO_DURATION` | 422 | Activation blocked — service product has no duration |

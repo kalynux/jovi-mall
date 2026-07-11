@@ -541,6 +541,80 @@ export class VendorOrderService {
     }
 
     /**
+     * Bulk-update fulfillment status for many orders in one call.
+     *
+     * Each order is validated and mutated independently via the existing
+     * single-order updateFulfillmentStatus (ownership, state machine, payment
+     * coupling, dispute hold) — an order that fails its own check is recorded in
+     * `failed` and does NOT block the rest of the batch. Same non-transactional,
+     * best-effort loop idiom as reassignItemsFromDefaultAgency below.
+     */
+    async bulkUpdateFulfillmentStatus(
+        orderIds: string[],
+        vendorId: string,
+        newStatus: FulfillmentStatus
+    ): Promise<{
+        total: number;
+        succeeded: string[];
+        failed: { orderId: string; code: string; reason: string }[];
+    }> {
+        const succeeded: string[] = [];
+        const failed: { orderId: string; code: string; reason: string }[] = [];
+
+        for (const orderId of orderIds) {
+            try {
+                await this.updateFulfillmentStatus(orderId, vendorId, newStatus);
+                succeeded.push(orderId);
+            } catch (err: any) {
+                failed.push({
+                    orderId,
+                    code: err.code || 'UNKNOWN_ERROR',
+                    reason: err.message || 'Unknown error'
+                });
+            }
+        }
+
+        return { total: orderIds.length, succeeded, failed };
+    }
+
+    /**
+     * Bulk-dispatch many paid physical orders to their delivery agency/agencies.
+     *
+     * Each order goes through the same ownership + payment + dispute checks as
+     * the single-order dispatchToAgency — orders that aren't dispatchable
+     * (unpaid, digital, disputed, not found) are recorded in `failed` without
+     * blocking the rest of the batch. `dispatchedShipments: 0` on a succeeded
+     * entry means the order had nothing pending (already dispatched) — an
+     * informational no-op, not a failure, matching the single-dispatch endpoint.
+     */
+    async bulkDispatchToAgency(
+        orderIds: string[],
+        vendorId: string
+    ): Promise<{
+        total: number;
+        succeeded: { orderId: string; dispatchedShipments: number }[];
+        failed: { orderId: string; code: string; reason: string }[];
+    }> {
+        const succeeded: { orderId: string; dispatchedShipments: number }[] = [];
+        const failed: { orderId: string; code: string; reason: string }[] = [];
+
+        for (const orderId of orderIds) {
+            try {
+                const result = await this.dispatchToAgency(orderId, vendorId);
+                succeeded.push({ orderId, dispatchedShipments: result.dispatchedShipments });
+            } catch (err: any) {
+                failed.push({
+                    orderId,
+                    code: err.code || 'UNKNOWN_ERROR',
+                    reason: err.message || 'Unknown error'
+                });
+            }
+        }
+
+        return { total: orderIds.length, succeeded, failed };
+    }
+
+    /**
      * Vendor explicitly dispatches a reviewed, paid order to its delivery
      * agency/agencies — the manual counterpart to the vendor's
      * `auto_redirect_orders_to_agency` setting. Advances the order's `pending`

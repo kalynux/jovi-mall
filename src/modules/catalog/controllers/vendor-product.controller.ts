@@ -140,6 +140,7 @@ export class VendorProductController {
             { page: query.page, limit: query.limit },
             { sortBy: query.sortBy, sortOrder: query.sortOrder }
         );
+        console.log({query, data: result.data})
         res.json({ success: true, data: result.data, meta: result.meta });
     });
 

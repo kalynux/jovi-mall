@@ -2,6 +2,9 @@ import { IVendor, IVendorBranding, IVendorBusinessAddress, IVendorOperatingHours
 import { IPayoutDetails } from '../../../core/types/payout.types';
 import { UpdateVendorProfileInput } from '../validators/vendor-onboarding.validator';
 import { VendorOnboardingStep } from '../../../core/constants/onboarding-steps';
+import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
+import { IStorageProvider } from '../../../core/storage';
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
@@ -20,6 +23,16 @@ export interface VendorPayoutDetailsSanitized {
   } | null;
 }
 
+/**
+ * Vendor branding, resolved from stored file references into full file
+ * details (id, key, url, mimeType, size, originalName) — mirrors how product
+ * media is returned (see enrichProduct / FileDetail).
+ */
+export interface VendorBrandingDetail {
+  logo: FileDetail | null;
+  coverImage: FileDetail | null;
+}
+
 export interface GetVendorProfileResponseDto {
   id: string;
   email: string;
@@ -30,7 +43,7 @@ export interface GetVendorProfileResponseDto {
   displayName?: string;
   businessDescription: string | null;
   country: string | null;
-  branding: IVendorBranding;
+  branding: VendorBrandingDetail;
   businessAddresses: IVendorBusinessAddress[];
   operatingHours: IVendorOperatingHours[];
   payoutDetails: VendorPayoutDetailsSanitized | null;
@@ -111,6 +124,43 @@ function sanitizePayoutDetails(payout: IPayoutDetails | null): VendorPayoutDetai
   };
 }
 
+/**
+ * Resolve a vendor's branding file references into full file details, batching
+ * both lookups into a single query. Missing/deleted files resolve to null
+ * (same "silently omit" behavior as product media — see buildFileDetails in
+ * enrich-product-detail.ts).
+ */
+async function buildBrandingDetail(
+  branding: IVendorBranding,
+  fileRepo: FileRepositoryMongo,
+  storage: IStorageProvider,
+): Promise<VendorBrandingDetail> {
+  const ids = [branding.logo_file_id?.toString(), branding.cover_image_file_id?.toString()]
+    .filter((id): id is string => !!id);
+
+  const files = ids.length > 0 ? await fileRepo.findManyByIds(ids) : [];
+  const byId = new Map(files.map(f => [f.id, f]));
+
+  const toDetail = (fileId?: string): FileDetail | null => {
+    if (!fileId) return null;
+    const f = byId.get(fileId);
+    if (!f) return null;
+    return {
+      id: f.id,
+      key: f.key,
+      url: storage.getPublicUrl(f.key),
+      mimeType: f.mimeType,
+      size: f.size,
+      originalName: f.originalName,
+    };
+  };
+
+  return {
+    logo: toDetail(branding.logo_file_id?.toString()),
+    coverImage: toDetail(branding.cover_image_file_id?.toString()),
+  };
+}
+
 export class VendorProfileMapper {
   /**
    * Map Vendor domain model to sanitized response DTO.
@@ -120,7 +170,11 @@ export class VendorProfileMapper {
    * - Payout account numbers are masked
    * - version included for optimistic locking on client
    */
-  static toResponseDto(vendor: IVendor): GetVendorProfileResponseDto {
+  static async toResponseDto(
+    vendor: IVendor,
+    fileRepo: FileRepositoryMongo,
+    storage: IStorageProvider,
+  ): Promise<GetVendorProfileResponseDto> {
     return {
       id: vendor._id.toString(),
       email: vendor.email ?? '',
@@ -131,7 +185,7 @@ export class VendorProfileMapper {
       displayName: vendor.display_name,
       businessDescription: vendor.business_description,
       country: vendor.country ?? null,
-      branding: vendor.branding,
+      branding: await buildBrandingDetail(vendor.branding, fileRepo, storage),
       businessAddresses: vendor.business_addresses,
       operatingHours: vendor.operating_hours,
       payoutDetails: sanitizePayoutDetails(vendor.payout_details),
@@ -221,7 +275,9 @@ export class VendorProfileMapper {
     if (input.preferred_language !== undefined) payload.preferred_language = input.preferred_language;
     if (input.country !== undefined) payload.country = input.country;
     if (input.branding !== undefined) payload.branding = input.branding as IVendorBranding;
-    if (input.business_addresses !== undefined) payload.business_addresses = input.business_addresses as IVendorBusinessAddress[];
+    // `_id` (when provided) is a hex string here — Mongoose casts it to ObjectId
+    // on write, preserving the address's identity instead of minting a new one.
+    if (input.business_addresses !== undefined) payload.business_addresses = input.business_addresses as unknown as IVendorBusinessAddress[];
     if (input.operating_hours !== undefined) payload.operating_hours = input.operating_hours as IVendorOperatingHours[];
     if (input.payout_details !== undefined) payload.payout_details = input.payout_details as IPayoutDetails;
     if (input.kyc_details !== undefined) {

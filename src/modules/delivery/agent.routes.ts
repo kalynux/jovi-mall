@@ -1,12 +1,24 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
 import { AgentProfileController } from './controllers/agent-profile.controller';
+import { AgentInvitesController } from './controllers/agent-invites.controller';
 import { ShipmentController } from '../shipments/shipment.controller';
 
 const router = Router();
 
 router.use(requireAuth);
 router.use(requireRole(['agent']));
+
+// ─── Agency membership (invites) ─────────────────────────────────────────────
+
+/** GET /api/agent/invites — pending agency invites addressed to this agent's email. */
+router.get('/invites', AgentInvitesController.listInvites);
+
+/** POST /api/agent/invites/:id/accept — join the inviting agency. */
+router.post('/invites/:id/accept', AgentInvitesController.acceptInvite);
+
+/** POST /api/agent/invites/:id/decline */
+router.post('/invites/:id/decline', AgentInvitesController.declineInvite);
 
 /** GET /api/agent/profile */
 router.get('/profile', AgentProfileController.getProfile);

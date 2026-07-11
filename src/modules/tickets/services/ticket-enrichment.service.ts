@@ -12,6 +12,8 @@ import { OrderModel } from '../../orders/order.model';
 import { ProductModel } from '../../catalog/models/product.model';
 import { Booking } from '../../booking/models/booking.model';
 import { TicketFollowerModel } from '../models/ticket-follower.model';
+import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
+import { getStorageProvider, IStorageProvider } from '../../../core/storage';
 
 /**
  * TicketEnrichmentService
@@ -49,6 +51,11 @@ interface ActorRef {
 }
 
 export class TicketEnrichmentService {
+    constructor(
+        private readonly fileRepository: FileRepositoryMongo = new FileRepositoryMongo(),
+        private readonly storageProvider: IStorageProvider = getStorageProvider(),
+    ) { }
+
     /**
      * Enrich a single ticket (detail view). Resolves creator, assignee, active
      * admin, linked entity and the follower list into readable summaries.
@@ -196,6 +203,18 @@ export class TicketEnrichmentService {
         return `${userId}:${role}`;
     }
 
+    /**
+     * Batch-resolve File ids into public URLs (e.g. a vendor's branding logo).
+     * Used instead of a stored URL now that branding is attached-file based —
+     * see FileDetail-style resolution in enrich-product-detail.ts.
+     */
+    private async resolveFileUrls(fileIds: string[]): Promise<Map<string, string>> {
+        const uniqueIds = [...new Set(fileIds)];
+        if (uniqueIds.length === 0) return new Map();
+        const files = await this.fileRepository.findManyByIds(uniqueIds);
+        return new Map(files.map(f => [f.id, this.storageProvider.getPublicUrl(f.key)]));
+    }
+
     private entityKey(type: string, id: string): string {
         return `${type}:${id}`;
     }
@@ -231,12 +250,16 @@ export class TicketEnrichmentService {
                 }
                 case ActorRole.VENDOR: {
                     const docs = await VendorModel.find({ user_id: { $in: ids } })
-                        .select('user_id business_name display_name branding.logo_url').lean();
+                        .select('user_id business_name display_name branding.logo_file_id').lean();
+                    const logoUrlByFileId = await this.resolveFileUrls(
+                        docs.map(d => d.branding?.logo_file_id?.toString()).filter((id): id is string => !!id),
+                    );
                     for (const d of docs) {
+                        const logoFileId = d.branding?.logo_file_id?.toString();
                         result.set(this.actorKey(d.user_id.toString(), role), {
                             user_id: d.user_id.toString(), role,
                             name: d.display_name || d.business_name,
-                            avatar_url: d.branding?.logo_url ?? null
+                            avatar_url: (logoFileId ? logoUrlByFileId.get(logoFileId) : undefined) ?? null
                         });
                     }
                     break;

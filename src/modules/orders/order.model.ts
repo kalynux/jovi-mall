@@ -73,6 +73,25 @@ export interface IOrderItem {
      * reassignment (moved to a new agency).
      */
     hold?: { previousStatus: 'pending' | 'assigned'; heldAt: Date } | null;
+    /**
+     * Snapshot of the product's pickup location at the moment this order was
+     * created — not a live reference, so a later edit to the vendor's business
+     * addresses doesn't retroactively change history. `address_snapshot` is
+     * null when `source === 'agency_storage'` (the agency's own HQ address is
+     * resolved live from `agency_id` instead, since it isn't vendor/product
+     * specific). See ProductStatusValidationService / order.service.ts.
+     */
+    pickup_location: {
+      source: 'vendor_address' | 'agency_storage';
+      vendor_address_id: mongoose.Types.ObjectId | null;
+      address_snapshot: {
+        label: string;
+        address_line1: string;
+        address_line2: string | null;
+        city: string;
+        state: string | null;
+      } | null;
+    } | null;
   };
 }
 
@@ -205,6 +224,25 @@ const OrderItemSchema = new Schema({
         type: {
           previousStatus: { type: String, enum: ['pending', 'assigned'], required: true },
           heldAt: { type: Date, required: true },
+        },
+        required: false,
+        default: null,
+      },
+      pickup_location: {
+        type: {
+          source: { type: String, enum: ['vendor_address', 'agency_storage'], required: true },
+          vendor_address_id: { type: Schema.Types.ObjectId, default: null },
+          address_snapshot: {
+            type: {
+              label: { type: String, required: true },
+              address_line1: { type: String, required: true },
+              address_line2: { type: String, default: null },
+              city: { type: String, required: true },
+              state: { type: String, default: null },
+            },
+            required: false,
+            default: null,
+          },
         },
         required: false,
         default: null,

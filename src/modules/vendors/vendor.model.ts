@@ -91,6 +91,18 @@ const VendorPoliciesSchema = new Schema(
     return_policy: { type: VendorReturnPolicySchema, default: null },
     cancellation_policy: { type: VendorCancellationPolicySchema, default: null },
     support_policy: { type: VendorSupportPolicySchema, default: null },
+    /**
+     * Up to 2 supporting document URLs (e.g. PDFs) covering additional terms
+     * that don't fit the structured fields above.
+     */
+    documents: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: (docs: string[]) => docs.length <= 2,
+        message: 'Maximum 2 policy documents allowed',
+      },
+    },
   },
   { _id: false },
 );
@@ -129,8 +141,8 @@ const BusinessAddressSchema = new Schema(
 
 const BrandingSchema = new Schema(
   {
-    logo_url: { type: String, default: null },
-    cover_image_url: { type: String, default: null },
+    logo_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },
+    cover_image_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },
   },
   { _id: false }
 );
@@ -203,6 +215,8 @@ export interface IVendorPolicies {
   return_policy: IVendorReturnPolicy | null;
   cancellation_policy: IVendorCancellationPolicy | null;
   support_policy: IVendorSupportPolicy | null;
+  /** Up to 2 supporting document URLs (e.g. PDFs) for terms not covered above. */
+  documents?: string[];
 }
 
 export interface IVendorBusinessAddress {
@@ -216,8 +230,8 @@ export interface IVendorBusinessAddress {
 }
 
 export interface IVendorBranding {
-  logo_url: string | null;
-  cover_image_url: string | null;
+  logo_file_id: mongoose.Types.ObjectId | null;
+  cover_image_file_id: mongoose.Types.ObjectId | null;
 }
 
 export interface IVendorOperatingHours {
@@ -255,6 +269,12 @@ export interface IVendor extends Document {
   kyc_details: IVendorKycDetails;
   social_links: IVendorSocialLinks;
   policies: IVendorPolicies | null;
+  /**
+   * Incremented every time `policies` changes. Distinct from `version` (optimistic
+   * concurrency) — this one is watched by the agency-connections module to detect
+   * a policy edit and pause any active connections that need reapproval.
+   */
+  policy_version: number;
   /** @deprecated Use kyc_details.legit_verified instead. Kept for query backward compatibility during migration. */
   legit_verified: boolean;
   default_delivery_agency_id?: mongoose.Types.ObjectId | null;
@@ -299,7 +319,7 @@ const VendorSchema = new Schema<IVendor>(
     phone: { type: String, required: true },
     email_verified: { type: Boolean, default: false },
     phone_verified: { type: Boolean, default: false },
-    branding: { type: BrandingSchema, default: () => ({ logo_url: null, cover_image_url: null }) },
+    branding: { type: BrandingSchema, default: () => ({ logo_file_id: null, cover_image_file_id: null }) },
     business_addresses: { type: [BusinessAddressSchema], default: [] },
     operating_hours: { type: [OperatingHoursSchema], default: [] },
     // Ordered array of payout methods (max 3). The FIRST entry is the preferred one.
@@ -314,6 +334,7 @@ const VendorSchema = new Schema<IVendor>(
       default: () => ({ instagram: null, facebook: null, twitter: null }),
     },
     policies: { type: VendorPoliciesSchema, default: null },
+    policy_version: { type: Number, default: 0 },
     /**
      * @deprecated Kept for backward compatibility. Always mirrors kyc_details.legit_verified.
      * The single source of truth is kyc_details.legit_verified.

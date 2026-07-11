@@ -14,6 +14,36 @@ export class DeliveryAgentRepository {
     return await DeliveryAgentModel.findById(agentId);
   }
 
+  async findByEmail(email: string): Promise<IDeliveryAgent | null> {
+    return await DeliveryAgentModel.findOne({ email: email.toLowerCase() });
+  }
+
+  async listByAgency(agencyId: string): Promise<IDeliveryAgent[]> {
+    return await DeliveryAgentModel.find({ agency_id: agencyId }).sort({ created_at: -1 });
+  }
+
+  /**
+   * Link an agent to an agency — only when not already linked to one (an agent
+   * belongs to at most ONE agency; the current agency must unlink first).
+   * Returns null when the guard fails.
+   */
+  async setAgency(agentId: string, agencyId: string): Promise<IDeliveryAgent | null> {
+    return await DeliveryAgentModel.findOneAndUpdate(
+      { _id: agentId, agency_id: { $in: [null, undefined] } },
+      { agency_id: agencyId },
+      { new: true }
+    );
+  }
+
+  /** Unlink an agent from the given agency (scoped so only the owner agency can). */
+  async clearAgency(agentId: string, agencyId: string): Promise<IDeliveryAgent | null> {
+    return await DeliveryAgentModel.findOneAndUpdate(
+      { _id: agentId, agency_id: agencyId },
+      { $unset: { agency_id: 1 } },
+      { new: true }
+    );
+  }
+
   async markEmailVerified(userId: string): Promise<IDeliveryAgent | null> {
     return await DeliveryAgentModel.findOneAndUpdate(
       { user_id: userId },

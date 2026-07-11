@@ -10,6 +10,7 @@
     "lint": "eslint src --max-warnings 0",
     "aggregate:analytics": "ts-node scripts/populate-vendor-analytics.ts",
     "backfill:last-ordered": "ts-node scripts/backfill-last-ordered-at.ts",
+    "backfill:pickup-locations": "ts-node scripts/backfill-pickup-locations.ts",
     "migrate:customer-payment-methods": "ts-node scripts/migrate-customer-payment-methods.ts",
     "seed:tickets": "ts-node scripts/seed/seed-tickets.ts",
     "seed:tickets:clean": "ts-node scripts/seed/seed-tickets.ts --clean",

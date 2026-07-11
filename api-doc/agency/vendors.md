@@ -10,13 +10,23 @@
 
 **Authorization**: Agency access required. Bearer token with `agency` role.
 
+> [!IMPORTANT]
+> **Legacy endpoint.** `GET /api/agency/vendors` only shows vendors who set this agency as their
+> **default**, which is narrower than "every vendor connected to me" — a vendor connected to this
+> agency *only* via a per-product override never appears here. For the full, connection-truth-based
+> "who's connected to me" view (with request/approve/reject actions), use
+> [Agency Vendor Connections](./vendor-connections.md) (`GET /api/agency/vendor-connections?status=active`)
+> instead. This endpoint still works and its narrower meaning is unchanged — kept for
+> backward compatibility.
+
 ---
 
 ### GET /api/agency/vendors
 
 **Description**: Vendors who have set this agency as their **default delivery agency**
 (`vendor.default_delivery_agency_id`). Read-only — an agency cannot change this relationship; it
-is configured on the vendor side (`PUT /api/vendor/profile/default-delivery-agency`).
+is configured on the vendor side (`PUT /api/vendor/profile/default-delivery-agency`), which now
+requires an active connection with this agency — see [Agency Vendor Connections](./vendor-connections.md).
 
 **Request Headers**:
 ```http

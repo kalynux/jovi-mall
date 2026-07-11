@@ -41,6 +41,10 @@ export interface Product {
   delivery?: {
     agencyId: string | null;
     freeDelivery: boolean;
+    pickupLocation: {
+      source: 'vendor_address' | 'agency_storage';
+      vendorAddressId: string | null;
+    } | null;
   };
 
   // System-driven suspension snapshot. Undefined/null unless currently suspended by a cascade.
@@ -78,7 +82,16 @@ export class ProductMapper implements IMapper<Product, IProduct> {
         isActive: doc.digitalConfig.isActive ?? true,
       } : undefined,
       delivery: doc.delivery
-        ? { agencyId: doc.delivery.agency_id?.toString() ?? null, freeDelivery: doc.delivery.free_delivery ?? false }
+        ? {
+          agencyId: doc.delivery.agency_id?.toString() ?? null,
+          freeDelivery: doc.delivery.free_delivery ?? false,
+          pickupLocation: doc.delivery.pickup_location
+            ? {
+              source: doc.delivery.pickup_location.source,
+              vendorAddressId: doc.delivery.pickup_location.vendor_address_id?.toString() ?? null,
+            }
+            : null,
+        }
         : undefined,
       suspension: doc.suspension
         ? {

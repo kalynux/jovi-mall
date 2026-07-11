@@ -35,6 +35,8 @@ export interface IVendorNotificationPreference extends Document {
         paymentReceivedPartial: boolean;
         paymentReceivedFull: boolean;
         storageAlert: boolean;
+        /** Covers all four connection.* situations (request received, approved, rejected, reapproval needed). */
+        connectionUpdated: boolean;
     };
 
     updatedAt: Date;
@@ -104,6 +106,10 @@ const VendorNotificationPreferenceSchema = new Schema<IVendorNotificationPrefere
                 default: true
             },
             storageAlert: {
+                type: Boolean,
+                default: true
+            },
+            connectionUpdated: {
                 type: Boolean,
                 default: true
             }

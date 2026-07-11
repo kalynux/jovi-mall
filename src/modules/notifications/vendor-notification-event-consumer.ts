@@ -24,6 +24,10 @@ export function initializeVendorNotificationEventConsumers(): void {
     eventBus.subscribe('payment.received.partial', handler.handlePaymentReceivedPartial.bind(handler));
     eventBus.subscribe('payment.received.full', handler.handlePaymentReceivedFull.bind(handler));
     eventBus.subscribe('vendor.storage.alert', handler.handleStorageAlert.bind(handler));
+    eventBus.subscribe('connection.request_received', handler.handleConnectionRequestReceived.bind(handler));
+    eventBus.subscribe('connection.approved', handler.handleConnectionApproved.bind(handler));
+    eventBus.subscribe('connection.rejected', handler.handleConnectionRejected.bind(handler));
+    eventBus.subscribe('connection.reapproval_needed', handler.handleConnectionReapprovalNeeded.bind(handler));
 
     console.log(
         `[VendorNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`

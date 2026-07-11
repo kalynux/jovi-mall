@@ -159,10 +159,23 @@ export class ShipmentService {
         ]);
 
         // Items: join shipment's order_item_id references against the order's own
-        // item snapshots for title/sku/price.
+        // item snapshots for title/sku/price. Pickup location (#3) is resolved
+        // per item from the snapshot taken at order-creation time (the product's
+        // configured pickup_location — see ProductStatusValidationService /
+        // order.service.ts) rather than guessed from the vendor's first address —
+        // a shipment can carry several of the vendor's products, each configured
+        // differently. The agency's own HQ address is still resolved live (not
+        // snapshotted) since it isn't vendor/product-specific.
+        const agencyHq = agency?.headquarters_addresses?.[0] ?? null;
         const orderItemsById = new Map((order as any).items.map((i: any) => [i._id.toString(), i]));
         const items = shipment.items.map(si => {
             const orderItem: any = orderItemsById.get(si.order_item_id.toString());
+            const pl = orderItem?.delivery?.pickup_location;
+            const pickupLocation = !pl
+                ? null // legacy order item predating this feature
+                : pl.source === 'agency_storage'
+                    ? { mode: 'storage_based' as const, alreadyInYourStorage: true, address: agencyHq }
+                    : { mode: 'pickup_based' as const, alreadyInYourStorage: false, address: pl.address_snapshot ?? null };
             return {
                 orderItemId: si.order_item_id.toString(),
                 productId: si.product_id.toString(),
@@ -170,19 +183,9 @@ export class ShipmentService {
                 title: orderItem?.title ?? null,
                 sku: orderItem?.sku ?? null,
                 variantTitle: orderItem?.variant_title ?? null,
+                pickupLocation,
             };
         });
-
-        // Pickup location (#3): if the agency warehouses vendor stock
-        // (storage_based), the item already sits at the agency's own HQ — nothing
-        // to go pick up. Otherwise (pickup_based), the agency must collect from
-        // the vendor's business address.
-        const storageBasedEnabled = agency?.policies?.pricing?.storage_based?.enabled ?? false;
-        const vendorAddress = vendor?.business_addresses?.[0] ?? null;
-        const agencyHq = agency?.headquarters_addresses?.[0] ?? null;
-        const pickupLocation = storageBasedEnabled
-            ? { mode: 'storage_based' as const, alreadyInYourStorage: true, address: agencyHq }
-            : { mode: 'pickup_based' as const, alreadyInYourStorage: false, address: vendorAddress };
 
         const defaultAddr = customer?.saved_addresses?.find((a: any) => a.is_default) ?? customer?.saved_addresses?.[0] ?? null;
 
@@ -210,7 +213,6 @@ export class ShipmentService {
                     country: defaultAddr.country,
                 } : null,
             } : null,
-            pickupLocation,
             agent: agent ? { id: agent._id.toString(), name: agent.name, phone: agent.phone ?? null, avatarUrl: agent.avatar_url ?? null } : null,
             statusHistory: shipment.status_history.map(h => ({
                 status: h.status,

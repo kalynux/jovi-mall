@@ -84,6 +84,18 @@ const AgencyPoliciesSchema = new Schema(
     pricing: { type: AgencyPoliciesPricingSchema, required: true },
     returns: { type: AgencyPoliciesReturnsSchema, required: true },
     damage: { type: AgencyPoliciesDamageSchema, required: true },
+    /**
+     * Up to 2 supporting document URLs (e.g. PDFs) covering additional terms
+     * that don't fit the structured fields above.
+     */
+    documents: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: (docs: string[]) => docs.length <= 2,
+        message: 'Maximum 2 policy documents allowed',
+      },
+    },
   },
   { _id: false }
 );
@@ -180,6 +192,8 @@ export interface IAgencyPolicies {
   pricing: IAgencyPoliciesPricing;
   returns: IAgencyPoliciesReturns;
   damage: IAgencyPoliciesDamage;
+  /** Up to 2 supporting document URLs (e.g. PDFs) for terms not covered above. */
+  documents?: string[];
 }
 
 export interface IAgencyKycDetails {
@@ -226,6 +240,12 @@ export interface IDeliveryAgency extends Document {
   payout_details: IPayoutMethod[];
   kyc_details: IAgencyKycDetails;
   policies: IAgencyPolicies | null;
+  /**
+   * Incremented every time `policies` changes. Distinct from `version` (optimistic
+   * concurrency) — this one is watched by the agency-connections module to detect
+   * a policy edit and pause any active connections that need reapproval.
+   */
+  policy_version: number;
   /** @deprecated Use kyc_details.legit_verified. Kept for backward compat. */
   legit_verified: boolean;
   wa?: {
@@ -272,6 +292,7 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
       }),
     },
     policies: { type: AgencyPoliciesSchema, default: null },
+    policy_version: { type: Number, default: 0 },
     /** @deprecated */
     legit_verified: { type: Boolean, default: false },
     wa: {

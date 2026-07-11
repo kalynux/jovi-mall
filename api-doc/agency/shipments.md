@@ -103,9 +103,9 @@ Each status change also recomputes the parent order's `fulfillment_status` — s
 <a name="detail"></a>
 ### GET /api/agency/shipments/:id
 
-**Description**: Full detail for one of the agency's own shipments — items, vendor (#4), customer
-+ delivery address (#5), pickup location (#3), assigned agent, status history, and the parent
-order's merged multi-agency timeline.
+**Description**: Full detail for one of the agency's own shipments — items (each with its own
+pickup location, #3), vendor (#4), customer + delivery address (#5), assigned agent, status
+history, and the parent order's merged multi-agency timeline.
 
 **Success Response** (`200 OK`):
 ```json
@@ -126,7 +126,25 @@ order's merged multi-agency timeline.
         "quantity": 2,
         "title": "T-Shirt",
         "sku": "TSHIRT-RED-L",
-        "variantTitle": "Size: Large, Color: Red"
+        "variantTitle": "Size: Large, Color: Red",
+        "pickupLocation": {
+          "mode": "pickup_based",
+          "alreadyInYourStorage": false,
+          "address": { "label": "Main Shop", "addressLine1": "12 Rue du Marché", "addressLine2": null, "city": "Douala", "state": "Littoral" }
+        }
+      },
+      {
+        "orderItemId": "507f1f77bcf86cd799439056",
+        "productId": "507f1f77bcf86cd799439067",
+        "quantity": 1,
+        "title": "Bulk Rice 25kg",
+        "sku": "RICE-25KG",
+        "variantTitle": null,
+        "pickupLocation": {
+          "mode": "storage_based",
+          "alreadyInYourStorage": true,
+          "address": { "label": "HQ Warehouse", "city": "Douala" }
+        }
       }
     ],
     "vendor": { "id": "507f1f77bcf86cd799439aaa", "businessName": "Acme Store", "phone": "+237670000001", "email": "acme@example.com" },
@@ -144,11 +162,6 @@ order's merged multi-agency timeline.
         "country": "CM"
       }
     },
-    "pickupLocation": {
-      "mode": "pickup_based",
-      "alreadyInYourStorage": false,
-      "address": { "label": "Main Shop", "city": "Douala", "state": "Littoral" }
-    },
     "agent": { "id": "507f1f77bcf86cd799439077", "name": "Paul Biya Jr.", "phone": "+237670000003", "avatarUrl": null },
     "statusHistory": [
       { "status": "assigned", "changedAt": "2026-07-05T09:00:00.000Z", "changedByUserId": null, "changedByRole": "system" },
@@ -164,10 +177,16 @@ order's merged multi-agency timeline.
 }
 ```
 
-> **`pickupLocation`** — if the agency's own `policies.pricing.storage_based.enabled` is true, the
-> item is assumed to already sit in the agency's own warehouse (`headquarters_addresses[0]`,
-> `alreadyInYourStorage: true`, nothing to go collect). Otherwise (`pickup_based`) the address is
-> the **vendor's** business address (`business_addresses[0]`) — go collect it from there.
+> **`items[].pickupLocation`** — each product is individually configured by its vendor (subject to
+> this agency's own policy — see [Delivery Agencies](../vendor/delivery-agencies.md) and
+> [Vendor Products](../vendor/products.md#update-product)), so a single shipment can mix items with
+> different pickup locations even though they're all the same vendor. `mode: "storage_based"` /
+> `alreadyInYourStorage: true` means the item already sits in the agency's own warehouse — nothing
+> to go collect (`address` is the agency's own HQ, resolved live, not vendor-specific). `mode:
+> "pickup_based"` / `alreadyInYourStorage: false` means the agency must collect from the specific
+> vendor business address the vendor chose for that product — `address` is a **snapshot** taken
+> when the order was placed, so it stays accurate even if the vendor edits/removes that address
+> later. `pickupLocation` is `null` only for shipments whose order predates this feature.
 >
 > **`orderTimeline`** — every shipment of the parent order (not just this one), so a multi-agency
 > order shows the full cross-agency flow, not just this agency's slice.

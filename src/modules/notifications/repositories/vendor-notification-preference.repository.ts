@@ -16,6 +16,7 @@ export interface UpdatePreferencesPayload {
         paymentReceivedPartial?: boolean;
         paymentReceivedFull?: boolean;
         storageAlert?: boolean;
+        connectionUpdated?: boolean;
     };
 }
 
@@ -54,7 +55,8 @@ export class VendorNotificationPreferenceRepository {
                     bookingCancelled: true,
                     paymentReceivedPartial: true,
                     paymentReceivedFull: true,
-                    storageAlert: true
+                    storageAlert: true,
+                    connectionUpdated: true
                 }
             });
         }
@@ -127,6 +129,7 @@ export class VendorNotificationPreferenceRepository {
             updatePayload['preferences.paymentReceivedPartial'] = updates.preferences.paymentReceivedPartial ?? current.preferences.paymentReceivedPartial;
             updatePayload['preferences.paymentReceivedFull'] = updates.preferences.paymentReceivedFull ?? current.preferences.paymentReceivedFull;
             updatePayload['preferences.storageAlert'] = updates.preferences.storageAlert ?? current.preferences.storageAlert;
+            updatePayload['preferences.connectionUpdated'] = updates.preferences.connectionUpdated ?? current.preferences.connectionUpdated;
         }
 
         const result = await VendorNotificationPreferenceModel.findOneAndUpdate(

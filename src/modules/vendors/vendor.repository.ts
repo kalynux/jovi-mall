@@ -1,6 +1,25 @@
-import { ClientSession } from 'mongoose';
+import { ClientSession, FilterQuery } from 'mongoose';
 import { VendorModel, IVendor } from './vendor.model';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
+import { VendorOnboardingStep } from '../../core/constants/onboarding-steps';
+
+// ─── Query Params Types ───────────────────────────────────────────────────────
+
+export interface VendorListQueryParams {
+  /** Free-text search across business_name, display_name, and business_addresses[].city / state / address_line1 */
+  search?: string;
+  /** Filter by business address city (case-insensitive) */
+  city?: string;
+  /** Filter by business address state/region (case-insensitive) */
+  state?: string;
+  /** If true, only return vendors whose return policy accepts returns */
+  return_eligible?: boolean;
+  /** If true, only return vendors whose cancellation policy allows cancellation */
+  cancellable?: boolean;
+  /** Pagination */
+  page: number;
+  limit: number;
+}
 
 export class VendorRepository {
   async create(vendorData: Partial<IVendor>): Promise<IVendor> {
@@ -147,6 +166,82 @@ export class VendorRepository {
     ]);
 
     return { data: docs, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  /**
+   * Bump the policy-change counter. Called by VendorProfileService whenever
+   * `policies` is written with a different value, so the agency-connections
+   * module can detect the change and pause connections that need reapproval.
+   */
+  async incrementPolicyVersion(vendorId: string, session?: ClientSession): Promise<IVendor | null> {
+    return await VendorModel.findByIdAndUpdate(
+      vendorId,
+      { $inc: { policy_version: 1 } },
+      { new: true, session }
+    );
+  }
+
+  // ─── Agency-Facing Query ──────────────────────────────────────────────────
+
+  /**
+   * Find vendors available for an agency to search/request a connection with.
+   * Symmetric to DeliveryAgencyRepository.findAvailableForVendors.
+   *
+   * Hard filters (always applied):
+   *   - status ≠ 'inactive'
+   *   - onboarding_step = 0 (fully completed)
+   *
+   * Returns a field-projected, lean result (no payout details, no KYC numbers).
+   */
+  async findAvailableForAgencies(
+    params: VendorListQueryParams,
+  ): Promise<{ vendors: IVendor[]; total: number }> {
+    const { search, city, state, return_eligible, cancellable, page, limit } = params;
+
+    const filter: FilterQuery<IVendor> = {
+      status: { $ne: 'inactive' },
+      onboarding_step: VendorOnboardingStep.COMPLETED,
+    };
+
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim(), 'i');
+      filter.$or = [
+        { business_name: searchRegex },
+        { display_name: searchRegex },
+        { 'business_addresses.city': searchRegex },
+        { 'business_addresses.state': searchRegex },
+        { 'business_addresses.address_line1': searchRegex },
+      ];
+    }
+
+    if (city && city.trim()) {
+      filter['business_addresses.city'] = new RegExp(city.trim(), 'i');
+    }
+
+    if (state && state.trim()) {
+      filter['business_addresses.state'] = new RegExp(state.trim(), 'i');
+    }
+
+    if (return_eligible === true) {
+      filter['policies.return_policy.return_eligible'] = true;
+    }
+
+    if (cancellable === true) {
+      filter['policies.cancellation_policy.cancellable'] = true;
+    }
+
+    const [vendors, total] = await Promise.all([
+      VendorModel.find(filter)
+        .select('business_name display_name branding business_addresses kyc_details.legit_verified policies status')
+        .sort({ business_name: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean()
+        .exec(),
+      VendorModel.countDocuments(filter).exec(),
+    ]);
+
+    return { vendors: vendors as unknown as IVendor[], total };
   }
 
   async unlinkWhatsApp(userId: string): Promise<IVendor | null> {

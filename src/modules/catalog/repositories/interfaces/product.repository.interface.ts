@@ -118,6 +118,19 @@ export interface IProductRepository {
   ): Promise<Product[]>;
 
   /**
+   * Find a SINGLE vendor's physical products whose OWN delivery.agencyId override
+   * points at the given agency. Unlike findPhysicalByOwnDeliveryAgency (agency-wide,
+   * across every vendor — correct for the admin deactivate/reactivate cascade), this
+   * is scoped to one vendor — used by the agency-connections pause/reapprove cascade,
+   * which must never touch a vendor's products tied to a *different*, unaffected agency.
+   */
+  findPhysicalByVendorAndOwnDeliveryAgency(
+    vendorId: string,
+    agencyId: string,
+    options?: RepositoryOptions,
+  ): Promise<Product[]>;
+
+  /**
    * An agency's "products I'm set up to deliver" view — combined: explicit
    * per-product override to this agency OR inherited via a vendor's default
    * agency (when that product has no override of its own).
@@ -128,4 +141,18 @@ export interface IProductRepository {
     pagination: PaginationOptions,
     options?: RepositoryOptions,
   ): Promise<Page<Product>>;
+
+  /**
+   * For each given business-address id, count how many of this vendor's
+   * (non-deleted) physical products currently have it set as their
+   * `delivery.pickupLocation` (source `vendor_address`). Used to block
+   * removing a business address that's still in use — see
+   * VendorProfileService.assertRemovedAddressesNotInUse. Ids with no matching
+   * products are simply absent from the returned map (treat as 0).
+   */
+  countPhysicalByVendorAndPickupAddresses(
+    vendorId: string,
+    addressIds: string[],
+    options?: RepositoryOptions,
+  ): Promise<Record<string, number>>;
 }

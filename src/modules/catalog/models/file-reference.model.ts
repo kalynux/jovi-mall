@@ -5,10 +5,10 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
  * Entities that can reference a File. Extend this union (and the schema enum)
- * when a new feature starts attaching files — e.g. 'ticket', 'store', 'kyc_doc'.
+ * when a new feature starts attaching files — e.g. 'store', 'kyc_doc'.
  * Nothing else in the file layer needs to change to support a new type.
  */
-export type FileReferenceEntityType = 'product' | 'variant' | 'digital_asset' | 'ticket';
+export type FileReferenceEntityType = 'product' | 'variant' | 'digital_asset' | 'ticket' | 'vendor';
 
 /**
  * FileReference — junction record linking a File to the entity that uses it.
@@ -37,7 +37,7 @@ const FileReferenceSchema = new Schema<IFileReference>({
   fileId: { type: Schema.Types.ObjectId, ref: MODELS.FILE, required: true },
   entityType: {
     type: String,
-    enum: ['product', 'variant', 'digital_asset', 'ticket'],
+    enum: ['product', 'variant', 'digital_asset', 'ticket', 'vendor'],
     required: true,
   },
   entityId: { type: Schema.Types.ObjectId, required: true },

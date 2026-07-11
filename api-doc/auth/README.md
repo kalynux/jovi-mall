@@ -457,7 +457,7 @@ Onboarding is **field-presence driven**: every profile write recalculates `onboa
 |------|-------|-------|-----------------|
 | `BASIC_SETUP` | `1` | Basic Setup | `country`, `timezone`, `payout_details` |
 | `DELIVERY_LINKING` | `2` | Delivery Linking | `default_delivery_agency_id` |
-| `BRANDING` | `3` | Branding (Optional) | `branding`, `business_addresses` — or `skip: true` |
+| `BRANDING` | `3` | Branding (Optional) | `branding` (attached file ids), `business_addresses` — or `skip: true` |
 | `COMPLETED` | `0` | Done | — |
 
 #### Step 1 — Basic Setup
@@ -494,14 +494,18 @@ Onboarding is **field-presence driven**: every profile write recalculates `onboa
 
 #### Step 3 — Branding (Optional / Skippable)
 
+Branding images are attached files, not raw URLs — upload the logo/cover image first via
+`POST /api/files/upload` (multipart, field name `files`), then submit the returned file `id`s below.
+See [Vendor Onboarding — Step 3: Branding](../vendor/onboarding.md#step-3-branding-optional--skippable).
+
 To provide branding data:
 
 ```json
 {
   "step": 3,
   "branding": {
-    "logo_url": "https://cdn.example.com/logo.png",
-    "cover_image_url": "https://cdn.example.com/cover.png"
+    "logo_file_id": "507f1f77bcf86cd799439030",
+    "cover_image_file_id": "507f1f77bcf86cd799439031"
   },
   "business_addresses": [
     {
@@ -526,8 +530,8 @@ To skip this step:
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | `skip` | boolean | ❌ | Set `true` to skip branding and mark complete |
-| `branding.logo_url` | string (URL) | ❌ | Publicly accessible image URL |
-| `branding.cover_image_url` | string (URL) | ❌ | Publicly accessible image URL |
+| `branding.logo_file_id` | string (ObjectId) \| null | ❌ | Id of a file uploaded via `POST /api/files/upload` |
+| `branding.cover_image_file_id` | string (ObjectId) \| null | ❌ | Id of a file uploaded via `POST /api/files/upload` |
 | `business_addresses` | array | ❌ | List of business addresses |
 
 #### Onboarding Step Response
@@ -666,7 +670,7 @@ Below are the key fields returned in `role_entity` for each role. Some fields ar
   "phone_verified": false,
   "country": null,
   "timezone": "Africa/Douala",
-  "branding": { "logo_url": null, "cover_image_url": null },
+  "branding": { "logo_file_id": null, "cover_image_file_id": null },
   "business_addresses": [],
   "payout_details": null,
   "kyc_details": { "national_id_number": null, "legit_verified": false },

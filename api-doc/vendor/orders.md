@@ -27,6 +27,8 @@ Authorization: Bearer <access_token>
 | List orders | `GET` | `/api/vendor/orders` | ✅ | ✅ |
 | Get order details | `GET` | `/api/vendor/orders/:id` | ✅ | ✅ |
 | Update fulfillment status | `PATCH` | `/api/vendor/orders/:id/status` | ✅ | ✅ |
+| Bulk update fulfillment status | `POST` | `/api/vendor/orders/bulk/status` | ✅ | ✅ |
+| Bulk dispatch to agency | `POST` | `/api/vendor/orders/bulk/dispatch` | ✅ | ❌ |
 | Add internal note | `POST` | `/api/vendor/orders/:id/notes` | ✅ | ✅ |
 | Get internal notes | `GET` | `/api/vendor/orders/:id/notes` | ✅ | ✅ |
 | Get single note | `GET` | `/api/vendor/orders/:id/notes/:noteId` | ✅ | ✅ |
@@ -301,6 +303,68 @@ The response is the full updated order details object (same shape as `GET /api/v
 
 ---
 
+<a name="bulk-status"></a>
+### POST /api/vendor/orders/bulk/status
+
+**Description**: Update the fulfillment status of **many orders in one call** (e.g. "cancel selected", "mark selected as processing" from a bulk-select UI). Each order is validated against its own current state **independently** — one ineligible order does not block the rest of the batch. This is the batched counterpart of `PATCH /api/vendor/orders/:id/status` above and enforces the exact same rules per order (state machine, payment coupling, dispute hold).
+
+**Authorization**: Vendor access required.
+
+**Request Headers**:
+- `Authorization: Bearer <token>`
+- `Content-Type: application/json`
+
+**Path Parameters**: None
+
+**Request Body**:
+```json
+{
+  "orderIds": ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"],
+  "status": "processing"
+}
+```
+- `orderIds` (string[], required, 1–50 items) — order IDs to update. A repeated ID is processed once per occurrence, independently — if the first occurrence changes the order's state, the second occurrence will evaluate against that new state (typically ending up in `failed` with `ORDER_TERMINAL_STATE` or `ORDER_INVALID_TRANSITION`).
+- `status` (string, required) — New status. Enum: `pending`, `processing`, `cancelled` (same vendor-settable subset as the single-order endpoint).
+
+**Success Response**:
+
+Status: `200 OK` — **always 200 for a well-formed request.** Per-order failures are reported in the response body, not as an HTTP error; only a malformed request (empty/oversized `orderIds`, invalid `status`) returns `400 VALIDATION_ERROR`.
+
+Body:
+```json
+{
+  "success": true,
+  "data": {
+    "total": 5,
+    "succeeded": ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012", "507f1f77bcf86cd799439013"],
+    "failed": [
+      { "orderId": "507f1f77bcf86cd799439014", "code": "ORDER_PAYMENT_REQUIRED", "reason": "order payment required" },
+      { "orderId": "507f1f77bcf86cd799439015", "code": "ORDER_TERMINAL_STATE", "reason": "order terminal state" }
+    ]
+  },
+  "message": "3 of 5 order(s) updated to 'processing', 2 failed"
+}
+```
+
+- `succeeded` — order IDs whose status was actually changed.
+- `failed` — one entry per order that was rejected, with `code` (a stable machine-readable error code — use this for logic/mapping) and `reason` (a human-readable string; may be generic for some codes, prefer `code` for display logic).
+
+**Possible `failed[].code` values** (identical to the single-order endpoint's error responses):
+
+| Code | Meaning |
+|------|---------|
+| `ORDER_NOT_FOUND` | Order doesn't exist or isn't owned by this vendor |
+| `ORDER_TERMINAL_STATE` | Order is already `delivered`, `cancelled`, or otherwise terminal |
+| `ORDER_INVALID_TRANSITION` | Requested status isn't reachable from the order's current status |
+| `ORDER_PAYMENT_REQUIRED` | Order isn't `paid` yet (blocks moving to `processing`) |
+| `ORDER_PAYMENT_FAILED_STATE` | Order's payment is `failed`/`refunded` |
+| `ORDER_DISPUTE_HOLD` | Order is frozen by an open payment dispute |
+
+**Error Responses** (request-level, before any order is touched):
+- `400` – `VALIDATION_ERROR` – `orderIds` empty/exceeds 50 items, contains an invalid ID, or `status` isn't one of the allowed values
+
+---
+
 <a name="dispatch"></a>
 ### POST /api/vendor/orders/:id/dispatch
 
@@ -341,6 +405,65 @@ already handled it) — the response still succeeds, just with an informational 
 - `400` – `ORDER_WRONG_TYPE` – Order is digital (nothing to dispatch to an agency).
 - `422` – `ORDER_PAYMENT_REQUIRED` – Order is not yet paid.
 - `423` – `ORDER_DISPUTE_HOLD` – Order is frozen by an open payment dispute.
+
+---
+
+<a name="bulk-dispatch"></a>
+### POST /api/vendor/orders/bulk/dispatch
+
+**Description**: Dispatch **many** reviewed, paid physical orders to their delivery agency/agencies in one call (e.g. "dispatch selected" from a bulk-select UI). Each order goes through the exact same checks as the single-order [`POST /api/vendor/orders/:id/dispatch`](#dispatch) above — orders that aren't dispatchable (unpaid, digital, disputed, not found) are reported as failures without blocking the rest of the batch.
+
+**Authorization**: Vendor access required.
+
+**Request Headers**:
+- `Authorization: Bearer <token>`
+- `Content-Type: application/json`
+
+**Request Body**:
+```json
+{
+  "orderIds": ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"]
+}
+```
+- `orderIds` (string[], required, 1–50 items) — order IDs to dispatch.
+
+**Success Response**:
+
+Status: `200 OK` — **always 200 for a well-formed request.** Per-order failures are reported in the response body, not as an HTTP error.
+
+Body:
+```json
+{
+  "success": true,
+  "data": {
+    "total": 4,
+    "succeeded": [
+      { "orderId": "507f1f77bcf86cd799439011", "dispatchedShipments": 1 },
+      { "orderId": "507f1f77bcf86cd799439012", "dispatchedShipments": 0 }
+    ],
+    "failed": [
+      { "orderId": "507f1f77bcf86cd799439013", "code": "ORDER_PAYMENT_REQUIRED", "reason": "order payment required" },
+      { "orderId": "507f1f77bcf86cd799439014", "code": "ORDER_WRONG_TYPE", "reason": "order wrong type" }
+    ]
+  },
+  "message": "2 of 4 order(s) dispatched, 2 failed"
+}
+```
+
+- `succeeded` — one entry per order that was **not rejected**, with `dispatchedShipments` (the number of `pending` shipments moved to `assigned`). `dispatchedShipments: 0` is a legitimate no-op — the order was already dispatched or had nothing pending — and is still reported as a success, matching the single-order endpoint's behavior.
+- `failed` — one entry per order that was rejected, with `code` (stable, prefer this for logic/mapping) and `reason` (human-readable, may be generic for some codes).
+
+**Possible `failed[].code` values**:
+
+| Code | Meaning |
+|------|---------|
+| `ORDER_NOT_FOUND` | Order doesn't exist or isn't owned by this vendor |
+| `ORDER_WRONG_TYPE` | Order is digital — nothing to dispatch to an agency |
+| `ORDER_PAYMENT_REQUIRED` | Order is not yet `paid` — **this is the "unpaid order can't be dispatched" case** |
+| `ORDER_DISPUTE_HOLD` | Order is frozen by an open payment dispute |
+
+**Error Responses** (request-level, before any order is touched):
+- `400` – `VALIDATION_ERROR` – `orderIds` empty, exceeds 50 items, or contains an invalid ID
 
 ---
 

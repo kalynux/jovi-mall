@@ -116,7 +116,7 @@ Root-level fields on the agency profile response object.
 
 `policies` is submitted at Step 4 and is the most complex field on the profile. It is `null` until Step 4 is completed.
 
-It has three top-level keys: `pricing`, `returns`, and `damage`.
+It has four top-level keys: `pricing`, `returns`, `damage`, and `documents`.
 
 ### 5.1 `pricing`
 
@@ -196,6 +196,16 @@ Governs damage claim resolution.
 | `investigation_fee` | `number` | **No — admin only** | ≥ 0 | Fee charged to open a damage investigation. Preset by admin. Defaults to `1000`. Always present in the API response. |
 
 > **Important:** `inspector` and `investigation_fee` are platform-level presets controlled exclusively by an admin. The frontend must never send these fields — they will be ignored if sent. They will always appear in the `policies.damage` block of the profile response.
+
+### 5.4 `documents`
+
+Supporting document(s) for terms that don't fit the structured fields above (e.g. a signed PDF addendum).
+
+| Field | Type | Sendable by frontend? | Validation | Description |
+|-------|------|----------------------|------------|-------------|
+| `documents` | `string[]` | Yes | Max 2 items, each a valid URL | Upload via `POST /api/agency/profile/policy-documents` (standalone route, PDF only, max 5MB each — see [onboarding.md](./onboarding.md#uploading-policy-documents)) first, then submit the resulting URL(s) here. Defaults to `[]`. |
+
+> **Full replace:** Like the rest of `policies`, `documents` is overwritten wholesale on every submit — resend existing URLs to keep them.
 
 ---
 
@@ -320,6 +330,8 @@ export interface AgencyPolicies {
   pricing: AgencyPricingPolicy;
   returns: AgencyReturnsPolicy;
   damage: AgencyDamagePolicy;
+  /** Up to 2 supporting document URLs (e.g. PDFs) for terms not covered above. Defaults to []. */
+  documents?: string[];
 }
 
 // ─── Full Profile ──────────────────────────────────────────────────────────────

@@ -55,6 +55,10 @@ export const MODELS = Object.freeze({
   SHIPMENT: 'Shipment',
   DELIVERY_AGENCY: 'DeliveryAgency',
   DELIVERY_AGENT: 'DeliveryAgent',
+  AGENT_INVITE: 'AgentInvite',
+
+  // Vendor <-> agency connections
+  VENDOR_AGENCY_CONNECTION: 'VendorAgencyConnection',
 
   // Payments
   PAYMENT_TRANSACTION: 'PaymentTransaction',
@@ -103,6 +107,16 @@ export const MODELS = Object.freeze({
   EARNINGS_ACCOUNT: 'EarningsAccount',
   EARNINGS_ALLOCATION: 'EarningsAllocation',
   EARNINGS_LEDGER: 'EarningsLedger',
+  EARNINGS_RESERVE_HOLD: 'EarningsReserveHold',
+
+  // COD (cash on delivery: collections, cash liabilities, reconciliation)
+  CASH_COLLECTION: 'CashCollection',
+  COD_CASH_ACCOUNT: 'CodCashAccount',
+  COD_CASH_LEDGER: 'CodCashLedger',
+  AGENT_DEPOSIT: 'AgentDeposit',
+  AGENCY_REMITTANCE: 'AgencyRemittance',
+  COD_DISCREPANCY: 'CodDiscrepancy',
+  COD_TRUST_EVENT: 'CodTrustEvent',
 } as const);
 
 export const COLLECTIONS = Object.freeze({
@@ -142,6 +156,10 @@ export const COLLECTIONS = Object.freeze({
   SHIPMENT: 'shipments',
   DELIVERY_AGENCY: 'delivery_agencies',
   DELIVERY_AGENT: 'delivery_agents',
+  AGENT_INVITE: 'agent_invites',
+
+  // Vendor <-> agency connections
+  VENDOR_AGENCY_CONNECTION: 'vendor_agency_connections',
 
   // Payments
   PAYMENT_TRANSACTION: 'payment_transactions',
@@ -190,6 +208,16 @@ export const COLLECTIONS = Object.freeze({
   EARNINGS_ACCOUNT: 'earnings_accounts',
   EARNINGS_ALLOCATION: 'earnings_allocations',
   EARNINGS_LEDGER: 'earnings_ledgers',
+  EARNINGS_RESERVE_HOLD: 'earnings_reserve_holds',
+
+  // COD (cash on delivery: collections, cash liabilities, reconciliation)
+  CASH_COLLECTION: 'cash_collections',
+  COD_CASH_ACCOUNT: 'cod_cash_accounts',
+  COD_CASH_LEDGER: 'cod_cash_ledgers',
+  AGENT_DEPOSIT: 'agent_deposits',
+  AGENCY_REMITTANCE: 'agency_remittances',
+  COD_DISCREPANCY: 'cod_discrepancies',
+  COD_TRUST_EVENT: 'cod_trust_events',
 } as const);
 
 export type ModelName = (typeof MODELS)[keyof typeof MODELS];

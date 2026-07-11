@@ -428,6 +428,60 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
   }
 
   /**
+   * Per-address product counts for the given vendor (see interface doc).
+   */
+  async countPhysicalByVendorAndPickupAddresses(
+    vendorId: string,
+    addressIds: string[],
+    options?: RepositoryOptions,
+  ): Promise<Record<string, number>> {
+    if (addressIds.length === 0) return {};
+
+    const aggregation = this.model.aggregate<{ _id: Types.ObjectId; count: number }>([
+      {
+        $match: {
+          vendorId: new Types.ObjectId(vendorId),
+          type: 'physical',
+          deletedAt: null,
+          'delivery.pickup_location.source': 'vendor_address',
+          'delivery.pickup_location.vendor_address_id': { $in: addressIds.map(id => new Types.ObjectId(id)) },
+        },
+      },
+      { $group: { _id: '$delivery.pickup_location.vendor_address_id', count: { $sum: 1 } } },
+    ]);
+    if (options?.session) aggregation.session(options.session);
+    const rows = await aggregation.exec();
+
+    const result: Record<string, number> = {};
+    for (const row of rows) result[row._id.toString()] = row.count;
+    return result;
+  }
+
+  /**
+   * Find a single vendor's physical products whose OWN delivery.agencyId override
+   * points at the given agency — scoped version of findPhysicalByOwnDeliveryAgency,
+   * used by the agency-connections pause/reapprove cascade (see interface doc).
+   */
+  async findPhysicalByVendorAndOwnDeliveryAgency(
+    vendorId: string,
+    agencyId: string,
+    options?: RepositoryOptions,
+  ): Promise<Product[]> {
+    if (!Types.ObjectId.isValid(agencyId)) return [];
+    const filter: FilterQuery<IProduct> = {
+      vendorId: vendorId as any,
+      type: 'physical',
+      'delivery.agency_id': agencyId as any,
+      deletedAt: null,
+    };
+
+    const query = this.model.find(filter);
+    if (options?.session) query.session(options.session);
+    const docs = await query.exec();
+    return docs.map(doc => this.mapper.toDomain(doc));
+  }
+
+  /**
    * An agency's "products I'm set up to deliver" view (requirement #8) —
    * combined: physical products with an explicit `delivery.agencyId` override to
    * this agency, OR belonging to a vendor whose `default_delivery_agency_id` is

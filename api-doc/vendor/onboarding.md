@@ -208,20 +208,18 @@ Captures the vendor's country, timezone, and payout method.
 - **Auth**: Yes (Vendor role)
 - **Prerequisite**: Step 1 completed
 
-Allows the vendor to select a default delivery agency for physical product orders. **Service-only vendors should skip this step.**
+> [!IMPORTANT]
+> **This step no longer selects a default delivery agency directly.** It is now a plain step-advance — calling it just moves onboarding to Step 3. Selecting an agency requires that agency's **consent**: see [Agency Connections](./agency-connections.md) — the vendor searches agencies (`GET /api/vendor/agency-connections/browse`) and sends connection requests (`POST /api/vendor/agency-connections`), independently of this onboarding step (an agency's approval is async and can't block onboarding progress). **The vendor's `default_delivery_agency_id` is set automatically the first time any connection is approved** — no explicit "set default" call needed for the first one. The vendor can change their default afterward via [`PUT /api/vendor/profile/default-delivery-agency`](./profile.md#put-apivendorprofiledefault-delivery-agency), e.g. once they have several active contracts.
+>
+> This applies equally to service-only vendors — there's nothing to configure here either way, so there is no meaningful difference between "skipping" and "not skipping" anymore.
 
-> [!TIP]
-> Before submitting this step, use `GET /api/vendor/delivery-agencies` to show the vendor a browsable, filterable list of available agencies. See the [Delivery Agencies](./delivery-agencies.md) documentation for full details on search, filtering, and pagination.
-
-#### Request Body — Selecting an agency
+#### Request Body
 
 ```json
-{
-  "default_delivery_agency_id": "683abc1234567890abcdef01"
-}
+{}
 ```
 
-#### Request Body — Skipping (service-only vendors)
+`skip` is still accepted for backward compatibility with existing frontend calls, but no longer changes behavior:
 
 ```json
 {
@@ -233,13 +231,10 @@ Allows the vendor to select a default delivery agency for physical product order
 
 | Field | Type | Required? | Validation | Notes |
 |-------|------|-----------|------------|-------|
-| `skip` | `boolean` | No | Defaults to `false` | Set `true` to skip without selecting an agency. |
-| `default_delivery_agency_id` | `string` | Conditional | Min 1 char. Must be a valid agency ID. | Required if `skip` is `false` or not provided. |
+| `skip` | `boolean` | No | Defaults to `false` | **Deprecated** — accepted but ignored. Kept only so existing clients don't break. |
 | `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard. |
 
-> **Validation rules:**
-> - Either `skip` must be `true` **or** `default_delivery_agency_id` must be provided — you cannot submit an empty form.
-> - When an agency ID is provided, the backend validates that the agency exists, is NOT inactive, and has completed its own onboarding (`onboarding_step === 0`). An invalid ID returns a `404` or `400` error.
+Any other field (e.g. a legacy client still sending `default_delivery_agency_id`) is silently ignored — it is not part of this endpoint's schema anymore and does not cause a validation error.
 
 #### Success Response (`200 OK`)
 
@@ -269,13 +264,21 @@ Allows the vendor to select a default delivery agency for physical product order
 
 Captures the vendor's branding (logo, cover image) and business addresses. This step is optional — the user can skip it and onboarding will be marked as complete.
 
+> [!IMPORTANT]
+> **Branding images are attached files, not raw URLs.** This mirrors product media (see
+> [Vendor Product Upload Reference — Media Handling](./product-upload-flow.md#media-handling)):
+> upload the logo/cover image first via `POST /api/files/upload` (multipart, field name `files`),
+> then submit the returned file `id`s here as `branding.logo_file_id` / `branding.cover_image_file_id`.
+> `GET /api/vendor/profile` and every onboarding response return the **populated file** (`id`, `key`,
+> `url`, `mimeType`, `size`, `originalName`), not a bare string.
+
 #### Request Body — Providing Data
 
 ```json
 {
   "branding": {
-    "logo_url": "https://cdn.example.com/vendors/tech-solutions/logo.png",
-    "cover_image_url": "https://cdn.example.com/vendors/tech-solutions/cover.jpg"
+    "logo_file_id": "507f1f77bcf86cd799439030",
+    "cover_image_file_id": "507f1f77bcf86cd799439031"
   },
   "business_addresses": [
     {
@@ -304,16 +307,30 @@ Captures the vendor's branding (logo, cover image) and business addresses. This 
 |-------|------|-----------|------------|-------|
 | `skip` | `boolean` | No | Defaults to `false` | Set `true` to skip and finalize onboarding. |
 | `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard. Ignored if `skip: true`. |
-| `branding` | `object` | No | See sub-fields | Ignored if `skip: true`. |
-| `branding.logo_url` | `string \| null` | No | Must be a valid absolute URL | Vendor logo image. |
-| `branding.cover_image_url` | `string \| null` | No | Must be a valid absolute URL | Cover/banner image. |
-| `business_addresses` | `object[]` | No | See sub-fields | Vendor's physical locations. Ignored if `skip: true`. |
+| `branding` | `object` | No | See sub-fields | **Full replacement of the whole sub-object** — send both fields, including the one you're not changing, or it will be cleared. Ignored if `skip: true`. |
+| `branding.logo_file_id` | `string \| null` | No | Valid MongoDB ObjectId of a file you uploaded via `POST /api/files/upload` | Vendor logo image. |
+| `branding.cover_image_file_id` | `string \| null` | No | Valid MongoDB ObjectId of a file you uploaded via `POST /api/files/upload` | Cover/banner image. |
+| `business_addresses` | `object[]` | No | See sub-fields | Vendor's physical locations. **Full replacement** — send the complete desired array, including unchanged entries. Ignored if `skip: true`. |
+| `business_addresses[]._id` | `string` | No | Valid MongoDB ObjectId | **Omit when adding a new address** (a fresh id is generated). **Include the `_id` you got back from `GET /api/vendor/profile`** when re-submitting an existing address (even just editing one field) — otherwise it's treated as removing the old one, which is **rejected** (`409 VENDOR_BUSINESS_ADDRESS_IN_USE`) if any physical product's pickup location still points at it. |
 | `business_addresses[].label` | `string` | Yes | Min 1, Max 50 chars | E.g. `"Main Office"`, `"Warehouse"`. |
 | `business_addresses[].address_line1` | `string` | Yes | Min 1, Max 200 chars | Primary street address. |
 | `business_addresses[].address_line2` | `string \| null` | No | Max 200 chars | Secondary address (suite, floor, etc.). |
 | `business_addresses[].city` | `string` | Yes | Min 1, Max 100 chars | City name. |
 | `business_addresses[].state` | `string \| null` | No | Max 100 chars | State or region. |
 | `business_addresses[].location` | `GeoPoint \| null` | No | `{ type: "Point", coordinates: [lng, lat] }` | Geographic coordinates for map display. |
+
+> [!NOTE]
+> **These addresses become selectable pickup locations for your physical products.** Each physical
+> product must have a `delivery.pickupLocation` pointing at one of these addresses (or at the
+> delivery agency's own storage, if that agency offers it) before it can be activated — see
+> [Vendor Products — Update Product](./products.md#update-product).
+>
+> **You cannot remove (or resubmit without its `_id`, which has the same effect) an address that's
+> still set as a pickup location on one or more physical products.** Doing so rejects the **entire**
+> `business_addresses` update with `409 VENDOR_BUSINESS_ADDRESS_IN_USE` — see
+> [Vendor Profile — Notes](./profile.md#patch-apivendorprofile) for the exact error shape, which
+> includes how many products are blocking each address. Reassign or clear the pickup location on
+> those products first, then retry.
 
 #### Success Response (`200 OK`)
 
@@ -371,7 +388,10 @@ Captures the vendor's return, cancellation, and support policies. All three sub-
     "required_info": ["order_number", "product_photo_video"],
     "availability": "business_hours",
     "languages": ["English", "French"]
-  }
+  },
+  "documents": [
+    "https://cdn.example.com/vendor-docs/terms-addendum.pdf"
+  ]
 }
 ```
 
@@ -429,6 +449,45 @@ Captures the vendor's return, cancellation, and support policies. All three sub-
 | `languages` | `string[]` | No | Max 20 entries, each max 50 chars | Languages supported (e.g. `["English", "French"]`). |
 
 **`required_info` enum values:** `"order_number"`, `"product_photo_video"`, `"tracking_number"`
+
+#### Field Reference — Documents
+
+| Field | Type | Required? | Validation | Notes |
+|-------|------|-----------|------------|-------|
+| `documents` | `string[]` | No | Max 2 items, each a valid URL | Supporting document(s) (e.g. a signed PDF addendum) covering additional terms that don't fit `return_policy` / `cancellation_policy` / `support_policy`. Upload via `POST /api/vendor/profile/policy-documents` first, then submit the resulting URL(s) here. Defaults to `[]`. |
+
+#### Uploading policy documents
+
+- **Endpoint**: `POST /api/vendor/profile/policy-documents`
+- **Auth**: Yes (Vendor role)
+- **Content-Type**: `multipart/form-data`, field name `documents` (1-2 files)
+
+This is a **standalone upload route, unrelated to the product/ticket media pipeline** (`POST /api/files/upload`). Files are **PDF only**, max **5MB each**, max **2 per request**. It does not touch `policies` itself — it only stores the file(s) and returns their public URLs, which you then include in the `documents` array on a `PUT /api/vendor/onboarding/policy-setup` or `PATCH /api/vendor/profile` call.
+
+**Request** (multipart form): `documents` = 1 or 2 PDF files.
+
+**Success Response (`201 Created`)**:
+
+```json
+{
+  "success": true,
+  "data": {
+    "urls": [
+      "https://cdn.example.com/vendor-policy-documents/terms-addendum.pdf"
+    ]
+  },
+  "message": "Uploaded 1 document(s)"
+}
+```
+
+**Error Responses**:
+
+| Status | Code | Cause |
+|--------|------|-------|
+| `400` | `VENDOR_POLICY_DOCUMENT_MISSING` | No file sent under the `documents` field. |
+| `400` | `VENDOR_POLICY_DOCUMENT_TYPE_INVALID` | A file's MIME type is not `application/pdf`. |
+| `400` | `VALIDATION_ERROR` | More than 2 files sent, or an unexpected field name. |
+| `413` | `CATALOG_FILE_TOO_LARGE` | A file exceeds 5MB. |
 
 #### Success Response (`200 OK`)
 
@@ -504,9 +563,7 @@ Returned when the request body fails Zod schema validation.
 | HTTP | Code | When it occurs | Suggested frontend action |
 |------|------|----------------|---------------------------|
 | `400` | `VENDOR_ONBOARDING_STEP_INCOMPLETE` | A prerequisite step has not been completed (e.g. submitting Step 3 before Step 1). | Redirect to the earliest incomplete step. |
-| `400` | `DELIVERY_AGENCY_NOT_FOUND` | The delivery agency ID submitted in Step 2 is inactive or has not completed onboarding. | Show error message and let user pick a different agency. |
 | `404` | `AUTH_USER_NOT_FOUND` | No vendor profile exists for the authenticated user. | Redirect to the add-role or registration flow. |
-| `404` | `DELIVERY_AGENCY_NOT_FOUND` | The delivery agency ID submitted in Step 2 does not exist. | Show error message and let user pick a different agency. |
 | `409` | `VENDOR_ONBOARDING_ALREADY_COMPLETED` | The vendor is fully onboarded; onboarding endpoints are locked. Use the general profile update endpoint instead. | Redirect to dashboard. |
 | `409` | `VENDOR_ONBOARDING_CONCURRENT_MODIFICATION` | The `version` you sent does not match the server's current value — another session saved changes in the meantime. | Show a prompt: *"Your profile was modified elsewhere. Please refresh and try again."* Then re-fetch the profile, store the new `version`, and let the user re-submit. |
 | `500` | `INTERNAL_ERROR` | Unexpected server error. | Show generic error message. |

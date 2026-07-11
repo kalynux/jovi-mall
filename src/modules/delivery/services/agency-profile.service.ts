@@ -15,6 +15,8 @@ import { IDeliveryAgency, IAgencyPolicies } from '../delivery-agency.model';
 import { IPayoutMethod } from '../../../core/types/payout.types';
 import { AgencyOnboardingStep, AgencyOnboardingStepValue } from '../../../core/constants/onboarding-steps';
 import { AGENCY_ONBOARDING_EVENTS } from '../events/agency-onboarding.events';
+import { ConnectionService } from '../../agency-connections/connection.service';
+import { transactionManager, TransactionManager } from '../../../core/database/transaction.manager';
 import {
     UpdateAgencyProfileInput,
     AgencyOnboardingStep1Input,
@@ -42,9 +44,13 @@ import {
  */
 export class AgencyProfileService {
     private agencyRepo: DeliveryAgencyRepository;
+    private txManager: TransactionManager;
+    private connectionService: ConnectionService;
 
     constructor() {
         this.agencyRepo = new DeliveryAgencyRepository();
+        this.txManager = transactionManager;
+        this.connectionService = new ConnectionService();
     }
 
     // ─── Read ─────────────────────────────────────────────────────────────────
@@ -133,6 +139,18 @@ export class AgencyProfileService {
         if (newStep !== updated.onboarding_step) {
             await this.agencyRepo.updateOnboardingStep(agencyId, newStep);
             updated.onboarding_step = newStep;
+        }
+
+        // Policies just changed value (checked AFTER the admin-controlled damage
+        // preset merge above, since that's the value actually persisted) — bump
+        // the policy-change counter and pause any active vendor connections so
+        // the vendor is prompted to reapprove. Only pays the transaction cost
+        // when a change is actually detected.
+        if (payload.policies && JSON.stringify(payload.policies) !== JSON.stringify(agency.policies)) {
+            await this.txManager.runInTransaction(async (session) => {
+                await this.agencyRepo.incrementPolicyVersion(agencyId, session);
+                await this.connectionService.pauseConnectionsForPolicyChange('agency', agencyId, session);
+            });
         }
 
         return AgencyProfileMapper.toResponseDto(updated);
@@ -418,6 +436,7 @@ export class AgencyProfileService {
                 investigation_fee: agency.policies?.damage?.investigation_fee ?? 1000,
             },
         };
+        const policiesChanged = JSON.stringify(agency.policies) !== JSON.stringify(policies);
 
         // Re-edit mode: on step 2 or 3 — save data, keep current step
         if (agency.onboarding_step < AgencyOnboardingStep.POLICY_SETUP) {
@@ -430,6 +449,12 @@ export class AgencyProfileService {
                 expectedVersion,
             );
             if (!updated) throw createAppError(ERROR_CODES.DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION, 409);
+            if (policiesChanged) {
+                await this.txManager.runInTransaction(async (session) => {
+                    await this.agencyRepo.incrementPolicyVersion(agencyId, session);
+                    await this.connectionService.pauseConnectionsForPolicyChange('agency', agencyId, session);
+                });
+            }
             await this.auditOnboardingStep(userId, agencyId, 'POLICY_DATA_UPDATED', 4, agency.onboarding_step);
             return {
                 profile: AgencyProfileMapper.toResponseDto(updated),
@@ -449,6 +474,13 @@ export class AgencyProfileService {
 
         if (!updated) {
             throw createAppError(ERROR_CODES.DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION, 409);
+        }
+
+        if (policiesChanged) {
+            await this.txManager.runInTransaction(async (session) => {
+                await this.agencyRepo.incrementPolicyVersion(agencyId, session);
+                await this.connectionService.pauseConnectionsForPolicyChange('agency', agencyId, session);
+            });
         }
 
         await this.emitStepCompletedEvent(agencyId, userId, AgencyOnboardingStep.POLICY_SETUP, AgencyOnboardingStep.COMPLETED);

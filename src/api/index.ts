@@ -61,11 +61,14 @@ router.use('/vendor', vendorBillingRoutes);
 router.use('/admin', adminBillingRoutes);
 
 // Earnings: commission/escrow ledger. Vendor sees held vs withdrawable balances;
-// admin sees the platform commission account. Mounted at the role roots →
-// /vendor/earnings, /admin/earnings/platform.
+// agency sees its own held vs withdrawable delivery-fee balance; admin sees the
+// platform commission account. Mounted at the role roots →
+// /vendor/earnings, /agency/earnings, /admin/earnings/platform.
 import vendorEarningsRoutes from '../modules/earnings/routes/vendor-earnings.routes';
+import agencyEarningsRoutes from '../modules/earnings/routes/agency-earnings.routes';
 import adminEarningsRoutes from '../modules/earnings/routes/admin-earnings.routes';
 router.use('/vendor', vendorEarningsRoutes);
+router.use('/agency', agencyEarningsRoutes);
 router.use('/admin', adminEarningsRoutes);
 
 // Unified vendor transactions feed (merges plan purchases, credit top-ups,
@@ -99,6 +102,11 @@ router.use('/vendor/tickets', vendorTicketRoutes);
 router.use('/customer/tickets', customerTicketRoutes);
 router.use('/agency/tickets', agencyTicketRoutes);
 router.use('/agent/tickets', agentTicketRoutes);
+
+// Vendor <-> Agency consensual connections (request/approve linkage)
+import { vendorConnectionRoutes, agencyConnectionRoutes } from '../modules/agency-connections';
+router.use('/vendor/agency-connections', vendorConnectionRoutes);
+router.use('/agency/vendor-connections', agencyConnectionRoutes);
 
 // Customer profile routes
 import customerRoutes from '../modules/customers/routes';

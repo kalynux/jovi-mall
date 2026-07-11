@@ -11,7 +11,7 @@ export type VectorisationStatus = 'not_started' | 'pending' | 'completed' | 'fai
  * Reason a product was system-suspended. Scopes which suspended products a
  * given restoration cascade is allowed to touch — other reasons must be left alone.
  */
-export type ProductSuspensionReason = 'default_delivery_agency_removed' | 'product_delivery_agency_removed';
+export type ProductSuspensionReason = 'default_delivery_agency_removed' | 'product_delivery_agency_removed' | 'agency_connection_paused';
 
 /**
  * Snapshot captured when a product is force-suspended, so it can be restored
@@ -30,16 +30,34 @@ export interface DigitalConfig {
   isActive: boolean;
 }
 
+export type PickupLocationSource = 'vendor_address' | 'agency_storage';
+
+/**
+ * Where the resolved delivery agency should collect this product from.
+ * `vendor_address` points at one of the vendor's own `business_addresses[]`
+ * (requires the effective agency's `policies.pricing.pickup_based.enabled`).
+ * `agency_storage` means the agency already warehouses this vendor's stock
+ * (requires `policies.pricing.storage_based.enabled`); `vendor_address_id` is
+ * always null in that case. See PickupLocationValidationService.
+ */
+export interface PickupLocation {
+  source: PickupLocationSource;
+  vendor_address_id: Types.ObjectId | null;
+}
+
 /**
  * Per-product delivery configuration. Only meaningful for physical products.
  * When `agency_id` is null, the order pipeline falls back to the vendor's
  * `default_delivery_agency_id`. If both are unset, the product cannot be
  * activated (see ProductStatusValidationService). `free_delivery` is
  * independent of agency resolution — it's a vendor-set marketing/order flag.
+ * `pickup_location` is required to activate a physical product — without it
+ * the delivery agency has no way to know where to collect the item from.
  */
 export interface DeliveryConfig {
   agency_id: Types.ObjectId | null;
   free_delivery: boolean;
+  pickup_location: PickupLocation | null;
 }
 
 export interface IProduct extends IBaseDocument {
@@ -166,6 +184,15 @@ const ProductSchema = new Schema<IProduct>({
         type: Boolean,
         default: false,
       },
+      // Required to activate a physical product — see ProductStatusValidationService.
+      pickup_location: {
+        type: {
+          source: { type: String, enum: ['vendor_address', 'agency_storage'], required: true },
+          vendor_address_id: { type: Schema.Types.ObjectId, default: null },
+        },
+        required: false,
+        default: null,
+      },
     },
     required: false,
     default: undefined,
@@ -174,7 +201,7 @@ const ProductSchema = new Schema<IProduct>({
   // System-driven suspension snapshot. Null unless currently suspended by a cascade.
   suspension: {
     type: {
-      reason: { type: String, enum: ['default_delivery_agency_removed', 'product_delivery_agency_removed'], required: true },
+      reason: { type: String, enum: ['default_delivery_agency_removed', 'product_delivery_agency_removed', 'agency_connection_paused'], required: true },
       previousStatus: {
         type: String,
         enum: ['draft', 'active', 'archived', 'pending_review'],

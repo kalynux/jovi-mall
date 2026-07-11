@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
-import { AgencyProfileController } from './controllers/agency-profile.controller';
+import { AgencyProfileController, uploadAgencyPolicyDocuments } from './controllers/agency-profile.controller';
 import { AgencyNetworkController } from './controllers/agency-network.controller';
+import { AgencyAgentsController } from './controllers/agency-agents.controller';
 import { ShipmentController } from '../shipments/shipment.controller';
 
 const router = Router();
@@ -62,6 +63,43 @@ router.put('/onboarding/branding', AgencyProfileController.completeBrandingSetup
  */
 router.put('/onboarding/policies', AgencyProfileController.completePolicySetup);
 
+/**
+ * POST /api/agency/profile/policy-documents
+ * Upload 1-2 supporting PDF documents (max 5MB each, field name "documents").
+ * Standalone upload path, unrelated to the product/ticket media pipeline.
+ * Returns public URLs to submit via `policies.documents` on the policy-setup
+ * or profile-update endpoints.
+ */
+router.post('/profile/policy-documents', uploadAgencyPolicyDocuments, AgencyProfileController.uploadPolicyDocuments);
+
+// ─── Agents (roster & invites) ──────────────────────────────────────────────
+
+/**
+ * POST /api/agency/agents/invites
+ * Invite a delivery agent to join this agency's roster, by email.
+ * Body: { email: string }
+ */
+router.post('/agents/invites', AgencyAgentsController.invite);
+
+/**
+ * GET /api/agency/agents/invites
+ * This agency's invites. Query: status? ('pending' | 'accepted' | 'declined' | 'revoked')
+ */
+router.get('/agents/invites', AgencyAgentsController.listInvites);
+
+/** DELETE /api/agency/agents/invites/:id — revoke a pending invite. */
+router.delete('/agents/invites/:id', AgencyAgentsController.revokeInvite);
+
+/** GET /api/agency/agents — the agency's agent roster. */
+router.get('/agents', AgencyAgentsController.listAgents);
+
+/**
+ * DELETE /api/agency/agents/:id
+ * Unlink an agent from the roster. Blocked while the agent has shipments in
+ * flight or undeposited COD cash.
+ */
+router.delete('/agents/:id', AgencyAgentsController.unlinkAgent);
+
 // ─── Shipments ──────────────────────────────────────────────────────────────
 
 /**
@@ -106,25 +144,27 @@ router.patch('/shipments/:id/assign-agent', ShipmentController.assignAgent);
  */
 router.patch('/shipments/:id/tracking-number', ShipmentController.setTrackingNumber);
 
-// ─── Network (read-only) ──────────────────────────────────────────────────────
-
-/**
- * GET /api/agency/vendors
- * Vendors who set this agency as their default delivery agency (requirement #7).
- * Read-only — the agency cannot change this from its side.
- */
-router.get('/vendors', AgencyNetworkController.listVendors);
-
-/**
- * GET /api/agency/products
- * Products this agency is set up to deliver: explicit per-product override to
- * this agency OR inherited via a vendor's default (requirement #8). Read-only.
- */
-router.get('/products', AgencyNetworkController.listProducts);
-
 // ─── Legacy / Backward Compatibility ──────────────────────────────────────────
 
 /** GET /api/agency/profile/completion-status (kept for backward compat) */
 router.get('/profile/completion-status', AgencyProfileController.getCompletionStatus);
+
+/**
+ * GET /api/agency/vendors (legacy — narrower than the connections view)
+ * Vendors who set this agency as their default delivery agency. Read-only —
+ * the agency cannot change this from its side. Still correct post-connections
+ * (default_delivery_agency_id can now only point at an actively-connected
+ * agency), but a vendor connected to this agency ONLY via a per-product
+ * override never appears here. See GET /api/agency/vendor-connections?status=active
+ * for the full "who's connected to me" view.
+ */
+router.get('/vendors', AgencyNetworkController.listVendors);
+
+/**
+ * GET /api/agency/products (legacy)
+ * Products this agency is set up to deliver: explicit per-product override to
+ * this agency OR inherited via a vendor's default. Read-only.
+ */
+router.get('/products', AgencyNetworkController.listProducts);
 
 export default router;

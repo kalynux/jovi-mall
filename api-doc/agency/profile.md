@@ -105,7 +105,8 @@ Authorization: Bearer <jwt_token>
         "inspector": "agency",
         "investigation_fee": 1000,
         "notes": null
-      }
+      },
+      "documents": []
     },
     "wa": null,
     "timezone": "Africa/Douala",
@@ -204,7 +205,7 @@ All fields are **optional** — send only what changed. This maps 1:1 to `Update
 | `headquarters_addresses` | `object[]` | Min 1 entry; see [Step 1 field reference](./onboarding.md#step-1-logistics-setup-required) | Step 1 (Logistics) | Full replace. Index 0 = primary HQ. |
 | `payout_details` | `object[]` | 1–2 entries, ordered (index 0 = preferred); see [Step 2 field reference](./onboarding.md#step-2-payout-setup-required) | Step 2 (Payout) | Full replace. |
 | `kyc_details` | `object` | `{ registration_number?, transport_license_id? }`, both nullable strings | — (general) | `legit_verified` is **admin-only** and ignored if sent. |
-| `policies` | `object` | `{ pricing, returns, damage }` — see [Step 4 field reference](./onboarding.md#step-4-policy-setup-required) | Step 4 (Policy Setup) | Full replace of the **whole** `policies` object. `damage.inspector`/`damage.investigation_fee` are preserved server-side regardless of what (if anything) you send for them. |
+| `policies` | `object` | `{ pricing, returns, damage, documents? }` — see [Step 4 field reference](./onboarding.md#step-4-policy-setup-required) | Step 4 (Policy Setup) | Full replace of the **whole** `policies` object. `damage.inspector`/`damage.investigation_fee` are preserved server-side regardless of what (if anything) you send for them. `documents` (max 2 URLs) is cleared if omitted — resend existing URLs to keep them. |
 
 > **Not editable here:** `email`, `phone` (no route exposes agency-initiated email/phone changes today), `status`, `kycVerified` (`kyc_details.legit_verified`), `onboardingStep`, `version` — all server/admin-controlled.
 

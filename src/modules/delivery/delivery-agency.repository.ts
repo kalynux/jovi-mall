@@ -44,6 +44,15 @@ export class DeliveryAgencyRepository {
   }
 
   /**
+   * Batch-fetch agencies by id in ONE query (e.g. resolving every distinct
+   * agency's policy for a multi-shipment order without an N+1 query per
+   * shipment). Agencies not found are simply absent from the result.
+   */
+  async findByIds(agencyIds: string[]): Promise<IDeliveryAgency[]> {
+    return DeliveryAgencyModel.find({ _id: { $in: agencyIds } });
+  }
+
+  /**
    * Check if an agency document exists for the given user_id.
    * Used for idempotency check on creation.
    */
@@ -161,6 +170,21 @@ export class DeliveryAgencyRepository {
           'kyc_details.legit_verified': verified,
         },
       },
+      { new: true },
+    );
+    if (session) query.session(session);
+    return query.exec();
+  }
+
+  /**
+   * Bump the policy-change counter. Called by AgencyProfileService whenever
+   * `policies` is written with a different value, so the agency-connections
+   * module can detect the change and pause connections that need reapproval.
+   */
+  async incrementPolicyVersion(agencyId: string, session?: ClientSession): Promise<IDeliveryAgency | null> {
+    const query = DeliveryAgencyModel.findByIdAndUpdate(
+      agencyId,
+      { $inc: { policy_version: 1 } },
       { new: true },
     );
     if (session) query.session(session);

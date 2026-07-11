@@ -157,6 +157,26 @@ The backend frequently includes context variables inside the `details` object fo
 - `PAYMENT_ORDER_NOT_FOUND` may include `{"orderId": "..."}`
 - `STORE_SLUG_TAKEN` may include `{"slug": "..."}`
 
+### 9. Vendor <-> Agency Connection Errors
+**Code:** `CONNECTION_INVALID_STATUS_TRANSITION` (Status `400`)
+Returned by the [Agency Connections](../vendor/agency-connections.md) API when an action (e.g.
+`approve`, `terminate`) doesn't apply to the connection's current status.
+
+```json
+{
+  "details": {
+    "from": "rejected",  // the connection's actual current status
+    "to": "active"       // the status the attempted action would have produced
+  }
+}
+```
+
+Other codes in this family — see [Agency Connections](../vendor/agency-connections.md) and
+[Vendor Connections](../agency/vendor-connections.md) for full context, no `details` payload:
+`CONNECTION_NOT_FOUND` (404), `CONNECTION_VENDOR_NOT_FOUND` (404), `CONNECTION_ALREADY_EXISTS`
+(409), `CONNECTION_NOT_PENDING` / `CONNECTION_NOT_PAUSED` / `CONNECTION_NOT_ACTIVE` (422),
+`CONNECTION_NOT_REQUESTER` / `CONNECTION_NOT_APPROVER` / `CONNECTION_WRONG_REAPPROVAL_PARTY` (403).
+
 ---
 
 ## Best Practices for Frontend Error Handling

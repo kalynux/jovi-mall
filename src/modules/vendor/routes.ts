@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
-import { VendorProfileController } from './controller/vendor-profile.controller';
+import { VendorProfileController, uploadVendorPolicyDocuments } from './controller/vendor-profile.controller';
 import { VendorCalendarController } from './controller/vendor-calendar.controller';
 import { VendorOrderController } from './controller/vendor-order.controller';
 import { VendorNotificationController } from './controller/vendor-notification.controller';
@@ -160,6 +160,15 @@ router.put('/onboarding/branding', VendorProfileController.completeBrandingSetup
  */
 router.put('/onboarding/policy-setup', VendorProfileController.completePolicySetup);
 
+/**
+ * POST /api/vendor/profile/policy-documents
+ * Upload 1-2 supporting PDF documents (max 5MB each, field name "documents").
+ * Standalone upload path, unrelated to the product/ticket media pipeline.
+ * Returns public URLs to submit via `policies.documents` on the policy-setup
+ * or profile-update endpoints.
+ */
+router.post('/profile/policy-documents', uploadVendorPolicyDocuments, VendorProfileController.uploadPolicyDocuments);
+
 
 /**
  * ==========================================
@@ -196,6 +205,24 @@ router.post('/calendar/disconnect', VendorCalendarController.disconnect);
  * List vendor orders with filters and pagination
  */
 router.get('/orders', VendorOrderController.listOrders);
+
+/**
+ * POST /api/vendor/orders/bulk/status
+ * Bulk-update fulfillment status for many orders at once. Each order is
+ * validated independently — partial success is expected, see api-doc.
+ *
+ * NOTE: registered ABOVE the /orders/:id/... routes below. POST /orders/:id/dispatch
+ * shares its path shape with POST /orders/bulk/dispatch — if the bulk routes were
+ * registered after the :id routes, Express would match "bulk" as the :id value and
+ * the bulk handler would never be reached.
+ */
+router.post('/orders/bulk/status', VendorOrderController.bulkUpdateFulfillmentStatus);
+
+/**
+ * POST /api/vendor/orders/bulk/dispatch
+ * Bulk-dispatch many paid physical orders to their delivery agency/agencies.
+ */
+router.post('/orders/bulk/dispatch', VendorOrderController.bulkDispatchToAgency);
 
 /**
  * GET /api/vendor/orders/:id

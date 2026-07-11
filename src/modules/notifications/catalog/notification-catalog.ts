@@ -88,6 +88,14 @@ const MANAGE_STORAGE_LABEL: Record<Language, string> = {
     ar: 'إدارة التخزين'
 };
 
+const VIEW_CONNECTION_LABEL: Record<Language, string> = {
+    en: 'View connection',
+    fr: 'Voir la connexion',
+    pt: 'Ver conexão',
+    es: 'Ver conexión',
+    ar: 'عرض الاتصال'
+};
+
 // ─── Catalog ─────────────────────────────────────────────────────────────────
 
 export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> = {
@@ -194,6 +202,70 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> =
             template: { name: 'vendor_storage_alert', bodyParams: ['{{percentUsed}}', '{{usageFormatted}}', '{{limitFormatted}}'] }
         },
         button: { type: 'url', label: MANAGE_STORAGE_LABEL, urlSuffix: 'settings/storage' }
+    },
+
+    // NOTE: the WhatsApp template names below (vendor_connection_*) still need to be
+    // created and approved in Meta Business Manager before WhatsApp delivery will
+    // actually succeed for these situations — in-app/email/telegram/push work today
+    // regardless. Same bootstrapping step every new situation in this catalog needs.
+    'connection.request_received': {
+        base: {
+            en: { subject: 'New connection request', body: '{{agencyName}} wants to connect with you as a delivery partner.' },
+            fr: { subject: 'Nouvelle demande de connexion', body: '{{agencyName}} souhaite se connecter avec vous en tant que partenaire de livraison.' },
+            pt: { subject: 'Novo pedido de conexão', body: '{{agencyName}} deseja se conectar com você como parceiro de entrega.' },
+            es: { subject: 'Nueva solicitud de conexión', body: '{{agencyName}} quiere conectarse contigo como socio de entrega.' },
+            ar: { subject: 'طلب اتصال جديد', body: 'ترغب {{agencyName}} في الاتصال بك كشريك توصيل.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_connection_request_received', bodyParams: ['{{agencyName}}'] }
+        },
+        button: { type: 'url', label: VIEW_CONNECTION_LABEL, urlSuffix: 'agency-connections/{{connectionId}}' }
+    },
+
+    'connection.approved': {
+        base: {
+            en: { subject: 'Connection approved', body: '{{agencyName}} approved your connection request. You can now select them as a delivery agency.' },
+            fr: { subject: 'Connexion approuvée', body: '{{agencyName}} a approuvé votre demande de connexion. Vous pouvez maintenant la sélectionner comme agence de livraison.' },
+            pt: { subject: 'Conexão aprovada', body: '{{agencyName}} aprovou seu pedido de conexão. Agora você pode selecioná-la como agência de entrega.' },
+            es: { subject: 'Conexión aprobada', body: '{{agencyName}} aprobó tu solicitud de conexión. Ahora puedes seleccionarla como agencia de entrega.' },
+            ar: { subject: 'تمت الموافقة على الاتصال', body: 'وافقت {{agencyName}} على طلب الاتصال الخاص بك. يمكنك الآن اختيارها كوكالة توصيل.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_connection_approved', bodyParams: ['{{agencyName}}'] }
+        },
+        button: { type: 'url', label: VIEW_CONNECTION_LABEL, urlSuffix: 'agency-connections/{{connectionId}}' }
+    },
+
+    'connection.rejected': {
+        base: {
+            en: { subject: 'Connection request rejected', body: '{{agencyName}} declined your connection request.' },
+            fr: { subject: 'Demande de connexion refusée', body: '{{agencyName}} a refusé votre demande de connexion.' },
+            pt: { subject: 'Pedido de conexão recusado', body: '{{agencyName}} recusou seu pedido de conexão.' },
+            es: { subject: 'Solicitud de conexión rechazada', body: '{{agencyName}} rechazó tu solicitud de conexión.' },
+            ar: { subject: 'تم رفض طلب الاتصال', body: 'رفضت {{agencyName}} طلب الاتصال الخاص بك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_connection_rejected', bodyParams: ['{{agencyName}}'] }
+        },
+        button: { type: 'url', label: VIEW_CONNECTION_LABEL, urlSuffix: 'agency-connections/{{connectionId}}' }
+    },
+
+    'connection.reapproval_needed': {
+        base: {
+            en: { subject: 'Reapproval needed', body: '{{agencyName}} updated their policies. Reapprove your connection to keep your products active.' },
+            fr: { subject: 'Réapprobation requise', body: '{{agencyName}} a mis à jour ses politiques. Réapprouvez votre connexion pour garder vos produits actifs.' },
+            pt: { subject: 'Reaprovação necessária', body: '{{agencyName}} atualizou suas políticas. Reaprove sua conexão para manter seus produtos ativos.' },
+            es: { subject: 'Reaprobación necesaria', body: '{{agencyName}} actualizó sus políticas. Vuelve a aprobar tu conexión para mantener tus productos activos.' },
+            ar: { subject: 'الموافقة مطلوبة مرة أخرى', body: 'قامت {{agencyName}} بتحديث سياساتها. أعد الموافقة على اتصالك للحفاظ على نشاط منتجاتك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_connection_reapproval_needed', bodyParams: ['{{agencyName}}'] }
+        },
+        button: { type: 'url', label: VIEW_CONNECTION_LABEL, urlSuffix: 'agency-connections/{{connectionId}}' }
     }
 };
 
