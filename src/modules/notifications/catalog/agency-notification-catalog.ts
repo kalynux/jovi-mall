@@ -35,6 +35,14 @@ const VIEW_TICKET_LABEL: Record<Language, string> = {
     ar: 'عرض التذكرة'
 };
 
+const VIEW_SHIPMENT_LABEL: Record<Language, string> = {
+    en: 'View shipment',
+    fr: 'Voir l\'expédition',
+    pt: 'Ver remessa',
+    es: 'Ver envío',
+    ar: 'عرض الشحنة'
+};
+
 const CONNECTION_BUTTON: ButtonDef = {
     type: 'url',
     label: VIEW_CONNECTION_LABEL,
@@ -45,6 +53,12 @@ const TICKET_BUTTON: ButtonDef = {
     type: 'url',
     label: VIEW_TICKET_LABEL,
     urlSuffix: 'tickets/{{ticketId}}'
+};
+
+const SHIPMENT_BUTTON: ButtonDef = {
+    type: 'url',
+    label: VIEW_SHIPMENT_LABEL,
+    urlSuffix: 'shipments/{{shipmentId}}'
 };
 
 // ─── Catalog ─────────────────────────────────────────────────────────────────
@@ -112,6 +126,21 @@ export const AGENCY_NOTIFICATION_CATALOG: Record<AgencyNotificationType, Situati
             template: { name: 'agency_connection_reapproval_needed', bodyParams: ['{{vendorName}}'] }
         },
         button: CONNECTION_BUTTON
+    },
+
+    'shipment.assigned': {
+        base: {
+            en: { subject: 'New shipment assigned', body: 'Order #{{orderNumber}} was dispatched to you — {{itemCount}} item(s) to fulfill.' },
+            fr: { subject: 'Nouvelle expédition assignée', body: 'La commande n°{{orderNumber}} vous a été confiée — {{itemCount}} article(s) à traiter.' },
+            pt: { subject: 'Nova remessa atribuída', body: 'O pedido nº{{orderNumber}} foi despachado para você — {{itemCount}} item(ns) para cumprir.' },
+            es: { subject: 'Nuevo envío asignado', body: 'El pedido n.º{{orderNumber}} fue despachado a ti — {{itemCount}} artículo(s) por cumplir.' },
+            ar: { subject: 'تم تعيين شحنة جديدة', body: 'تم إرسال الطلب رقم {{orderNumber}} إليك — {{itemCount}} عنصر (عناصر) للتنفيذ.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_shipment_assigned', bodyParams: ['{{orderNumber}}', '{{itemCount}}'] }
+        },
+        button: SHIPMENT_BUTTON
     },
 
     'payout.requested': {

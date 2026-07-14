@@ -169,6 +169,28 @@ export class AgencyNotificationEventHandler {
         }
     }
 
+    /** Handle shipment.assigned event (a vendor dispatched an order to this agency). */
+    async handleShipmentAssigned(event: DomainEvent): Promise<void> {
+        try {
+            const { shipmentId, agencyId, orderNumber, itemCount } = event.payload;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.shipmentAssigned) return;
+
+            await this.dispatch({
+                situation: 'shipment.assigned',
+                prefs,
+                agencyId,
+                aggregateType: 'shipment',
+                aggregateId: shipmentId,
+                idempotencyKey: `shipment.assigned:${shipmentId}`,
+                context: { orderNumber, itemCount, shipmentId }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle shipment.assigned:', error);
+        }
+    }
+
     /** Handle payout.requested event (fires for both vendor and agency payouts). */
     async handlePayoutRequested(event: DomainEvent): Promise<void> {
         try {

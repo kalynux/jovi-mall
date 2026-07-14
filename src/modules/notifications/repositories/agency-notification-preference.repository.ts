@@ -10,6 +10,7 @@ export interface UpdateAgencyPreferencesPayload {
     whatsappEnabled?: boolean;
     preferences?: {
         connectionUpdated?: boolean;
+        shipmentAssigned?: boolean;
         payoutUpdates?: boolean;
     };
 }
@@ -41,6 +42,7 @@ export class AgencyNotificationPreferenceRepository {
                 whatsappVerified: false,
                 preferences: {
                     connectionUpdated: true,
+                    shipmentAssigned: true,
                     payoutUpdates: true
                 }
             });
@@ -100,6 +102,8 @@ export class AgencyNotificationPreferenceRepository {
         if (updates.preferences) {
             updatePayload['preferences.connectionUpdated'] =
                 updates.preferences.connectionUpdated ?? current.preferences.connectionUpdated;
+            updatePayload['preferences.shipmentAssigned'] =
+                updates.preferences.shipmentAssigned ?? current.preferences.shipmentAssigned;
             updatePayload['preferences.payoutUpdates'] =
                 updates.preferences.payoutUpdates ?? current.preferences.payoutUpdates;
         }

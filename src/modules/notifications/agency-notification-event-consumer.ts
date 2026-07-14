@@ -21,6 +21,7 @@ export function initializeAgencyNotificationEventConsumers(): void {
     eventBus.subscribe('connection.approved', handler.handleConnectionApproved.bind(handler));
     eventBus.subscribe('connection.rejected', handler.handleConnectionRejected.bind(handler));
     eventBus.subscribe('connection.reapproval_needed', handler.handleConnectionReapprovalNeeded.bind(handler));
+    eventBus.subscribe('shipment.assigned', handler.handleShipmentAssigned.bind(handler));
     eventBus.subscribe('payout.requested', handler.handlePayoutRequested.bind(handler));
     eventBus.subscribe('payout.paid', handler.handlePayoutPaid.bind(handler));
     eventBus.subscribe('payout.rejected', handler.handlePayoutRejected.bind(handler));

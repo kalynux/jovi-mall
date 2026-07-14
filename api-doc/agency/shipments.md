@@ -376,4 +376,17 @@ Only allowed while the shipment is still `assigned` (not yet picked up).
 
 **Error Responses**:
 - `400` – `VALIDATION_ERROR` – Missing/invalid `trackingNumber`.
+
+---
+
+## Notifications
+
+You receive an agency notification (in-app, always; plus your configured secondary channel) when
+a vendor dispatches an order to you: `shipment.assigned` (`aggregateType: "shipment"`, `aggregateId`
+= the `Shipment` id). Fires on both manual dispatch and payment-triggered auto-redirect — the
+shipment's `status` has already moved `pending` → `assigned` by the time it's delivered, so it will
+show up in `GET /api/agency/shipments` immediately.
+
+Toggle via the `shipmentAssigned` flag on [notification preferences](./notifications.md) (default:
+on).
 - `404` – `SHIPMENT_NOT_FOUND` – Shipment does not exist or is not handled by this agency.

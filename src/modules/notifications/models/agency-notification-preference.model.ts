@@ -28,6 +28,8 @@ export interface IAgencyNotificationPreference extends Document {
     preferences: {
         /** Covers all four connection.* situations (request received, approved, rejected, reapproval needed). */
         connectionUpdated: boolean;
+        /** A vendor's order was dispatched to this agency (shipment.assigned). */
+        shipmentAssigned: boolean;
         /** Covers all three payout.* situations (requested, paid, rejected). */
         payoutUpdates: boolean;
     };
@@ -75,6 +77,10 @@ const AgencyNotificationPreferenceSchema = new Schema<IAgencyNotificationPrefere
         },
         preferences: {
             connectionUpdated: {
+                type: Boolean,
+                default: true
+            },
+            shipmentAssigned: {
                 type: Boolean,
                 default: true
             },

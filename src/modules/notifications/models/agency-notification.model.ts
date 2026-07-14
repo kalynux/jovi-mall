@@ -14,10 +14,11 @@ export type AgencyNotificationType =
     | 'connection.approved'
     | 'connection.rejected'
     | 'connection.reapproval_needed'
+    | 'shipment.assigned'
     | 'payout.requested'
     | 'payout.paid'
     | 'payout.rejected';
-export type AgencyAggregateType = 'connection' | 'payout';
+export type AgencyAggregateType = 'connection' | 'shipment' | 'payout';
 
 /**
  * Deep-link action for a notification, localized in the agency's language.
@@ -62,6 +63,7 @@ const AgencyNotificationSchema = new Schema<IAgencyNotification>(
                 'connection.approved',
                 'connection.rejected',
                 'connection.reapproval_needed',
+                'shipment.assigned',
                 'payout.requested',
                 'payout.paid',
                 'payout.rejected'
@@ -70,7 +72,7 @@ const AgencyNotificationSchema = new Schema<IAgencyNotification>(
         },
         title: { type: String, required: true, trim: true, maxlength: 200 },
         message: { type: String, required: true, trim: true, maxlength: 1000 },
-        aggregateType: { type: String, enum: ['connection', 'payout'], required: true },
+        aggregateType: { type: String, enum: ['connection', 'shipment', 'payout'], required: true },
         aggregateId: { type: Schema.Types.ObjectId, required: true },
         action: {
             type: new Schema(

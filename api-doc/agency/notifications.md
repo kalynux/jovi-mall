@@ -75,6 +75,7 @@ verification status, and per-event subscriptions.
     "whatsappVerified": false,
     "preferences": {
       "connectionUpdated": true,
+      "shipmentAssigned": true,
       "payoutUpdates": true
     }
   }
@@ -99,6 +100,7 @@ Telegram link, WhatsApp link) — not stored toggles, ignored on write.
   "whatsappEnabled": false,
   "preferences": {
     "connectionUpdated": true,
+    "shipmentAssigned": true,
     "payoutUpdates": true
   }
 }
@@ -241,6 +243,7 @@ notification-preferences payload.
 | Preference key | Notification `type` | `aggregateType` | Fires when |
 |---|---|---|---|
 | `connectionUpdated` | `connection.request_received`, `connection.approved`, `connection.rejected`, `connection.reapproval_needed` | `connection` | A vendor connection request/approval/rejection/reapproval-needed happens — the agency-side mirror of the vendor's `connectionUpdated`. See [Vendor connections](./vendor-connections.md). |
+| `shipmentAssigned` | `shipment.assigned` | `shipment` | A vendor dispatches an order to this agency (manual dispatch or auto-redirect on payment) — the shipment moves `pending` → `assigned` and appears on `GET /api/agency/shipments`. `aggregateId` is the `Shipment` id; `action.path` deep-links to `shipments/{shipmentId}`. See [Shipments](./shipments.md). |
 | `payoutUpdates` | `payout.requested`, `payout.paid`, `payout.rejected` | `payout` | Your own payout request is created, paid, or rejected. `aggregateId` is the `PayoutRequest` id; `action.path` deep-links to `tickets/{ticketId}`. See [Earnings — Requesting a payout](./earnings.md#requesting-a-payout). |
 
 Note the direction: these fire when the **vendor** is the actor on a connection the agency cares
