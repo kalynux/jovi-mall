@@ -23,7 +23,18 @@ import { MODELS, COLLECTIONS } from '../../core/database/collections';
  */
 
 export type OrderType = 'physical' | 'digital';
-export type PaymentStatus = 'pending' | 'AWAITING_PAYMENT' | 'paid' | 'disputed' | 'failed' | 'refunded';
+/**
+ * How the order is paid.
+ * - 'online': prepaid via a gateway (Stripe / NotchPay / MyCoolPay) — the default.
+ * - 'cash_on_delivery': cash handed to the delivery agent per shipment, verified
+ *   by a delivery code (see src/modules/cod/). COD orders fulfil BEFORE payment.
+ */
+export type OrderPaymentMethod = 'online' | 'cash_on_delivery';
+/**
+ * 'partially_paid' is COD-only: at least one of the order's shipments had its
+ * cash collected while others are still outstanding (or ended 'returned').
+ */
+export type PaymentStatus = 'pending' | 'AWAITING_PAYMENT' | 'partially_paid' | 'paid' | 'disputed' | 'failed' | 'refunded';
 /**
  * 'partially_shipped' / 'partially_delivered' / 'shipped' / 'delivered' are
  * system-derived from the order's shipments (see OrderFulfillmentAggregationService)
@@ -121,6 +132,7 @@ export interface IOrder extends Document {
   total_amount: number;                 // Convenience field (same as price_breakdown.total)
 
   // Payment tracking
+  payment_method: OrderPaymentMethod;
   payment_status: PaymentStatus;
   payment_intent_id?: string;           // Payment provider reference
 
@@ -312,9 +324,15 @@ const OrderSchema = new Schema<IOrder>({
   },
 
   // Payment tracking
+  payment_method: {
+    type: String,
+    enum: ['online', 'cash_on_delivery'],
+    default: 'online',
+    required: true
+  },
   payment_status: {
     type: String,
-    enum: ['pending', 'AWAITING_PAYMENT', 'paid', 'disputed', 'failed', 'refunded'],
+    enum: ['pending', 'AWAITING_PAYMENT', 'partially_paid', 'paid', 'disputed', 'failed', 'refunded'],
     default: 'pending',
     index: true  // For payment status queries
   },

@@ -9,18 +9,29 @@ import { EarningsSourceType } from './earnings-allocation.model';
  * balances and history can never diverge.
  *
  * `amount` is the (positive) magnitude moved; `entry_type` says what happened:
- *  - `hold`     money entered `pending_balance` (order split).
- *  - `release`  money moved `pending_balance` → `available_balance`.
- *  - `reversal` money left an account (refund clawback).
+ *  - `hold`            money entered `pending_balance` (order/COD split).
+ *  - `release`         money moved `pending_balance` → `available_balance`.
+ *  - `reversal`        money left an account (refund clawback).
+ *  - `reserve_hold`    money moved `pending_balance` → `reserve_balance`
+ *                      (COD rolling reserve on agency earnings).
+ *  - `reserve_release` money moved `reserve_balance` → `available_balance`.
  * `pending_after`/`available_after` snapshot the balances after the entry.
  */
 
-export type EarningsLedgerEntryType = 'hold' | 'release' | 'reversal';
+export type EarningsLedgerEntryType =
+  | 'hold'
+  | 'release'
+  | 'reversal'
+  | 'reserve_hold'
+  | 'reserve_release';
 
 export type EarningsLedgerReasonCode =
   | 'order_split'
+  | 'cod_split'
   | 'hold_release'
-  | 'refund_reversal';
+  | 'refund_reversal'
+  | 'cod_rolling_reserve'
+  | 'reserve_matured';
 
 export interface IEarningsLedger extends Document {
   account_id: mongoose.Types.ObjectId;
@@ -42,14 +53,22 @@ const EarningsLedgerSchema = new Schema<IEarningsLedger>(
     account_id: { type: Schema.Types.ObjectId, ref: MODELS.EARNINGS_ACCOUNT, required: true },
     owner_type: { type: String, enum: ['vendor', 'agency', 'platform'], required: true },
     owner_id: { type: Schema.Types.ObjectId, default: null },
-    entry_type: { type: String, enum: ['hold', 'release', 'reversal'], required: true },
+    entry_type: {
+      type: String,
+      enum: ['hold', 'release', 'reversal', 'reserve_hold', 'reserve_release'],
+      required: true,
+    },
     amount: { type: Number, required: true },
     pending_after: { type: Number, required: true },
     available_after: { type: Number, required: true },
-    source_type: { type: String, enum: ['order', 'booking'], required: true },
+    source_type: { type: String, enum: ['order', 'booking', 'cod_collection'], required: true },
     source_id: { type: Schema.Types.ObjectId, required: true },
     allocation_id: { type: Schema.Types.ObjectId, ref: MODELS.EARNINGS_ALLOCATION, required: true },
-    reason_code: { type: String, enum: ['order_split', 'hold_release', 'refund_reversal'], required: true },
+    reason_code: {
+      type: String,
+      enum: ['order_split', 'cod_split', 'hold_release', 'refund_reversal', 'cod_rolling_reserve', 'reserve_matured'],
+      required: true,
+    },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: false } }
 );

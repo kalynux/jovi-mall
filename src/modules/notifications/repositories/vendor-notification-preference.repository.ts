@@ -17,6 +17,7 @@ export interface UpdatePreferencesPayload {
         paymentReceivedFull?: boolean;
         storageAlert?: boolean;
         connectionUpdated?: boolean;
+        payoutUpdates?: boolean;
     };
 }
 
@@ -56,7 +57,8 @@ export class VendorNotificationPreferenceRepository {
                     paymentReceivedPartial: true,
                     paymentReceivedFull: true,
                     storageAlert: true,
-                    connectionUpdated: true
+                    connectionUpdated: true,
+                    payoutUpdates: true
                 }
             });
         }
@@ -130,6 +132,7 @@ export class VendorNotificationPreferenceRepository {
             updatePayload['preferences.paymentReceivedFull'] = updates.preferences.paymentReceivedFull ?? current.preferences.paymentReceivedFull;
             updatePayload['preferences.storageAlert'] = updates.preferences.storageAlert ?? current.preferences.storageAlert;
             updatePayload['preferences.connectionUpdated'] = updates.preferences.connectionUpdated ?? current.preferences.connectionUpdated;
+            updatePayload['preferences.payoutUpdates'] = updates.preferences.payoutUpdates ?? current.preferences.payoutUpdates;
         }
 
         const result = await VendorNotificationPreferenceModel.findOneAndUpdate(

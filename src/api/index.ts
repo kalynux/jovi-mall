@@ -71,6 +71,13 @@ router.use('/vendor', vendorEarningsRoutes);
 router.use('/agency', agencyEarningsRoutes);
 router.use('/admin', adminEarningsRoutes);
 
+// Payout requests: vendor/agency request a withdrawal of their entire available
+// balance, which opens a PAYOUT_REQUEST ticket for admins to process.
+// /vendor/earnings/payout, /agency/earnings/payout (both mounted above alongside
+// earnings) + the admin processing queue below.
+import adminPayoutRequestsRoutes from '../modules/earnings/routes/admin-payout-requests.routes';
+router.use('/admin', adminPayoutRequestsRoutes);
+
 // Unified vendor transactions feed (merges plan purchases, credit top-ups,
 // credit usage and sales earnings into one history).
 import vendorTransactionRoutes from '../modules/transactions/routes/vendor-transaction.routes';
@@ -123,6 +130,10 @@ router.use('/agent', agentRoutes);
 // Admin delivery agency management (deactivate/reactivate cascades to vendor products)
 import adminAgencyRoutes from '../modules/delivery/admin-agency.routes';
 router.use('/admin', adminAgencyRoutes);
+
+// Admin COD oversight (cash chain: remittance confirmation, liabilities, discrepancies)
+import adminCodRoutes from '../modules/cod/admin-cod.routes';
+router.use('/admin/cod', adminCodRoutes);
 
 // Admin profile routes
 import adminRoutes from '../modules/admins/routes';

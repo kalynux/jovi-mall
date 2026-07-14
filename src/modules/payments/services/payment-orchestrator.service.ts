@@ -103,6 +103,12 @@ export class PaymentOrchestratorService {
     // In production, get userId from authenticated session
     const userId = order.customer_id.toString();
 
+    // COD orders are paid in cash at handoff (see src/modules/cod/) — they
+    // never go through a gateway.
+    if (order.payment_method === 'cash_on_delivery') {
+      throw createAppError(ERROR_CODES.PAYMENT_ORDER_IS_COD, 422, 'This order is cash on delivery — no online payment is required');
+    }
+
     // Validate order status
     if (order.payment_status === 'paid') {
       throw createAppError(ERROR_CODES.PAYMENT_ORDER_ALREADY_PAID, 409);
@@ -250,6 +256,12 @@ export class PaymentOrchestratorService {
     const orders = await OrderModel.find({ cart_id: cartId });
     if (orders.length === 0) {
       throw createAppError(ERROR_CODES.PAYMENT_CART_NOT_FOUND, 404, undefined, { cartId });
+    }
+
+    // The payment method is chosen for the WHOLE checkout group — a COD group
+    // is paid in cash at handoff (see src/modules/cod/), never via a gateway.
+    if (orders.some(o => o.payment_method === 'cash_on_delivery')) {
+      throw createAppError(ERROR_CODES.PAYMENT_ORDER_IS_COD, 422, 'This checkout is cash on delivery — no online payment is required', { cartId });
     }
 
     // All orders already paid → nothing to do

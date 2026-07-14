@@ -329,6 +329,12 @@ export function createAppError(
     [ERROR_CODES.EARNINGS_ALREADY_COMPLETED]: 'This order has already been confirmed',
     [ERROR_CODES.EARNINGS_ORDER_NOT_CONFIRMABLE]: 'This order cannot be confirmed yet',
     [ERROR_CODES.EARNINGS_FORBIDDEN]: 'You are not allowed to access these earnings',
+    [ERROR_CODES.EARNINGS_PAYOUT_ALREADY_PENDING]: 'A payout request is already pending',
+    [ERROR_CODES.EARNINGS_PAYOUT_METHOD_MISSING]: 'No payout method is configured on this profile',
+    [ERROR_CODES.EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE]: 'There is no available balance to request a payout for',
+    [ERROR_CODES.EARNINGS_PAYOUT_BELOW_MINIMUM]: 'Available balance is below the minimum payout amount',
+    [ERROR_CODES.EARNINGS_PAYOUT_REQUEST_NOT_FOUND]: 'Payout request not found',
+    [ERROR_CODES.EARNINGS_PAYOUT_REQUEST_NOT_PENDING]: 'This payout request has already been resolved',
 
     [ERROR_CODES.PAYMENT_ORDER_NOT_FOUND]: 'Order not found',
     [ERROR_CODES.PAYMENT_ORDER_ALREADY_PAID]: 'Order is already paid',

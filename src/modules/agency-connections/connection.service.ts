@@ -72,9 +72,11 @@ export class ConnectionService {
   }
 
   /**
-   * Publish a vendor-facing notification event for a connection lifecycle change.
-   * Agency-facing notifications don't exist yet (see plan §8) — only fired when
-   * the vendor is the one who needs to know (the agency was the actor).
+   * Publish a vendor-facing notification event for a connection lifecycle change
+   * (the agency was the actor). Both VendorNotificationEventHandler and
+   * AgencyNotificationEventHandler subscribe to these event names — `recipientRole`
+   * tells each which payloads are theirs, same discriminator pattern as payout.*'s
+   * `ownerType` (see vendor-notification-event-handler.service.ts).
    */
   private async notifyVendor(
     situation: 'connection.request_received' | 'connection.approved' | 'connection.rejected' | 'connection.reapproval_needed',
@@ -85,7 +87,25 @@ export class ConnectionService {
     await eventBus.publish(situation, {
       eventType: situation,
       aggregateId: connectionId,
-      payload: { connectionId, vendorId, agencyName },
+      payload: { connectionId, recipientRole: 'vendor', vendorId, agencyName },
+      occurredAt: new Date(),
+    });
+  }
+
+  /**
+   * Agency-facing counterpart to notifyVendor — fired when the vendor was the
+   * actor and the agency is the one who needs to know.
+   */
+  private async notifyAgency(
+    situation: 'connection.request_received' | 'connection.approved' | 'connection.rejected' | 'connection.reapproval_needed',
+    connectionId: string,
+    agencyId: string,
+    vendorName: string,
+  ): Promise<void> {
+    await eventBus.publish(situation, {
+      eventType: situation,
+      aggregateId: connectionId,
+      payload: { connectionId, recipientRole: 'agency', agencyId, vendorName },
       occurredAt: new Date(),
     });
   }
@@ -173,6 +193,8 @@ export class ConnectionService {
 
     if (actorRole === 'agency') {
       await this.notifyVendor('connection.request_received', result._id.toString(), vendorId, agency.agency_name);
+    } else {
+      await this.notifyAgency('connection.request_received', result._id.toString(), agencyId, vendor.business_name);
     }
 
     return result;
@@ -273,6 +295,8 @@ export class ConnectionService {
 
       if (actorRole === 'agency') {
         await this.notifyVendor('connection.approved', updated._id.toString(), vendorId, agency.agency_name);
+      } else {
+        await this.notifyAgency('connection.approved', updated._id.toString(), agencyId, vendor.business_name);
       }
 
       return updated;
@@ -309,6 +333,9 @@ export class ConnectionService {
     if (actorRole === 'agency') {
       const agency = await this.agencyRepo.findById(actorEntityId);
       if (agency) await this.notifyVendor('connection.rejected', updated._id.toString(), connection.vendor_id.toString(), agency.agency_name);
+    } else {
+      const vendor = await this.vendorRepo.findById(actorEntityId);
+      if (vendor) await this.notifyAgency('connection.rejected', updated._id.toString(), connection.agency_id.toString(), vendor.business_name);
     }
 
     return updated;
@@ -419,9 +446,12 @@ export class ConnectionService {
     const reapprovalRequiredFrom = opposite(role);
     const pausedReason = role === 'vendor' ? ('vendor_policy_changed' as const) : ('agency_policy_changed' as const);
 
-    // Fetched once — every connection in this batch shares the same agency_id
-    // when role === 'agency' (findActiveOrPausedForEntity filtered on it).
+    // Fetched once — every connection in this batch shares the same entity_id
+    // for the changed side (findActiveOrPausedForEntity filtered on it). The
+    // OTHER party (reapprovalRequiredFrom) is who gets notified, so we need
+    // their counterparty's display name.
     const agencyName = role === 'agency' ? (await this.agencyRepo.findById(entityId, session))?.agency_name : null;
+    const vendorName = role === 'vendor' ? (await this.vendorRepo.findById(entityId))?.business_name : null;
 
     for (const connection of connections) {
       await this.connectionRepo.applyTransition(
@@ -442,6 +472,8 @@ export class ConnectionService {
 
       if (agencyName) {
         await this.notifyVendor('connection.reapproval_needed', connection._id.toString(), connection.vendor_id.toString(), agencyName);
+      } else if (vendorName) {
+        await this.notifyAgency('connection.reapproval_needed', connection._id.toString(), connection.agency_id.toString(), vendorName);
       }
     }
   }

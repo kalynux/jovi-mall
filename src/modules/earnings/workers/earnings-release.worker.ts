@@ -1,23 +1,41 @@
 import cron from 'node-cron';
 import { transactionManager } from '../../../core/database/transaction.manager';
 import { EarningsAllocationRepository } from '../repositories/earnings-allocation.repository';
+import { EarningsAccountRepository } from '../repositories/earnings-account.repository';
 import { EarningsAccountService, earningsAccountService } from '../services/earnings-account.service';
+import { earningsSplitService } from '../services/earnings-split.service';
+import { PayoutRequestRepository } from '../repositories/payout-request.repository';
+import { payoutRequestService } from '../services/payout-request.service';
 import { OrderModel } from '../../orders/order.model';
 import { OrderCompletionService, orderCompletionService } from '../../orders/order-completion.service';
 import { EARNINGS_CONFIG, daysAgo } from '../config/earnings.config';
+import { IEarningsAllocation, EarningsAllocationModel } from '../models/earnings-allocation.model';
+import { EarningsReserveHoldModel } from '../models/earnings-reserve-hold.model';
+import { CashCollectionModel } from '../../cod/models/cash-collection.model';
+import { COD_CONFIG, daysFromNow } from '../../cod/config/cod.config';
+import { codDiscrepancyService } from '../../cod/services/cod-discrepancy.service';
+import { ActorRole } from '../../tickets/types/ticket.types';
 
 /**
- * EarningsReleaseWorker - daily sweep with two idempotent stages:
+ * EarningsReleaseWorker - daily sweep with idempotent stages:
  *
  *  1. Auto-confirm: orders that reached `delivered`/`fulfilled` but were never
  *     confirmed by the customer within `AUTO_CONFIRM_DAYS` are auto-completed
  *     (which starts their escrow hold window).
  *  2. Release: held allocations whose `hold_release_at` has elapsed move from
- *     `pending_balance` to `available_balance` (withdrawable).
+ *     `pending_balance` to `available_balance` (withdrawable). COD-sourced
+ *     allocations additionally require `cash_settled_at` (repo-level filter).
+ *  3. COD split recovery: `collected` CashCollections older than an hour with
+ *     no allocations get re-split (the post-collect split is best-effort).
+ *  4. Reserve release: matured COD rolling-reserve holds move to available.
+ *  5. Auto-payout: vendor/agency accounts whose `available_balance` reached
+ *     `AUTO_PAYOUT_THRESHOLD` get a payout request opened on their behalf, so
+ *     the platform never ends up owing an unbounded amount to one account.
  *
  * Lifecycle mirrors `PlanExpiryWorker`/`FileCleanupWorker` (node-cron, daily).
- * Both stages are safe to re-run: completion is guarded by `completion.confirmed_at`
- * and release by an atomic `held → released` claim.
+ * Every stage is safe to re-run: completion is guarded by `completion.confirmed_at`,
+ * release by an atomic `held → released` claim, and the split by its
+ * per-source idempotency index.
  */
 export class EarningsReleaseWorker {
   private task: ReturnType<typeof cron.schedule> | null = null;
@@ -25,6 +43,8 @@ export class EarningsReleaseWorker {
   constructor(
     private readonly allocationRepo: EarningsAllocationRepository = new EarningsAllocationRepository(),
     private readonly accounts: EarningsAccountService = earningsAccountService,
+    private readonly accountRepo: EarningsAccountRepository = new EarningsAccountRepository(),
+    private readonly payoutRepo: PayoutRequestRepository = new PayoutRequestRepository(),
     private readonly orderCompletion: OrderCompletionService = orderCompletionService
   ) {}
 
@@ -50,6 +70,9 @@ export class EarningsReleaseWorker {
     console.log('[EarningsReleaseWorker] Starting earnings sweep');
     await this.autoConfirmStaleOrders(now);
     await this.releaseMaturedHolds(now);
+    await this.recoverMissedCodSplits(now);
+    await this.releaseMaturedReserves(now);
+    await this.autoTriggerPayoutsOverThreshold();
     console.log('[EarningsReleaseWorker] Earnings sweep complete');
   }
 
@@ -85,11 +108,179 @@ export class EarningsReleaseWorker {
           // released/reversed it — skip to stay idempotent.
           const claimed = await this.allocationRepo.markReleased(allocation._id, new Date(), session);
           if (!claimed) return;
-          await this.accounts.releaseInSession(claimed, session);
+
+          // COD rolling reserve: a slice of each COD-sourced AGENCY release
+          // parks in reserve_balance for RESERVE_DAYS as security against
+          // cash discrepancies (the agency is the cash-accountable party).
+          const reserveAmount = this.reserveAmountFor(claimed);
+          if (reserveAmount > 0) {
+            const account = await this.accounts.releaseWithReserveInSession(claimed, reserveAmount, session);
+            await EarningsReserveHoldModel.create(
+              [
+                {
+                  account_id: account._id,
+                  owner_type: 'agency',
+                  owner_id: claimed.beneficiary_id,
+                  amount: reserveAmount,
+                  currency: claimed.currency,
+                  source_allocation_id: claimed._id,
+                  status: 'held',
+                  held_at: now,
+                  release_at: daysFromNow(COD_CONFIG.RESERVE_DAYS, now),
+                },
+              ],
+              { session }
+            );
+          } else {
+            await this.accounts.releaseInSession(claimed, session);
+          }
         });
       } catch (error) {
         console.error(
           `[EarningsReleaseWorker] Failed to release allocation ${allocation._id.toString()}:`,
+          error
+        );
+      }
+    }
+  }
+
+  /** Reserve slice for a released allocation: COD agency shares only. */
+  private reserveAmountFor(allocation: IEarningsAllocation): number {
+    if (!allocation.requires_cash_settlement) return 0;
+    if (allocation.beneficiary_type !== 'agency' || !allocation.beneficiary_id) return 0;
+    return Math.floor((allocation.amount * COD_CONFIG.RESERVE_PERCENT) / 100);
+  }
+
+  /**
+   * Stage 4 — release matured reserve holds (reserve → available), but ONLY
+   * while the agency has no open cash discrepancies: an unresolved shortfall
+   * keeps its reserve parked (that is the reserve's purpose).
+   */
+  private async releaseMaturedReserves(now: Date): Promise<void> {
+    const matured = await EarningsReserveHoldModel.find({
+      status: 'held',
+      release_at: { $lte: now },
+    }).limit(EARNINGS_CONFIG.BATCH_SIZE);
+
+    for (const hold of matured) {
+      try {
+        const agencyId = hold.owner_id.toString();
+        if (await codDiscrepancyService.hasOpenForAgency(agencyId)) {
+          continue; // stays parked until the discrepancy is resolved
+        }
+
+        const allocation = await EarningsAllocationModel.findById(hold.source_allocation_id);
+        if (!allocation) {
+          console.error(
+            `[EarningsReleaseWorker] Reserve hold ${hold._id.toString()} references missing allocation ${hold.source_allocation_id.toString()}`
+          );
+          continue;
+        }
+
+        await transactionManager.runInTransaction(async (session) => {
+          // Atomic claim keeps concurrent sweeps idempotent.
+          const claimed = await EarningsReserveHoldModel.findOneAndUpdate(
+            { _id: hold._id, status: 'held' },
+            { $set: { status: 'released', released_at: new Date() } },
+            { new: true, session }
+          );
+          if (!claimed) return;
+          await this.accounts.releaseReserveInSession(allocation, claimed.amount, session);
+        });
+      } catch (error) {
+        console.error(
+          `[EarningsReleaseWorker] Failed to release reserve hold ${hold._id.toString()}:`,
+          error
+        );
+      }
+    }
+  }
+
+  /**
+   * Stage 3 — re-split COD collections whose post-collect split never landed
+   * (it is best-effort after the collect transaction). One hour of grace
+   * avoids racing a split that is still in flight; the split's per-source
+   * unique index keeps this idempotent.
+   */
+  private async recoverMissedCodSplits(now: Date): Promise<void> {
+    const cutoff = new Date(now.getTime() - 60 * 60 * 1000);
+    const candidates = await CashCollectionModel.find({
+      status: 'collected',
+      collected_at: { $lte: cutoff },
+    })
+      .sort({ collected_at: 1 })
+      .limit(EARNINGS_CONFIG.BATCH_SIZE);
+
+    for (const collection of candidates) {
+      try {
+        if (await this.allocationRepo.existsForSource('cod_collection', collection._id.toString())) {
+          continue; // already split — the common case
+        }
+        const order = await OrderModel.findById(collection.order_id);
+        if (!order) {
+          console.error(
+            `[EarningsReleaseWorker] COD collection ${collection._id.toString()} references missing order ${collection.order_id.toString()}`
+          );
+          continue;
+        }
+        await earningsSplitService.splitCodCollection(order, collection);
+        console.log(
+          `[EarningsReleaseWorker] Recovered missing COD split for collection ${collection._id.toString()}`
+        );
+      } catch (error) {
+        console.error(
+          `[EarningsReleaseWorker] Failed to recover COD split for collection ${collection._id.toString()}:`,
+          error
+        );
+      }
+    }
+  }
+
+  /**
+   * Stage 5 — vendor/agency accounts whose `available_balance` has reached
+   * `AUTO_PAYOUT_THRESHOLD` get a payout request opened on their behalf,
+   * exactly as if they'd called `POST .../earnings/payout` themselves (same
+   * ticket + notification flow). Skips accounts that already have a pending
+   * request (the "one at a time" rule already enforced for manual requests)
+   * and requires `SUPPORT_ADMIN_USER_ID` to be configured as the acting admin
+   * (same convention as `TicketService.createSystemTicket`) — logs and skips
+   * entirely if it isn't, rather than failing the whole sweep.
+   */
+  private async autoTriggerPayoutsOverThreshold(): Promise<void> {
+    const systemActorUserId = process.env.SUPPORT_ADMIN_USER_ID;
+    if (!systemActorUserId) {
+      console.warn(
+        '[EarningsReleaseWorker] SUPPORT_ADMIN_USER_ID not configured — skipping auto-payout threshold sweep'
+      );
+      return;
+    }
+
+    const accounts = await this.accountRepo.findOverThreshold(EARNINGS_CONFIG.AUTO_PAYOUT_THRESHOLD);
+
+    for (const account of accounts) {
+      const ownerType = account.owner_type as 'vendor' | 'agency';
+      const ownerId = account.owner_id!.toString();
+      try {
+        const pending = await this.payoutRepo.findPendingForOwner(ownerType, ownerId);
+        if (pending) continue; // already being processed — wait for it to resolve
+
+        await payoutRequestService.requestPayout(
+          ownerType,
+          ownerId,
+          systemActorUserId,
+          ActorRole.ADMIN,
+          'auto_threshold'
+        );
+        console.log(
+          `[EarningsReleaseWorker] Auto-triggered payout request for ${ownerType} ${ownerId} (balance over ${EARNINGS_CONFIG.AUTO_PAYOUT_THRESHOLD})`
+        );
+      } catch (error) {
+        // Most commonly EARNINGS_PAYOUT_METHOD_MISSING — the account has no
+        // payout method configured yet, so there's nowhere to send funds.
+        // Logged for ops follow-up; balance simply stays over threshold
+        // until the vendor/agency configures one.
+        console.error(
+          `[EarningsReleaseWorker] Failed to auto-trigger payout for ${ownerType} ${ownerId}:`,
           error
         );
       }

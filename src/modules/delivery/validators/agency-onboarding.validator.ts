@@ -121,10 +121,18 @@ const AgencyPoliciesDamageZodSchema = z.object({
     notes: z.string().max(700).trim().optional(),
 });
 
+// COD participation. The per-collection fee itself lives in
+// pricing.additional_fees.cod_handling_fee; this block only gates eligibility.
+const AgencyPoliciesCodZodSchema = z.object({
+    enabled: z.boolean(),
+    max_order_amount: z.number().min(0).nullable().optional().default(null),
+});
+
 const AgencyPoliciesZodSchema = z.object({
     pricing: AgencyPoliciesPricingZodSchema,
     returns: AgencyPoliciesReturnsZodSchema,
     damage: AgencyPoliciesDamageZodSchema,
+    cod: AgencyPoliciesCodZodSchema.optional().default({ enabled: false, max_order_amount: null }),
     // Additional terms that don't fit the structured fields above (e.g. a signed PDF addendum).
     documents: z.array(z.string().url()).max(2, 'Maximum 2 documents allowed').optional(),
 });

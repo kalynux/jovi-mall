@@ -16,7 +16,12 @@ import { EarningsOwnerType } from './earnings-account.model';
  * Amounts are integers in minor currency units.
  */
 
-export type EarningsSourceType = 'order' | 'booking';
+/**
+ * 'cod_collection' allocations are sourced from ONE CashCollection (one COD
+ * shipment's verified cash handoff — see src/modules/cod/), not a whole order:
+ * COD orders collect per shipment, so they split per shipment too.
+ */
+export type EarningsSourceType = 'order' | 'booking' | 'cod_collection';
 export type EarningsAllocationStatus = 'held' | 'released' | 'reversed';
 
 export interface IEarningsAllocation extends Document {
@@ -44,13 +49,23 @@ export interface IEarningsAllocation extends Document {
   released_at: Date | null;
   reversed_at: Date | null;
 
+  /**
+   * COD only: the money behind this allocation is physical cash travelling
+   * Agent → Agency → Platform. Release is gated on BOTH hold maturation AND
+   * `cash_settled_at` — the platform never releases earnings it hasn't
+   * physically received (stamped by the remittance FIFO settlement, see
+   * src/modules/cod/services/cod-settlement.service).
+   */
+  requires_cash_settlement: boolean;
+  cash_settled_at: Date | null;
+
   created_at: Date;
   updated_at: Date;
 }
 
 const EarningsAllocationSchema = new Schema<IEarningsAllocation>(
   {
-    source_type: { type: String, enum: ['order', 'booking'], required: true },
+    source_type: { type: String, enum: ['order', 'booking', 'cod_collection'], required: true },
     source_id: { type: Schema.Types.ObjectId, required: true },
 
     beneficiary_type: { type: String, enum: ['vendor', 'agency', 'platform'], required: true },
@@ -67,6 +82,9 @@ const EarningsAllocationSchema = new Schema<IEarningsAllocation>(
     hold_release_at: { type: Date, default: null },
     released_at: { type: Date, default: null },
     reversed_at: { type: Date, default: null },
+
+    requires_cash_settlement: { type: Boolean, required: true, default: false },
+    cash_settled_at: { type: Date, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

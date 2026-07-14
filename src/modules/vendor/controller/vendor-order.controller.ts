@@ -52,6 +52,7 @@ export class VendorOrderController {
         const filters: any = {};
         if (query.status) filters.status = query.status;
         if (query.paymentStatus) filters.paymentStatus = query.paymentStatus;
+        if (query.paymentMethod) filters.paymentMethod = query.paymentMethod;  // COD vs prepaid
         if (query.orderType) filters.orderType = query.orderType;  // NEW: Order type filter
         if (query.customerId) filters.customerId = query.customerId;  // NEW: Scope to one customer
         if (query.dateFrom) filters.dateFrom = new Date(query.dateFrom);

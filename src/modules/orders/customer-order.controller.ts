@@ -10,6 +10,8 @@ import { OrderRepository } from './order.repository';
 import { VendorRepository } from '../vendors/vendor.repository';
 import { assertCancellationAllowed } from '../vendors/utils/cancellation-policy.util';
 import { ShipmentService } from '../shipments/shipment.service';
+import { ShipmentModel } from '../shipments/shipment.model';
+import { cashCollectionService } from '../cod/services/cash-collection.service';
 
 const completionService: OrderCompletionService = orderCompletionService;
 const orderService = new OrderService();
@@ -19,18 +21,31 @@ const shipmentService = new ShipmentService();
 
 /**
  * Collapse a checkout group's per-order payment statuses into one label the
- * customer UI can show for the logical "order": all paid → paid; none paid →
- * awaiting_payment; otherwise partially_paid.
+ * customer UI can show for the logical "order": all paid → paid; any paid or
+ * partially collected (COD) → partially_paid; none paid → awaiting_payment.
  */
 function aggregatePaymentStatus(statuses: string[]): string {
   if (statuses.every(s => s === 'paid')) return 'paid';
-  if (statuses.some(s => s === 'paid')) return 'partially_paid';
+  if (statuses.some(s => s === 'paid' || s === 'partially_paid')) return 'partially_paid';
   if (statuses.every(s => s === 'AWAITING_PAYMENT' || s === 'pending')) return 'awaiting_payment';
   return 'mixed';
 }
 
 /** Fulfillment states from which a customer may still cancel (pre-shipment). */
 const CANCELLABLE_FULFILLMENT_STATES = ['pending', 'processing'];
+
+/**
+ * Shipment statuses past which a COD order is no longer customer-cancellable:
+ * the package left the agency (or already reached the customer), so the
+ * failed-delivery flow owns the outcome from here.
+ */
+const COD_NON_CANCELLABLE_SHIPMENT_STATUSES = [
+  'picked_up', 'in_transit', 'agent_delivered', 'delivered', 'failed', 'returned',
+];
+
+const CheckoutSchema = z.object({
+  paymentMethod: z.enum(['online', 'cash_on_delivery']).optional().default('online'),
+});
 
 const CancelOrderSchema = z.object({
   reason: z.string().trim().max(500).optional(),
@@ -53,13 +68,15 @@ export class CustomerOrderController {
    */
   static checkout = asyncHandler(async (req: Request, res: Response) => {
     const customerId = req.auth!.role_entity._id.toString();
+    const { paymentMethod } = CheckoutSchema.parse(req.body ?? {});
 
-    const { cartId, orders } = await orderService.createOrdersFromCart(customerId);
+    const { cartId, orders } = await orderService.createOrdersFromCart(customerId, paymentMethod);
 
     res.status(201).json({
       success: true,
       data: {
         cartId,
+        paymentMethod,
         orders: orders.map(order => ({
           id: order._id.toString(),
           orderNumber: order.order_number,
@@ -67,12 +84,15 @@ export class CustomerOrderController {
           orderType: order.order_type,
           total: order.total_amount,
           currency: order.currency,
+          paymentMethod: order.payment_method,
           paymentStatus: order.payment_status,
           fulfillmentStatus: order.fulfillment_status,
           itemCount: order.items.length,
         })),
       },
-      message: 'Orders created. Complete payment for the cart to proceed.',
+      message: paymentMethod === 'cash_on_delivery'
+        ? 'Orders created. Pay the delivery agent in cash at handoff — you will receive a delivery code for each shipment.'
+        : 'Orders created. Complete payment for the cart to proceed.',
     });
   });
 
@@ -121,6 +141,13 @@ export class CustomerOrderController {
 
     const totalAmount = orders.reduce((sum, o) => sum + o.total_amount, 0);
 
+    // COD: per-shipment cash blocks, incl. the delivery code for still-pending
+    // handoffs — this is the customer's own view, the code is their secret.
+    const hasCod = orders.some(o => o.payment_method === 'cash_on_delivery');
+    const codByOrder = hasCod
+      ? await cashCollectionService.getCodBlocksForOrders(orders.map(o => o._id.toString()), true)
+      : new Map<string, any[]>();
+
     res.status(200).json({
       success: true,
       data: {
@@ -137,8 +164,12 @@ export class CustomerOrderController {
           orderType: order.order_type,
           total: order.total_amount,
           currency: order.currency,
+          paymentMethod: order.payment_method,
           paymentStatus: order.payment_status,
           fulfillmentStatus: order.fulfillment_status,
+          codCollections: order.payment_method === 'cash_on_delivery'
+            ? (codByOrder.get(order._id.toString()) ?? [])
+            : undefined,
           items: order.items.map(item => ({
             id: item._id.toString(),
             productId: item.product_id.toString(),
@@ -213,6 +244,25 @@ export class CustomerOrderController {
   });
 
   /**
+   * POST /customer/orders/:orderId/shipments/:shipmentId/resend-delivery-code
+   *
+   * COD: regenerate this shipment's delivery code, resend it via WhatsApp and
+   * return it (it is the customer's own secret). Wrong-attempt lockouts reset.
+   */
+  static resendDeliveryCode = asyncHandler(async (req: Request, res: Response) => {
+    const { orderId, shipmentId } = req.params;
+    const customerId = req.auth!.role_entity._id.toString();
+
+    const result = await cashCollectionService.resendCodeAsCustomer(customerId, orderId, shipmentId);
+
+    res.status(200).json({
+      success: true,
+      data: result,
+      message: 'A new delivery code was generated. Give it to the agent only after you have received and paid for your package.',
+    });
+  });
+
+  /**
    * POST /customer/orders/:id/cancel
    *
    * Customer-initiated cancellation, gated by the vendor's cancellation policy.
@@ -261,6 +311,21 @@ export class CustomerOrderController {
       throw createAppError(ERROR_CODES.ORDER_NOT_CANCELLABLE, 422, undefined, {
         paymentStatus: order.payment_status,
       });
+    }
+
+    // COD orders fulfil before payment, so "unpaid" alone isn't enough: once
+    // any package left the agency (picked_up onwards) the handoff/failed-
+    // delivery flow owns the outcome — no silent cancellation underneath it.
+    if (order.payment_method === 'cash_on_delivery' && order.order_type === 'physical') {
+      const inFlight = await ShipmentModel.countDocuments({
+        order_id: orderId,
+        status: { $in: COD_NON_CANCELLABLE_SHIPMENT_STATUSES },
+      });
+      if (inFlight > 0) {
+        throw createAppError(ERROR_CODES.ORDER_NOT_CANCELLABLE, 422, undefined, {
+          reason: 'A shipment is already out for delivery or has been handled',
+        });
+      }
     }
 
     await orderService.cancelOrder(order, {

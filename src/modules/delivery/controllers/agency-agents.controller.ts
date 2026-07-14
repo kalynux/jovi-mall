@@ -7,6 +7,11 @@ const InviteAgentSchema = z.object({
   email: z.string().trim().email().toLowerCase(),
 });
 
+const SetCodLimitSchema = z.object({
+  /** Minor units; null restores the platform default. */
+  maxExposureOverride: z.number().int().min(0).nullable(),
+});
+
 const ListInvitesQuerySchema = z.object({
   status: z.enum(['pending', 'accepted', 'declined', 'revoked']).optional(),
 });
@@ -70,5 +75,18 @@ export class AgencyAgentsController {
     const agent = await agentRosterService.unlinkAgent(agencyId, req.params.id);
 
     res.json({ success: true, data: agent, message: 'Agent removed from your roster.' });
+  });
+
+  /**
+   * PATCH /api/agency/agents/:id/cod-limit
+   * Cap this agent's COD cash exposure. Body: { maxExposureOverride: number | null }
+   */
+  static setCodLimit = asyncHandler(async (req: Request, res: Response) => {
+    const agencyId = req.auth!.role_entity._id.toString();
+    const { maxExposureOverride } = SetCodLimitSchema.parse(req.body);
+
+    const result = await agentRosterService.setCodLimit(agencyId, req.params.id, maxExposureOverride);
+
+    res.json({ success: true, data: result, message: 'COD exposure limit updated.' });
   });
 }

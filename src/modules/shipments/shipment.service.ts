@@ -13,6 +13,8 @@ import { VendorRepository } from '../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../delivery/delivery-agency.repository';
 import { DeliveryAgentRepository } from '../delivery/delivery-agent.repository';
 import { CustomerModel } from '../customers/customer.model';
+import { cashCollectionService } from '../cod/services/cash-collection.service';
+import { codExposureService } from '../cod/services/cod-exposure.service';
 
 // Shipment-status transitions an AGENCY may trigger directly via PATCH .../status.
 // 'assigned' (system, on payment dispatch), 'delivered' (system, on customer
@@ -98,6 +100,24 @@ export class ShipmentService {
         pagination: PaginationOptions = { page: 1, limit: 20 }
     ): Promise<Page<any>> {
         const page = await this.shipmentRepo.findByAgencyPaginated(agencyId, filters, pagination);
+        return this._enrichShipmentPage(page);
+    }
+
+    /**
+     * List shipments assigned to an AGENT (the agent app's work queue), with
+     * the same vendor/customer enrichment as the agency list.
+     */
+    async listForAgent(
+        agentId: string,
+        filters: { status?: ShipmentStatus } = {},
+        pagination: PaginationOptions = { page: 1, limit: 20 }
+    ): Promise<Page<any>> {
+        const page = await this.shipmentRepo.findByAgentPaginated(agentId, filters, pagination);
+        return this._enrichShipmentPage(page);
+    }
+
+    /** Shared list enrichment: vendor + redacted customer/order summary per shipment. */
+    private async _enrichShipmentPage(page: Page<IShipment>): Promise<Page<any>> {
         if (page.data.length === 0) return { data: [], meta: page.meta };
 
         const orderIds = [...new Set(page.data.map(s => s.order_id.toString()))];
@@ -144,6 +164,25 @@ export class ShipmentService {
         if (!shipment || shipment.status === 'pending') {
             throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
         }
+        return this._buildDetail(shipment);
+    }
+
+    /**
+     * Full detail for a shipment assigned to this AGENT — same payload as the
+     * agency detail (items, pickup locations, customer + delivery address,
+     * COD summary), scoped by agent_id.
+     */
+    async getDetailForAgent(agentId: string, shipmentId: string): Promise<any> {
+        const shipment = await this.shipmentRepo.findByIdAndAgent(shipmentId, agentId);
+        if (!shipment) {
+            throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+        }
+        return this._buildDetail(shipment);
+    }
+
+    /** Shared detail assembly for the agency and agent views. */
+    private async _buildDetail(shipment: IShipment): Promise<any> {
+        const agencyId = shipment.agency_id.toString();
 
         const order = await OrderModel.findById(shipment.order_id).lean().exec();
         if (!order) {
@@ -193,10 +232,18 @@ export class ShipmentService {
         // order, labeled by agency, sorted chronologically.
         const timeline = await this._mergeShipmentTimelines(siblingShipments);
 
+        // COD: the cash this shipment's agent must collect + collection state.
+        // Never includes the delivery code — that is customer-only.
+        const cod = (order as any).payment_method === 'cash_on_delivery'
+            ? await cashCollectionService.getCodSummaryForShipment((shipment._id as Types.ObjectId).toString())
+            : null;
+
         return {
             ...this.toSummary(shipment),
             orderId: shipment.order_id.toString(),
             orderNumber: (order as any).order_number,
+            paymentMethod: (order as any).payment_method ?? 'online',
+            cod,
             items,
             vendor: vendor ? { id: vendor._id.toString(), businessName: vendor.business_name, phone: vendor.phone ?? null, email: vendor.email ?? null } : null,
             customer: customer ? {
@@ -256,12 +303,56 @@ export class ShipmentService {
         }
 
         const orderId = shipment.order_id.toString();
+        const order = await OrderModel.findById(orderId);
+        if (!order) {
+            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
+        }
+        const isCod = order.payment_method === 'cash_on_delivery';
+
+        if (isCod) {
+            // For COD, 'delivered' can ONLY be reached through the agent's
+            // verified code collection (see CashCollectionService.collect) —
+            // an unverified "agent says delivered" claim is exactly what the
+            // delivery-code exists to prevent.
+            if (newStatus === 'agent_delivered') {
+                throw createAppError(ERROR_CODES.SHIPMENT_INVALID_STATUS_TRANSITION, 400,
+                    'COD shipments are delivered by the agent submitting the customer delivery code, not by an agent_delivered claim', {
+                    from: shipment.status,
+                    to: newStatus,
+                });
+            }
+            // Cash accountability needs a responsible agent BEFORE the package
+            // leaves the agency.
+            if (newStatus === 'picked_up' && !shipment.agent_id) {
+                throw createAppError(ERROR_CODES.COD_AGENT_NOT_ASSIGNED, 422,
+                    'Assign an agent before picking up a cash-on-delivery shipment');
+            }
+        }
+
+        // Captured inside the transaction, used for the post-commit customer
+        // notification (the plaintext code never lives in the txn scope alone).
+        let issuedCode: { collection: any; code: string } | null = null;
 
         await transactionManager.runInTransaction(async (session) => {
             await this.shipmentRepo.applyStatusChange(shipmentId, newStatus, { userId: actorUserId, role: 'agency' }, session);
             await this.orderRepo.setItemDeliveryStatusByShipment(shipmentId, newStatus, session);
             await this.aggregationService.recomputeFulfillmentStatus(orderId, session);
+
+            if (isCod && newStatus === 'picked_up') {
+                // The pending cash collection (expected amount + delivery code)
+                // is created atomically with the pickup — a picked-up COD
+                // shipment can never exist without its collection record.
+                issuedCode = await cashCollectionService.createForShipmentInSession(order, shipment, session);
+            }
+            if (isCod && newStatus === 'returned') {
+                await cashCollectionService.handleShipmentReturnedInSession(shipmentId, orderId, session);
+            }
         });
+
+        if (issuedCode) {
+            const { collection, code } = issuedCode as { collection: any; code: string };
+            await cashCollectionService.notifyCodeIssued(order, collection, code);
+        }
 
         const updated = await this.shipmentRepo.findById(shipmentId);
         return this.toSummary(updated!);
@@ -306,6 +397,14 @@ export class ShipmentService {
         const agent = await this.agentRepo.findById(agentId);
         if (!agent || agent.agency_id?.toString() !== agencyId) {
             throw createAppError(ERROR_CODES.SHIPMENT_AGENT_NOT_IN_AGENCY, 422);
+        }
+
+        // COD risk gate: the assigned agent will physically hold this
+        // shipment's cash — enforce trust tier + exposure limit up front.
+        const order = await OrderModel.findById(shipment.order_id);
+        if (order?.payment_method === 'cash_on_delivery') {
+            const expectedAmount = cashCollectionService.computeExpectedAmount(order, shipment);
+            await codExposureService.assertCanTakeCodShipment(agent, expectedAmount);
         }
 
         const updated = await this.shipmentRepo.assignAgent(shipmentId, agentId);

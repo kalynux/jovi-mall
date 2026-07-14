@@ -1,0 +1,72 @@
+import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+
+/**
+ * CodDiscrepancy - a flagged problem in the cash chain.
+ *
+ *  - 'late_deposit'   (system): the agent sat on collected cash past the
+ *    deposit deadline (opened by the daily sweep, one open per agent).
+ *  - 'cash_shortfall' (agency): the agent handed over less than they held.
+ *  - 'other'          (agency/admin): anything else worth an audit trail.
+ *
+ * Consequences while OPEN:
+ *  - any open discrepancy blocks the agency's rolling-reserve releases;
+ *  - an open 'cash_shortfall' blocks new COD assignments to that agent.
+ * Resolution ('resolved' = recovered/explained, 'written_off' = platform ate
+ * the loss) is admin-only and append-styled: the row keeps its full history.
+ */
+
+export type CodDiscrepancyType = 'late_deposit' | 'cash_shortfall' | 'other';
+export type CodDiscrepancyStatus = 'open' | 'resolved' | 'written_off';
+
+export interface ICodDiscrepancy extends Document {
+  agent_id: mongoose.Types.ObjectId;
+  agency_id: mongoose.Types.ObjectId;
+  type: CodDiscrepancyType;
+  /** Money at stake (minor units); null for non-monetary flags. */
+  amount: number | null;
+  currency: string;
+  status: CodDiscrepancyStatus;
+  raised_by: 'system' | 'agency' | 'admin';
+  raised_by_user_id: mongoose.Types.ObjectId | null;
+  note: string | null;
+  resolution_note: string | null;
+  resolved_by_user_id: mongoose.Types.ObjectId | null;
+  opened_at: Date;
+  resolved_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+const CodDiscrepancySchema = new Schema<ICodDiscrepancy>(
+  {
+    agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, required: true },
+    agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, required: true },
+    type: { type: String, enum: ['late_deposit', 'cash_shortfall', 'other'], required: true },
+    amount: { type: Number, default: null, min: 0 },
+    currency: { type: String, required: true, uppercase: true, trim: true },
+    status: { type: String, enum: ['open', 'resolved', 'written_off'], required: true, default: 'open' },
+    raised_by: { type: String, enum: ['system', 'agency', 'admin'], required: true },
+    raised_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+    note: { type: String, default: null, trim: true, maxlength: 500 },
+    resolution_note: { type: String, default: null, trim: true, maxlength: 500 },
+    resolved_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+    opened_at: { type: Date, required: true, default: () => new Date() },
+    resolved_at: { type: Date, default: null },
+  },
+  { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
+);
+
+// The daily sweep opens at most ONE late-deposit flag per agent at a time.
+CodDiscrepancySchema.index(
+  { agent_id: 1, type: 1 },
+  { unique: true, partialFilterExpression: { status: 'open', type: 'late_deposit' } }
+);
+CodDiscrepancySchema.index({ agency_id: 1, status: 1, created_at: -1 });
+CodDiscrepancySchema.index({ status: 1, created_at: -1 });
+
+export const CodDiscrepancyModel = mongoose.model<ICodDiscrepancy>(
+  MODELS.COD_DISCREPANCY,
+  CodDiscrepancySchema,
+  COLLECTIONS.COD_DISCREPANCY
+);

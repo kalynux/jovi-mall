@@ -21,6 +21,7 @@ export interface CustomerOrderGroup {
     orderType: string;
     total: number;
     currency: string;
+    paymentMethod: string;
     paymentStatus: string;
     fulfillmentStatus: string;
     itemCount: number;
@@ -77,6 +78,7 @@ export class OrderRepository {
               orderType: '$order_type',
               total: '$total_amount',
               currency: '$currency',
+              paymentMethod: '$payment_method',
               paymentStatus: '$payment_status',
               fulfillmentStatus: '$fulfillment_status',
               itemCount: { $size: '$items' },
@@ -108,6 +110,7 @@ export class OrderRepository {
         orderType: o.orderType,
         total: o.total,
         currency: o.currency,
+        paymentMethod: o.paymentMethod ?? 'online',
         paymentStatus: o.paymentStatus,
         fulfillmentStatus: o.fulfillmentStatus,
         itemCount: o.itemCount,

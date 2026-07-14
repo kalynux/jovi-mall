@@ -9,9 +9,11 @@ import { initAggregationScheduler } from './core/jobs/aggregation-scheduler';
 import { planExpiryWorker } from './modules/billing/workers/plan-expiry.worker';
 import { registerPlanNotificationConsumer } from './modules/billing/events/plan-notification.consumer';
 import { initializeVendorNotificationEventConsumers } from './modules/notifications/vendor-notification-event-consumer';
+import { initializeAgencyNotificationEventConsumers } from './modules/notifications/agency-notification-event-consumer';
 import { fileCleanupWorker } from './modules/file-cleanup/workers/file-cleanup.worker';
 import { earningsReleaseWorker } from './modules/earnings/workers/earnings-release.worker';
 import { unpaidOrderCancelWorker } from './modules/orders/workers/unpaid-order-cancel.worker';
+import { codDepositDeadlineWorker } from './modules/cod/workers/cod-deposit-deadline.worker';
 
 
 const PORT = process.env.PORT || 8022;
@@ -33,6 +35,9 @@ async function startServer() {
     // Vendor notifications: in-app + multi-channel dispatch (incl. storage alerts)
     initializeVendorNotificationEventConsumers();
 
+    // Agency notifications: minimal in-app + push dispatch (payout requests only)
+    initializeAgencyNotificationEventConsumers();
+
     // Storage lifecycle: daily file-cleanup sweep (detach → delete → alert)
     fileCleanupWorker.start();
 
@@ -41,6 +46,9 @@ async function startServer() {
 
     // Orders: daily auto-cancel of orders left unpaid past each vendor's window
     unpaidOrderCancelWorker.start();
+
+    // COD: daily flagging of agents holding cash past the deposit deadline
+    codDepositDeadlineWorker.start();
 
     app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);

@@ -57,7 +57,8 @@ Authorization: Bearer <access_token>
 
 **Query Parameters**:
 - `status` (string, optional) - Filter by order status. Enum: `pending`, `processing`, `partially_shipped`, `shipped`, `partially_delivered`, `delivered`, `fulfilled`, `cancelled`, `returned`
-- `paymentStatus` (string, optional) - Filter by payment status. Enum: `pending`, `AWAITING_PAYMENT`, `paid`, `disputed`, `failed`, `refunded`
+- `paymentStatus` (string, optional) - Filter by payment status. Enum: `pending`, `AWAITING_PAYMENT`, `partially_paid`, `paid`, `disputed`, `failed`, `refunded`
+- `paymentMethod` (string, optional) - Filter by payment method. Enum: `online`, `cash_on_delivery`
 - `orderType` (string, optional) - Filter by order type. Enum: `physical`, `digital`
 - `dateFrom` (string, optional) - Filter orders from date (ISO 8601 format)
 - `dateTo` (string, optional) - Filter orders to date (ISO 8601 format)
@@ -83,6 +84,7 @@ Body:
       "orderNumber": "string",
       "orderType": "physical",
       "fulfillmentStatus": "pending",
+      "paymentMethod": "online",
       "paymentStatus": "paid",
       "customer": {
         "id": "string",
@@ -142,6 +144,7 @@ Body:
     "orderNumber": "string",
     "orderType": "physical",
     "fulfillmentStatus": "processing",
+    "paymentMethod": "online",
     "paymentStatus": "paid",
     "paymentIntentId": "string",
     "customer": {
@@ -378,7 +381,10 @@ invisible to the agency (`GET /agency/shipments` excludes `pending`) until eithe
   (calling it afterward is a harmless no-op).
 
 Advances every `pending` shipment of the order to `assigned` and mirrors that onto the matching
-order items. Requires the order to be `paid` and not on dispute hold.
+order items. Requires the order to be `paid` and not on dispute hold — **except cash-on-delivery
+orders** (`paymentMethod: "cash_on_delivery"`), which are dispatchable while still unpaid
+(`AWAITING_PAYMENT`/`partially_paid`): COD fulfils before payment by design. For COD, auto-redirect
+fires at **checkout** instead of payment success.
 
 **Authorization**: Vendor access required.
 
@@ -403,7 +409,7 @@ already handled it) — the response still succeeds, just with an informational 
 **Error Responses**:
 - `404` – `ORDER_NOT_FOUND` – Order not found or does not belong to vendor.
 - `400` – `ORDER_WRONG_TYPE` – Order is digital (nothing to dispatch to an agency).
-- `422` – `ORDER_PAYMENT_REQUIRED` – Order is not yet paid.
+- `422` – `ORDER_PAYMENT_REQUIRED` – Order is not yet paid (online orders only — COD orders dispatch unpaid).
 - `423` – `ORDER_DISPUTE_HOLD` – Order is frozen by an open payment dispute.
 
 ---
@@ -969,17 +975,40 @@ pending → processing → partially_shipped → shipped → partially_delivered
 | Status | Description |
 |--------|-------------|
 | `pending` | Payment not yet initiated |
-| `AWAITING_PAYMENT` | Awaiting payment confirmation |
-| `paid` | Payment completed successfully |
+| `AWAITING_PAYMENT` | Awaiting payment confirmation (for COD: awaiting cash handoffs) |
+| `partially_paid` | **COD only.** Some of the order's shipments have had their cash collected, others are outstanding (or came back `returned`). |
+| `paid` | Payment completed successfully (COD: every shipment's cash collected) |
 | `disputed` | **A card payment is under dispute (chargeback). The order is frozen — see "Payment disputes" below.** |
-| `failed` | Payment attempt failed |
+| `failed` | Payment attempt failed (COD: every shipment returned with no cash ever collected) |
 | `refunded` | Payment has been refunded (incl. a lost dispute) |
+
+### Cash-on-delivery orders (`paymentMethod: "cash_on_delivery"`)
+
+Every order now carries a `paymentMethod` (`"online"` — the default, prepaid via gateway — or
+`"cash_on_delivery"`). COD orders **invert the payment/fulfilment sequence**: they are unpaid at
+creation, fulfil first, and get paid per shipment when the delivery agent collects cash against
+the customer's delivery code. What changes for the vendor dashboard:
+
+- **Dispatch before payment.** COD orders can be moved to `processing` and dispatched while
+  `AWAITING_PAYMENT`. Auto-redirect (if enabled) fires at checkout.
+- **Payment progresses with delivery**: `AWAITING_PAYMENT` → `partially_paid` → `paid` as each
+  shipment's cash is collected. `payment.received.partial` / `payment.received.full`
+  notifications fire on each collection, like online payments.
+- **No unpaid auto-cancel.** The daily unpaid-order sweep skips COD orders.
+- **Earnings timing differs**: your net for each COD shipment is computed at its cash collection
+  (minus platform commission, the agency's delivery fee AND its COD handling fee) and held in
+  escrow. Release requires the usual hold window **plus** the physical cash reaching the platform
+  through the agency's remittance — COD earnings can therefore stay `pending` longer than online
+  ones. See [transactions.md](./transactions.md).
+- **Refunds:** there is no gateway to refund against. Post-collection COD refunds are handled
+  off-platform in this phase — the refund endpoints report COD orders as ineligible
+  (`REFUND_PAYMENT_NOT_FOUND`: no gateway payment transaction exists for them).
 
 ### State Transition Rules
 
 The system enforces valid state transitions:
 - Cannot transition from terminal states (`delivered`, `fulfilled`, `cancelled`, `returned`) to non-terminal states
-- Cannot mark order as `shipped`/`processing` if payment status is not `paid`
+- Cannot mark order as `shipped`/`processing` if payment status is not `paid` — **except COD orders**, which fulfil before payment
 - **An order on dispute hold cannot advance at all (see below) — returns `423`.**
 - State machine validation is enforced in the service layer
 

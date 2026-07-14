@@ -76,6 +76,21 @@ export interface IAgentLiveState {
   current_capacity_status: 'available' | 'busy' | 'offline';
 }
 
+export interface IAgentCodProfile {
+  /**
+   * 0–100 (default 100). Degraded by late deposits / cash shortfalls, restored
+   * by admin adjustment. Below COD_CONFIG.TRUST_REDUCED_THRESHOLD the agent is
+   * blocked from COD shipments; between the thresholds their exposure limit is
+   * multiplied down. History lives in CodTrustEvent (append-only).
+   */
+  trust_score: number;
+  /**
+   * Agency-set cap (minor units) on this agent's cash exposure, overriding
+   * COD_CONFIG.AGENT_MAX_EXPOSURE_DEFAULT. null = platform default.
+   */
+  max_exposure_override: number | null;
+}
+
 export interface IDeliveryAgent extends Document {
   user_id: mongoose.Types.ObjectId;
   agency_id?: mongoose.Types.ObjectId;
@@ -89,6 +104,7 @@ export interface IDeliveryAgent extends Document {
   legal_identity: IAgentLegalIdentity;
   emergency_contact: IAgentEmergencyContact | null;
   live_state: IAgentLiveState;
+  cod: IAgentCodProfile;
   wa?: {
     name?: string;
     wa_phone_id?: string;
@@ -130,6 +146,16 @@ const DeliveryAgentSchema = new Schema<IDeliveryAgent>(
     live_state: {
       type: LiveStateSchema,
       default: () => ({ last_known_location: null, current_capacity_status: 'offline' }),
+    },
+    cod: {
+      type: new Schema(
+        {
+          trust_score: { type: Number, required: true, default: 100, min: 0, max: 100 },
+          max_exposure_override: { type: Number, default: null, min: 0 },
+        },
+        { _id: false }
+      ),
+      default: () => ({ trust_score: 100, max_exposure_override: null }),
     },
     wa: {
       name: String,

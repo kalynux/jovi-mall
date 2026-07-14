@@ -31,4 +31,8 @@ router.post('/:orderId/shipments/:shipmentId/confirm-delivery', CustomerOrderCon
 // Cancel an unpaid, pre-shipment order (gated by the vendor's cancellation policy).
 router.post('/:id/cancel', CustomerOrderController.cancelOrder);
 
+// COD: re-request the delivery code for one shipment (regenerates + resends via
+// WhatsApp, and returns it — it is the customer's own secret). Rate-limited.
+router.post('/:orderId/shipments/:shipmentId/resend-delivery-code', CustomerOrderController.resendDeliveryCode);
+
 export default router;

@@ -89,6 +89,8 @@ export const MODELS = Object.freeze({
   // Notifications
   VENDOR_NOTIFICATION: 'VendorNotification',
   VENDOR_NOTIFICATION_PREFERENCE: 'VendorNotificationPreference',
+  AGENCY_NOTIFICATION: 'AgencyNotification',
+  AGENCY_NOTIFICATION_PREFERENCE: 'AgencyNotificationPreference',
   DEVICE_TOKEN: 'DeviceToken',
 
   // Integrations
@@ -108,6 +110,7 @@ export const MODELS = Object.freeze({
   EARNINGS_ALLOCATION: 'EarningsAllocation',
   EARNINGS_LEDGER: 'EarningsLedger',
   EARNINGS_RESERVE_HOLD: 'EarningsReserveHold',
+  PAYOUT_REQUEST: 'PayoutRequest',
 
   // COD (cash on delivery: collections, cash liabilities, reconciliation)
   CASH_COLLECTION: 'CashCollection',
@@ -190,6 +193,8 @@ export const COLLECTIONS = Object.freeze({
   // Notifications
   VENDOR_NOTIFICATION: 'vendor_notifications',
   VENDOR_NOTIFICATION_PREFERENCE: 'vendor_notification_preferences',
+  AGENCY_NOTIFICATION: 'agency_notifications',
+  AGENCY_NOTIFICATION_PREFERENCE: 'agency_notification_preferences',
   DEVICE_TOKEN: 'device_tokens',
 
   // Integrations
@@ -209,6 +214,7 @@ export const COLLECTIONS = Object.freeze({
   EARNINGS_ALLOCATION: 'earnings_allocations',
   EARNINGS_LEDGER: 'earnings_ledgers',
   EARNINGS_RESERVE_HOLD: 'earnings_reserve_holds',
+  PAYOUT_REQUEST: 'payout_requests',
 
   // COD (cash on delivery: collections, cash liabilities, reconciliation)
   CASH_COLLECTION: 'cash_collections',

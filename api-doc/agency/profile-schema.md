@@ -116,7 +116,7 @@ Root-level fields on the agency profile response object.
 
 `policies` is submitted at Step 4 and is the most complex field on the profile. It is `null` until Step 4 is completed.
 
-It has four top-level keys: `pricing`, `returns`, `damage`, and `documents`.
+It has five top-level keys: `pricing`, `returns`, `damage`, `cod`, and `documents`.
 
 ### 5.1 `pricing`
 
@@ -197,7 +197,22 @@ Governs damage claim resolution.
 
 > **Important:** `inspector` and `investigation_fee` are platform-level presets controlled exclusively by an admin. The frontend must never send these fields — they will be ignored if sent. They will always appear in the `policies.damage` block of the profile response.
 
-### 5.4 `documents`
+### 5.4 `cod`
+
+Cash-on-delivery participation. The per-collection **fee** the agency charges is configured in
+`pricing.additional_fees.cod_handling_fee` (above); this block only gates **eligibility**. When
+disabled, customers cannot place COD orders whose shipments this agency would carry. See
+[cod-cash-management.md](./cod-cash-management.md) for the full COD cash workflow.
+
+| Field | Type | Required? | Validation | Description |
+|-------|------|-----------|------------|-------------|
+| `enabled` | `boolean` | Yes | — | Whether this agency handles cash-on-delivery orders. Defaults to `false` (opt-in). |
+| `max_order_amount` | `number \| null` | No | ≥ 0, default `null` | Optional cap on a single COD order's total (minor units). Checkout rejects COD orders above it. `null` = no per-order cap. |
+
+> **Policy-version note:** like every other policy change, editing `cod` bumps `policy_version`
+> and pauses active vendor connections for reapproval.
+
+### 5.5 `documents`
 
 Supporting document(s) for terms that don't fit the structured fields above (e.g. a signed PDF addendum).
 
@@ -309,6 +324,12 @@ export interface AgencyPricingPolicy {
   notes?: string | null;
 }
 
+export interface AgencyCodPolicy {
+  enabled: boolean;
+  /** Minor units; null = no per-order cap. */
+  max_order_amount: number | null;
+}
+
 export interface AgencyReturnsPolicy {
   payer: 'vendor' | 'agency' | 'customer';
   handling_fee: number;
@@ -330,6 +351,8 @@ export interface AgencyPolicies {
   pricing: AgencyPricingPolicy;
   returns: AgencyReturnsPolicy;
   damage: AgencyDamagePolicy;
+  /** COD participation. Defaults to { enabled: false, max_order_amount: null }. */
+  cod: AgencyCodPolicy;
   /** Up to 2 supporting document URLs (e.g. PDFs) for terms not covered above. Defaults to []. */
   documents?: string[];
 }

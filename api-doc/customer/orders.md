@@ -28,6 +28,16 @@ Turn the customer's current cart into orders — **one order per vendor**. Re-va
 `cartId` and start in `payment_status='AWAITING_PAYMENT'`. The cart is cleared on success. Order
 creation is **atomic**: if any order fails to create, none are persisted and the cart is left intact.
 
+### Request Body
+
+```json
+{ "paymentMethod": "cash_on_delivery" }
+```
+
+- `paymentMethod` *(string, optional, default `"online"`)* — `"online"` (prepaid via gateway) or
+  `"cash_on_delivery"`. Applies to the **whole checkout group**. See
+  [Cash on delivery](#cod) below for eligibility and lifecycle.
+
 ### Response
 
 **Success (201 Created)**
@@ -36,6 +46,7 @@ creation is **atomic**: if any order fails to create, none are persisted and the
   "success": true,
   "data": {
     "cartId": "664a1f77bcf86cd799439900",
+    "paymentMethod": "online",
     "orders": [
       {
         "id": "507f1f77bcf86cd799439011",
@@ -44,6 +55,7 @@ creation is **atomic**: if any order fails to create, none are persisted and the
         "orderType": "physical",
         "total": 15000,
         "currency": "XAF",
+        "paymentMethod": "online",
         "paymentStatus": "AWAITING_PAYMENT",
         "fulfillmentStatus": "pending",
         "itemCount": 2
@@ -55,6 +67,7 @@ creation is **atomic**: if any order fails to create, none are persisted and the
         "orderType": "physical",
         "total": 5000,
         "currency": "XAF",
+        "paymentMethod": "online",
         "paymentStatus": "AWAITING_PAYMENT",
         "fulfillmentStatus": "pending",
         "itemCount": 1
@@ -65,7 +78,10 @@ creation is **atomic**: if any order fails to create, none are persisted and the
 }
 ```
 
-Next step: call `POST /api/payments/initiate` with `{ "cartId": "<cartId>", "gateway": "...", "channel": {...} }` to pay for the whole group in one transaction.
+Next step (**online** checkout only): call `POST /api/payments/initiate` with
+`{ "cartId": "<cartId>", "gateway": "...", "channel": {...} }` to pay for the whole group in one
+transaction. A **cash_on_delivery** checkout requires no payment call — see
+[Cash on delivery](#cod).
 
 ### Errors
 
@@ -76,6 +92,9 @@ Next step: call `POST /api/payments/initiate` with `{ "cartId": "<cartId>", "gat
 | 404 | `ORDER_PRODUCT_NOT_FOUND` | A cart item's product no longer exists. |
 | 404 | `ORDER_VENDOR_NOT_FOUND` | A vendor referenced by the cart no longer exists. |
 | 422 | `ORDER_NO_DELIVERY_AGENCY` | A physical product has no resolvable delivery agency. |
+| 422 | `COD_NOT_AVAILABLE_FOR_DIGITAL` | `paymentMethod: "cash_on_delivery"` on a digital cart. |
+| 422 | `COD_AGENCY_NOT_SUPPORTED` | A delivery agency on the order doesn't handle COD. `details.agencyName` names it. |
+| 422 | `COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | One vendor-order's total exceeds an agency's COD cap. `details: { agencyName, maxOrderAmount, orderTotal }`. |
 
 ---
 
@@ -111,6 +130,7 @@ order that may contain several per-vendor orders. Paginated by group.
           "orderType": "physical",
           "total": 15000,
           "currency": "XAF",
+          "paymentMethod": "online",
           "paymentStatus": "AWAITING_PAYMENT",
           "fulfillmentStatus": "pending",
           "itemCount": 2,
@@ -124,7 +144,9 @@ order that may contain several per-vendor orders. Paginated by group.
 ```
 
 The group-level `paymentStatus` is an aggregate of its orders: `paid` (all paid), `awaiting_payment`
-(none paid), `partially_paid` (some paid), or `mixed`.
+(none paid), `partially_paid` (some paid — including COD orders partway through their per-shipment
+cash collection), or `mixed`. Each order also carries its own `paymentMethod`
+(`"online"` | `"cash_on_delivery"`).
 
 ---
 
@@ -154,8 +176,19 @@ authenticated customer.
         "orderType": "physical",
         "total": 15000,
         "currency": "XAF",
+        "paymentMethod": "cash_on_delivery",
         "paymentStatus": "AWAITING_PAYMENT",
         "fulfillmentStatus": "pending",
+        "codCollections": [
+          {
+            "shipmentId": "507f1f77bcf86cd799439100",
+            "expectedAmount": 15000,
+            "currency": "XAF",
+            "status": "pending",
+            "collectedAt": null,
+            "deliveryCode": "847392"
+          }
+        ],
         "items": [
           {
             "id": "507f1f77bcf86cd799439055",
@@ -177,6 +210,13 @@ authenticated customer.
 ```
 
 > `items[].freeDelivery` is a snapshot of the product's free-delivery flag taken at checkout time; it does not reflect later changes to the product.
+>
+> **`codCollections`** — present only on `cash_on_delivery` orders. One entry per shipment, created
+> when that shipment is picked up: `expectedAmount` is the exact cash to pay the agent at handoff;
+> `deliveryCode` is the customer's secret 6-digit code (present **only while `status` is
+> `"pending"`**) — show it prominently, with the instruction to give it to the agent only after
+> receiving the package and paying. `status` becomes `"collected"` after handoff, or `"cancelled"`
+> if the shipment was returned. See [Cash on delivery](#cod).
 
 ### Errors
 
@@ -207,7 +247,62 @@ earnings against its own vendor's commission, and proceeds with fulfilment.
 **Group-payment errors:** `404 PAYMENT_CART_NOT_FOUND` (no orders for the cartId), `409
 PAYMENT_ORDER_ALREADY_PAID` (all orders already paid), `409 PAYMENT_CART_NO_PAYABLE_ORDERS` (nothing
 left to pay), `400 PAYMENT_CART_MIXED_CURRENCY`, `400 PAYMENT_REFERENCE_REQUIRED` (neither cartId nor
-orderId supplied).
+orderId supplied), `422 PAYMENT_ORDER_IS_COD` (the checkout is cash-on-delivery — no online payment
+exists for it).
+
+---
+
+<a name="cod"></a>
+## Cash on delivery (COD)
+
+Choosing `paymentMethod: "cash_on_delivery"` at checkout means the customer pays **each delivery
+agent in cash at handoff** — one payment per shipment. No call to `/api/payments/initiate` is ever
+made for a COD checkout.
+
+**Eligibility** (validated at checkout): physical carts only, and every delivery agency involved
+must support COD (some also cap the per-order amount).
+
+**Lifecycle of a COD order:**
+
+1. Order created (`paymentStatus: "AWAITING_PAYMENT"`). The vendor prepares and dispatches it —
+   COD orders fulfil **before** payment, and are exempt from the unpaid auto-cancel sweep.
+2. When a shipment is picked up by the delivery agency, a `codCollections[]` entry appears on the
+   [group detail](#get-apicustomerordersgroupscartid) with the exact `expectedAmount` and the
+   customer's secret 6-digit `deliveryCode` (also sent via WhatsApp when possible).
+3. At the door: the customer receives the package, **pays the agent in cash**, then gives them the
+   code. The verified code atomically records the payment and marks the shipment **delivered** —
+   there is no separate confirm-delivery step for COD shipments.
+4. `paymentStatus` progresses `AWAITING_PAYMENT` → `partially_paid` (some shipments collected) →
+   `paid` (all collected). If a shipment fails and is returned, no cash is due for it; an order
+   where **nothing** was ever collected and all shipments came back ends `failed`.
+
+> **UI guidance:** display the delivery code with a clear warning — *"only give this code to the
+> delivery agent after you have received your package and paid."* The code is the customer's
+> proof-of-payment lever; releasing it early is equivalent to signing a receipt.
+
+### POST /api/customer/orders/:orderId/shipments/:shipmentId/resend-delivery-code
+
+Regenerate this shipment's delivery code (e.g. lost, or locked after the agent entered too many
+wrong codes) and resend it via WhatsApp. The new code is also returned — it is the customer's own
+secret. Rate-limited to one (re)generation per 60 seconds.
+
+**Success (200 OK)**
+```json
+{
+  "success": true,
+  "data": {
+    "shipmentId": "507f1f77bcf86cd799439100",
+    "deliveryCode": "391847",
+    "expectedAmount": 15000,
+    "currency": "XAF"
+  },
+  "message": "A new delivery code was generated. Give it to the agent only after you have received and paid for your package."
+}
+```
+
+**Errors:** `404 ORDER_NOT_FOUND` / `404 SHIPMENT_NOT_FOUND` (not this customer's), `404
+COD_COLLECTION_NOT_FOUND` (no pending collection — not a COD shipment, not picked up yet, or
+already collected), `429 COD_CODE_RESEND_TOO_SOON` (`details.retryInSeconds`).
 
 ---
 
@@ -295,6 +390,10 @@ Customer-initiated cancellation, gated by the vendor's **cancellation policy**.
 - Only **unpaid** orders (`payment_status` is `pending` or `AWAITING_PAYMENT`). For a **paid**
   order, this endpoint returns `422 ORDER_CANCEL_REQUIRES_REFUND` — use the vendor refund flow
   instead (this endpoint performs no refund).
+- **COD orders**: additionally, no shipment may have left the agency yet (all still
+  `pending`/`assigned`). Once a package is `picked_up` or beyond, the handoff / failed-delivery
+  flow owns the outcome — the customer can still refuse at the door (no cash changes hands and
+  the shipment is returned).
 - The vendor's `cancellation_policy` must permit it (`cancellable` flag + `cancellation_deadline`).
   Orders have no firm delivery date, so delivery-date-based deadlines fall back to
   creation-based handling.
@@ -339,3 +438,4 @@ timeline event is appended, and an `order.cancelled` event is emitted (drives ve
 > orders left unpaid past the vendor's configured window
 > (`auto_cancel_unpaid_days`, default 3). See
 > [vendor/profile.md](../vendor/profile.md#put-apivendorprofileauto-cancel-unpaid-days).
+> **Cash-on-delivery orders are exempt** — they are unpaid until handoff by design.

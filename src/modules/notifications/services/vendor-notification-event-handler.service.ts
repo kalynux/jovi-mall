@@ -280,7 +280,8 @@ export class VendorNotificationEventHandler {
     /** Handle connection.request_received event (agency sent the vendor a request). */
     async handleConnectionRequestReceived(event: DomainEvent): Promise<void> {
         try {
-            const { connectionId, vendorId, agencyName } = event.payload;
+            const { connectionId, recipientRole, vendorId, agencyName } = event.payload;
+            if (recipientRole !== 'vendor') return;
 
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.connectionUpdated) return;
@@ -302,7 +303,8 @@ export class VendorNotificationEventHandler {
     /** Handle connection.approved event (the agency approved/reapproved a request the vendor sent). */
     async handleConnectionApproved(event: DomainEvent): Promise<void> {
         try {
-            const { connectionId, vendorId, agencyName } = event.payload;
+            const { connectionId, recipientRole, vendorId, agencyName } = event.payload;
+            if (recipientRole !== 'vendor') return;
 
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.connectionUpdated) return;
@@ -326,7 +328,8 @@ export class VendorNotificationEventHandler {
     /** Handle connection.rejected event (the agency rejected a request the vendor sent). */
     async handleConnectionRejected(event: DomainEvent): Promise<void> {
         try {
-            const { connectionId, vendorId, agencyName } = event.payload;
+            const { connectionId, recipientRole, vendorId, agencyName } = event.payload;
+            if (recipientRole !== 'vendor') return;
 
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.connectionUpdated) return;
@@ -348,7 +351,8 @@ export class VendorNotificationEventHandler {
     /** Handle connection.reapproval_needed event (the agency changed its policies; vendor must reapprove). */
     async handleConnectionReapprovalNeeded(event: DomainEvent): Promise<void> {
         try {
-            const { connectionId, vendorId, agencyName } = event.payload;
+            const { connectionId, recipientRole, vendorId, agencyName } = event.payload;
+            if (recipientRole !== 'vendor') return;
 
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.connectionUpdated) return;
@@ -364,6 +368,75 @@ export class VendorNotificationEventHandler {
             });
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle connection.reapproval_needed:', error);
+        }
+    }
+
+    /** Handle payout.requested event (fires for both vendor and agency payouts). */
+    async handlePayoutRequested(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, amount, currency, payoutRequestId, ticketId } = event.payload;
+            if (ownerType !== 'vendor') return;
+
+            const prefs = await this.preferenceRepo.getByVendor(ownerId);
+            if (!prefs.preferences.payoutUpdates) return;
+
+            await this.dispatch({
+                situation: 'payout.requested',
+                prefs,
+                vendorId: ownerId,
+                aggregateType: 'payout',
+                aggregateId: payoutRequestId,
+                idempotencyKey: `payout.requested:${payoutRequestId}`,
+                context: { currency, amountFormatted: Number(amount).toLocaleString(), ticketId }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle payout.requested:', error);
+        }
+    }
+
+    /** Handle payout.paid event (fires for both vendor and agency payouts). */
+    async handlePayoutPaid(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, amount, currency, payoutRequestId, ticketId } = event.payload;
+            if (ownerType !== 'vendor') return;
+
+            const prefs = await this.preferenceRepo.getByVendor(ownerId);
+            if (!prefs.preferences.payoutUpdates) return;
+
+            await this.dispatch({
+                situation: 'payout.paid',
+                prefs,
+                vendorId: ownerId,
+                aggregateType: 'payout',
+                aggregateId: payoutRequestId,
+                idempotencyKey: `payout.paid:${payoutRequestId}`,
+                context: { currency, amountFormatted: Number(amount).toLocaleString(), ticketId }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle payout.paid:', error);
+        }
+    }
+
+    /** Handle payout.rejected event (fires for both vendor and agency payouts). */
+    async handlePayoutRejected(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, amount, currency, payoutRequestId, ticketId } = event.payload;
+            if (ownerType !== 'vendor') return;
+
+            const prefs = await this.preferenceRepo.getByVendor(ownerId);
+            if (!prefs.preferences.payoutUpdates) return;
+
+            await this.dispatch({
+                situation: 'payout.rejected',
+                prefs,
+                vendorId: ownerId,
+                aggregateType: 'payout',
+                aggregateId: payoutRequestId,
+                idempotencyKey: `payout.rejected:${payoutRequestId}`,
+                context: { currency, amountFormatted: Number(amount).toLocaleString(), ticketId }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle payout.rejected:', error);
         }
     }
 

@@ -177,6 +177,44 @@ Other codes in this family — see [Agency Connections](../vendor/agency-connect
 (409), `CONNECTION_NOT_PENDING` / `CONNECTION_NOT_PAUSED` / `CONNECTION_NOT_ACTIVE` (422),
 `CONNECTION_NOT_REQUESTER` / `CONNECTION_NOT_APPROVER` / `CONNECTION_WRONG_REAPPROVAL_PARTY` (403).
 
+### 10. Cash on Delivery (COD) Errors
+
+The `COD_` family covers checkout eligibility, delivery-code verification, agent cash exposure,
+deposits, remittances and discrepancies. Role-specific context:
+[customer/orders.md](../customer/orders.md#cod), [agent/cod-cash.md](../agent/cod-cash.md),
+[agency/cod-cash-management.md](../agency/cod-cash-management.md), [admin/cod.md](../admin/cod.md).
+
+| Code | Status | When | `details` |
+|---|---|---|---|
+| `COD_NOT_AVAILABLE_FOR_DIGITAL` | 422 | COD checkout on a digital cart | — |
+| `COD_AGENCY_NOT_SUPPORTED` | 422 | A delivery agency on the order doesn't handle COD | `{ agencyId, agencyName }` |
+| `COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | 422 | Order total above an agency's COD cap | `{ agencyName, maxOrderAmount, orderTotal }` |
+| `COD_COLLECTION_NOT_FOUND` | 404 | No cash collection for the shipment (not COD / not picked up) | — |
+| `COD_COLLECTION_ALREADY_COLLECTED` | 409 | Cash already recorded for this shipment | — |
+| `COD_COLLECTION_NOT_COLLECTIBLE` | 422 | Shipment/collection state doesn't allow collection | `{ shipmentStatus }` or `{ collectionStatus }` |
+| `COD_INVALID_CODE` | 422 | Wrong delivery code | `{ attemptsRemaining }` |
+| `COD_CODE_ATTEMPTS_EXCEEDED` | 423 | Code locked after too many wrong attempts — resend required | — |
+| `COD_CODE_RESEND_TOO_SOON` | 429 | Code (re)send rate limit | `{ retryInSeconds }` |
+| `COD_AGENT_NOT_ASSIGNED` | 422 | COD shipment pickup attempted without an assigned agent | — |
+| `COD_AGENT_EXPOSURE_EXCEEDED` | 422 | Assignment would exceed the agent's cash exposure limit | `{ currentExposure, additionalAmount, effectiveLimit }` |
+| `COD_AGENT_TRUST_TOO_LOW` | 422 | Trust below COD threshold, or open cash-shortfall flag | `{ trustScore, minimum }` or `{ reason }` |
+| `COD_AGENT_HAS_OUTSTANDING_CASH` | 422 | Agent unlink blocked by undeposited cash | `{ outstanding }` |
+| `COD_DEPOSIT_INVALID_AMOUNT` | 422 | Deposit amount not a positive integer | `{ amount }` |
+| `COD_DEPOSIT_EXCEEDS_BALANCE` | 422 | Deposit larger than the agent's held cash | `{ amount, outstanding }` |
+| `COD_REMITTANCE_INVALID_AMOUNT` | 422 | Remittance amount not a positive integer | `{ amount }` |
+| `COD_REMITTANCE_EXCEEDS_LIABILITY` | 422 | Declared amount (plus open declarations) above what the agency owes | `{ amount, pendingDeclared, outstanding }` |
+| `COD_REMITTANCE_NOT_FOUND` | 404 | Unknown remittance | — |
+| `COD_REMITTANCE_ALREADY_RESOLVED` | 409 | Remittance already confirmed/rejected | — |
+| `COD_DISCREPANCY_NOT_FOUND` | 404 | Unknown discrepancy | — |
+| `COD_DISCREPANCY_ALREADY_RESOLVED` | 409 | Discrepancy already closed | — |
+| `PAYMENT_ORDER_IS_COD` | 422 | Online payment attempted for a cash-on-delivery order/checkout | `{ cartId? }` |
+
+Related delivery-roster codes (agent↔agency membership — see
+[agency/agents.md](../agency/agents.md), [agent/agency-membership.md](../agent/agency-membership.md)):
+`DELIVERY_INVITE_NOT_FOUND` (404), `DELIVERY_INVITE_ALREADY_PENDING` (409),
+`DELIVERY_AGENT_ALREADY_IN_AGENCY` (409), `DELIVERY_AGENT_NOT_IN_AGENCY` (404),
+`DELIVERY_AGENT_HAS_ACTIVE_SHIPMENTS` (422).
+
 ---
 
 ## Best Practices for Frontend Error Handling

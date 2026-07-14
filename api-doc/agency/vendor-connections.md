@@ -188,3 +188,18 @@ POST /api/agency/vendor-connections               { "counterpartyId": "507f1f77b
 GET  /api/agency/vendor-connections?status=active
 POST /api/agency/vendor-connections/665f.../approve
 ```
+
+---
+
+## Notifications
+
+You receive an agency notification (in-app, always; plus your configured secondary channel) for:
+- `connection.request_received` — a vendor sent you a request
+- `connection.approved` — a vendor approved or reapproved a connection
+- `connection.rejected` — a vendor rejected your request
+- `connection.reapproval_needed` — a vendor changed its policies and you need to reapprove
+
+Toggle these as a group via the `connectionUpdated` flag on
+[notification preferences](./notifications.md) (default: on). Vendors receive the symmetric
+notification when you (the agency) are the actor — see
+[Vendor Notifications — Events](../vendor/notifications.md#events).

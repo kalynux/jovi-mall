@@ -48,6 +48,22 @@ export const EARNINGS_CONFIG = {
 
   /** Max allocations/orders processed per sweep stage (back-pressure). */
   BATCH_SIZE: intEnv('EARNINGS_BATCH_SIZE', 200),
+
+  /**
+   * Minimum `available_balance` a vendor/agency may request a payout for
+   * (manual or auto-triggered). Below this, both `POST .../earnings/payout`
+   * and the auto-threshold sweep refuse with EARNINGS_PAYOUT_BELOW_MINIMUM.
+   */
+  MIN_PAYOUT_AMOUNT: intEnv('EARNINGS_MIN_PAYOUT_AMOUNT', 10_000),
+
+  /**
+   * `available_balance` level at which the platform automatically opens a
+   * payout request on the vendor/agency's behalf (same ticket/notification
+   * flow as a manual request), so balances never grow unbounded into money
+   * the platform owes. Checked daily by EarningsReleaseWorker. Vendor/agency
+   * only — agents have no EarningsAccount today.
+   */
+  AUTO_PAYOUT_THRESHOLD: intEnv('EARNINGS_AUTO_PAYOUT_THRESHOLD', 2_000_000),
 } as const;
 
 /** A `Date` `days` in the future relative to `now`. */

@@ -284,6 +284,6 @@ You receive a vendor notification (in-app, always; plus your configured secondar
 - `connection.reapproval_needed` — an agency changed its policies and you need to reapprove
 
 Toggle these as a group via the `connectionUpdated` flag on
-[notification preferences](./notifications.md) (default: on). Agency-side notifications for these
-same events (e.g. "a vendor sent you a request") are not yet implemented — agencies should poll
-`GET /api/agency/vendor-connections?status=pending` / `?status=paused_reapproval`.
+[notification preferences](./notifications.md) (default: on). Agencies receive the symmetric
+notification when you (the vendor) are the actor — see
+[Agency Notifications — Events](../agency/notifications.md#events).

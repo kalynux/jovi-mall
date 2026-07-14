@@ -50,9 +50,12 @@ export class UnpaidOrderCancelWorker {
     console.log('[UnpaidOrderCancelWorker] Starting unpaid-order sweep');
 
     // Cheap pre-filter: anything unpaid for less than a day can't have crossed
-    // even the smallest (1-day) vendor window.
+    // even the smallest (1-day) vendor window. COD orders are excluded — they
+    // are unpaid until delivery BY DESIGN; the failed-delivery flow owns their
+    // terminal states, not this sweep.
     const candidates = await OrderModel.find({
       payment_status: { $in: ['pending', 'AWAITING_PAYMENT'] },
+      payment_method: { $ne: 'cash_on_delivery' },
       fulfillment_status: { $ne: 'cancelled' },
       created_at: { $lte: daysAgo(1, now) },
     }).limit(UNPAID_ORDER_CANCEL_CONFIG.BATCH_SIZE);

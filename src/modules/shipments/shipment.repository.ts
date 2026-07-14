@@ -65,6 +65,41 @@ export class ShipmentRepository {
   }
 
   /**
+   * Find a shipment scoped to the assigned agent. Returns null if it doesn't
+   * exist or isn't assigned to this agent — ownership is never leaked.
+   */
+  async findByIdAndAgent(shipmentId: string, agentId: string): Promise<IShipment | null> {
+    if (!Types.ObjectId.isValid(shipmentId)) return null;
+    return await ShipmentModel.findOne({ _id: shipmentId, agent_id: agentId });
+  }
+
+  /**
+   * List shipments assigned to an agent, newest first, paginated. Mirrors
+   * findByAgencyPaginated — 'pending' shipments have no agent yet, so the
+   * exclusion is implicit, but kept explicit for symmetry.
+   */
+  async findByAgentPaginated(
+    agentId: string,
+    filters: { status?: ShipmentStatus } = {},
+    pagination: PaginationOptions = { page: 1, limit: 20 }
+  ): Promise<Page<IShipment>> {
+    const { page, limit } = pagination;
+    const filter: FilterQuery<IShipment> = { agent_id: agentId, status: { $ne: 'pending' } };
+    if (filters.status && filters.status !== 'pending') filter.status = filters.status;
+
+    const [total, docs] = await Promise.all([
+      ShipmentModel.countDocuments(filter).exec(),
+      ShipmentModel.find(filter)
+        .sort({ created_at: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .exec(),
+    ]);
+
+    return { data: docs, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  /**
    * Set/replace the carrier tracking number on a shipment matching `filter`
    * (used to enforce agency/agent ownership at the query level). Returns the
    * updated shipment, or null when no shipment matches.
@@ -125,15 +160,21 @@ export class ShipmentRepository {
 
   /**
    * Advance all `pending` shipments of an order to `assigned` (the hand-off to
-   * the agency). Returns the number of shipments updated. Only `pending`
-   * shipments are touched, so this is safe to call idempotently.
+   * the agency). Returns the shipments that were updated (so callers can
+   * notify each shipment's agency) — empty when nothing was pending. Only
+   * `pending` shipments are touched, so this is safe to call idempotently.
    */
-  async assignPendingByOrderId(orderId: string): Promise<number> {
-    const result = await ShipmentModel.updateMany(
+  async assignPendingByOrderId(orderId: string): Promise<IShipment[]> {
+    const pending = await ShipmentModel.find({ order_id: orderId, status: 'pending' });
+    if (pending.length === 0) return [];
+
+    await ShipmentModel.updateMany(
       { order_id: orderId, status: 'pending' },
       { $set: { status: 'assigned' } }
     );
-    return result.modifiedCount ?? 0;
+
+    pending.forEach(s => { s.status = 'assigned'; });
+    return pending;
   }
 
   /**

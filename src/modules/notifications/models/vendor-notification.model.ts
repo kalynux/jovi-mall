@@ -17,14 +17,17 @@ export type NotificationType =
     | 'connection.request_received'
     | 'connection.approved'
     | 'connection.rejected'
-    | 'connection.reapproval_needed';
+    | 'connection.reapproval_needed'
+    | 'payout.requested'
+    | 'payout.paid'
+    | 'payout.rejected';
 
 /**
  * Aggregate Types
  *
  * The domain entity that triggered this notification.
  */
-export type AggregateType = 'order' | 'booking' | 'payment' | 'storage' | 'connection';
+export type AggregateType = 'order' | 'booking' | 'payment' | 'storage' | 'connection' | 'payout';
 
 /**
  * Delivery Channels
@@ -89,7 +92,14 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
                 'booking.cancelled',
                 'payment.received.partial',
                 'payment.received.full',
-                'storage.alert'
+                'storage.alert',
+                'connection.request_received',
+                'connection.approved',
+                'connection.rejected',
+                'connection.reapproval_needed',
+                'payout.requested',
+                'payout.paid',
+                'payout.rejected'
             ],
             required: true
         },
@@ -107,7 +117,7 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
         },
         aggregateType: {
             type: String,
-            enum: ['order', 'booking', 'payment', 'storage'],
+            enum: ['order', 'booking', 'payment', 'storage', 'connection', 'payout'],
             required: true
         },
         aggregateId: {

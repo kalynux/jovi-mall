@@ -79,11 +79,34 @@ const AgencyPoliciesDamageSchema = new Schema(
   { _id: false }
 );
 
+const AgencyPoliciesCodSchema = new Schema(
+  {
+    /** Whether this agency handles cash-on-delivery orders at all. */
+    enabled: { type: Boolean, required: true, default: false },
+    /**
+     * Optional cap on a single COD order's total (minor units). Checkout
+     * rejects COD orders above it. null = no per-order cap.
+     */
+    max_order_amount: { type: Number, default: null, min: 0 },
+  },
+  { _id: false }
+);
+
 const AgencyPoliciesSchema = new Schema(
   {
     pricing: { type: AgencyPoliciesPricingSchema, required: true },
     returns: { type: AgencyPoliciesReturnsSchema, required: true },
     damage: { type: AgencyPoliciesDamageSchema, required: true },
+    /**
+     * COD participation. Fee charged per COD collection is configured in
+     * `pricing.additional_fees.cod_handling_fee`; this block only gates
+     * eligibility. Defaults to disabled — agencies opt in explicitly.
+     */
+    cod: {
+      type: AgencyPoliciesCodSchema,
+      required: true,
+      default: () => ({ enabled: false, max_order_amount: null }),
+    },
     /**
      * Up to 2 supporting document URLs (e.g. PDFs) covering additional terms
      * that don't fit the structured fields above.
@@ -188,10 +211,16 @@ export interface IAgencyPoliciesDamage {
   notes?: string | null;
 }
 
+export interface IAgencyPoliciesCod {
+  enabled: boolean;
+  max_order_amount: number | null;
+}
+
 export interface IAgencyPolicies {
   pricing: IAgencyPoliciesPricing;
   returns: IAgencyPoliciesReturns;
   damage: IAgencyPoliciesDamage;
+  cod: IAgencyPoliciesCod;
   /** Up to 2 supporting document URLs (e.g. PDFs) for terms not covered above. */
   documents?: string[];
 }

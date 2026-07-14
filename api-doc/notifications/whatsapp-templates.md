@@ -1,10 +1,14 @@
-# Vendor Notification — WhatsApp Templates
+# WhatsApp Templates
 
-This is the source-of-truth for the WhatsApp Business templates used by vendor
-notifications. Create each template in **WhatsApp Business Manager → Message
+This is the source-of-truth for the WhatsApp Business templates used by the
+platform — vendor notifications (§1–7) and the customer-facing COD delivery
+code (§8). Create each template in **WhatsApp Business Manager → Message
 Templates** exactly as specified, in **all 5 languages**. Until a template is
-approved, out-of-24h-window sends for that event will fail (the failure is
-recorded on the notification's `deliveryErrors`, never breaking the flow).
+approved, out-of-24h-window sends for that event will fail — for vendor
+notifications the failure is recorded on the notification's `deliveryErrors`
+(never breaking the flow); for the COD code it is logged and the code simply
+stays available in the customer's own order view (see
+[customer/orders.md](../customer/orders.md#cod)).
 
 ## Conventions
 
@@ -120,6 +124,25 @@ Languages are kept in sync with `SUPPORTED_LANGUAGES`
 | pt_PT | Armazenamento quase cheio | Seu armazenamento de mídia está em {{1}}% ({{2}} de {{3}}). Libere espaço ou atualize seu plano. | Gerir armazenamento |
 | es | Almacenamiento casi lleno | Tu almacenamiento multimedia está al {{1}}% ({{2}} de {{3}}). Libera espacio o mejora tu plan. | Almacenamiento |
 | ar | مساحة التخزين ممتلئة تقريبًا | مساحة تخزين الوسائط لديك عند {{1}}% ({{2}} من {{3}}). حرّر مساحة أو قم بترقية باقتك. | إدارة التخزين |
+
+## 8. `cod_delivery_code` (customer-facing, no button)
+
+Sent by [`DeliveryCodeService`](../../src/modules/cod/services/delivery-code.service.ts)
+**only as a fallback**: it always tries a free-form text message first (free,
+same copy as below); this template is used only when that specific send fails
+because the customer is outside Meta's 24h customer-service window. Cost is
+minimized by design — the paid template is never the first attempt.
+
+- **Body params:** `{{1}}`=order number, `{{2}}`=delivery code, `{{3}}`=amount, `{{4}}`=currency
+- **Button:** none
+
+| Lang | Header | Body |
+|---|---|---|
+| en | Your delivery code | Your delivery code for order {{1}} is {{2}}. Amount to pay in cash on delivery: {{3}} {{4}}. Only give this code to the delivery agent AFTER you have received your package and paid. |
+| fr | Votre code de livraison | Votre code de livraison pour la commande {{1}} est {{2}}. Montant à payer en espèces à la livraison : {{3}} {{4}}. Ne donnez ce code à l'agent qu'APRÈS avoir reçu votre colis et payé. |
+| pt_PT | O seu código de entrega | O seu código de entrega para o pedido {{1}} é {{2}}. Valor a pagar em dinheiro na entrega: {{3}} {{4}}. Só entregue este código ao agente DEPOIS de receber a sua encomenda e pagar. |
+| es | Tu código de entrega | Tu código de entrega para el pedido {{1}} es {{2}}. Monto a pagar en efectivo contra entrega: {{3}} {{4}}. Entrega este código al agente SOLO después de recibir tu paquete y pagar. |
+| ar | رمز التسليم الخاص بك | رمز التسليم لطلبك {{1}} هو {{2}}. المبلغ المطلوب دفعه نقدًا عند التسليم: {{3}} {{4}}. لا تُعطِ هذا الرمز للمندوب إلا بعد استلام طردك والدفع. |
 
 ---
 

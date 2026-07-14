@@ -6,6 +6,7 @@ import { DeliveryAgentRepository } from '../delivery-agent.repository';
 import { DeliveryAgencyRepository } from '../delivery-agency.repository';
 import { IDeliveryAgent } from '../delivery-agent.model';
 import { ShipmentModel } from '../../shipments/shipment.model';
+import { codCashAccountService } from '../../cod/services/cod-cash-account.service';
 
 /** Shipment statuses that keep an agent bound to their agency (work in flight). */
 const ACTIVE_SHIPMENT_STATUSES = ['assigned', 'picked_up', 'in_transit', 'agent_delivered', 'failed'];
@@ -70,7 +71,14 @@ export class AgentRosterService {
 
   async listAgents(agencyId: string) {
     const agents = await this.agentRepo.listByAgency(agencyId);
-    return agents.map((agent) => this.toRosterDto(agent));
+    const cashBalances = await codCashAccountService.getBalances(
+      'agent',
+      agents.map((a) => a._id.toString())
+    );
+    return agents.map((agent) => ({
+      ...this.toRosterDto(agent),
+      cashHeld: cashBalances.get(agent._id.toString()) ?? 0,
+    }));
   }
 
   /**
@@ -104,9 +112,36 @@ export class AgentRosterService {
     return this.toRosterDto(updated);
   }
 
-  /** COD cash guard — wired up once agent cash accounts land (M4). */
-  protected async assertNoOutstandingCash(_agentId: string): Promise<void> {
-    // no-op until COD cash accounts exist
+  /**
+   * Agency-set cap on an agent's COD cash exposure (null = platform default).
+   * Trust-tier scaling still applies on top (see CodExposureService).
+   */
+  async setCodLimit(agencyId: string, agentId: string, maxExposureOverride: number | null) {
+    const agent = await this.agentRepo.findById(agentId);
+    if (!agent || agent.agency_id?.toString() !== agencyId) {
+      throw createAppError(ERROR_CODES.DELIVERY_AGENT_NOT_IN_AGENCY, 404);
+    }
+    const updated = await this.agentRepo.updateProfile(agentId, {
+      cod: { ...(agent.cod ?? { trust_score: 100, max_exposure_override: null }), max_exposure_override: maxExposureOverride },
+    } as any);
+    return {
+      id: agentId,
+      maxExposureOverride: updated?.cod?.max_exposure_override ?? null,
+      trustScore: updated?.cod?.trust_score ?? 100,
+    };
+  }
+
+  /**
+   * An agent holding undeposited COD cash cannot leave the roster — the
+   * agency would lose its accountability anchor for that cash.
+   */
+  protected async assertNoOutstandingCash(agentId: string): Promise<void> {
+    const { balance } = await codCashAccountService.getBalance('agent', agentId);
+    if (balance > 0) {
+      throw createAppError(ERROR_CODES.COD_AGENT_HAS_OUTSTANDING_CASH, 422, undefined, {
+        outstanding: balance,
+      });
+    }
   }
 
   // ─── Agent side ─────────────────────────────────────────────────────────────
@@ -200,6 +235,8 @@ export class AgentRosterService {
       status: agent.status,
       vehicleInfo: agent.vehicle_info,
       capacityStatus: agent.live_state?.current_capacity_status ?? 'offline',
+      trustScore: agent.cod?.trust_score ?? 100,
+      codMaxExposureOverride: agent.cod?.max_exposure_override ?? null,
       joinedAgencyAt: agent.updated_at,
     };
   }

@@ -112,6 +112,7 @@ export class VendorOrderService {
 
                 // Status
                 fulfillmentStatus: order.fulfillment_status,
+                paymentMethod: order.payment_method,
                 paymentStatus: order.payment_status,
 
                 // Item count
@@ -210,6 +211,7 @@ export class VendorOrderService {
 
             // Status
             fulfillmentStatus: order.fulfillment_status,
+            paymentMethod: order.payment_method,
             paymentStatus: order.payment_status,
             paymentIntentId: order.payment_intent_id,
 
@@ -448,8 +450,14 @@ export class VendorOrderService {
             );
         }
 
-        // 4. Payment-fulfillment coupling
-        if (newStatus === 'processing' && order.payment_status !== 'paid') {
+        // 4. Payment-fulfillment coupling. Prepaid orders may only start
+        // processing once paid; COD orders fulfil BEFORE payment by design —
+        // the cash is collected at handoff, not up front.
+        if (
+            newStatus === 'processing' &&
+            order.payment_status !== 'paid' &&
+            order.payment_method !== 'cash_on_delivery'
+        ) {
             throw createAppError(
                 ERROR_CODES.ORDER_PAYMENT_REQUIRED,
                 422,

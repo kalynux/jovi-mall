@@ -80,6 +80,48 @@ export class EarningsAccountRepository {
   }
 
   /**
+   * Atomically move `totalAmount` out of pending, splitting it into
+   * `totalAmount - reserveAmount` → available and `reserveAmount` → reserve
+   * (COD rolling reserve on agency releases). Returns the updated account, or
+   * `null` when pending is too low.
+   */
+  async releaseWithReserve(
+    accountId: Types.ObjectId,
+    totalAmount: number,
+    reserveAmount: number,
+    session?: ClientSession
+  ): Promise<IEarningsAccount | null> {
+    return EarningsAccountModel.findOneAndUpdate(
+      { _id: accountId, pending_balance: { $gte: totalAmount } },
+      {
+        $inc: {
+          pending_balance: -totalAmount,
+          available_balance: totalAmount - reserveAmount,
+          reserve_balance: reserveAmount,
+          version: 1,
+        },
+      },
+      { new: true, session: session ?? null }
+    );
+  }
+
+  /**
+   * Atomically move `amount` from reserve → available (matured reserve hold).
+   * Returns the updated account, or `null` when the reserve is too low.
+   */
+  async releaseReserve(
+    accountId: Types.ObjectId,
+    amount: number,
+    session?: ClientSession
+  ): Promise<IEarningsAccount | null> {
+    return EarningsAccountModel.findOneAndUpdate(
+      { _id: accountId, reserve_balance: { $gte: amount } },
+      { $inc: { reserve_balance: -amount, available_balance: amount, version: 1 } },
+      { new: true, session: session ?? null }
+    );
+  }
+
+  /**
    * Atomically remove `amount` from pending (refund before release). Returns the
    * updated account, or `null` when pending is too low.
    */
@@ -118,5 +160,70 @@ export class EarningsAccountRepository {
   ): Promise<IEarningsAccount | null> {
     const oid = this.toOwnerId(ownerType, ownerId);
     return EarningsAccountModel.findOne({ owner_type: ownerType, owner_id: oid });
+  }
+
+  /**
+   * Vendor/agency accounts whose `available_balance` has reached `threshold`
+   * — used by EarningsReleaseWorker's daily auto-payout sweep. Never includes
+   * the platform account (it has no payout concept).
+   */
+  async findOverThreshold(threshold: number): Promise<IEarningsAccount[]> {
+    return EarningsAccountModel.find({
+      owner_type: { $in: ['vendor', 'agency'] },
+      available_balance: { $gte: threshold },
+    });
+  }
+
+  /**
+   * Atomically move the account's ENTIRE `available_balance` into
+   * `requested_balance` (payout request). `amount` must be the value the
+   * caller just read in the same session — the exact-match guard means this
+   * returns `null` if a concurrent write changed `available_balance` first
+   * (race lost; caller surfaces a "try again" error rather than moving a
+   * stale/wrong amount).
+   */
+  async moveAvailableToRequested(
+    accountId: Types.ObjectId,
+    amount: number,
+    session?: ClientSession
+  ): Promise<IEarningsAccount | null> {
+    return EarningsAccountModel.findOneAndUpdate(
+      { _id: accountId, available_balance: amount },
+      { $inc: { available_balance: -amount, requested_balance: amount, version: 1 } },
+      { new: true, session: session ?? null }
+    );
+  }
+
+  /**
+   * Mark-paid: permanently remove `amount` from `requested_balance` — the
+   * funds have left the platform's ledger. Returns `null` when requested is
+   * too low.
+   */
+  async deductFromRequested(
+    accountId: Types.ObjectId,
+    amount: number,
+    session?: ClientSession
+  ): Promise<IEarningsAccount | null> {
+    return EarningsAccountModel.findOneAndUpdate(
+      { _id: accountId, requested_balance: { $gte: amount } },
+      { $inc: { requested_balance: -amount, version: 1 } },
+      { new: true, session: session ?? null }
+    );
+  }
+
+  /**
+   * Reject: move `amount` back from `requested_balance` to
+   * `available_balance`. Returns `null` when requested is too low.
+   */
+  async releaseRequestedToAvailable(
+    accountId: Types.ObjectId,
+    amount: number,
+    session?: ClientSession
+  ): Promise<IEarningsAccount | null> {
+    return EarningsAccountModel.findOneAndUpdate(
+      { _id: accountId, requested_balance: { $gte: amount } },
+      { $inc: { requested_balance: -amount, available_balance: amount, version: 1 } },
+      { new: true, session: session ?? null }
+    );
   }
 }

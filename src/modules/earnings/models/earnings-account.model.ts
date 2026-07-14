@@ -27,6 +27,20 @@ export interface IEarningsAccount extends Document {
   pending_balance: number;
   /** Released — withdrawable (payout flow handled in a later phase). */
   available_balance: number;
+  /**
+   * COD rolling reserve (agencies only): a percentage of each released
+   * COD-sourced agency allocation parks here for COD_CONFIG.RESERVE_DAYS and
+   * moves to `available_balance` only while the agency has no open cash
+   * discrepancies. Scheduling lives in EarningsReserveHold.
+   */
+  reserve_balance: number;
+  /**
+   * Earmarked for an in-flight payout request: money leaves `available_balance`
+   * the instant a request is created (so it can't be requested twice) and either
+   * leaves the ledger for good when an admin marks the request paid, or returns
+   * to `available_balance` if the admin rejects it. See PayoutRequest.
+   */
+  requested_balance: number;
   version: number;
   created_at: Date;
   updated_at: Date;
@@ -39,6 +53,8 @@ const EarningsAccountSchema = new Schema<IEarningsAccount>(
     currency: { type: String, required: true, uppercase: true, trim: true, default: 'XAF' },
     pending_balance: { type: Number, required: true, default: 0, min: 0 },
     available_balance: { type: Number, required: true, default: 0, min: 0 },
+    reserve_balance: { type: Number, required: true, default: 0, min: 0 },
+    requested_balance: { type: Number, required: true, default: 0, min: 0 },
     version: { type: Number, default: 0 },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }

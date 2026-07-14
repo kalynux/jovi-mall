@@ -12,7 +12,8 @@ export const ListOrdersQuerySchema = z.object({
     // system-derived (see OrderFulfillmentAggregationService) — listed here for
     // filtering only, never settable via UpdateFulfillmentStatusSchema below.
     status: z.enum(['pending', 'processing', 'partially_shipped', 'shipped', 'partially_delivered', 'delivered', 'fulfilled', 'cancelled']).optional(),
-    paymentStatus: z.enum(['pending', 'AWAITING_PAYMENT', 'paid', 'failed', 'refunded']).optional(),
+    paymentStatus: z.enum(['pending', 'AWAITING_PAYMENT', 'partially_paid', 'paid', 'failed', 'refunded']).optional(),
+    paymentMethod: z.enum(['online', 'cash_on_delivery']).optional(),  // Filter COD vs prepaid orders
     orderType: z.enum(['physical', 'digital']).optional(),  // NEW: Filter by order type
     customerId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid customer ID').optional(),  // NEW: Scope to one customer
     dateFrom: z.string().datetime().optional(),  // ISO 8601

@@ -37,6 +37,8 @@ export interface IVendorNotificationPreference extends Document {
         storageAlert: boolean;
         /** Covers all four connection.* situations (request received, approved, rejected, reapproval needed). */
         connectionUpdated: boolean;
+        /** Covers all three payout.* situations (requested, paid, rejected). */
+        payoutUpdates: boolean;
     };
 
     updatedAt: Date;
@@ -110,6 +112,10 @@ const VendorNotificationPreferenceSchema = new Schema<IVendorNotificationPrefere
                 default: true
             },
             connectionUpdated: {
+                type: Boolean,
+                default: true
+            },
+            payoutUpdates: {
                 type: Boolean,
                 default: true
             }

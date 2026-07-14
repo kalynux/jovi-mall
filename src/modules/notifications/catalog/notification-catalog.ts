@@ -96,6 +96,14 @@ const VIEW_CONNECTION_LABEL: Record<Language, string> = {
     ar: 'عرض الاتصال'
 };
 
+const VIEW_TICKET_LABEL: Record<Language, string> = {
+    en: 'View ticket',
+    fr: 'Voir le ticket',
+    pt: 'Ver o chamado',
+    es: 'Ver el ticket',
+    ar: 'عرض التذكرة'
+};
+
 // ─── Catalog ─────────────────────────────────────────────────────────────────
 
 export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> = {
@@ -266,6 +274,51 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> =
             template: { name: 'vendor_connection_reapproval_needed', bodyParams: ['{{agencyName}}'] }
         },
         button: { type: 'url', label: VIEW_CONNECTION_LABEL, urlSuffix: 'agency-connections/{{connectionId}}' }
+    },
+
+    'payout.requested': {
+        base: {
+            en: { subject: 'Payout request created', body: 'Your request to withdraw {{currency}} {{amountFormatted}} was created. Track its progress under Tickets.' },
+            fr: { subject: 'Demande de paiement créée', body: 'Votre demande de retrait de {{currency}} {{amountFormatted}} a été créée. Suivez son avancement dans Tickets.' },
+            pt: { subject: 'Pedido de pagamento criado', body: 'Seu pedido de retirada de {{currency}} {{amountFormatted}} foi criado. Acompanhe o progresso em Chamados.' },
+            es: { subject: 'Solicitud de pago creada', body: 'Tu solicitud de retiro de {{currency}} {{amountFormatted}} fue creada. Sigue su progreso en Tickets.' },
+            ar: { subject: 'تم إنشاء طلب السحب', body: 'تم إنشاء طلبك لسحب {{currency}} {{amountFormatted}}. تابع التقدم ضمن التذاكر.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_payout_requested', bodyParams: ['{{currency}}', '{{amountFormatted}}'] }
+        },
+        button: { type: 'url', label: VIEW_TICKET_LABEL, urlSuffix: 'tickets/{{ticketId}}' }
+    },
+
+    'payout.paid': {
+        base: {
+            en: { subject: 'Payout paid', body: 'Your payout of {{currency}} {{amountFormatted}} has been paid.' },
+            fr: { subject: 'Paiement effectué', body: 'Votre paiement de {{currency}} {{amountFormatted}} a été effectué.' },
+            pt: { subject: 'Pagamento efetuado', body: 'Seu pagamento de {{currency}} {{amountFormatted}} foi efetuado.' },
+            es: { subject: 'Pago realizado', body: 'Tu pago de {{currency}} {{amountFormatted}} ha sido realizado.' },
+            ar: { subject: 'تم الدفع', body: 'تم دفع مبلغ {{currency}} {{amountFormatted}} الخاص بك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_payout_paid', bodyParams: ['{{currency}}', '{{amountFormatted}}'] }
+        },
+        button: { type: 'url', label: VIEW_TICKET_LABEL, urlSuffix: 'tickets/{{ticketId}}' }
+    },
+
+    'payout.rejected': {
+        base: {
+            en: { subject: 'Payout request rejected', body: 'Your request to withdraw {{currency}} {{amountFormatted}} was rejected. See Tickets for the reason.' },
+            fr: { subject: 'Demande de paiement refusée', body: 'Votre demande de retrait de {{currency}} {{amountFormatted}} a été refusée. Voir Tickets pour le motif.' },
+            pt: { subject: 'Pedido de pagamento rejeitado', body: 'Seu pedido de retirada de {{currency}} {{amountFormatted}} foi rejeitado. Veja o motivo em Chamados.' },
+            es: { subject: 'Solicitud de pago rechazada', body: 'Tu solicitud de retiro de {{currency}} {{amountFormatted}} fue rechazada. Consulta el motivo en Tickets.' },
+            ar: { subject: 'تم رفض طلب السحب', body: 'تم رفض طلبك لسحب {{currency}} {{amountFormatted}}. راجع السبب ضمن التذاكر.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_payout_rejected', bodyParams: ['{{currency}}', '{{amountFormatted}}'] }
+        },
+        button: { type: 'url', label: VIEW_TICKET_LABEL, urlSuffix: 'tickets/{{ticketId}}' }
     }
 };
 

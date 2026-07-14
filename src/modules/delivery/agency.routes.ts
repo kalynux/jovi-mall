@@ -3,7 +3,10 @@ import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware'
 import { AgencyProfileController, uploadAgencyPolicyDocuments } from './controllers/agency-profile.controller';
 import { AgencyNetworkController } from './controllers/agency-network.controller';
 import { AgencyAgentsController } from './controllers/agency-agents.controller';
+import { AgencyNotificationController } from './controllers/agency-notification.controller';
 import { ShipmentController } from '../shipments/shipment.controller';
+import { AgencyCodController } from '../cod/controllers/agency-cod.controller';
+import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
 
 const router = Router();
 
@@ -100,6 +103,13 @@ router.get('/agents', AgencyAgentsController.listAgents);
  */
 router.delete('/agents/:id', AgencyAgentsController.unlinkAgent);
 
+/**
+ * PATCH /api/agency/agents/:id/cod-limit
+ * Cap this agent's COD cash exposure (null = platform default).
+ * Body: { maxExposureOverride: number | null }
+ */
+router.patch('/agents/:id/cod-limit', AgencyAgentsController.setCodLimit);
+
 // ─── Shipments ──────────────────────────────────────────────────────────────
 
 /**
@@ -143,6 +153,70 @@ router.patch('/shipments/:id/assign-agent', ShipmentController.assignAgent);
  * Body: { trackingNumber: string }
  */
 router.patch('/shipments/:id/tracking-number', ShipmentController.setTrackingNumber);
+
+// ─── COD (cash management) ────────────────────────────────────────────────────
+
+/**
+ * GET /api/agency/cod/summary
+ * The agency's cash position: liability to the platform, cash out with each
+ * agent, and collected cash not yet covered by a confirmed remittance.
+ */
+router.get('/cod/summary', AgencyCodController.summary);
+
+/**
+ * POST /api/agency/cod/deposits
+ * Record cash physically received from one of this agency's agents.
+ * Body: { agentId, amount, note? }
+ */
+router.post('/cod/deposits', AgencyCodController.recordDeposit);
+
+/** GET /api/agency/cod/deposits — deposit history. Query: agentId?, page?, limit? */
+router.get('/cod/deposits', AgencyCodController.listDeposits);
+
+/**
+ * POST /api/agency/cod/remittances
+ * Declare a cash transfer to the platform (admin confirms receipt).
+ * Body: { amount, reference, note? }
+ */
+router.post('/cod/remittances', AgencyCodController.declareRemittance);
+
+/** GET /api/agency/cod/remittances — remittance history. Query: status?, page?, limit? */
+router.get('/cod/remittances', AgencyCodController.listRemittances);
+
+/**
+ * POST /api/agency/cod/discrepancies
+ * Flag a cash problem with one of this agency's agents (applies trust penalty).
+ * Body: { agentId, type: 'cash_shortfall' | 'other', amount?, note }
+ */
+router.post('/cod/discrepancies', AgencyCodController.raiseDiscrepancy);
+
+/** GET /api/agency/cod/discrepancies — this agency's flags. Query: status?, agentId?, page?, limit? */
+router.get('/cod/discrepancies', AgencyCodController.listDiscrepancies);
+
+// ─── Notifications (multi-channel; see agency-notification.model.ts) ─────────
+
+/** GET /api/agency/notifications */
+router.get('/notifications', AgencyNotificationController.listNotifications);
+
+/** PATCH /api/agency/notifications/:id/read */
+router.patch('/notifications/:id/read', AgencyNotificationController.markAsRead);
+
+/** POST /api/agency/notifications/read-all */
+router.post('/notifications/read-all', AgencyNotificationController.markAllAsRead);
+
+/** GET /api/agency/notification-preferences */
+router.get('/notification-preferences', AgencyNotificationController.getPreferences);
+
+/** PATCH /api/agency/notification-preferences */
+router.patch('/notification-preferences', AgencyNotificationController.updatePreferences);
+
+/**
+ * POST /api/agency/devices — register/refresh an FCM device token.
+ * DELETE /api/agency/devices — unregister a device token (e.g. on logout).
+ * Reuses the existing, already role-agnostic DeviceTokenController as-is.
+ */
+router.post('/devices', DeviceTokenController.register);
+router.delete('/devices', DeviceTokenController.unregister);
 
 // ─── Legacy / Backward Compatibility ──────────────────────────────────────────
 

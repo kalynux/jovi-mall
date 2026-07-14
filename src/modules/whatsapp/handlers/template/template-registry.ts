@@ -92,7 +92,11 @@ export class TemplateRegistry {
             ['vendor_booking_cancelled', 1, true, 'Vendor: booking cancelled'],
             ['vendor_payment_partial', 2, true, 'Vendor: partial payment received'],
             ['vendor_payment_full', 2, true, 'Vendor: full payment received'],
-            ['vendor_storage_alert', 3, true, 'Vendor: media storage threshold alert']
+            ['vendor_storage_alert', 3, true, 'Vendor: media storage threshold alert'],
+            // Customer-facing COD delivery code — fallback for when the customer is
+            // outside Meta's 24h free-form window (see DeliveryCodeService).
+            // Body params: order number, delivery code, amount, currency.
+            ['cod_delivery_code', 4, false, 'Customer: cash-on-delivery delivery code']
         ];
 
         for (const [name, body, hasButton, description] of notificationTemplates) {

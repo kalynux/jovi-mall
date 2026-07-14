@@ -1,9 +1,10 @@
 import mongoose, { ClientSession } from 'mongoose';
-import { IOrder, OrderType } from './order.model';
+import { IOrder, OrderType, OrderPaymentMethod } from './order.model';
 import { OrderRepository } from './order.repository';
 import { CartService, CartResponse } from '../cart/services/cart.service';
 import { transactionManager } from '../../core/database/transaction.manager';
 import { ShipmentRepository } from '../shipments/shipment.repository';
+import { IShipment } from '../shipments/shipment.model';
 import { OrderTimelineRepository } from './order-timeline.repository';
 import { VendorRepository } from '../vendors/vendor.repository';
 import { VendorSettingsRepository } from '../vendors/repositories/vendor-settings.repository';
@@ -18,6 +19,7 @@ import { ProductVariantModel } from '../catalog/models/product-variant.model';
 import { VendorCustomerSyncService } from '../vendors/services/vendor-customer-sync.service';
 import { eventBus } from '../../core/events/event-bus';
 import { earningsSplitService } from '../earnings/services/earnings-split.service';
+import { codEligibilityService } from '../cod/services/cod-eligibility.service';
 
 /**
  * OrderService - Cart-aware, payment-ready order management
@@ -80,7 +82,13 @@ export class OrderService {
     order.fulfillment_status = 'cancelled';
     // Unpaid orders never collected funds — mark the intent failed. A paid order
     // is never routed here (refunds own that path), so don't clobber 'paid'.
-    if (order.payment_status !== 'paid' && order.payment_status !== 'refunded') {
+    // 'partially_paid' (COD) means cash WAS collected for part of the order —
+    // never overwrite that financial fact either.
+    if (
+      order.payment_status !== 'paid' &&
+      order.payment_status !== 'refunded' &&
+      order.payment_status !== 'partially_paid'
+    ) {
       order.payment_status = 'failed';
     }
     await order.save();
@@ -156,8 +164,8 @@ export class OrderService {
         return;
       }
 
-      const assignedCount = await this.shipmentRepo.assignPendingByOrderId(order._id.toString());
-      if (assignedCount === 0) return; // Nothing pending (e.g. already dispatched)
+      const assignedShipments = await this.shipmentRepo.assignPendingByOrderId(order._id.toString());
+      if (assignedShipments.length === 0) return; // Nothing pending (e.g. already dispatched)
 
       // Mirror the hand-off onto the order items so vendor/customer views agree.
       for (const item of order.items) {
@@ -170,12 +178,14 @@ export class OrderService {
         orderId: order._id.toString(),
         eventType: 'delivery.agency_updated',
         description: 'Order auto-dispatched to the delivery agency in charge',
-        metadata: { auto: true, shipmentsAssigned: assignedCount },
+        metadata: { auto: true, shipmentsAssigned: assignedShipments.length },
         actorType: 'system',
         actorId: null
       });
 
-      console.log(`[OrderService] Order ${order._id} auto-dispatched: ${assignedCount} shipment(s) assigned.`);
+      await this._publishShipmentAssigned(assignedShipments, order);
+
+      console.log(`[OrderService] Order ${order._id} auto-dispatched: ${assignedShipments.length} shipment(s) assigned.`);
     } catch (error) {
       console.error('[OrderService] Failed to auto-dispatch order to agency:', error);
     }
@@ -201,7 +211,12 @@ export class OrderService {
     if (order.order_type !== 'physical') {
       throw createAppError(ERROR_CODES.ORDER_WRONG_TYPE, 400, 'Only physical orders can be dispatched to a delivery agency');
     }
-    if (order.payment_status !== 'paid') {
+    // Prepaid orders dispatch only once paid. COD orders fulfil BEFORE payment
+    // by design — dispatchable while the cash is still outstanding.
+    const codAwaitingCash =
+      order.payment_method === 'cash_on_delivery' &&
+      (order.payment_status === 'AWAITING_PAYMENT' || order.payment_status === 'partially_paid');
+    if (order.payment_status !== 'paid' && !codAwaitingCash) {
       throw createAppError(ERROR_CODES.ORDER_PAYMENT_REQUIRED, 422, undefined, { paymentStatus: order.payment_status });
     }
     if (order.dispute_hold?.active) {
@@ -211,8 +226,8 @@ export class OrderService {
       });
     }
 
-    const assignedCount = await this.shipmentRepo.assignPendingByOrderId(orderId);
-    if (assignedCount === 0) return 0;
+    const assignedShipments = await this.shipmentRepo.assignPendingByOrderId(orderId);
+    if (assignedShipments.length === 0) return 0;
 
     for (const item of order.items) {
       if (item.delivery && item.delivery.status === 'pending') {
@@ -227,12 +242,37 @@ export class OrderService {
       description: actor.type === 'vendor'
         ? 'Vendor dispatched the order to its delivery agency'
         : 'Order auto-dispatched to the delivery agency in charge',
-      metadata: { auto: actor.type === 'system', shipmentsAssigned: assignedCount },
+      metadata: { auto: actor.type === 'system', shipmentsAssigned: assignedShipments.length },
       actorType: actor.type,
       actorId: actor.id,
     });
 
-    return assignedCount;
+    await this._publishShipmentAssigned(assignedShipments, order);
+
+    return assignedShipments.length;
+  }
+
+  /**
+   * Publish one `shipment.assigned` event per shipment just handed off to an
+   * agency (dispatch, manual or auto). Each shipment belongs to exactly one
+   * agency, so this is the natural per-recipient granularity — see
+   * AgencyNotificationEventHandler.handleShipmentAssigned.
+   */
+  private async _publishShipmentAssigned(shipments: IShipment[], order: IOrder): Promise<void> {
+    for (const shipment of shipments) {
+      await eventBus.publish('shipment.assigned', {
+        eventType: 'shipment.assigned',
+        aggregateId: (shipment._id as mongoose.Types.ObjectId).toString(),
+        payload: {
+          shipmentId: (shipment._id as mongoose.Types.ObjectId).toString(),
+          agencyId: shipment.agency_id.toString(),
+          orderId: order._id.toString(),
+          orderNumber: order.order_number,
+          itemCount: shipment.items.length,
+        },
+        occurredAt: new Date(),
+      });
+    }
   }
 
   /**
@@ -252,10 +292,14 @@ export class OrderService {
    * variant-first data, single currency, physical/digital only).
    *
    * @param customerId - Customer ID
+   * @param paymentMethod - 'online' (default, prepaid via gateway) or
+   *   'cash_on_delivery' (cash collected per shipment at handoff). Applies to
+   *   the WHOLE checkout group — every order it splits into.
    * @returns The checkout-group cart id, created orders, and any shipments
    */
   async createOrdersFromCart(
-    customerId: string
+    customerId: string,
+    paymentMethod: OrderPaymentMethod = 'online'
   ): Promise<{ cartId: string; orders: IOrder[]; shipments: any[] }> {
     // 1. VALIDATION PHASE: Fetch and validate cart
     const cart = await this.cartService.getCart(customerId);
@@ -303,6 +347,16 @@ export class OrderService {
       throw createAppError(ERROR_CODES.ORDER_CART_INVALID, 400, `Order type must be 'physical' or 'digital', got '${orderType}'`);
     }
 
+    // COD is physical-only: nothing is handed over for digital goods, so there
+    // is no moment to pay cash. Reject the whole checkout up front.
+    if (paymentMethod === 'cash_on_delivery' && orderType !== 'physical') {
+      throw createAppError(
+        ERROR_CODES.COD_NOT_AVAILABLE_FOR_DIGITAL,
+        422,
+        'Cash on delivery is only available for physical orders'
+      );
+    }
+
     // 2. GROUP CART ITEMS BY VENDOR — one order per vendor (this IS the
     //    single-vendor-per-order enforcement).
     const vendorGroups = new Map<string, CartResponse['items']>();
@@ -319,7 +373,7 @@ export class OrderService {
 
       for (const [vendorId, items] of vendorGroups) {
         const built = await this.buildVendorOrder(
-          { customerId, cartId: cart.cartId!, vendorId, items, orderType, currency },
+          { customerId, cartId: cart.cartId!, vendorId, items, orderType, currency, paymentMethod },
           session
         );
         createdOrders.push(built.order);
@@ -334,6 +388,18 @@ export class OrderService {
     for (const order of orders) {
       await this.emitOrderCreatedEvent(order);
       await this.syncVendorCustomerOrderPlaced(order);
+
+      // COD orders have no payment-success moment before fulfilment, so the
+      // vendor's auto-redirect (normally fired on payment success) runs at
+      // checkout instead. Best-effort, same as the payment-success path.
+      if (order.payment_method === 'cash_on_delivery' && order.order_type === 'physical') {
+        await this.maybeDispatchToAgencies(order);
+        try {
+          await order.save();
+        } catch (error) {
+          console.error('[OrderService] Failed to persist COD auto-dispatch:', error);
+        }
+      }
     }
 
     // 5. Clear the cart once, after all orders are committed.
@@ -356,10 +422,11 @@ export class OrderService {
       items: CartResponse['items'];
       orderType: OrderType;
       currency: string;
+      paymentMethod: OrderPaymentMethod;
     },
     session: ClientSession
   ): Promise<{ order: IOrder; shipments: any[] }> {
-    const { customerId, cartId, vendorId, items, orderType, currency } = params;
+    const { customerId, cartId, vendorId, items, orderType, currency, paymentMethod } = params;
 
     // Order number (unique per order)
     const orderNumber = await OrderNumberGenerator.generateOrderNumber();
@@ -480,6 +547,17 @@ export class OrderService {
         agencyGroups[agencyId].push({ orderItem, index: i });
       }
 
+      // COD eligibility: every agency carrying one of this order's shipments
+      // must support COD (its agent collects that shipment's cash). Validated
+      // inside the checkout transaction so a failure rolls back the whole group.
+      if (paymentMethod === 'cash_on_delivery') {
+        await codEligibilityService.assertVendorOrderEligible({
+          orderType,
+          totalAmount: total,
+          agencyIds: Object.keys(agencyGroups),
+        });
+      }
+
       // CREATE ORDER (Physical)
       const order = await this.orderRepo.create({
         order_number: orderNumber,
@@ -491,7 +569,8 @@ export class OrderService {
         currency,
         price_breakdown: priceBreakdown,
         total_amount: total,
-        payment_status: 'AWAITING_PAYMENT',  // Ready for payment
+        payment_method: paymentMethod,
+        payment_status: 'AWAITING_PAYMENT',  // Ready for payment (COD: paid at handoff)
         fulfillment_status: 'pending'
       }, session);
 
@@ -529,7 +608,7 @@ export class OrderService {
       return { order, shipments };
     }
 
-    // DIGITAL ORDER: No delivery, no shipments
+    // DIGITAL ORDER: No delivery, no shipments (COD rejected upstream)
     const order = await this.orderRepo.create({
       order_number: orderNumber,
       order_type: orderType,
@@ -540,6 +619,7 @@ export class OrderService {
       currency,
       price_breakdown: priceBreakdown,
       total_amount: total,
+      payment_method: paymentMethod,
       payment_status: 'AWAITING_PAYMENT',  // Ready for payment
       fulfillment_status: 'pending'
     }, session);

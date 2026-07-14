@@ -61,7 +61,9 @@ A vendor's notification settings — the values the backend reads when deciding 
       "bookingCancelled": true,
       "paymentReceivedPartial": true,
       "paymentReceivedFull": true,
-      "storageAlert": true
+      "storageAlert": true,
+      "connectionUpdated": true,
+      "payoutUpdates": true
     }
   }
 }
@@ -103,7 +105,9 @@ The `*Verified` flags are **computed live** from the vendor's account (email ver
     "bookingCancelled": false,
     "paymentReceivedPartial": true,
     "paymentReceivedFull": true,
-    "storageAlert": true
+    "storageAlert": true,
+    "connectionUpdated": true,
+    "payoutUpdates": true
   }
 }
 ```
@@ -446,7 +450,7 @@ Because `GET /notifications` returns everything regardless of push success, a ve
 
 ### Events
 
-The seven subscribable events (`preferences.*` key → notification `type`):
+The subscribable events (`preferences.*` key → notification `type`):
 
 | Preference key | Notification `type` | `aggregateType` | Fires when |
 |---|---|---|---|
@@ -457,6 +461,8 @@ The seven subscribable events (`preferences.*` key → notification `type`):
 | `paymentReceivedPartial` | `payment.received.partial` | `payment` | A partial payment is received |
 | `paymentReceivedFull` | `payment.received.full` | `payment` | A full payment is received |
 | `storageAlert` | `storage.alert` | `storage` | Media storage crosses a threshold (80% / 90% / 100%). `aggregateId` is the vendor id. See [Storage](./storage.md). |
+| `connectionUpdated` | `connection.request_received`, `connection.approved`, `connection.rejected`, `connection.reapproval_needed` | `connection` | An agency connection request/approval/rejection/reapproval-needed happens where the **agency** was the actor. See [Agency connections](./agency-connections.md). The symmetric agency-side events (fired when the **vendor** is the actor) are documented in [Agency Notifications — Events](../agency/notifications.md#events). |
+| `payoutUpdates` | `payout.requested`, `payout.paid`, `payout.rejected` | `payout` | Your own payout request is created, paid, or rejected. `aggregateId` is the `PayoutRequest` id; `action.path` deep-links to `tickets/{ticketId}` — the request is tracked as a ticket, see [Earnings — Requesting a payout](./earnings.md#requesting-a-payout). |
 
 ### Delivery channels
 

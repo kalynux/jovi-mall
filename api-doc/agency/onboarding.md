@@ -319,7 +319,7 @@ Send `skip: true` to bypass this step without providing branding data. The flow 
 - **Auth**: Yes (Agency role)
 - **Prerequisite**: Step 2 completed (Step 3 may be skipped)
 
-This is the final required step. It captures the three policy pillars that govern how the agency operates with vendors and customers: **pricing**, **returns**, and **damage handling**.
+This is the final required step. It captures the policy pillars that govern how the agency operates with vendors and customers: **pricing**, **returns**, **damage handling**, and **cash-on-delivery participation**.
 
 #### Request Body
 
@@ -361,6 +361,10 @@ This is the final required step. It captures the three policy pillars that gover
       "claim_deadline_days": 7,
       "max_refund_per_item": 50000,
       "notes": "Damage claims without original packaging will be rejected."
+    },
+    "cod": {
+      "enabled": true,
+      "max_order_amount": 500000
     },
     "documents": [
       "https://cdn.example.com/agency-docs/terms-addendum.pdf"
@@ -434,6 +438,20 @@ The `pricing` object covers two fulfilment models (`storage_based` and `pickup_b
 | `notes` | `string` | No | Max 700 chars | Additional conditions or rejection criteria (e.g. packaging requirements). |
 
 > **Admin-only fields:** `inspector` and `investigation_fee` are **not accepted from the frontend**. They are preset by the platform admin and will appear in the profile response (defaulting to `"agency"` and `1000` respectively). Do not send these fields — they will be silently ignored.
+
+---
+
+#### Field Reference — `policies.cod`
+
+Cash-on-delivery participation (opt-in). The per-collection fee lives in
+`pricing.additional_fees.cod_handling_fee`; this block only gates eligibility. See
+[cod-cash-management.md](./cod-cash-management.md) for the operational workflow (agent
+requirements, cash deposits, remittances).
+
+| Field | Type | Required? | Validation | Description |
+|-------|------|-----------|------------|-------------|
+| `enabled` | `boolean` | Yes (block optional) | — | Whether this agency handles COD orders. Omitting the whole `cod` block defaults to `{ "enabled": false, "max_order_amount": null }`. |
+| `max_order_amount` | `number \| null` | No | ≥ 0, default `null` | Cap on a single COD order's total (minor units). Checkout rejects COD orders above it. `null` = no cap. |
 
 ---
 

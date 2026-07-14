@@ -15,6 +15,8 @@
     "seed:tickets": "ts-node scripts/seed/seed-tickets.ts",
     "seed:tickets:clean": "ts-node scripts/seed/seed-tickets.ts --clean",
     "seed:plans": "ts-node scripts/seed/seed-pricing-plans.ts",
+    "seed:cod": "ts-node scripts/seed/seed-cod.ts",
+    "seed:cod:clean": "ts-node scripts/seed/seed-cod.ts --clean",
     "simulate:notifications": "ts-node scripts/simulate-vendor-notifications.ts"
   },
   "keywords": [],

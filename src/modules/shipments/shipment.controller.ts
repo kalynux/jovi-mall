@@ -75,6 +75,36 @@ export class ShipmentController {
     });
 
     /**
+     * GET /api/agent/shipments
+     *
+     * Shipments assigned to the authenticated agent (their work queue).
+     */
+    static listForAgent = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const agentId = req.auth!.role_entity._id.toString();
+        const { status, page, limit } = ListShipmentsQuerySchema.parse(req.query);
+
+        const result = await shipmentService.listForAgent(agentId, { status }, { page, limit });
+
+        res.json({ success: true, data: result.data, meta: result.meta });
+    });
+
+    /**
+     * GET /api/agent/shipments/:id
+     *
+     * Full detail for a shipment assigned to the authenticated agent — items,
+     * pickup locations, customer + delivery address, and (for COD) the cash to
+     * collect. Never includes the customer's delivery code.
+     */
+    static getDetailForAgent = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const agentId = req.auth!.role_entity._id.toString();
+        const shipmentId = req.params.id;
+
+        const detail = await shipmentService.getDetailForAgent(agentId, shipmentId);
+
+        res.json({ success: true, data: detail });
+    });
+
+    /**
      * PATCH /api/agency/shipments/:id/status
      *
      * Agency-driven status transition (picked_up, in_transit, agent_delivered,

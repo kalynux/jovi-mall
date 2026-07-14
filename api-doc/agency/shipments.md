@@ -62,6 +62,28 @@ and on the vendor's `GET /api/vendor/orders/:id` (`deliveryTimeline`).
 Each status change also recomputes the parent order's `fulfillment_status` — see
 [vendor/orders.md#fulfillment-lifecycle](../vendor/orders.md#fulfillment-lifecycle).
 
+### Cash-on-delivery (COD) shipments — different rules
+
+For shipments belonging to a `cash_on_delivery` order (`paymentMethod` on the
+[detail](#detail) response; see [cod-cash-management.md](./cod-cash-management.md) for the whole
+cash chain), three rules change:
+
+1. **Visible before payment.** COD orders are unpaid until handoff by design, so the vendor
+   dispatches them (or auto-redirect fires) at checkout — the shipment reaches your dashboard
+   without any payment.
+2. **An agent must be assigned before `picked_up`.** The agent is the cash-accountable party.
+   Attempting `picked_up` on an unassigned COD shipment fails with `COD_AGENT_NOT_ASSIGNED`.
+   Assignment itself is gated by the agent's cash-exposure limit and trust score
+   (see [assign-agent](#assign-agent)). At `picked_up` the platform creates the shipment's cash
+   collection and sends the customer their delivery code.
+3. **`agent_delivered` is rejected; `delivered` happens via the delivery code.** The agent submits
+   the customer's code (`POST /api/agent/shipments/:id/cod/collect`), which atomically records the
+   cash and marks the shipment `delivered`. There is no customer app confirmation step for COD.
+
+The [detail](#detail) response carries a `cod` block for these shipments:
+`{ expectedAmount, currency, status: "pending" | "collected" | "cancelled", collectedAt }`
+(present once picked up; never contains the customer's code).
+
 ---
 
 <a name="list"></a>
@@ -212,6 +234,10 @@ one transaction.
   above) — e.g. `picked_up` is only valid from `assigned`, `agent_delivered` only from
   `in_transit`.
 
+> **COD:** `agent_delivered` is rejected for cash-on-delivery shipments (delivery happens through
+> the agent's code submission), and `picked_up` additionally requires an assigned agent
+> (`COD_AGENT_NOT_ASSIGNED`). A `returned` COD shipment voids its pending cash collection.
+
 **Success Response** (`200 OK`):
 ```json
 {
@@ -304,9 +330,14 @@ Only allowed while the shipment is still `assigned` (not yet picked up).
 }
 ```
 
+> **COD:** for cash-on-delivery shipments the assignment is additionally gated on the agent's cash
+> risk profile — the agent will physically hold this shipment's cash.
+
 **Error Responses**:
 - `404` – `SHIPMENT_NOT_FOUND` – Shipment does not exist or is not handled by this agency.
 - `422` – `SHIPMENT_AGENT_NOT_IN_AGENCY` – The agent does not exist or belongs to a different agency.
+- `422` – `COD_AGENT_EXPOSURE_EXCEEDED` – (COD only) held + expected cash would exceed the agent's effective limit. `details: { currentExposure, additionalAmount, effectiveLimit }`.
+- `422` – `COD_AGENT_TRUST_TOO_LOW` – (COD only) trust score below the COD threshold, or an open cash-shortfall discrepancy.
 
 ---
 

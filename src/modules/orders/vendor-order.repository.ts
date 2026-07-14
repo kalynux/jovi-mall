@@ -20,6 +20,7 @@ import { PaginationOptions, Page } from '../../core/repositories/base.repository
 export interface OrderFilters {
     status?: string;
     paymentStatus?: string;
+    paymentMethod?: string;  // 'online' | 'cash_on_delivery'
     orderType?: 'physical' | 'digital';  // NEW: Filter by order type
     customerId?: string;                  // NEW: Scope to a single customer (Customer Management)
     dateFrom?: Date;
@@ -49,6 +50,10 @@ export class VendorOrderRepository {
 
         if (filters.paymentStatus) {
             query.payment_status = filters.paymentStatus;
+        }
+
+        if (filters.paymentMethod) {
+            query.payment_method = filters.paymentMethod;
         }
 
         // NEW: Order type filter

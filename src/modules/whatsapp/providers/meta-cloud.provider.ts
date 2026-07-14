@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import axios, { AxiosInstance } from 'axios';
 import { WhatsAppProvider } from './provider.interface';
 import { SendResult } from '../types/whatsapp-message.types';
