@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../../api/middlewares/async-handler';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
+import { sendSuccess, sendPaginated } from '../../core/responses';
 import { OrderModel } from './order.model';
 import { paymentDisputeService } from '../payments/services/dispute.service';
 
@@ -38,11 +39,7 @@ export class AdminOrderController {
       OrderModel.countDocuments(filter),
     ]);
 
-    res.json({
-      success: true,
-      data,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
-    });
+    sendPaginated(res, data, { total, page, limit, pages: Math.ceil(total / limit) });
   });
 
   /**
@@ -61,6 +58,6 @@ export class AdminOrderController {
     await paymentDisputeService.adminResolveOrder(orderId, outcome);
 
     const updated = await OrderModel.findById(orderId);
-    res.json({ success: true, data: updated, message: `Dispute resolved as ${outcome}` });
+    sendSuccess(res, updated, { message: `Dispute resolved as ${outcome}` });
   });
 }

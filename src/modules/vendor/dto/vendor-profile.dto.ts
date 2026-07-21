@@ -1,4 +1,5 @@
 import { IVendor, IVendorBranding, IVendorBusinessAddress, IVendorOperatingHours, IVendorKycDetails, IVendorSocialLinks, IVendorPolicies } from '../../vendors/vendor.model';
+import { withGeoAddress } from '../../../core/types/geo-address.types';
 import { IPayoutDetails } from '../../../core/types/payout.types';
 import { UpdateVendorProfileInput } from '../validators/vendor-onboarding.validator';
 import { VendorOnboardingStep } from '../../../core/constants/onboarding-steps';
@@ -277,7 +278,7 @@ export class VendorProfileMapper {
     if (input.branding !== undefined) payload.branding = input.branding as IVendorBranding;
     // `_id` (when provided) is a hex string here — Mongoose casts it to ObjectId
     // on write, preserving the address's identity instead of minting a new one.
-    if (input.business_addresses !== undefined) payload.business_addresses = input.business_addresses as unknown as IVendorBusinessAddress[];
+    if (input.business_addresses !== undefined) payload.business_addresses = input.business_addresses.map(withGeoAddress) as unknown as IVendorBusinessAddress[];
     if (input.operating_hours !== undefined) payload.operating_hours = input.operating_hours as IVendorOperatingHours[];
     if (input.payout_details !== undefined) payload.payout_details = input.payout_details as IPayoutDetails;
     if (input.kyc_details !== undefined) {

@@ -4,7 +4,7 @@ import { UserRepository } from '../../modules/users/user.repository';
 import { CustomerRepository } from '../../modules/customers/customer.repository';
 import { VendorRepository } from '../../modules/vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../modules/delivery/delivery-agency.repository';
-import { DeliveryAgentRepository } from '../../modules/delivery/delivery-agent.repository';
+import { AgentRepository } from '../../modules/agents';
 import { AdminRepository } from '../../modules/admins/admin.repository';
 import { AUTH_COOKIE, accessCookieOptions } from '../../config/cookie.config';
 import { AuthService } from '../../modules/auth/auth.service';
@@ -16,7 +16,7 @@ const userRepo = new UserRepository();
 const customerRepo = new CustomerRepository();
 const vendorRepo = new VendorRepository();
 const agencyRepo = new DeliveryAgencyRepository();
-const agentRepo = new DeliveryAgentRepository();
+const agentRepo = new AgentRepository();
 const adminRepo = new AdminRepository();
 const authService = new AuthService();
 

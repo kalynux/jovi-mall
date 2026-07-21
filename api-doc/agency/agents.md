@@ -159,23 +159,31 @@ Blocked while the agent still has:
 <a name="cod-limit"></a>
 ### PATCH /api/agency/agents/:id/cod-limit
 
-**Description**: Cap this agent's COD cash exposure (held cash + expected cash of assigned
-uncollected COD shipments). `null` restores the platform default. The agent's trust tier still
-scales the effective limit down (see [cod-cash-management.md](./cod-cash-management.md#risk)).
+**Description**: Set this contract's slice of the agent's COD pool, bounding their cash exposure
+(held cash + expected cash of assigned uncollected COD shipments) for **your** dispatches. Not
+nullable: `0` grants nothing, and is the default. The agent's trust tier still scales the effective
+limit down (see [cod-cash-management.md](./cod-cash-management.md#risk)).
+
+The threshold is a **sub-allocation** of the agent's own global pool, so a raise can be refused
+because of another agency's slice. See
+[agent-roster.md](./agent-roster.md#patch-apiagencyagentsmembershipidcod-limit) for the full contract
+and error set.
 
 **Request Body**:
 ```json
-{ "maxExposureOverride": 150000 }
+{ "threshold": 150000 }
 ```
 
 **Success Response** (`200 OK`):
 ```json
 {
   "success": true,
-  "data": { "id": "507f1f77bcf86cd799439101", "maxExposureOverride": 150000, "trustScore": 95 },
-  "message": "COD exposure limit updated."
+  "data": { "membershipId": "507f1f77bcf86cd799439011", "threshold": 150000, "headroomAfter": 200000 },
+  "message": "COD threshold updated."
 }
 ```
 
 **Error Responses**:
-- `404` – `DELIVERY_AGENT_NOT_IN_AGENCY` – Agent doesn't exist or isn't on this roster.
+- `404` – `CONTRACT_NOT_FOUND` – Contract doesn't exist or isn't on this roster.
+- `422` – `CONTRACT_COD_THRESHOLD_OUT_OF_BOUNDS` / `CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM` /
+  `CONTRACT_COD_THRESHOLD_BELOW_OUTSTANDING`.

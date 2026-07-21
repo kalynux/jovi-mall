@@ -4,6 +4,7 @@ import { AppError } from '../../../core/errors';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
+import { sendSuccess, sendPaginated } from '../../../core/responses';
 import {
     BulkUpdateRequestSchema,
     InventoryHistoryQuerySchema,
@@ -62,7 +63,7 @@ export class VendorInventoryController {
 
         const result = await alertService.getAlerts(vendorId, query.page, query.limit);
 
-        res.json(result);
+        sendSuccess(res, result);
     });
 
     /**
@@ -124,7 +125,7 @@ export class VendorInventoryController {
         const result = await bulkUpdateService.execute(vendorId, updates);
 
         if (result.success) {
-            res.json(result);
+            sendSuccess(res, result);
         } else {
             next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'Bulk update failed', { errors: (result as any).errors }));
         }
@@ -187,14 +188,11 @@ export class VendorInventoryController {
             })
         );
 
-        res.json({
-            logs: enrichedLogs,
-            pagination: {
-                page: query.page,
-                limit: query.limit,
-                total,
-                totalPages: Math.ceil(total / query.limit)
-            }
+        sendPaginated(res, enrichedLogs, {
+            total,
+            page: query.page,
+            limit: query.limit,
+            pages: Math.ceil(total / query.limit),
         });
     });
 
@@ -257,15 +255,12 @@ export class VendorInventoryController {
         // Calculate total reserved quantity
         const totalReserved = reservations.reduce((sum, r) => sum + r.quantity, 0);
 
-        res.json({
-            reservations: enrichedReservations,
+        sendPaginated(res, enrichedReservations, {
+            total,
+            page: query.page,
+            limit: query.limit,
+            pages: Math.ceil(total / query.limit),
             totalReserved,
-            pagination: {
-                page: query.page,
-                limit: query.limit,
-                total,
-                totalPages: Math.ceil(total / query.limit)
-            }
         });
     });
 }

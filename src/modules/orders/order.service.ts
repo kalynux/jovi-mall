@@ -1,6 +1,8 @@
 import mongoose, { ClientSession } from 'mongoose';
 import { IOrder, OrderType, OrderPaymentMethod } from './order.model';
 import { OrderRepository } from './order.repository';
+import { CustomerModel } from '../customers/customer.model';
+import { IGeoAddress, GeoAddressInput, toGeoAddress } from '../../core/types/geo-address.types';
 import { CartService, CartResponse } from '../cart/services/cart.service';
 import { transactionManager } from '../../core/database/transaction.manager';
 import { ShipmentRepository } from '../shipments/shipment.repository';
@@ -295,11 +297,18 @@ export class OrderService {
    * @param paymentMethod - 'online' (default, prepaid via gateway) or
    *   'cash_on_delivery' (cash collected per shipment at handoff). Applies to
    *   the WHOLE checkout group — every order it splits into.
+   * @param deliveryInput - The chosen drop-off address for a PHYSICAL checkout:
+   *   an inline selected geocoding result (`address`) or the id of one of the
+   *   customer's saved addresses (`addressId`). Resolved to a GeoAddress and
+   *   snapshotted onto every physical order. Optional/back-compatible: when
+   *   absent it falls back to the customer's default saved address's geo, and
+   *   stays null if that too has none (legacy read-time derivation still works).
    * @returns The checkout-group cart id, created orders, and any shipments
    */
   async createOrdersFromCart(
     customerId: string,
-    paymentMethod: OrderPaymentMethod = 'online'
+    paymentMethod: OrderPaymentMethod = 'online',
+    deliveryInput?: { addressId?: string | null; address?: GeoAddressInput | null } | null
   ): Promise<{ cartId: string; orders: IOrder[]; shipments: any[] }> {
     // 1. VALIDATION PHASE: Fetch and validate cart
     const cart = await this.cartService.getCart(customerId);
@@ -357,6 +366,12 @@ export class OrderService {
       );
     }
 
+    // Resolve the drop-off (delivery) address for a PHYSICAL checkout and snapshot
+    // it onto every order in the group. Digital orders have no delivery.
+    const deliveryAddress = orderType === 'physical'
+      ? await this.resolveDeliveryAddress(customerId, deliveryInput)
+      : null;
+
     // 2. GROUP CART ITEMS BY VENDOR — one order per vendor (this IS the
     //    single-vendor-per-order enforcement).
     const vendorGroups = new Map<string, CartResponse['items']>();
@@ -373,7 +388,7 @@ export class OrderService {
 
       for (const [vendorId, items] of vendorGroups) {
         const built = await this.buildVendorOrder(
-          { customerId, cartId: cart.cartId!, vendorId, items, orderType, currency, paymentMethod },
+          { customerId, cartId: cart.cartId!, vendorId, items, orderType, currency, paymentMethod, deliveryAddress },
           session
         );
         createdOrders.push(built.order);
@@ -409,6 +424,47 @@ export class OrderService {
   }
 
   /**
+   * Resolve the drop-off (delivery) GeoAddress for a physical checkout.
+   *
+   * Priority: an inline selected geocoding result → the geo of the named saved
+   * address (`addressId`) → the geo of the customer's default saved address.
+   * Returns null when none of these carry geo (a legacy saved address with no
+   * geocoding), in which case the order stores no snapshot and read paths fall
+   * back to deriving from the customer's current saved address. This keeps
+   * checkout fully backward-compatible while making the drop-off durable and
+   * geolocatable whenever the data exists.
+   */
+  private async resolveDeliveryAddress(
+    customerId: string,
+    deliveryInput?: { addressId?: string | null; address?: GeoAddressInput | null } | null
+  ): Promise<IGeoAddress | null> {
+    // An inline selected result always wins.
+    if (deliveryInput?.address) {
+      return toGeoAddress(deliveryInput.address);
+    }
+
+    const customer = await CustomerModel.findById(customerId)
+      .select('saved_addresses')
+      .lean()
+      .exec();
+    const addresses = customer?.saved_addresses ?? [];
+
+    if (deliveryInput?.addressId) {
+      const chosen = addresses.find(a => a._id.toString() === deliveryInput.addressId);
+      if (!chosen) {
+        throw createAppError(ERROR_CODES.CUSTOMER_ADDRESS_NOT_FOUND, 404, undefined, {
+          addressId: deliveryInput.addressId,
+        });
+      }
+      return chosen.geo ?? null;
+    }
+
+    // No explicit selection — fall back to the customer's default saved address.
+    const fallback = addresses.find(a => a.is_default) ?? addresses[0] ?? null;
+    return fallback?.geo ?? null;
+  }
+
+  /**
    * Build and persist ONE single-vendor order (plus its shipments, for physical
    * orders) within the given transaction session. Extracted from the cart split
    * so each vendor group produces an independent order that then runs the normal
@@ -423,10 +479,11 @@ export class OrderService {
       orderType: OrderType;
       currency: string;
       paymentMethod: OrderPaymentMethod;
+      deliveryAddress: IGeoAddress | null;
     },
     session: ClientSession
   ): Promise<{ order: IOrder; shipments: any[] }> {
-    const { customerId, cartId, vendorId, items, orderType, currency, paymentMethod } = params;
+    const { customerId, cartId, vendorId, items, orderType, currency, paymentMethod, deliveryAddress } = params;
 
     // Order number (unique per order)
     const orderNumber = await OrderNumberGenerator.generateOrderNumber();
@@ -526,6 +583,8 @@ export class OrderService {
                 address_line2: address.address_line2 ?? null,
                 city: address.city,
                 state: address.state ?? null,
+                // Snapshot the geocoded address too (null on legacy addresses).
+                geo: address.geo ?? null,
               },
             };
           }
@@ -571,7 +630,8 @@ export class OrderService {
         total_amount: total,
         payment_method: paymentMethod,
         payment_status: 'AWAITING_PAYMENT',  // Ready for payment (COD: paid at handoff)
-        fulfillment_status: 'pending'
+        fulfillment_status: 'pending',
+        delivery_address: deliveryAddress   // Geocoded drop-off snapshot (null on legacy)
       }, session);
 
       // CREATE SHIPMENTS & UPDATE ORDER ITEMS

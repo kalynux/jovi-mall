@@ -6,7 +6,7 @@ import { ActorRole } from '../types/ticket.types';
 import { AdminModel } from '../../admins/admin.model';
 import { VendorModel } from '../../vendors/vendor.model';
 import { CustomerModel } from '../../customers/customer.model';
-import { DeliveryAgentModel } from '../../delivery/delivery-agent.model';
+import { DeliveryAgentModel } from '../../agents';
 import { DeliveryAgencyModel } from '../../delivery/delivery-agency.model';
 import { OrderModel } from '../../orders/order.model';
 import { ProductModel } from '../../catalog/models/product.model';

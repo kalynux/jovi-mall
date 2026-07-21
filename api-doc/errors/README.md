@@ -201,6 +201,14 @@ deposits, remittances and discrepancies. Role-specific context:
 | `COD_AGENT_HAS_OUTSTANDING_CASH` | 422 | Agent unlink blocked by undeposited cash | `{ outstanding }` |
 | `COD_DEPOSIT_INVALID_AMOUNT` | 422 | Deposit amount not a positive integer | `{ amount }` |
 | `COD_DEPOSIT_EXCEEDS_BALANCE` | 422 | Deposit larger than the agent's held cash | `{ amount, outstanding }` |
+| `COD_DEPOSIT_NOT_FOUND` | 404 | Unknown deposit, or not this agency's | — |
+| `COD_DEPOSIT_ALREADY_RESOLVED` | 409 | Deposit already confirmed or rejected | `{ status }` |
+| `COD_DEPOSIT_REFERENCE_REQUIRED` | 422 | Direct-to-platform deposit with no transfer reference | — |
+| `COD_DEPOSIT_AGENCY_ALREADY_SETTLED` | 422 | Direct payment for cash the agency already remitted — pay the agency instead | `{ amount, agencyOwesPlatform, hint }` |
+| `COD_DEPOSIT_WRONG_RECIPIENT` | 403 | Only the party the cash was handed to may confirm/reject it | `{ recipient, hint }` |
+| `DELIVERY_AGENT_NOTIFICATION_NOT_FOUND` | 404 | Notification not found, or not this agent's | — |
+| `DELIVERY_AGENT_NOTIFICATION_CHANNEL_NOT_VERIFIED` | 400 | Tried to enable an unverified secondary channel | `{ channel }` |
+| `DELIVERY_AGENT_NOTIFICATION_DELIVERY_FAILED` | 502 | A secondary-channel delivery failed (in-app still recorded) | — |
 | `COD_REMITTANCE_INVALID_AMOUNT` | 422 | Remittance amount not a positive integer | `{ amount }` |
 | `COD_REMITTANCE_EXCEEDS_LIABILITY` | 422 | Declared amount (plus open declarations) above what the agency owes | `{ amount, pendingDeclared, outstanding }` |
 | `COD_REMITTANCE_NOT_FOUND` | 404 | Unknown remittance | — |

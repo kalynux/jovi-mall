@@ -10,7 +10,7 @@ import {
 } from '../models/cod-discrepancy.model';
 import { CodTrustService, codTrustService } from './cod-trust.service';
 import { CodCashAccountService, codCashAccountService } from './cod-cash-account.service';
-import { DeliveryAgentRepository } from '../../delivery/delivery-agent.repository';
+import { AgentRepository, AgentMembershipRepository } from '../../agents';
 
 /**
  * CodDiscrepancyService - flagged problems in the cash chain and their
@@ -22,7 +22,8 @@ export class CodDiscrepancyService {
   constructor(
     private readonly trust: CodTrustService = codTrustService,
     private readonly cashAccounts: CodCashAccountService = codCashAccountService,
-    private readonly agentRepo: DeliveryAgentRepository = new DeliveryAgentRepository()
+    private readonly agentRepo: AgentRepository = new AgentRepository(),
+    private readonly memberships: AgentMembershipRepository = new AgentMembershipRepository()
   ) {}
 
   /** System-raised late-deposit flag (daily sweep). No-op if one is already open. */
@@ -58,6 +59,98 @@ export class CodDiscrepancyService {
     return discrepancy;
   }
 
+  /**
+   * System flag: the agent declared a handover and the agency let the confirm
+   * deadline pass without either confirming or rejecting it.
+   *
+   * The mirror of `openLateDeposit`, pointing the other way — and deliberately
+   * carrying NO trust penalty, because the party at fault is the agency, not the
+   * agent. What it does carry is the reserve block every open discrepancy
+   * carries, which is the only automatic pressure on an agency to answer. Both
+   * available answers are one click, so an agency that has done neither for
+   * DEPOSIT_CONFIRM_DEADLINE_DAYS is ignoring its agent.
+   *
+   * One open flag per deposit (unique partial index): an agency may be sitting
+   * on several declarations, and each is a separate thing to answer.
+   */
+  async openDepositNotConfirmed(deposit: {
+    id: string;
+    agentId: string;
+    agencyId: string;
+    amount: number;
+    currency: string;
+  }) {
+    const existing = await CodDiscrepancyModel.findOne({
+      deposit_id: deposit.id,
+      type: 'deposit_not_confirmed',
+      status: 'open',
+    });
+    if (existing) return null;
+
+    const discrepancy = await CodDiscrepancyModel.create({
+      agent_id: deposit.agentId,
+      agency_id: deposit.agencyId,
+      type: 'deposit_not_confirmed',
+      amount: deposit.amount,
+      currency: deposit.currency,
+      status: 'open',
+      raised_by: 'system',
+      raised_by_user_id: null,
+      deposit_id: deposit.id,
+      note: `The agent declared a ${deposit.amount} ${deposit.currency} handover and the agency did not confirm or reject it within ${COD_CONFIG.DEPOSIT_CONFIRM_DEADLINE_DAYS} days`,
+    });
+
+    await this.emitOpened(discrepancy);
+    return discrepancy;
+  }
+
+  /**
+   * The agent reports a problem with the cash chain — most usefully, that an
+   * agency recorded less than they handed over, or recorded nothing at all.
+   *
+   * This exists because until it did, the chain had no way to represent the
+   * agent's side of a dispute: `raised_by` was `system | agency | admin`, so an
+   * agency's account of a handover was unfalsifiable and the agent wore the
+   * late-deposit penalty for it. No trust penalty, obviously — this is the agent
+   * reporting, not being reported.
+   */
+  async raiseByAgent(params: {
+    agentId: string;
+    agencyId: string;
+    amount: number | null;
+    note: string;
+    depositId?: string | null;
+    raisedByUserId: string;
+  }): Promise<ICodDiscrepancy> {
+    const { agentId, agencyId, amount, note, depositId, raisedByUserId } = params;
+
+    // LIVE, not approved — the same reasoning as raiseByAgency, mirrored: an
+    // agent must be able to report an agency that has suspended them, which is
+    // often exactly when a cash dispute surfaces.
+    const membership = await this.memberships.findLive(agentId, agencyId);
+    if (!membership) {
+      throw createAppError(ERROR_CODES.AGENT_MEMBERSHIP_NOT_FOUND, 404);
+    }
+
+    const { currency } = await this.cashAccounts.getBalance('agent', agentId);
+
+    const discrepancy = await CodDiscrepancyModel.create({
+      agent_id: agentId,
+      agency_id: agencyId,
+      type: 'other',
+      amount,
+      currency,
+      status: 'open',
+      raised_by: 'agent',
+      raised_by_user_id: raisedByUserId,
+      deposit_id: depositId ?? null,
+      note,
+    });
+
+    await this.emitOpened(discrepancy);
+    return discrepancy;
+  }
+
   /** Agency reports the agent handed over less cash than they held. */
   async raiseByAgency(params: {
     agencyId: string;
@@ -70,8 +163,12 @@ export class CodDiscrepancyService {
     const { agencyId, agentId, type, amount, note, raisedByUserId } = params;
 
     const agent = await this.agentRepo.findById(agentId);
-    if (!agent || agent.agency_id?.toString() !== agencyId) {
-      throw createAppError(ERROR_CODES.DELIVERY_AGENT_NOT_IN_AGENCY, 404);
+    // LIVE, not approved: an agency must be able to raise a shortfall against
+    // an agent it has already suspended — that is usually WHY they suspended
+    // them, and requiring approval would make the report impossible.
+    const membership = agent ? await this.memberships.findLive(agentId, agencyId) : null;
+    if (!agent || !membership) {
+      throw createAppError(ERROR_CODES.AGENT_MEMBERSHIP_NOT_FOUND, 404);
     }
 
     const { currency } = await this.cashAccounts.getBalance('agent', agentId);
@@ -166,7 +263,12 @@ export class CodDiscrepancyService {
   }
 
   async list(
-    filter: { agencyId?: string; agentId?: string; status?: CodDiscrepancyStatus },
+    filter: {
+      agencyId?: string;
+      agentId?: string;
+      status?: CodDiscrepancyStatus;
+      type?: CodDiscrepancyType;
+    },
     page: number,
     limit: number
   ) {
@@ -174,6 +276,7 @@ export class CodDiscrepancyService {
     if (filter.agencyId) query.agency_id = filter.agencyId;
     if (filter.agentId) query.agent_id = filter.agentId;
     if (filter.status) query.status = filter.status;
+    if (filter.type) query.type = filter.type;
 
     const [total, docs] = await Promise.all([
       CodDiscrepancyModel.countDocuments(query).exec(),
@@ -218,6 +321,7 @@ export class CodDiscrepancyService {
       currency: d.currency,
       status: d.status,
       raisedBy: d.raised_by,
+      depositId: d.deposit_id?.toString() ?? null,
       note: d.note,
       resolutionNote: d.resolution_note,
       openedAt: d.opened_at,

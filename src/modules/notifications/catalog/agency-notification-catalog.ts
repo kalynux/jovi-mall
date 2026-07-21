@@ -61,6 +61,20 @@ const SHIPMENT_BUTTON: ButtonDef = {
     urlSuffix: 'shipments/{{shipmentId}}'
 };
 
+const REVIEW_DEPOSIT_LABEL: Record<Language, string> = {
+    en: 'Review deposit',
+    fr: 'Examiner le dépôt',
+    pt: 'Rever depósito',
+    es: 'Revisar depósito',
+    ar: 'مراجعة الإيداع'
+};
+
+const DEPOSIT_BUTTON: ButtonDef = {
+    type: 'url',
+    label: REVIEW_DEPOSIT_LABEL,
+    urlSuffix: 'cod/deposits/{{depositId}}'
+};
+
 // ─── Catalog ─────────────────────────────────────────────────────────────────
 
 // NOTE: the WhatsApp template names below (agency_*) still need to be created
@@ -143,6 +157,36 @@ export const AGENCY_NOTIFICATION_CATALOG: Record<AgencyNotificationType, Situati
         button: SHIPMENT_BUTTON
     },
 
+    'shipment.offer.accepted': {
+        base: {
+            en: { subject: 'Agent accepted the delivery', body: '{{agentName}} accepted the delivery for order #{{orderNumber}}. They are on the way.' },
+            fr: { subject: 'Le livreur a accepté la livraison', body: '{{agentName}} a accepté la livraison de la commande n°{{orderNumber}}. Il est en route.' },
+            pt: { subject: 'O agente aceitou a entrega', body: '{{agentName}} aceitou a entrega do pedido nº{{orderNumber}}. Está a caminho.' },
+            es: { subject: 'El agente aceptó la entrega', body: '{{agentName}} aceptó la entrega del pedido n.º{{orderNumber}}. Va en camino.' },
+            ar: { subject: 'قبل المندوب التوصيل', body: 'قبل {{agentName}} توصيل الطلب رقم {{orderNumber}}. إنه في الطريق.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_shipment_offer_accepted', bodyParams: ['{{agentName}}', '{{orderNumber}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
+    'shipment.assignment.unfilled': {
+        base: {
+            en: { subject: 'No agent accepted — assign manually', body: 'No agent took the delivery for order #{{orderNumber}}. Assign an agent manually to keep it moving.' },
+            fr: { subject: 'Aucun livreur — à assigner manuellement', body: 'Aucun livreur n\'a pris la livraison de la commande n°{{orderNumber}}. Assignez un livreur manuellement pour la faire avancer.' },
+            pt: { subject: 'Nenhum agente aceitou — atribua manualmente', body: 'Nenhum agente aceitou a entrega do pedido nº{{orderNumber}}. Atribua um agente manualmente para continuar.' },
+            es: { subject: 'Ningún agente aceptó — asigna manualmente', body: 'Ningún agente aceptó la entrega del pedido n.º{{orderNumber}}. Asigna un agente manualmente para continuar.' },
+            ar: { subject: 'لم يقبل أي مندوب — عيّن يدويًا', body: 'لم يقبل أي مندوب توصيل الطلب رقم {{orderNumber}}. عيّن مندوبًا يدويًا لمواصلة العملية.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_shipment_assignment_unfilled', bodyParams: ['{{orderNumber}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
     'payout.requested': {
         base: {
             en: { subject: 'Payout request created', body: 'Your request to withdraw {{currency}} {{amountFormatted}} was created. Track its progress under Tickets.' },
@@ -186,6 +230,78 @@ export const AGENCY_NOTIFICATION_CATALOG: Record<AgencyNotificationType, Situati
             template: { name: 'agency_payout_rejected', bodyParams: ['{{currency}}', '{{amountFormatted}}'] }
         },
         button: TICKET_BUTTON
+    },
+
+    // An agent claims they handed cash over. The deadline is in the copy on
+    // purpose: ignoring this freezes the agency's reserve releases, and an
+    // agency that does not know that will not act.
+    'cod.deposit.declared': {
+        base: {
+            en: {
+                subject: 'Deposit awaiting your confirmation',
+                body: '{{agentName}} declared a cash deposit of {{currency}} {{amountFormatted}}. Confirm or reject it within {{deadlineDays}} days — unanswered declarations freeze your reserve releases.'
+            },
+            fr: {
+                subject: 'Dépôt en attente de votre confirmation',
+                body: '{{agentName}} a déclaré un dépôt en espèces de {{currency}} {{amountFormatted}}. Confirmez-le ou refusez-le sous {{deadlineDays}} jours — les déclarations sans réponse gèlent vos libérations de réserve.'
+            },
+            pt: {
+                subject: 'Depósito a aguardar a sua confirmação',
+                body: '{{agentName}} declarou um depósito em dinheiro de {{currency}} {{amountFormatted}}. Confirme ou rejeite dentro de {{deadlineDays}} dias — declarações sem resposta congelam as libertações da sua reserva.'
+            },
+            es: {
+                subject: 'Depósito pendiente de tu confirmación',
+                body: '{{agentName}} declaró un depósito en efectivo de {{currency}} {{amountFormatted}}. Confírmalo o recházalo en {{deadlineDays}} días — las declaraciones sin responder congelan la liberación de tu reserva.'
+            },
+            ar: {
+                subject: 'إيداع في انتظار تأكيدك',
+                body: 'أعلن {{agentName}} عن إيداع نقدي بقيمة {{currency}} {{amountFormatted}}. قم بتأكيده أو رفضه خلال {{deadlineDays}} أيام — الإعلانات التي لا يتم الرد عليها تجمد إفراجات الاحتياطي الخاص بك.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'agency_cod_deposit_declared',
+                bodyParams: ['{{agentName}}', '{{currency}}', '{{amountFormatted}}', '{{deadlineDays}}']
+            }
+        },
+        button: DEPOSIT_BUTTON
+    },
+
+    // The agent bypassed the agency and paid the platform. Nothing for them to
+    // do — but their liability just moved without them touching it, so silence
+    // would look like a bookkeeping error on their side.
+    'cod.deposit.direct_to_platform': {
+        base: {
+            en: {
+                subject: 'Agent paid the platform directly',
+                body: '{{agentName}} paid {{currency}} {{amountFormatted}} of collected cash straight to the platform. Your liability has been reduced by the same amount and the collections it covers are settled — nothing is owed to you for it.'
+            },
+            fr: {
+                subject: 'Un agent a payé directement la plateforme',
+                body: '{{agentName}} a versé {{currency}} {{amountFormatted}} d\'espèces collectées directement à la plateforme. Votre passif a été réduit d\'autant et les collectes couvertes sont réglées — rien ne vous est dû à ce titre.'
+            },
+            pt: {
+                subject: 'Agente pagou diretamente à plataforma',
+                body: '{{agentName}} pagou {{currency}} {{amountFormatted}} de dinheiro cobrado diretamente à plataforma. A sua responsabilidade foi reduzida no mesmo valor e as cobranças que cobre estão liquidadas — nada lhe é devido por isso.'
+            },
+            es: {
+                subject: 'Un agente pagó directamente a la plataforma',
+                body: '{{agentName}} pagó {{currency}} {{amountFormatted}} del efectivo cobrado directamente a la plataforma. Tu pasivo se ha reducido en la misma cantidad y las cobranzas que cubre están liquidadas — no se te debe nada por ello.'
+            },
+            ar: {
+                subject: 'دفع وكيل للمنصة مباشرة',
+                body: 'دفع {{agentName}} مبلغ {{currency}} {{amountFormatted}} من النقد المحصل مباشرة إلى المنصة. تم تخفيض التزامك بنفس المبلغ وتمت تسوية التحصيلات التي يغطيها — لا شيء مستحق لك مقابل ذلك.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'agency_cod_deposit_direct_to_platform',
+                bodyParams: ['{{agentName}}', '{{currency}}', '{{amountFormatted}}']
+            }
+        },
+        button: DEPOSIT_BUTTON
     }
 };
 

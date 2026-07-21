@@ -5,6 +5,7 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { ICustomer } from '../customer.model';
 import { UpdateCustomerProfileInput, AddCustomerAddressInput, AddCustomerPaymentMethodInput } from '../validators/customer-onboarding.validator';
 import { paymentMethodService } from '../../payment-methods/services/payment-method.service';
+import { toGeoAddress } from '../../../core/types/geo-address.types';
 
 export class CustomerProfileService {
     private customerRepo: CustomerRepository;
@@ -64,7 +65,15 @@ export class CustomerProfileService {
         const customer = await this.customerRepo.findById(customerId);
         if (!customer) throw createAppError(ERROR_CODES.CUSTOMER_NOT_FOUND, 404);
 
-        const updated = await this.customerRepo.addAddress(customerId, input as ICustomer['saved_addresses'][number]);
+        // Normalise the selected geocoding result into a persistable GeoAddress
+        // (server-assigns resolved_at, null-fills absent components).
+        const { geo, ...rest } = input;
+        const address = {
+            ...rest,
+            geo: geo ? toGeoAddress(geo) : null,
+        } as ICustomer['saved_addresses'][number];
+
+        const updated = await this.customerRepo.addAddress(customerId, address);
         if (!updated) throw createAppError(ERROR_CODES.CUSTOMER_NOT_FOUND, 404);
         return this.toProfileDto(updated);
     }

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../../api/middlewares/async-handler';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
+import { GeoAddressZodSchema } from '../../core/types/geo-address.types';
 import { OrderModel } from './order.model';
 import { OrderCompletionService, orderCompletionService } from './order-completion.service';
 import { OrderService } from './order.service';
@@ -43,9 +44,23 @@ const COD_NON_CANCELLABLE_SHIPMENT_STATUSES = [
   'picked_up', 'in_transit', 'agent_delivered', 'delivered', 'failed', 'returned',
 ];
 
-const CheckoutSchema = z.object({
-  paymentMethod: z.enum(['online', 'cash_on_delivery']).optional().default('online'),
-});
+const CheckoutSchema = z
+  .object({
+    paymentMethod: z.enum(['online', 'cash_on_delivery']).optional().default('online'),
+    // Drop-off address for a physical checkout. Provide EITHER the id of one of
+    // the customer's saved addresses OR a selected geocoding result inline. Both
+    // optional (back-compat): when neither is given the order falls back to the
+    // customer's default saved address. Snapshotted onto every order in the group.
+    deliveryAddressId: z
+      .string()
+      .regex(/^[0-9a-fA-F]{24}$/, 'deliveryAddressId must be a valid id')
+      .optional(),
+    deliveryAddress: GeoAddressZodSchema.optional(),
+  })
+  .refine(d => !(d.deliveryAddressId && d.deliveryAddress), {
+    message: 'Provide either deliveryAddressId or deliveryAddress, not both',
+    path: ['deliveryAddress'],
+  });
 
 const CancelOrderSchema = z.object({
   reason: z.string().trim().max(500).optional(),
@@ -68,9 +83,12 @@ export class CustomerOrderController {
    */
   static checkout = asyncHandler(async (req: Request, res: Response) => {
     const customerId = req.auth!.role_entity._id.toString();
-    const { paymentMethod } = CheckoutSchema.parse(req.body ?? {});
+    const { paymentMethod, deliveryAddressId, deliveryAddress } = CheckoutSchema.parse(req.body ?? {});
 
-    const { cartId, orders } = await orderService.createOrdersFromCart(customerId, paymentMethod);
+    const { cartId, orders } = await orderService.createOrdersFromCart(customerId, paymentMethod, {
+      addressId: deliveryAddressId ?? null,
+      address: deliveryAddress ?? null,
+    });
 
     res.status(201).json({
       success: true,

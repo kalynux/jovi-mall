@@ -51,7 +51,8 @@ export const UpdateNotificationPreferencesSchema = z.object({
         paymentReceivedFull: z.boolean().optional(),
         storageAlert: z.boolean().optional(),
         connectionUpdated: z.boolean().optional(),
-        payoutUpdates: z.boolean().optional()
+        payoutUpdates: z.boolean().optional(),
+        shipmentRejected: z.boolean().optional()
     }).optional()
 });
 

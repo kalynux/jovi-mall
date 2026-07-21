@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
+import { GeoAddressSchema, IGeoAddress } from '../../core/types/geo-address.types';
 import { FixedOnboardingStep } from '../../core/constants/onboarding-steps';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
@@ -14,7 +15,17 @@ const SavedAddressSchema = new Schema(
     state: { type: String, default: null, trim: true },
     country: { type: String, default: 'CM', trim: true, uppercase: true },
     is_default: { type: Boolean, default: false },
+    /**
+     * @deprecated Bare coordinate kept for backward compatibility. Prefer `geo`
+     * (the full GeoAddress); `geo.coordinates` is the canonical point.
+     */
     location: { type: GeoPointSchema, default: null },
+    /**
+     * Canonical geospatial address — formatted address + coordinates + provider
+     * place id + structured admin components. Populated when the customer picks
+     * a result from address search; null on legacy/plain-text entries.
+     */
+    geo: { type: GeoAddressSchema, default: null },
   },
   { _id: true }
 );
@@ -67,7 +78,10 @@ export interface ICustomerSavedAddress {
   state: string | null;
   country: string;
   is_default: boolean;
+  /** @deprecated Prefer `geo.coordinates`. */
   location: IGeoPoint | null;
+  /** Canonical geospatial address; null on legacy/plain-text entries. */
+  geo: IGeoAddress | null;
 }
 
 export interface ICustomerPreferences {
@@ -171,7 +185,8 @@ const CustomerSchema = new Schema<ICustomer>(
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );
 
-// Geospatial index for customer saved addresses
+// Geospatial indexes for customer saved addresses (legacy bare point + GeoAddress)
 CustomerSchema.index({ 'saved_addresses.location': '2dsphere' }, { sparse: true });
+CustomerSchema.index({ 'saved_addresses.geo.coordinates': '2dsphere' }, { sparse: true });
 
 export const CustomerModel = mongoose.model<ICustomer>(MODELS.CUSTOMER, CustomerSchema, COLLECTIONS.CUSTOMER);

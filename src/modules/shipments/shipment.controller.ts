@@ -6,7 +6,6 @@ import {
     ListShipmentsQuerySchema,
     UpdateShipmentStatusSchema,
     RejectShipmentSchema,
-    AssignAgentSchema,
 } from './shipment.validator';
 
 const shipmentService = new ShipmentService();
@@ -130,25 +129,15 @@ export class ShipmentController {
         const agencyId = req.auth!.role_entity._id.toString();
         const actorUserId = req.auth!.user.id;
         const shipmentId = req.params.id;
-        const { reason } = RejectShipmentSchema.parse(req.body);
+        const { reason, note } = RejectShipmentSchema.parse(req.body);
 
-        const shipment = await shipmentService.reject(agencyId, shipmentId, reason, actorUserId);
+        const shipment = await shipmentService.reject(agencyId, shipmentId, reason, note ?? null, actorUserId);
 
         res.json({ success: true, data: shipment, message: 'Shipment rejected' });
     });
 
-    /**
-     * PATCH /api/agency/shipments/:id/assign-agent
-     *
-     * Assign one of the agency's own agents to handle this shipment.
-     */
-    static assignAgent = asyncHandler(async (req: Request, res: Response): Promise<void> => {
-        const agencyId = req.auth!.role_entity._id.toString();
-        const shipmentId = req.params.id;
-        const { agentId } = AssignAgentSchema.parse(req.body);
-
-        const shipment = await shipmentService.assignAgent(agencyId, shipmentId, agentId);
-
-        res.json({ success: true, data: shipment, message: 'Agent assigned' });
-    });
+    // NOTE: agent assignment moved to the agent-acceptance workflow —
+    // PATCH /api/agency/shipments/:id/assign-agent now creates an offer via
+    // AgencyAssignmentController.offerAgent (modules/shipment-assignment), not a
+    // direct assignment here.
 }

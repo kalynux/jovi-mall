@@ -22,9 +22,16 @@ export function initializeAgencyNotificationEventConsumers(): void {
     eventBus.subscribe('connection.rejected', handler.handleConnectionRejected.bind(handler));
     eventBus.subscribe('connection.reapproval_needed', handler.handleConnectionReapprovalNeeded.bind(handler));
     eventBus.subscribe('shipment.assigned', handler.handleShipmentAssigned.bind(handler));
+    // Agent-acceptance workflow: an agent accepted, or nobody did (assign manually).
+    eventBus.subscribe('shipment.offer_accepted', handler.handleOfferAccepted.bind(handler));
+    eventBus.subscribe('shipment.no_agent_available', handler.handleAssignmentUnfilled.bind(handler));
     eventBus.subscribe('payout.requested', handler.handlePayoutRequested.bind(handler));
     eventBus.subscribe('payout.paid', handler.handlePayoutPaid.bind(handler));
     eventBus.subscribe('payout.rejected', handler.handlePayoutRejected.bind(handler));
+    eventBus.subscribe('cod.deposit.declared', handler.handleCodDepositDeclared.bind(handler));
+    // Shared with the agent consumer — this handler only acts on the
+    // direct-to-platform case, where the agency's liability moved without them.
+    eventBus.subscribe('cod.deposit.recorded', handler.handleCodDepositRecorded.bind(handler));
 
     console.log(
         `[AgencyNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`

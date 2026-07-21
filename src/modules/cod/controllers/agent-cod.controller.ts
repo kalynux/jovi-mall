@@ -4,13 +4,30 @@ import { cashCollectionService } from '../services/cash-collection.service';
 import { codCashAccountService } from '../services/cod-cash-account.service';
 import { codExposureService } from '../services/cod-exposure.service';
 import { agentDepositService } from '../services/agent-deposit.service';
-import { CollectCashSchema, CodPaginationQuerySchema } from '../validators/cod.validators';
-import { IDeliveryAgent } from '../../delivery/delivery-agent.model';
+import { codDiscrepancyService } from '../services/cod-discrepancy.service';
+import {
+  CollectCashSchema,
+  CodPaginationQuerySchema,
+  DeclareDepositSchema,
+  AgentDepositStatusSchema,
+  AgentRaiseDiscrepancySchema,
+} from '../validators/cod.validators';
+import { IDeliveryAgent } from '../../agents';
+import {
+  agentActionAuditService,
+  outcomeFromError,
+} from '../../tracking-integration/services/agent-action-audit.service';
+import { AgentActionOutcome } from '../../tracking-integration/models/tracking-outbox.model';
+
+const ListDepositsQuerySchema = CodPaginationQuerySchema.extend({
+  status: AgentDepositStatusSchema.optional(),
+});
 
 /**
  * Agent COD Controller - the agent side of cash on delivery: submit the
  * customer's delivery code at handoff (records the cash + delivers the
- * shipment) and re-request a code for the customer.
+ * shipment), re-request a code for the customer, declare cash handed back, and
+ * report an agency that has not accounted for it.
  */
 export class AgentCodController {
   /**
@@ -21,20 +38,38 @@ export class AgentCodController {
     const agentId = req.auth!.role_entity._id.toString();
     const agentUserId = req.auth!.user.id;
     const shipmentId = req.params.id;
-    const input = CollectCashSchema.parse(req.body);
 
-    const result = await cashCollectionService.collect(agentId, agentUserId, shipmentId, {
-      code: input.code,
-      location: input.location ?? null,
-      deviceInfo: input.deviceInfo ?? null,
-      ip: req.ip ?? null,
-    });
+    // Phase 6 audit: this is the one genuine agent-initiated shipment action
+    // (COD delivery). Emit the full outcome spectrum — attempt up front, then
+    // success or the specific failure — fire-and-forget so it never disturbs the
+    // collection. geo-tracker captures the agent's GPS for each.
+    const audit = (outcome: AgentActionOutcome, reason?: string | null): void => {
+      void agentActionAuditService
+        .emit({ action: 'delivery', outcome, agentId, shipmentId, actorRole: 'agent', reason })
+        .catch((err) => console.error('[AgentCodController] agent-action audit emit failed:', err));
+    };
 
-    res.json({
-      success: true,
-      data: result,
-      message: 'Cash collected and shipment delivered.',
-    });
+    audit('attempt');
+    try {
+      const input = CollectCashSchema.parse(req.body);
+
+      const result = await cashCollectionService.collect(agentId, agentUserId, shipmentId, {
+        code: input.code,
+        location: input.location ?? null,
+        deviceInfo: input.deviceInfo ?? null,
+        ip: req.ip ?? null,
+      });
+
+      audit('success');
+      res.json({
+        success: true,
+        data: result,
+        message: 'Cash collected and shipment delivered.',
+      });
+    } catch (err) {
+      audit(outcomeFromError(err), err instanceof Error ? err.message : null);
+      throw err;
+    }
   });
 
   /**
@@ -64,6 +99,11 @@ export class AgentCodController {
     const agent = req.auth!.role_entity as IDeliveryAgent;
     const agentId = agent._id.toString();
 
+    // The agent holds ONE pot of cash across every agency, and their own
+    // `cod.max_threshold` is the pool that bounds it — so a self-view has a
+    // single honest limit, and it is the agent's own. Each contract's threshold
+    // is a slice of this and binds only that agency's dispatches; none of them
+    // is "my limit".
     const [{ balance, currency }, exposure] = await Promise.all([
       codCashAccountService.getBalance('agent', agentId),
       codExposureService.currentExposure(agentId),
@@ -75,7 +115,7 @@ export class AgentCodController {
         cashHeld: balance,
         currency,
         currentExposure: exposure,
-        effectiveExposureLimit: codExposureService.effectiveLimit(agent),
+        effectiveExposureLimit: codExposureService.effectiveLimit(agent, agent.cod?.max_threshold ?? 0),
         trustScore: agent.cod?.trust_score ?? 100,
       },
     });
@@ -91,13 +131,94 @@ export class AgentCodController {
     res.json({ success: true, data: result.data, meta: result.meta });
   });
 
-  /** GET /api/agent/cod/deposits — this agent's recorded cash hand-overs. */
+  /**
+   * GET /api/agent/cod/deposits — this agent's cash hand-overs.
+   * Query: status?, page?, limit?
+   */
   static listDeposits = asyncHandler(async (req: Request, res: Response) => {
     const agentId = req.auth!.role_entity._id.toString();
-    const { page, limit } = CodPaginationQuerySchema.parse(req.query);
+    const { page, limit, status } = ListDepositsQuerySchema.parse(req.query);
 
-    const result = await agentDepositService.listForAgent(agentId, page, limit);
+    const result = await agentDepositService.listForAgent(agentId, page, limit, status);
 
     res.json({ success: true, data: result.data, meta: result.meta });
+  });
+
+  /**
+   * POST /api/agent/cod/deposits
+   * Declare a cash hand-over. Moves no money — the receiving party confirms it,
+   * and that is when the agent's balance falls.
+   *
+   * `recipient: 'agency'` is the normal route; `'platform'` means the agent paid
+   * the platform directly, bypassing the agency, and needs a transfer
+   * `reference`. Either way the declaration is a timestamped claim the receiver
+   * has to answer, which is what an agent previously had no way to create.
+   *
+   * Body: { agencyId, amount, recipient?, reference?, note? }
+   */
+  static declareDeposit = asyncHandler(async (req: Request, res: Response) => {
+    const agentId = req.auth!.role_entity._id.toString();
+    const { agencyId, amount, recipient, reference, note } = DeclareDepositSchema.parse(req.body);
+
+    const deposit = await agentDepositService.declare({
+      agentId,
+      agencyId,
+      amount,
+      recipient,
+      reference,
+      note,
+      declaredByUserId: req.auth!.user.id,
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        id: deposit._id.toString(),
+        agencyId,
+        amount: deposit.amount,
+        currency: deposit.currency,
+        recipient: deposit.recipient,
+        status: deposit.status,
+        reference: deposit.reference,
+        declaredAt: deposit.declared_at,
+      },
+      message:
+        recipient === 'platform'
+          ? 'Deposit declared — the platform will confirm receipt, which clears it with your agency too.'
+          : 'Deposit declared — your agency will confirm receipt. Your cash balance falls when they do.',
+    });
+  });
+
+  /**
+   * POST /api/agent/cod/discrepancies
+   * Report a cash problem with an agency — most usefully, that they recorded
+   * less than was handed over, or nothing at all.
+   * Body: { agencyId, amount?, depositId?, note }
+   */
+  static raiseDiscrepancy = asyncHandler(async (req: Request, res: Response) => {
+    const agentId = req.auth!.role_entity._id.toString();
+    const { agencyId, amount, depositId, note } = AgentRaiseDiscrepancySchema.parse(req.body);
+
+    const discrepancy = await codDiscrepancyService.raiseByAgent({
+      agentId,
+      agencyId,
+      amount,
+      depositId,
+      note,
+      raisedByUserId: req.auth!.user.id,
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        id: discrepancy._id.toString(),
+        agencyId,
+        type: discrepancy.type,
+        amount: discrepancy.amount,
+        status: discrepancy.status,
+        openedAt: discrepancy.opened_at,
+      },
+      message: 'Report raised — an admin will review it.',
+    });
   });
 }

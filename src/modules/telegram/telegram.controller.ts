@@ -7,6 +7,7 @@ import { CommandBus } from '../command-bus/command-bus';
 import { asyncHandler } from '../../api/middlewares/async-handler';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
+import { sendSuccess, sendMessage } from '../../core/responses';
 
 interface TelegramWebhookPayload {
     chat_id: string;
@@ -70,7 +71,7 @@ export class TelegramController {
             }
 
             const result = await this.linkService.generateLinkToken(userId);
-            res.status(200).json(result);
+            sendSuccess(res, result);
         } catch (error: any) {
             console.error('[Telegram] Error generating link token:', error.message);
             next(createAppError(ERROR_CODES.TELEGRAM_LINK_FAILED, 500, 'Failed to generate link token'));
@@ -89,7 +90,7 @@ export class TelegramController {
             }
 
             const status = await this.linkService.getStatus(userId);
-            res.status(200).json(status);
+            sendSuccess(res, status);
         } catch (error: any) {
             console.error('[Telegram] Error getting status:', error.message);
             next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to get status'));
@@ -108,7 +109,7 @@ export class TelegramController {
             }
 
             const result = await this.linkService.toggleActivation(userId);
-            res.status(200).json(result);
+            sendSuccess(res, result);
         } catch (error: any) {
             console.error('[Telegram] Error toggling activation:', error.message);
 
@@ -131,7 +132,7 @@ export class TelegramController {
             const result = await this.notificationService.send(validatedData);
 
             if (result.success) {
-                res.status(200).json(result);
+                sendSuccess(res, result);
             } else {
                 next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 400, result.error));
             }
@@ -158,7 +159,7 @@ export class TelegramController {
             }
 
             await this.linkService.disconnectAccount(userId);
-            res.status(200).json({ success: true, message: 'Account disconnected' });
+            sendMessage(res, 'Account disconnected');
         } catch (error: any) {
             console.error('[Telegram] Error disconnecting account:', error.message);
 

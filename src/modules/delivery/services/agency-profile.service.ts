@@ -13,6 +13,7 @@ import { eventBus } from '../../../core/events/event-bus';
 import { auditLogger } from '../../../core/audit/audit-logger';
 import { IDeliveryAgency, IAgencyPolicies } from '../delivery-agency.model';
 import { IPayoutMethod } from '../../../core/types/payout.types';
+import { withGeoAddress } from '../../../core/types/geo-address.types';
 import { AgencyOnboardingStep, AgencyOnboardingStepValue } from '../../../core/constants/onboarding-steps';
 import { AGENCY_ONBOARDING_EVENTS } from '../events/agency-onboarding.events';
 import { ConnectionService } from '../../agency-connections/connection.service';
@@ -187,7 +188,7 @@ export class AgencyProfileService {
                 agencyId,
                 {
                     coverage_areas: input.coverage_areas as string[],
-                    headquarters_addresses: input.headquarters_addresses as IDeliveryAgency['headquarters_addresses'],
+                    headquarters_addresses: input.headquarters_addresses.map(withGeoAddress) as unknown as IDeliveryAgency['headquarters_addresses'],
                     onboarding_step: agency.onboarding_step as AgencyOnboardingStepValue,
                 },
                 expectedVersion,
@@ -216,7 +217,7 @@ export class AgencyProfileService {
             agencyId,
             {
                 coverage_areas: input.coverage_areas as string[],
-                headquarters_addresses: input.headquarters_addresses as IDeliveryAgency['headquarters_addresses'],
+                headquarters_addresses: input.headquarters_addresses.map(withGeoAddress) as unknown as IDeliveryAgency['headquarters_addresses'],
                 onboarding_step: newStep,
             },
             expectedVersion,

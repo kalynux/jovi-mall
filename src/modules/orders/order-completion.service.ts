@@ -8,6 +8,16 @@ import {
 } from '../earnings/services/earnings-completion.service';
 
 /**
+ * Item delivery statuses from which nothing further will happen.
+ *
+ * `failed` is deliberately absent: a failed delivery is still in the agent's
+ * hands and can go back to `in_transit` (see AGENCY_TRIGGERABLE_TRANSITIONS),
+ * so the order is not finished. `rejected` and `pending_agency_reassignment`
+ * are likewise waiting on someone.
+ */
+const TERMINAL_ITEM_DELIVERY_STATUSES: readonly string[] = ['delivered', 'returned'];
+
+/**
  * OrderCompletionService - marks an order "completed" (customer confirmed
  * delivery/satisfaction, or system auto-confirmed) and starts the escrow hold
  * window.
@@ -15,6 +25,10 @@ import {
  * Shared by the customer confirm-delivery endpoint and the auto-confirm sweep so
  * the side effects (stamp `completion`, append timeline, mature the held
  * earnings) stay identical regardless of who triggers completion.
+ *
+ * Completion is what starts the hold window for EVERY actor on the order —
+ * vendor, platform, agency and agent alike. Nobody's share matures early and
+ * nobody's late; see EarningsCompletionService.onOrderCompleted.
  */
 export class OrderCompletionService {
   constructor(
@@ -23,16 +37,37 @@ export class OrderCompletionService {
   ) {}
 
   /**
-   * Throw if the order is not in a state a customer may confirm. An order is
-   * confirmable once its fulfilment has reached `delivered` (physical) or
-   * `fulfilled` (digital) and it has not already been completed.
+   * Is the order finished — i.e. has every physical item reached a state from
+   * which nothing more will happen?
+   *
+   * NOT the same as `fulfillment_status === 'delivered'`, which requires every
+   * item to be *delivered*. An order with one item delivered and one returned is
+   * every bit as finished, but sits at `partially_delivered` and would otherwise
+   * never complete — stranding the delivered item's escrow permanently. For COD
+   * that is real cash already taken from a customer, so leaving it unreleasable
+   * is worse than any alternative.
+   */
+  isSettled(order: IOrder): boolean {
+    if (order.order_type !== 'physical') return order.fulfillment_status === 'fulfilled';
+
+    const statuses = order.items
+      .map((item) => item.delivery?.status)
+      .filter((s): s is NonNullable<typeof s> => !!s);
+
+    return (
+      statuses.length > 0 && statuses.every((s) => TERMINAL_ITEM_DELIVERY_STATUSES.includes(s))
+    );
+  }
+
+  /**
+   * Throw if the order is not in a state a customer may confirm: every item
+   * settled, and not already completed.
    */
   assertConfirmable(order: IOrder): void {
     if (order.completion?.confirmed_at) {
       throw createAppError(ERROR_CODES.EARNINGS_ALREADY_COMPLETED, 409);
     }
-    const confirmable = order.fulfillment_status === 'delivered' || order.fulfillment_status === 'fulfilled';
-    if (!confirmable) {
+    if (!this.isSettled(order)) {
       throw createAppError(ERROR_CODES.EARNINGS_ORDER_NOT_CONFIRMABLE, 422, undefined, {
         fulfillment_status: order.fulfillment_status,
       });
@@ -66,8 +101,10 @@ export class OrderCompletionService {
       actorId,
     });
 
-    // Start the escrow hold window on this order's held earnings.
-    await this.earningsCompletion.onSourceCompleted('order', order._id.toString(), now);
+    // Start the escrow hold window on every allocation this order produced —
+    // including its per-shipment COD collection rows, which do not hang off the
+    // order's own source id.
+    await this.earningsCompletion.onOrderCompleted(order._id.toString(), now);
   }
 }
 

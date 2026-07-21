@@ -2,6 +2,8 @@ import { AgencyNotificationRepository } from '../repositories/agency-notificatio
 import { AgencyNotificationPreferenceRepository } from '../repositories/agency-notification-preference.repository';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
 import { IDeliveryAgency } from '../../delivery/delivery-agency.model';
+import { AgentRepository } from '../../agents';
+import { COD_CONFIG } from '../../cod/config/cod.config';
 import { TelegramRepository } from '../../telegram/telegram.repository';
 import { MailService } from '../../mail/mail.service';
 import { TelegramNotificationService } from '../../telegram/services/telegram-notification.service';
@@ -54,6 +56,7 @@ export class AgencyNotificationEventHandler {
     private notificationRepo: AgencyNotificationRepository;
     private preferenceRepo: AgencyNotificationPreferenceRepository;
     private agencyRepo: DeliveryAgencyRepository;
+    private agentRepo: AgentRepository;
     private telegramRepo: TelegramRepository;
     private mailService: MailService;
     private telegramService: TelegramNotificationService;
@@ -64,6 +67,7 @@ export class AgencyNotificationEventHandler {
         this.notificationRepo = new AgencyNotificationRepository();
         this.preferenceRepo = new AgencyNotificationPreferenceRepository();
         this.agencyRepo = new DeliveryAgencyRepository();
+        this.agentRepo = new AgentRepository();
         this.telegramRepo = new TelegramRepository();
         this.mailService = new MailService();
         this.telegramService = new TelegramNotificationService();
@@ -191,6 +195,56 @@ export class AgencyNotificationEventHandler {
         }
     }
 
+    /** Handle shipment.offer_accepted — an agent took a shipment this agency offered. */
+    async handleOfferAccepted(event: DomainEvent): Promise<void> {
+        try {
+            const { shipmentId, agencyId, orderNumber, agentName } = event.payload;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.shipmentAssigned) return;
+
+            await this.dispatch({
+                situation: 'shipment.offer.accepted',
+                prefs,
+                agencyId,
+                aggregateType: 'shipment',
+                aggregateId: shipmentId,
+                idempotencyKey: `shipment.offer.accepted:${shipmentId}`,
+                context: { shipmentId, orderNumber: orderNumber ?? '—', agentName: agentName ?? 'The agent' }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle shipment.offer_accepted:', error);
+        }
+    }
+
+    /**
+     * Handle shipment.no_agent_available — nobody accepted (declined, timed out,
+     * or the auto pool was exhausted). Tells the agency to assign manually. The
+     * idempotency key carries the event time so a shipment that goes unfilled
+     * again after a manual retry still notifies rather than being deduped away.
+     */
+    async handleAssignmentUnfilled(event: DomainEvent): Promise<void> {
+        try {
+            const { shipmentId, agencyId, orderNumber } = event.payload;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.shipmentAssigned) return;
+
+            const at = new Date(event.occurredAt ?? Date.now()).getTime();
+            await this.dispatch({
+                situation: 'shipment.assignment.unfilled',
+                prefs,
+                agencyId,
+                aggregateType: 'shipment',
+                aggregateId: shipmentId,
+                idempotencyKey: `shipment.assignment.unfilled:${shipmentId}:${at}`,
+                context: { shipmentId, orderNumber: orderNumber ?? '—' }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle shipment.no_agent_available:', error);
+        }
+    }
+
     /** Handle payout.requested event (fires for both vendor and agency payouts). */
     async handlePayoutRequested(event: DomainEvent): Promise<void> {
         try {
@@ -257,6 +311,95 @@ export class AgencyNotificationEventHandler {
             });
         } catch (error) {
             console.error('[AgencyNotificationHandler] Failed to handle payout.rejected:', error);
+        }
+    }
+
+    /**
+     * Handle cod.deposit.declared — one of this agency's agents says they handed
+     * cash over, and the agency now has DEPOSIT_CONFIRM_DEADLINE_DAYS to confirm
+     * or reject it before a `deposit_not_confirmed` flag freezes their reserve
+     * releases.
+     *
+     * Only the 'agency' recipient: a platform-bound declaration is the admin's to
+     * answer, and telling the agency to review something they cannot act on would
+     * be worse than saying nothing.
+     */
+    async handleCodDepositDeclared(event: DomainEvent): Promise<void> {
+        try {
+            const { depositId, agencyId, agentId, amount, currency, recipient } = event.payload;
+            if (recipient !== 'agency') return;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.codDepositUpdates) return;
+
+            await this.dispatch({
+                situation: 'cod.deposit.declared',
+                prefs,
+                agencyId,
+                aggregateType: 'deposit',
+                aggregateId: depositId,
+                idempotencyKey: `cod.deposit.declared:${depositId}`,
+                context: {
+                    depositId,
+                    agentName: await this.resolveAgentName(agentId),
+                    currency,
+                    amountFormatted: Number(amount).toLocaleString(),
+                    deadlineDays: COD_CONFIG.DEPOSIT_CONFIRM_DEADLINE_DAYS
+                }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle cod.deposit.declared:', error);
+        }
+    }
+
+    /**
+     * Handle cod.deposit.recorded — but ONLY the direct-to-platform case.
+     *
+     * The agency route is the agency's own action, so telling them about it would
+     * be pure echo. A platform payment is different: the agency's liability fell
+     * and its collections settled without it doing anything, so silence would
+     * look like its books had drifted.
+     *
+     * This event is shared with the agent consumer, which handles the rest — the
+     * same pattern the connection.* events already use.
+     */
+    async handleCodDepositRecorded(event: DomainEvent): Promise<void> {
+        try {
+            const { depositId, agencyId, agentId, amount, currency, recipient } = event.payload;
+            if (recipient !== 'platform') return;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.codDepositUpdates) return;
+
+            await this.dispatch({
+                situation: 'cod.deposit.direct_to_platform',
+                prefs,
+                agencyId,
+                aggregateType: 'deposit',
+                aggregateId: depositId,
+                idempotencyKey: `cod.deposit.direct_to_platform:${depositId}`,
+                context: {
+                    depositId,
+                    agentName: await this.resolveAgentName(agentId),
+                    currency,
+                    amountFormatted: Number(amount).toLocaleString()
+                }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle cod.deposit.recorded:', error);
+        }
+    }
+
+    /**
+     * The agent's display name, or a neutral fallback. Never throws: a missing
+     * agent must not cost the agency a notification about real money.
+     */
+    private async resolveAgentName(agentId: string): Promise<string> {
+        try {
+            const agent = await this.agentRepo.findById(agentId);
+            return agent?.name ?? 'An agent';
+        } catch {
+            return 'An agent';
         }
     }
 

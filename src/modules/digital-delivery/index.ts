@@ -24,7 +24,7 @@ export * from './services/download-execution.service';
 
 // Routes
 export * from './routes/customer.routes';
-export * from './routes/vendor.routes';
+// export * from './routes/vendor.routes'; // DEPRECATED/commented — superseded by catalog per-variant digital routes
 
 // Types
 export * from './types';

@@ -179,7 +179,9 @@ export class VendorOrderService {
                 totalSpent: customerData?.totalSpent ?? 0
             },
 
-            shippingAddress: customerData?.shippingAddress ?? null,
+            // Prefer the order's durable geocoded drop-off snapshot; fall back to
+            // the customer's current default saved address for legacy orders.
+            shippingAddress: this._resolveShippingAddress(order, customerData),
 
             // Line items with pricing snapshots. Each physical item carries its
             // own delivery block, since items can be split across agencies.
@@ -317,6 +319,16 @@ export class VendorOrderService {
                 shipmentId,
                 trackingNumber: shipment?.tracking_number ?? null,
                 agent,
+                // Why the agency declined this delivery (so the vendor knows what
+                // to fix before reassigning). Reason is a fixed code; `note` is the
+                // agency's free-text explanation, required when reason is 'other'.
+                rejection: shipment?.rejection
+                    ? {
+                        reason: shipment.rejection.reason,
+                        note: shipment.rejection.note ?? null,
+                        rejectedAt: shipment.rejection.rejectedAt ?? null
+                    }
+                    : null,
                 freeDelivery: deliveryData.free_delivery ?? false
             });
         }
@@ -330,6 +342,26 @@ export class VendorOrderService {
      * Returns name, email, phone, avatar, and per-vendor order stats.
      * Also extracts the customer's default shipping address.
      */
+    /**
+     * The order's shipping address for the vendor detail view. Prefers the durable
+     * geocoded drop-off snapshot taken at checkout (`order.delivery_address`),
+     * exposing both the flat fields the UI already renders and the full `geo`;
+     * falls back to the customer's derived default saved address for legacy orders.
+     */
+    private _resolveShippingAddress(order: any, customerData: any): any {
+        const geo = order?.delivery_address;
+        if (geo) {
+            return {
+                street: geo.components?.street ?? geo.formatted_address ?? '',
+                city: geo.components?.city ?? '',
+                state: geo.components?.region ?? null,
+                country: geo.components?.country_code ?? geo.components?.country ?? '',
+                geo,
+            };
+        }
+        return customerData?.shippingAddress ?? null;
+    }
+
     private async _resolveCustomerInfo(customerId: string, vendorId: string): Promise<any> {
         const [customer, stats] = await Promise.all([
             CustomerModel.findById(customerId)

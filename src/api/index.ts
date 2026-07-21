@@ -91,6 +91,21 @@ router.use('/customer/cart', customerCartRoutes);
 import customerOrderRoutes from '../modules/orders/customer-order.routes';
 router.use('/customer/orders', customerOrderRoutes);
 
+// Customer digital-product delivery: mint download links, execute downloads
+// (single-use token in the URL), and list the purchased library. Mounted at
+// /api/digital because generated download URLs are /api/digital/download/:token.
+// Entitlements are granted post-payment by OrderService → digital-fulfillment.
+import { createCustomerDigitalRoutes } from '../modules/digital-delivery/routes/customer.routes';
+import { DigitalEntitlementService } from '../modules/digital-delivery/services/digital-entitlement.service';
+import { DownloadLinkService } from '../modules/digital-delivery/services/download-link.service';
+import { DownloadExecutionService } from '../modules/digital-delivery/services/download-execution.service';
+import { getStorageProvider } from '../core/storage';
+router.use('/digital', createCustomerDigitalRoutes(
+  new DigitalEntitlementService(),
+  new DownloadLinkService(),
+  new DownloadExecutionService(getStorageProvider()),
+));
+
 // Admin order controls (payment-dispute hold: list frozen orders, manual resolve)
 import adminOrderRoutes from '../modules/orders/admin-order.routes';
 router.use('/admin/orders', adminOrderRoutes);
@@ -115,6 +130,17 @@ import { vendorConnectionRoutes, agencyConnectionRoutes } from '../modules/agenc
 router.use('/vendor/agency-connections', vendorConnectionRoutes);
 router.use('/agency/vendor-connections', agencyConnectionRoutes);
 
+// Live-tracking authorization resolution — consumed by the geo-tracker service
+// (forwarding the caller's token) to learn which agents the caller may track.
+import trackingRoutes from '../modules/tracking-integration/routes/tracking.routes';
+router.use('/tracking', trackingRoutes);
+
+// Geocoding: address search + reverse geocoding (Google-Maps-style workflow).
+// Provider-agnostic (GEO_PROVIDER); backs every role's address entry. Any
+// signed-in user may search — see modules/geo.
+import geoRoutes from '../modules/geo/routes';
+router.use('/geo', geoRoutes);
+
 // Customer profile routes
 import customerRoutes from '../modules/customers/routes';
 router.use('/customer', customerRoutes);
@@ -123,9 +149,33 @@ router.use('/customer', customerRoutes);
 import agencyRoutes from '../modules/delivery/agency.routes';
 router.use('/agency', agencyRoutes);
 
-// Delivery Agent profile routes
+// Delivery Agent work routes (shipments, COD)
 import agentRoutes from '../modules/delivery/agent.routes';
 router.use('/agent', agentRoutes);
+
+// ─── Agent domain ────────────────────────────────────────────────────────────
+// The agent's own record: profile, onboarding, availability, working state,
+// device capabilities, preferences/settings, tracking-allow, and agent↔agency
+// memberships (an agent may serve several agencies at once).
+//
+// `agentSelfRoutes` shares the /agent prefix with the work routes above; the
+// two never overlap (this one owns the agent aggregate, that one owns work).
+//
+// Imported from their files rather than the module barrel: routers depend on
+// auth.middleware, which depends on auth.service, which imports the barrel —
+// re-exporting routes from it closes a require cycle that crashes at boot.
+import agentSelfRoutes from '../modules/agents/routes/agent.routes';
+import agencyRosterRoutes from '../modules/agents/routes/agency-roster.routes';
+import adminAgentRoutes from '../modules/agents/routes/admin-agent.routes';
+import internalAgentRoutes from '../modules/agents/routes/internal-agent.routes';
+router.use('/agent', agentSelfRoutes);
+router.use('/agency/agents', agencyRosterRoutes);
+router.use('/admin/agents', adminAgentRoutes);
+
+// Service-to-service API consumed by geo-tracker (shared-secret auth, not a
+// user session). jovi-mall answers "may this agent be tracked?"; geo-tracker
+// owns tracking execution. Disabled entirely when INTERNAL_SERVICE_TOKEN is unset.
+router.use('/internal/agents', internalAgentRoutes);
 
 // Admin delivery agency management (deactivate/reactivate cascades to vendor products)
 import adminAgencyRoutes from '../modules/delivery/admin-agency.routes';

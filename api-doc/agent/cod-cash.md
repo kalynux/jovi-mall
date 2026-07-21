@@ -19,22 +19,47 @@ not claims — a COD shipment can ONLY be marked delivered by submitting the cus
 code**:
 
 1. The agency assigns you to a COD shipment (blocked if it would push you over your cash exposure
-   limit, or if your trust score is too low — see [Risk controls](#risk-controls)).
-2. The agency marks the shipment `picked_up`. At that moment the platform creates the shipment's
-   **cash collection** (the exact amount to collect, shown as `cod.expectedAmount` on
-   [shipment detail](./shipments.md#detail)) and sends the customer a 6-digit delivery code
-   (WhatsApp + their app).
-3. At the door: hand over the package, **collect the cash**, then ask the customer for their code.
-   The customer is instructed to give it only after receiving and paying.
-4. Submit the code via [`POST /shipments/:id/cod/collect`](#collect). One atomic operation records
+   limit, or if your trust score is too low — see [Risk controls](#risk-controls)). **At that moment**
+   the platform creates the shipment's **cash collection** (the exact amount to collect, shown as
+   `cod.expectedAmount` on [shipment detail](./shipments.md#detail)) and sends the customer a 6-digit
+   delivery code (WhatsApp + their app) — so the customer is holding it long before you arrive.
+2. The agency marks the shipment `picked_up`, then `in_transit`. No new code is issued; the customer
+   keeps the one they were sent at assignment.
+
+   > If the agency swaps the assigned agent, the code is **not** re-issued — the customer keeps it,
+   > and the collection is simply re-pointed at whoever is now delivering. If the customer has lost
+   > their code, [resend it](#resend) rather than waiting.
+3. On arrival, mark the shipment `agent_delivered`. For a COD shipment the response comes back with
+   `requiresDeliveryCode: true` — that is the signal to ask for the code. The shipment is **not**
+   delivered yet.
+4. At the door: hand over the package, **collect the cash**, then ask the customer for their code.
+   The customer is instructed to give it only after receiving and paying. They have had the code
+   since pickup, so they can read it out the moment you arrive.
+5. Submit the code via [`POST /shipments/:id/cod/collect`](#collect). One atomic operation records
    the cash, marks the shipment **delivered**, and adds the amount to your cash balance
    (you now owe it to your agency).
-5. Hand the cash to your agency. They record the deposit, which reduces
-   [your balance](#balance) — aim to settle within the deposit deadline (default **2 days**) or a
-   late-deposit flag lowers your trust score.
+6. Hand the cash back — to your agency, or [straight to the platform](#declare-deposit). Either way
+   [your balance](#balance) falls once the receiving party confirms. Aim to settle within the deposit
+   deadline (default **2 days**) or a late-deposit flag lowers your trust score.
 
-There is no separate customer delivery confirmation for COD — the verified code **is** the
-confirmation. `agent_delivered` claims are rejected for COD shipments.
+**There is no separate customer delivery confirmation for COD — the verified code IS the
+confirmation.** So for COD:
+
+- `agent_delivered` means "I am at the door", not "this is delivered". It is a dead end except
+  through the code: a COD shipment can never be moved to `delivered` by a status change. The
+  customer's own confirm-delivery endpoint **rejects COD** for the same reason.
+- The one other way out is `failed` (customer absent, refuses the parcel, or will not pay).
+
+> ### ⚠️ Leaving a shipment at `agent_delivered` means "I was paid"
+>
+> After **7 days** at `agent_delivered`, the platform records the cash as collected anyway — without
+> a code — and the shipment becomes `delivered`. **The amount lands on your cash balance and you owe
+> it**, exactly as if you had submitted a code.
+>
+> This exists because a customer can pay and still never produce the code (phone not to hand, or
+> simply unwilling), and that should not strand everyone's money. The other half of it is your duty:
+> **if you were NOT paid, move the shipment to `failed` → `returned`.** Leaving it sitting there for
+> a week is treated as an assertion that you took the cash.
 
 ---
 
@@ -178,8 +203,8 @@ Query: `page?`, `limit?`.
 
 ### GET /api/agent/cod/deposits
 
-**Description**: Your recorded cash hand-overs to the agency (recorded agency-side when they
-physically receive the cash). Query: `page?`, `limit?`.
+**Description**: Your cash hand-overs. Query: `status?` (`declared` | `confirmed` | `rejected`),
+`page?`, `limit?`.
 
 **Success Response** (`200 OK`):
 ```json
@@ -193,12 +218,109 @@ physically receive the cash). Query: `page?`, `limit?`.
       "amount": 78000,
       "currency": "XAF",
       "note": "Evening cash-desk deposit",
+      "recipient": "agency",
+      "status": "confirmed",
+      "reference": null,
+      "declaredAt": "2026-07-10T17:40:00.000Z",
+      "resolvedAt": "2026-07-10T18:00:00.000Z",
+      "rejectionReason": null,
       "recordedAt": "2026-07-10T18:00:00.000Z"
     }
   ],
   "meta": { "total": 4, "page": 1, "limit": 20, "pages": 1 }
 }
 ```
+
+| Field | Description |
+|---|---|
+| `recipient` | `agency` (the normal route) or `platform` (you paid the platform directly). |
+| `status` | `declared` = waiting on the receiver; `confirmed` = money moved; `rejected` = they say it didn't happen (see `rejectionReason`). |
+| `reference` | Your transfer/receipt reference. Required for `platform` deposits. |
+| `declaredAt` | When YOU declared it. `null` if the agency recorded it themselves at the desk. |
+
+---
+
+<a name="declare-deposit"></a>
+### POST /api/agent/cod/deposits
+
+**Description**: Declare cash you have handed back. **This moves no money by itself** — it is a
+timestamped claim the receiving party has to answer. Your balance falls when they confirm.
+
+Declaring matters even when your agency records deposits reliably: it is your evidence. While a
+declaration is open it also **suspends your late-deposit penalty** for that amount — you have said,
+on the record, that you handed the cash over, and the clock is now on them. If they reject it, the
+clock resumes.
+
+**Request Body**:
+```json
+{
+  "agencyId": "507f1f77bcf86cd799439099",
+  "amount": 78000,
+  "recipient": "agency",
+  "reference": null,
+  "note": "Evening cash-desk deposit"
+}
+```
+- `agencyId` (string, required) — the agency whose cash this is. Required even when paying the
+  platform: the cash was always collected under one contract, and that is the contract it settles.
+- `amount` (number, required) — minor units. Bounded by what you actually owe **this** agency.
+- `recipient` (string, optional, default `agency`) — `agency`, or `platform` to bypass the agency.
+- `reference` (string, required for `platform`) — bank/mobile-money/receipt id. The platform isn't
+  standing there, so this is the only thing tying your claim to real money.
+- `note` (string, optional, ≤500 chars).
+
+**Success Response** (`201 Created`): the deposit, `status: "declared"`.
+
+**Error Responses**:
+- `404` – `AGENT_MEMBERSHIP_NOT_FOUND` – No live contract with that agency.
+- `422` – `COD_DEPOSIT_INVALID_AMOUNT` – Not a positive integer.
+- `422` – `COD_DEPOSIT_EXCEEDS_BALANCE` – More than the cash you hold across all agencies.
+- `422` – `CONTRACT_SETTLEMENT_EXCEEDS_OUTSTANDING` – More than you owe **this** agency.
+  `details.hint` says whether the rest belongs to another agency.
+- `422` – `COD_DEPOSIT_REFERENCE_REQUIRED` – `recipient: "platform"` without a `reference`.
+- `422` – `COD_DEPOSIT_AGENCY_ALREADY_SETTLED` – **Direct payments only.** Your agency has already
+  passed this cash to the platform out of its own pocket, so the platform is square and you owe the
+  **agency**, not the platform. `details.agencyOwesPlatform` is the most the platform can still take
+  directly; pay that much and the rest to your agency.
+
+> ### Paying the platform directly
+>
+> `recipient: "platform"` settles both legs at once — your balance AND your agency's debt to the
+> platform. Use it when your agency is unresponsive, disputes your hand-overs, or you simply can't
+> reach their cash desk. It needs no permission from the agency, but they are notified, and the
+> cash still settles against their contract with you.
+
+> **You'll be notified when a deposit is confirmed or rejected** — in-app, push, and your chosen
+> secondary channel. A `recorded` notification you did not declare yourself is worth reading closely:
+> it is how you catch an agency recording less than you handed over. See
+> [Agent Notifications](./notifications.md).
+
+---
+
+### POST /api/agent/cod/discrepancies
+
+**Description**: Report a cash problem with an agency — most usefully, that they recorded **less
+than you handed over**, or nothing at all. An admin reviews it.
+
+**Request Body**:
+```json
+{
+  "agencyId": "507f1f77bcf86cd799439099",
+  "amount": 40000,
+  "depositId": "665f1f77bcf86cd799439400",
+  "note": "Handed over 78,000 at the desk on the 10th; only 38,000 was recorded."
+}
+```
+- `agencyId` (string, required).
+- `amount` (number, optional) — the money in dispute, if it is a specific figure.
+- `depositId` (string, optional) — the deposit record you are disputing, if there is one.
+- `note` (string, required, ≤500 chars) — what happened.
+
+**Success Response** (`201 Created`): the raised report.
+
+**Error Responses**:
+- `404` – `AGENT_MEMBERSHIP_NOT_FOUND` – No live contract with that agency. (An agency that has
+  **suspended** you can still be reported — that is often exactly when this is needed.)
 
 ---
 
@@ -216,5 +338,12 @@ physically receive the cash). Query: `page?`, `limit?`.
   Penalties: holding cash past the deposit deadline (−5, once per open flag), a cash shortfall
   reported by your agency (−20). Admins can adjust the score (e.g. restore it after a resolved
   discrepancy).
+
+  > **A deposit you have [declared](#declare-deposit) does not count against you.** The late-deposit
+  > check only looks at cash you have *not* declared — if you have said you handed it over and nobody
+  > has answered, that is on them, and the platform flags the agency instead. A rejected declaration
+  > stops covering you the moment it is rejected.
 - **Open cash-shortfall discrepancy** — blocks new COD assignments until an admin resolves it.
-- **GPS/device evidence** — captured at code submission; used in fraud investigations.
+- **GPS/device evidence** — captured at code submission; used in fraud investigations. An
+  auto-collected shipment (7 days at `agent_delivered`, no code) carries none — it is recorded with
+  `verification.method: "auto_no_code"`, and a dispute turns on exactly that difference.

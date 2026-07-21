@@ -9,14 +9,21 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
  * `pending_balance` (held in escrow) and only move to `available_balance`
  * (withdrawable) once the order is completed and the hold window elapses.
  *
- * `owner_type` is a discriminator: `vendor` and `agency` are keyed by their own
- * id; `platform` is a SINGLETON (`owner_id` is null) that accumulates marketplace
- * commission. Exactly one account per (owner_type, owner_id), created lazily.
+ * `owner_type` is a discriminator: `vendor`, `agency` and `agent` are keyed by
+ * their own id; `platform` is a SINGLETON (`owner_id` is null) that accumulates
+ * marketplace commission. Exactly one account per (owner_type, owner_id),
+ * created lazily.
+ *
+ * Every owner type here is a party the PLATFORM owes money to and pays via the
+ * payout pipeline — that is what earns a seat in this model. An agent's share of
+ * the delivery fee is carved out of the agency's at split time (see
+ * EarningsSplitService and the contract's `fee_split`), so the agent is paid by
+ * the platform directly rather than by the agency out of its own pocket.
  *
  * `version` provides optimistic locking; balance mutations use atomic `$inc`.
  */
 
-export type EarningsOwnerType = 'vendor' | 'agency' | 'platform';
+export type EarningsOwnerType = 'vendor' | 'agency' | 'platform' | 'agent';
 
 export interface IEarningsAccount extends Document {
   owner_type: EarningsOwnerType;
@@ -48,7 +55,7 @@ export interface IEarningsAccount extends Document {
 
 const EarningsAccountSchema = new Schema<IEarningsAccount>(
   {
-    owner_type: { type: String, enum: ['vendor', 'agency', 'platform'], required: true },
+    owner_type: { type: String, enum: ['vendor', 'agency', 'platform', 'agent'], required: true },
     owner_id: { type: Schema.Types.ObjectId, default: null },
     currency: { type: String, required: true, uppercase: true, trim: true, default: 'XAF' },
     pending_balance: { type: Number, required: true, default: 0, min: 0 },

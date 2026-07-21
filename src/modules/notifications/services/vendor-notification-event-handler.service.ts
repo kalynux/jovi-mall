@@ -440,6 +440,38 @@ export class VendorNotificationEventHandler {
         }
     }
 
+    /**
+     * Handle shipment.rejected event (a delivery agency declined a shipment).
+     *
+     * The vendor must reassign the affected items to another agency, so the
+     * notification deep-links to the order. The specific reason + note are shown
+     * on the order view itself (see vendor-order.service enrichment) — this alert
+     * only tells the vendor which order needs attention.
+     */
+    async handleShipmentRejected(event: DomainEvent): Promise<void> {
+        try {
+            const { shipmentId, orderId, orderNumber, vendorId, agencyName } = event.payload;
+            if (!vendorId) return;
+
+            const prefs = await this.preferenceRepo.getByVendor(vendorId);
+            if (!prefs.preferences.shipmentRejected) return;
+
+            await this.dispatch({
+                situation: 'shipment.rejected',
+                prefs,
+                vendorId,
+                aggregateType: 'order',
+                aggregateId: orderId,
+                // One shipment is rejected at most once (status guard on 'assigned'),
+                // so the shipment id is a stable idempotency key.
+                idempotencyKey: `shipment.rejected:${shipmentId}`,
+                context: { orderNumber, agencyName, orderId }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle shipment.rejected:', error);
+        }
+    }
+
     // ─── Dispatch + delivery ─────────────────────────────────────────────────
 
     /**

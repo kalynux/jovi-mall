@@ -63,7 +63,8 @@ A vendor's notification settings — the values the backend reads when deciding 
       "paymentReceivedFull": true,
       "storageAlert": true,
       "connectionUpdated": true,
-      "payoutUpdates": true
+      "payoutUpdates": true,
+      "shipmentRejected": true
     }
   }
 }
@@ -107,7 +108,8 @@ The `*Verified` flags are **computed live** from the vendor's account (email ver
     "paymentReceivedFull": true,
     "storageAlert": true,
     "connectionUpdated": true,
-    "payoutUpdates": true
+    "payoutUpdates": true,
+    "shipmentRejected": true
   }
 }
 ```
@@ -463,6 +465,7 @@ The subscribable events (`preferences.*` key → notification `type`):
 | `storageAlert` | `storage.alert` | `storage` | Media storage crosses a threshold (80% / 90% / 100%). `aggregateId` is the vendor id. See [Storage](./storage.md). |
 | `connectionUpdated` | `connection.request_received`, `connection.approved`, `connection.rejected`, `connection.reapproval_needed` | `connection` | An agency connection request/approval/rejection/reapproval-needed happens where the **agency** was the actor. See [Agency connections](./agency-connections.md). The symmetric agency-side events (fired when the **vendor** is the actor) are documented in [Agency Notifications — Events](../agency/notifications.md#events). |
 | `payoutUpdates` | `payout.requested`, `payout.paid`, `payout.rejected` | `payout` | Your own payout request is created, paid, or rejected. `aggregateId` is the `PayoutRequest` id; `action.path` deep-links to `tickets/{ticketId}` — the request is tracked as a ticket, see [Earnings — Requesting a payout](./earnings.md#requesting-a-payout). |
+| `shipmentRejected` | `shipment.rejected` | `order` | A delivery agency declined a shipment; its items move to `pending_agency_reassignment` and you must route them to another agency. `aggregateId` is the order id; `action.path` deep-links to `orders/{orderId}`. The specific reason + note are shown on the order's per-item delivery detail (see [Orders](./orders.md)), not in the notification text. |
 
 ### Delivery channels
 

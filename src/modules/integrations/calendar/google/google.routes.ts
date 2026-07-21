@@ -7,6 +7,7 @@ import { VendorModel } from '../../../vendors/vendor.model';
 import { asyncHandler } from '../../../../api/middlewares/async-handler';
 import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
+import { sendSuccess, sendMessage } from '../../../../core/responses';
 
 const router = Router();
 const provider = new GoogleCalendarProvider();
@@ -98,7 +99,7 @@ router.get(
     }
 
     if (redirectOAuthResult(res, { calendar: 'connected' })) return;
-    res.json({ success: true, message: 'Google Calendar connected successfully' });
+    sendMessage(res, 'Google Calendar connected successfully');
   })
 );
 
@@ -116,13 +117,13 @@ router.get(
     const account = await ConnectedCalendarAccount.findOne({ userId, provider: 'google' });
 
     if (account) {
-      res.json({
+      sendSuccess(res, {
         connected: true,
         email: account.email,
         expiresAt: account.expiresAt,
       });
     } else {
-      res.json({ connected: false });
+      sendSuccess(res, { connected: false });
     }
   })
 );
@@ -156,7 +157,7 @@ router.get(
 
     try {
       const result = await provider.testConnection(userId);
-      res.json({ success: result });
+      sendSuccess(res, { ok: result });
     } catch (error: any) {
       next(createAppError(ERROR_CODES.INTEGRATION_UNSUPPORTED_CALENDAR_PROVIDER, 500, error.message));
     }

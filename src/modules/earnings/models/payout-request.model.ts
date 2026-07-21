@@ -4,8 +4,8 @@ import { EarningsOwnerType } from './earnings-account.model';
 import { PayoutMethodSchema, IPayoutMethod } from '../../../core/types/payout.types';
 
 /**
- * PayoutRequest - a vendor/agency's request to withdraw their ENTIRE current
- * `available_balance`. Created atomically alongside the EarningsAccount move
+ * PayoutRequest - a vendor/agency/agent's request to withdraw their ENTIRE
+ * current `available_balance`. Created atomically alongside the EarningsAccount move
  * (available_balance -> requested_balance, see EarningsAccountService), then
  * routed through the ticketing module (one PAYOUT_REQUEST ticket per request,
  * assigned to the admin pool) for the human workflow.
@@ -52,7 +52,9 @@ export interface IPayoutRequest extends Document {
 
 const PayoutRequestSchema = new Schema<IPayoutRequest>(
   {
-    owner_type: { type: String, enum: ['vendor', 'agency'], required: true },
+    // No 'platform': the platform account is the marketplace's own commission,
+    // and it does not pay itself out.
+    owner_type: { type: String, enum: ['vendor', 'agency', 'agent'], required: true },
     owner_id: { type: Schema.Types.ObjectId, required: true },
     amount: { type: Number, required: true, min: 1 },
     currency: { type: String, required: true, uppercase: true, trim: true },

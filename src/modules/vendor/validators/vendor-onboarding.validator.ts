@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { GeoPointZodSchema } from '../../../core/types/geo.types';
+import { GeoAddressZodSchema } from '../../../core/types/geo-address.types';
 import { PayoutDetailsZodSchema } from '../../../core/types/payout.types';
 import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 
@@ -17,7 +18,10 @@ const BusinessAddressSchema = z.object({
     address_line2: z.string().max(200).trim().nullable().optional(),
     city: z.string().min(1).max(100).trim(),
     state: z.string().max(100).trim().nullable().optional(),
+    /** @deprecated Prefer `geo`; kept for backward compatibility. */
     location: GeoPointZodSchema.nullable().optional(),
+    /** Selected address-search result — the canonical geospatial address. */
+    geo: GeoAddressZodSchema.nullable().optional(),
 });
 
 const OperatingHoursSchema = z.object({

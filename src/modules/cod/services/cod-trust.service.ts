@@ -2,12 +2,18 @@ import { Types } from 'mongoose';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { CodTrustEventModel, CodTrustEventType, ICodTrustEvent } from '../models/cod-trust-event.model';
-import { DeliveryAgentModel, IDeliveryAgent } from '../../delivery/delivery-agent.model';
+import { DeliveryAgentModel, IDeliveryAgent, agentMembershipRepository } from '../../agents';
 
 /**
  * CodTrustService - the agent trust score: a 0–100 signal of how safely an
  * agent handles cash. The current value is denormalized on
  * `DeliveryAgent.cod.trust_score`; every movement appends a CodTrustEvent.
+ *
+ * Trust is platform-wide rather than per-agency: the agent holds one physical
+ * pot of cash whoever dispatched it, so a shortfall is a fact about the person.
+ * The trust EVENT still records an agency for context (which relationship the
+ * movement arose under) — under multi-agency that is the agent's primary
+ * agency, since the event itself has no dispatching agency in scope.
  *
  * Score effects live in CodExposureService (limit tiers / COD block).
  */
@@ -28,7 +34,7 @@ export class CodTrustService {
 
     const agent = await DeliveryAgentModel.findById(agentId);
     if (!agent) {
-      throw createAppError(ERROR_CODES.DELIVERY_AGENT_NOT_FOUND, 404);
+      throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
     }
 
     const current = agent.cod?.trust_score ?? 100;
@@ -39,9 +45,13 @@ export class CodTrustService {
       { $set: { 'cod.trust_score': scoreAfter } }
     );
 
+    // Context only: an agent may serve several agencies, so attribute the event
+    // to their primary one. null when they currently serve none.
+    const primary = await agentMembershipRepository.findPrimary(agentId);
+
     const event = await CodTrustEventModel.create({
       agent_id: agentId,
-      agency_id: agent.agency_id ?? null,
+      agency_id: primary?.agency_id ?? null,
       event_type: eventType,
       delta: scoreAfter - current, // effective (post-clamp) movement
       score_after: scoreAfter,

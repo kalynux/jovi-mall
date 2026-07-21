@@ -5,7 +5,11 @@ import { agentDepositService } from '../services/agent-deposit.service';
 import { agencyRemittanceService } from '../services/agency-remittance.service';
 import { codDiscrepancyService } from '../services/cod-discrepancy.service';
 import { codSummaryService } from '../services/cod-summary.service';
-import { CodPaginationQuerySchema } from '../validators/cod.validators';
+import {
+  CodPaginationQuerySchema,
+  AgentDepositStatusSchema,
+  RejectDepositSchema,
+} from '../validators/cod.validators';
 
 const RecordDepositSchema = z.object({
   agentId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid agent ID'),
@@ -15,6 +19,7 @@ const RecordDepositSchema = z.object({
 
 const ListDepositsQuerySchema = CodPaginationQuerySchema.extend({
   agentId: z.string().regex(/^[0-9a-fA-F]{24}$/).optional(),
+  status: AgentDepositStatusSchema.optional(),
 });
 
 const DeclareRemittanceSchema = z.object({
@@ -46,7 +51,8 @@ const ListDiscrepanciesQuerySchema = CodPaginationQuerySchema.extend({
 export class AgencyCodController {
   /**
    * POST /api/agency/cod/deposits
-   * Record cash received from one of this agency's agents.
+   * Record cash received from one of this agency's agents — one step, because
+   * the agency IS the receiving party and there is nobody to counter-sign.
    * Body: { agentId, amount, note? }
    */
   static recordDeposit = asyncHandler(async (req: Request, res: Response) => {
@@ -69,18 +75,88 @@ export class AgencyCodController {
         amount: deposit.amount,
         currency: deposit.currency,
         note: deposit.note,
+        status: deposit.status,
         recordedAt: deposit.created_at,
       },
       message: 'Deposit recorded — the agent\'s outstanding cash was reduced.',
     });
   });
 
-  /** GET /api/agency/cod/deposits — this agency's deposit history. Query: agentId?, page?, limit? */
+  /**
+   * POST /api/agency/cod/deposits/:id/confirm
+   * Confirm a handover THIS agency's agent declared. Money moves here: the
+   * agent's liability falls and the contract's outstanding balance is drawn
+   * down.
+   */
+  static confirmDeposit = asyncHandler(async (req: Request, res: Response) => {
+    const agencyId = req.auth!.role_entity._id.toString();
+
+    const deposit = await agentDepositService.confirm({
+      depositId: req.params.id,
+      by: 'agency',
+      agencyId,
+      confirmedByUserId: req.auth!.user.id,
+    });
+
+    res.json({
+      success: true,
+      data: {
+        id: deposit._id.toString(),
+        agentId: deposit.agent_id.toString(),
+        amount: deposit.amount,
+        currency: deposit.currency,
+        status: deposit.status,
+        resolvedAt: deposit.resolved_at,
+      },
+      message: 'Deposit confirmed — the agent\'s outstanding cash was reduced.',
+    });
+  });
+
+  /**
+   * POST /api/agency/cod/deposits/:id/reject
+   * Reject a declared handover (nothing arrived, or not that much). No money
+   * moves; the agent's deposit clock resumes and an admin can see both sides.
+   * Body: { reason }
+   */
+  static rejectDeposit = asyncHandler(async (req: Request, res: Response) => {
+    const agencyId = req.auth!.role_entity._id.toString();
+    const { reason } = RejectDepositSchema.parse(req.body);
+
+    const deposit = await agentDepositService.reject({
+      depositId: req.params.id,
+      by: 'agency',
+      agencyId,
+      reason,
+      rejectedByUserId: req.auth!.user.id,
+    });
+
+    res.json({
+      success: true,
+      data: {
+        id: deposit._id.toString(),
+        agentId: deposit.agent_id.toString(),
+        amount: deposit.amount,
+        status: deposit.status,
+        rejectionReason: deposit.rejection_reason,
+        resolvedAt: deposit.resolved_at,
+      },
+      message: 'Deposit rejected — nothing was settled.',
+    });
+  });
+
+  /**
+   * GET /api/agency/cod/deposits — this agency's deposit history.
+   * Query: agentId?, status?, page?, limit? — `status=declared` is the inbox of
+   * handovers this agency still has to answer.
+   */
   static listDeposits = asyncHandler(async (req: Request, res: Response) => {
     const agencyId = req.auth!.role_entity._id.toString();
-    const { page, limit, agentId } = ListDepositsQuerySchema.parse(req.query);
+    const { page, limit, agentId, status } = ListDepositsQuerySchema.parse(req.query);
 
-    const result = await agentDepositService.listForAgency(agencyId, page, limit, agentId);
+    const result = await agentDepositService.listForAgency(agencyId, page, limit, {
+      agentId,
+      status,
+    });
 
     res.json({ success: true, data: result.data, meta: result.meta });
   });

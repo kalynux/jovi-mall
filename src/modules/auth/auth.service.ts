@@ -5,7 +5,7 @@ import { UserRepository } from '../users/user.repository';
 import { CustomerRepository } from '../customers/customer.repository';
 import { VendorRepository } from '../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../delivery/delivery-agency.repository';
-import { DeliveryAgentRepository } from '../delivery/delivery-agent.repository';
+import { AgentRepository } from '../agents';
 import { AdminRepository } from '../admins/admin.repository';
 import { AddRoleInput, AuthMeInput, LoginInput, RegisterInput } from './auth.schemas';
 import { IUser } from '../users/user.model';
@@ -35,7 +35,7 @@ export class AuthService {
   private customerRepo: CustomerRepository;
   private vendorRepo: VendorRepository;
   private agencyRepo: DeliveryAgencyRepository;
-  private agentRepo: DeliveryAgentRepository;
+  private agentRepo: AgentRepository;
   private adminRepo: AdminRepository;
   private mailService: MailService;
   private redisDb = EMAIL_VERIFY_DB;
@@ -45,7 +45,7 @@ export class AuthService {
     this.customerRepo = new CustomerRepository();
     this.vendorRepo = new VendorRepository();
     this.agencyRepo = new DeliveryAgencyRepository();
-    this.agentRepo = new DeliveryAgentRepository();
+    this.agentRepo = new AgentRepository();
     this.adminRepo = new AdminRepository();
     this.mailService = new MailService();
   }

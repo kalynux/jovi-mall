@@ -20,7 +20,9 @@ export type NotificationType =
     | 'connection.reapproval_needed'
     | 'payout.requested'
     | 'payout.paid'
-    | 'payout.rejected';
+    | 'payout.rejected'
+    // A delivery agency declined a shipment; the vendor must reassign it.
+    | 'shipment.rejected';
 
 /**
  * Aggregate Types
@@ -99,7 +101,8 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
                 'connection.reapproval_needed',
                 'payout.requested',
                 'payout.paid',
-                'payout.rejected'
+                'payout.rejected',
+                'shipment.rejected'
             ],
             required: true
         },

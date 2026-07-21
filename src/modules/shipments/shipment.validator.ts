@@ -16,7 +16,7 @@ export type SetTrackingNumberDto = z.infer<typeof SetTrackingNumberSchema>;
 // 'pending' is intentionally excluded — a shipment sits there from order
 // creation, before any vendor review/dispatch; an agency never sees it.
 export const ListShipmentsQuerySchema = z.object({
-    status: z.enum(['assigned', 'picked_up', 'in_transit', 'agent_delivered', 'delivered', 'failed', 'returned', 'rejected', 'pending_agency_reassignment']).optional(),
+    status: z.enum(['assigned', 'handing_over', 'picked_up', 'in_transit', 'agent_delivered', 'delivered', 'failed', 'returned', 'rejected', 'pending_agency_reassignment']).optional(),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
 });
@@ -34,12 +34,26 @@ export const UpdateShipmentStatusSchema = z.object({
 export type UpdateShipmentStatusDto = z.infer<typeof UpdateShipmentStatusSchema>;
 
 // Reject an assigned shipment. Fixed reason enum (not free text) — mirrors
-// ProductSuspensionReason's scoped-reason pattern.
-export const RejectShipmentSchema = z.object({
-    reason: z.enum(['out_of_coverage_area', 'capacity_exceeded', 'invalid_address', 'vendor_item_not_ready', 'other'], {
-        errorMap: () => ({ message: 'Invalid rejection reason' })
+// ProductSuspensionReason's scoped-reason pattern. The four concrete reasons are
+// self-describing; `other` is not, so it REQUIRES a free-text note (≤200 chars)
+// explaining the decision. The note is optional for the concrete reasons.
+export const RejectShipmentSchema = z
+    .object({
+        reason: z.enum(['out_of_coverage_area', 'capacity_exceeded', 'invalid_address', 'vendor_item_not_ready', 'other'], {
+            errorMap: () => ({ message: 'Invalid rejection reason' })
+        }),
+        note: z.string().trim().max(200, 'Rejection note must be 200 characters or fewer').optional()
     })
-});
+    .superRefine((data, ctx) => {
+        // `.trim()` has already run, so an all-whitespace note is now '' (falsy).
+        if (data.reason === 'other' && !data.note) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['note'],
+                message: 'A note is required when the rejection reason is "other"'
+            });
+        }
+    });
 
 export type RejectShipmentDto = z.infer<typeof RejectShipmentSchema>;
 

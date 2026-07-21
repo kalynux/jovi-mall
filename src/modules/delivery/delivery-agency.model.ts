@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
-// No geo types needed
+import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
+import { GeoAddressSchema, IGeoAddress } from '../../core/types/geo-address.types';
 import { PayoutMethodSchema, IPayoutMethod } from '../../core/types/payout.types';
 import { AgencyOnboardingStep } from '../../core/constants/onboarding-steps';
 import { SUPPORTED_LANGUAGES, Language } from '../../core/constants/languages';
@@ -154,6 +155,22 @@ const HeadquartersAddressSchema = new Schema(
     city: { type: String, required: true, trim: true },
     address_description: { type: String, required: true, trim: true },
     support_contact: { type: SupportContactSchema, required: true },
+    /**
+     * Map coordinates for this location. Required at onboarding (see the agency
+     * logistics validator), so an agency is geolocatable and the auto-assignment
+     * distance factor can measure from the pickup point. Kept non-required at the
+     * schema level so legacy documents still hydrate; the validator enforces it
+     * on every write.
+     */
+    location: { type: GeoPointSchema, default: null },
+    /**
+     * Canonical geospatial address (formatted address + coordinates + provider
+     * place id + admin components), populated when the agency selects an
+     * address-search result. `location` remains the required geolocation used by
+     * the auto-assignment distance factor; `geo` enriches it and is null on
+     * legacy documents.
+     */
+    geo: { type: GeoAddressSchema, default: null },
   },
   { _id: true }
 );
@@ -242,6 +259,21 @@ export interface IAgencyHeadquartersAddress {
   city: string;
   address_description: string;
   support_contact: IAgencySupportContact;
+  /** Map coordinates. Required at onboarding; null only on legacy documents. */
+  location: IGeoPoint | null;
+  /** Canonical geospatial address; null on legacy/plain-text entries. */
+  geo: IGeoAddress | null;
+}
+
+/**
+ * Auto-assignment participation. When enabled, a shipment handed to this agency
+ * is auto-offered to the top-ranked eligible agent (closest to pickup, free
+ * capacity, trust, COD-clearable) instead of waiting for a manual pick. Defaults
+ * OFF — an agency opts in explicitly. The offer TIMEOUT is a platform default,
+ * not configured here.
+ */
+export interface IAgencyAssignmentSettings {
+  auto_assign_enabled: boolean;
 }
 
 export interface IDeliveryAgency extends Document {
@@ -269,6 +301,8 @@ export interface IDeliveryAgency extends Document {
   payout_details: IPayoutMethod[];
   kyc_details: IAgencyKycDetails;
   policies: IAgencyPolicies | null;
+  /** Auto-assignment participation for the agent-acceptance workflow. */
+  assignment_settings: IAgencyAssignmentSettings;
   /**
    * Incremented every time `policies` changes. Distinct from `version` (optimistic
    * concurrency) — this one is watched by the agency-connections module to detect
@@ -321,6 +355,14 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
       }),
     },
     policies: { type: AgencyPoliciesSchema, default: null },
+    assignment_settings: {
+      type: new Schema<IAgencyAssignmentSettings>(
+        { auto_assign_enabled: { type: Boolean, required: true, default: false } },
+        { _id: false }
+      ),
+      required: true,
+      default: () => ({ auto_assign_enabled: false }),
+    },
     policy_version: { type: Number, default: 0 },
     /** @deprecated */
     legit_verified: { type: Boolean, default: false },
@@ -348,6 +390,10 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );
 
-// Geospatial indexes were removed as location data is now string-based.
+// Geospatial index on HQ locations — supports proximity queries and the
+// auto-assignment distance factor (pickup point ← agency storage). Sparse:
+// legacy documents may have no coordinates yet.
+DeliveryAgencySchema.index({ 'headquarters_addresses.location': '2dsphere' }, { sparse: true });
+DeliveryAgencySchema.index({ 'headquarters_addresses.geo.coordinates': '2dsphere' }, { sparse: true });
 
 export const DeliveryAgencyModel = mongoose.model<IDeliveryAgency>(MODELS.DELIVERY_AGENCY, DeliveryAgencySchema, COLLECTIONS.DELIVERY_AGENCY);

@@ -28,7 +28,8 @@ export const UpdateAgencyNotificationPreferencesSchema = z.object({
     preferences: z.object({
         connectionUpdated: z.boolean().optional(),
         shipmentAssigned: z.boolean().optional(),
-        payoutUpdates: z.boolean().optional()
+        payoutUpdates: z.boolean().optional(),
+        codDepositUpdates: z.boolean().optional()
     }).optional()
 });
 

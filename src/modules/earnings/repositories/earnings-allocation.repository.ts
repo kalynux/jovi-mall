@@ -18,8 +18,12 @@ export interface CreateAllocationInput {
   /** COD: release additionally gated on the covering cash being remitted. */
   requires_cash_settlement?: boolean;
   /**
-   * COD: the collection moment IS the verified delivery, so allocations are
-   * created already completed with their hold window running.
+   * Normally omitted — an allocation matures when its ORDER completes, and
+   * OrderCompletionService stamps it then. Pass these only when splitting a
+   * source whose order has ALREADY completed (the COD collect path completes
+   * before it splits, and the recovery sweep re-splits long afterwards);
+   * otherwise the row would sit held forever, since `findMaturedHeld` skips a
+   * null `hold_release_at`.
    */
   completed_at?: Date;
   hold_release_at?: Date;

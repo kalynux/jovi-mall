@@ -183,6 +183,7 @@ Body:
           "shipmentId": "507f1f77bcf86cd799439100",
           "trackingNumber": "FS-1234567890",
           "freeDelivery": false,
+          "rejection": null,
           "agent": {
             "id": "507f1f77bcf86cd799439101",
             "name": "John Doe",
@@ -244,6 +245,7 @@ Body:
 > - `deliveries` is an order-level overview with one entry per agency/shipment handling the order (de-duplicated by `shipmentId`). It is `null` for digital orders. Use `items[].delivery` when you need to know which agency carries a specific item.
 > - `deliveryTimeline` merges every shipment's status history for this order, labeled by agency and sorted chronologically (see the example above). Each entry is `{ shipmentId, agencyId, agencyName, status, changedAt, changedByRole }` — the **same shape** as `orderTimeline` on [`GET /api/agency/shipments/:id`](../agency/shipments.md#detail). It is unrelated to the generic audit trail returned by `GET /api/vendor/orders/:id/timeline` below — that endpoint returns `eventType`/`oldValue`/`newValue` events, not shipment status history. Empty for digital orders.
 > - `deliveryStatus` reflects the per-item delivery status: `pending`, `assigned`, `picked_up`, `in_transit`, `agent_delivered`, `delivered`, `failed`, `returned`, `rejected`, or `pending_agency_reassignment`.
+> - `delivery.rejection` is `null` unless the agency **declined** this item's shipment. When set it is `{ reason, note, rejectedAt }` — `reason` is one of `out_of_coverage_area`, `capacity_exceeded`, `invalid_address`, `vendor_item_not_ready`, `other`; `note` is the agency's free-text explanation (always present when `reason` is `other`, otherwise may be `null`). Use it to decide how to reroute; a `shipment.rejected` notification also fires (see [Notifications](./notifications.md)).
 > - `trackingNumber` is the carrier tracking number set by the delivery agency/agent for that item's shipment. It is `null` until the agency/agent records one (e.g. the order is not yet dispatched).
 > - `freeDelivery` is a snapshot of the product's `delivery.freeDelivery` flag at checkout time — it does not change agency resolution, shipment routing, or fee calculation.
 > - `priceBreakdown.shipping` is always `0` — shipping cost tracking is not yet implemented in the order schema.

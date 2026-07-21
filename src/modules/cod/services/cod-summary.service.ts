@@ -2,8 +2,12 @@ import { Types } from 'mongoose';
 import { CashCollectionModel } from '../models/cash-collection.model';
 import { CodCashAccountModel } from '../models/cod-cash-account.model';
 import { CodCashAccountService, codCashAccountService } from './cod-cash-account.service';
-import { DeliveryAgentRepository } from '../../delivery/delivery-agent.repository';
-import { DeliveryAgentModel } from '../../delivery/delivery-agent.model';
+import {
+  AgentRepository,
+  AgentMembershipRepository,
+  DeliveryAgentModel,
+  IDeliveryAgent,
+} from '../../agents';
 import { DeliveryAgencyModel } from '../../delivery/delivery-agency.model';
 
 /**
@@ -14,20 +18,30 @@ import { DeliveryAgencyModel } from '../../delivery/delivery-agency.model';
 export class CodSummaryService {
   constructor(
     private readonly cashAccounts: CodCashAccountService = codCashAccountService,
-    private readonly agentRepo: DeliveryAgentRepository = new DeliveryAgentRepository()
+    private readonly agentRepo: AgentRepository = new AgentRepository(),
+    private readonly memberships: AgentMembershipRepository = new AgentMembershipRepository()
   ) {}
 
-  /** The agency's cash position: own liability, per-agent outstanding, unsettled collections. */
+  /**
+   * The agency's cash position: own liability, per-agent outstanding, unsettled
+   * collections.
+   *
+   * The roster now comes from memberships rather than a foreign key on the
+   * agent — the same agent may appear in several agencies' summaries, each
+   * seeing only the cash they are exposed to.
+   */
   async agencySummary(agencyId: string) {
+    const agentIds = await this.memberships.listActiveAgentIds(agencyId);
+
     const [liability, agents, unsettled] = await Promise.all([
       this.cashAccounts.getBalance('agency', agencyId),
-      this.agentRepo.listByAgency(agencyId),
+      this.agentRepo.findManyByIds(agentIds),
       this.unsettledCollections({ agency_id: new Types.ObjectId(agencyId) }),
     ]);
 
     const balances = await this.cashAccounts.getBalances(
       'agent',
-      agents.map((a) => a._id.toString())
+      agents.map((a: IDeliveryAgent) => a._id.toString())
     );
 
     return {
@@ -36,7 +50,7 @@ export class CodSummaryService {
         balance: liability.balance,
         currency: liability.currency,
       },
-      agents: agents.map((agent) => ({
+      agents: agents.map((agent: IDeliveryAgent) => ({
         id: agent._id.toString(),
         name: agent.name,
         cashHeld: balances.get(agent._id.toString()) ?? 0,
@@ -85,27 +99,41 @@ export class CodSummaryService {
         .exec(),
     ]);
 
-    const agentIds = accounts.map((a) => a.owner_id);
+    const agentIds = accounts.map((a) => a.owner_id.toString());
     const agents = await DeliveryAgentModel.find({ _id: { $in: agentIds } })
-      .select('name email phone agency_id cod status')
+      .select('name email phone cod status')
       .lean()
       .exec();
     const agentById = new Map(agents.map((a: any) => [a._id.toString(), a]));
 
+    // An agent may serve several agencies, so "which agency?" no longer has a
+    // single answer — report every active one. The cash, by contrast, is one
+    // pot: the figure that bounds it platform-wide is the agent's own COD pool,
+    // read off the agent record already fetched above. Each contract's slice is
+    // an allocation of that pool and binds only its agency, so no per-contract
+    // figure belongs in this view.
+    const agencyIdsByAgent = new Map<string, string[]>();
+    await Promise.all(
+      agentIds.map(async (id) => {
+        agencyIdsByAgent.set(id, await this.memberships.listActiveAgencyIds(id));
+      })
+    );
+
     return {
       data: accounts.map((account) => {
-        const agent: any = agentById.get(account.owner_id.toString());
+        const id = account.owner_id.toString();
+        const agent: any = agentById.get(id);
         return {
-          agentId: account.owner_id.toString(),
+          agentId: id,
           name: agent?.name ?? null,
           email: agent?.email ?? null,
           phone: agent?.phone ?? null,
-          agencyId: agent?.agency_id?.toString() ?? null,
+          agencyIds: agencyIdsByAgent.get(id) ?? [],
           status: agent?.status ?? null,
           cashHeld: account.balance,
           currency: account.currency,
           trustScore: agent?.cod?.trust_score ?? 100,
-          maxExposureOverride: agent?.cod?.max_exposure_override ?? null,
+          codMaxThreshold: agent?.cod?.max_threshold ?? 0,
         };
       }),
       meta: { total, page, limit, pages: Math.ceil(total / limit) },

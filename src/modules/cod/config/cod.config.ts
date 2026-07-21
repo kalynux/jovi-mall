@@ -50,6 +50,16 @@ export const COD_CONFIG = {
    * `late_deposit` discrepancy (and applies the trust penalty).
    */
   DEPOSIT_DEADLINE_DAYS: intEnv('COD_DEPOSIT_DEADLINE_DAYS', 2),
+  /**
+   * Days an agency has to confirm or reject a deposit its agent declared before
+   * the sweep opens a `deposit_not_confirmed` discrepancy against the AGENCY.
+   *
+   * Deliberately no longer than DEPOSIT_DEADLINE_DAYS: a declaration suppresses
+   * the agent's own late-deposit penalty, so a longer window here would be a
+   * free way for an agent to park an unfalsifiable claim and stop the clock.
+   * Both parties are on the same deadline.
+   */
+  DEPOSIT_CONFIRM_DEADLINE_DAYS: intEnv('COD_DEPOSIT_CONFIRM_DEADLINE_DAYS', 2),
   /** Cron for the daily deposit-deadline sweep (01/02/03/05 are taken). */
   DEPOSIT_SWEEP_CRON: process.env.COD_DEPOSIT_SWEEP_CRON || '0 4 * * *',
 

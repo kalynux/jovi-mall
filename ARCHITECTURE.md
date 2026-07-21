@@ -62,8 +62,64 @@ Each module is self-contained. Communication between modules happens via public 
 - **Data:** `Payments`, `Transactions`.
 
 ### 7. Delivery
-- **Scope:** Logistics, Shipping, Agent management, Tracking.
-- **Data:** `Deliveries`, `DeliveryAgencies`, `DeliveryAgents`, `DeliveryStatusHistory`.
+- **Scope:** Logistics, Shipping, Agencies, Shipment lifecycle.
+- **Data:** `Deliveries`, `DeliveryAgencies`, `DeliveryStatusHistory`.
+- **Note:** Agents were extracted into their own context (below) once they stopped being an
+  agency-owned record.
+
+### 7b. Agent
+- **Scope:** The delivery agent as a platform identity — profile, account status, availability,
+  working state, device capabilities, preferences/settings, the tracking-allow business flag,
+  agent↔agency memberships, and assignment eligibility.
+- **Data:** `DeliveryAgents`, `AgentAgencyMemberships`, `AgentMembershipEvents`, `AgentInvites`.
+- **Owner:** Agent (own record), Agency (per-membership terms), Admin (account status, tracking, transfers).
+- **Public surface:** `src/modules/agents/index.ts` — other modules import from the barrel, never
+  from files inside it. Routes are the exception and are imported directly by the API layer (a
+  router pulls in auth middleware, which imports the barrel — re-exporting routes closes a require
+  cycle).
+
+> **Why agents are their own context.** An agent is not owned by an agency: they sign up
+> independently and may serve **several agencies at once**. The original model carried a single
+> `DeliveryAgent.agency_id`, which cannot express "approved at A, suspended at B". Anything that
+> differs per agency (employment terms, COD exposure cap, approval state) therefore lives on
+> `AgentAgencyMembership`; anything true of the person regardless of employer (identity, trust score,
+> availability, device, tracking permission) lives on the agent.
+>
+> **The rule for new agent fields:** if the value could differ per agency, it belongs on the
+> membership.
+
+#### Tracking ownership boundary (with the geo-tracker service)
+
+| Service | Owns |
+|---|---|
+| jovi-mall | Whether tracking is **allowed** (`agent.tracking.allowed`) — business policy; and every **business event** (shipment actions and their outcomes) |
+| geo-tracker | Tracking **execution** — connections, positions, fan-out, ETA; and the **spatial audit** (where an agent was when an action happened) |
+
+`agent.last_known_tracking_state` is a **business-reference mirror**, not a position store. It exists
+so operational screens can say "last seen 3 minutes ago" without a synchronous cross-service call.
+It is stale by construction and no assignment rule reads it.
+
+**Agent-action audit (Phase 6).** When an agent performs a shipment action — the COD delivery-code
+`collect`, or an agency-driven pickup/delivery/return/cancel on the agent's shipment — jovi-mall emits
+an `agent.action` event (via the tracking outbox) carrying the action, its outcome, and the actor. It
+holds no location. geo-tracker receives it, captures the agent's latest GPS, and writes an **immutable**
+audit row. The business event stays here; the spatial record stays there — `agent-action-audit.service.ts`
+is the emitter, geo-tracker's `/webhooks/agent-actions` the sink.
+
+#### Assignment eligibility
+
+An agent may receive a shipment only when **all** hold: `active` account · **approved** membership
+with the *dispatching* agency · `online` · tracking allowed · device location not disabled · under
+their concurrency ceiling.
+
+An agent may hold **several active shipments at once** — capacity bounds this, it does not forbid it,
+and the count spans all agencies (capacity is a property of the person, not of one agency's view).
+
+Device location is the one input jovi-mall cannot observe. It resolves through
+`IAgentDeviceLocationProvider` so the rule never learns whether the answer came from the agent's app
+or from geo-tracker; swapping providers is a change in `agent.bootstrap.ts` alone. The signal is
+**tri-state** — `true` / `false` / `null` (unknown) — and `null` is never coerced to `false`:
+defaulting unknown→false would make every agent ineligible the moment geo-tracker went down.
 
 ### 8. Notifications
 - **Scope:** Email, SMS, Push notifications.
@@ -126,5 +182,12 @@ stateDiagram-v2
     - `deliveries`
     - `delivery_agencies`
     - `delivery_agents`
+    - `agent_agency_memberships` — an agent may serve several agencies; one row per relationship
+    - `agent_membership_events` — append-only membership history (no update/delete by contract)
+    - `agent_invites`
+
+5.  **Append-only collections.** `agent_membership_events` (and any audit trail) exposes no update or
+    delete path, and deliberately does **not** use `BaseRepository` — its soft-delete filter has no
+    business on evidence. A correction is a new event, not an edit.
 
 ---

@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
+import { GeoAddressSchema, IGeoAddress } from '../../core/types/geo-address.types';
 import { PayoutMethodSchema, IPayoutDetails } from '../../core/types/payout.types';
 import { VendorOnboardingStep } from '../../core/constants/onboarding-steps';
 import { SUPPORTED_LANGUAGES, Language } from '../../core/constants/languages';
@@ -132,7 +133,14 @@ const BusinessAddressSchema = new Schema(
     address_line2: { type: String, default: null, trim: true },
     city: { type: String, required: true, trim: true },
     state: { type: String, default: null, trim: true },
+    /** @deprecated Bare coordinate kept for backward compatibility. Prefer `geo`. */
     location: { type: GeoPointSchema, default: null },
+    /**
+     * Canonical geospatial address (formatted address + coordinates + provider
+     * place id + admin components). Populated when the vendor selects an
+     * address-search result; null on legacy/plain-text entries.
+     */
+    geo: { type: GeoAddressSchema, default: null },
   },
   { _id: true }
 );
@@ -226,7 +234,10 @@ export interface IVendorBusinessAddress {
   address_line2: string | null;
   city: string;
   state: string | null;
+  /** @deprecated Prefer `geo.coordinates`. */
   location: IGeoPoint | null;
+  /** Canonical geospatial address; null on legacy/plain-text entries. */
+  geo: IGeoAddress | null;
 }
 
 export interface IVendorBranding {
@@ -372,7 +383,8 @@ const VendorSchema = new Schema<IVendor>(
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );
 
-// Geospatial index for vendor business address locations
+// Geospatial indexes for vendor business addresses (legacy bare point + GeoAddress)
 VendorSchema.index({ 'business_addresses.location': '2dsphere' }, { sparse: true });
+VendorSchema.index({ 'business_addresses.geo.coordinates': '2dsphere' }, { sparse: true });
 
 export const VendorModel = mongoose.model<IVendor>(MODELS.VENDOR, VendorSchema, COLLECTIONS.VENDOR);

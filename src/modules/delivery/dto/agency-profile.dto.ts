@@ -1,4 +1,5 @@
 import { IDeliveryAgency, IAgencyHeadquartersAddress, IAgencyKycDetails, IAgencyPolicies } from '../delivery-agency.model';
+import { withGeoAddress } from '../../../core/types/geo-address.types';
 // removed IPolygon
 import { IPayoutMethod } from '../../../core/types/payout.types';
 import { UpdateAgencyProfileInput } from '../validators/agency-onboarding.validator';
@@ -270,7 +271,7 @@ export class AgencyProfileMapper {
         if (input.timezone !== undefined) payload.timezone = input.timezone;
         if (input.preferred_language !== undefined) payload.preferred_language = input.preferred_language;
         if (input.coverage_areas !== undefined) payload.coverage_areas = input.coverage_areas as string[];
-        if (input.headquarters_addresses !== undefined) payload.headquarters_addresses = input.headquarters_addresses as IAgencyHeadquartersAddress[];
+        if (input.headquarters_addresses !== undefined) payload.headquarters_addresses = input.headquarters_addresses.map(withGeoAddress) as unknown as IAgencyHeadquartersAddress[];
         if (input.payout_details !== undefined) payload.payout_details = input.payout_details as IPayoutMethod[];
         if (input.kyc_details !== undefined) {
             payload.kyc_details = {

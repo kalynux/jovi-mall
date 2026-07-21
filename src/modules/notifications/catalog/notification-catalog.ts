@@ -319,6 +319,24 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> =
             template: { name: 'vendor_payout_rejected', bodyParams: ['{{currency}}', '{{amountFormatted}}'] }
         },
         button: { type: 'url', label: VIEW_TICKET_LABEL, urlSuffix: 'tickets/{{ticketId}}' }
+    },
+
+    // A delivery agency declined a shipment. The specific reason + note live on
+    // the order view (like payout.rejected points to Tickets), so this copy just
+    // alerts + deep-links — no need to localize the fixed reason codes.
+    'shipment.rejected': {
+        base: {
+            en: { subject: 'Delivery declined', body: '{{agencyName}} declined delivery of order #{{orderNumber}}. Open the order to assign another delivery agency.' },
+            fr: { subject: 'Livraison refusée', body: '{{agencyName}} a refusé la livraison de la commande n°{{orderNumber}}. Ouvrez la commande pour choisir une autre agence de livraison.' },
+            pt: { subject: 'Entrega recusada', body: '{{agencyName}} recusou a entrega do pedido nº{{orderNumber}}. Abra o pedido para atribuir outra agência de entrega.' },
+            es: { subject: 'Entrega rechazada', body: '{{agencyName}} rechazó la entrega del pedido n.º{{orderNumber}}. Abre el pedido para asignar otra agencia de entrega.' },
+            ar: { subject: 'تم رفض التوصيل', body: 'رفضت {{agencyName}} توصيل الطلب رقم {{orderNumber}}. افتح الطلب لتعيين وكالة توصيل أخرى.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_shipment_rejected', bodyParams: ['{{agencyName}}', '{{orderNumber}}'] }
+        },
+        button: { type: 'url', label: VIEW_ORDER_LABEL, urlSuffix: 'orders/{{orderId}}' }
     }
 };
 

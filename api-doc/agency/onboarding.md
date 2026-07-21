@@ -159,7 +159,8 @@ Captures the geographic regions served by the agency and at least one physical h
       "support_contact": {
         "phone": "+237612345678",
         "email": "douala@fasttrack.cm"
-      }
+      },
+      "location": { "type": "Point", "coordinates": [9.7043, 4.0511] }
     },
     {
       "region": "Centre",
@@ -168,12 +169,18 @@ Captures the geographic regions served by the agency and at least one physical h
       "support_contact": {
         "phone": "+237699876543",
         "email": null
-      }
+      },
+      "location": { "type": "Point", "coordinates": [11.5174, 3.8480] }
     }
   ],
   "version": 0
 }
 ```
+
+> **`location` is required.** Every HQ address must carry map coordinates (GeoJSON Point,
+> `coordinates: [longitude, latitude]`) so the agency is placeable on a map and the
+> auto-assignment distance factor can measure from the pickup point. Pre-existing agencies must
+> re-save their addresses with coordinates.
 
 #### Field Reference
 
@@ -186,6 +193,8 @@ Captures the geographic regions served by the agency and at least one physical h
 | `headquarters_addresses[].address_description` | `string` | Yes | Min 1, Max 200 chars | Full street address / landmark. |
 | `headquarters_addresses[].support_contact.phone` | `string` | Yes | Min 6, Max 20 chars. Regex `/^\+?[0-9\s\-()]+$/` | Phone number for this location. |
 | `headquarters_addresses[].support_contact.email` | `string \| null` | No | Valid email format | Contact email for this location. |
+| `headquarters_addresses[].location` | `object` | **Yes** | GeoJSON Point `{ type: "Point", coordinates: [lng, lat] }`; lng ∈ [-180,180], lat ∈ [-90,90] | Map coordinates. Required so the agency is geolocatable and auto-assignment can measure distance to pickup. |
+| `headquarters_addresses[].geo` | `object \| null` | No | A selected address-search result (`GeoAddress`) — see [Geospatial addresses](../geo/README.md) | The canonical geospatial address (formatted address + coordinates + admin components). Optional and back-compatible; `location` stays required. Prefer sending `geo` (search → select) going forward. |
 | `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard. |
 
 ---

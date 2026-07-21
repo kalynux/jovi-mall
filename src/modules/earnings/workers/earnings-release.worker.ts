@@ -8,6 +8,7 @@ import { PayoutRequestRepository } from '../repositories/payout-request.reposito
 import { payoutRequestService } from '../services/payout-request.service';
 import { OrderModel } from '../../orders/order.model';
 import { OrderCompletionService, orderCompletionService } from '../../orders/order-completion.service';
+import { ShipmentService } from '../../shipments/shipment.service';
 import { EARNINGS_CONFIG, daysAgo } from '../config/earnings.config';
 import { IEarningsAllocation, EarningsAllocationModel } from '../models/earnings-allocation.model';
 import { EarningsReserveHoldModel } from '../models/earnings-reserve-hold.model';
@@ -45,7 +46,8 @@ export class EarningsReleaseWorker {
     private readonly accounts: EarningsAccountService = earningsAccountService,
     private readonly accountRepo: EarningsAccountRepository = new EarningsAccountRepository(),
     private readonly payoutRepo: PayoutRequestRepository = new PayoutRequestRepository(),
-    private readonly orderCompletion: OrderCompletionService = orderCompletionService
+    private readonly orderCompletion: OrderCompletionService = orderCompletionService,
+    private readonly shipments: ShipmentService = new ShipmentService()
   ) {}
 
   /** Schedule the daily sweep (default 01:00 server time). */
@@ -68,6 +70,7 @@ export class EarningsReleaseWorker {
   /** Run the full sweep once. Safe to call manually (tests/ops). */
   async runSweep(now: Date = new Date()): Promise<void> {
     console.log('[EarningsReleaseWorker] Starting earnings sweep');
+    await this.autoConfirmStaleShipments(now);
     await this.autoConfirmStaleOrders(now);
     await this.releaseMaturedHolds(now);
     await this.recoverMissedCodSplits(now);
@@ -76,17 +79,52 @@ export class EarningsReleaseWorker {
     console.log('[EarningsReleaseWorker] Earnings sweep complete');
   }
 
-  /** Stage 1 — auto-confirm delivered/fulfilled orders past the window. */
+  /**
+   * Stage 0 — auto-confirm shipments the customer never confirmed, once their
+   * dispute window has elapsed.
+   *
+   * Runs BEFORE the order stage on purpose: confirming the last outstanding
+   * shipment completes its order inside that same call, and anything left over
+   * is picked up by the order stage immediately after — so a lapsed order
+   * matures in one sweep rather than waiting a day per level.
+   */
+  private async autoConfirmStaleShipments(now: Date): Promise<void> {
+    const cutoff = daysAgo(EARNINGS_CONFIG.SHIPMENT_AUTO_CONFIRM_DAYS, now);
+    try {
+      const confirmed = await this.shipments.autoConfirmStaleDeliveries(
+        cutoff,
+        EARNINGS_CONFIG.BATCH_SIZE
+      );
+      if (confirmed > 0) {
+        console.log(
+          `[EarningsReleaseWorker] Auto-confirmed ${confirmed} shipment(s) past the ${EARNINGS_CONFIG.SHIPMENT_AUTO_CONFIRM_DAYS}-day dispute window`
+        );
+      }
+    } catch (error) {
+      console.error('[EarningsReleaseWorker] Shipment auto-confirm stage failed:', error);
+    }
+  }
+
+  /**
+   * Stage 1 — auto-confirm settled orders the customer never confirmed.
+   *
+   * `partially_delivered` is in the candidate filter, not just `delivered`: an
+   * order with one item delivered and one returned is finished and must still
+   * complete, or its escrow is stranded forever. The status filter is only a
+   * cheap index-backed pre-filter; `isSettled` decides, because "every item
+   * terminal" is not expressible as a single fulfillment_status.
+   */
   private async autoConfirmStaleOrders(now: Date): Promise<void> {
     const cutoff = daysAgo(EARNINGS_CONFIG.AUTO_CONFIRM_DAYS, now);
     const stale = await OrderModel.find({
-      fulfillment_status: { $in: ['delivered', 'fulfilled'] },
+      fulfillment_status: { $in: ['delivered', 'fulfilled', 'partially_delivered'] },
       'completion.confirmed_at': null,
       updated_at: { $lte: cutoff },
     }).limit(EARNINGS_CONFIG.BATCH_SIZE);
 
     for (const order of stale) {
       try {
+        if (!this.orderCompletion.isSettled(order)) continue;
         await this.orderCompletion.complete(order, 'system', true);
       } catch (error) {
         console.error(
@@ -258,8 +296,12 @@ export class EarningsReleaseWorker {
     const accounts = await this.accountRepo.findOverThreshold(EARNINGS_CONFIG.AUTO_PAYOUT_THRESHOLD);
 
     for (const account of accounts) {
-      const ownerType = account.owner_type as 'vendor' | 'agency';
-      const ownerId = account.owner_id!.toString();
+      // The platform account has no owner_id and nobody to pay itself; skip it
+      // rather than let it fail the missing-payout-method check every sweep.
+      if (account.owner_type === 'platform' || !account.owner_id) continue;
+
+      const ownerType = account.owner_type as 'vendor' | 'agency' | 'agent';
+      const ownerId = account.owner_id.toString();
       try {
         const pending = await this.payoutRepo.findPendingForOwner(ownerType, ownerId);
         if (pending) continue; // already being processed — wait for it to resolve

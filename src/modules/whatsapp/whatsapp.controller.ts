@@ -5,6 +5,7 @@ import { CommandBus } from '../command-bus/command-bus';
 import { asyncHandler } from '../../api/middlewares/async-handler';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
+import { sendSuccess, sendMessage } from '../../core/responses';
 
 interface WhatsappWebhookPayload {
   reply_to: string;
@@ -51,7 +52,7 @@ export class WhatsappController {
     }
 
     const status = await this.linkService.getStatus(userId, role);
-    res.status(200).json(status);
+    sendSuccess(res, status);
   });
 
   unlinkAccount = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
@@ -63,6 +64,6 @@ export class WhatsappController {
     }
 
     await this.linkService.unlinkAccount(userId, role);
-    res.status(200).json({ success: true, message: 'WhatsApp account unlinked' });
+    sendMessage(res, 'WhatsApp account unlinked');
   });
 }

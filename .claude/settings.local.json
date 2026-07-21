@@ -4,7 +4,8 @@
       "Bash(npx tsc *)",
       "Bash(npm run *)",
       "Bash(echo \"started with pid $!\")",
-      "PowerShell(npx tsc --noEmit 2>&1)"
+      "PowerShell(npx tsc --noEmit 2>&1)",
+      "Read(//c/Users/Fante/.claude/projects/c--Users-Fante-Desktop-projects-jovi-mall/**)"
     ]
   }
 }

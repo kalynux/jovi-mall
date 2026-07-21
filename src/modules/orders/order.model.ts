@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
+import { GeoAddressSchema, IGeoAddress } from '../../core/types/geo-address.types';
 
 /**
  * Order Model
@@ -73,7 +74,7 @@ export interface IOrderItem {
   delivery?: {
     agency_id: mongoose.Types.ObjectId;
     shipment_id?: mongoose.Types.ObjectId | null;
-    status: 'pending' | 'assigned' | 'picked_up' | 'in_transit' | 'agent_delivered' | 'delivered' | 'failed' | 'returned' | 'rejected' | 'pending_agency_reassignment';
+    status: 'pending' | 'assigned' | 'handing_over' | 'picked_up' | 'in_transit' | 'agent_delivered' | 'delivered' | 'failed' | 'returned' | 'rejected' | 'pending_agency_reassignment';
     free_delivery: boolean;
     /**
      * Set when `status` is forced to 'pending_agency_reassignment' because the
@@ -101,6 +102,8 @@ export interface IOrderItem {
         address_line2: string | null;
         city: string;
         state: string | null;
+        /** Geocoded pickup address snapshotted from the vendor business address. */
+        geo: IGeoAddress | null;
       } | null;
     } | null;
   };
@@ -158,6 +161,12 @@ export interface IOrder extends Document {
     confirmed_by: 'customer' | 'system' | null;
     auto: boolean;
   };
+
+  // Drop-off (customer delivery) address — geocoded and snapshotted at checkout,
+  // durable like the per-item pickup snapshot. Physical orders only; null for
+  // digital orders and for legacy orders created before this field existed (those
+  // readers fall back to the customer's current default saved address).
+  delivery_address: IGeoAddress | null;
 
   // Timestamps
   created_at: Date;
@@ -228,7 +237,7 @@ const OrderItemSchema = new Schema({
       shipment_id: { type: Schema.Types.ObjectId, ref: MODELS.SHIPMENT, default: null },
       status: {
         type: String,
-        enum: ['pending', 'assigned', 'picked_up', 'in_transit', 'agent_delivered', 'delivered', 'failed', 'returned', 'rejected', 'pending_agency_reassignment'],
+        enum: ['pending', 'assigned', 'handing_over', 'picked_up', 'in_transit', 'agent_delivered', 'delivered', 'failed', 'returned', 'rejected', 'pending_agency_reassignment'],
         default: 'pending'
       },
       free_delivery: { type: Boolean, default: false },
@@ -251,6 +260,8 @@ const OrderItemSchema = new Schema({
               address_line2: { type: String, default: null },
               city: { type: String, required: true },
               state: { type: String, default: null },
+              // Geocoded snapshot of the vendor business address at order time.
+              geo: { type: GeoAddressSchema, default: null },
             },
             required: false,
             default: null,
@@ -362,10 +373,17 @@ const OrderSchema = new Schema<IOrder>({
     confirmed_at: { type: Date, default: null },
     confirmed_by: { type: String, enum: ['customer', 'system', null], default: null },
     auto: { type: Boolean, default: false }
-  }
+  },
+
+  // Drop-off (customer delivery) address, geocoded + snapshotted at checkout.
+  // Physical orders only; null otherwise.
+  delivery_address: { type: GeoAddressSchema, default: null }
 }, {
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' }
 });
+
+// Geospatial index for the drop-off address (proximity/routing queries).
+OrderSchema.index({ 'delivery_address.coordinates': '2dsphere' }, { sparse: true });
 
 // Validation: Physical orders must have delivery info for all items
 OrderSchema.pre('save', function (next) {

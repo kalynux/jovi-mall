@@ -12,6 +12,7 @@ export interface UpdateAgencyPreferencesPayload {
         connectionUpdated?: boolean;
         shipmentAssigned?: boolean;
         payoutUpdates?: boolean;
+        codDepositUpdates?: boolean;
     };
 }
 
@@ -43,7 +44,8 @@ export class AgencyNotificationPreferenceRepository {
                 preferences: {
                     connectionUpdated: true,
                     shipmentAssigned: true,
-                    payoutUpdates: true
+                    payoutUpdates: true,
+                    codDepositUpdates: true
                 }
             });
         }
@@ -106,6 +108,8 @@ export class AgencyNotificationPreferenceRepository {
                 updates.preferences.shipmentAssigned ?? current.preferences.shipmentAssigned;
             updatePayload['preferences.payoutUpdates'] =
                 updates.preferences.payoutUpdates ?? current.preferences.payoutUpdates;
+            updatePayload['preferences.codDepositUpdates'] =
+                updates.preferences.codDepositUpdates ?? current.preferences.codDepositUpdates;
         }
 
         const result = await AgencyNotificationPreferenceModel.findOneAndUpdate(

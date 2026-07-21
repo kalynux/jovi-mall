@@ -13,8 +13,10 @@ import { EarningsAccountService, earningsAccountService } from './earnings-accou
 import { IPayoutMethod } from '../../../core/types/payout.types';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
+import { AgentRepository } from '../../agents/repositories/agent.repository';
 import { VendorModel } from '../../vendors/vendor.model';
 import { DeliveryAgencyModel } from '../../delivery/delivery-agency.model';
+import { DeliveryAgentModel } from '../../agents/models/agent.model';
 import { ticketService } from '../../tickets/services/ticket.service';
 import { TicketNoteService } from '../../tickets/services/ticket-note.service';
 import { ActorRole, EntityType, TicketImportance, TicketStatus, TicketType } from '../../tickets/types/ticket.types';
@@ -40,6 +42,7 @@ export class PayoutRequestService {
     private readonly accounts: EarningsAccountService = earningsAccountService,
     private readonly vendorRepo: VendorRepository = new VendorRepository(),
     private readonly agencyRepo: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
+    private readonly agentRepo: AgentRepository = new AgentRepository(),
     private readonly ticketNotes: TicketNoteService = new TicketNoteService()
   ) {}
 
@@ -103,7 +106,8 @@ export class PayoutRequestService {
     }
 
     try {
-      const ownerLabel = ownerType === 'vendor' ? 'Vendor' : 'Agency';
+      const ownerLabel =
+        ownerType === 'vendor' ? 'Vendor' : ownerType === 'agent' ? 'Agent' : 'Agency';
       const description =
         origin === 'auto_threshold'
           ? `Balance reached the platform's automatic payout threshold. A payout of ${payoutRequest.currency} ${payoutRequest.amount.toLocaleString()} was requested automatically, via ${this.describePayoutMethod(payoutMethod)}.`
@@ -293,6 +297,14 @@ export class PayoutRequestService {
     }
   }
 
+  /**
+   * The owner's preferred method — the first entry of their ordered list.
+   *
+   * `platform` deliberately returns null: the platform account holds the
+   * marketplace's own commission and has nobody to pay it to, so a payout
+   * request for it is refused at the missing-method check rather than needing a
+   * special case here.
+   */
   private async resolvePreferredPayoutMethod(
     ownerType: EarningsOwnerType,
     ownerId: string
@@ -304,6 +316,10 @@ export class PayoutRequestService {
     if (ownerType === 'agency') {
       const agency = await this.agencyRepo.findById(ownerId);
       return agency?.payout_details?.[0] ?? null;
+    }
+    if (ownerType === 'agent') {
+      const agent = await this.agentRepo.findById(ownerId);
+      return agent?.payout_details?.[0] ?? null;
     }
     return null;
   }
@@ -322,6 +338,7 @@ export class PayoutRequestService {
     const result = new Map<string, string>();
     const vendorIds = requests.filter((r) => r.owner_type === 'vendor').map((r) => r.owner_id);
     const agencyIds = requests.filter((r) => r.owner_type === 'agency').map((r) => r.owner_id);
+    const agentIds = requests.filter((r) => r.owner_type === 'agent').map((r) => r.owner_id);
 
     if (vendorIds.length > 0) {
       const vendors = await VendorModel.find({ _id: { $in: vendorIds } })
@@ -337,6 +354,15 @@ export class PayoutRequestService {
         .lean();
       for (const a of agencies) {
         result.set(`agency:${a._id.toString()}`, a.agency_name);
+      }
+    }
+    if (agentIds.length > 0) {
+      // An agent is a person, not a business — `name` is the only label there is.
+      const agents = await DeliveryAgentModel.find({ _id: { $in: agentIds } })
+        .select('name')
+        .lean();
+      for (const a of agents) {
+        result.set(`agent:${a._id.toString()}`, a.name);
       }
     }
     return result;

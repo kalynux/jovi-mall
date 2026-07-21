@@ -1,7 +1,7 @@
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { CustomerRepository } from '../../customers/customer.repository';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
-import { DeliveryAgentRepository } from '../../delivery/delivery-agent.repository';
+import { AgentRepository } from '../../agents';
 import { UserRepository } from '../../users/user.repository';
 import { getRedisClient, WA_VERIFY_DB } from '../../../infra/redis/redis.factory';
 import { createAppError } from '../../../core/errors';
@@ -24,14 +24,14 @@ export class WhatsAppLinkService {
     private vendorRepo: VendorRepository;
     private customerRepo: CustomerRepository;
     private agencyRepo: DeliveryAgencyRepository;
-    private agentRepo: DeliveryAgentRepository;
+    private agentRepo: AgentRepository;
     private userRepo: UserRepository;
 
     constructor() {
         this.vendorRepo = new VendorRepository();
         this.customerRepo = new CustomerRepository();
         this.agencyRepo = new DeliveryAgencyRepository();
-        this.agentRepo = new DeliveryAgentRepository();
+        this.agentRepo = new AgentRepository();
         this.userRepo = new UserRepository();
     }
 

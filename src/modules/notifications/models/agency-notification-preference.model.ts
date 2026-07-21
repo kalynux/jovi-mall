@@ -32,6 +32,16 @@ export interface IAgencyNotificationPreference extends Document {
         shipmentAssigned: boolean;
         /** Covers all three payout.* situations (requested, paid, rejected). */
         payoutUpdates: boolean;
+        /**
+         * Covers cod.deposit.declared and cod.deposit.direct_to_platform.
+         *
+         * Turning this off has a consequence worth surfacing in the UI: an
+         * unanswered declaration opens a `deposit_not_confirmed` flag after
+         * DEPOSIT_CONFIRM_DEADLINE_DAYS, which freezes this agency's
+         * rolling-reserve releases. The deadline runs whether or not they asked
+         * to hear about it.
+         */
+        codDepositUpdates: boolean;
     };
 
     updatedAt: Date;
@@ -85,6 +95,10 @@ const AgencyNotificationPreferenceSchema = new Schema<IAgencyNotificationPrefere
                 default: true
             },
             payoutUpdates: {
+                type: Boolean,
+                default: true
+            },
+            codDepositUpdates: {
                 type: Boolean,
                 default: true
             }

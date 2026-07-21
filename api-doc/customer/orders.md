@@ -31,12 +31,19 @@ creation is **atomic**: if any order fails to create, none are persisted and the
 ### Request Body
 
 ```json
-{ "paymentMethod": "cash_on_delivery" }
+{ "paymentMethod": "cash_on_delivery", "deliveryAddressId": "664addr..." }
 ```
 
 - `paymentMethod` *(string, optional, default `"online"`)* — `"online"` (prepaid via gateway) or
   `"cash_on_delivery"`. Applies to the **whole checkout group**. See
   [Cash on delivery](#cod) below for eligibility and lifecycle.
+- `deliveryAddressId` *(string, optional)* — id of one of the customer's saved addresses to deliver to.
+- `deliveryAddress` *(GeoAddress, optional)* — a selected address-search result to deliver to, sent
+  inline (see [Geospatial addresses](../geo/README.md)). Provide **either** `deliveryAddressId` **or**
+  `deliveryAddress`, not both. When neither is given, the customer's **default saved address** is used.
+
+The resolved address is **geocoded and frozen** onto every physical order as `delivery_address`, so a
+later edit to the customer's saved addresses never rewrites past orders. Digital carts ignore it.
 
 ### Response
 
@@ -271,8 +278,15 @@ must support COD (some also cap the per-order amount).
    customer's secret 6-digit `deliveryCode` (also sent via WhatsApp when possible).
 3. At the door: the customer receives the package, **pays the agent in cash**, then gives them the
    code. The verified code atomically records the payment and marks the shipment **delivered** —
-   there is no separate confirm-delivery step for COD shipments.
-4. `paymentStatus` progresses `AWAITING_PAYMENT` → `partially_paid` (some shipments collected) →
+   there is no separate confirm-delivery step for COD shipments, and
+   [`POST …/confirm-delivery`](#confirm-shipment) rejects them.
+4. **If the code never arrives:** the agent marks arrival (`agent_delivered`) and, after 7 days at
+   that status, the system records the cash as collected anyway and the shipment becomes
+   `delivered`. This exists because a customer can pay and still not produce the code (phone not to
+   hand, or unwilling), while an agent who was *not* paid is required to mark the shipment failed →
+   returned instead — so a shipment left at `agent_delivered` for a week is treated as paid. The
+   collection is flagged internally as having no code behind it.
+5. `paymentStatus` progresses `AWAITING_PAYMENT` → `partially_paid` (some shipments collected) →
    `paid` (all collected). If a shipment fails and is returned, no cash is due for it; an order
    where **nothing** was ever collected and all shipments came back ends `failed`.
 
@@ -377,7 +391,12 @@ last one.
 | 403 | `SHIPMENT_ACCESS_DENIED` | Order belongs to another customer. |
 | 404 | `SHIPMENT_NOT_FOUND` | Shipment not found, or doesn't belong to this order. |
 | 409 | `SHIPMENT_ALREADY_CONFIRMED` | Shipment already confirmed as delivered. |
-| 422 | `SHIPMENT_CONFIRMATION_NOT_ALLOWED` | Shipment hasn't reached `agent_delivered` yet. |
+| 422 | `SHIPMENT_CONFIRMATION_NOT_ALLOWED` | Shipment hasn't reached `agent_delivered` yet, **or the order is cash-on-delivery** (`details.paymentMethod`) — see below. |
+
+> **Not for COD.** A cash-on-delivery order is confirmed by giving the agent your delivery code, not
+> by calling this endpoint — the code is what records the payment and marks the shipment delivered in
+> the same step. Calling it on a COD order returns `422 SHIPMENT_CONFIRMATION_NOT_ALLOWED`. Don't show
+> a confirm-delivery action for COD shipments; show the delivery code instead.
 
 ---
 

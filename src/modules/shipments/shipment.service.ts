@@ -1,20 +1,26 @@
 import { Types } from 'mongoose';
 import { ShipmentRepository } from './shipment.repository';
-import { IShipment, ShipmentStatus, ShipmentRejectionReason } from './shipment.model';
+import { IShipment, ShipmentStatus, ShipmentRejectionReason, IShipmentHandover, IShipmentHandoverPickup } from './shipment.model';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
-import { OrderModel } from '../orders/order.model';
+import { IOrder, OrderModel } from '../orders/order.model';
+import { ICashCollection } from '../cod/models/cash-collection.model';
 import { OrderRepository } from '../orders/order.repository';
 import { OrderFulfillmentAggregationService, orderFulfillmentAggregationService } from '../orders/domain/services/OrderFulfillmentAggregationService';
 import { OrderCompletionService, orderCompletionService } from '../orders/order-completion.service';
 import { transactionManager } from '../../core/database/transaction.manager';
 import { VendorRepository } from '../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../delivery/delivery-agency.repository';
-import { DeliveryAgentRepository } from '../delivery/delivery-agent.repository';
+import {
+    AgentRepository,
+    agentCapacityService,
+} from '../agents';
 import { CustomerModel } from '../customers/customer.model';
 import { cashCollectionService } from '../cod/services/cash-collection.service';
-import { codExposureService } from '../cod/services/cod-exposure.service';
+import { eventBus } from '../../core/events/event-bus';
+import { agentActionAuditService } from '../tracking-integration/services/agent-action-audit.service';
+import { shipmentAssignmentOfferRepository } from '../shipment-assignment/repositories/shipment-assignment-offer.repository';
 
 // Shipment-status transitions an AGENCY may trigger directly via PATCH .../status.
 // 'assigned' (system, on payment dispatch), 'delivered' (system, on customer
@@ -24,7 +30,31 @@ const AGENCY_TRIGGERABLE_TRANSITIONS: Partial<Record<ShipmentStatus, ShipmentSta
     assigned: ['picked_up'],
     picked_up: ['in_transit'],
     in_transit: ['agent_delivered', 'failed'],
+    // A claim of arrival is not proof of one. It can still fail — the customer
+    // is out, refuses the parcel, or (COD) will not pay — and without this the
+    // shipment would be stranded: 'delivered' is reachable only by the customer
+    // confirming or, for COD, by the delivery code, and neither is coming.
+    agent_delivered: ['failed'],
     failed: ['in_transit', 'returned'],
+    // A shipment handed over after a post-pickup reassignment resumes when its
+    // replacement agent picks the parcel up (guarded on agent_id, so the new
+    // agent must have accepted first); 'returned' is the escape hatch.
+    handing_over: ['picked_up', 'returned'],
+};
+
+// Agent → agent reassignment: the status a shipment resets to when it is pulled
+// off its current agent. Pre-pickup it goes back to the agency queue as
+// `assigned` (the parcel never left); once picked up, the parcel is physically
+// with the old agent, so it enters `handing_over` until a replacement agent picks
+// it up. Statuses absent here are not reassignable (pending / agent_delivered /
+// terminal / already-held).
+const REASSIGNMENT_TARGET_STATUS: Partial<Record<ShipmentStatus, ShipmentStatus>> = {
+    assigned: 'assigned',
+    picked_up: 'handing_over',
+    in_transit: 'handing_over',
+    failed: 'handing_over',
+    // A returned parcel is re-dispatched to a new agent (Rule 2: original pickup).
+    returned: 'handing_over',
 };
 
 /**
@@ -42,7 +72,7 @@ export class ShipmentService {
     private orderRepo: OrderRepository;
     private vendorRepo: VendorRepository;
     private agencyRepo: DeliveryAgencyRepository;
-    private agentRepo: DeliveryAgentRepository;
+    private agentRepo: AgentRepository;
     private aggregationService: OrderFulfillmentAggregationService;
     private completionService: OrderCompletionService;
 
@@ -51,7 +81,7 @@ export class ShipmentService {
         this.orderRepo = new OrderRepository();
         this.vendorRepo = new VendorRepository();
         this.agencyRepo = new DeliveryAgencyRepository();
-        this.agentRepo = new DeliveryAgentRepository();
+        this.agentRepo = new AgentRepository();
         this.aggregationService = orderFulfillmentAggregationService;
         this.completionService = orderCompletionService;
     }
@@ -261,6 +291,14 @@ export class ShipmentService {
                 } : null,
             } : null,
             agent: agent ? { id: agent._id.toString(), name: agent.name, phone: agent.phone ?? null, avatarUrl: agent.avatar_url ?? null } : null,
+            // Reassignment handover: where the (replacement) agent collects this
+            // shipment, when it was reassigned. Null for a first-assigned shipment.
+            handover: shipment.handover ? {
+                pickup: shipment.handover.pickup,
+                fromAgentId: shipment.handover.from_agent_id?.toString() ?? null,
+                fromStatus: shipment.handover.from_status,
+                reassignedAt: shipment.handover.reassigned_at,
+            } : null,
             statusHistory: shipment.status_history.map(h => ({
                 status: h.status,
                 changedAt: h.changed_at,
@@ -269,12 +307,15 @@ export class ShipmentService {
             })),
             rejection: shipment.rejection ? {
                 reason: shipment.rejection.reason,
+                note: shipment.rejection.note ?? null,
                 rejectedAt: shipment.rejection.rejectedAt,
                 rejectedBy: shipment.rejection.rejectedBy.toString(),
             } : null,
             customerConfirmation: shipment.customer_confirmation ? {
                 confirmedAt: shipment.customer_confirmation.confirmed_at,
-                confirmedBy: shipment.customer_confirmation.confirmed_by.toString(),
+                // null when the dispute window lapsed and the sweep confirmed it.
+                confirmedBy: shipment.customer_confirmation.confirmed_by?.toString() ?? null,
+                auto: shipment.customer_confirmation.auto ?? false,
             } : null,
             orderTimeline: timeline,
         };
@@ -309,29 +350,36 @@ export class ShipmentService {
         }
         const isCod = order.payment_method === 'cash_on_delivery';
 
+        // An agent must have ACCEPTED the shipment before it can be picked up.
+        // Under the agent-acceptance workflow `agent_id` is written only on
+        // acceptance, so its absence means no agent has taken the job. (This was
+        // previously a COD-only guard for cash accountability; it now holds for
+        // prepaid too — a shipment must not leave the agency unaccepted.)
+        if (newStatus === 'picked_up' && !shipment.agent_id) {
+            throw createAppError(ERROR_CODES.SHIPMENT_AGENT_NOT_ASSIGNED, 422,
+                'An agent must accept this shipment before it can be picked up');
+        }
+
         if (isCod) {
-            // For COD, 'delivered' can ONLY be reached through the agent's
-            // verified code collection (see CashCollectionService.collect) —
-            // an unverified "agent says delivered" claim is exactly what the
-            // delivery-code exists to prevent.
-            if (newStatus === 'agent_delivered') {
+            // A COD agent MAY claim arrival with `agent_delivered` — it means "I
+            // am at the door", not "this is delivered". It is deliberately a
+            // dead end for COD: only the customer's code moves it to 'delivered'
+            // (see CashCollectionService.collect), because an unverified "agent
+            // says delivered" claim is exactly what the code exists to prevent.
+            // The response tells the agent to submit the code next.
+            if (newStatus === 'delivered') {
                 throw createAppError(ERROR_CODES.SHIPMENT_INVALID_STATUS_TRANSITION, 400,
-                    'COD shipments are delivered by the agent submitting the customer delivery code, not by an agent_delivered claim', {
+                    'COD shipments are delivered by the agent submitting the customer delivery code, not by a status change', {
                     from: shipment.status,
                     to: newStatus,
                 });
-            }
-            // Cash accountability needs a responsible agent BEFORE the package
-            // leaves the agency.
-            if (newStatus === 'picked_up' && !shipment.agent_id) {
-                throw createAppError(ERROR_CODES.COD_AGENT_NOT_ASSIGNED, 422,
-                    'Assign an agent before picking up a cash-on-delivery shipment');
             }
         }
 
         // Captured inside the transaction, used for the post-commit customer
         // notification (the plaintext code never lives in the txn scope alone).
-        let issuedCode: { collection: any; code: string } | null = null;
+        // `code` is null when the collection already existed — nothing to send.
+        let issuedCode: { collection: ICashCollection; code: string | null } | null = null;
 
         await transactionManager.runInTransaction(async (session) => {
             await this.shipmentRepo.applyStatusChange(shipmentId, newStatus, { userId: actorUserId, role: 'agency' }, session);
@@ -339,23 +387,143 @@ export class ShipmentService {
             await this.aggregationService.recomputeFulfillmentStatus(orderId, session);
 
             if (isCod && newStatus === 'picked_up') {
-                // The pending cash collection (expected amount + delivery code)
-                // is created atomically with the pickup — a picked-up COD
-                // shipment can never exist without its collection record.
-                issuedCode = await cashCollectionService.createForShipmentInSession(order, shipment, session);
+                // Safety net, not the normal path: the collection is normally
+                // created at agent assignment (see assignAgent), which for COD
+                // always precedes pickup. This keeps the older invariant — a
+                // picked-up COD shipment can never exist without its collection
+                // record — true for shipments assigned before that hook existed.
+                // Idempotent: an existing collection yields code: null.
+                issuedCode = await cashCollectionService.ensureForShipmentInSession(order, shipment, session);
             }
             if (isCod && newStatus === 'returned') {
                 await cashCollectionService.handleShipmentReturnedInSession(shipmentId, orderId, session);
             }
         });
 
-        if (issuedCode) {
-            const { collection, code } = issuedCode as { collection: any; code: string };
-            await cashCollectionService.notifyCodeIssued(order, collection, code);
+        // Only notify when a code was actually minted here; a collection that
+        // already existed (the normal case now, created at assignment) returns
+        // code: null and the customer already has it.
+        const picked = issuedCode as { collection: any; code: string | null } | null;
+        if (picked?.code) {
+            await cashCollectionService.notifyCodeIssued(order, picked.collection, picked.code);
         }
 
         const updated = await this.shipmentRepo.findById(shipmentId);
-        return this.toSummary(updated!);
+        this._emitTrackingStatusChanged(updated!, order.customer_id?.toString() ?? null);
+        // A returned shipment has left the agent's active set — give the capacity
+        // slot reserved on acceptance back. ('failed' stays active: the agent is
+        // still holding the parcel and may retry via failed → in_transit.)
+        if (newStatus === 'returned') {
+            this._releaseAgentCapacity(updated, 'returned');
+        }
+        // Phase 6: record the agent-action audit for a pickup/delivery/return/
+        // cancel transition (fire-and-forget; a no-op for other statuses or when
+        // the shipment carries no agent).
+        void agentActionAuditService
+            .emitShipmentTransition(updated!, 'agency')
+            .catch((err) => console.error('[ShipmentService] agent-action audit emit failed:', err));
+
+        // A COD agent who has just announced arrival is not finished: the parcel
+        // is handed over against the customer's code, and only that code marks it
+        // delivered. Say so in the response rather than leaving the app to infer
+        // it from payment_method — this is the one moment the agent must be told
+        // what to do next.
+        const requiresDeliveryCode = isCod && updated!.status === 'agent_delivered';
+
+        return {
+            ...this.toSummary(updated!),
+            requiresDeliveryCode,
+            ...(requiresDeliveryCode
+                ? { nextAction: 'Ask the customer for their delivery code and submit it to record the cash and complete the delivery.' }
+                : {}),
+        };
+    }
+
+    /**
+     * Fire-and-forget notify the live-tracking integration (geo-tracker, via the
+     * outbox) that a shipment's status changed, so an agency/customer that can no
+     * longer track its agent loses access immediately. Best-effort: a failure
+     * here never affects the delivery flow (mirrors the codebase's post-commit
+     * event emission pattern). Terminal statuses are what actually revoke; other
+     * transitions are re-checked and kept if still valid on the geo-tracker side.
+     */
+    private _emitTrackingStatusChanged(shipment: IShipment, customerId: string | null): void {
+        void eventBus.publish('shipment.status_changed', {
+            eventType: 'shipment.status_changed',
+            aggregateId: shipment._id.toString(),
+            occurredAt: new Date(),
+            payload: {
+                shipmentId: shipment._id.toString(),
+                orderId: shipment.order_id.toString(),
+                agencyId: shipment.agency_id.toString(),
+                agentId: shipment.agent_id ? shipment.agent_id.toString() : null,
+                customerId,
+                status: shipment.status,
+            },
+        }).catch((err) => console.error('[ShipmentService] tracking emit failed:', err));
+    }
+
+    /**
+     * Fire-and-forget notify the live-tracking integration that a specific agent
+     * was RELEASED from a shipment (an agent → agent reassignment), so geo-tracker
+     * closes that agent's tracking session and the agency/customer immediately
+     * lose visibility of them for this shipment. Unlike a terminal status this is
+     * a *release* — the shipment is not over, so no outcome is stamped and a fresh
+     * session opens the moment the replacement agent accepts. Carries the RELEASED
+     * agent's id (not the shipment's current `agent_id`, which is now null).
+     */
+    private _emitAgentReleased(shipment: IShipment, releasedAgentId: string, customerId: string | null): void {
+        void eventBus.publish('shipment.agent_released', {
+            eventType: 'shipment.agent_released',
+            aggregateId: shipment._id.toString(),
+            occurredAt: new Date(),
+            payload: {
+                shipmentId: shipment._id.toString(),
+                orderId: shipment.order_id.toString(),
+                agencyId: shipment.agency_id.toString(),
+                agentId: releasedAgentId,
+                customerId,
+            },
+        }).catch((err) => console.error('[ShipmentService] agent_released emit failed:', err));
+    }
+
+    /**
+     * Fire-and-forget business audit of an agent → agent reassignment (for
+     * dashboards / future consumers). Purely observational — the tracking release
+     * rides `_emitAgentReleased`, and the durable record is the shipment's
+     * `status_history` + the assignment offer rows.
+     */
+    private _emitReassigned(shipment: IShipment, previousAgentId: string, previousStatus: ShipmentStatus, reason: string, orderNumber: string | null): void {
+        void eventBus.publish('shipment.reassigned', {
+            eventType: 'shipment.reassigned',
+            aggregateId: shipment._id.toString(),
+            occurredAt: new Date(),
+            payload: {
+                shipmentId: shipment._id.toString(),
+                orderId: shipment.order_id.toString(),
+                orderNumber,
+                agencyId: shipment.agency_id.toString(),
+                previousAgentId,
+                previousStatus,
+                newStatus: shipment.status,
+                reason,
+            },
+        }).catch((err) => console.error('[ShipmentService] reassigned emit failed:', err));
+    }
+
+    /**
+     * Give back the capacity slot an agent reserved when they accepted this
+     * shipment, now that it has left their active set (delivered / returned /
+     * rejected). Best-effort and post-commit: `release` guards against a
+     * double-release (it never throws), and the nightly capacity reconcile is the
+     * backstop for any missed release. A no-op when the shipment had no agent.
+     */
+    private _releaseAgentCapacity(shipment: IShipment | null, reason: 'delivered' | 'returned' | 'rejected'): void {
+        const agentId = shipment?.agent_id?.toString();
+        if (!agentId) return;
+        void agentCapacityService
+            .release(agentId, reason)
+            .catch((err) => console.error('[ShipmentService] capacity release failed:', err));
     }
 
     /**
@@ -365,7 +533,7 @@ export class ShipmentService {
      * the admin agency-deactivation cascade, so the vendor's existing
      * updateDeliveryAgency endpoint can reassign them without new logic.
      */
-    async reject(agencyId: string, shipmentId: string, reason: ShipmentRejectionReason, actorUserId: string): Promise<any> {
+    async reject(agencyId: string, shipmentId: string, reason: ShipmentRejectionReason, note: string | null, actorUserId: string): Promise<any> {
         const shipment = await this.shipmentRepo.findByIdAndAgency(shipmentId, agencyId);
         if (!shipment) {
             throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
@@ -376,39 +544,189 @@ export class ShipmentService {
         }
 
         await transactionManager.runInTransaction(async (session) => {
-            await this.shipmentRepo.applyRejection(shipmentId, reason, actorUserId, session);
+            await this.shipmentRepo.applyRejection(shipmentId, reason, note, actorUserId, session);
             await this.orderRepo.holdItemsForRejectedShipment(shipmentId, session);
+            // Kill any live offer on this shipment: the agency is declining the
+            // whole shipment for reassignment, so an outstanding offer must not
+            // remain acceptable on a shipment that has left this agency.
+            await shipmentAssignmentOfferRepository.cancelPendingForShipment(shipmentId, session);
         });
 
         const updated = await this.shipmentRepo.findById(shipmentId);
+        this._emitTrackingStatusChanged(updated!, null);
+        // If an agent had already accepted (agent_id set while still 'assigned'),
+        // free the capacity slot they reserved — the shipment is leaving them.
+        this._releaseAgentCapacity(updated, 'rejected');
+        // Phase 6: a rejection is an audited 'cancel' action for the agent on the
+        // shipment (no-op if it was never assigned to one).
+        void agentActionAuditService
+            .emitShipmentTransition(updated!, 'agency')
+            .catch((err) => console.error('[ShipmentService] agent-action audit emit failed:', err));
+        // Tell the vendor their delivery was declined so they can reassign — the
+        // reason + note live on the order view (this only alerts + deep-links).
+        void this._emitShipmentRejected(updated!, reason, note ?? null)
+            .catch((err) => console.error('[ShipmentService] shipment.rejected emit failed:', err));
         return this.toSummary(updated!);
     }
 
     /**
-     * Assign one of the agency's own agents to a shipment (requirement #6).
-     * `Shipment.agent_id` is modeled but was previously never written anywhere.
+     * Notify the vendor that an agency declined a shipment's delivery. Enriches
+     * the event with the recipient (vendorId), order number, and agency name at
+     * emit time — the notification handler does no DB enrichment of its own.
+     * Best-effort and post-commit: a failure here never affects the rejection.
      */
-    async assignAgent(agencyId: string, shipmentId: string, agentId: string): Promise<any> {
+    private async _emitShipmentRejected(shipment: IShipment, reason: ShipmentRejectionReason, note: string | null): Promise<void> {
+        const order = await OrderModel.findById(shipment.order_id).select('order_number vendor_id').lean().exec();
+        if (!order) return;
+        const agency = await this.agencyRepo.findById(shipment.agency_id.toString());
+
+        await eventBus.publish('shipment.rejected', {
+            eventType: 'shipment.rejected',
+            aggregateId: shipment._id.toString(),
+            occurredAt: new Date(),
+            payload: {
+                shipmentId: shipment._id.toString(),
+                orderId: shipment.order_id.toString(),
+                orderNumber: (order as any).order_number ?? null,
+                vendorId: (order as any).vendor_id?.toString() ?? null,
+                agencyId: shipment.agency_id.toString(),
+                agencyName: agency?.agency_name ?? null,
+                reason,
+                note,
+            },
+        });
+    }
+
+    /**
+     * Detach a shipment's current agent for an agent → agent reassignment — the
+     * primitive the assignment orchestrator (ShipmentAssignmentService.reassign)
+     * calls before offering the shipment to a replacement. This is deliberately
+     * NOT a public re-offer: it only removes the old agent, leaving the shipment
+     * offerable again.
+     *
+     * The status the shipment resets to depends on whether the parcel has left
+     * the agency (REASSIGNMENT_TARGET_STATUS): pre-pickup it returns to the queue
+     * as `assigned`; post-pickup it enters `handing_over` (the parcel is with the
+     * old agent, awaiting physical handover to the replacement) and its order
+     * items are re-mirrored + fulfillment recomputed, exactly as a forward
+     * transition would.
+     *
+     * The detach is a guarded compare-and-set (`claimForReassignment`) on the
+     * exact (agent, status) read here, so a concurrent accept / pickup / collect /
+     * second reassign makes it miss and raise `SHIPMENT_REASSIGNMENT_CONFLICT`
+     * rather than double-detaching — the race guard.
+     *
+     * Post-commit and best-effort, the OLD agent is torn down: its tracking
+     * session is RELEASED (not terminated — the shipment is not over, it merely
+     * left this agent) and its reserved capacity slot is returned. Working-state
+     * recompute is left to the caller (it owns the availability service).
+     */
+    async reassignAgent(
+        agencyId: string,
+        shipmentId: string,
+        reason: string,
+        actorUserId: string | null,
+        handoverPickup: IShipmentHandoverPickup | null = null
+    ): Promise<{ shipment: IShipment; previousAgentId: string; previousStatus: ShipmentStatus }> {
         const shipment = await this.shipmentRepo.findByIdAndAgency(shipmentId, agencyId);
         if (!shipment) {
             throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
         }
 
-        const agent = await this.agentRepo.findById(agentId);
-        if (!agent || agent.agency_id?.toString() !== agencyId) {
-            throw createAppError(ERROR_CODES.SHIPMENT_AGENT_NOT_IN_AGENCY, 422);
+        const previousAgentId = shipment.agent_id ? shipment.agent_id.toString() : null;
+        if (!previousAgentId) {
+            throw createAppError(ERROR_CODES.SHIPMENT_NOT_REASSIGNABLE, 422,
+                'This shipment has no agent bound to reassign from');
         }
 
-        // COD risk gate: the assigned agent will physically hold this
-        // shipment's cash — enforce trust tier + exposure limit up front.
-        const order = await OrderModel.findById(shipment.order_id);
-        if (order?.payment_method === 'cash_on_delivery') {
-            const expectedAmount = cashCollectionService.computeExpectedAmount(order, shipment);
-            await codExposureService.assertCanTakeCodShipment(agent, expectedAmount);
+        const previousStatus = shipment.status;
+        const targetStatus = REASSIGNMENT_TARGET_STATUS[previousStatus];
+        if (!targetStatus) {
+            throw createAppError(ERROR_CODES.SHIPMENT_REASSIGNMENT_NOT_ALLOWED, 422, undefined, {
+                status: previousStatus,
+            });
         }
 
-        const updated = await this.shipmentRepo.assignAgent(shipmentId, agentId);
-        return this.toSummary(updated!);
+        const orderId = shipment.order_id.toString();
+        const order = await OrderModel.findById(orderId);
+        // Never re-open a settled order: reassigning a `returned`/`failed` shipment
+        // whose order has already completed (escrow released, COD settled) would
+        // strand money. Refuse and tell the agency the order is closed.
+        if (order?.completion?.confirmed_at) {
+            throw createAppError(ERROR_CODES.SHIPMENT_REASSIGNMENT_NOT_ALLOWED, 422,
+                'This order has already been completed and its shipments can no longer be reassigned', {
+                status: previousStatus,
+            });
+        }
+
+        // The handover record captured atomically with the detach — where the
+        // replacement collects, and the agent/status it came from.
+        const handover: IShipmentHandover | null = handoverPickup
+            ? {
+                pickup: handoverPickup,
+                from_agent_id: new Types.ObjectId(previousAgentId),
+                from_status: previousStatus,
+                reassigned_at: new Date(),
+            }
+            : null;
+
+        let detached: IShipment | null = null;
+        // Set when re-opening a RETURNED COD shipment for re-delivery — a fresh
+        // delivery code to send the customer post-commit.
+        let reopened: { collection: ICashCollection; code: string } | { collection: null; code: null } = { collection: null, code: null };
+        await transactionManager.runInTransaction(async (session) => {
+            detached = await this.shipmentRepo.claimForReassignment(
+                shipmentId, agencyId, previousAgentId, previousStatus, targetStatus, actorUserId, handover, session
+            );
+            // The CAS missed — the shipment moved since we read it (a concurrent
+            // accept / pickup / collect / reassign). Fail closed, don't double-detach.
+            if (!detached) {
+                throw createAppError(ERROR_CODES.SHIPMENT_REASSIGNMENT_CONFLICT, 409, undefined, {
+                    expectedAgentId: previousAgentId,
+                    expectedStatus: previousStatus,
+                });
+            }
+            // Re-mirror the order items + recompute fulfillment only when the status
+            // actually moved (post-pickup → handing_over); an `assigned → assigned`
+            // reset leaves item statuses untouched.
+            if (targetStatus !== previousStatus) {
+                await this.orderRepo.setItemDeliveryStatusByShipment(shipmentId, targetStatus, session);
+                await this.aggregationService.recomputeFulfillmentStatus(orderId, session);
+            }
+            // Re-opening a RETURNED shipment for re-delivery: returning it cancelled
+            // its COD code and drove payment to a terminal `failed`. Revive both, or
+            // the replacement can never record the cash and reach `delivered`.
+            if (previousStatus === 'returned' && order) {
+                reopened = await cashCollectionService.reopenForRedeliveryInSession(order, detached, session);
+            }
+            // Defensive: a bound agent has no pending offer, but cancel any stray one
+            // so nothing can be accepted onto a shipment that just changed hands.
+            await shipmentAssignmentOfferRepository.cancelPendingForShipment(shipmentId, session);
+        });
+
+        // ── post-commit, best-effort teardown of the OLD agent ──────────────────
+        // Release (not terminate) the old agent's tracking session and drop the
+        // agency/customer's visibility of them for this shipment.
+        this._emitAgentReleased(detached!, previousAgentId, order?.customer_id?.toString() ?? null);
+        // Give back the capacity slot the old agent reserved on acceptance — UNLESS
+        // the shipment was `returned`, which already released it (double-release
+        // would only trip the drift warning).
+        if (previousStatus !== 'returned') {
+            void agentCapacityService
+                .release(previousAgentId, 'reassigned')
+                .catch((err) => console.error('[ShipmentService] reassign capacity release failed:', err));
+        }
+        // Send the customer their fresh delivery code, if we re-opened a returned
+        // COD shipment.
+        const reissued = reopened as { collection: ICashCollection; code: string } | { collection: null; code: null };
+        if (reissued.code && order) {
+            await cashCollectionService.notifyCodeIssued(order, reissued.collection, reissued.code);
+        }
+        // Business audit of the reassignment + the old agent's "you're off this
+        // shipment" notification (the handler keys on this event).
+        this._emitReassigned(detached!, previousAgentId, previousStatus, reason, order?.order_number ?? null);
+
+        return { shipment: detached!, previousAgentId, previousStatus };
     }
 
     /**
@@ -417,6 +735,22 @@ export class ShipmentService {
      * fulfillment_status; if that recompute lands on 'delivered' (i.e. this was
      * the LAST outstanding shipment), the order's own completion is triggered
      * too — no separate order-level confirmation click required.
+     *
+     * ONLINE-PAID ONLY. For COD the customer's confirmation IS their delivery
+     * code, and it must arrive through `CashCollectionService.collect` so the
+     * cash is recorded in the same transaction as the delivery. Letting this
+     * endpoint confirm a COD shipment would mark it delivered with its
+     * collection still `pending` — no allocations for anyone (not even the
+     * vendor), no cash liability on the agent, an order whose payment status
+     * stays a lie, and nothing downstream able to notice: the split-recovery
+     * sweep only looks at `collected` collections, and the shipment auto-confirm
+     * sweep only at `agent_delivered` shipments. It breaks the invariant
+     * `recomputeCodPaymentStatusInSession` is built on — for COD, delivered ⟺
+     * cash collected.
+     *
+     * COD only became reachable here in step 3d, which let a COD agent mark
+     * `agent_delivered` on arrival; before that the state machine kept COD out
+     * of this path on its own.
      */
     async confirmDeliveryByCustomer(customerId: string, orderId: string, shipmentId: string, actorUserId: string): Promise<any> {
         const order = await OrderModel.findById(orderId);
@@ -425,6 +759,14 @@ export class ShipmentService {
         }
         if (order.customer_id.toString() !== customerId) {
             throw createAppError(ERROR_CODES.SHIPMENT_ACCESS_DENIED, 403);
+        }
+        if (order.payment_method === 'cash_on_delivery') {
+            throw createAppError(
+                ERROR_CODES.SHIPMENT_CONFIRMATION_NOT_ALLOWED,
+                422,
+                'Cash-on-delivery shipments are confirmed by giving the agent your delivery code, not by confirming here',
+                { paymentMethod: order.payment_method }
+            );
         }
 
         const shipment = await this.shipmentRepo.findById(shipmentId);
@@ -438,24 +780,150 @@ export class ShipmentService {
             throw createAppError(ERROR_CODES.SHIPMENT_CONFIRMATION_NOT_ALLOWED, 422, undefined, { status: shipment.status });
         }
 
-        await transactionManager.runInTransaction(async (session) => {
-            await this.shipmentRepo.applyCustomerConfirmation(shipmentId, actorUserId, session);
-            await this.orderRepo.setItemDeliveryStatusByShipment(shipmentId, 'delivered', session);
-            await this.aggregationService.recomputeFulfillmentStatus(orderId, session);
-        });
-
-        // Post-commit: if every shipment is now confirmed, complete the order too
-        // (idempotent — a no-op if already completed).
-        const refreshedOrder = await OrderModel.findById(orderId);
-        if (refreshedOrder && refreshedOrder.fulfillment_status === 'delivered' && !refreshedOrder.completion?.confirmed_at) {
-            await this.completionService.complete(refreshedOrder, 'customer', false, actorUserId);
-        }
+        const { order: refreshedOrder } = await this._applyDeliveryConfirmation(shipmentId, orderId, actorUserId, false);
 
         const updated = await this.shipmentRepo.findById(shipmentId);
+        this._emitTrackingStatusChanged(updated!, customerId);
         return {
             ...this.toSummary(updated!),
             orderFulfillmentStatus: refreshedOrder?.fulfillment_status ?? order.fulfillment_status,
         };
+    }
+
+    /**
+     * Confirm one shipment's delivery and, if that finished the order, complete
+     * the order too.
+     *
+     * Shared by the customer's explicit confirmation and the auto-confirm sweep,
+     * so a lapsed dispute window and a customer clicking confirm produce
+     * identical state — the only difference being who is recorded as having done
+     * it. Completing the order here is what starts the escrow hold window for
+     * every actor on it, so a second path that forgot to would silently strand
+     * everyone's money.
+     *
+     * Returns the refreshed order, plus whether the confirmation actually landed
+     * — `applied: false` means the shipment had already left `agent_delivered`
+     * (a customer and the sweep can arrive together, and only one may confirm).
+     * The order is returned either way, so the two cannot be told apart from it
+     * alone; the sweep needs the distinction to count honestly.
+     */
+    private async _applyDeliveryConfirmation(
+        shipmentId: string,
+        orderId: string,
+        actorUserId: string | null,
+        auto: boolean
+    ): Promise<{ order: IOrder | null; applied: boolean }> {
+        let applied = false;
+
+        await transactionManager.runInTransaction(async (session) => {
+            // Guarded on status: the sweep and a customer can land together, and
+            // only one may confirm.
+            const confirmed = await this.shipmentRepo.applyCustomerConfirmation(
+                shipmentId,
+                actorUserId,
+                auto,
+                session
+            );
+            if (!confirmed) return;
+            applied = true;
+
+            await this.orderRepo.setItemDeliveryStatusByShipment(shipmentId, 'delivered', session);
+            await this.aggregationService.recomputeFulfillmentStatus(orderId, session);
+        });
+
+        if (!applied) return { order: await OrderModel.findById(orderId), applied: false };
+
+        // Delivered → the shipment left the agent's active set; free their slot.
+        // (Prepaid path; the COD delivered path releases from CashCollectionService.)
+        this._releaseAgentCapacity(await this.shipmentRepo.findById(shipmentId), 'delivered');
+
+        // Post-commit: if every item has now reached a terminal state, complete
+        // the order too (idempotent — a no-op if already completed). `isSettled`
+        // rather than `fulfillment_status === 'delivered'`: an order whose other
+        // shipment was returned is finished, and must still complete or its
+        // escrow never releases.
+        const refreshedOrder = await OrderModel.findById(orderId);
+        if (refreshedOrder && !refreshedOrder.completion?.confirmed_at && this.completionService.isSettled(refreshedOrder)) {
+            await this.completionService.complete(
+                refreshedOrder,
+                auto ? 'system' : 'customer',
+                auto,
+                actorUserId
+            );
+        }
+        return { order: refreshedOrder, applied: true };
+    }
+
+    /**
+     * Auto-confirm shipments an agent marked delivered that the customer never
+     * confirmed, once the dispute window has elapsed.
+     *
+     * Without this, `agent_delivered → delivered` has exactly ONE trigger — the
+     * customer clicking confirm (or, for COD, releasing their code) — and a
+     * customer who does neither leaves the order permanently short of
+     * `delivered`. It never completes, and the vendor, platform, agency and
+     * agent are never paid. `AUTO_CONFIRM_DAYS` does not cover it: that
+     * auto-confirms the ORDER, but only once fulfilment already reached
+     * `delivered`, which itself requires every shipment to have been confirmed.
+     * It is a backstop for the order-level click with no backstop for the
+     * per-shipment one.
+     *
+     * ── COD TAKES A DIFFERENT ROUTE, AND THE DIFFERENCE IS LOAD-BEARING ─────
+     *
+     * A prepaid shipment just needs confirming. A COD shipment sitting at
+     * `agent_delivered` also has uncollected cash hanging off it, and confirming
+     * it the prepaid way — flipping the status, skipping the collection — is the
+     * one thing that must never happen here. It would not wrongly release money
+     * (`requires_cash_settlement` sees to that), it would quietly ensure nobody
+     * is paid at ALL: no collection means no `splitCodCollection`, so no
+     * allocations exist to release, and the order's COD payment status never
+     * recomputes. A delivered, completed order that nobody earns from and whose
+     * payment status is a lie.
+     *
+     * So COD is routed THROUGH the collection instead —
+     * `CashCollectionService.autoCollectWithoutCode` records the cash as
+     * collected-without-code and delivers the shipment in one transaction,
+     * leaving every downstream mechanism intact. See that method for why the
+     * cash lands on the agent and why no discrepancy is raised.
+     *
+     * Branched on the order's payment method rather than trusting the shipment
+     * state machine to tell COD apart. It could once, and that guarantee was
+     * deliberately removed so a COD agent can signal arrival before entering the
+     * code (step 3d) — a hole this sweep must not fall into.
+     *
+     * Returns the number of shipments confirmed, by either route.
+     */
+    async autoConfirmStaleDeliveries(cutoff: Date, limit: number): Promise<number> {
+        const stale = await this.shipmentRepo.findStaleAgentDelivered(cutoff, limit);
+        if (stale.length === 0) return 0;
+
+        const orderIds = [...new Set(stale.map((s) => s.order_id.toString()))];
+        const orders = await OrderModel.find({ _id: { $in: orderIds } }).select('payment_method');
+        const paymentMethodByOrder = new Map(
+            orders.map((o) => [o._id.toString(), o.payment_method])
+        );
+
+        let confirmed = 0;
+        for (const shipment of stale) {
+            const orderId = shipment.order_id.toString();
+            const paymentMethod = paymentMethodByOrder.get(orderId);
+
+            // Unknown order → skip. Never auto-confirm on an assumption.
+            if (!paymentMethod) continue;
+
+            try {
+                const applied = paymentMethod === 'cash_on_delivery'
+                    ? await cashCollectionService.autoCollectWithoutCode(shipment)
+                    : (await this._applyDeliveryConfirmation(shipment._id.toString(), orderId, null, true)).applied;
+                if (applied) confirmed++;
+            } catch (error) {
+                console.error(
+                    `[ShipmentService] Failed to auto-confirm shipment ${shipment._id.toString()}:`,
+                    error
+                );
+            }
+        }
+        return confirmed;
     }
 
     /**

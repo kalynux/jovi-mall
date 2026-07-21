@@ -5,6 +5,7 @@ import { LoginSchema } from '../auth.schemas';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import { sendSuccess, sendMessage } from '../../../core/responses';
 import {
     AUTH_COOKIE,
     accessCookieOptions,
@@ -38,8 +39,7 @@ export class BrowserAuthController {
         res.cookie(AUTH_COOKIE.ACCESS, accessToken, accessCookieOptions);
         res.cookie(AUTH_COOKIE.REFRESH, refreshToken, refreshCookieOptions);
 
-        res.status(200).json({
-            success: true,
+        sendSuccess(res, {
             user: {
                 id: user._id,
                 email: user.login_email,
@@ -62,11 +62,7 @@ export class BrowserAuthController {
 
         res.cookie(AUTH_COOKIE.ACCESS, accessToken, accessCookieOptions);
 
-        res.status(200).json({
-            success: true,
-            message: 'Access token refreshed',
-            user: { id: user._id, role },
-        });
+        sendSuccess(res, { user: { id: user._id, role } }, { message: 'Access token refreshed' });
     });
 
     /**
@@ -77,6 +73,6 @@ export class BrowserAuthController {
         res.clearCookie(AUTH_COOKIE.ACCESS, clearCookieOptions);
         res.clearCookie(AUTH_COOKIE.REFRESH, clearCookieOptions);
 
-        res.status(200).json({ success: true, message: 'Logged out successfully' });
+        sendMessage(res, 'Logged out successfully');
     });
 }

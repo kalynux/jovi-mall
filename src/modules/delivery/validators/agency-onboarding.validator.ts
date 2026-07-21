@@ -1,5 +1,6 @@
 import { z } from 'zod';
-// No geo types exported here
+import { GeoPointZodSchema } from '../../../core/types/geo.types';
+import { GeoAddressZodSchema } from '../../../core/types/geo-address.types';
 import { PayoutDetailsZodSchema } from '../../../core/types/payout.types';
 import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 
@@ -23,6 +24,13 @@ const HeadquartersAddressSchema = z.object({
     city: z.string().min(1).max(100).trim(),
     address_description: z.string().min(1).max(200).trim(),
     support_contact: SupportContactSchema,
+    // Map coordinates are REQUIRED — every agency address must be geolocatable
+    // (so the auto-assignment distance factor can measure from pickup, and the
+    // location renders on a map). GeoJSON Point: { type:'Point', coordinates:[lng,lat] }.
+    location: GeoPointZodSchema,
+    // The full selected address-search result. Optional (kept back-compatible for
+    // clients that still send only `location`), but preferred going forward.
+    geo: GeoAddressZodSchema.nullable().optional(),
 });
 
 const KycDetailsSchema = z.object({

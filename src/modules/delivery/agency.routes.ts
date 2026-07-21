@@ -2,9 +2,9 @@ import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
 import { AgencyProfileController, uploadAgencyPolicyDocuments } from './controllers/agency-profile.controller';
 import { AgencyNetworkController } from './controllers/agency-network.controller';
-import { AgencyAgentsController } from './controllers/agency-agents.controller';
 import { AgencyNotificationController } from './controllers/agency-notification.controller';
 import { ShipmentController } from '../shipments/shipment.controller';
+import { AgencyAssignmentController } from '../shipment-assignment/controllers/agency-assignment.controller';
 import { AgencyCodController } from '../cod/controllers/agency-cod.controller';
 import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
 
@@ -29,6 +29,13 @@ router.get('/profile', AgencyProfileController.getProfile);
 
 /** PATCH /api/agency/profile */
 router.patch('/profile', AgencyProfileController.updateProfile);
+
+/**
+ * PATCH /api/agency/assignment-settings
+ * Toggle auto-assignment: when on, a shipment handed to this agency is
+ * auto-offered to the top-ranked eligible agent. Body: { autoAssignEnabled: boolean }
+ */
+router.patch('/assignment-settings', AgencyAssignmentController.updateSettings);
 
 // ─── Onboarding ───────────────────────────────────────────────────────────────
 
@@ -78,37 +85,15 @@ router.post('/profile/policy-documents', uploadAgencyPolicyDocuments, AgencyProf
 // ─── Agents (roster & invites) ──────────────────────────────────────────────
 
 /**
- * POST /api/agency/agents/invites
- * Invite a delivery agent to join this agency's roster, by email.
- * Body: { email: string }
+ * Roster management (/api/agency/agents/**) moved to the agent domain —
+ * see modules/agents/routes/agency-roster.routes.ts, mounted in api/index.ts.
+ *
+ * It grew well past "invite and unlink": approval of join requests, suspension
+ * and reinstatement, employment terms, per-membership COD caps, eligibility
+ * diagnostics and history. Those are agent-domain concerns, and an agent may
+ * now serve several agencies, so the roster is a membership collection rather
+ * than a foreign key on the agent.
  */
-router.post('/agents/invites', AgencyAgentsController.invite);
-
-/**
- * GET /api/agency/agents/invites
- * This agency's invites. Query: status? ('pending' | 'accepted' | 'declined' | 'revoked')
- */
-router.get('/agents/invites', AgencyAgentsController.listInvites);
-
-/** DELETE /api/agency/agents/invites/:id — revoke a pending invite. */
-router.delete('/agents/invites/:id', AgencyAgentsController.revokeInvite);
-
-/** GET /api/agency/agents — the agency's agent roster. */
-router.get('/agents', AgencyAgentsController.listAgents);
-
-/**
- * DELETE /api/agency/agents/:id
- * Unlink an agent from the roster. Blocked while the agent has shipments in
- * flight or undeposited COD cash.
- */
-router.delete('/agents/:id', AgencyAgentsController.unlinkAgent);
-
-/**
- * PATCH /api/agency/agents/:id/cod-limit
- * Cap this agent's COD cash exposure (null = platform default).
- * Body: { maxExposureOverride: number | null }
- */
-router.patch('/agents/:id/cod-limit', AgencyAgentsController.setCodLimit);
 
 // ─── Shipments ──────────────────────────────────────────────────────────────
 
@@ -142,10 +127,40 @@ router.post('/shipments/:id/reject', ShipmentController.reject);
 
 /**
  * PATCH /api/agency/shipments/:id/assign-agent
- * Assign one of this agency's own agents to a shipment (requirement #6).
- * Body: { agentId: string }
+ * Offer this shipment to one of the agency's agents (agent-acceptance workflow).
+ * No longer a direct assignment: it creates an OFFER the agent must accept
+ * (unless the agent has auto-accept enabled). Body: { agentId: string }
  */
-router.patch('/shipments/:id/assign-agent', ShipmentController.assignAgent);
+router.patch('/shipments/:id/assign-agent', AgencyAssignmentController.offerAgent);
+
+/**
+ * POST /api/agency/shipments/:id/auto-assign
+ * Let the system pick: rank eligible agents (closest to pickup, free capacity,
+ * trust, COD-clearable) and offer the top one now.
+ */
+router.post('/shipments/:id/auto-assign', AgencyAssignmentController.autoAssign);
+
+/**
+ * GET /api/agency/shipments/:id/assignment-candidates
+ * Preview the ranked candidate agents for this shipment (with score breakdown).
+ */
+router.get('/shipments/:id/assignment-candidates', AgencyAssignmentController.previewCandidates);
+
+/**
+ * POST /api/agency/shipments/:id/offer/cancel
+ * Withdraw the shipment's live offer, returning it to the agency queue.
+ */
+router.post('/shipments/:id/offer/cancel', AgencyAssignmentController.cancelOffer);
+
+/**
+ * POST /api/agency/shipments/:id/reassign
+ * Change agents: detach the current agent (releasing their tracking session) and
+ * offer the shipment to a replacement, who must accept before their tracking
+ * starts. Body: { agentId?, reason }. `agentId` is required once the parcel has
+ * been picked up (manual only — the shipment enters `handing_over` until the new
+ * agent picks it up); omit it pre-pickup to auto-assign. `reason` is mandatory.
+ */
+router.post('/shipments/:id/reassign', AgencyAssignmentController.reassign);
 
 /**
  * PATCH /api/agency/shipments/:id/tracking-number
@@ -170,8 +185,24 @@ router.get('/cod/summary', AgencyCodController.summary);
  */
 router.post('/cod/deposits', AgencyCodController.recordDeposit);
 
-/** GET /api/agency/cod/deposits — deposit history. Query: agentId?, page?, limit? */
+/**
+ * GET /api/agency/cod/deposits — deposit history.
+ * Query: agentId?, status?, page?, limit? — `?status=declared` is the inbox of
+ * hand-overs agents have declared and this agency has not yet answered.
+ */
 router.get('/cod/deposits', AgencyCodController.listDeposits);
+
+/**
+ * POST /api/agency/cod/deposits/:id/confirm
+ * Confirm a hand-over an agent declared. This is where the money moves.
+ */
+router.post('/cod/deposits/:id/confirm', AgencyCodController.confirmDeposit);
+
+/**
+ * POST /api/agency/cod/deposits/:id/reject
+ * Reject a declared hand-over (nothing arrived / not that much). Body: { reason }
+ */
+router.post('/cod/deposits/:id/reject', AgencyCodController.rejectDeposit);
 
 /**
  * POST /api/agency/cod/remittances

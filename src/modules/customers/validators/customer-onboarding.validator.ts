@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { GeoPointZodSchema } from '../../../core/types/geo.types';
+import { GeoAddressZodSchema } from '../../../core/types/geo-address.types';
 
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
 
@@ -11,7 +12,10 @@ const SavedAddressSchema = z.object({
     state: z.string().max(100).trim().nullable().optional(),
     country: z.string().length(2).toUpperCase().default('CM'),
     is_default: z.boolean().default(false),
+    /** @deprecated Prefer `geo`; kept for backward compatibility. */
     location: GeoPointZodSchema.nullable().optional(),
+    /** Selected address-search result — the canonical geospatial address. */
+    geo: GeoAddressZodSchema.nullable().optional(),
 });
 
 const PreferencesSchema = z.object({

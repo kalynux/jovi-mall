@@ -1,5 +1,5 @@
 import { ClientSession, FilterQuery, Types } from 'mongoose';
-import { ShipmentModel, IShipment, IShipmentItem, ShipmentStatus, ShipmentRejectionReason } from './shipment.model';
+import { ShipmentModel, IShipment, IShipmentItem, ShipmentStatus, ShipmentRejectionReason, IShipmentHandover } from './shipment.model';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
 
 export class ShipmentRepository {
@@ -206,10 +206,11 @@ export class ShipmentRepository {
     );
   }
 
-  /** Record a rejection with reason and set `status = 'rejected'`. */
+  /** Record a rejection with reason (+ optional note) and set `status = 'rejected'`. */
   async applyRejection(
     shipmentId: string,
     reason: ShipmentRejectionReason,
+    note: string | null,
     rejectedByUserId: string,
     session?: ClientSession
   ): Promise<IShipment | null> {
@@ -220,7 +221,7 @@ export class ShipmentRepository {
       {
         $set: {
           status: 'rejected',
-          rejection: { reason, rejectedAt: now, rejectedBy: new Types.ObjectId(rejectedByUserId) },
+          rejection: { reason, note: note ?? null, rejectedAt: now, rejectedBy: new Types.ObjectId(rejectedByUserId) },
         },
         $push: {
           status_history: {
@@ -235,40 +236,185 @@ export class ShipmentRepository {
     );
   }
 
-  /** Assign one of the agency's own agents to a shipment. Ownership of the agent is validated by the caller. */
+  /**
+   * Bind an agent to a shipment — the moment an offer is accepted. Sets
+   * `agent_id` (the authoritative binding, which makes the agent trackable) and
+   * mirrors it onto the `assignment` sub-doc for the agency dashboard.
+   * Ownership/eligibility is validated by the caller.
+   */
   async assignAgent(shipmentId: string, agentId: string, session?: ClientSession): Promise<IShipment | null> {
     const sessionOpt = session ? { session } : {};
     return await ShipmentModel.findByIdAndUpdate(
       shipmentId,
-      { $set: { agent_id: new Types.ObjectId(agentId) } },
+      {
+        $set: {
+          agent_id: new Types.ObjectId(agentId),
+          assignment: {
+            state: 'accepted',
+            current_offer_id: null,
+            offered_agent_id: new Types.ObjectId(agentId),
+            updated_at: new Date(),
+          },
+        },
+      },
       { new: true, ...sessionOpt }
     );
   }
 
   /**
-   * Customer confirms this shipment's delivery: `agent_delivered` → `delivered`.
-   * Caller has already validated the current status allows confirmation.
+   * Mark a shipment as having a live offer out to an agent (workflow mirror
+   * only — `agent_id` stays null until they accept).
    */
-  async applyCustomerConfirmation(
+  async markOffered(
     shipmentId: string,
-    confirmedByUserId: string,
+    offerId: string,
+    agentId: string,
     session?: ClientSession
   ): Promise<IShipment | null> {
     const sessionOpt = session ? { session } : {};
-    const now = new Date();
     return await ShipmentModel.findByIdAndUpdate(
       shipmentId,
       {
         $set: {
+          assignment: {
+            state: 'offered',
+            current_offer_id: new Types.ObjectId(offerId),
+            offered_agent_id: new Types.ObjectId(agentId),
+            updated_at: new Date(),
+          },
+        },
+      },
+      { new: true, ...sessionOpt }
+    );
+  }
+
+  /**
+   * Return a shipment to the agency queue (no live offer, no agent) — used when
+   * an offer is rejected/expired/cancelled and there is no next candidate.
+   */
+  async markUnassigned(shipmentId: string, session?: ClientSession): Promise<IShipment | null> {
+    const sessionOpt = session ? { session } : {};
+    return await ShipmentModel.findByIdAndUpdate(
+      shipmentId,
+      {
+        $set: {
+          assignment: {
+            state: 'unassigned',
+            current_offer_id: null,
+            offered_agent_id: null,
+            updated_at: new Date(),
+          },
+        },
+      },
+      { new: true, ...sessionOpt }
+    );
+  }
+
+  /**
+   * Detach the current agent for an agent → agent reassignment — a guarded
+   * compare-and-set that is the race guard for the whole reassignment flow.
+   *
+   * The update matches ONLY when the shipment still has exactly the agent and
+   * status the caller read (`agent_id: prevAgentId, status: prevStatus`), so any
+   * concurrent transition (a second reassign, an accept, a pickup, a COD collect
+   * that moved it on) makes this miss and return null — the caller then reports a
+   * conflict rather than double-detaching. On a match it clears `agent_id`, sets
+   * `status` to the reassignment target (`assigned` pre-pickup, `handing_over`
+   * post-pickup), resets the `assignment` mirror to `unassigned`, and appends a
+   * `status_history` entry so the timeline records the reassignment moment.
+   */
+  async claimForReassignment(
+    shipmentId: string,
+    agencyId: string,
+    prevAgentId: string,
+    prevStatus: ShipmentStatus,
+    targetStatus: ShipmentStatus,
+    actorUserId: string | null,
+    handover: IShipmentHandover | null,
+    session?: ClientSession
+  ): Promise<IShipment | null> {
+    const sessionOpt = session ? { session } : {};
+    const now = new Date();
+    return await ShipmentModel.findOneAndUpdate(
+      { _id: shipmentId, agency_id: agencyId, agent_id: prevAgentId, status: prevStatus },
+      {
+        $set: {
+          agent_id: null,
+          status: targetStatus,
+          assignment: {
+            state: 'unassigned',
+            current_offer_id: null,
+            offered_agent_id: null,
+            updated_at: now,
+          },
+          // The reassignment-handover collection point (null on a pre-pickup
+          // reassignment, where the parcel never left the agency).
+          handover,
+        },
+        $push: {
+          status_history: {
+            status: targetStatus,
+            changed_at: now,
+            changed_by_user_id: actorUserId ? new Types.ObjectId(actorUserId) : null,
+            changed_by_role: 'agency',
+          },
+        },
+      },
+      { new: true, ...sessionOpt }
+    );
+  }
+
+  /**
+   * Shipments an agent marked delivered that the customer never confirmed, past
+   * the dispute window — the auto-confirm sweep's candidate set.
+   *
+   * The window is measured from `updated_at` rather than from the moment the
+   * status became `agent_delivered`, which the shipment does not record as a
+   * field. That errs the right way: any later write (a tracking number, say) can
+   * only push `updated_at` forward, so the window can only ever be LONGER than
+   * intended, never shorter. A customer is never given less time to dispute than
+   * the configured window. Same convention as the order-level sweep.
+   */
+  async findStaleAgentDelivered(cutoff: Date, limit: number): Promise<IShipment[]> {
+    return await ShipmentModel.find({
+      status: 'agent_delivered',
+      updated_at: { $lte: cutoff },
+    }).limit(limit);
+  }
+
+  /**
+   * Confirm this shipment's delivery: `agent_delivered` → `delivered`.
+   *
+   * Guarded on the current status rather than trusting the caller's read: the
+   * confirmation window sweep and a customer clicking confirm can land at the
+   * same instant, and this must produce one confirmation. Returns null when the
+   * shipment was no longer `agent_delivered` — treat that as "someone else got
+   * there first", not as an error.
+   *
+   * `confirmedByUserId` is null for an auto-confirmation; nobody clicked.
+   */
+  async applyCustomerConfirmation(
+    shipmentId: string,
+    confirmedByUserId: string | null,
+    auto = false,
+    session?: ClientSession
+  ): Promise<IShipment | null> {
+    const sessionOpt = session ? { session } : {};
+    const now = new Date();
+    const actorId = confirmedByUserId ? new Types.ObjectId(confirmedByUserId) : null;
+    return await ShipmentModel.findOneAndUpdate(
+      { _id: shipmentId, status: 'agent_delivered' },
+      {
+        $set: {
           status: 'delivered',
-          customer_confirmation: { confirmed_at: now, confirmed_by: new Types.ObjectId(confirmedByUserId) },
+          customer_confirmation: { confirmed_at: now, confirmed_by: actorId, auto },
         },
         $push: {
           status_history: {
             status: 'delivered',
             changed_at: now,
-            changed_by_user_id: new Types.ObjectId(confirmedByUserId),
-            changed_by_role: 'customer',
+            changed_by_user_id: actorId,
+            changed_by_role: auto ? 'system' : 'customer',
           },
         },
       },

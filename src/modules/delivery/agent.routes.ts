@@ -1,48 +1,68 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
-import { AgentProfileController } from './controllers/agent-profile.controller';
-import { AgentInvitesController } from './controllers/agent-invites.controller';
 import { ShipmentController } from '../shipments/shipment.controller';
 import { AgentCodController } from '../cod/controllers/agent-cod.controller';
+import { AgentOfferController } from '../shipment-assignment/controllers/agent-offer.controller';
+import { AgentNotificationController } from './controllers/agent-notification.controller';
+import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
 
+/**
+ * Agent work routes — mounted at /api/agent alongside the agent domain's own
+ * router (see api/index.ts).
+ *
+ * Scope: an agent's WORK (shipments, cash, and the notifications about them).
+ * The agent's own record — profile, onboarding, availability, device
+ * capabilities, preferences, settings, agency memberships and invites — lives in
+ * `modules/agents` and is mounted separately on the same prefix. Nothing here
+ * touches the agent aggregate.
+ *
+ * Notifications sit here rather than there on purpose: they are about the
+ * agent's work and money (see agent-notification.model.ts), and they hang off
+ * their own models, not the agent aggregate. `notification-preferences` is
+ * likewise a separate model — distinct from the agent's own `/preferences`,
+ * which the agent domain owns.
+ */
 const router = Router();
 
 router.use(requireAuth);
 router.use(requireRole(['agent']));
 
-// ─── Agency membership (invites) ─────────────────────────────────────────────
+// ─── Shipments (agent work queue) ─────────────────────────────────────────────
 
-/** GET /api/agent/invites — pending agency invites addressed to this agent's email. */
-router.get('/invites', AgentInvitesController.listInvites);
-
-/** POST /api/agent/invites/:id/accept — join the inviting agency. */
-router.post('/invites/:id/accept', AgentInvitesController.acceptInvite);
-
-/** POST /api/agent/invites/:id/decline */
-router.post('/invites/:id/decline', AgentInvitesController.declineInvite);
-
-/** GET /api/agent/profile */
-router.get('/profile', AgentProfileController.getProfile);
-
-/** PATCH /api/agent/profile */
-router.patch('/profile', AgentProfileController.updateProfile);
-
-/** GET /api/agent/profile/completion-status */
-router.get('/profile/completion-status', AgentProfileController.getCompletionStatus);
+// ─── Assignment offers (agent-acceptance workflow) ────────────────────────────
 
 /**
- * PATCH /api/agent/onboarding/step
- * Body: { step: 1 | 2, ...stepFields }
- *   Step 1: { vehicle_info: { vehicle_type, color, plate_number? } }
- *   Step 2: { skip?: boolean, avatar_url?, timezone? }
+ * GET /api/agent/offers
+ * Assignment offers for this agent, pending first. Query: status?, page?, limit?
+ * An offer is the agency (or the system) asking this agent to take a shipment;
+ * it must be accepted before the shipment is theirs, and it expires on timeout.
  */
-router.patch('/onboarding/step', AgentProfileController.completeOnboardingStep);
+router.get('/offers', AgentOfferController.list);
+
+/** GET /api/agent/offers/:id — one offer's detail (pickup, COD amount, expiry). */
+router.get('/offers/:id', AgentOfferController.get);
+
+/**
+ * POST /api/agent/offers/:id/accept
+ * Take the job: binds this agent to the shipment, opens live tracking, and (for
+ * COD) issues the customer's delivery code. Fails if the offer expired or the
+ * agent is no longer eligible / is at capacity.
+ */
+router.post('/offers/:id/accept', AgentOfferController.accept);
+
+/**
+ * POST /api/agent/offers/:id/reject
+ * Decline the job. Body: { reason? }. An auto-assignment then tries the next
+ * ranked agent; a manual offer returns the shipment to the agency queue.
+ */
+router.post('/offers/:id/reject', AgentOfferController.reject);
 
 // ─── Shipments (agent work queue) ─────────────────────────────────────────────
 
 /**
  * GET /api/agent/shipments
  * Shipments assigned to this agent, newest first. Query: status?, page?, limit?
+ * An agent may hold several at once — this list is routinely plural.
  */
 router.get('/shipments', ShipmentController.listForAgent);
 
@@ -82,7 +102,56 @@ router.get('/cod/balance', AgentCodController.getBalance);
 /** GET /api/agent/cod/ledger — append-only history of this agent's cash movements. */
 router.get('/cod/ledger', AgentCodController.getLedger);
 
-/** GET /api/agent/cod/deposits — this agent's recorded cash hand-overs to the agency. */
+/** GET /api/agent/cod/deposits — this agent's cash hand-overs. Query: status?, page?, limit? */
 router.get('/cod/deposits', AgentCodController.listDeposits);
+
+/**
+ * POST /api/agent/cod/deposits
+ * Declare cash handed back — to the agency, or straight to the platform
+ * (`recipient: 'platform'`, which needs a transfer `reference`). Moves no money;
+ * the receiving party confirms. Body: { agencyId, amount, recipient?, reference?, note? }
+ */
+router.post('/cod/deposits', AgentCodController.declareDeposit);
+
+/**
+ * POST /api/agent/cod/discrepancies
+ * Report a cash problem with an agency (e.g. they recorded less than was handed
+ * over). Body: { agencyId, amount?, depositId?, note }
+ */
+router.post('/cod/discrepancies', AgentCodController.raiseDiscrepancy);
+
+// ─── Notifications (multi-channel; see agent-notification.model.ts) ──────────
+
+/** GET /api/agent/notifications */
+router.get('/notifications', AgentNotificationController.listNotifications);
+
+/** PATCH /api/agent/notifications/:id/read */
+router.patch('/notifications/:id/read', AgentNotificationController.markAsRead);
+
+/** POST /api/agent/notifications/read-all */
+router.post('/notifications/read-all', AgentNotificationController.markAllAsRead);
+
+/**
+ * GET /api/agent/notification-preferences
+ * NOT the same thing as the agent domain's `/api/agent/preferences` — this is
+ * notification channels; that is the agent's own record.
+ */
+router.get('/notification-preferences', AgentNotificationController.getPreferences);
+
+/** PATCH /api/agent/notification-preferences */
+router.patch('/notification-preferences', AgentNotificationController.updatePreferences);
+
+/**
+ * FCM device registration — same shape as `/api/agency/devices` and
+ * `/api/vendor/devices`, reusing the role-agnostic DeviceTokenController.
+ *
+ * ⚠️ NOT `/api/agent/device` (singular), which the agent domain owns and which
+ * means something completely different: the agent's device CAPABILITIES and
+ * location permission, an input to assignment eligibility. This one is an FCM
+ * push token and nothing else. Without it push cannot reach an agent at all —
+ * FcmPushService resolves tokens by user, and agents had no way to register one.
+ */
+router.post('/devices', DeviceTokenController.register);
+router.delete('/devices', DeviceTokenController.unregister);
 
 export default router;

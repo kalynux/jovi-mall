@@ -5,6 +5,8 @@
  * These are used for documentation and type safety.
  */
 
+import { IGeoAddress } from '../../../core/types/geo-address.types';
+
 export interface VendorOrderListItemDTO {
     id: string;
     orderNumber: string;
@@ -49,6 +51,12 @@ export interface ShippingAddressDTO {
     city: string;
     state: string | null;
     country: string;
+    /**
+     * Full geocoded drop-off address when the order carries a durable snapshot
+     * (formatted address + coordinates + provider + admin components). Absent/null
+     * on legacy orders whose address is still derived from the saved address.
+     */
+    geo?: IGeoAddress | null;
 }
 
 export interface DeliveryAgentDTO {

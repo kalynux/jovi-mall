@@ -11,6 +11,7 @@ import {
 import { asyncHandler } from '../../api/middlewares/async-handler';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
+import { sendSuccess, sendCreated, sendMessage } from '../../core/responses';
 
 const authService = new AuthService();
 
@@ -34,14 +35,14 @@ export class AuthController {
     const input = RegisterSchema.parse(req.body);
     const { user, role, role_entity, accessToken, refreshToken } = await authService.register(input);
     setAuthCookies(res, accessToken, refreshToken);
-    res.status(201).json({ user, role, role_entity });
+    sendCreated(res, { user, role, role_entity });
   });
 
   static login = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const input = LoginSchema.parse(req.body);
     const { user, role, role_entity, accessToken, refreshToken } = await authService.login(input);
     setAuthCookies(res, accessToken, refreshToken);
-    res.status(200).json({ user, role, role_entity });
+    sendSuccess(res, { user, role, role_entity });
   });
 
   /**
@@ -50,7 +51,7 @@ export class AuthController {
    */
   static logout = asyncHandler(async (_req: Request, res: Response) => {
     clearAuthCookies(res);
-    res.status(200).json({ success: true, message: 'Logged out successfully' });
+    sendMessage(res, 'Logged out successfully');
   });
 
   static me = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
@@ -60,7 +61,7 @@ export class AuthController {
     if (!user) {
       return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
     }
-    res.status(200).json({ user, role, role_entity });
+    sendSuccess(res, { user, role, role_entity });
   });
 
   static authMe = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
@@ -72,7 +73,7 @@ export class AuthController {
     const input = AuthMeSchema.parse({ userId, role });
     const { user, role: resolvedRole, role_entity, accessToken, refreshToken } = await authService.authMe(input);
     setAuthCookies(res, accessToken, refreshToken);
-    res.status(200).json({ user, role: resolvedRole, role_entity });
+    sendSuccess(res, { user, role: resolvedRole, role_entity });
   });
 
   static addRole = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
@@ -83,14 +84,14 @@ export class AuthController {
     const input = AddRoleSchema.parse(req.body);
     const { user, role, role_entity, accessToken, refreshToken } = await authService.addRole(userId, input);
     setAuthCookies(res, accessToken, refreshToken);
-    res.status(201).json({ user, role, role_entity });
+    sendCreated(res, { user, role, role_entity });
   });
 
   static sendEmailVerification = asyncHandler(async (req: Request, res: Response) => {
     const user = req.auth?.user;
     const role = req.auth?.role;
     const result = await authService.sendEmailVerification((user as any).id, role!);
-    res.status(200).json(result);
+    sendSuccess(res, result);
   });
 
   static verifyEmail = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
@@ -99,7 +100,7 @@ export class AuthController {
       return next(createAppError(ERROR_CODES.AUTH_VERIFY_TOKEN_INVALID, 400, 'Missing verification token'));
     }
     const result = await authService.verifyEmail(token);
-    res.status(200).json(result);
+    sendSuccess(res, result);
   });
 
   static requestWaVerification = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
@@ -107,6 +108,6 @@ export class AuthController {
     const role = req.auth?.role;
     const { update_other_roles } = req.body;
     const result = await authService.issueWaVerificationCode((user as any).id, role!, update_other_roles);
-    res.status(200).json(result);
+    sendSuccess(res, result);
   });
 }

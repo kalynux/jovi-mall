@@ -35,7 +35,28 @@ router.post('/remittances/:id/confirm', AdminCodController.confirmRemittance);
  */
 router.post('/remittances/:id/reject', AdminCodController.rejectRemittance);
 
-/** GET /api/admin/cod/discrepancies — all flags. Query: status?, agencyId?, agentId?, page?, limit? */
+/**
+ * GET /api/admin/cod/deposits — every agent hand-over.
+ * Query: status?, recipient?, agencyId?, page?, limit?
+ * `?status=declared&recipient=platform` is the platform's confirmation queue.
+ */
+router.get('/deposits', AdminCodController.listDeposits);
+
+/**
+ * POST /api/admin/cod/deposits
+ * Record cash an agent paid the PLATFORM directly, bypassing the agency.
+ * Clears the agent, the contract AND the agency, and settles the agency's
+ * collections FIFO. Body: { agentId, agencyId, amount, reference, note? }
+ */
+router.post('/deposits', AdminCodController.recordDirectDeposit);
+
+/** POST /api/admin/cod/deposits/:id/confirm — confirm an agent's declared direct payment. */
+router.post('/deposits/:id/confirm', AdminCodController.confirmDeposit);
+
+/** POST /api/admin/cod/deposits/:id/reject — reject one. Body: { reason } */
+router.post('/deposits/:id/reject', AdminCodController.rejectDeposit);
+
+/** GET /api/admin/cod/discrepancies — all flags. Query: status?, type?, agencyId?, agentId?, page?, limit? */
 router.get('/discrepancies', AdminCodController.listDiscrepancies);
 
 /**

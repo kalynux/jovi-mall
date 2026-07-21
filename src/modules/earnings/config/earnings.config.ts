@@ -33,6 +33,22 @@ export const EARNINGS_CONFIG = {
   AUTO_CONFIRM_DAYS: intEnv('EARNINGS_AUTO_CONFIRM_DAYS', 7),
 
   /**
+   * The customer's dispute window on ONE shipment: days an `agent_delivered`
+   * shipment may sit unconfirmed before the sweep confirms it on their behalf.
+   *
+   * This is the per-shipment analogue of AUTO_CONFIRM_DAYS, and the system is
+   * unpayable without it — `agent_delivered → delivered` is otherwise triggered
+   * only by the customer clicking confirm, so one silent customer freezes the
+   * whole order's escrow for every actor, forever. AUTO_CONFIRM_DAYS cannot
+   * cover it: it only looks at orders whose fulfilment already reached
+   * `delivered`, which requires every shipment to have been confirmed already.
+   *
+   * COD is unaffected — its shipments are confirmed outright by the delivery
+   * code, never landing in `agent_delivered`.
+   */
+  SHIPMENT_AUTO_CONFIRM_DAYS: intEnv('EARNINGS_SHIPMENT_AUTO_CONFIRM_DAYS', 7),
+
+  /**
    * Defensive fallback fee (minor units) used ONLY when a shipment's agency
    * has no `policies` configured yet — should not occur in practice, since
    * agency onboarding Step 4 (policy setup) is required and only

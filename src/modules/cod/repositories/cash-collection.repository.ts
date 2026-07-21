@@ -15,8 +15,32 @@ export class CashCollectionRepository {
     return await CashCollectionModel.findById(id);
   }
 
-  async findByShipmentId(shipmentId: string): Promise<ICashCollection | null> {
-    return await CashCollectionModel.findOne({ shipment_id: shipmentId });
+  async findByShipmentId(shipmentId: string, session?: ClientSession): Promise<ICashCollection | null> {
+    const query = CashCollectionModel.findOne({ shipment_id: shipmentId });
+    if (session) query.session(session);
+    return await query.exec();
+  }
+
+  /**
+   * Re-point a PENDING collection at a different agent — the agency swapped who
+   * is delivering after the code was already issued.
+   *
+   * Guarded on `pending`, and that guard is the point: once a collection is
+   * `collected`, `agent_id` records who actually took the customer's cash and
+   * whose balance it landed on. Rewriting it then would move a cash liability
+   * onto someone who never touched the money.
+   */
+  async reassignPendingAgent(
+    shipmentId: string,
+    agentId: string,
+    session?: ClientSession
+  ): Promise<ICashCollection | null> {
+    const sessionOpt = session ? { session } : {};
+    return await CashCollectionModel.findOneAndUpdate(
+      { shipment_id: shipmentId, status: 'pending' },
+      { $set: { agent_id: new Types.ObjectId(agentId) } },
+      { new: true, ...sessionOpt }
+    );
   }
 
   /** Shipment-scoped lookup INCLUDING the plaintext code (customer views only). */
@@ -99,6 +123,38 @@ export class CashCollectionRepository {
     return await CashCollectionModel.findOneAndUpdate(
       { shipment_id: shipmentId, status: 'pending' },
       { $set: { status: 'cancelled' } },
+      { new: true, ...sessionOpt }
+    );
+  }
+
+  /**
+   * Revive a `cancelled` collection for re-delivery — the shipment was reassigned
+   * out of `returned`, so it needs a fresh delivery code and a new agent.
+   *
+   * Guarded on `cancelled`, and that guard is the point: it can only resurrect a
+   * returned shipment's dead code, never touch a `collected` one (whose cash
+   * already landed on someone's balance) or a live `pending` one. Clears the
+   * agent (the replacement is re-pointed on accept) and resets the code state.
+   */
+  async reopenCancelledForRedelivery(
+    shipmentId: string,
+    code: { code_hash: string; code_plain: string; code_generated_at: Date },
+    session?: ClientSession
+  ): Promise<ICashCollection | null> {
+    const sessionOpt = session ? { session } : {};
+    return await CashCollectionModel.findOneAndUpdate(
+      { shipment_id: shipmentId, status: 'cancelled' },
+      {
+        $set: {
+          status: 'pending',
+          agent_id: null,
+          code_hash: code.code_hash,
+          code_plain: code.code_plain,
+          code_generated_at: code.code_generated_at,
+          code_attempts: 0,
+          code_locked: false,
+        },
+      },
       { new: true, ...sessionOpt }
     );
   }

@@ -39,6 +39,8 @@ export interface IVendorNotificationPreference extends Document {
         connectionUpdated: boolean;
         /** Covers all three payout.* situations (requested, paid, rejected). */
         payoutUpdates: boolean;
+        /** A delivery agency declined a shipment and the vendor must reassign it. */
+        shipmentRejected: boolean;
     };
 
     updatedAt: Date;
@@ -116,6 +118,10 @@ const VendorNotificationPreferenceSchema = new Schema<IVendorNotificationPrefere
                 default: true
             },
             payoutUpdates: {
+                type: Boolean,
+                default: true
+            },
+            shipmentRejected: {
                 type: Boolean,
                 default: true
             }

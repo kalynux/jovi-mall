@@ -4,11 +4,17 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 /**
  * CashCollection - the payment record of ONE COD shipment.
  *
- * Created when a COD shipment is picked up (the package is now out for
- * delivery), with the expected cash snapshot and a hashed delivery code the
- * customer receives. The agent can only mark the handoff done by submitting
- * that code — which atomically records the cash, delivers the shipment and
- * raises the agent's/agency's cash liability.
+ * Created when a COD shipment is assigned an agent (so the customer is holding
+ * their code long before anyone reaches the door), with the expected cash
+ * snapshot and a hashed delivery code. Normally the agent marks the handoff
+ * done by submitting that code — which atomically records the cash, delivers
+ * the shipment and raises the agent's/agency's cash liability.
+ *
+ * The one exception is the auto-collection: a shipment left at
+ * `agent_delivered` past the dispute window is collected without a code by the
+ * earnings sweep, because an agent who was NOT paid is required to return the
+ * shipment instead. See `CashCollectionService.autoCollectWithoutCode` and
+ * `verification.method`.
  *
  * This collection is the COD equivalent of a PaymentTransaction: append-only
  * in spirit (status only ever moves pending → collected | cancelled, amounts
@@ -20,8 +26,26 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 export type CashCollectionStatus = 'pending' | 'collected' | 'cancelled';
 
+/**
+ * How a collection's handoff was verified.
+ *
+ *  - 'code'         — the agent submitted the customer's delivery code. The
+ *    customer proved receipt by releasing a secret only they held.
+ *  - 'auto_no_code' — no code ever arrived and the dispute window elapsed with
+ *    the shipment still at `agent_delivered`, which is the agent's implicit
+ *    assertion that they were paid (an unpaid agent's duty is to return the
+ *    shipment). The collection was recorded by the system on the strength of
+ *    that assertion alone.
+ *
+ * The distinction is the point: an uncoded collection carries no customer
+ * evidence at all, and a delivery dispute turns on exactly that.
+ */
+export type CollectionVerificationMethod = 'code' | 'auto_no_code';
+
 export interface ICollectionVerification {
-  /** GPS fix reported by the agent app at code submission (optional). */
+  /** What proved the handoff — see CollectionVerificationMethod. */
+  method: CollectionVerificationMethod;
+  /** GPS fix reported by the agent app at code submission (null when uncoded). */
   location: { lat: number; lng: number } | null;
   /** Free-form device identifier/user-agent reported by the agent app. */
   device_info: string | null;
@@ -102,6 +126,9 @@ const CashCollectionSchema = new Schema<ICashCollection>(
     verification: {
       type: new Schema(
         {
+          // Defaulted, not required: every row that predates the auto-collect
+          // path was a code submission, so the default is the truth for them.
+          method: { type: String, enum: ['code', 'auto_no_code'], default: 'code' },
           location: {
             type: new Schema(
               { lat: { type: Number, required: true }, lng: { type: Number, required: true } },

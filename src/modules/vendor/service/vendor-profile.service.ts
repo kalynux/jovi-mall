@@ -8,6 +8,7 @@ import { eventBus } from '../../../core/events/event-bus';
 import { auditLogger } from '../../../core/audit/audit-logger';
 import { VendorOnboardingStep, VendorOnboardingStepValue } from '../../../core/constants/onboarding-steps';
 import { IVendor, IVendorBranding, IVendorPolicies, IVendorSupportChannel, IVendorSupportPolicy } from '../../vendors/vendor.model';
+import { withGeoAddress } from '../../../core/types/geo-address.types';
 import { DeliveryAgencyRepository, AgencyListQueryParams } from '../../delivery/delivery-agency.repository';
 import { TransactionManager, transactionManager } from '../../../core/database/transaction.manager';
 import { ProductDeliveryAgencySuspensionService } from '../../catalog/domain/services/ProductDeliveryAgencySuspensionService';
@@ -378,7 +379,9 @@ export class VendorProfileService {
         await this.assertRemovedAddressesNotInUse(vendorId, vendor.business_addresses, input.business_addresses);
         // `_id` (when provided) is a hex string here — Mongoose casts it to
         // ObjectId on write, preserving identity instead of minting a new one.
-        brandingData.business_addresses = input.business_addresses as unknown as IVendor['business_addresses'];
+        // `withGeoAddress` normalises each entry's selected geo result into a
+        // persistable GeoAddress (assigns resolved_at, null-fills components).
+        brandingData.business_addresses = input.business_addresses.map(withGeoAddress) as unknown as IVendor['business_addresses'];
       }
     }
 

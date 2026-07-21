@@ -53,6 +53,18 @@ export class DeliveryAgencyRepository {
   }
 
   /**
+   * Toggle the agency's auto-assignment participation. Returns the updated
+   * agency, or null when no such agency exists.
+   */
+  async setAutoAssignEnabled(agencyId: string, enabled: boolean): Promise<IDeliveryAgency | null> {
+    return DeliveryAgencyModel.findByIdAndUpdate(
+      agencyId,
+      { $set: { 'assignment_settings.auto_assign_enabled': enabled } },
+      { new: true }
+    ).exec();
+  }
+
+  /**
    * Check if an agency document exists for the given user_id.
    * Used for idempotency check on creation.
    */

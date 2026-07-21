@@ -2,7 +2,9 @@ import { ClientSession } from 'mongoose';
 import { OrderModel, FulfillmentStatus } from '../../order.model';
 
 // Item delivery statuses that mean "has left the vendor/agency for delivery."
-const SHIPPED_OR_BEYOND: readonly string[] = ['picked_up', 'in_transit', 'agent_delivered', 'delivered'];
+// `handing_over` is included: the parcel was already picked up and is mid-transfer
+// to a replacement agent, so the order has not regressed to "still processing".
+const SHIPPED_OR_BEYOND: readonly string[] = ['handing_over', 'picked_up', 'in_transit', 'agent_delivered', 'delivered'];
 
 // fulfillment_status values this service is allowed to move the order out of.
 // Never touches 'pending' (vendor hasn't started processing) or 'cancelled'/

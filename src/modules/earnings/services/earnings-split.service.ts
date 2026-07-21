@@ -16,6 +16,10 @@ import { IShipment } from '../../shipments/shipment.model';
 import { ShipmentRepository } from '../../shipments/shipment.repository';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
 import { IAgencyPolicies } from '../../delivery/delivery-agency.model';
+import {
+  AgentContractRepository,
+  agentContractRepository,
+} from '../../agents/repositories/agent-contract.repository';
 import { ICashCollection } from '../../cod/models/cash-collection.model';
 
 /**
@@ -41,7 +45,8 @@ export class EarningsSplitService {
     private readonly accounts: EarningsAccountService = earningsAccountService,
     private readonly entitlements: EntitlementService = entitlementService,
     private readonly shipmentRepo: ShipmentRepository = new ShipmentRepository(),
-    private readonly agencyRepo: DeliveryAgencyRepository = new DeliveryAgencyRepository()
+    private readonly agencyRepo: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
+    private readonly contracts: AgentContractRepository = agentContractRepository
   ) {}
 
   /**
@@ -166,13 +171,21 @@ export class EarningsSplitService {
     // deferred. Natural hook: a new call from ShipmentService.updateStatus()
     // on a 'failed'/'returned' transition, once this base per-shipment split
     // has been validated in production. Not wired in this task.
-    // TODO(agent): a delivery agent's own per-delivery cut is explicitly out
-    // of scope for this task. No beneficiary_type: 'agent' allocation is
-    // created anywhere in this service; EarningsOwnerType / beneficiary_type
-    // stays 'vendor' | 'agency' | 'platform'. Intended future approach: a
-    // flat fee per shipment once an agent is assigned, mirroring today's
-    // placeholder DELIVERY_FLAT_FEE pattern. For COD, agencies pay their
-    // agents off-platform in the meantime.
+    // TODO(agent): PREPAID orders do not yet pay the agent their fee_split cut.
+    // COD does (see splitCodCollection + computeAgentCut), but the two splits
+    // fire at different moments and only one of them knows who the agent is:
+    // this split runs at PAYMENT success, when an order's shipments exist but
+    // are still `pending` with no agent_id — nobody has been dispatched yet. The
+    // COD split runs after the handoff, so `collection.agent_id` is known.
+    //
+    // So the agent's cut cannot simply be carved out here. It needs a
+    // delivery-time allocation, and that is a real design decision rather than a
+    // missing line: the agency's full delivery fee is already `held` from
+    // payment, so paying the agent later means either moving money out of an
+    // allocation that already exists (there is no transfer primitive — reversal
+    // is all-or-nothing per row), or deferring the agency's own delivery-fee
+    // allocation until delivery, which would change when an agency sees its
+    // pending earnings. Do not guess; settle it with the product owner.
 
     return totals;
   }
@@ -263,12 +276,21 @@ export class EarningsSplitService {
    *
    * Differences from the prepaid split:
    *  - Source is the CashCollection (COD orders collect per shipment).
-   *  - Allocations are created ALREADY COMPLETED with the hold window running
-   *    from `collected_at` — the verified delivery code IS the customer
-   *    confirmation, so there is no separate completion step to wait for.
    *  - `requires_cash_settlement: true` — release additionally waits for the
    *    physical cash to be remitted and confirmed (Agent → Agency → Platform,
    *    see cod-settlement.service).
+   *
+   * Like prepaid, these allocations are created with NO completion date and so
+   * no hold window: escrow is resolved per ORDER, not per shipment, and
+   * `OrderCompletionService` stamps them when the whole order completes (see
+   * EarningsCompletionService.onOrderCompleted).
+   *
+   * This reverses an earlier design in which a COD collection was treated as
+   * self-completing, on the grounds that the verified delivery code IS that
+   * shipment's customer confirmation. True as far as it goes — but it made one
+   * shipment's money releasable while its siblings were still out for delivery,
+   * so the actors on a split order were paid at different times for the same
+   * order. Every actor now matures together, on the order.
    *  - The agency's `additional_fees.cod_handling_fee` is charged here
    *    (percentage of the collected amount, or fixed per collection), paid by
    *    the vendor like the delivery fee.
@@ -310,6 +332,12 @@ export class EarningsSplitService {
         ? Math.floor((gross * codFeeConfig.value) / 100)
         : codFeeConfig.value;
 
+    // The agent's cut comes OUT of the delivery fee, not on top of it: the
+    // vendor pays the same either way, and the agency shares the fee with the
+    // person who actually made the delivery.
+    const agentId = collection.agent_id.toString();
+    const agentCut = await this.computeAgentCut(agentId, agencyId, deliveryFee);
+
     const vendorNet = gross - commission - deliveryFee - codFee;
     if (vendorNet < 0) {
       throw createAppError(ERROR_CODES.EARNINGS_INVALID_SPLIT, 422, undefined, {
@@ -320,10 +348,13 @@ export class EarningsSplitService {
       });
     }
 
-    // Collection == verified delivery: allocations start completed, with the
-    // hold window running from the handoff moment.
-    const completedAt = collection.collected_at ?? new Date();
-    const holdReleaseAt = daysFromNow(EARNINGS_CONFIG.HOLD_DAYS, completedAt);
+    // If the order has ALREADY completed, inherit its maturity rather than
+    // waiting for a completion event that has been and gone. Two paths reach
+    // here after completion and both would otherwise strand this money as held
+    // forever: the collect path completes the order (the delivery code is the
+    // customer's confirmation) BEFORE splitting, and the daily sweep re-splits
+    // collections whose split never landed, long after the fact.
+    const orderCompletedAt = order.completion?.confirmed_at ?? null;
     const codDefaults = {
       source_type: 'cod_collection' as const,
       source_id: sourceId,
@@ -331,15 +362,35 @@ export class EarningsSplitService {
       commission_percent_snapshot: commissionPercent,
       currency,
       requires_cash_settlement: true,
-      completed_at: completedAt,
-      hold_release_at: holdReleaseAt,
+      ...(orderCompletedAt
+        ? {
+            completed_at: orderCompletedAt,
+            hold_release_at: daysFromNow(EARNINGS_CONFIG.HOLD_DAYS, orderCompletedAt),
+          }
+        : {}),
     };
 
     const allocations: CreateAllocationInput[] = [
       { ...codDefaults, beneficiary_type: 'vendor', beneficiary_id: vendorId, amount: vendorNet },
       { ...codDefaults, beneficiary_type: 'platform', beneficiary_id: null, amount: commission },
-      // One agency row per collection: delivery fee + COD handling fee.
-      { ...codDefaults, beneficiary_type: 'agency', beneficiary_id: agencyId, amount: deliveryFee + codFee },
+      // One agency row per collection: what's left of the delivery fee after the
+      // agent's cut, plus the whole COD handling fee. The handling fee stays with
+      // the agency deliberately — fee_split is defined as a share "of the delivery
+      // fee", and the agency is the party carrying the cash-accountability (it is
+      // their balance the rolling reserve is held against).
+      {
+        ...codDefaults,
+        beneficiary_type: 'agency',
+        beneficiary_id: agencyId,
+        amount: deliveryFee - agentCut + codFee,
+      },
+      // The agent is paid by the PLATFORM, like any other beneficiary — hold →
+      // release → available → payout. `requires_cash_settlement` is inherited
+      // from codDefaults, so the agent's own cut is not releasable until the cash
+      // they collected has physically reached the platform. That is deliberate:
+      // an agent must not be able to withdraw a cut of money they are still
+      // holding, or never handed back.
+      { ...codDefaults, beneficiary_type: 'agent', beneficiary_id: agentId, amount: agentCut },
     ];
 
     await this.persist(allocations);
@@ -349,8 +400,58 @@ export class EarningsSplitService {
       commission,
       deliveryFee,
       codFee,
+      agentCut,
       vendorNet,
     });
+  }
+
+  /**
+   * The agent's share of one delivery's fee, per the contract they made the
+   * delivery under (`fee_split`).
+   *
+   * Clamped to the delivery fee. A flat fee negotiated above what the delivery
+   * actually earns would otherwise drive the agency's allocation negative, and
+   * an allocation cannot be negative — the platform can only divide the fee it
+   * collected, not invent the shortfall. The agency is free to make up the
+   * difference off-platform; it is logged because a contract that routinely
+   * clamps is mispriced, not merely unlucky.
+   *
+   * No live contract → no cut. The cash still has to be accounted for and the
+   * split must not fail, so the fee stays whole with the agency and the anomaly
+   * is logged. This mirrors the attribution gap in
+   * CashCollectionService.attributeToContractInSession and has the same cause: a
+   * contract terminated with a shipment still in flight.
+   */
+  private async computeAgentCut(
+    agentId: string,
+    agencyId: string,
+    deliveryFee: number
+  ): Promise<number> {
+    if (deliveryFee <= 0) return 0;
+
+    const contract = await this.contracts.findLive(agentId, agencyId);
+    if (!contract) {
+      console.error(
+        `[EarningsSplitService] No live contract for agent ${agentId} at agency ${agencyId} — ` +
+          `no agent cut taken; the full delivery fee stays with the agency.`
+      );
+      return 0;
+    }
+
+    const split = contract.fee_split;
+    const raw =
+      split?.model === 'flat'
+        ? (split.agent_flat_fee ?? 0)
+        : Math.floor((deliveryFee * (split?.agent_share_percent ?? 0)) / 100);
+
+    const cut = Math.max(0, Math.min(raw, deliveryFee));
+    if (raw > deliveryFee) {
+      console.error(
+        `[EarningsSplitService] Contract ${contract._id.toString()} owes agent ${agentId} ` +
+          `${raw} but the delivery fee is only ${deliveryFee}; clamped to ${cut}.`
+      );
+    }
+    return cut;
   }
 
   /**

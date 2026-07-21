@@ -8,6 +8,11 @@ import { CashCollectionRepository } from '../repositories/cash-collection.reposi
 import { CashCollectionModel, ICashCollection } from '../models/cash-collection.model';
 import { DeliveryCodeService, deliveryCodeService } from './delivery-code.service';
 import { CodCashAccountService, codCashAccountService } from './cod-cash-account.service';
+import {
+  AgentContractRepository,
+  agentContractRepository,
+} from '../../agents/repositories/agent-contract.repository';
+import { agentCapacityService } from '../../agents/domain/services/agent-capacity.service';
 import { earningsSplitService } from '../../earnings/services/earnings-split.service';
 import { IOrder, OrderModel, PaymentStatus } from '../../orders/order.model';
 import { OrderRepository } from '../../orders/order.repository';
@@ -30,19 +35,34 @@ export interface CollectInput {
 }
 
 /**
+ * Shipment states from which a COD collection may be recorded. The parcel must
+ * be out with the agent; anything earlier has no cash to collect, and anything
+ * later already has.
+ */
+const COLLECTIBLE_SHIPMENT_STATUSES: readonly string[] = ['picked_up', 'in_transit', 'agent_delivered'];
+
+/**
  * CashCollectionService - the COD "payment gateway": the delivery agent is the
  * collector, and the customer's delivery code is the authorization.
  *
  * Lifecycle of one COD shipment's cash:
- *  - `picked_up`  → a pending CashCollection is created (expected amount +
- *    hashed delivery code snapshot) inside the SAME transaction as the status
- *    change; the code goes to the customer post-commit (WhatsApp + in-app).
+ *  - agent assigned → a pending CashCollection is created (expected amount +
+ *    hashed delivery code snapshot) inside the SAME transaction as the
+ *    assignment; the code goes to the customer post-commit (WhatsApp + in-app),
+ *    so they are holding it long before anyone reaches the door.
  *  - agent submits the code at handoff → ONE transaction: collection claimed
  *    `collected` (with GPS/device evidence), shipment `delivered`, order items
  *    mirrored, fulfillment recomputed, the order's COD payment status
  *    recomputed (partially_paid/paid), and cash liabilities raised (M4).
+ *  - no code after the dispute window → `autoCollectWithoutCode` does all of the
+ *    above minus the evidence, on the strength of the agent having left the
+ *    shipment at `agent_delivered` rather than returning it.
  *  - shipment `returned` → the pending collection is cancelled and the order's
  *    COD payment status recomputed (all returned + nothing collected → failed).
+ *
+ * The invariant every one of those paths keeps, and which nothing else may
+ * break: for COD, `delivered` ⟺ cash collected. `recomputeCodPaymentStatus`
+ * derives the order's payment status from exactly that equivalence.
  */
 export class CashCollectionService {
   constructor(
@@ -53,24 +73,51 @@ export class CashCollectionService {
     private readonly timelineRepo: OrderTimelineRepository = new OrderTimelineRepository(),
     private readonly aggregationService: OrderFulfillmentAggregationService = orderFulfillmentAggregationService,
     private readonly completionService: OrderCompletionService = orderCompletionService,
-    private readonly cashAccounts: CodCashAccountService = codCashAccountService
+    private readonly cashAccounts: CodCashAccountService = codCashAccountService,
+    private readonly contracts: AgentContractRepository = agentContractRepository
   ) {}
 
-  // ─── Creation (at pickup) ────────────────────────────────────────────────────
+  // ─── Creation (at agent assignment) ─────────────────────────────────────────
 
   /**
-   * Create the pending collection for a COD shipment being picked up. Runs
-   * inside the caller's (ShipmentService.updateStatus) transaction so a
-   * picked-up COD shipment can never exist without its collection record.
-   * Returns the plaintext code for the post-commit customer notification.
+   * Ensure a COD shipment has its pending cash collection, pointing at the agent
+   * currently assigned to it. Runs inside the caller's transaction.
+   *
+   * Called at AGENT ASSIGNMENT, so the customer gets their delivery code as soon
+   * as someone is dispatched rather than at pickup — by the time the agent is at
+   * the door the customer has long had it and can read it straight out. It is
+   * also called again at pickup as a safety net: the invariant that a picked-up
+   * COD shipment always has a collection predates the assignment hook and must
+   * survive shipments assigned before it existed.
+   *
+   * Idempotent, and both halves of that matter:
+   *  - Already exists → returns `code: null`. The customer keeps the code they
+   *    have. Re-issuing on every reassignment would invalidate a code the
+   *    customer may already be holding, and train them to expect a fresh one
+   *    that is not coming.
+   *  - Agent swapped → the PENDING collection is re-pointed at the new agent.
+   *    Skip this and the cash lands on the previous agent's balance at collect
+   *    (`creditCashLiabilitiesInSession` credits `collection.agent_id`), leaving
+   *    one agent holding cash they never took and another accountable for none.
    */
-  async createForShipmentInSession(
+  async ensureForShipmentInSession(
     order: IOrder,
     shipment: IShipment,
     session: ClientSession
-  ): Promise<{ collection: ICashCollection; code: string }> {
+  ): Promise<{ collection: ICashCollection; code: string | null }> {
     if (!shipment.agent_id) {
-      throw createAppError(ERROR_CODES.COD_AGENT_NOT_ASSIGNED, 422, 'A COD shipment cannot be picked up before an agent is assigned');
+      throw createAppError(ERROR_CODES.COD_AGENT_NOT_ASSIGNED, 422, 'A COD shipment needs an assigned agent before its delivery code can be issued');
+    }
+    const shipmentId = shipment._id.toString();
+    const agentId = shipment.agent_id.toString();
+
+    const existing = await this.collectionRepo.findByShipmentId(shipmentId, session);
+    if (existing) {
+      if (existing.status === 'pending' && existing.agent_id?.toString() !== agentId) {
+        const repointed = await this.collectionRepo.reassignPendingAgent(shipmentId, agentId, session);
+        return { collection: repointed ?? existing, code: null };
+      }
+      return { collection: existing, code: null };
     }
 
     const expectedAmount = this.computeExpectedAmount(order, shipment);
@@ -99,6 +146,57 @@ export class CashCollectionService {
     return { collection, code };
   }
 
+  /**
+   * Re-open a RETURNED COD shipment's cancelled collection for re-delivery — used
+   * when the shipment is reassigned agent → agent out of `returned`. Returning
+   * the shipment cancelled its delivery code (`cancelPendingByShipment`) and drove
+   * the order's COD payment status to a terminal `failed`; both must be undone or
+   * the replacement can never record the cash and reach `delivered`.
+   *
+   * This mints a FRESH code (a new secret for the customer, since the old one was
+   * voided) on the revived collection, and clears the terminal `failed` payment
+   * status back to `pending` so a fresh collection can move the order forward. The
+   * replacement agent is re-pointed onto the pending collection when they accept
+   * (`ensureForShipmentInSession` → `reassignPendingAgent`), so no second code is
+   * issued there.
+   *
+   * A no-op (returns `code: null`) for a non-COD order, or when there is no
+   * cancelled collection to revive (e.g. reassignment out of `failed`, whose code
+   * was never cancelled). Runs inside the reassignment transaction.
+   */
+  async reopenForRedeliveryInSession(
+    order: IOrder,
+    shipment: IShipment,
+    session: ClientSession
+  ): Promise<{ collection: ICashCollection; code: string } | { collection: null; code: null }> {
+    if (order.payment_method !== 'cash_on_delivery') return { collection: null, code: null };
+
+    const shipmentId = (shipment._id as any).toString();
+    const existing = await this.collectionRepo.findByShipmentId(shipmentId, session);
+    if (!existing || existing.status !== 'cancelled') return { collection: null, code: null };
+
+    const code = this.codes.generateCode();
+    const revived = await this.collectionRepo.reopenCancelledForRedelivery(
+      shipmentId,
+      { code_hash: this.codes.hashCode(code), code_plain: code, code_generated_at: new Date() },
+      session
+    );
+    if (!revived) return { collection: null, code: null };
+
+    // Clear the terminal payment status the return produced. Only `failed` is
+    // touched — `paid`/`refunded` mean the money question is genuinely closed and
+    // must never be re-opened by a redelivery.
+    if (order.payment_status === 'failed') {
+      await OrderModel.updateOne(
+        { _id: order._id, payment_status: 'failed' },
+        { $set: { payment_status: 'pending' } },
+        { session }
+      );
+    }
+
+    return { collection: revived, code };
+  }
+
   /** Best-effort post-commit customer notification of a (re)issued code. */
   async notifyCodeIssued(order: IOrder, collection: ICashCollection, code: string): Promise<void> {
     try {
@@ -124,8 +222,15 @@ export class CashCollectionService {
 
   /**
    * Agent submits the customer's delivery code: verify, then atomically record
-   * the cash and deliver the shipment. The ONLY path by which a COD shipment
-   * reaches 'delivered'.
+   * the cash and deliver the shipment. The only path by which a COD shipment
+   * reaches 'delivered' with the customer's own evidence behind it — the one
+   * other route, `autoCollectWithoutCode`, records the same cash on nothing but
+   * the elapsed dispute window.
+   *
+   * `agent_delivered` is the expected state here — the agent signals arrival,
+   * is told to ask for the code, and submits it. `picked_up`/`in_transit` stay
+   * collectible too: the code is the thing that proves the handoff, and an agent
+   * who collects without first announcing arrival has still collected.
    */
   async collect(agentId: string, agentUserId: string, shipmentId: string, input: CollectInput) {
     // 1. Scope: the shipment must be assigned to THIS agent (404 — never leak).
@@ -133,7 +238,7 @@ export class CashCollectionService {
     if (!shipment || shipment.agent_id?.toString() !== agentId) {
       throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
     }
-    if (shipment.status !== 'picked_up' && shipment.status !== 'in_transit') {
+    if (!COLLECTIBLE_SHIPMENT_STATUSES.includes(shipment.status)) {
       throw createAppError(ERROR_CODES.COD_COLLECTION_NOT_COLLECTIBLE, 422, undefined, {
         shipmentStatus: shipment.status,
       });
@@ -178,6 +283,7 @@ export class CashCollectionService {
       claimed = await this.collectionRepo.claimCollected(
         collection._id as Types.ObjectId,
         {
+          method: 'code',
           location: input.location ?? null,
           device_info: input.deviceInfo ?? null,
           ip: input.ip ?? null,
@@ -219,7 +325,149 @@ export class CashCollectionService {
       await this.splitEarnings(refreshedOrder, claimed!);
     }
 
+    // Delivered → the shipment left the agent's active set; free the capacity
+    // slot they reserved on acceptance. Best-effort (release never throws; the
+    // nightly reconcile is the backstop).
+    void agentCapacityService
+      .release(agentId, 'delivered')
+      .catch((err) => console.error('[CashCollectionService] capacity release failed:', err));
+
     return this.toDto(claimed!, refreshedOrder?.payment_status ?? null);
+  }
+
+  // ─── Auto-collection (the dispute window elapsed, no code ever came) ────────
+
+  /**
+   * Record a COD collection WITHOUT code verification, attributed to the system,
+   * because the shipment sat at `agent_delivered` past the dispute window.
+   * Called only by `ShipmentService.autoConfirmStaleDeliveries`.
+   *
+   * ── Why this exists ──────────────────────────────────────────────────────
+   *
+   * A customer can pay cash and still never produce the code — phone not to
+   * hand, or simply unwilling. The agent's duty is the other half: an agent who
+   * was NOT paid must move the shipment to `failed` → `returned`. Leaving it at
+   * `agent_delivered` for the whole window is therefore an implicit assertion
+   * that the cash WAS collected, and this records that assertion.
+   *
+   * ── Why it goes THROUGH the collection rather than around it ──────────────
+   *
+   * The tempting shortcut — flip the shipment to `delivered` and skip the
+   * collection — does NOT wrongly release money (COD allocations carry
+   * `requires_cash_settlement`, so they wait for cash the platform physically
+   * holds). It fails far more quietly: `splitCodCollection` only ever runs off a
+   * collection, so there would be no allocations at all and NOBODY — not even
+   * the vendor — would earn from the delivery; the collection would sit
+   * `pending` forever, invisible to `recoverMissedCodSplits`, which only looks
+   * at `collected`; and `recomputeCodPaymentStatusInSession` would never run, so
+   * a delivered, completed order would keep a payment status that is a lie.
+   * Going through the collection keeps every one of those mechanisms intact.
+   *
+   * ── The liability, deliberately, lands on the AGENT ───────────────────────
+   *
+   * `creditCashLiabilitiesInSession` credits `collection.agent_id`, exactly as a
+   * coded collection would. That is the intent: the agent claimed delivery and
+   * had the full window to mark it returned if unpaid. Non-payment is then the
+   * existing deposit-deadline worker's job — it opens a `late_deposit`
+   * discrepancy and applies the trust penalty once the agent sits on the cash
+   * past `DEPOSIT_DEADLINE_DAYS`. This path deliberately raises no discrepancy
+   * and costs no trust of its own: at this moment nothing has actually gone
+   * wrong, an open discrepancy would block the AGENCY's rolling-reserve releases
+   * for a customer who merely would not read out a code, and whether the
+   * customer cooperates is not something the agent controls.
+   *
+   * No exposure check, matching `collect()`: the limit is admission control at
+   * assignment, and refusing to record cash that physically exists would only
+   * make the books wrong.
+   *
+   * Returns true when a collection was recorded, false when there was nothing
+   * to do (the agent's code landed first, or there is no collection at all).
+   */
+  async autoCollectWithoutCode(shipment: IShipment): Promise<boolean> {
+    const shipmentId = shipment._id.toString();
+    const orderId = shipment.order_id.toString();
+
+    const collection = await this.collectionRepo.findByShipmentId(shipmentId);
+    if (!collection) {
+      // A COD shipment that reached `agent_delivered` with no collection means
+      // the assignment hook never ran. Auto-collecting is impossible (there is
+      // no expected amount to record), and confirming without one would create
+      // exactly the ledger hole this path exists to prevent — so leave it for a
+      // human and say so loudly.
+      console.error(
+        `[CashCollectionService] COD shipment ${shipmentId} is stale at agent_delivered with no ` +
+          `cash collection; cannot auto-collect. It will not confirm until one exists.`
+      );
+      return false;
+    }
+    if (collection.status !== 'pending') return false;
+
+    let claimed: ICashCollection | null = null;
+    await transactionManager.runInTransaction(async (session) => {
+      // Claim the cash first — guarded on `pending`, this is the double-collect
+      // guard, and it is the same order `collect()` takes its writes in. Null
+      // means the agent submitted the code while the sweep was running: they
+      // win, and their collection carries real evidence where ours would not.
+      const claim = await this.collectionRepo.claimCollected(
+        collection._id as Types.ObjectId,
+        { method: 'auto_no_code', location: null, device_info: null, ip: null },
+        session
+      );
+      if (!claim) return;
+
+      // Guarded on `agent_delivered`, and that guard is load-bearing: the agency
+      // may have moved the shipment to `failed` since the sweep read it, and a
+      // failed delivery must never be auto-collected. Throwing rolls the claim
+      // above back rather than recording cash against a shipment coming home.
+      const delivered = await this.shipmentRepo.applyCustomerConfirmation(
+        shipmentId,
+        null,
+        true,
+        session
+      );
+      if (!delivered) {
+        throw createAppError(
+          ERROR_CODES.COD_COLLECTION_NOT_COLLECTIBLE,
+          409,
+          'Shipment left agent_delivered while its auto-collection was in flight',
+          { shipmentId }
+        );
+      }
+
+      await this.orderRepo.setItemDeliveryStatusByShipment(shipmentId, 'delivered', session);
+      await this.aggregationService.recomputeFulfillmentStatus(orderId, session);
+      await this.recomputeCodPaymentStatusInSession(orderId, session);
+      await this.creditCashLiabilitiesInSession(claim, session);
+
+      claimed = claim;
+    });
+
+    if (!claimed) return false;
+
+    // Post-commit side effects — identical to `collect()`'s, because the
+    // downstream money mechanics must not be able to tell the two apart.
+    const refreshedOrder = await OrderModel.findById(orderId);
+    if (
+      refreshedOrder &&
+      !refreshedOrder.completion?.confirmed_at &&
+      this.completionService.isSettled(refreshedOrder)
+    ) {
+      // 'system'/auto, never 'customer': nobody confirmed anything here.
+      await this.completionService.complete(refreshedOrder, 'system', true, null);
+    }
+
+    const claimedAgentId = (claimed as ICashCollection).agent_id.toString();
+    if (refreshedOrder) {
+      await this.emitPostCollectionEvents(refreshedOrder, claimed, claimedAgentId, true);
+      await this.splitEarnings(refreshedOrder, claimed);
+    }
+
+    // Delivered → free the agent's capacity slot (best-effort; see collect()).
+    void agentCapacityService
+      .release(claimedAgentId, 'delivered')
+      .catch((err) => console.error('[CashCollectionService] capacity release failed:', err));
+
+    return true;
   }
 
   /**
@@ -237,9 +485,13 @@ export class CashCollectionService {
   }
 
   /**
-   * Raise both cash liabilities for a verified collection, INSIDE the collect
+   * Raise both cash liabilities for a collection, INSIDE the collect
    * transaction: the agent now physically holds the cash (owes the agency),
    * and the agency chain is accountable to the platform for it.
+   *
+   * Runs identically for a coded and an auto (uncoded) collection. That is
+   * deliberate — the agent is accountable for the cash either way, and the
+   * deposit-deadline worker can only chase what has been credited here.
    */
   protected async creditCashLiabilitiesInSession(
     collection: ICashCollection,
@@ -264,6 +516,53 @@ export class CashCollectionService {
       'collection',
       'cash_collection',
       refId,
+      session
+    );
+    await this.attributeToContractInSession(collection, session);
+  }
+
+  /**
+   * Attribute collected cash to the contract it was earned under.
+   *
+   * The agent's CodCashAccount is ONE pot across every agency; this is the
+   * per-agency share of it. The split is what lets §4 ask "may this contract
+   * end?" without the answer being polluted by cash the agent owes someone
+   * else, and it is the counter a settlement later draws down.
+   *
+   * `findLive`, not `findActive`: suspending or pausing a contract deliberately
+   * leaves the agent's existing shipments alone, so cash can legitimately land
+   * under a contract that is no longer taking new work. Refusing to attribute it
+   * would lose the very balance that blocks that contract from being terminated
+   * with the agency's money still in the agent's pocket.
+   *
+   * A missing contract does NOT fail the collection. This runs inside the
+   * transaction by which a COD shipment reaches `delivered`, and a bookkeeping
+   * gap must never strand a physical handover that already happened — the cash
+   * is still recorded against the agent and the agency above. It is logged
+   * because it means a contract was terminated with a shipment still in flight,
+   * which is a lifecycle bug worth chasing, not a routine event.
+   */
+  private async attributeToContractInSession(
+    collection: ICashCollection,
+    session: ClientSession
+  ): Promise<void> {
+    const agentId = collection.agent_id.toString();
+    const agencyId = collection.agency_id.toString();
+
+    const contract = await this.contracts.findLive(agentId, agencyId, session);
+    if (!contract) {
+      console.error(
+        `[CashCollectionService] No live contract for agent ${agentId} at agency ${agencyId}; ` +
+          `collection ${collection._id.toString()} (${collection.expected_amount}) is unattributed. ` +
+          `The cash is recorded against the agent and the agency, but this contract's ` +
+          `outstanding balance will understate what the agent holds.`
+      );
+      return;
+    }
+
+    await this.contracts.adjustOutstandingBalance(
+      contract._id.toString(),
+      collection.expected_amount,
       session
     );
   }
@@ -453,19 +752,33 @@ export class CashCollectionService {
     return total;
   }
 
-  private async emitPostCollectionEvents(order: IOrder, collection: ICashCollection, agentId: string) {
+  /**
+   * `uncoded` marks an auto-collection recorded without a delivery code. It is
+   * the audit trail for a collection nobody verified — deliberately carried here
+   * rather than as a CodDiscrepancy, which would have blocked the agency's
+   * reserve releases over a customer who simply would not read out their code.
+   */
+  private async emitPostCollectionEvents(
+    order: IOrder,
+    collection: ICashCollection,
+    agentId: string,
+    uncoded = false
+  ) {
     // Timeline (audit trail on the order).
     try {
       await this.timelineRepo.appendEvent({
         orderId: order._id.toString(),
         eventType: 'payment.updated',
-        description: `Cash collected on delivery (${collection.expected_amount} ${collection.currency})`,
+        description: uncoded
+          ? `Cash recorded as collected without a delivery code after the confirmation window elapsed (${collection.expected_amount} ${collection.currency})`
+          : `Cash collected on delivery (${collection.expected_amount} ${collection.currency})`,
         metadata: {
           codCollectionId: collection._id.toString(),
           shipmentId: collection.shipment_id.toString(),
           agentId,
           amount: collection.expected_amount,
           paymentStatus: order.payment_status,
+          verificationMethod: uncoded ? 'auto_no_code' : 'code',
         },
         actorType: 'system',
         actorId: null,
@@ -511,6 +824,7 @@ export class CashCollectionService {
           agentId,
           amount: collection.expected_amount,
           currency: collection.currency,
+          verificationMethod: uncoded ? 'auto_no_code' : 'code',
         },
       });
     } catch (error) {

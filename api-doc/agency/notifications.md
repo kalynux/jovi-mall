@@ -76,7 +76,8 @@ verification status, and per-event subscriptions.
     "preferences": {
       "connectionUpdated": true,
       "shipmentAssigned": true,
-      "payoutUpdates": true
+      "payoutUpdates": true,
+      "codDepositUpdates": true
     }
   }
 }
@@ -84,6 +85,13 @@ verification status, and per-event subscriptions.
 
 The `*Verified` flags are **computed live** from the agency's account (email verification,
 Telegram link, WhatsApp link) — not stored toggles, ignored on write.
+
+`codDepositUpdates` covers two COD cash-chain situations: an agent **declaring a hand-over** you must
+confirm or reject (`cod.deposit.declared`), and an agent **paying the platform directly**, which drops
+your liability without you acting (`cod.deposit.direct_to_platform`). Note the declaration one has a
+consequence you cannot opt out of: leave a declaration unanswered past the confirm deadline (2 days)
+and a `deposit_not_confirmed` discrepancy freezes your rolling-reserve releases. Turning the
+notification off does not stop the clock — so surface that in the settings UI.
 
 ---
 
@@ -101,7 +109,8 @@ Telegram link, WhatsApp link) — not stored toggles, ignored on write.
   "preferences": {
     "connectionUpdated": true,
     "shipmentAssigned": true,
-    "payoutUpdates": true
+    "payoutUpdates": true,
+    "codDepositUpdates": true
   }
 }
 ```

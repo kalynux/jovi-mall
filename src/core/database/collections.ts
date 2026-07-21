@@ -53,12 +53,23 @@ export const MODELS = Object.freeze({
 
   // Shipments & delivery
   SHIPMENT: 'Shipment',
+  SHIPMENT_ASSIGNMENT_OFFER: 'ShipmentAssignmentOffer',
   DELIVERY_AGENCY: 'DeliveryAgency',
   DELIVERY_AGENT: 'DeliveryAgent',
   AGENT_INVITE: 'AgentInvite',
 
+  // Agent domain (agent ↔ agency contracts; an agent may serve many agencies,
+  // each contract sub-allocating a slice of the agent's global COD threshold)
+  AGENT_AGENCY_CONTRACT: 'AgentAgencyContract',
+  AGENT_MEMBERSHIP_EVENT: 'AgentMembershipEvent',
+  CONTRACT_STATUS_REQUEST: 'ContractStatusRequest',
+  CONTRACT_SETTLEMENT: 'ContractSettlement',
+
   // Vendor <-> agency connections
   VENDOR_AGENCY_CONNECTION: 'VendorAgencyConnection',
+
+  // Live-tracking integration (outbox → geo-tracker service)
+  TRACKING_OUTBOX: 'TrackingOutbox',
 
   // Payments
   PAYMENT_TRANSACTION: 'PaymentTransaction',
@@ -91,6 +102,8 @@ export const MODELS = Object.freeze({
   VENDOR_NOTIFICATION_PREFERENCE: 'VendorNotificationPreference',
   AGENCY_NOTIFICATION: 'AgencyNotification',
   AGENCY_NOTIFICATION_PREFERENCE: 'AgencyNotificationPreference',
+  AGENT_NOTIFICATION: 'AgentNotification',
+  AGENT_NOTIFICATION_PREFERENCE: 'AgentNotificationPreference',
   DEVICE_TOKEN: 'DeviceToken',
 
   // Integrations
@@ -157,12 +170,23 @@ export const COLLECTIONS = Object.freeze({
 
   // Shipments & delivery
   SHIPMENT: 'shipments',
+  SHIPMENT_ASSIGNMENT_OFFER: 'shipment_assignment_offers',
   DELIVERY_AGENCY: 'delivery_agencies',
   DELIVERY_AGENT: 'delivery_agents',
   AGENT_INVITE: 'agent_invites',
 
+  // Agent domain (agent ↔ agency contracts; an agent may serve many agencies,
+  // each contract sub-allocating a slice of the agent's global COD threshold)
+  AGENT_AGENCY_CONTRACT: 'agent_agency_contracts',
+  AGENT_MEMBERSHIP_EVENT: 'agent_membership_events',
+  CONTRACT_STATUS_REQUEST: 'contract_status_requests',
+  CONTRACT_SETTLEMENT: 'contract_settlements',
+
   // Vendor <-> agency connections
   VENDOR_AGENCY_CONNECTION: 'vendor_agency_connections',
+
+  // Live-tracking integration (outbox → geo-tracker service)
+  TRACKING_OUTBOX: 'tracking_outbox',
 
   // Payments
   PAYMENT_TRANSACTION: 'payment_transactions',
@@ -195,6 +219,8 @@ export const COLLECTIONS = Object.freeze({
   VENDOR_NOTIFICATION_PREFERENCE: 'vendor_notification_preferences',
   AGENCY_NOTIFICATION: 'agency_notifications',
   AGENCY_NOTIFICATION_PREFERENCE: 'agency_notification_preferences',
+  AGENT_NOTIFICATION: 'agent_notifications',
+  AGENT_NOTIFICATION_PREFERENCE: 'agent_notification_preferences',
   DEVICE_TOKEN: 'device_tokens',
 
   // Integrations

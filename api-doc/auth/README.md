@@ -27,6 +27,32 @@ Both cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` in production. **Token
 
 ---
 
+## Response Envelope
+
+> **⚠️ Breaking change (2026-07-17):** auth responses are now wrapped in the platform-standard
+> success envelope. Payloads that were previously returned at the top level (`{ user, role, role_entity }`)
+> are now nested under `data`.
+
+Every **success** response on this service uses:
+
+```json
+{ "success": true, "data": <payload>, "meta": { "...": "pagination or summary" }, "message": "optional note" }
+```
+
+- `data` always holds the payload (object, array, or `null`).
+- `meta` appears only on paginated/list responses (`{ total, page, limit, pages }`).
+- `message` is an optional human-readable note.
+
+Every **error** response uses the mirror shape:
+
+```json
+{ "success": false, "requestId": "req_abc", "error": { "code": "AUTH_INVALID_CREDENTIALS", "message": "Invalid credentials", "statusCode": 401, "details": {} } }
+```
+
+Read `data` for the body, `error.code` for programmatic handling. All examples below show the full envelope.
+
+---
+
 ## Frontend Integration
 
 All fetch/axios calls **must** include credentials to send cookies:
@@ -63,7 +89,7 @@ A user can hold **multiple roles** and log in under any of them independently.
 |--------|------|------|-------------|
 | `POST` | `/auth/register` | Public | Register a new account |
 | `POST` | `/auth/login` | Public | Log in and set auth cookies |
-| `POST` | `/auth/refresh` | Public (cookie) | Issue new access token from refresh cookie |
+| `POST` | `/auth/browser/refresh` | Public (cookie) | Explicitly issue a new access token from the refresh cookie |
 | `POST` | `/auth/logout` | Public | Clear both auth cookies |
 | `GET` | `/auth/me` | Required | Get current user (lightweight) |
 | `GET` | `/auth/auth-me/:role` | Required | Restore session + re-issue cookies |
@@ -112,28 +138,32 @@ Sets cookies `access_token` and `refresh_token`.
 
 ```json
 {
-  "user": {
-    "_id": "664abc...",
-    "login_phone": "08012345678",
-    "login_email": "john@example.com",
-    "roles": ["vendor"],
-    "status": "active"
-  },
-  "role_entity": {
-    "_id": "664def...",
-    "user_id": "664abc...",
-    "business_name": "John's Shop",
-    "email": "john@example.com",
-    "phone": "08012345678",
-    "email_verified": false,
-    "phone_verified": false,
-    "onboarding_step": 1,
-    "status": "pending_verification"
+  "success": true,
+  "data": {
+    "user": {
+      "_id": "664abc...",
+      "login_phone": "08012345678",
+      "login_email": "john@example.com",
+      "roles": ["vendor"],
+      "status": "active"
+    },
+    "role": "vendor",
+    "role_entity": {
+      "_id": "664def...",
+      "user_id": "664abc...",
+      "business_name": "John's Shop",
+      "email": "john@example.com",
+      "phone": "08012345678",
+      "email_verified": false,
+      "phone_verified": false,
+      "onboarding_step": 1,
+      "status": "pending_verification"
+    }
   }
 }
 ```
 
-> `onboarding_step` tells you where to redirect. See [Onboarding Flow](#onboarding-flow) below.
+> `data.role_entity.onboarding_step` tells you where to redirect. See [Onboarding Flow](#onboarding-flow) below.
 >
 > No tokens in response body.
 
@@ -177,23 +207,26 @@ Sets cookies `access_token` and `refresh_token`.
 
 ```json
 {
-  "user": {
-    "_id": "664abc...",
-    "login_phone": "08012345678",
-    "roles": ["vendor", "customer"],
-    "status": "active"
-  },
-  "role": "vendor",
-  "role_entity": {
-    "_id": "664def...",
-    "business_name": "John's Shop",
-    "onboarding_step": 1,
-    "status": "pending_verification"
+  "success": true,
+  "data": {
+    "user": {
+      "_id": "664abc...",
+      "login_phone": "08012345678",
+      "roles": ["vendor", "customer"],
+      "status": "active"
+    },
+    "role": "vendor",
+    "role_entity": {
+      "_id": "664def...",
+      "business_name": "John's Shop",
+      "onboarding_step": 1,
+      "status": "pending_verification"
+    }
   }
 }
 ```
 
-> Check `role_entity.onboarding_step` to determine where to redirect the user. See [Post-Login Routing](#post-login--registration-routing).
+> Check `data.role_entity.onboarding_step` to determine where to redirect the user. See [Post-Login Routing](#post-login--registration-routing).
 
 ### Errors
 
@@ -220,15 +253,23 @@ None.
 ```json
 {
   "success": true,
+  "data": null,
   "message": "Logged out successfully"
 }
 ```
 
 ---
 
-## POST `/auth/refresh`
+## POST `/auth/browser/refresh`
 
 Issues a new `access_token` cookie using the `refresh_token` cookie.
+
+> **Note:** There is **no** `POST /auth/refresh` on the main auth router. Two refresh paths exist:
+> 1. **Automatic (recommended):** `requireAuth` performs a *silent refresh* from the `refresh_token`
+>    cookie whenever the access token is missing/expired, transparently re-issuing the access cookie —
+>    so browser clients rarely need to refresh explicitly.
+> 2. **Explicit:** `POST /auth/browser/refresh` (this endpoint), for clients that want to refresh
+>    proactively. Bearer-only callers (mobile/service) cannot silently refresh — they must re-login on expiry.
 
 **Auth**: Public (uses `refresh_token` cookie automatically)
 
@@ -242,8 +283,9 @@ Sets a new `access_token` cookie.
 
 ```json
 {
-  "message": "Token refreshed",
-  "user": { "_id": "...", "roles": ["vendor"], "..." : "..." }
+  "success": true,
+  "data": { "user": { "id": "664abc...", "role": "vendor" } },
+  "message": "Access token refreshed"
 }
 ```
 
@@ -257,7 +299,7 @@ Sets a new `access_token` cookie.
 
 ## GET `/auth/me`
 
-Returns the raw user object. Lightweight — no role entity loaded.
+Returns the current user with the active role and its role entity.
 
 **Auth**: Required
 
@@ -265,11 +307,16 @@ Returns the raw user object. Lightweight — no role entity loaded.
 
 ```json
 {
-  "user": {
-    "_id": "664abc...",
-    "login_phone": "08012345678",
-    "roles": ["vendor"],
-    "status": "active"
+  "success": true,
+  "data": {
+    "user": {
+      "_id": "664abc...",
+      "login_phone": "08012345678",
+      "roles": ["vendor"],
+      "status": "active"
+    },
+    "role": "vendor",
+    "role_entity": { "_id": "664def...", "business_name": "John's Shop", "onboarding_step": 0 }
   }
 }
 ```
@@ -290,19 +337,22 @@ Sets fresh `access_token` and `refresh_token` cookies.
 
 ```json
 {
-  "user": { "_id": "...", "roles": ["vendor", "customer"], "..." : "..." },
-  "role": "vendor",
-  "role_entity": {
-    "_id": "...",
-    "business_name": "John's Shop",
-    "onboarding_step": 1,
-    "status": "pending_verification",
-    "..." : "..."
+  "success": true,
+  "data": {
+    "user": { "_id": "...", "roles": ["vendor", "customer"], "..." : "..." },
+    "role": "vendor",
+    "role_entity": {
+      "_id": "...",
+      "business_name": "John's Shop",
+      "onboarding_step": 1,
+      "status": "pending_verification",
+      "..." : "..."
+    }
   }
 }
 ```
 
-> Check `role_entity.onboarding_step` to route to onboarding or dashboard.
+> Check `data.role_entity.onboarding_step` to route to onboarding or dashboard.
 
 ### Errors
 
@@ -341,9 +391,12 @@ Sets fresh cookies scoped to the **newly added role**.
 
 ```json
 {
-  "user": { "_id": "...", "roles": ["vendor", "customer"], "..." : "..." },
-  "role": "customer",
-  "role_entity": { "_id": "...", "name": "John Doe", "onboarding_step": 0, "..." : "..." }
+  "success": true,
+  "data": {
+    "user": { "_id": "...", "roles": ["vendor", "customer"], "..." : "..." },
+    "role": "customer",
+    "role_entity": { "_id": "...", "name": "John Doe", "onboarding_step": 0, "..." : "..." }
+  }
 }
 ```
 
@@ -370,7 +423,7 @@ None. The `userId` and `role` are read from the JWT.
 ### Response `200`
 
 ```json
-{ "message": "Verification email sent" }
+{ "success": true, "data": { "message": "Verification email sent" } }
 ```
 
 ### Errors
@@ -400,7 +453,7 @@ Confirms the email address. Called automatically when the user clicks the verifi
 ### Response `200`
 
 ```json
-{ "message": "Email verified successfully" }
+{ "success": true, "data": { "message": "Email verified successfully" } }
 ```
 
 ---
@@ -421,13 +474,18 @@ Starts the WhatsApp phone verification flow.
 
 ```json
 {
-  "code": "A1B2C3D4", // 8 alpha-numeric characters
-  "command": "/link:A1B2C3D4",
-  "wa_link": "https://wa.me/234XXXXXXXXXX?text=%2Flink%3AA1B2C3D4",
-  "expires_in_seconds": 600,
-  "instructions": "Click the wa_link to verify your WhatsApp account automatically..."
+  "success": true,
+  "data": {
+    "code": "A1B2C3D4",
+    "command": "/link:A1B2C3D4",
+    "wa_link": "https://wa.me/234XXXXXXXXXX?text=%2Flink%3AA1B2C3D4",
+    "expires_in_seconds": 600,
+    "instructions": "Click the wa_link to verify your WhatsApp account automatically..."
+  }
 }
 ```
+
+> `data.code` is 8 alpha-numeric characters.
 
 ---
 
@@ -780,10 +838,13 @@ AUTH_REFRESH_TOKEN_TTL=2592000           # 30 days in seconds
 ### Flow E — Expired Access Token (Silent Refresh)
 
 ```
-1. Any API call returns 401
-2. POST /api/auth/refresh   (refresh_token cookie sent automatically)
-      → Issues new access_token cookie
-3. Retry original request
+Browser clients (cookie auth):
+  Refresh is AUTOMATIC — requireAuth silently refreshes from the refresh_token
+  cookie and re-issues the access cookie. No explicit call needed.
+  (To refresh proactively: POST /api/auth/browser/refresh)
+
+Bearer-only clients (mobile/service):
+  Cannot silently refresh. On 401 → re-login.
 ```
 
 ### Flow F — Multi-Role Login / Role Switch
@@ -811,6 +872,6 @@ AUTH_REFRESH_TOKEN_TTL=2592000           # 30 days in seconds
 ```
 1. POST /api/auth/logout
       → Clears both cookies
-      → Returns { success: true }
+      → Returns { success: true, data: null, message: "Logged out successfully" }
       → Redirect to login page
 ```
