@@ -1,11 +1,13 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import { BillingOwnerType, BILLING_OWNER_TYPES } from '../billing.types';
 
 /**
- * CreditTopup - A vendor's purchase of a credit pack.
+ * CreditTopup - An owner's purchase of a credit pack.
  *
- * Created `pending` when the vendor initiates a top-up; flipped to `paid` by the
- * payment webhook (which then credits the wallet) or `failed` on gateway failure.
+ * Created `pending` when the owner (vendor/agency/agent) initiates a top-up;
+ * flipped to `paid` by the payment webhook (which then credits the wallet) or
+ * `failed` on gateway failure.
  */
 
 export type CreditTopupStatus = 'pending' | 'paid' | 'failed' | 'reversed';
@@ -14,7 +16,8 @@ export type CreditTopupStatus = 'pending' | 'paid' | 'failed' | 'reversed';
 export type CreditTopupGateway = 'NOTCHPAY' | 'MYCOOLPAY' | 'STRIPE';
 
 export interface ICreditTopup extends Document {
-  vendor_id: mongoose.Types.ObjectId;
+  owner_type: BillingOwnerType;
+  owner_id: mongoose.Types.ObjectId;
   pack_code: string;
   credits: number;
   price: number;
@@ -30,7 +33,8 @@ export interface ICreditTopup extends Document {
 
 const CreditTopupSchema = new Schema<ICreditTopup>(
   {
-    vendor_id: { type: Schema.Types.ObjectId, ref: MODELS.VENDOR, required: true },
+    owner_type: { type: String, enum: BILLING_OWNER_TYPES, required: true },
+    owner_id: { type: Schema.Types.ObjectId, required: true },
     pack_code: { type: String, required: true, trim: true },
     credits: { type: Number, required: true, min: 1 },
     price: { type: Number, required: true, min: 0 },
@@ -43,7 +47,7 @@ const CreditTopupSchema = new Schema<ICreditTopup>(
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );
 
-CreditTopupSchema.index({ vendor_id: 1, created_at: -1 });
+CreditTopupSchema.index({ owner_type: 1, owner_id: 1, created_at: -1 });
 
 export const CreditTopupModel = mongoose.model<ICreditTopup>(
   MODELS.CREDIT_TOPUP,

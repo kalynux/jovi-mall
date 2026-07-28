@@ -48,6 +48,10 @@ export interface IAgentNotificationPreference extends Document {
          * channel (in-app + push are always delivered).
          */
         assignmentOffers: boolean;
+        /** Subscription plan lifecycle (plan.expiring / plan.expired). */
+        planUpdates: boolean;
+        /** The agent's own media storage threshold alerts (storage.alert, 80/90/100%). */
+        storageAlert: boolean;
     };
 
     updatedAt: Date;
@@ -97,6 +101,14 @@ const AgentNotificationPreferenceSchema = new Schema<IAgentNotificationPreferenc
                 default: true
             },
             assignmentOffers: {
+                type: Boolean,
+                default: true
+            },
+            planUpdates: {
+                type: Boolean,
+                default: true
+            },
+            storageAlert: {
                 type: Boolean,
                 default: true
             }

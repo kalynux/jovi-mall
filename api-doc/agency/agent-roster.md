@@ -123,7 +123,7 @@ memberships.
         "name": "Jean Kamga",
         "email": "agent@example.com",
         "phone": "+237670000001",
-        "avatarUrl": null,
+        "avatar": null,
         "status": "active",
         "vehicleInfo": { "vehicle_type": "bike", "plate_number": "ABC-123", "color": "red" },
         "availability": "online",
@@ -247,6 +247,7 @@ deactivated contract was the agent's primary, another active contract is promote
 ```
 
 `employment_type`: `employee` | `contractor` | `freelancer`. `ends_at` must not precede `started_at`.
+`employee_ref` is *clearable*: `null` or `""` clears it (stored as `null`); omit to leave unchanged.
 
 Employment is **per-membership**: the same agent may be your employee and another agency's freelancer.
 

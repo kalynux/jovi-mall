@@ -117,7 +117,7 @@ account exists yet with that email, the invite becomes visible as soon as one do
       "name": "Paul N.",
       "email": "agent@example.com",
       "phone": "+2376...",
-      "avatarUrl": null,
+      "avatar": null,
       "status": "active",
       "vehicleInfo": { "vehicle_type": "bike", "plate_number": "LT-123-AB", "color": "red" },
       "capacityStatus": "available",

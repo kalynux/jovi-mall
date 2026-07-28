@@ -664,7 +664,7 @@ PATCH /api/customer/profile
 |------|-------|-------|-----------------|
 | `LOGISTICS_SETUP` | `1` | Logistics Setup | `coverage_areas` (min 1), `headquarters_addresses` (min 1) |
 | `PAYOUT_SETUP` | `2` | Payout Setup | `payout_details` |
-| `BRANDING` | `3` | Branding (Optional) | `logo_url`, `timezone` — or `skip: true` |
+| `BRANDING` | `3` | Branding (Optional) | `logo_file_id`, `timezone` — or `skip: true` |
 | `COMPLETED` | `0` | Done | — |
 
 ---
@@ -697,7 +697,7 @@ Below are the key fields returned in `role_entity` for each role. Some fields ar
   "phone": "08098765432",
   "email_verified": false,
   "phone_verified": false,
-  "avatar_url": null,
+  "avatar": null,
   "bio": null,
   "saved_addresses": [],
   "preferences": {

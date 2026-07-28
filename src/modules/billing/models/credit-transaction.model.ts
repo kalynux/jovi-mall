@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { WalletOwnerType } from './credit-wallet.model';
+import { BILLING_OWNER_TYPES } from '../billing.types';
 
 /**
  * CreditTransaction - Append-only ledger of every credit movement.
@@ -42,7 +43,7 @@ export interface ICreditTransaction extends Document {
 const CreditTransactionSchema = new Schema<ICreditTransaction>(
   {
     wallet_id: { type: Schema.Types.ObjectId, ref: MODELS.CREDIT_WALLET, required: true },
-    owner_type: { type: String, enum: ['vendor', 'agency'], required: true },
+    owner_type: { type: String, enum: BILLING_OWNER_TYPES, required: true },
     owner_id: { type: Schema.Types.ObjectId, required: true },
     type: {
       type: String,

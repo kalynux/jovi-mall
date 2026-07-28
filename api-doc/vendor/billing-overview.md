@@ -63,7 +63,7 @@ When a vendor buys a new plan while a **paid** plan is still running, the new pl
 
 A vendor may not queue a second pending plan while one already exists (`BILLING_PENDING_PLAN_EXISTS`).
 
-`VendorPlan.status` values: `active`, `pending_activation`, `expired`, `cancelled`.
+`SubscriberPlan.status` values: `active`, `pending_activation`, `expired`, `cancelled`. (The plan-assignment model is now owner-scoped — `SubscriberPlan`, `owner_type`/`owner_id` — and shared by vendor/agency/agent.)
 
 **How a vendor gets a plan.** New vendors start on free Starter automatically. To upgrade, the vendor **buys a plan themselves** — `POST /vendor/plans/:planId/purchase` opens a gateway payment; once confirmed (via `POST /vendor/plan-purchases/:id/verify`) the plan is **assigned/activated automatically, with no admin step**: immediately if currently on free/lapsed, or queued as `pending_activation` behind a still-running paid plan. Admins can also assign a plan manually for comps/overrides. This mirrors the credit top-up flow exactly.
 
@@ -138,11 +138,12 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
 ```
 `term_days: null` = never expires (free tier). `max_active_products: null` = unlimited.
 
-### `VendorPlan`
+### `SubscriberPlan`
 ```json
 {
   "_id": "667a...",
-  "vendor_id": "6601...",
+  "owner_type": "vendor",
+  "owner_id": "6601...",
   "plan_id": "665f...",
   "plan_code": "growth",
   "status": "active",
@@ -178,7 +179,8 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
 ```json
 {
   "_id": "66bb...",
-  "vendor_id": "6601...",
+  "owner_type": "vendor",
+  "owner_id": "6601...",
   "pack_code": "pack_100",
   "credits": 100,
   "price": 600,
@@ -197,7 +199,8 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
 ```json
 {
   "_id": "66cc...",
-  "vendor_id": "6601...",
+  "owner_type": "vendor",
+  "owner_id": "6601...",
   "plan_id": "665f...",
   "plan_code": "growth",
   "price": 5000,
@@ -205,12 +208,12 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
   "status": "pending",
   "gateway": "NOTCHPAY",
   "gateway_ref": "notch_tx_p1",
-  "vendor_plan_id": null,
+  "subscriber_plan_id": null,
   "created_at": "2026-06-19T14:00:00.000Z",
   "updated_at": "2026-06-19T14:00:00.000Z"
 }
 ```
-`status` ∈ `pending | paid | failed`. `vendor_plan_id` is the `VendorPlan` created once the purchase is applied (null until `paid`).
+`status` ∈ `pending | paid | failed`. `subscriber_plan_id` is the `SubscriberPlan` created once the purchase is applied (null until `paid`). (The engine is now owner-scoped — `owner_type`/`owner_id` replace the old `vendor_id`; the same rows serve agency/agent purchases.)
 
 ### `CreditPack` (catalog item)
 ```json

@@ -1,9 +1,14 @@
+import mongoose from 'mongoose';
 import { IDeliveryAgency, IAgencyHeadquartersAddress, IAgencyKycDetails, IAgencyPolicies } from '../delivery-agency.model';
 import { withGeoAddress } from '../../../core/types/geo-address.types';
 // removed IPolygon
 import { IPayoutMethod } from '../../../core/types/payout.types';
 import { UpdateAgencyProfileInput } from '../validators/agency-onboarding.validator';
 import { AgencyOnboardingStep, AgencyOnboardingStepValue } from '../../../core/constants/onboarding-steps';
+import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
+import { IStorageProvider } from '../../../core/storage';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
+import { resolveFileDetail } from '../../catalog/read-models/file-detail.resolver';
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
@@ -29,12 +34,25 @@ export type AgencyPayoutDetailsSanitized = AgencyPayoutMethodSanitized;
 
 export interface GetAgencyProfileResponseDto {
     id: string;
-    agencyName: string;
+    /**
+     * Personal/contact display name. The public BUSINESS name lives on the
+     * Magazin (GET /api/agency/magazin), not here — mirroring the vendor Store.
+     */
+    displayName?: string;
     email: string | null;
     emailVerified: boolean;
     phone: string | null;
     phoneVerified: boolean;
-    logoUrl: string | null;
+    /**
+     * Personal profile avatar as a resolved file object, or null. Distinct from
+     * the business logo, which lives on the Magazin.
+     */
+    avatar: FileDetail | null;
+    /**
+     * ISO-2 operating country. Set once (onboarding Step 1) and immutable
+     * afterwards; null only on legacy profiles that predate the field.
+     */
+    country: string | null;
     coverageAreas: string[];
     /**
      * First entry is always the primary headquarters.
@@ -90,6 +108,7 @@ export interface AgencyOnboardingStatusDto {
 
 export interface CreateAgencyResponseDto {
     id: string;
+    /** Business name — resolved from the agency's Magazin (source of truth). */
     agencyName: string;
     onboardingStep: number;
     version: number;
@@ -172,15 +191,20 @@ export class AgencyProfileMapper {
      * - kyc_details registration_number and transport_license_id are NEVER returned
      * - Payout account details are masked
      */
-    static toResponseDto(agency: IDeliveryAgency): GetAgencyProfileResponseDto {
+    static async toResponseDto(
+        agency: IDeliveryAgency,
+        fileRepo: FileRepositoryMongo,
+        storage: IStorageProvider,
+    ): Promise<GetAgencyProfileResponseDto> {
         return {
             id: agency._id.toString(),
-            agencyName: agency.agency_name,
+            displayName: agency.display_name,
             email: agency.email ?? null,
             emailVerified: agency.email_verified,
             phone: agency.phone ?? null,
             phoneVerified: agency.phone_verified,
-            logoUrl: agency.logo_url,
+            avatar: await resolveFileDetail(agency.avatar_file_id?.toString(), fileRepo, storage),
+            country: agency.country ?? null,
             coverageAreas: agency.coverage_areas,
             headquartersAddresses: agency.headquarters_addresses,
             payoutDetails: sanitizePayoutList(agency.payout_details),
@@ -197,10 +221,10 @@ export class AgencyProfileMapper {
         };
     }
 
-    static toCreateResponseDto(agency: IDeliveryAgency): CreateAgencyResponseDto {
+    static toCreateResponseDto(agency: IDeliveryAgency, agencyName: string): CreateAgencyResponseDto {
         return {
             id: agency._id.toString(),
-            agencyName: agency.agency_name,
+            agencyName,
             onboardingStep: agency.onboarding_step,
             version: agency.version,
             createdAt: agency.created_at,
@@ -225,8 +249,8 @@ export class AgencyProfileMapper {
         if ((agency.payout_details?.length ?? 0) > 0) completedFields.push('payout_details');
         else missingFields.push('payout_details');
 
-        // Step 3 fields (optional)
-        if (agency.logo_url) completedFields.push('logo_url');
+        // Step 3 fields (optional). The business logo now lives on the Magazin, not
+        // the agency, so it is not reflected in this agency-only completion mapper.
         if (agency.timezone && agency.timezone !== 'Africa/Douala') completedFields.push('timezone');
 
         // Step 4 fields
@@ -266,10 +290,14 @@ export class AgencyProfileMapper {
     static toUpdatePayload(input: UpdateAgencyProfileInput): Partial<IDeliveryAgency> {
         const payload: Partial<IDeliveryAgency> = {};
 
-        if (input.agency_name !== undefined) payload.agency_name = input.agency_name;
-        if (input.logo_url !== undefined) payload.logo_url = input.logo_url as string | null;
+        if (input.displayName !== undefined) payload.display_name = input.displayName;
+        if (input.avatarFileId !== undefined) {
+            payload.avatar_file_id = input.avatarFileId ? new mongoose.Types.ObjectId(input.avatarFileId) : null;
+        }
         if (input.timezone !== undefined) payload.timezone = input.timezone;
         if (input.preferred_language !== undefined) payload.preferred_language = input.preferred_language;
+        // Set-once: the service rejects a change before this mapping runs.
+        if (input.country !== undefined) payload.country = input.country;
         if (input.coverage_areas !== undefined) payload.coverage_areas = input.coverage_areas as string[];
         if (input.headquarters_addresses !== undefined) payload.headquarters_addresses = input.headquarters_addresses.map(withGeoAddress) as unknown as IAgencyHeadquartersAddress[];
         if (input.payout_details !== undefined) payload.payout_details = input.payout_details as IPayoutMethod[];

@@ -1,25 +1,32 @@
 import { z } from 'zod';
+import { clearable } from '../../../core/validation/zod.helpers';
 
 /**
  * Update Store Profile Schema
- * 
+ *
  * Validates the SHAPE of profile update requests.
  * Business policy (immutability, vendor ownership) is enforced in service layer.
- * 
- * SECURITY: slug and country are NOT accepted (immutable).
+ *
+ * SECURITY: slug is NOT accepted (immutable).
+ * NO address/city/country: physical locations are the vendor profile's
+ * `business_addresses` (geocoded, country-anchored); country lives on the
+ * vendor profile (set-once at onboarding) and is served read-only here.
+ *
+ * Optional fields are clearable: sending null or '' clears the field,
+ * omitting it leaves it unchanged. `name` is required in the model and
+ * cannot be cleared.
  */
 export const UpdateStoreProfileSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters').max(100).optional(),
   // slug NOT accepted (immutable in vendor API)
-  logoUrl: z.string().url('Logo URL must be valid').optional(),
-  bannerUrl: z.string().url('Banner URL must be valid').optional(),
-  description: z.string().max(1000, 'Description too long').optional(),
-  address: z.string().max(200, 'Address too long').optional(),
-  city: z.string().max(100, 'City name too long').optional(),
-  // country NOT accepted (immutable)
-  supportEmail: z.string().email('Invalid email format').optional(),
-  supportPhone: z.string().min(8).max(20).optional(),
-  supportWhatsapp: z.string().min(8).max(20).optional(),
+  // Logo/banner are the ids of files previously uploaded via POST /api/files/upload
+  // (not URLs). Sending '' or null clears the slot. The response returns a derived URL.
+  logoFileId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'logoFileId must be a valid file id')),
+  bannerFileId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'bannerFileId must be a valid file id')),
+  description: clearable(z.string().max(1000, 'Description too long')),
+  supportEmail: clearable(z.string().email('Invalid email format')),
+  supportPhone: clearable(z.string().min(8).max(20)),
+  supportWhatsapp: clearable(z.string().min(8).max(20)),
   version: z.number().int().min(0, 'Version must be non-negative'), // REQUIRED
 });
 

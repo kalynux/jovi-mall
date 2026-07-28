@@ -1,4 +1,5 @@
 import { IDeliveryAgency } from '../../delivery/delivery-agency.model';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
@@ -38,7 +39,7 @@ export interface VendorAgencyPolicySummaryDto {
 export interface VendorAgencyListItemDto {
     id: string;
     agencyName: string;
-    logoUrl: string | null;
+    logo: FileDetail | null;
     /** Whether admin has verified the agency's KYC (business legitimacy). */
     kycVerified: boolean;
     /**
@@ -80,13 +81,17 @@ export class VendorAgencyMapper {
      * - Per-location support contacts are NEVER returned
      * - Only the primary HQ address (index 0) is exposed — no branch addresses
      */
-    static toListItemDto(agency: IDeliveryAgency): VendorAgencyListItemDto {
+    static toListItemDto(
+        agency: IDeliveryAgency,
+        agencyName: string,
+        logo: FileDetail | null = null,
+    ): VendorAgencyListItemDto {
         const primaryHQ = agency.headquarters_addresses?.[0] ?? null;
 
         return {
             id: agency._id.toString(),
-            agencyName: agency.agency_name,
-            logoUrl: agency.logo_url,
+            agencyName,
+            logo,
             kycVerified: agency.kyc_details?.legit_verified ?? false,
             headquartersAddress: primaryHQ
                 ? {

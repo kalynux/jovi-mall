@@ -58,9 +58,9 @@ Vendors must complete basic setup and select a delivery agency before their prof
 {
   "step": 3,
   "skip": false, // Set to true to skip this step without providing branding data
-  "branding": { // Optional
-    "logo_url": "url",
-    "cover_image_url": "url"
+  "branding": { // Optional — ids of files uploaded via POST /api/files/upload
+    "logo_file_id": "507f1f77bcf86cd799439030",
+    "cover_image_file_id": "507f1f77bcf86cd799439031"
   },
   "business_addresses": [ // Optional
     {
@@ -175,7 +175,7 @@ Agencies must define their coverage areas and headquarters, followed by payout s
 {
   "step": 3,
   "skip": false, // Set to true to skip
-  "logo_url": "url", // Optional
+  "logo_file_id": "507f1f77bcf86cd799439030", // Optional — id from POST /api/files/upload
   "timezone": "Africa/Douala" // Optional
 }
 ```

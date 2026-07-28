@@ -29,6 +29,8 @@ export type AgentNotificationType =
     | 'cod.deposit.rejected'
     /** A new shipment assignment offer to accept/reject before it times out. */
     | 'shipment.offer.received'
+    /** A reminder that a still-open offer is waiting (auto-assignment round 2). */
+    | 'shipment.offer.reminder'
     /** An offer the agent didn't answer in time lapsed. */
     | 'shipment.offer.expired'
     /**
@@ -36,8 +38,13 @@ export type AgentNotificationType =
      * another agent). Tells them they are no longer responsible for it — and,
      * with the detach, their live access to it is already gone.
      */
-    | 'shipment.reassigned_away';
-export type AgentAggregateType = 'deposit' | 'offer' | 'shipment';
+    | 'shipment.reassigned_away'
+    /** Subscription plan lifecycle (billing). */
+    | 'plan.expiring'
+    | 'plan.expired'
+    /** This agent's own media storage crossed a usage threshold (80/90/100%). */
+    | 'storage.alert';
+export type AgentAggregateType = 'deposit' | 'offer' | 'shipment' | 'plan' | 'storage';
 
 /**
  * Deep-link action for a notification, localized in the agent's language.
@@ -82,13 +89,18 @@ const AgentNotificationSchema = new Schema<IAgentNotification>(
                 'cod.deposit.confirmed',
                 'cod.deposit.rejected',
                 'shipment.offer.received',
-                'shipment.offer.expired'
+                'shipment.offer.reminder',
+                'shipment.offer.expired',
+                'shipment.reassigned_away',
+                'plan.expiring',
+                'plan.expired',
+                'storage.alert'
             ],
             required: true
         },
         title: { type: String, required: true, trim: true, maxlength: 200 },
         message: { type: String, required: true, trim: true, maxlength: 1000 },
-        aggregateType: { type: String, enum: ['deposit', 'offer'], required: true },
+        aggregateType: { type: String, enum: ['deposit', 'offer', 'shipment', 'plan', 'storage'], required: true },
         aggregateId: { type: Schema.Types.ObjectId, required: true },
         action: {
             type: new Schema(

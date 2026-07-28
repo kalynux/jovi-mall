@@ -22,14 +22,17 @@ export type NotificationType =
     | 'payout.paid'
     | 'payout.rejected'
     // A delivery agency declined a shipment; the vendor must reassign it.
-    | 'shipment.rejected';
+    | 'shipment.rejected'
+    // Subscription plan lifecycle (billing).
+    | 'plan.expiring'
+    | 'plan.expired';
 
 /**
  * Aggregate Types
  *
  * The domain entity that triggered this notification.
  */
-export type AggregateType = 'order' | 'booking' | 'payment' | 'storage' | 'connection' | 'payout';
+export type AggregateType = 'order' | 'booking' | 'payment' | 'storage' | 'connection' | 'payout' | 'plan';
 
 /**
  * Delivery Channels
@@ -102,7 +105,9 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
                 'payout.requested',
                 'payout.paid',
                 'payout.rejected',
-                'shipment.rejected'
+                'shipment.rejected',
+                'plan.expiring',
+                'plan.expired'
             ],
             required: true
         },
@@ -120,7 +125,7 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
         },
         aggregateType: {
             type: String,
-            enum: ['order', 'booking', 'payment', 'storage', 'connection', 'payout'],
+            enum: ['order', 'booking', 'payment', 'storage', 'connection', 'payout', 'plan'],
             required: true
         },
         aggregateId: {

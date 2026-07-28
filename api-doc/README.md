@@ -128,7 +128,7 @@ Every route tree is guarded by role. `✅` = full access to that area's endpoint
 | Cart & checkout | — | ✅ | — | — | — | — |
 | Customer orders / confirm delivery | — | ✅ (self) | — | — | — | — |
 | Vendor store / products / inventory / analytics | — | — | ✅ (self) | — | — | — |
-| Billing (plans/credits) | — | — | ✅ (self) | — | — | ✅ |
+| Billing (plans/credits) | — | — | ✅ (self) | ✅ (self) | ✅ (self) | ✅ |
 | Earnings & payout requests | — | — | ✅ (self) | ✅ (self) | via COD¹ | ✅ (platform) |
 | Delivery agency management | — | — | — | ✅ (self) | — | ✅ |
 | Agent roster / memberships | — | — | — | ✅ (its agents) | ✅ (self) | ✅ |
@@ -138,6 +138,7 @@ Every route tree is guarded by role. `✅` = full access to that area's endpoint
 | Tickets (support) | — | ✅ | ✅ | ✅ | ✅ | ✅ (all) |
 | Notifications & preferences | — | — | ✅ (self) | ✅ (self) | ✅ (self) | — |
 | Saved payment methods (`/me/payment-methods`) | — | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Change password (`/me/password`) | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | File upload / management (`/files`) | — | ✅ | ✅ | ✅ | ✅ | ✅ (+ hard-delete/orphans) |
 | Admin order controls / COD oversight / agent admin | — | — | — | — | — | ✅ |
 | Tracking authorization (`/tracking/visible-agents`) | — | ✅ (own orders) | — | ✅ (its agents) | ✅ (self) | ✅ (all) |
@@ -179,6 +180,8 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 
 ### Cross-cutting
 - [Auth & sessions](./auth/README.md) · [Onboarding](./auth/onboarding.md)
+- [Change password (`/me/password`, all roles)](./me/password.md)
+- [**Billing, plans & credit — cross-dashboard guide**](./billing-plans-across-roles.md) (vendor · agency · agent · admin)
 - [Error catalog](./errors/README.md)
 - [Geospatial addresses & address search](./geo/README.md)
 - [Uploads (role-neutral)](./uploads/README.md)
@@ -202,13 +205,15 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 ### Agency
 - [Profile](./agency/profile.md) · [Profile schema](./agency/profile-schema.md) · [Onboarding](./agency/onboarding.md)
 - [Agents](./agency/agents.md) · [Agent roster](./agency/agent-roster.md) · [Shipments](./agency/shipments.md)
-- [COD cash management](./agency/cod-cash-management.md) · [Earnings](./agency/earnings.md) · [Payment methods](./agency/payment-methods.md)
+- [Billing (plans & credit)](./agency/billing.md) · [COD cash management](./agency/cod-cash-management.md) · [Earnings](./agency/earnings.md) · [Payment methods](./agency/payment-methods.md)
 - [Vendor connections](./agency/vendor-connections.md) · [Vendors](./agency/vendors.md) · [Products](./agency/products.md)
+- [File management](./agency/file-management.md) · [Storage](./agency/storage.md)
 - [Notifications](./agency/notifications.md) · [Tickets](./agency/tickets.md)
 
 ### Agent
 - [Onboarding](./agent/onboarding.md) · [Availability & device](./agent/availability-and-device.md) · [Agency membership](./agent/agency-membership.md)
-- [Shipments](./agent/shipments.md) · [COD cash](./agent/cod-cash.md) · [Payment methods](./agent/payment-methods.md)
+- [Shipments](./agent/shipments.md) · [Delivery proof](./agent/delivery-proof.md) · [COD cash](./agent/cod-cash.md) · [Billing (plans & credit)](./agent/billing.md) · [Payment methods](./agent/payment-methods.md)
+- [File management](./agent/file-management.md) · [Storage](./agent/storage.md)
 - [Notifications](./agent/notifications.md) · [Tickets](./agent/tickets.md)
 
 ### Admin
@@ -226,6 +231,13 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 
 - **IDs** are MongoDB ObjectIds (24-hex strings).
 - **Timestamps** are ISO-8601 UTC strings (`2026-07-17T10:20:30.000Z`).
+- **Clearing optional fields** (added 2026-07-22): optional string fields in PATCH/POST bodies are
+  *clearable* unless a doc says otherwise. Three states: **omit** the key → stored value unchanged;
+  send **`null` or `""`** (whitespace-only counts as `""`) → field **cleared**, stored and returned
+  as `null`; send a value → it must satisfy the field's constraint (URL, email, length…), and invalid
+  non-empty values are rejected with `VALIDATION_ERROR`. Required fields (e.g. store `name`) and
+  verified identity fields (vendor `email`/`phone`) are **not** clearable. Numeric/boolean/date
+  fields accept `null` where documented but never `""`.
 - **Money** is stored in the smallest unit is **not** assumed — amounts are numbers in the account
   currency (default `XAF`); check each endpoint. COD amounts are whole-currency numbers.
 - **Soft delete**: most resources are soft-deleted; list endpoints never return deleted records.

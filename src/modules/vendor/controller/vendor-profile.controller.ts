@@ -2,10 +2,8 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import multer from 'multer';
 import { VendorProfileService } from '../service/vendor-profile.service';
-import { UserService } from '../../users/user.service';
 import {
   UpdateVendorProfileSchema,
-  UpdatePasswordSchema,
   VendorOnboardingStep1Schema,
   VendorOnboardingStep2Schema,
   VendorOnboardingStep3Schema,
@@ -46,7 +44,6 @@ const SetAutoCancelUnpaidDaysSchema = z.object({
 });
 
 const vendorProfileService = new VendorProfileService();
-const userService = new UserService();
 const vendorSettingsRepository = new VendorSettingsRepository();
 
 export class VendorProfileController {
@@ -65,16 +62,8 @@ export class VendorProfileController {
     res.json({ success: true, data: profile, message: 'Profile updated successfully' });
   });
 
-  static updatePassword = asyncHandler(async (req: Request, res: Response) => {
-    const userId = req.auth!.user._id.toString();
-    const vendorId = req.auth!.role_entity._id.toString();
-    const input = UpdatePasswordSchema.parse(req.body);
-    await userService.changePassword(userId, input.oldPassword, input.newPassword, {
-      role: 'vendor',
-      roleEntityId: vendorId,
-    });
-    res.json({ success: true, message: 'Password updated successfully.' });
-  });
+  // Password change moved to the role-agnostic UserController (/api/me/password);
+  // the vendor route keeps a deprecated alias pointing at that handler.
 
   static getCompletionStatus = asyncHandler(async (req: Request, res: Response) => {
     const vendorId = req.auth!.role_entity._id.toString();

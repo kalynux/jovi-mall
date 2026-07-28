@@ -410,7 +410,7 @@ changed and at least one order item was moved (see the important note above) —
 
 **Error Responses:**
 - `404 CATALOG_PRODUCT_NOT_FOUND` — Product not found
-- `422 CATALOG_PRODUCT_INVALID_STATE` — Product is `archived` or `suspended`; update not allowed
+- `422 CATALOG_PRODUCT_INVALID_STATE` — Product is `archived` or `pending_review`; update not allowed. **`suspended` products ARE editable** — editing is often the way out of suspension (e.g. repointing `delivery.agencyId` at a working agency, which auto-restores the product if it's eligible again).
 - `422 CONNECTION_NOT_ACTIVE` — `delivery.agencyId` was set to an agency you don't have an active, approved connection with. See [Agency Connections](./agency-connections.md).
 - `422 CATALOG_PRODUCT_NO_DELIVERY_AGENCY` — `delivery.pickupLocation` was set but no delivery agency (override or vendor default) is resolvable yet.
 - `422 CATALOG_PRODUCT_INVALID_PICKUP_LOCATION` — `delivery.pickupLocation` doesn't match the resolved agency's policy, or `vendorAddressId` doesn't match one of your business addresses.
@@ -438,7 +438,23 @@ PATCH /api/vendor/products/:id/status
 | `active` | Live and purchasable |
 | `archived` | Hidden, data preserved |
 | `pending_review` | Awaiting admin moderation |
-| `suspended` | Admin-only — vendors cannot set this |
+| `suspended` | **System lock — vendors can neither set nor leave it.** Applied by the delivery-agency cascade (agency deactivated, connection paused/terminated, default removed) to **`active` products only** — drafts stay drafts (and stay editable) while an agency problem lasts. Any attempt to change a suspended product's status here returns `422 CATALOG_PRODUCT_INVALID_STATE`. It clears **automatically** when the cause is fixed: new active default agency set, connection (re)approved, agency reactivated, or the product's own `delivery.agencyId` repointed at a working agency via [Update Product](#update-product) — each re-validates the activation gate before restoring. |
+
+> [!IMPORTANT]
+> **Allowed transitions (vendor-triggered).** The current status constrains what you may request:
+>
+> | From | Allowed targets |
+> |------|-----------------|
+> | `draft` | `active` (runs the activation gate below), `archived` |
+> | `active` | `draft`, `archived` |
+> | `archived` | `draft` (unarchive first — activation happens from `draft` only) |
+> | `suspended` | — none (system lock, see table above) |
+> | `pending_review` | — none (admin moderation) |
+>
+> Re-requesting the current status is accepted as a no-op. Anything else returns
+> `422 CATALOG_PRODUCT_INVALID_STATE` with `details: { status, requested }`. The same rules apply
+> to [Bulk Status Change](#bulk-status-change) (ineligible products are reported/skipped, not
+> errored as a whole) and to archiving (single + bulk: only `draft`/`active` products can be archived).
 
 > [!WARNING]
 > **Activation Requirements (status → `active`)**
@@ -471,6 +487,7 @@ PATCH /api/vendor/products/:id/status
 
 | Code | Meaning |
 |------|---------|
+| `CATALOG_PRODUCT_INVALID_STATE` | The requested transition isn't vendor-triggerable (see the allowed-transitions table above — e.g. any change from `suspended`, or `archived → active` without unarchiving to `draft` first). `details: { status, requested }` |
 | `CATALOG_PRODUCT_NO_DESCRIPTION` | `description` is missing or blank |
 | `CATALOG_PRODUCT_NO_VARIANTS` | No variants exist |
 | `CATALOG_PRODUCT_VARIANT_ZERO_PRICE` | An active variant has price = 0 |
@@ -617,6 +634,11 @@ POST /api/vendor/products/bulk/archive
 
 **Limits:** Max 50 product IDs per request.
 
+> [!NOTE]
+> Only `draft` and `active` products are archived — same rule as the single-product archive
+> route. Products in any other status (`suspended`, `archived`, `pending_review`) are silently
+> skipped and reflected in the `failed` count.
+
 **Response `200`:**
 
 ```json
@@ -651,7 +673,9 @@ POST /api/vendor/products/bulk/status
 **Limits:** Max 50 product IDs per request.
 
 > [!IMPORTANT]
-> When changing status to `active`, the backend validates each product individually using the same rules as the single-product status endpoint. Products failing validation are not activated and are reported in the `errors` array. This is a partial-success operation.
+> When changing status to `active`, the backend validates each product individually using the same rules as the single-product status endpoint — **including the allowed-transitions table** (activation from `draft` only; `suspended`/`pending_review` products can never be moved by a vendor). Products failing either check are not updated and are reported in the `errors` array. This is a partial-success operation.
+>
+> For `draft`/`archived` targets, products whose current status doesn't permit the transition (e.g. `suspended`) are silently skipped and show up in the `failed` count without a per-product error entry.
 
 **Response `200`:**
 

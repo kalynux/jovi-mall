@@ -3,6 +3,7 @@ import { GeoPointZodSchema } from '../../../core/types/geo.types';
 import { GeoAddressZodSchema } from '../../../core/types/geo-address.types';
 import { PayoutDetailsZodSchema } from '../../../core/types/payout.types';
 import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
+import { clearable } from '../../../core/validation/zod.helpers';
 
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
 
@@ -15,9 +16,9 @@ const BusinessAddressSchema = z.object({
     _id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId').optional(),
     label: z.string().min(1).max(50).trim(),
     address_line1: z.string().min(1).max(200).trim(),
-    address_line2: z.string().max(200).trim().nullable().optional(),
+    address_line2: clearable(z.string().max(200).trim()),
     city: z.string().min(1).max(100).trim(),
-    state: z.string().max(100).trim().nullable().optional(),
+    state: clearable(z.string().max(100).trim()),
     /** @deprecated Prefer `geo`; kept for backward compatibility. */
     location: GeoPointZodSchema.nullable().optional(),
     /** Selected address-search result — the canonical geospatial address. */
@@ -36,18 +37,18 @@ const OperatingHoursSchema = z.object({
 });
 
 const BrandingSchema = z.object({
-    logo_file_id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'logo_file_id must be a valid MongoDB ObjectId').nullable().optional(),
-    cover_image_file_id: z.string().regex(/^[0-9a-fA-F]{24}$/, 'cover_image_file_id must be a valid MongoDB ObjectId').nullable().optional(),
+    logo_file_id: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'logo_file_id must be a valid MongoDB ObjectId')),
+    cover_image_file_id: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'cover_image_file_id must be a valid MongoDB ObjectId')),
 });
 
 const SocialLinksSchema = z.object({
-    instagram: z.string().url().nullable().optional(),
-    facebook: z.string().url().nullable().optional(),
-    twitter: z.string().url().nullable().optional(),
+    instagram: clearable(z.string().url()),
+    facebook: clearable(z.string().url()),
+    twitter: clearable(z.string().url()),
 });
 
 const KycDetailsSchema = z.object({
-    national_id_number: z.string().min(1).trim().nullable().optional(),
+    national_id_number: clearable(z.string().min(1).trim()),
 });
 
 // ─── Step 1: Basic Setup (REQUIRED) ──────────────────────────────────────────
@@ -104,7 +105,7 @@ const ReturnPolicySchema = z.object({
     refund_percentage: z.number().min(0).max(100).nullable().optional(),
     return_shipping_payer: z.enum(['vendor', 'customer', 'customer_reimbursed_if_defect']).default('customer'),
     refund_processing_days: z.number().int().min(1).max(30).default(7),
-    return_condition_notes: z.string().max(500).trim().nullable().optional(),
+    return_condition_notes: clearable(z.string().max(500).trim()),
 }).refine(
     (data) => data.refund_type !== 'partial' || (data.refund_percentage !== undefined && data.refund_percentage !== null),
     { message: 'refund_percentage is required when refund_type is "partial"', path: ['refund_percentage'] },
@@ -157,10 +158,10 @@ const SupportChannelSchema = z.object({
 
 const SupportPolicySchema = z.object({
     channels: z.array(SupportChannelSchema).max(4).optional(),
-    eligibility_notes: z.string().max(500).trim().nullable().optional(),
+    eligibility_notes: clearable(z.string().max(500).trim()),
     required_info: z.array(z.enum(['order_number', 'product_photo_video', 'tracking_number'])).optional(),
     availability: z.enum(['24_7', 'business_hours', 'limited']).nullable().optional(),
-    availability_description: z.string().max(200).trim().nullable().optional(),
+    availability_description: clearable(z.string().max(200).trim()),
     languages: z.array(z.string().min(1).max(50).trim()).max(20).optional(),
 });
 
@@ -181,13 +182,15 @@ export type VendorOnboardingStep4Input = z.infer<typeof VendorOnboardingStep4Sch
 
 export const UpdateVendorProfileSchema = z.object({
     displayName: z.string().min(2).max(100).trim().optional(),
-    businessDescription: z.string().max(1000).trim().nullable().optional(),
+    // NOTE: the business name/description/logo/banner are edited on the Store
+    // (PATCH /api/vendor/store), not here — the Store is their source of truth.
     email: z.string().email().optional(),
     phone: z.string().min(8).max(20).optional(),
     timezone: z.string().min(1).trim().optional(),
     preferred_language: z.enum(SUPPORTED_LANGUAGES).optional(),
     country: z.string().length(2).toUpperCase().optional(),
-    branding: BrandingSchema.optional(),
+    // Personal profile avatar as a File reference ('' / null clears it).
+    avatarFileId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'avatarFileId must be a valid file id')),
     business_addresses: z.array(BusinessAddressSchema).optional(),
     operating_hours: z.array(OperatingHoursSchema).optional(),
     payout_details: PayoutDetailsZodSchema.optional(),
@@ -212,19 +215,12 @@ export const UpdateVendorProfileSchema = z.object({
 
 export type UpdateVendorProfileInput = z.infer<typeof UpdateVendorProfileSchema>;
 
-// ─── Password Update (used by vendor-profile.controller.ts) ──────────────────
+// ─── Password Update ─────────────────────────────────────────────────────────
+// Canonical definitions live in the users module (the password is account-level,
+// not vendor-level — see /api/me/password). Re-exported for backward compatibility.
 
-export const PasswordStrengthSchema = z
-    .string()
-    .min(8, 'Password must be at least 8 characters')
-    .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
-    .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
-    .regex(/[0-9]/, 'Password must contain at least one number')
-    .regex(/[^A-Za-z0-9]/, 'Password must contain at least one special character');
-
-export const UpdatePasswordSchema = z.object({
-    oldPassword: z.string().min(1, 'Current password is required'),
-    newPassword: PasswordStrengthSchema,
-});
-
-export type UpdatePasswordInput = z.infer<typeof UpdatePasswordSchema>;
+export {
+    PasswordStrengthSchema,
+    UpdatePasswordSchema,
+    type UpdatePasswordInput,
+} from '../../users/user.validator';

@@ -67,7 +67,11 @@ export class ProductUpdateService {
       throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 403);
     }
 
-    if (product.status !== 'draft' && product.status !== 'active') {
+    // 'suspended' is editable on purpose: suspension is system-driven (a delivery
+    // agency became unusable), and editing is often the vendor's only way OUT of
+    // it — e.g. repointing delivery.agencyId at a working agency, which the
+    // controller follows with a restore attempt (handleProductAgencyOverrideChange).
+    if (product.status !== 'draft' && product.status !== 'active' && product.status !== 'suspended') {
       throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_STATE, 422, undefined, { status: product.status });
     }
 
@@ -191,7 +195,7 @@ export class ProductUpdateService {
       await this.fileReferenceService.reconcile({
         previousFileIds: product.fileIds ?? [],
         nextFileIds: command.fileIds,
-        vendorId,
+        actor: { type: 'vendor', id: vendorId },
         entityType: 'product',
         entityId: productId,
       });

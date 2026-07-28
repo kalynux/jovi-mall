@@ -3,16 +3,28 @@ import { ERROR_CODES } from '../../../../../core/error-codes';
 import { IFileRepository } from '../../../repositories/interfaces/file.repository.interface';
 import { IFileReferenceRepository } from '../../../repositories/interfaces/file-reference.repository.interface';
 import { FileReferenceEntityType } from '../../../models/file-reference.model';
+import { FileOwnerType } from '../../../models/file.model';
+import { File } from '../../../repositories/mappers/file.mapper';
 import { RepositoryOptions } from '../../../repositories/types';
 
+/**
+ * The party performing the attach — used to authorize newly-attached files. A
+ * file may be attached by its owner, by an admin, or when it is a shared system
+ * file. See {@link FileReferenceService.assertAttachable}.
+ */
+export interface FileReferenceActor {
+    type: FileOwnerType;
+    id: string;
+}
+
 export interface ReconcileFileReferencesCommand {
-    /** The fileIds currently persisted on the owner (product/variant) before the change. */
+    /** The fileIds currently persisted on the owner (product/store/…) before the change. */
     previousFileIds: string[];
     /** The full desired fileIds array after the change. */
     nextFileIds: string[];
-    /** Vendor performing the change — used to authorize newly-attached files. */
-    vendorId: string;
-    /** The entity the files attach to (e.g. the product or variant being edited). */
+    /** Who is performing the change — used to authorize newly-attached files. */
+    actor: FileReferenceActor;
+    /** The entity the files attach to (e.g. the product, store or ticket being edited). */
     entityType: FileReferenceEntityType;
     /** Id of that entity. */
     entityId: string;
@@ -23,19 +35,23 @@ export interface ReconcileFileReferencesCommand {
 /**
  * FileReferenceService
  *
- * Maintains the `file_references` collection when a product/variant `fileIds`
- * array is replaced wholesale (the pattern used by the catalog endpoints).
+ * The reusable primitive for recording "this file is in use". Maintains the
+ * `file_references` collection when a single- or multi-file slot on an entity is
+ * replaced wholesale. It is entity-agnostic: any module (product, ticket, store,
+ * agency, or a new one) records file usage by calling {@link reconcile} with the
+ * relevant `entityType` + `field` — no change to the file layer is needed.
  *
- * Given the previous and next arrays it:
- *   1. Authorizes every newly-attached file (must be owned by the vendor or be a
- *      system file) — closes the IDOR where a vendor could reference another
- *      vendor's file by id.
- *   2. Adds a reference row for each added file.
+ * Given the previous and next fileId arrays it:
+ *   1. Authorizes every newly-attached file — the actor must own it, it must be a
+ *      shared system file, or the actor must be an admin. Closes the IDOR where an
+ *      actor could reference another owner's file by id.
+ *   2. Adds a reference row for each added file (owner denormalized from the File's
+ *      original uploader, per the file_references contract).
  *   3. Removes the reference row for each removed file.
  *
  * Reference rows are the source of truth for "is this file in use" (there is no
- * usageCount counter anymore). `add`/`remove` are idempotent, so reconciling the
- * same arrays twice is harmless.
+ * usageCount counter). `add`/`remove` are idempotent, so reconciling the same
+ * arrays twice is harmless.
  */
 export class FileReferenceService {
     constructor(
@@ -54,15 +70,17 @@ export class FileReferenceService {
         if (added.length === 0 && removed.length === 0) return;
 
         if (added.length > 0) {
-            await this.assertOwnership(added, command.vendorId, options);
+            const files = await this.resolveAttachable(added, command.actor, options);
             for (const fileId of added) {
+                const file = files.get(fileId)!;
                 await this.fileReferenceRepository.add({
                     fileId,
                     entityType: command.entityType,
                     entityId: command.entityId,
                     field,
-                    ownerType: 'vendor',
-                    ownerId: command.vendorId,
+                    // Denormalize from the File's original uploader, not the actor.
+                    ownerType: file.ownerType,
+                    ownerId: file.ownerId,
                 }, options);
             }
         }
@@ -79,15 +97,15 @@ export class FileReferenceService {
     }
 
     /**
-     * Every newly-attached file must exist and be owned by the acting vendor
-     * (or be a shared system file). Prevents referencing files the vendor does
-     * not own.
+     * Fetch and authorize every newly-attached file. Each must exist and be
+     * attachable by the actor. Returns the files keyed by id so the caller can
+     * denormalize their owner onto the reference.
      */
-    private async assertOwnership(
+    private async resolveAttachable(
         fileIds: string[],
-        vendorId: string,
+        actor: FileReferenceActor,
         options?: RepositoryOptions,
-    ): Promise<void> {
+    ): Promise<Map<string, File>> {
         const files = await this.fileRepository.findManyByIds(fileIds, options);
         const byId = new Map(files.map((file) => [file.id, file]));
 
@@ -96,17 +114,25 @@ export class FileReferenceService {
             if (!file) {
                 throw createAppError(ERROR_CODES.CATALOG_FILE_NOT_FOUND, 404, `File not found: ${fileId}`);
             }
-
-            const ownedByVendor = file.ownerType === 'vendor' && file.ownerId === vendorId;
-            const isSystemFile = file.ownerType === 'system';
-
-            if (!ownedByVendor && !isSystemFile) {
-                throw createAppError(
-                    ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED,
-                    403,
-                    `Cannot attach file ${fileId}: it is not owned by this vendor`,
-                );
-            }
+            this.assertAttachable(file, actor);
         }
+
+        return byId;
+    }
+
+    /**
+     * A file is attachable when the actor owns it, it is a shared system file, or
+     * the actor is an admin. Prevents referencing files the actor does not own.
+     */
+    private assertAttachable(file: File, actor: FileReferenceActor): void {
+        if (actor.type === 'admin') return;
+        if (file.ownerType === 'system') return;
+        if (file.ownerType === actor.type && file.ownerId === actor.id) return;
+
+        throw createAppError(
+            ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED,
+            403,
+            `Cannot attach file ${file.id}: it is not owned by this ${actor.type}`,
+        );
     }
 }

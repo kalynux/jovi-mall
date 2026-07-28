@@ -64,7 +64,7 @@ This step captures the agent's vehicle information.
   "vehicle_info": {
     "vehicle_type": "bike", // Enums allowed: 'bike', 'car', 'van', 'truck'
     "color": "Red", // Min 1, Max 50 characters
-    "plate_number": "LT-123-AB" // Optional/Nullable
+    "plate_number": "LT-123-AB" // Optional/Nullable — null or "" clears it
   }
 }
 ```
@@ -77,10 +77,20 @@ This step captures the avatar and timezone. Since it is optional, the user can c
 ```json
 {
   "step": 2,
-  "avatar_url": "https://example.com/avatar.jpg", // Optional, must be a valid URL
+  "avatar_url": "https://example.com/avatar.jpg", // Optional, must be a valid URL — null or "" clears it
   "timezone": "Africa/Douala" // Optional
 }
 ```
+
+> [!NOTE]
+> **Onboarding still takes a legacy `avatar_url` (a plain URL string).** The **canonical** avatar is a
+> **file reference** set on the profile-settings endpoint (`PATCH /api/agent/profile`, field
+> `avatar_file_id`): upload the image via `POST /api/files/upload`, then send the returned file `id`.
+> While set, that file counts as *in use* — it appears under `usage.references` on `GET /api/files/:id`
+> with `entityType: "agent", field: "avatar"`, and cannot be deleted until you detach it
+> (`avatar_file_id: null`). Profile reads return `avatar` as a **resolved file object** —
+> `{ id, key, url, mimeType, size, originalName }` (the same shape product images use) — or `null`; never
+> a bare URL string. See [File Management — the `usage` object](../vendor/file-management.md#get-apifilesid).
 
 #### Request Body (Skipping Step)
 If the user clicks "Skip" on the UI, send this payload to immediately complete the onboarding process:
@@ -144,3 +154,27 @@ If an invalid step is provided:
   }
 }
 ```
+
+### Onboarding is locked once completed
+
+While onboarding is in progress the agent may move freely between steps —
+re-submitting step 1 from step 2, for example, updates the vehicle info and
+keeps them on step 2. **Once `onboardingStep === 0` (COMPLETED), both steps are
+closed**: any submission to `PATCH /api/agent/onboarding/step` returns `409`.
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "AGENT_ONBOARDING_ALREADY_COMPLETED",
+    "message": "Agent onboarding is already completed. Update your details from profile settings instead."
+  }
+}
+```
+
+The frontend must **not** send an onboarding step after completion. Vehicle
+info, avatar and timezone remain fully editable afterwards through the profile
+settings endpoints (`PATCH /api/agent/profile`, `PATCH /api/agent/settings`),
+which never reopen onboarding. On `PATCH /api/agent/profile` the avatar is set as
+a **file reference** via `avatar_file_id` (see the note under Step 2 above), not a
+raw URL.

@@ -8,7 +8,7 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
  * when a new feature starts attaching files — e.g. 'store', 'kyc_doc'.
  * Nothing else in the file layer needs to change to support a new type.
  */
-export type FileReferenceEntityType = 'product' | 'variant' | 'digital_asset' | 'ticket' | 'vendor';
+export type FileReferenceEntityType = 'product' | 'variant' | 'digital_asset' | 'ticket' | 'vendor' | 'store' | 'agency' | 'agency_magazin' | 'customer' | 'agent' | 'admin' | 'shipment';
 
 /**
  * FileReference — junction record linking a File to the entity that uses it.
@@ -37,7 +37,7 @@ const FileReferenceSchema = new Schema<IFileReference>({
   fileId: { type: Schema.Types.ObjectId, ref: MODELS.FILE, required: true },
   entityType: {
     type: String,
-    enum: ['product', 'variant', 'digital_asset', 'ticket', 'vendor'],
+    enum: ['product', 'variant', 'digital_asset', 'ticket', 'vendor', 'store', 'agency', 'agency_magazin', 'customer', 'agent', 'admin', 'shipment'],
     required: true,
   },
   entityId: { type: Schema.Types.ObjectId, required: true },

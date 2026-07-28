@@ -77,7 +77,9 @@ verification status, and per-event subscriptions.
       "connectionUpdated": true,
       "shipmentAssigned": true,
       "payoutUpdates": true,
-      "codDepositUpdates": true
+      "codDepositUpdates": true,
+      "planUpdates": true,
+      "storageAlert": true
     }
   }
 }
@@ -254,6 +256,9 @@ notification-preferences payload.
 | `connectionUpdated` | `connection.request_received`, `connection.approved`, `connection.rejected`, `connection.reapproval_needed` | `connection` | A vendor connection request/approval/rejection/reapproval-needed happens — the agency-side mirror of the vendor's `connectionUpdated`. See [Vendor connections](./vendor-connections.md). |
 | `shipmentAssigned` | `shipment.assigned` | `shipment` | A vendor dispatches an order to this agency (manual dispatch or auto-redirect on payment) — the shipment moves `pending` → `assigned` and appears on `GET /api/agency/shipments`. `aggregateId` is the `Shipment` id; `action.path` deep-links to `shipments/{shipmentId}`. See [Shipments](./shipments.md). |
 | `payoutUpdates` | `payout.requested`, `payout.paid`, `payout.rejected` | `payout` | Your own payout request is created, paid, or rejected. `aggregateId` is the `PayoutRequest` id; `action.path` deep-links to `tickets/{ticketId}`. See [Earnings — Requesting a payout](./earnings.md#requesting-a-payout). |
+| `codDepositUpdates` | `cod.deposit.declared`, `cod.deposit.direct_to_platform` | `deposit` | An agent declares a hand-over you must confirm/reject, or pays the platform directly. `action.path` deep-links to `cod/deposits/{depositId}`. See [COD cash management](./cod-cash-management.md). |
+| `planUpdates` | `plan.expiring`, `plan.expired`, `shipment.cap.exceeded` | `plan` | **Billing.** Your subscription plan is nearing expiry / has expired (handed over to a queued plan or downgraded to free), or you crossed your plan's unterminated-shipment **soft** cap. `aggregateId` is the agency id; `action.path` deep-links to `plans`. See [Agency Billing](./billing.md). The shipment-cap alert is monitoring-only — deliveries are never blocked. |
+| `storageAlert` | `storage.alert` | `storage` | **Media storage** crossed 80 / 90 / 100% of your plan cap (highest crossed band only, at most once per month per band). `aggregateId` is the agency id; `action.path` deep-links to `settings/storage`. See [Storage](./storage.md). Agent delivery proofs count toward this. |
 
 Note the direction: these fire when the **vendor** is the actor on a connection the agency cares
 about (vendor sent a request, approved/rejected/reapproved one). The symmetric vendor-side events

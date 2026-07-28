@@ -52,6 +52,34 @@ const OFFER_BUTTON: ButtonDef = {
     urlSuffix: 'offers/{{offerId}}'
 };
 
+const MANAGE_PLAN_LABEL: Record<Language, string> = {
+    en: 'Manage plan',
+    fr: 'Gérer le forfait',
+    pt: 'Gerir plano',
+    es: 'Gestionar plan',
+    ar: 'إدارة الباقة'
+};
+
+const PLAN_BUTTON: ButtonDef = {
+    type: 'url',
+    label: MANAGE_PLAN_LABEL,
+    urlSuffix: 'plans'
+};
+
+const MANAGE_STORAGE_LABEL: Record<Language, string> = {
+    en: 'Manage storage',
+    fr: 'Gérer le stockage',
+    pt: 'Gerir armazenamento',
+    es: 'Gestionar almacenamiento',
+    ar: 'إدارة التخزين'
+};
+
+const STORAGE_BUTTON: ButtonDef = {
+    type: 'url',
+    label: MANAGE_STORAGE_LABEL,
+    urlSuffix: 'settings/storage'
+};
+
 /**
  * Who answered the deposit, when it was the platform rather than an agency.
  *
@@ -213,6 +241,41 @@ export const AGENT_NOTIFICATION_CATALOG: Record<AgentNotificationType, Situation
         button: OFFER_BUTTON
     },
 
+    // Round-2 reminder: a delivery offer this agent hasn't answered is STILL open
+    // and can still be accepted. Pushes them to act before someone else takes it.
+    'shipment.offer.reminder': {
+        base: {
+            en: {
+                subject: 'Delivery offer still waiting',
+                body: 'Your delivery offer from {{agencyName}} for order {{orderNumber}} is still open. Accept it now before another agent takes it.'
+            },
+            fr: {
+                subject: 'Offre de livraison en attente',
+                body: 'Votre offre de livraison de {{agencyName}} pour la commande {{orderNumber}} est toujours ouverte. Acceptez-la avant qu\'un autre agent ne la prenne.'
+            },
+            pt: {
+                subject: 'Oferta de entrega ainda pendente',
+                body: 'A sua oferta de entrega de {{agencyName}} para a encomenda {{orderNumber}} continua aberta. Aceite-a antes que outro agente a leve.'
+            },
+            es: {
+                subject: 'Oferta de entrega en espera',
+                body: 'Tu oferta de entrega de {{agencyName}} para el pedido {{orderNumber}} sigue abierta. Acéptala antes de que otro agente la tome.'
+            },
+            ar: {
+                subject: 'عرض توصيل لا يزال بانتظارك',
+                body: 'لا يزال عرض التوصيل من {{agencyName}} للطلب {{orderNumber}} مفتوحًا. اقبله الآن قبل أن يأخذه وكيل آخر.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'agent_shipment_offer_reminder',
+                bodyParams: ['{{agencyName}}', '{{orderNumber}}']
+            }
+        },
+        button: OFFER_BUTTON
+    },
+
     // The offer lapsed because the agent didn't answer in time. Informational, so
     // a missed job doesn't just vanish silently.
     'shipment.offer.expired': {
@@ -283,6 +346,56 @@ export const AGENT_NOTIFICATION_CATALOG: Record<AgentNotificationType, Situation
             }
         }
         // No button: the agent has no remaining action on a shipment that left them.
+    },
+
+    'plan.expiring': {
+        base: {
+            en: { subject: 'Your plan is expiring soon', body: 'Your {{planCode}} plan expires in {{daysUntilExpiry}} day(s), on {{expiresDate}}. Renew or upgrade to keep your higher delivery limit.' },
+            fr: { subject: 'Votre forfait expire bientôt', body: 'Votre forfait {{planCode}} expire dans {{daysUntilExpiry}} jour(s), le {{expiresDate}}. Renouvelez ou améliorez-le pour conserver votre limite de livraisons plus élevée.' },
+            pt: { subject: 'O seu plano expira em breve', body: 'O seu plano {{planCode}} expira em {{daysUntilExpiry}} dia(s), a {{expiresDate}}. Renove ou faça upgrade para manter o seu limite de entregas mais alto.' },
+            es: { subject: 'Tu plan expira pronto', body: 'Tu plan {{planCode}} expira en {{daysUntilExpiry}} día(s), el {{expiresDate}}. Renuévalo o mejóralo para mantener tu límite de entregas más alto.' },
+            ar: { subject: 'باقتك على وشك الانتهاء', body: 'تنتهي باقة {{planCode}} خلال {{daysUntilExpiry}} يوم/أيام، بتاريخ {{expiresDate}}. جدّدها أو قم بترقيتها للحفاظ على حد التوصيل الأعلى.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_plan_expiring', bodyParams: ['{{planCode}}', '{{daysUntilExpiry}}', '{{expiresDate}}'] }
+        },
+        button: PLAN_BUTTON
+    },
+
+    // On downgrade the agent's concurrent-delivery limit drops to the free tier,
+    // so the copy is explicit that their capacity changed.
+    'plan.expired': {
+        base: {
+            en: { subject: 'Your plan has expired', body: 'Your {{expiredPlanCode}} plan has expired. You are now on the {{newPlanCode}} plan, which may lower how many deliveries you can hold at once. Upgrade anytime from your plan settings.' },
+            fr: { subject: 'Votre forfait a expiré', body: 'Votre forfait {{expiredPlanCode}} a expiré. Vous êtes maintenant sur le forfait {{newPlanCode}}, ce qui peut réduire le nombre de livraisons simultanées. Améliorez à tout moment depuis vos paramètres de forfait.' },
+            pt: { subject: 'O seu plano expirou', body: 'O seu plano {{expiredPlanCode}} expirou. Está agora no plano {{newPlanCode}}, o que pode reduzir quantas entregas pode ter em simultâneo. Faça upgrade a qualquer momento nas definições do plano.' },
+            es: { subject: 'Tu plan ha expirado', body: 'Tu plan {{expiredPlanCode}} ha expirado. Ahora estás en el plan {{newPlanCode}}, lo que puede reducir cuántas entregas puedes tener a la vez. Mejora en cualquier momento desde la configuración de tu plan.' },
+            ar: { subject: 'انتهت صلاحية باقتك', body: 'انتهت صلاحية باقة {{expiredPlanCode}}. أنت الآن على باقة {{newPlanCode}}، وقد يقلل ذلك عدد عمليات التوصيل التي يمكنك تنفيذها في وقت واحد. يمكنك الترقية في أي وقت من إعدادات باقتك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_plan_expired', bodyParams: ['{{expiredPlanCode}}', '{{newPlanCode}}'] }
+        },
+        button: PLAN_BUTTON
+    },
+
+    // The agent's OWN media storage crossed a usage threshold (80/90/100%).
+    // Delivery proofs are charged to the agency, not here — this is the agent's
+    // personal file storage. Uploads are only blocked at 100%.
+    'storage.alert': {
+        base: {
+            en: { subject: 'Storage almost full', body: 'Your media storage is at {{percentUsed}}% ({{usageFormatted}} of {{limitFormatted}}). Free up space or upgrade your plan.' },
+            fr: { subject: 'Stockage presque plein', body: 'Votre stockage multimédia est à {{percentUsed}}% ({{usageFormatted}} sur {{limitFormatted}}). Libérez de l\'espace ou améliorez votre forfait.' },
+            pt: { subject: 'Armazenamento quase cheio', body: 'O seu armazenamento de mídia está em {{percentUsed}}% ({{usageFormatted}} de {{limitFormatted}}). Libere espaço ou faça upgrade do seu plano.' },
+            es: { subject: 'Almacenamiento casi lleno', body: 'Tu almacenamiento multimedia está al {{percentUsed}}% ({{usageFormatted}} de {{limitFormatted}}). Libera espacio o mejora tu plan.' },
+            ar: { subject: 'مساحة التخزين ممتلئة تقريبًا', body: 'مساحة تخزين الوسائط لديك عند {{percentUsed}}% ({{usageFormatted}} من {{limitFormatted}}). حرّر مساحة أو قم بترقية باقتك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_storage_alert', bodyParams: ['{{percentUsed}}', '{{usageFormatted}}', '{{limitFormatted}}'] }
+        },
+        button: STORAGE_BUTTON
     }
 };
 

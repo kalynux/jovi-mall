@@ -1,5 +1,10 @@
+import mongoose from 'mongoose';
 import { IStore } from '../models/store.model';
 import { StoreConfig } from '../config/store.config';
+import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
+import { IStorageProvider } from '../../../core/storage';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
+import { resolveFileDetails } from '../../catalog/read-models/file-detail.resolver';
 
 /**
  * Get Store Profile Response DTO
@@ -12,15 +17,22 @@ export interface GetStoreProfileResponseDto {
   vendorId: string;
   name: string;
   slug: string; // READ-ONLY (immutable in vendor API)
-  logoUrl?: string;
-  bannerUrl?: string;
-  description?: string;
-  address?: string;
-  city?: string;
-  country: string; // READ-ONLY (immutable)
-  supportEmail?: string;
-  supportPhone?: string;
-  supportWhatsapp?: string;
+  // Branding as resolved file objects (same shape as product media): the update
+  // endpoint accepts `logoFileId`/`bannerFileId`, and reads return the resolved
+  // `logo`/`banner` objects (`{ id, key, url, mimeType, size, originalName }`),
+  // or null when the slot is unset.
+  logo?: FileDetail | null;
+  banner?: FileDetail | null;
+  description?: string | null;
+  /**
+   * READ-ONLY, sourced from the vendor profile (set-once at onboarding) — the
+   * store stores no country of its own. Null until onboarding Step 1 sets it.
+   * Physical locations are the vendor profile's `business_addresses`.
+   */
+  country: string | null;
+  supportEmail?: string | null;
+  supportPhone?: string | null;
+  supportWhatsapp?: string | null;
   isOpen: boolean; // Vacation mode
   publicUrl: string; // Computed (not stored)
   version: number; // For optimistic locking
@@ -30,22 +42,24 @@ export interface GetStoreProfileResponseDto {
 
 /**
  * Update Store Profile Input DTO
- * 
+ *
  * Fields allowed for vendor updates.
  * slug and country are NOT allowed (immutable).
+ *
+ * Clearable fields: undefined = leave unchanged, null = clear the field.
+ * (The validator normalises '' to null before it reaches this DTO.)
  */
 export interface UpdateStoreProfileInputDto {
   name?: string;
   // slug NOT allowed (immutable in vendor API)
-  logoUrl?: string;
-  bannerUrl?: string;
-  description?: string;
-  address?: string;
-  city?: string;
-  // country NOT allowed (immutable)
-  supportEmail?: string;
-  supportPhone?: string;
-  supportWhatsapp?: string;
+  logoFileId?: string | null;
+  bannerFileId?: string | null;
+  description?: string | null;
+  // NO address/city/country: physical locations are the vendor profile's
+  // business_addresses; country lives on the vendor profile (set-once).
+  supportEmail?: string | null;
+  supportPhone?: string | null;
+  supportWhatsapp?: string | null;
   version: number; // REQUIRED for optimistic locking
 }
 
@@ -74,18 +88,28 @@ export class StoreProfileMapper {
    * @param store - Store domain model
    * @returns Sanitized DTO safe for API responses
    */
-  static toResponseDto(store: IStore): GetStoreProfileResponseDto {
+  static async toResponseDto(
+    store: IStore,
+    vendorCountry: string | null,
+    fileRepo: FileRepositoryMongo,
+    storage: IStorageProvider,
+  ): Promise<GetStoreProfileResponseDto> {
+    // Resolve both branding slots into FileDetail objects in a single batched
+    // query. Missing/deleted files resolve to null (same behaviour as vendor
+    // branding — see buildBrandingDetail in vendor-profile.dto.ts).
+    const logoFid = store.logo_file_id?.toString();
+    const bannerFid = store.banner_file_id?.toString();
+    const detailById = await resolveFileDetails([logoFid, bannerFid], fileRepo, storage);
+
     return {
       id: store._id.toString(),
       vendorId: store.vendor_id.toString(),
       name: store.name,
       slug: store.slug,
-      logoUrl: store.logo_url,
-      bannerUrl: store.banner_url,
+      logo: logoFid ? detailById.get(logoFid) ?? null : null,
+      banner: bannerFid ? detailById.get(bannerFid) ?? null : null,
       description: store.description,
-      address: store.address,
-      city: store.city,
-      country: store.country,
+      country: vendorCountry, // read-only, from the vendor profile
       supportEmail: store.support_email,
       supportPhone: store.support_phone,
       supportWhatsapp: store.support_whatsapp,
@@ -114,28 +138,20 @@ export class StoreProfileMapper {
     }
 
     // slug is NEVER mapped (immutable in vendor API)
-    
-    if (input.logoUrl !== undefined) {
-      payload.logo_url = input.logoUrl;
+
+    if (input.logoFileId !== undefined) {
+      payload.logo_file_id = input.logoFileId ? new mongoose.Types.ObjectId(input.logoFileId) : null;
     }
 
-    if (input.bannerUrl !== undefined) {
-      payload.banner_url = input.bannerUrl;
+    if (input.bannerFileId !== undefined) {
+      payload.banner_file_id = input.bannerFileId ? new mongoose.Types.ObjectId(input.bannerFileId) : null;
     }
 
     if (input.description !== undefined) {
       payload.description = input.description;
     }
 
-    if (input.address !== undefined) {
-      payload.address = input.address;
-    }
-
-    if (input.city !== undefined) {
-      payload.city = input.city;
-    }
-
-    // country is NEVER mapped (immutable)
+    // country is NEVER mapped (it lives on the vendor profile, set-once)
 
     if (input.supportEmail !== undefined) {
       payload.support_email = input.supportEmail;

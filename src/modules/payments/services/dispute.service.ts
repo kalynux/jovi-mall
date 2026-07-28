@@ -10,6 +10,19 @@ import { creditTopupService } from '../../billing/services/credit-topup.service'
 import { ticketService } from '../../tickets/services/ticket.service';
 import { TicketType, EntityType, TicketImportance } from '../../tickets/types/ticket.types';
 import { eventBus } from '../../../core/events/event-bus';
+import { BillingOwnerType } from '../../billing/billing.types';
+
+/** Map a billing owner type to the ticket EntityType for chargeback tickets. */
+function ownerEntityType(ownerType: BillingOwnerType): EntityType {
+  switch (ownerType) {
+    case 'agency':
+      return EntityType.AGENCY;
+    case 'agent':
+      return EntityType.AGENT;
+    default:
+      return EntityType.VENDOR;
+  }
+}
 
 /**
  * PaymentDisputeService — coordinates Stripe dispute / refund webhooks.
@@ -96,11 +109,11 @@ export class PaymentDisputeService {
     if (plan) {
       await this.openTicket(
         TicketType.CHARGEBACK,
-        EntityType.VENDOR,
-        plan.vendor_id.toString(),
+        ownerEntityType(plan.owner_type),
+        plan.owner_id.toString(),
         `Plan purchase ${reason}: ${plan.plan_code}`,
-        `Vendor plan purchase (${plan.plan_code}, ${plan.price} ${plan.currency}) was ${reason}d ` +
-          `(PaymentIntent ${paymentIntentId}). The vendor was downgraded to the free tier. ` +
+        `${plan.owner_type} plan purchase (${plan.plan_code}, ${plan.price} ${plan.currency}) was ${reason}d ` +
+          `(PaymentIntent ${paymentIntentId}). The ${plan.owner_type} was downgraded to the free tier. ` +
           `Re-assign the plan from admin billing if the dispute is resolved in their favour.`
       );
       return;
@@ -110,10 +123,10 @@ export class PaymentDisputeService {
     if (topup) {
       await this.openTicket(
         TicketType.CHARGEBACK,
-        EntityType.VENDOR,
-        topup.vendor_id.toString(),
+        ownerEntityType(topup.owner_type),
+        topup.owner_id.toString(),
         `Credit top-up ${reason}: ${topup.credits} credits`,
-        `Vendor credit top-up (${topup.credits} credits, ${topup.price} ${topup.currency}) was ` +
+        `${topup.owner_type} credit top-up (${topup.credits} credits, ${topup.price} ${topup.currency}) was ` +
           `${reason}d (PaymentIntent ${paymentIntentId}). ${topup.credits} credits were clawed back.`
       );
       return;

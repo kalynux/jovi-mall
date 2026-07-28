@@ -7,6 +7,7 @@ import { agentContractService } from '../domain/services/agent-contract.service'
 import { agentInviteService } from '../domain/services/agent-invite.service';
 import { agentMembershipEventRepository } from '../repositories/agent-membership-event.repository';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
+import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
 import { AgentProfileMapper } from '../dto/agent-profile.dto';
 import { AgentMembershipMapper } from '../dto/agent-membership.dto';
 import {
@@ -25,6 +26,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
 const agencyRepo = new DeliveryAgencyRepository();
+const magazinRepo = new MagazinRepository();
 
 /** Every handler here is scoped to the caller's own agent record. */
 function selfId(req: Request): string {
@@ -235,11 +237,11 @@ export class AgentSelfController {
 async function resolveAgencyNames(agencyIds: string[]): Promise<Map<string, string>> {
   const unique = [...new Set(agencyIds)];
   const nameById = new Map<string, string>();
-  await Promise.all(
-    unique.map(async (id) => {
-      const agency = await agencyRepo.findById(id);
-      if (agency) nameById.set(id, agency.agency_name);
-    })
-  );
+  // Business name lives on the Magazin (source of truth), keyed by agency_id.
+  const magazinNames = await magazinRepo.findNamesByAgencyIds(unique);
+  for (const id of unique) {
+    const name = magazinNames.get(id)?.name;
+    if (name) nameById.set(id, name);
+  }
   return nameById;
 }

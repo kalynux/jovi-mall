@@ -32,6 +32,13 @@ export function initializeAgencyNotificationEventConsumers(): void {
     // Shared with the agent consumer — this handler only acts on the
     // direct-to-platform case, where the agency's liability moved without them.
     eventBus.subscribe('cod.deposit.recorded', handler.handleCodDepositRecorded.bind(handler));
+    // Subscription plan lifecycle (owner-typed; handler no-ops on non-agency owners)
+    // + the unterminated-shipment soft-cap alert.
+    eventBus.subscribe('plan.expiring', handler.handlePlanExpiring.bind(handler));
+    eventBus.subscribe('plan.expired', handler.handlePlanExpired.bind(handler));
+    eventBus.subscribe('agency.shipment_cap.exceeded', handler.handleShipmentCapExceeded.bind(handler));
+    // Media storage threshold alerts (80/90/100%), from the file-cleanup sweep.
+    eventBus.subscribe('agency.storage.alert', handler.handleStorageAlert.bind(handler));
 
     console.log(
         `[AgencyNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`

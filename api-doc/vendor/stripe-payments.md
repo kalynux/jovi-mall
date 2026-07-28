@@ -45,7 +45,7 @@ unchanged** — what changes is how the frontend must *act on* the Stripe respon
       "price": 5000, "currency": "XAF",        // catalog price — stays XAF
       "status": "pending", "gateway": "STRIPE",
       "gateway_ref": "pi_3Qabcdef...",          // Stripe PaymentIntent id
-      "vendor_plan_id": null,
+      "subscriber_plan_id": null,
       "created_at": "…", "updated_at": "…"
     },
     "instructions": {

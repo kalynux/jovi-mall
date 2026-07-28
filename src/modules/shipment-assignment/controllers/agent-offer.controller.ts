@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { shipmentAssignmentService } from '../domain/services/shipment-assignment.service';
-import { ListOffersQuerySchema, RejectOfferSchema } from '../validators/assignment.validator';
+import { ListOffersQuerySchema, RejectOfferSchema, CancelShipmentSchema } from '../validators/assignment.validator';
 
 /**
  * AgentOfferController — the agent's side of the acceptance workflow.
@@ -39,5 +39,22 @@ export class AgentOfferController {
     const { reason } = RejectOfferSchema.parse(req.body);
     const result = await shipmentAssignmentService.reject(agentId, req.params.id, reason ?? null);
     res.json({ success: true, data: result, message: 'Offer rejected' });
+  });
+
+  /**
+   * POST /api/agent/shipments/:id/cancel — the assigned agent cancels a shipment
+   * mid-delivery. Body: { reason: <enum>, note?: <=200 chars }. Releases this
+   * agent (capacity + tracking) and RESUMES auto-assignment from where it had
+   * reached (never restarting), so the shipment is re-offered without operator
+   * intervention. `reason` is required; `note` is required when reason is 'other'.
+   */
+  static cancelShipment = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const agentId = req.auth!.role_entity._id.toString();
+    const { reason, note } = CancelShipmentSchema.parse(req.body);
+    const result = await shipmentAssignmentService.cancelByAgent(agentId, req.params.id, {
+      reason,
+      note: note ?? null,
+    });
+    res.json({ success: true, data: result, message: 'Shipment cancelled' });
   });
 }

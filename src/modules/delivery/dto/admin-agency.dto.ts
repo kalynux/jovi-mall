@@ -1,10 +1,11 @@
 import { IDeliveryAgency } from '../delivery-agency.model';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 
 export interface AdminAgencyListItemDto {
     id: string;
     userId: string;
     agencyName: string;
-    logoUrl: string | null;
+    logo: FileDetail | null;
     status: 'active' | 'pending_verification' | 'inactive';
     onboardingStep: number;
     createdAt: Date;
@@ -19,12 +20,20 @@ export interface AdminAgencyListMeta {
 }
 
 export class AdminAgencyMapper {
-    static toListItemDto(agency: IDeliveryAgency): AdminAgencyListItemDto {
+    /**
+     * @param logo Pre-resolved FileDetail for the agency's logo file (the caller
+     * resolves logo_file_id → FileDetail in batch). Null when unset.
+     */
+    static toListItemDto(
+        agency: IDeliveryAgency,
+        agencyName: string,
+        logo: FileDetail | null = null,
+    ): AdminAgencyListItemDto {
         return {
             id: agency._id.toString(),
             userId: agency.user_id.toString(),
-            agencyName: agency.agency_name,
-            logoUrl: agency.logo_url,
+            agencyName,
+            logo,
             status: agency.status,
             onboardingStep: agency.onboarding_step,
             createdAt: agency.created_at,

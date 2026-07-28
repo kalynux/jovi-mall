@@ -1,4 +1,5 @@
 import { IVendor } from '../../vendors/vendor.model';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
@@ -29,7 +30,7 @@ export interface AgencyVendorListItemDto {
   id: string;
   businessName: string;
   displayName: string | null;
-  logoUrl: string | null;
+  logo: FileDetail | null;
   /** Whether admin has verified the vendor's KYC (business legitimacy). */
   kycVerified: boolean;
   /** Primary business address (index 0 of the vendor's addresses). Null if none on file. */
@@ -50,14 +51,18 @@ export class AgencyVendorMapper {
    * - Support channel contact values (email/phone/whatsapp handles) are NEVER returned
    * - Only the primary business address (index 0) is exposed
    */
-  static toListItemDto(vendor: IVendor, logoUrl: string | null = null): AgencyVendorListItemDto {
+  static toListItemDto(
+    vendor: IVendor,
+    businessName: string,
+    logo: FileDetail | null = null,
+  ): AgencyVendorListItemDto {
     const primary = vendor.business_addresses?.[0] ?? null;
 
     return {
       id: vendor._id.toString(),
-      businessName: vendor.business_name,
+      businessName,
       displayName: vendor.display_name ?? null,
-      logoUrl,
+      logo,
       kycVerified: vendor.kyc_details?.legit_verified ?? false,
       primaryAddress: primary
         ? {

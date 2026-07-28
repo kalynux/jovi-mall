@@ -310,6 +310,13 @@ export interface IDeliveryAgent extends Document {
   phone?: string;
   phone_verified: boolean;
   name: string;
+  /**
+   * Profile avatar as a File reference — registers in `file_references` and is
+   * deletion-protected. Canonical going forward; `avatar_url` is the deprecated
+   * read-fallback for legacy string avatars.
+   */
+  avatar_file_id: mongoose.Types.ObjectId | null;
+  /** @deprecated Prefer `avatar_file_id`. Kept as a read-fallback for legacy avatars. */
   avatar_url: string | null;
   vehicle_info: IAgentVehicleInfo | null;
   legal_identity: IAgentLegalIdentity;
@@ -598,6 +605,7 @@ const DeliveryAgentSchema = new Schema<IDeliveryAgent>(
     phone: { type: String, trim: true },
     phone_verified: { type: Boolean, default: false },
     name: { type: String, required: true },
+    avatar_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },
     avatar_url: { type: String, default: null },
     vehicle_info: { type: VehicleInfoSchema, default: null },
     legal_identity: {

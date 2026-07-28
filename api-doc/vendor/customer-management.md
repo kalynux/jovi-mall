@@ -111,7 +111,7 @@ Create a flag.
 |---|---|---|---|
 | `name` | string | yes | 1–60 chars. Must be unique among the vendor's active flags. |
 | `color` | string | yes | Hex color, `#RGB` or `#RRGGBB`. |
-| `description` | string \| null | no | ≤ 200 chars. |
+| `description` | string \| null | no | ≤ 200 chars. *Clearable*: `null` or `""` clears (stored as `null`). |
 
 **Response 201**
 ```jsonc
@@ -168,7 +168,14 @@ override the displayed name (locally only) and assign flags.
   "realName": "Jane Doe",          // the customer's actual profile name (read-only)
   "hasNameOverride": true,
   "email": "jane@example.com",      // or null
-  "avatar": "https://.../a.png",   // or null
+  "avatar": {                        // resolved file object (same shape as product media), or null
+    "id": "665f0c1a2b3c4d5e6f705678",
+    "key": "products/2026/07/jane-avatar.png",
+    "url": "https://.../a.png",
+    "mimeType": "image/png",
+    "size": 15360,
+    "originalName": "avatar.png"
+  },
   "orderCount": 12,
   "totalSpent": 145000,
   "lastOrderAt": "2026-06-01T09:30:00.000Z",  // or null

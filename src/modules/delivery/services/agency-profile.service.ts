@@ -14,10 +14,17 @@ import { auditLogger } from '../../../core/audit/audit-logger';
 import { IDeliveryAgency, IAgencyPolicies } from '../delivery-agency.model';
 import { IPayoutMethod } from '../../../core/types/payout.types';
 import { withGeoAddress } from '../../../core/types/geo-address.types';
+import { assertGeoInCountry, geoAddressEquals } from '../../../core/validation/address-country.helper';
 import { AgencyOnboardingStep, AgencyOnboardingStepValue } from '../../../core/constants/onboarding-steps';
 import { AGENCY_ONBOARDING_EVENTS } from '../events/agency-onboarding.events';
 import { ConnectionService } from '../../agency-connections/connection.service';
 import { transactionManager, TransactionManager } from '../../../core/database/transaction.manager';
+import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
+import { FileReferenceRepositoryMongo } from '../../catalog/repositories/mongo/file-reference.repository.mongo';
+import { FileReferenceService } from '../../catalog/domain/services/media/FileReferenceService';
+import { getStorageProvider, IStorageProvider } from '../../../core/storage';
+import { MagazinProvisioningService } from '../../magazin/service/magazin-provisioning.service';
+import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
 import {
     UpdateAgencyProfileInput,
     AgencyOnboardingStep1Input,
@@ -47,11 +54,69 @@ export class AgencyProfileService {
     private agencyRepo: DeliveryAgencyRepository;
     private txManager: TransactionManager;
     private connectionService: ConnectionService;
+    private fileRepository: FileRepositoryMongo;
+    private fileReferenceService: FileReferenceService;
+    private storageProvider: IStorageProvider;
+    private magazinProvisioning: MagazinProvisioningService;
+    private magazinRepo: MagazinRepository;
 
     constructor() {
         this.agencyRepo = new DeliveryAgencyRepository();
         this.txManager = transactionManager;
         this.connectionService = new ConnectionService();
+        this.fileRepository = new FileRepositoryMongo();
+        this.fileReferenceService = new FileReferenceService(this.fileRepository, new FileReferenceRepositoryMongo());
+        this.storageProvider = getStorageProvider();
+        this.magazinProvisioning = new MagazinProvisioningService();
+        this.magazinRepo = new MagazinRepository();
+    }
+
+    /**
+     * Keep `file_references` in sync with the agency's personal AVATAR slot
+     * whenever it changes, so the file is exempt from orphan garbage collection
+     * while set. Mirrors the vendor avatar reconciliation. The business LOGO is a
+     * Magazin concern, not handled here. Runs before the write so an unauthorized
+     * file reference is rejected before persistence. Only touched when a value is
+     * supplied (PATCH semantics).
+     */
+    private async reconcileAgencyAvatarReference(
+        agencyId: string,
+        current: IDeliveryAgency,
+        nextAvatarFileId: string | null | undefined,
+    ): Promise<void> {
+        if (nextAvatarFileId === undefined) return;
+        await this.fileReferenceService.reconcile({
+            previousFileIds: current.avatar_file_id ? [current.avatar_file_id.toString()] : [],
+            nextFileIds: nextAvatarFileId ? [nextAvatarFileId] : [],
+            actor: { type: 'agency', id: agencyId },
+            entityType: 'agency',
+            entityId: agencyId,
+            field: 'avatar',
+        });
+    }
+
+    /**
+     * Apply a business-logo change (from onboarding Step 3) to the agency's
+     * Magazin — get-or-create it, reconcile the logo file reference, then persist
+     * the new logo id. The business logo lives on the Magazin, never the agency.
+     */
+    private async applyBrandingLogoToMagazin(
+        agencyId: string,
+        nextLogoFileId: string | null | undefined,
+    ): Promise<void> {
+        if (nextLogoFileId === undefined) return;
+        const magazin = await this.magazinProvisioning.ensureMagazinForAgency(agencyId);
+        await this.fileReferenceService.reconcile({
+            previousFileIds: magazin.logo_file_id ? [magazin.logo_file_id.toString()] : [],
+            nextFileIds: nextLogoFileId ? [nextLogoFileId] : [],
+            actor: { type: 'agency', id: agencyId },
+            entityType: 'agency_magazin',
+            entityId: magazin._id.toString(),
+            field: 'logo',
+        });
+        await this.magazinRepo.updateByAgencyId(agencyId, magazin.version, {
+            logo_file_id: nextLogoFileId ? new mongoose.Types.ObjectId(nextLogoFileId) : null,
+        });
     }
 
     // ─── Read ─────────────────────────────────────────────────────────────────
@@ -59,7 +124,7 @@ export class AgencyProfileService {
     async getProfile(agencyId: string): Promise<GetAgencyProfileResponseDto> {
         const agency = await this.agencyRepo.findById(agencyId);
         if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
-        return AgencyProfileMapper.toResponseDto(agency);
+        return AgencyProfileMapper.toResponseDto(agency, this.fileRepository, this.storageProvider);
     }
 
     async getCompletionStatus(agencyId: string): Promise<AgencyCompletionStatusDto> {
@@ -84,16 +149,23 @@ export class AgencyProfileService {
         const agency = await this.agencyRepo.findById(agencyId);
         if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
 
-        // Idempotency: if agency_name already matches, return success
-        if (agency.agency_name === input.agency_name && agency.onboarding_step !== undefined) {
-            return AgencyProfileMapper.toCreateResponseDto(agency);
+        // The business name lives on the Magazin (source of truth). Get-or-create
+        // it and set its name; idempotent when the name already matches.
+        const magazin = await this.magazinProvisioning.ensureMagazinForAgency(agencyId, input.agency_name);
+        const previousName = magazin.name;
+        if (magazin.name !== input.agency_name) {
+            await this.magazinRepo.updateByAgencyId(agencyId, magazin.version, { name: input.agency_name });
         }
 
-        const updated = await this.agencyRepo.updateProfile(agencyId, {
-            agency_name: input.agency_name,
-            onboarding_step: AgencyOnboardingStep.LOGISTICS_SETUP,
-        });
-        if (!updated) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
+        // Advance onboarding past initialization (idempotent — a no-op once past step 1).
+        let updated = agency;
+        if (agency.onboarding_step < AgencyOnboardingStep.LOGISTICS_SETUP || agency.onboarding_step === undefined) {
+            const stepped = await this.agencyRepo.updateProfile(agencyId, {
+                onboarding_step: AgencyOnboardingStep.LOGISTICS_SETUP,
+            });
+            if (!stepped) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
+            updated = stepped;
+        }
 
         // Emit event
         await eventBus.publish(AGENCY_ONBOARDING_EVENTS.AGENCY_INITIALIZED, {
@@ -108,11 +180,11 @@ export class AgencyProfileService {
             actor: { userId, role: 'agency' },
             action: 'AGENCY_INITIALIZED',
             resource: { type: 'DeliveryAgency', id: agencyId },
-            changes: { agency_name: { from: agency.agency_name, to: input.agency_name } },
+            changes: { agency_name: { from: previousName, to: input.agency_name } },
             timestamp: new Date(),
         });
 
-        return AgencyProfileMapper.toCreateResponseDto(updated);
+        return AgencyProfileMapper.toCreateResponseDto(updated, input.agency_name);
     }
 
     // ─── General Profile Update ───────────────────────────────────────────────
@@ -120,6 +192,43 @@ export class AgencyProfileService {
     async updateProfile(agencyId: string, input: UpdateAgencyProfileInput): Promise<GetAgencyProfileResponseDto> {
         const agency = await this.agencyRepo.findById(agencyId);
         if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
+
+        // POLICY: Country is set-once (onboarding Step 1) — reject changes,
+        // allow an idempotent echo of the current value or a first set on
+        // legacy rows that predate the field.
+        if (input.country !== undefined && agency.country && input.country !== agency.country) {
+            throw createAppError(
+                ERROR_CODES.PROFILE_COUNTRY_IMMUTABLE,
+                403,
+                'Country cannot be changed once set. It was fixed during onboarding for tax, shipping and address policy.',
+                { currentCountry: agency.country },
+            );
+        }
+
+        if (input.headquarters_addresses !== undefined) {
+            this.assertHeadquartersAddressesInCountry(
+                input.country ?? agency.country ?? null,
+                input.headquarters_addresses,
+                agency.headquarters_addresses,
+            );
+        } else if (input.country !== undefined && !agency.country) {
+            // First set on a legacy profile — existing geocoded HQ addresses must fit.
+            const mismatched = (agency.headquarters_addresses ?? [])
+                .filter((a) => a.geo?.components?.country_code && a.geo.components.country_code.toUpperCase() !== input.country!.toUpperCase())
+                .map((a) => ({ city: a.city, region: a.region, countryCode: a.geo!.components.country_code }));
+            if (mismatched.length > 0) {
+                throw createAppError(
+                    ERROR_CODES.ADDRESS_COUNTRY_MISMATCH,
+                    400,
+                    `You already have headquarters addresses located outside ${input.country.toUpperCase()}. Remove or re-pick them before setting your country.`,
+                    { mismatchedAddresses: mismatched, requiredCountry: input.country.toUpperCase() },
+                );
+            }
+        }
+
+        // Keep the personal-avatar file reference in sync before the write, so an
+        // unauthorized file reference is rejected before anything is persisted.
+        await this.reconcileAgencyAvatarReference(agencyId, agency, input.avatarFileId);
 
         const payload = AgencyProfileMapper.toUpdatePayload(input);
 
@@ -154,7 +263,7 @@ export class AgencyProfileService {
             });
         }
 
-        return AgencyProfileMapper.toResponseDto(updated);
+        return AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider);
     }
 
     // ─── Onboarding Steps ─────────────────────────────────────────────────────
@@ -181,12 +290,22 @@ export class AgencyProfileService {
             throw createAppError(ERROR_CODES.DELIVERY_ONBOARDING_ALREADY_COMPLETED, 409);
         }
 
+        // Country may still be corrected while onboarding is in progress (it
+        // locks at completion). If it changes, every geo-bearing HQ address is
+        // re-validated against the new country (no grandfathering).
+        this.assertHeadquartersAddressesInCountry(
+            input.country,
+            input.headquarters_addresses,
+            agency.country && agency.country === input.country ? agency.headquarters_addresses : [],
+        );
+
         // Re-edit mode: step is already beyond step 1.
         // Save the updated data but keep the current onboarding_step intact.
         if (agency.onboarding_step > AgencyOnboardingStep.LOGISTICS_SETUP) {
             const updated = await this.agencyRepo.atomicOnboardingUpdate(
                 agencyId,
                 {
+                    country: input.country,
                     coverage_areas: input.coverage_areas as string[],
                     headquarters_addresses: input.headquarters_addresses.map(withGeoAddress) as unknown as IDeliveryAgency['headquarters_addresses'],
                     onboarding_step: agency.onboarding_step as AgencyOnboardingStepValue,
@@ -201,7 +320,7 @@ export class AgencyProfileService {
             await this.auditOnboardingStep(userId, agencyId, 'LOGISTICS_DATA_UPDATED', 1, agency.onboarding_step);
 
             return {
-                profile: AgencyProfileMapper.toResponseDto(updated),
+                profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
                 completionStatus: this.buildCompletionStatus(updated),
             };
         }
@@ -216,6 +335,7 @@ export class AgencyProfileService {
         const updated = await this.agencyRepo.atomicOnboardingUpdate(
             agencyId,
             {
+                country: input.country,
                 coverage_areas: input.coverage_areas as string[],
                 headquarters_addresses: input.headquarters_addresses.map(withGeoAddress) as unknown as IDeliveryAgency['headquarters_addresses'],
                 onboarding_step: newStep,
@@ -232,7 +352,7 @@ export class AgencyProfileService {
         await this.auditOnboardingStep(userId, agencyId, 'LOGISTICS_SETUP', 1, newStep);
 
         return {
-            profile: AgencyProfileMapper.toResponseDto(updated),
+            profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
             completionStatus: this.buildCompletionStatus(updated),
         };
     }
@@ -279,7 +399,7 @@ export class AgencyProfileService {
             await this.auditOnboardingStep(userId, agencyId, 'PAYOUT_DATA_UPDATED', 2, agency.onboarding_step);
 
             return {
-                profile: AgencyProfileMapper.toResponseDto(updated),
+                profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
                 completionStatus: this.buildCompletionStatus(updated),
             };
         }
@@ -313,7 +433,7 @@ export class AgencyProfileService {
         await this.auditOnboardingStep(userId, agencyId, 'PAYOUT_SETUP', 2, newStep);
 
         return {
-            profile: AgencyProfileMapper.toResponseDto(updated),
+            profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
             completionStatus: this.buildCompletionStatus(updated),
         };
     }
@@ -348,14 +468,15 @@ export class AgencyProfileService {
                 onboarding_step: agency.onboarding_step as AgencyOnboardingStepValue,
             };
             if (!input.skip) {
-                if (input.logo_url !== undefined) updates.logo_url = input.logo_url as string | null;
+                // Business logo lives on the Magazin; timezone stays on the profile.
+                await this.applyBrandingLogoToMagazin(agencyId, input.logo_file_id);
                 if (input.timezone !== undefined) updates.timezone = input.timezone;
             }
             const updated = await this.agencyRepo.atomicOnboardingUpdate(agencyId, updates, expectedVersion);
             if (!updated) throw createAppError(ERROR_CODES.DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION, 409);
             await this.auditOnboardingStep(userId, agencyId, 'BRANDING_DATA_UPDATED', 3, agency.onboarding_step);
             return {
-                profile: AgencyProfileMapper.toResponseDto(updated),
+                profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
                 completionStatus: this.buildCompletionStatus(updated),
             };
         }
@@ -372,7 +493,8 @@ export class AgencyProfileService {
         };
 
         if (!input.skip) {
-            if (input.logo_url !== undefined) updates.logo_url = input.logo_url as string | null;
+            // Business logo lives on the Magazin; timezone stays on the profile.
+            await this.applyBrandingLogoToMagazin(agencyId, input.logo_file_id);
             if (input.timezone !== undefined) updates.timezone = input.timezone;
         }
 
@@ -386,7 +508,7 @@ export class AgencyProfileService {
         await this.auditOnboardingStep(userId, agencyId, 'BRANDING', 3, AgencyOnboardingStep.POLICY_SETUP);
 
         return {
-            profile: AgencyProfileMapper.toResponseDto(updated),
+            profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
             completionStatus: this.buildCompletionStatus(updated),
         };
     }
@@ -414,7 +536,7 @@ export class AgencyProfileService {
         if (agency.onboarding_step === AgencyOnboardingStep.COMPLETED) {
             if (agency.policies && JSON.stringify(agency.policies) === JSON.stringify(input.policies)) {
                 return {
-                    profile: AgencyProfileMapper.toResponseDto(agency),
+                    profile: await AgencyProfileMapper.toResponseDto(agency, this.fileRepository, this.storageProvider),
                     completionStatus: this.buildCompletionStatus(agency),
                 };
             }
@@ -458,7 +580,7 @@ export class AgencyProfileService {
             }
             await this.auditOnboardingStep(userId, agencyId, 'POLICY_DATA_UPDATED', 4, agency.onboarding_step);
             return {
-                profile: AgencyProfileMapper.toResponseDto(updated),
+                profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
                 completionStatus: this.buildCompletionStatus(updated),
             };
         }
@@ -489,19 +611,49 @@ export class AgencyProfileService {
         await eventBus.publish(AGENCY_ONBOARDING_EVENTS.COMPLETED, {
             eventType: AGENCY_ONBOARDING_EVENTS.COMPLETED,
             aggregateId: agencyId,
-            payload: { agencyId, userId, agencyName: updated.agency_name },
+            payload: { agencyId, userId, agencyName: (await this.magazinRepo.findNameByAgencyId(agencyId)) ?? '' },
             occurredAt: new Date(),
         });
 
         await this.auditOnboardingStep(userId, agencyId, 'POLICY_SETUP', 4, AgencyOnboardingStep.COMPLETED);
 
         return {
-            profile: AgencyProfileMapper.toResponseDto(updated),
+            profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
             completionStatus: this.buildCompletionStatus(updated),
         };
     }
 
     // ─── Private Helpers ──────────────────────────────────────────────────────
+
+    /**
+     * Headquarters addresses are the agency's physical locations, so each must
+     * be geolocatable inside the agency's registered country. Every NEW or
+     * EDITED entry in this full-replace array must carry a geocoded `geo`
+     * whose country matches; entries echoed back identical to a stored one
+     * (same region/city/description, same geo) are grandfathered — legacy
+     * `location`-only entries keep working until next touched.
+     *
+     * HQ entries carry no `_id` in the input, so "unchanged" is content-based.
+     */
+    private assertHeadquartersAddressesInCountry(
+        country: string | null,
+        incoming: AgencyOnboardingStep1Input['headquarters_addresses'],
+        existing: IDeliveryAgency['headquarters_addresses'] | undefined,
+    ): void {
+        const previous = existing ?? [];
+        incoming.forEach((entry, index) => {
+            const unchanged = previous.some(
+                (p) =>
+                    entry.region === p.region &&
+                    entry.city === p.city &&
+                    entry.address_description === p.address_description &&
+                    geoAddressEquals(entry.geo, p.geo),
+            );
+            if (unchanged) return;
+
+            assertGeoInCountry(entry.geo, country, { index, label: entry.city ?? null });
+        });
+    }
 
     private recalculateOnboardingStep(agency: IDeliveryAgency): AgencyOnboardingStepValue {
         const step1Complete = agency.coverage_areas.length > 0 && agency.headquarters_addresses.length > 0;

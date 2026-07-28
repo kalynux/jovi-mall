@@ -1,5 +1,5 @@
 import { ClientSession, FilterQuery, Types } from 'mongoose';
-import { ShipmentModel, IShipment, IShipmentItem, ShipmentStatus, ShipmentRejectionReason, IShipmentHandover } from './shipment.model';
+import { ShipmentModel, IShipment, IShipmentItem, ShipmentStatus, ShipmentRejectionReason, IShipmentHandover, IShipmentAgentCancellation, UNTERMINATED_SHIPMENT_STATUSES } from './shipment.model';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
 
 export class ShipmentRepository {
@@ -21,6 +21,19 @@ export class ShipmentRepository {
 
   async findByOrderId(orderId: string): Promise<IShipment[]> {
     return await ShipmentModel.find({ order_id: orderId });
+  }
+
+  /**
+   * Count an agency's "unterminated" shipments (the billing/plan soft cap). Pass a
+   * `session` to read within a transaction. See `UNTERMINATED_SHIPMENT_STATUSES`.
+   */
+  async countUnterminatedByAgency(agencyId: string, session?: ClientSession): Promise<number> {
+    const query = ShipmentModel.countDocuments({
+      agency_id: new Types.ObjectId(agencyId),
+      status: { $in: UNTERMINATED_SHIPMENT_STATUSES },
+    });
+    if (session) query.session(session);
+    return query.exec();
   }
 
   /**
@@ -111,6 +124,19 @@ export class ShipmentRepository {
     return await ShipmentModel.findOneAndUpdate(
       filter,
       { $set: { tracking_number: trackingNumber } },
+      { new: true }
+    );
+  }
+
+  /**
+   * Set or clear the delivery-proof File reference on a shipment. Pass `null` to
+   * clear it (on proof removal). The File itself is owned by the agency and lives
+   * in file_references; this only mirrors the current proof's id onto the shipment.
+   */
+  async setDeliveryProof(shipmentId: string, fileId: string | null): Promise<IShipment | null> {
+    return await ShipmentModel.findByIdAndUpdate(
+      shipmentId,
+      { $set: { delivery_proof_file_id: fileId ? new Types.ObjectId(fileId) : null } },
       { new: true }
     );
   }
@@ -258,6 +284,88 @@ export class ShipmentRepository {
         },
       },
       { new: true, ...sessionOpt }
+    );
+  }
+
+  /**
+   * Bind an agent to a shipment ONLY IF it is still unassigned and offerable —
+   * the concurrency-safe acceptance primitive.
+   *
+   * This is the single serialisation point for "first valid approval wins": with
+   * the offer layer now allowing several agents to hold an acceptable offer at
+   * once (a timed-out agent keeps theirs), two simultaneous accepts both reach
+   * this write, but the filter `agent_id: null` matches for only ONE of them —
+   * Mongo serialises the update on the document. The loser gets null and reports
+   * "another agent already accepted" (the requirement's STEP 7 / STEP 11). Runs
+   * inside the accept transaction so a later failure (capacity/COD) rolls the
+   * bind back.
+   */
+  async bindAgentIfUnassigned(
+    shipmentId: string,
+    agentId: string,
+    offerableStatuses: ShipmentStatus[],
+    session?: ClientSession
+  ): Promise<IShipment | null> {
+    const now = new Date();
+    return await ShipmentModel.findOneAndUpdate(
+      { _id: shipmentId, agent_id: null, status: { $in: offerableStatuses } },
+      {
+        $set: {
+          agent_id: new Types.ObjectId(agentId),
+          assignment: {
+            state: 'accepted',
+            current_offer_id: null,
+            offered_agent_id: new Types.ObjectId(agentId),
+            updated_at: now,
+          },
+        },
+      },
+      { new: true, session: session ?? undefined }
+    );
+  }
+
+  /**
+   * Detach an agent who is CANCELLING their own shipment mid-delivery — a guarded
+   * compare-and-set mirroring `claimForReassignment`, but agent-initiated.
+   *
+   * Matches ONLY when the shipment still holds exactly the agent and status the
+   * caller read, so a concurrent accept/pickup/collect/reassign makes it miss and
+   * return null (the caller then reports a conflict rather than double-detaching).
+   * On a match it clears `agent_id`, resets the status to the offerable target
+   * (`assigned` pre-pickup, `handing_over` post-pickup), records the cancellation
+   * (reason + note), and appends an `agent`-role history entry. The auto-assign
+   * broadcast is then resumed from its stored cursor by the caller.
+   */
+  async claimForAgentCancel(
+    shipmentId: string,
+    agentId: string,
+    prevStatus: ShipmentStatus,
+    targetStatus: ShipmentStatus,
+    cancellation: IShipmentAgentCancellation,
+    handover: IShipmentHandover | null,
+    session?: ClientSession
+  ): Promise<IShipment | null> {
+    const now = new Date();
+    return await ShipmentModel.findOneAndUpdate(
+      { _id: shipmentId, agent_id: agentId, status: prevStatus },
+      {
+        $set: {
+          agent_id: null,
+          status: targetStatus,
+          assignment: { state: 'unassigned', current_offer_id: null, offered_agent_id: null, updated_at: now },
+          handover,
+          agent_cancellation: cancellation,
+        },
+        $push: {
+          status_history: {
+            status: targetStatus,
+            changed_at: now,
+            changed_by_user_id: null,
+            changed_by_role: 'agent',
+          },
+        },
+      },
+      { new: true, session: session ?? undefined }
     );
   }
 

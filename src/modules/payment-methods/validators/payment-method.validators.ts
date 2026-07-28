@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { clearable } from '../../../core/validation/zod.helpers';
 
 /**
  * Payment methods are gateway-managed. We accept only tokenized references and
@@ -11,11 +12,11 @@ export const AddPaymentMethodSchema = z.object({
     gateway_instrument_id: z.string().min(1).trim(),
     method_type: z.enum(['card', 'mobile_money', 'bank_transfer']),
     display_label: z.string().min(1).max(100).trim(),
-    brand: z.string().max(50).trim().nullable().optional(),
-    last4: z.string().regex(/^\d{4}$/, 'last4 must be exactly 4 digits').nullable().optional(),
+    brand: clearable(z.string().max(50).trim()),
+    last4: clearable(z.string().regex(/^\d{4}$/, 'last4 must be exactly 4 digits')),
     exp_month: z.number().int().min(1).max(12).nullable().optional(),
     exp_year: z.number().int().min(2000).max(2100).nullable().optional(),
-    holder_name: z.string().max(100).trim().nullable().optional(),
+    holder_name: clearable(z.string().max(100).trim()),
     is_default: z.boolean().default(false),
 });
 

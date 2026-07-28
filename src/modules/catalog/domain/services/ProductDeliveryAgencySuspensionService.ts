@@ -20,15 +20,17 @@ const DELIVERY_AGENCY_REASONS = [DEFAULT_AGENCY_REASON, PRODUCT_AGENCY_REASON, C
 /**
  * Suspends/restores physical products in response to a delivery agency becoming
  * unusable/usable again — either the vendor's default agency (suspends every
- * physical product of that vendor) or a single product's own delivery.agencyId
- * override (suspends just that product).
+ * ACTIVE physical product of that vendor) or a single product's own
+ * delivery.agencyId override (suspends just that product, if active). Non-active
+ * products are never suspended: they can't reach 'active' without passing the
+ * activation gate, so suspending them would only lock the vendor out of editing.
  *
  * A product can be suspended for either reason independently, so restoring to
  * 'active' is never blind: it re-runs the (agency-aware) activation gate first,
  * and only flips status if it passes — otherwise the product stays suspended,
  * since the OTHER reason could still be broken. Non-'active' previous statuses
- * (draft/archived/pending_review) restore directly; they don't need agency
- * validation.
+ * (legacy rows suspended before the active-only rule) restore directly; they
+ * don't need agency validation.
  */
 export class ProductDeliveryAgencySuspensionService {
     constructor(
@@ -119,7 +121,10 @@ export class ProductDeliveryAgencySuspensionService {
 
             if (targetStatus === 'active') {
                 try {
-                    await this.statusValidationService.validate(product, 'active');
+                    // Pass `options` through: restores run inside the transaction that
+                    // just fixed the agency/connection/default, and the gate must see
+                    // those in-session writes — not the pre-transaction snapshot.
+                    await this.statusValidationService.validate(product, 'active', options);
                 } catch {
                     continue; // Still blocked by something else — leave suspended.
                 }

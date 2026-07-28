@@ -14,6 +14,9 @@ import { ShipmentService } from '../shipments/shipment.service';
 import { OrderService } from './order.service';
 import { IProductRepository } from '../catalog/repositories/interfaces/product.repository.interface';
 import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.repository.mongo';
+import { FileRepositoryMongo } from '../catalog/repositories/mongo/file.repository.mongo';
+import { getStorageProvider, IStorageProvider } from '../../core/storage';
+import { resolveFileDetails, resolveFileDetail } from '../catalog/read-models/file-detail.resolver';
 
 /**
  * Vendor Order Service
@@ -59,6 +62,8 @@ export class VendorOrderService {
     private shipmentService: ShipmentService;
     private orderService: OrderService;
     private productRepository: IProductRepository;
+    private fileRepository: FileRepositoryMongo;
+    private storageProvider: IStorageProvider;
 
     constructor() {
         this.vendorOrderRepo = new VendorOrderRepository();
@@ -68,6 +73,8 @@ export class VendorOrderService {
         this.shipmentService = new ShipmentService();
         this.orderService = new OrderService();
         this.productRepository = new ProductRepositoryMongo();
+        this.fileRepository = new FileRepositoryMongo();
+        this.storageProvider = getStorageProvider();
     }
 
     /**
@@ -269,14 +276,22 @@ export class VendorOrderService {
             const agencyId = deliveryData.agency_id?.toString() || null;
             const shipmentId = deliveryData.shipment_id?.toString() || null;
 
-            // Agency (cached)
+            // Agency (cached). The business name lives on the Magazin (keyed by
+            // agency_id), so fetch it alongside the agency's contact fields.
             let agency: any = null;
             if (agencyId) {
                 if (!agencyCache.has(agencyId)) {
-                    agencyCache.set(agencyId, await db.collection(COLLECTIONS.DELIVERY_AGENCY).findOne(
-                        { _id: deliveryData.agency_id },
-                        { projection: { agency_name: 1, phone: 1, email: 1 } }
-                    ));
+                    const [agencyDoc, magazinDoc] = await Promise.all([
+                        db.collection(COLLECTIONS.DELIVERY_AGENCY).findOne(
+                            { _id: deliveryData.agency_id },
+                            { projection: { phone: 1, email: 1 } }
+                        ),
+                        db.collection(COLLECTIONS.AGENCY_MAGAZIN).findOne(
+                            { agency_id: deliveryData.agency_id },
+                            { projection: { name: 1 } }
+                        ),
+                    ]);
+                    agencyCache.set(agencyId, agencyDoc ? { ...agencyDoc, agency_name: magazinDoc?.name ?? null } : null);
                 }
                 agency = agencyCache.get(agencyId);
             }
@@ -290,25 +305,29 @@ export class VendorOrderService {
                 shipment = shipmentCache.get(shipmentId);
             }
 
-            // Agent from shipment (cached)
+            // Agent from shipment (cached as the built DTO, so its avatar File
+            // reference is resolved to a URL once per distinct agent).
             let agent: any = null;
             if (shipment?.agent_id) {
                 const agentId = shipment.agent_id.toString();
                 if (!agentCache.has(agentId)) {
-                    agentCache.set(agentId, await db.collection(COLLECTIONS.DELIVERY_AGENT).findOne(
+                    const agentDoc = await db.collection(COLLECTIONS.DELIVERY_AGENT).findOne(
                         { _id: shipment.agent_id },
-                        { projection: { name: 1, phone: 1, avatar_url: 1 } }
-                    ));
+                        { projection: { name: 1, phone: 1, avatar_file_id: 1, avatar_url: 1 } }
+                    );
+                    let built: any = null;
+                    if (agentDoc) {
+                        const avatar = await resolveFileDetail(agentDoc.avatar_file_id?.toString(), this.fileRepository, this.storageProvider);
+                        built = {
+                            id: agentDoc._id.toString(),
+                            name: agentDoc.name,
+                            phone: agentDoc.phone || null,
+                            avatar
+                        };
+                    }
+                    agentCache.set(agentId, built);
                 }
-                const agentDoc = agentCache.get(agentId);
-                if (agentDoc) {
-                    agent = {
-                        id: agentDoc._id.toString(),
-                        name: agentDoc.name,
-                        phone: agentDoc.phone || null,
-                        avatarUrl: agentDoc.avatar_url || null
-                    };
-                }
+                agent = agentCache.get(agentId);
             }
 
             byItem.set(item._id.toString(), {
@@ -365,7 +384,7 @@ export class VendorOrderService {
     private async _resolveCustomerInfo(customerId: string, vendorId: string): Promise<any> {
         const [customer, stats] = await Promise.all([
             CustomerModel.findById(customerId)
-                .select('name email phone avatar_url saved_addresses')
+                .select('name email phone avatar_file_id avatar_url saved_addresses')
                 .lean()
                 .exec() as Promise<any>,
             OrderModel.aggregate([
@@ -401,11 +420,13 @@ export class VendorOrderService {
             country: defaultAddr.country
         } : null;
 
+        const avatar = await resolveFileDetail(customer.avatar_file_id?.toString(), this.fileRepository, this.storageProvider);
+
         return {
             name: customer.name,
             email: customer.email ?? null,
             phone: customer.phone ?? null,
-            avatar: customer.avatar_url ?? null,
+            avatar,
             orderCount: stats[0]?.orderCount ?? 0,
             totalSpent: stats[0]?.totalSpent ?? 0,
             shippingAddress
@@ -421,16 +442,23 @@ export class VendorOrderService {
         if (customerIds.length === 0) return new Map();
 
         const customers = await CustomerModel.find({ _id: { $in: customerIds } })
-            .select('name email avatar_url')
+            .select('name email avatar_file_id avatar_url')
             .lean()
             .exec() as any[];
 
+        const avatarByFileId = await resolveFileDetails(
+            customers.map((c) => c.avatar_file_id?.toString() ?? null),
+            this.fileRepository,
+            this.storageProvider,
+        );
+
         const map = new Map<string, any>();
         for (const c of customers) {
+            const fid = c.avatar_file_id?.toString();
             map.set(c._id.toString(), {
                 name: c.name,
                 email: c.email ?? null,
-                avatar: c.avatar_url ?? null
+                avatar: fid ? avatarByFileId.get(fid) ?? null : null
             });
         }
         return map;
@@ -736,7 +764,7 @@ export class VendorOrderService {
     /**
      * Batch-resolve actor display names for timeline entries.
      *
-     * Vendors → business_name from vendors collection.
+     * Vendors → name from the Store (business-name source of truth, keyed by vendor_id).
      * Customers → name from customers collection.
      * System → "System".
      */
@@ -757,11 +785,11 @@ export class VendorOrderService {
 
         const db = mongoose.connection.db;
 
-        const [vendors, customers] = await Promise.all([
+        const [vendorStores, customers] = await Promise.all([
             vendorIds.length > 0 && db
-                ? db.collection(COLLECTIONS.VENDOR)
-                    .find({ _id: { $in: vendorIds } })
-                    .project({ business_name: 1 })
+                ? db.collection(COLLECTIONS.STORE)
+                    .find({ vendor_id: { $in: vendorIds } })
+                    .project({ vendor_id: 1, name: 1 })
                     .toArray()
                 : Promise.resolve([]),
             customerIds.length > 0
@@ -772,8 +800,8 @@ export class VendorOrderService {
                 : Promise.resolve([])
         ]);
 
-        for (const v of vendors as any[]) {
-            nameMap.set(v._id.toString(), v.business_name);
+        for (const s of vendorStores as any[]) {
+            nameMap.set(s.vendor_id.toString(), s.name);
         }
         for (const c of customers) {
             nameMap.set((c as any)._id.toString(), (c as any).name);
@@ -956,6 +984,13 @@ export class VendorOrderService {
             throw createAppError(ERROR_CODES.ORDER_DELIVERY_AGENCY_NOT_FOUND, 404);
         }
 
+        // Business name lives on the Magazin (keyed by agency_id).
+        const magazinDoc = await mongoose.connection.db.collection(COLLECTIONS.AGENCY_MAGAZIN).findOne(
+            { agency_id: new mongoose.Types.ObjectId(deliveryAgencyId) },
+            { projection: { name: 1 } }
+        );
+        const agencyName = magazinDoc?.name || null;
+
         // 6. Move the item between agency shipments (the dispatch source of truth).
         //    Reuse the destination agency's open shipment for this order if one
         //    exists, otherwise create a fresh one.
@@ -1004,11 +1039,11 @@ export class VendorOrderService {
         await this.timelineRepo.appendEvent({
             orderId,
             eventType: 'delivery.agency_updated',
-            description: `Delivery agency for "${item.title}" changed to ${agencyExists.agency_name || deliveryAgencyId}`,
+            description: `Delivery agency for "${item.title}" changed to ${agencyName || deliveryAgencyId}`,
             metadata: {
                 itemId,
                 newAgencyId: deliveryAgencyId,
-                agencyName: agencyExists.agency_name || 'Unknown',
+                agencyName: agencyName || 'Unknown',
                 previousAgencyId,
                 shipmentId: destShipment._id!.toString()
             },

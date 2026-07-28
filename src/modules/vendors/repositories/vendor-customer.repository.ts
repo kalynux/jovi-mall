@@ -11,6 +11,7 @@ export interface VendorCustomerListRow extends IVendorCustomer {
         _id: Types.ObjectId;
         name?: string;
         email?: string;
+        avatar_file_id?: Types.ObjectId | null;
         avatar_url?: string | null;
     } | null;
 }

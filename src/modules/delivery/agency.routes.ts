@@ -61,7 +61,7 @@ router.put('/onboarding/payout', AgencyProfileController.completePayoutSetup);
 
 /**
  * PUT /api/agency/onboarding/branding
- * Step 3 (Optional/Skippable): { skip?: boolean, logo_url?, timezone? }
+ * Step 3 (Optional/Skippable): { skip?: boolean, logo_file_id?, timezone? }
  * Optional: { version } for optimistic concurrency
  */
 router.put('/onboarding/branding', AgencyProfileController.completeBrandingSetup);

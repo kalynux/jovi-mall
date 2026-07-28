@@ -213,7 +213,7 @@ export class VendorVariantController {
             await fileReferenceService.reconcile({
                 previousFileIds: [],
                 nextFileIds: input.fileIds,
-                vendorId,
+                actor: { type: 'vendor', id: vendorId },
                 entityType: 'variant',
                 entityId: variant.id,
             });
@@ -341,7 +341,7 @@ export class VendorVariantController {
             await fileReferenceService.reconcile({
                 previousFileIds: existingVariant.fileIds ?? [],
                 nextFileIds: input.fileIds,
-                vendorId,
+                actor: { type: 'vendor', id: vendorId },
                 entityType: 'variant',
                 entityId: variantId,
             });

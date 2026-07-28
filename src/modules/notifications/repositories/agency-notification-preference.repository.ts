@@ -13,6 +13,8 @@ export interface UpdateAgencyPreferencesPayload {
         shipmentAssigned?: boolean;
         payoutUpdates?: boolean;
         codDepositUpdates?: boolean;
+        planUpdates?: boolean;
+        storageAlert?: boolean;
     };
 }
 
@@ -45,7 +47,9 @@ export class AgencyNotificationPreferenceRepository {
                     connectionUpdated: true,
                     shipmentAssigned: true,
                     payoutUpdates: true,
-                    codDepositUpdates: true
+                    codDepositUpdates: true,
+                    planUpdates: true,
+                    storageAlert: true
                 }
             });
         }
@@ -110,6 +114,10 @@ export class AgencyNotificationPreferenceRepository {
                 updates.preferences.payoutUpdates ?? current.preferences.payoutUpdates;
             updatePayload['preferences.codDepositUpdates'] =
                 updates.preferences.codDepositUpdates ?? current.preferences.codDepositUpdates;
+            updatePayload['preferences.planUpdates'] =
+                updates.preferences.planUpdates ?? current.preferences.planUpdates;
+            updatePayload['preferences.storageAlert'] =
+                updates.preferences.storageAlert ?? current.preferences.storageAlert;
         }
 
         const result = await AgencyNotificationPreferenceModel.findOneAndUpdate(

@@ -22,7 +22,8 @@ Root-level fields on the agency profile response object.
 | `emailVerified` | `boolean` | Yes | No | — | Whether the main email has been verified. |
 | `phone` | `string \| null` | Yes | Yes | Regex: `/^\+?[0-9\s\-()]+$/` | Main agency phone number. |
 | `phoneVerified` | `boolean` | Yes | No | — | Whether the main phone has been verified. |
-| `logoUrl` | `string \| null` | Yes | Yes | Must be a valid absolute URL | URL to the agency logo image. |
+| `logoFileId` | `string \| null` | Yes | Yes (as `logo_file_id`) | Valid MongoDB ObjectId of a file uploaded via `POST /api/files/upload` | File id of the agency logo. On update send `logo_file_id`; the response returns both this and the derived `logoUrl`. |
+| `logoUrl` | `string \| null` | Yes | No (derived) | — | Public URL of the logo, derived server-side from `logoFileId`. Read-only. |
 | `timezone` | `string` | Yes | Yes | IANA timezone string | Operating timezone. Default: `"Africa/Douala"`. |
 | `coverageAreas` | `string[]` | Yes | Yes | Min 1 item. Values are region keys from `locations.json`. | Regions this agency can serve. |
 | `kycVerified` | `boolean` | Yes | No (admin-only) | — | Whether admin has approved the agency's KYC documents. |
@@ -366,7 +367,7 @@ export interface DeliveryAgencyProfile {
   emailVerified: boolean;
   phone: string | null;
   phoneVerified: boolean;
-  logoUrl: string | null;
+  logo: FileDetail | null;   // { id, key, url, mimeType, size, originalName } — same shape as product media
   timezone: string;
   coverageAreas: string[];
   headquartersAddresses: HeadquartersAddress[];

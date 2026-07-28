@@ -15,10 +15,15 @@ import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repo
 import { CashCollectionService, cashCollectionService } from '../../../cod/services/cash-collection.service';
 import { CodExposureService, codExposureService } from '../../../cod/services/cod-exposure.service';
 import { ASSIGNMENT_CONFIG } from '../../config/assignment.config';
+import { RankingSource } from '../../models/shipment-assignment-session.model';
+import { GeoRoutingClient, geoRoutingClient } from '../../services/geo-routing.client';
 
 /**
- * The per-factor breakdown behind a candidate's score. Persisted onto the offer
- * so a placement is explainable after the fact (why THIS agent, over that one).
+ * The per-factor breakdown behind a candidate's score. Persisted onto the
+ * session so a placement is explainable after the fact (why THIS agent).
+ * NOTE: under the requirement the ranking ORDER is proximity (nearest first);
+ * this weighted score is retained for explainability/audit and tie-breaking,
+ * not as the primary sort key.
  */
 export interface CandidateScoreBreakdown {
   distance_km: number | null;
@@ -30,11 +35,20 @@ export interface CandidateScoreBreakdown {
   weighted: number;
 }
 
-export interface ScoredCandidate {
+/** One ranked candidate. `rank` is the proximity order (0 = nearest). */
+export interface RankedCandidate {
   agentId: string;
-  score: number;
   rank: number;
+  distanceMeters: number | null;
+  durationSeconds: number | null;
+  score: number;
   breakdown: CandidateScoreBreakdown;
+}
+
+/** The full ranking + how it was ordered (geo provider vs local fallback). */
+export interface RankingResult {
+  candidates: RankedCandidate[];
+  source: RankingSource;
 }
 
 /** Raw inputs to the pure scorer — kept separate so it can be tested DB-free. */
@@ -43,6 +57,14 @@ export interface CandidateScoreInput {
   freeCapacity: number;
   maxActiveShipments: number;
   trustScore: number;
+}
+
+/** A candidate ranked by weighted score (retained for previews + unit tests). */
+export interface ScoredCandidate {
+  agentId: string;
+  score: number;
+  rank: number;
+  breakdown: CandidateScoreBreakdown;
 }
 
 // ─── Pure scoring (no I/O — unit-tested directly) ──────────────────────────────
@@ -64,8 +86,7 @@ export function haversineKm(a: IGeoPoint, b: IGeoPoint): number {
 /**
  * Map a distance to a 0..1 score: 1 at/inside DISTANCE_FULL_SCORE_KM, 0
  * at/beyond DISTANCE_ZERO_SCORE_KM, linear between. Unknown distance (missing
- * pickup or agent coordinates) is NEUTRAL, not zero — a missing location must
- * degrade gracefully, not always lose.
+ * pickup or agent coordinates) is NEUTRAL, not zero.
  */
 export function distanceScore(distanceKm: number | null, cfg = ASSIGNMENT_CONFIG): number {
   if (distanceKm === null || !Number.isFinite(distanceKm)) return cfg.UNKNOWN_DISTANCE_SCORE;
@@ -101,9 +122,8 @@ export function scoreCandidate(input: CandidateScoreInput, cfg = ASSIGNMENT_CONF
 
 /**
  * Rank pre-scored candidates highest-first and stamp their rank. Ties break by
- * agentId so ordering is deterministic (important: the auto pool is snapshotted
- * and re-read by the timeout branch — a non-deterministic order could skip an
- * agent). Pure.
+ * agentId so ordering is deterministic. Pure. (Retained for the weighted-score
+ * preview and the DB-free unit tests; the live ranking orders by proximity.)
  */
 export function rankScored(
   scored: Array<{ agentId: string; breakdown: CandidateScoreBreakdown }>
@@ -115,17 +135,21 @@ export function rankScored(
 
 /**
  * AssignmentCandidateService — computes the ranked list of agents an auto
- * assignment should offer a shipment to, in order.
+ * assignment should offer a shipment to, nearest first.
  *
- * Pipeline (matches the spec):
- *   1. eligibility  — reuse AgentEligibilityService.listEligibleAgentIds (active,
- *      active contract, online, tracking-allowed, device-location, under-capacity).
- *   2. COD gate     — if the order is COD, drop agents over their COD headroom.
- *      If not COD, every eligible agent stays (spec: "assign to any").
- *   3. score        — distance-to-pickup + free capacity + trust, weighted.
- *
- * The scoring inputs are resolved with I/O here; the arithmetic is the pure
- * functions above.
+ * Pipeline (matches the requirement):
+ *   1. eligibility — active · approved · online · tracking-allowed · device-loc
+ *      · under-capacity (AgentEligibilityService).
+ *   2. current-location gate — an agent with no resolvable position is dropped
+ *      (they cannot be ranked by proximity). With REQUIRE_LIVE_POSITION on, only
+ *      a FRESH pushed position counts.
+ *   3. trust floor — MIN_TRUST_SCORE gates receiving ANY order.
+ *   4. COD gate — for a COD order, drop agents over their COD headroom (checked
+ *      in parallel, not a sequential N+1). Prepaid orders skip it entirely.
+ *   5. cap to MAX_AUTO_CANDIDATES nearest (local haversine pre-cut).
+ *   6. proximity ranking — send the capped set + pickup to the Geo Provider
+ *      (geo-tracker's road-network matrix); fall back to local haversine order
+ *      if it is unavailable. Order is nearest → farthest.
  */
 export class AssignmentCandidateService {
   constructor(
@@ -135,18 +159,20 @@ export class AssignmentCandidateService {
     private readonly vendors: VendorRepository = new VendorRepository(),
     private readonly agencies: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
     private readonly cashCollection: CashCollectionService = cashCollectionService,
-    private readonly exposure: CodExposureService = codExposureService
+    private readonly exposure: CodExposureService = codExposureService,
+    private readonly geoRouting: GeoRoutingClient = geoRoutingClient
   ) {}
 
   /**
-   * Ranked candidates for a shipment, best first, capped at MAX_AUTO_CANDIDATES.
-   * Empty when no eligible (and, for COD, COD-clearable) agent exists.
+   * Ranked candidates for a shipment, nearest first, capped at
+   * MAX_AUTO_CANDIDATES. Empty when no eligible (and, for COD, COD-clearable)
+   * agent with a usable location exists.
    */
-  async rankCandidates(shipment: IShipment, order: IOrder): Promise<ScoredCandidate[]> {
+  async buildRanking(shipment: IShipment, order: IOrder): Promise<RankingResult> {
     const agencyId = shipment.agency_id.toString();
 
     const eligibleIds = await this.eligibility.listEligibleAgentIds(agencyId);
-    if (eligibleIds.length === 0) return [];
+    if (eligibleIds.length === 0) return { candidates: [], source: 'haversine' };
 
     const isCod = order.payment_method === 'cash_on_delivery';
     const expectedAmount = isCod ? this.cashCollection.computeExpectedAmount(order, shipment) : 0;
@@ -156,31 +182,103 @@ export class AssignmentCandidateService {
       this.resolvePickupLocation(shipment, order),
     ]);
 
-    const scored: Array<{ agentId: string; breakdown: CandidateScoreBreakdown }> = [];
-    for (const agent of agents) {
-      const agentId = agent._id.toString();
-
-      // COD gate: keep only agents who can carry this cash under the DISPATCHING
-      // agency's cap. Non-COD orders skip the gate entirely.
-      if (isCod && !(await this.canTakeCod(agent, agencyId, expectedAmount))) continue;
-
-      const agentLoc = this.resolveAgentLocation(agent);
-      const distanceKm = pickup && agentLoc ? haversineKm(pickup, agentLoc) : null;
-      const maxActive = agent.capacity?.max_active_shipments ?? 0;
-      const inUse = agent.capacity?.active_shipment_count ?? 0;
-
-      scored.push({
-        agentId,
-        breakdown: scoreCandidate({
-          distanceKm,
-          freeCapacity: Math.max(0, maxActive - inUse),
-          maxActiveShipments: maxActive,
-          trustScore: agent.cod?.trust_score ?? 0,
-        }),
+    // Steps 2 + 3 — location-available and trust-floor gates (pure, no I/O).
+    const located = agents
+      .map((agent) => ({ agent, position: this.resolvePosition(agent) }))
+      .filter((c): c is { agent: IDeliveryAgent; position: ResolvedPosition } => {
+        if (!c.position) return false; // no current location → cannot rank by proximity
+        if (ASSIGNMENT_CONFIG.REQUIRE_LIVE_POSITION && !c.position.fresh) return false;
+        if ((c.agent.cod?.trust_score ?? 0) < ASSIGNMENT_CONFIG.MIN_TRUST_SCORE) return false;
+        return true;
       });
+
+    // Step 4 — COD headroom gate, evaluated in PARALLEL (was a sequential N+1).
+    let survivors = located;
+    if (isCod) {
+      const codOk = await Promise.all(
+        located.map((c) => this.canTakeCod(c.agent, agencyId, expectedAmount))
+      );
+      survivors = located.filter((_, i) => codOk[i]);
+    }
+    if (survivors.length === 0) return { candidates: [], source: 'haversine' };
+
+    // Step 5 — pre-cut to the nearest MAX_AUTO_CANDIDATES by local haversine, so
+    // the Geo Provider is only ever asked about the plausible set (the
+    // requirement's "up to 20 to the provider").
+    const withDistance = survivors.map((c) => ({
+      ...c,
+      haversineKm: pickup ? haversineKm(pickup, c.position.point) : null,
+    }));
+    withDistance.sort((a, b) => this.byNearest(a.haversineKm, b.haversineKm, a.agent, b.agent));
+    const capped = withDistance.slice(0, ASSIGNMENT_CONFIG.MAX_AUTO_CANDIDATES);
+
+    // Step 6 — proximity ranking via the Geo Provider, with haversine fallback.
+    return await this.rankByProximity(capped, pickup);
+  }
+
+  /** Order the capped set nearest-first via the Geo Provider, else haversine. */
+  private async rankByProximity(
+    capped: Array<{ agent: IDeliveryAgent; position: ResolvedPosition; haversineKm: number | null }>,
+    pickup: IGeoPoint | null
+  ): Promise<RankingResult> {
+    const geo = pickup
+      ? await this.geoRouting.rankByProximity(
+          pickup,
+          capped.map((c) => ({ agentId: c.agent._id.toString(), position: c.position.point }))
+        )
+      : null;
+
+    if (geo) {
+      // Provider order wins. Build candidates in the returned nearest→farthest order.
+      const byId = new Map(capped.map((c) => [c.agent._id.toString(), c]));
+      const candidates: RankedCandidate[] = [];
+      geo.forEach((r, rank) => {
+        const c = byId.get(r.agentId);
+        if (!c) return;
+        const distanceKm = Number.isFinite(r.distanceMeters) ? r.distanceMeters / 1000 : c.haversineKm;
+        candidates.push(this.toRanked(c.agent, rank, r.distanceMeters, r.durationSeconds, distanceKm));
+      });
+      return { candidates, source: 'geo_matrix' };
     }
 
-    return rankScored(scored).slice(0, ASSIGNMENT_CONFIG.MAX_AUTO_CANDIDATES);
+    // Fallback: local haversine order (already sorted nearest-first above).
+    const candidates = capped.map((c, rank) =>
+      this.toRanked(c.agent, rank, c.haversineKm != null ? c.haversineKm * 1000 : null, null, c.haversineKm)
+    );
+    return { candidates, source: 'haversine' };
+  }
+
+  private toRanked(
+    agent: IDeliveryAgent,
+    rank: number,
+    distanceMeters: number | null,
+    durationSeconds: number | null,
+    distanceKm: number | null
+  ): RankedCandidate {
+    const maxActive = agent.capacity?.max_active_shipments ?? 0;
+    const inUse = agent.capacity?.active_shipment_count ?? 0;
+    const breakdown = scoreCandidate({
+      distanceKm,
+      freeCapacity: Math.max(0, maxActive - inUse),
+      maxActiveShipments: maxActive,
+      trustScore: agent.cod?.trust_score ?? 0,
+    });
+    return {
+      agentId: agent._id.toString(),
+      rank,
+      distanceMeters: distanceMeters != null && Number.isFinite(distanceMeters) ? distanceMeters : null,
+      durationSeconds: durationSeconds != null && Number.isFinite(durationSeconds) ? durationSeconds : null,
+      score: breakdown.weighted,
+      breakdown,
+    };
+  }
+
+  /** nearest-first comparator; unknown distances sort last, ties by agentId. */
+  private byNearest(a: number | null, b: number | null, agA: IDeliveryAgent, agB: IDeliveryAgent): number {
+    const da = a == null || !Number.isFinite(a) ? Infinity : a;
+    const db = b == null || !Number.isFinite(b) ? Infinity : b;
+    if (da !== db) return da - db;
+    return agA._id.toString().localeCompare(agB._id.toString());
   }
 
   /** Non-throwing COD headroom check (the throwing form is for command paths). */
@@ -194,22 +292,30 @@ export class AssignmentCandidateService {
     }
   }
 
-  /** Agent position: live tracking mirror first, else declared home base. */
-  private resolveAgentLocation(agent: IDeliveryAgent): IGeoPoint | null {
-    const live = agent.last_known_tracking_state?.last_position;
-    if (live?.coordinates?.length === 2) return live;
+  /**
+   * Agent position + whether it counts as CURRENT. A live pushed position within
+   * POSITION_FRESHNESS_SECONDS is fresh; an older mirror or the declared home
+   * base is a usable fallback but not "fresh". Null when nothing is on file — an
+   * agent with no coordinates at all cannot be ranked by proximity.
+   */
+  private resolvePosition(agent: IDeliveryAgent): ResolvedPosition | null {
+    const lk = agent.last_known_tracking_state;
+    const live = lk?.last_position;
+    if (live?.coordinates?.length === 2) {
+      const reportedAt = lk?.last_reported_at ? new Date(lk.last_reported_at).getTime() : 0;
+      const fresh =
+        reportedAt > 0 && Date.now() - reportedAt <= ASSIGNMENT_CONFIG.POSITION_FRESHNESS_SECONDS * 1000;
+      return { point: live, fresh };
+    }
     const home = agent.home_base?.location;
-    if (home?.coordinates?.length === 2) return home;
+    if (home?.coordinates?.length === 2) return { point: home, fresh: false };
     return null;
   }
 
   /**
-   * Pickup coordinates for a shipment, resolved LIVE (the order snapshot carries
-   * no coordinates). `agency_storage` ⇒ the agency's primary HQ location;
-   * `vendor_address` ⇒ the referenced vendor business address's location. Uses
-   * the shipment's first item's pickup config (a shipment's items share a
-   * pickup in practice). Returns null when no location is on file — the distance
-   * factor then goes neutral for every candidate.
+   * Pickup coordinates for a shipment, resolved LIVE. `agency_storage` ⇒ the
+   * agency's primary HQ location; `vendor_address` ⇒ the referenced vendor
+   * business address's location. Returns null when no location is on file.
    */
   private async resolvePickupLocation(shipment: IShipment, order: IOrder): Promise<IGeoPoint | null> {
     const firstItem = shipment.items[0];
@@ -240,6 +346,11 @@ export class AssignmentCandidateService {
   private geoOf(loc: IGeoPoint | null | undefined): IGeoPoint | null {
     return loc && Array.isArray(loc.coordinates) && loc.coordinates.length === 2 ? loc : null;
   }
+}
+
+interface ResolvedPosition {
+  point: IGeoPoint;
+  fresh: boolean;
 }
 
 export const assignmentCandidateService = new AssignmentCandidateService();

@@ -1,4 +1,5 @@
-import { IVendor, IVendorBranding, IVendorBusinessAddress, IVendorOperatingHours, IVendorKycDetails, IVendorSocialLinks, IVendorPolicies } from '../../vendors/vendor.model';
+import mongoose from 'mongoose';
+import { IVendor, IVendorBusinessAddress, IVendorOperatingHours, IVendorKycDetails, IVendorSocialLinks, IVendorPolicies } from '../../vendors/vendor.model';
 import { withGeoAddress } from '../../../core/types/geo-address.types';
 import { IPayoutDetails } from '../../../core/types/payout.types';
 import { UpdateVendorProfileInput } from '../validators/vendor-onboarding.validator';
@@ -24,27 +25,16 @@ export interface VendorPayoutDetailsSanitized {
   } | null;
 }
 
-/**
- * Vendor branding, resolved from stored file references into full file
- * details (id, key, url, mimeType, size, originalName) — mirrors how product
- * media is returned (see enrichProduct / FileDetail).
- */
-export interface VendorBrandingDetail {
-  logo: FileDetail | null;
-  coverImage: FileDetail | null;
-}
-
 export interface GetVendorProfileResponseDto {
   id: string;
   email: string;
   emailVerified: boolean;
   phone: string;
   phoneVerified: boolean;
-  businessName: string;
   displayName?: string;
-  businessDescription: string | null;
   country: string | null;
-  branding: VendorBrandingDetail;
+  /** Personal profile avatar, resolved from its File reference. Null when unset. */
+  avatar: FileDetail | null;
   businessAddresses: IVendorBusinessAddress[];
   operatingHours: IVendorOperatingHours[];
   payoutDetails: VendorPayoutDetailsSanitized | null;
@@ -126,39 +116,26 @@ function sanitizePayoutDetails(payout: IPayoutDetails | null): VendorPayoutDetai
 }
 
 /**
- * Resolve a vendor's branding file references into full file details, batching
- * both lookups into a single query. Missing/deleted files resolve to null
- * (same "silently omit" behavior as product media — see buildFileDetails in
- * enrich-product-detail.ts).
+ * Resolve the vendor's personal avatar File reference into a full file detail.
+ * Missing/deleted files resolve to null, matching branding behavior.
  */
-async function buildBrandingDetail(
-  branding: IVendorBranding,
+async function buildAvatarDetail(
+  avatarFileId: mongoose.Types.ObjectId | null | undefined,
   fileRepo: FileRepositoryMongo,
   storage: IStorageProvider,
-): Promise<VendorBrandingDetail> {
-  const ids = [branding.logo_file_id?.toString(), branding.cover_image_file_id?.toString()]
-    .filter((id): id is string => !!id);
-
-  const files = ids.length > 0 ? await fileRepo.findManyByIds(ids) : [];
-  const byId = new Map(files.map(f => [f.id, f]));
-
-  const toDetail = (fileId?: string): FileDetail | null => {
-    if (!fileId) return null;
-    const f = byId.get(fileId);
-    if (!f) return null;
-    return {
-      id: f.id,
-      key: f.key,
-      url: storage.getPublicUrl(f.key),
-      mimeType: f.mimeType,
-      size: f.size,
-      originalName: f.originalName,
-    };
-  };
-
+): Promise<FileDetail | null> {
+  const id = avatarFileId?.toString();
+  if (!id) return null;
+  const files = await fileRepo.findManyByIds([id]);
+  const f = files[0];
+  if (!f) return null;
   return {
-    logo: toDetail(branding.logo_file_id?.toString()),
-    coverImage: toDetail(branding.cover_image_file_id?.toString()),
+    id: f.id,
+    key: f.key,
+    url: storage.getPublicUrl(f.key),
+    mimeType: f.mimeType,
+    size: f.size,
+    originalName: f.originalName,
   };
 }
 
@@ -182,11 +159,9 @@ export class VendorProfileMapper {
       emailVerified: vendor.email_verified,
       phone: vendor.phone ?? '',
       phoneVerified: vendor.phone_verified,
-      businessName: vendor.business_name,
       displayName: vendor.display_name,
-      businessDescription: vendor.business_description,
       country: vendor.country ?? null,
-      branding: await buildBrandingDetail(vendor.branding, fileRepo, storage),
+      avatar: await buildAvatarDetail(vendor.avatar_file_id, fileRepo, storage),
       businessAddresses: vendor.business_addresses,
       operatingHours: vendor.operating_hours,
       payoutDetails: sanitizePayoutDetails(vendor.payout_details),
@@ -269,13 +244,14 @@ export class VendorProfileMapper {
     const payload: Partial<IVendor> = {};
 
     if (input.displayName !== undefined) payload.display_name = input.displayName;
-    if (input.businessDescription !== undefined) payload.business_description = input.businessDescription as string | null;
     if (input.email !== undefined) payload.email = input.email;
     if (input.phone !== undefined) payload.phone = input.phone;
     if (input.timezone !== undefined) payload.timezone = input.timezone;
     if (input.preferred_language !== undefined) payload.preferred_language = input.preferred_language;
     if (input.country !== undefined) payload.country = input.country;
-    if (input.branding !== undefined) payload.branding = input.branding as IVendorBranding;
+    if (input.avatarFileId !== undefined) {
+      payload.avatar_file_id = input.avatarFileId ? new mongoose.Types.ObjectId(input.avatarFileId) : null;
+    }
     // `_id` (when provided) is a hex string here — Mongoose casts it to ObjectId
     // on write, preserving the address's identity instead of minting a new one.
     if (input.business_addresses !== undefined) payload.business_addresses = input.business_addresses.map(withGeoAddress) as unknown as IVendorBusinessAddress[];

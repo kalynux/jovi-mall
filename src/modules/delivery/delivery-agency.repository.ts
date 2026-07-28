@@ -1,6 +1,16 @@
-import { ClientSession, FilterQuery } from 'mongoose';
+import { ClientSession, PipelineStage, Types } from 'mongoose';
 import { DeliveryAgencyModel, IDeliveryAgency } from './delivery-agency.model';
 import { AgencyOnboardingStepValue } from '../../core/constants/onboarding-steps';
+import { COLLECTIONS } from '../../core/database/collections';
+
+/**
+ * An agency row joined to its Magazin's business name + logo. The public business
+ * name/logo live on the Magazin (see `src/modules/magazin/`), not on the agency,
+ * so list/browse queries `$lookup` it and expose it as this lean sub-field.
+ */
+export type AgencyWithMagazin = IDeliveryAgency & {
+  magazin?: { name?: string; logo_file_id?: Types.ObjectId | null } | null;
+};
 
 // ─── Query Params Types ───────────────────────────────────────────────────────
 
@@ -244,68 +254,73 @@ export class DeliveryAgencyRepository {
    */
   async findAvailableForVendors(
     params: AgencyListQueryParams,
-  ): Promise<{ agencies: IDeliveryAgency[]; total: number }> {
+  ): Promise<{ agencies: AgencyWithMagazin[]; total: number }> {
     const { search, region, hq_city, storage_based, pickup_based, returns_payer, min_claim_deadline_days, page, limit } = params;
 
-    const filter: FilterQuery<IDeliveryAgency> = {
+    // Non-name filters run on the agency document itself.
+    const baseMatch: Record<string, unknown> = {
       status: { $ne: 'inactive' },
       onboarding_step: 0,
     };
+    if (region && region.trim()) baseMatch.coverage_areas = new RegExp(region.trim(), 'i');
+    if (hq_city && hq_city.trim()) baseMatch['headquarters_addresses.0.city'] = new RegExp(hq_city.trim(), 'i');
+    if (storage_based === true) baseMatch['policies.pricing.storage_based.enabled'] = true;
+    if (pickup_based === true) baseMatch['policies.pricing.pickup_based.enabled'] = true;
+    if (returns_payer) baseMatch['policies.returns.payer'] = returns_payer;
+    if (min_claim_deadline_days !== undefined && min_claim_deadline_days >= 0) {
+      baseMatch['policies.damage.claim_deadline_days'] = { $gte: min_claim_deadline_days };
+    }
 
-    // ── Free-text search ──────────────────────────────────────────────────────
+    // The business name/logo live on the Magazin, so join it — the free-text search
+    // and the name sort operate on `magazin.name`.
+    const pipeline: PipelineStage[] = [
+      { $match: baseMatch },
+      { $lookup: { from: COLLECTIONS.AGENCY_MAGAZIN, localField: '_id', foreignField: 'agency_id', as: 'magazin' } },
+      { $addFields: { magazin: { $arrayElemAt: ['$magazin', 0] } } },
+    ];
+
     if (search && search.trim()) {
       const searchRegex = new RegExp(search.trim(), 'i');
-      filter.$or = [
-        { agency_name: searchRegex },
-        { coverage_areas: searchRegex },
-        { 'headquarters_addresses.city': searchRegex },
-        { 'headquarters_addresses.region': searchRegex },
-        { 'headquarters_addresses.address_description': searchRegex },
-      ];
+      pipeline.push({
+        $match: {
+          $or: [
+            { 'magazin.name': searchRegex },
+            { coverage_areas: searchRegex },
+            { 'headquarters_addresses.city': searchRegex },
+            { 'headquarters_addresses.region': searchRegex },
+            { 'headquarters_addresses.address_description': searchRegex },
+          ],
+        },
+      });
     }
 
-    // ── Region filter ─────────────────────────────────────────────────────────
-    if (region && region.trim()) {
-      filter.coverage_areas = new RegExp(region.trim(), 'i');
-    }
+    // Field-projected result (no payout details, no KYC numbers) + the magazin name/logo.
+    pipeline.push({
+      $facet: {
+        data: [
+          { $sort: { 'magazin.name': 1 } },
+          { $skip: (page - 1) * limit },
+          { $limit: limit },
+          {
+            $project: {
+              'kyc_details.legit_verified': 1,
+              headquarters_addresses: 1,
+              coverage_areas: 1,
+              policies: 1,
+              status: 1,
+              'magazin.name': 1,
+              'magazin.logo_file_id': 1,
+            },
+          },
+        ],
+        total: [{ $count: 'count' }],
+      },
+    });
 
-    // ── Headquarters city filter ──────────────────────────────────────────────
-    if (hq_city && hq_city.trim()) {
-      filter['headquarters_addresses.0.city'] = new RegExp(hq_city.trim(), 'i');
-    }
-
-    // ── Policy filters ────────────────────────────────────────────────────────
-    if (storage_based === true) {
-      filter['policies.pricing.storage_based.enabled'] = true;
-    }
-
-    if (pickup_based === true) {
-      filter['policies.pricing.pickup_based.enabled'] = true;
-    }
-
-    if (returns_payer) {
-      filter['policies.returns.payer'] = returns_payer;
-    }
-
-    if (min_claim_deadline_days !== undefined && min_claim_deadline_days >= 0) {
-      filter['policies.damage.claim_deadline_days'] = { $gte: min_claim_deadline_days };
-    }
-
-    // ── Execute ───────────────────────────────────────────────────────────────
-    const [agencies, total] = await Promise.all([
-      DeliveryAgencyModel.find(filter)
-        .select(
-          'agency_name logo_url kyc_details.legit_verified headquarters_addresses coverage_areas policies status',
-        )
-        .sort({ agency_name: 1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .lean()
-        .exec(),
-      DeliveryAgencyModel.countDocuments(filter).exec(),
-    ]);
-
-    return { agencies: agencies as unknown as IDeliveryAgency[], total };
+    const [result] = await DeliveryAgencyModel.aggregate(pipeline).exec();
+    const agencies = (result?.data ?? []) as AgencyWithMagazin[];
+    const total = result?.total?.[0]?.count ?? 0;
+    return { agencies, total };
   }
 
   // ─── Admin-Facing Query ────────────────────────────────────────────────────────
@@ -317,25 +332,44 @@ export class DeliveryAgencyRepository {
   async findAllForAdmin(
     params: { status?: 'active' | 'pending_verification' | 'inactive'; page: number; limit: number },
     session?: ClientSession,
-  ): Promise<{ agencies: IDeliveryAgency[]; total: number }> {
+  ): Promise<{ agencies: AgencyWithMagazin[]; total: number }> {
     const { status, page, limit } = params;
-    const filter: FilterQuery<IDeliveryAgency> = {};
-    if (status) filter.status = status;
+    const match: Record<string, unknown> = {};
+    if (status) match.status = status;
 
-    const findQuery = DeliveryAgencyModel.find(filter)
-      .select('agency_name logo_url status onboarding_step user_id created_at updated_at')
-      .sort({ agency_name: 1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .lean();
-    const countQuery = DeliveryAgencyModel.countDocuments(filter);
+    // Business name/logo live on the Magazin — join it, and sort by its name.
+    const pipeline: PipelineStage[] = [
+      { $match: match },
+      { $lookup: { from: COLLECTIONS.AGENCY_MAGAZIN, localField: '_id', foreignField: 'agency_id', as: 'magazin' } },
+      { $addFields: { magazin: { $arrayElemAt: ['$magazin', 0] } } },
+      {
+        $facet: {
+          data: [
+            { $sort: { 'magazin.name': 1 } },
+            { $skip: (page - 1) * limit },
+            { $limit: limit },
+            {
+              $project: {
+                status: 1,
+                onboarding_step: 1,
+                user_id: 1,
+                created_at: 1,
+                updated_at: 1,
+                'magazin.name': 1,
+                'magazin.logo_file_id': 1,
+              },
+            },
+          ],
+          total: [{ $count: 'count' }],
+        },
+      },
+    ];
 
-    if (session) {
-      findQuery.session(session);
-      countQuery.session(session);
-    }
-
-    const [agencies, total] = await Promise.all([findQuery.exec(), countQuery.exec()]);
-    return { agencies: agencies as unknown as IDeliveryAgency[], total };
+    const aggregate = DeliveryAgencyModel.aggregate(pipeline);
+    if (session) aggregate.session(session);
+    const [result] = await aggregate.exec();
+    const agencies = (result?.data ?? []) as AgencyWithMagazin[];
+    const total = result?.total?.[0]?.count ?? 0;
+    return { agencies, total };
   }
 }

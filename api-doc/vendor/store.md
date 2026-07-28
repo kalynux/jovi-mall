@@ -2,7 +2,16 @@
 
 ## Overview
 
-The Store Profile Management API allows vendors to manage their public storefront - the commercial surface of their business on the platform. Each vendor has exactly one store. Vendors can view and update store details, manage vacation mode, but cannot modify immutable fields like slug and country.
+The Store Profile Management API allows vendors to manage their public storefront - the commercial surface of their business on the platform. Each vendor has exactly one store, **auto-created on first access** (and provisioned during onboarding Step 1). Vendors can view and update store details and manage vacation mode, but cannot modify the immutable `slug`.
+
+> [!IMPORTANT]
+> **The store carries no address, city, or country of its own.**
+> - Physical locations (which are also pickup locations) are the vendor profile's
+>   **`business_addresses`** — geocoded, mappable, and validated against the
+>   vendor's registered country. Manage them via
+>   [`PATCH /api/vendor/profile`](./profile.md#patch-apivendorprofile).
+> - **`country`** lives on the vendor profile (set once during onboarding,
+>   immutable afterwards) and is served **read-only** in store responses.
 
 **Base URL**: `/api/vendor`
 
@@ -41,11 +50,23 @@ Authorization: Bearer <jwt_token>
     "vendorId": "507f191e810c19729de860ea",
     "name": "TechSolutions Store",
     "slug": "techsolutions",
-    "logoUrl": "https://cdn.example.com/logos/techsolutions.png",
-    "bannerUrl": "https://cdn.example.com/banners/techsolutions.jpg",
+    "logo": {
+      "id": "507f1f77bcf86cd799439030",
+      "key": "products/2026/07/logo-techsolutions.png",
+      "url": "https://cdn.example.com/logos/techsolutions.png",
+      "mimeType": "image/png",
+      "size": 24576,
+      "originalName": "logo.png"
+    },
+    "banner": {
+      "id": "507f1f77bcf86cd799439031",
+      "key": "products/2026/07/banner-techsolutions.jpg",
+      "url": "https://cdn.example.com/banners/techsolutions.jpg",
+      "mimeType": "image/jpeg",
+      "size": 184320,
+      "originalName": "banner.jpg"
+    },
     "description": "Your one-stop shop for premium tech solutions and gadgets",
-    "address": "123 Innovation Street",
-    "city": "Douala",
     "country": "CM",
     "supportEmail": "support@techsolutions.com",
     "supportPhone": "+237612345678",
@@ -61,10 +82,14 @@ Authorization: Bearer <jwt_token>
 
 **Field Descriptions**:
 - `slug`: URL-safe store identifier (READ-ONLY, immutable in vendor API)
-- `country`: ISO country code (READ-ONLY, immutable)
+- `country`: ISO country code (READ-ONLY) — **sourced from the vendor profile**, not stored on the store. `null` until onboarding Step 1 sets it.
 - `isOpen`: Vacation mode status (true = open, false = on vacation)
 - `publicUrl`: Computed from slug, not editable directly
 - `version`: Optimistic locking counter
+
+**Auto-provisioning**: if the vendor has no store row yet (accounts created before
+store provisioning existed), this endpoint creates it on the fly — name derived
+from the business name given at signup (else the vendor's display name), slug auto-generated and unique.
 
 #### Error Responses
 
@@ -87,17 +112,9 @@ Authorization: Bearer <jwt_token>
 **Not Found (404)**:
 
 > [!WARNING]
-> If this error occurs, it indicates a **system bug**. Every vendor must have exactly one store. Store creation happens only during onboarding.
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "NOT_FOUND",
-    "message": "Store not found for vendor 507f191e810c19729de860ea. This is a system bug - vendors should always have a store."
-  }
-}
-```
+> Should not occur in practice: the store is **auto-created on first access**
+> (get-or-create) and provisioned during onboarding Step 1. A 404 here means the
+> vendor profile itself is missing — a system bug.
 
 ---
 
@@ -122,11 +139,9 @@ Content-Type: application/json
 ```json
 {
   "name": "TechSolutions Premium",
-  "logoUrl": "https://cdn.example.com/logos/new-logo.png",
-  "bannerUrl": "https://cdn.example.com/banners/new-banner.jpg",
+  "logoFileId": "507f1f77bcf86cd799439030",
+  "bannerFileId": "507f1f77bcf86cd799439031",
   "description": "Updated description with new offerings",
-  "address": "456 Tech Avenue",
-  "city": "Yaoundé",
   "supportEmail": "hello@techsolutions.com",
   "supportPhone": "+237698765432",
   "supportWhatsapp": "+237698765432",
@@ -136,19 +151,39 @@ Content-Type: application/json
 
 **Fields** (all optional except `version`):
 
-- `name` (string, 2-100 chars): Store display name
-- `logoUrl` (string, valid URL): Store logo image URL
-- `bannerUrl` (string, valid URL): Store banner/hero image URL
-- `description` (string, max 1000 chars): Store description
-- `address` (string, max 200 chars): Physical address
-- `city` (string, max 100 chars): City
-- `supportEmail` (string, valid email): Support contact email
-- `supportPhone` (string, 8-20 chars): Support contact phone
-- `supportWhatsapp` (string, 8-20 chars): WhatsApp support number
+- `name` (string, 2-100 chars): Store display name — **not clearable** (required field)
+- `logoFileId` (string, MongoDB ObjectId, *clearable*): Id of a logo file previously uploaded via `POST /api/files/upload`. The response returns the resolved `logo` file object (`{ id, key, url, mimeType, size, originalName }` | null). Registers a `file_references` row so the file is not garbage-collected while set.
+- `bannerFileId` (string, MongoDB ObjectId, *clearable*): Id of a banner/hero file uploaded via `POST /api/files/upload`. The response returns the resolved `banner` file object (same shape as `logo`).
+- `description` (string, max 1000 chars, *clearable*): Store description
+- `supportEmail` (string, valid email, *clearable*): Support contact email
+- `supportPhone` (string, 8-20 chars, *clearable*): Support contact phone
+- `supportWhatsapp` (string, 8-20 chars, *clearable*): WhatsApp support number
 - `version` (**required**, number): Current store version for optimistic locking
 
+> **No `address` / `city` / `country` here.** Physical store locations are the
+> vendor profile's `business_addresses` (with geocoded coordinates for maps);
+> the country is set once during onboarding and served read-only. See
+> [Vendor Profile](./profile.md#patch-apivendorprofile).
+
+**Clearing a field**: every field marked *clearable* accepts three states:
+
+| You send | Effect |
+|---|---|
+| key omitted | field left unchanged |
+| `null` or `""` (or whitespace-only) | field **cleared** — stored and returned as `null` |
+| a value | must satisfy the field's constraint (URL, email, length…) |
+
+```json
+{ "version": 5, "logoFileId": null }
+```
+and
+```json
+{ "version": 5, "logoFileId": "" }
+```
+are equivalent: both remove the logo. A non-empty invalid value (e.g. `"logoFileId": "not-an-id"`) is still rejected with `VALIDATION_ERROR`.
+
 > [!IMPORTANT]
-> **Immutable Fields**: `slug` and `country` cannot be updated. Attempts to modify these fields will be rejected.
+> **Immutable Fields**: `slug` cannot be updated, and `country` is not stored on the store at all (it lives on the vendor profile, set-once). Attempts to send either are rejected.
 
 #### Response
 
@@ -162,11 +197,23 @@ Content-Type: application/json
     "vendorId": "507f191e810c19729de860ea",
     "name": "TechSolutions Premium",
     "slug": "techsolutions",
-    "logoUrl": "https://cdn.example.com/logos/new-logo.png",
-    "bannerUrl": "https://cdn.example.com/banners/new-banner.jpg",
+    "logo": {
+      "id": "507f1f77bcf86cd799439030",
+      "key": "products/2026/07/new-logo.png",
+      "url": "https://cdn.example.com/logos/new-logo.png",
+      "mimeType": "image/png",
+      "size": 24576,
+      "originalName": "new-logo.png"
+    },
+    "banner": {
+      "id": "507f1f77bcf86cd799439031",
+      "key": "products/2026/07/new-banner.jpg",
+      "url": "https://cdn.example.com/banners/new-banner.jpg",
+      "mimeType": "image/jpeg",
+      "size": 184320,
+      "originalName": "new-banner.jpg"
+    },
     "description": "Updated description with new offerings",
-    "address": "456 Tech Avenue",
-    "city": "Yaoundé",
     "country": "CM",
     "supportEmail": "hello@techsolutions.com",
     "supportPhone": "+237698765432",
@@ -197,8 +244,8 @@ Content-Type: application/json
         "message": "Name must be at least 2 characters"
       },
       {
-        "field": "logoUrl",
-        "message": "Logo URL must be valid"
+        "field": "logoFileId",
+        "message": "logoFileId must be a valid file id"
       }
     ]
   }
@@ -220,17 +267,17 @@ Content-Type: application/json
 }
 ```
 
-**Country Immutability (403)**:
+**Country Not Stored Here (403)**:
 
 > [!IMPORTANT]
-> Country cannot be changed by vendors. This is locked for tax and shipping compliance.
+> The store has no country field. The country lives on the vendor profile — set once during onboarding, immutable afterwards.
 
 ```json
 {
   "success": false,
   "error": {
-    "code": "FORBIDDEN",
-    "message": "Country cannot be modified. This is locked for tax and shipping compliance."
+    "code": "PROFILE_COUNTRY_IMMUTABLE",
+    "message": "Country is not stored on the store. It lives on your vendor profile and is set once during onboarding."
   }
 }
 ```
@@ -411,18 +458,18 @@ All store updates use **optimistic locking** to prevent data loss from concurren
 
 ### Country
 
-**Status**: IMMUTABLE (enforced at all layers)
+**Status**: NOT STORED ON THE STORE — read-only mirror of the vendor profile's country
 
 **Rationale**:
-- Locked for tax compliance
-- Locked for shipping calculation
-- Changing country has legal implications
+- One canonical country per vendor (set once during onboarding Step 1, immutable after)
+- Locked for tax compliance and shipping calculation
+- Anchors the business-address policy: every geocoded business address must resolve inside it
 
-**Error if attempted**:
+**Error if attempted here**:
 ```json
 {
-  "code": "FORBIDDEN",
-  "message": "Country cannot be modified. This is locked for tax and shipping compliance."
+  "code": "PROFILE_COUNTRY_IMMUTABLE",
+  "message": "Country is not stored on the store. It lives on your vendor profile and is set once during onboarding."
 }
 ```
 
@@ -666,10 +713,11 @@ This enforces strong tenant isolation.
 
 **Future**: Multi-store support by removing unique constraint and adding store management UI.
 
-### Fail-Fast Philosophy
+### Provisioning (get-or-create)
 
-`getStore(vendorId)` throws `NotFoundError` if store missing. This is intentional:
-
-> **Store missing = system bug, not business case.**
-
-Every vendor must have a store. Store creation happens only during onboarding.
+Every vendor must have a store. It is created by `StoreProvisioningService` from
+two paths: a best-effort hook when onboarding Step 1 completes, and get-or-create
+on first access to any `/api/vendor/store` endpoint (which also heals accounts
+that predate provisioning). Creation is race-safe via the unique `vendor_id`
+index. A 404 can therefore only mean the **vendor profile** is missing — a
+system bug.

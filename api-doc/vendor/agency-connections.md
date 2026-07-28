@@ -26,13 +26,15 @@ connection first.
 later flip to `paused_reapproval` — automatically, by the system — whenever **either side** edits
 their policies (`Vendor.policies` or `DeliveryAgency.policies`); the side that did **not** just
 change is the one who must reapprove (`POST .../:id/approve` again). While paused, any of your
-products depending on that agency (as default or override) are auto-suspended, and are
-auto-restored the moment the connection goes back to `active`. From `active` or
+**active** products depending on that agency (as default or override) are auto-suspended
+(drafts are untouched — they can't go live without an active agency anyway, and stay editable),
+and are auto-restored the moment the connection goes back to `active`. From `active` or
 `paused_reapproval`, either side may also `terminate` the connection outright.
 
 A rejected/withdrawn/terminated connection can be re-requested — this reuses the same
 underlying record (there is only ever one connection document per vendor↔agency pair), resetting
-it back to `pending`.
+it back to `pending`. When a re-requested connection is approved again, products suspended by
+the earlier termination are auto-restored, same as a reapproval.
 
 ---
 
@@ -59,7 +61,7 @@ current connection state to that agency (if any), so the UI can render the right
     {
       "id": "683abc1234567890abcdef01",
       "agencyName": "Swift Deliveries Cameroon",
-      "logoUrl": "https://cdn.example.com/logos/swift-deliveries.png",
+      "logo": { "id": "507f1f77bcf86cd799439030", "key": "products/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
       "kycVerified": true,
       "headquartersAddress": { "region": "Littoral", "city": "Douala", "address_description": "4th Floor, Immeuble Ndokotti, Akwa" },
       "coverageAreas": ["littoral", "centre", "west"],
@@ -70,7 +72,7 @@ current connection state to that agency (if any), so the UI can render the right
     {
       "id": "683abc1234567890abcdef02",
       "agencyName": "Rapid Cargo",
-      "logoUrl": null,
+      "logo": null,
       "kycVerified": false,
       "headquartersAddress": null,
       "coverageAreas": ["centre"],
@@ -152,8 +154,11 @@ same endpoint handles both — the current status decides which happens.
   (`403 CONNECTION_WRONG_REAPPROVAL_PARTY` if the agency is the one who needs to act, not you).
 - Any other status: `400 CONNECTION_INVALID_STATUS_TRANSITION`.
 
-Reapproving restores any of your products that were auto-suspended while this connection was
-paused (see Overview).
+**Every** approval that lands on `active` — a plain approval of a re-requested (previously
+terminated) connection just as much as a reapproval — restores any of your **active** products
+that were auto-suspended because this connection went away (see Overview). Restoration
+re-validates each product's activation gate first, so a product still blocked by something
+else (e.g. its own override agency is down) stays suspended until that is fixed too.
 
 > [!IMPORTANT]
 > **Your first-ever approved connection automatically becomes your default delivery agency** — if

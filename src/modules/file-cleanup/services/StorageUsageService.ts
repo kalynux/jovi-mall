@@ -1,7 +1,7 @@
 import { Types } from 'mongoose';
 import { FileReferenceModel } from '../../catalog/models/file-reference.model';
 import { COLLECTIONS } from '../../../core/database/collections';
-import { VendorPlanModel } from '../../billing/models/vendor-plan.model';
+import { SubscriberPlanModel } from '../../billing/models/subscriber-plan.model';
 import { PricingPlanModel } from '../../billing/models/pricing-plan.model';
 
 export interface VendorStorageUsage {
@@ -76,8 +76,9 @@ export class StorageUsageService {
   async getVendorLimitBytes(vendorId: string, defaultLimitBytes: number): Promise<number> {
     if (!Types.ObjectId.isValid(vendorId)) return defaultLimitBytes;
 
-    const activePlan = await VendorPlanModel.findOne({
-      vendor_id: new Types.ObjectId(vendorId),
+    const activePlan = await SubscriberPlanModel.findOne({
+      owner_type: 'vendor',
+      owner_id: new Types.ObjectId(vendorId),
       status: 'active',
     })
       .select('plan_id')

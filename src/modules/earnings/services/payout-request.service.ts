@@ -16,6 +16,8 @@ import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.reposit
 import { AgentRepository } from '../../agents/repositories/agent.repository';
 import { VendorModel } from '../../vendors/vendor.model';
 import { DeliveryAgencyModel } from '../../delivery/delivery-agency.model';
+import { StoreModel } from '../../store/models/store.model';
+import { AgencyMagazinModel } from '../../magazin/models/magazin.model';
 import { DeliveryAgentModel } from '../../agents/models/agent.model';
 import { ticketService } from '../../tickets/services/ticket.service';
 import { TicketNoteService } from '../../tickets/services/ticket-note.service';
@@ -125,6 +127,7 @@ export class PayoutRequestService {
         entityId: ownerId,
         createdByUserId: requestedByUserId,
         createdByRole: requestedByRole,
+        createdByEntityId: ownerId,
       });
       await ticketService.assignTicket(ticket.id, ActorRole.ADMIN, null, requestedByUserId, requestedByRole);
       await this.payoutRepo.setTicketId(payoutRequest.id, ticket.id);
@@ -341,19 +344,23 @@ export class PayoutRequestService {
     const agentIds = requests.filter((r) => r.owner_type === 'agent').map((r) => r.owner_id);
 
     if (vendorIds.length > 0) {
-      const vendors = await VendorModel.find({ _id: { $in: vendorIds } })
-        .select('business_name display_name')
-        .lean();
+      // Business name lives on the Store; prefer the vendor's personal display name.
+      const [vendors, stores] = await Promise.all([
+        VendorModel.find({ _id: { $in: vendorIds } }).select('display_name').lean(),
+        StoreModel.find({ vendor_id: { $in: vendorIds } }).select('vendor_id name').lean(),
+      ]);
+      const storeNameByVendor = new Map(stores.map((s: any) => [s.vendor_id.toString(), s.name]));
       for (const v of vendors) {
-        result.set(`vendor:${v._id.toString()}`, v.display_name || v.business_name);
+        result.set(`vendor:${v._id.toString()}`, v.display_name || storeNameByVendor.get(v._id.toString()) || '');
       }
     }
     if (agencyIds.length > 0) {
-      const agencies = await DeliveryAgencyModel.find({ _id: { $in: agencyIds } })
-        .select('agency_name')
+      // Business name lives on the Magazin (keyed by agency_id).
+      const magazins = await AgencyMagazinModel.find({ agency_id: { $in: agencyIds } })
+        .select('agency_id name')
         .lean();
-      for (const a of agencies) {
-        result.set(`agency:${a._id.toString()}`, a.agency_name);
+      for (const m of magazins) {
+        result.set(`agency:${(m as any).agency_id.toString()}`, (m as any).name);
       }
     }
     if (agentIds.length > 0) {

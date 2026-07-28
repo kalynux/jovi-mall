@@ -1,7 +1,7 @@
 import { Product } from '../mappers/product.mapper';
 import { Page, PaginationOptions, RepositoryOptions } from '../types';
 import { ProductListProjection } from '../../read-models/product-detail.read-model';
-import { ProductSuspensionReason } from '../../models/product.model';
+import { ProductStatus, ProductSuspensionReason } from '../../models/product.model';
 
 export interface IProductRepository {
   create(product: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>, options?: RepositoryOptions): Promise<Product>;
@@ -56,13 +56,21 @@ export interface IProductRepository {
   ): Promise<Page<ProductListProjection>>;
 
   // Bulk operations
+  /**
+   * `allowedFromStatuses`, when given, restricts the update to products currently
+   * in one of those statuses (transition policy, e.g. vendors can't touch
+   * 'suspended'); products outside it are skipped, not errored. A status write
+   * leaving 'suspended' clears the suspension snapshot.
+   */
   bulkUpdateStatus(
     productIds: string[],
     vendorId: string,
     status: string,
+    allowedFromStatuses?: ProductStatus[],
     options?: RepositoryOptions
   ): Promise<number>; // Returns number of updated products
 
+  /** Only 'draft'/'active' products are archived — same rule as ProductArchiveService. */
   bulkArchive(
     productIds: string[],
     vendorId: string,
@@ -70,8 +78,10 @@ export interface IProductRepository {
   ): Promise<number>; // Returns number of archived products
 
   /**
-   * Suspend all of a vendor's physical products (any status except already-'suspended'),
-   * capturing each product's own current status so it can be restored later.
+   * Suspend all of a vendor's currently-ACTIVE physical products, capturing each
+   * product's own current status so it can be restored later. Non-active products
+   * (draft/archived/pending_review) are left alone — they can't reach 'active'
+   * without the activation gate anyway, and suspending them would only block editing.
    * Returns the affected product ids.
    */
   suspendVendorPhysicalProducts(
@@ -81,8 +91,8 @@ export interface IProductRepository {
   ): Promise<string[]>;
 
   /**
-   * Suspend a single physical product (no-op if already suspended), capturing its
-   * current status so it can be restored later. Returns whether it was suspended.
+   * Suspend a single physical product (no-op unless currently 'active'), capturing
+   * its current status so it can be restored later. Returns whether it was suspended.
    */
   suspendProduct(
     productId: string,

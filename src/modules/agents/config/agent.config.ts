@@ -38,10 +38,15 @@ export const AGENT_CONFIG = Object.freeze({
    * single agent-level cap shared across every agency — unlike COD, it is NOT
    * sub-allocated per contract. An agent full with agency A's work cannot
    * absorb agency B's.
+   *
+   * The cap is now PLAN-DRIVEN: an agent's active pricing plan sets this value
+   * (free tier = 20, see the agent plan seed). `MAX` is the config ceiling for a
+   * plan-driven or admin value (raised well above any tier); `DEFAULT` matches
+   * the free agent plan cap so a plan-less agent behaves like a free subscriber.
    */
-  MAX_ACTIVE_SHIPMENTS_MAX: intEnv('AGENT_MAX_ACTIVE_SHIPMENTS_MAX', 10),
+  MAX_ACTIVE_SHIPMENTS_MAX: intEnv('AGENT_MAX_ACTIVE_SHIPMENTS_MAX', 100),
   MAX_ACTIVE_SHIPMENTS_MIN: intEnv('AGENT_MAX_ACTIVE_SHIPMENTS_MIN', 1),
-  MAX_ACTIVE_SHIPMENTS_DEFAULT: intEnv('AGENT_MAX_ACTIVE_SHIPMENTS_DEFAULT', 3),
+  MAX_ACTIVE_SHIPMENTS_DEFAULT: intEnv('AGENT_MAX_ACTIVE_SHIPMENTS_DEFAULT', 20),
 
   /** How many ALLOCATING contracts one agent may hold at once. */
   MAX_AGENCY_RELATIONSHIPS: intEnv('AGENT_MAX_AGENCY_RELATIONSHIPS', 5),

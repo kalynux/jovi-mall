@@ -49,7 +49,7 @@ export const AgencyOnboardingStep = {
     LOGISTICS_SETUP: 1,
     /** Step 2 (Required): payout_details */
     PAYOUT_SETUP: 2,
-    /** Step 3 (Optional/Skippable): logo_url, timezone */
+    /** Step 3 (Optional/Skippable): logo_file_id, timezone */
     BRANDING: 3,
     /** Step 4 (Required): pricing, returns, and damage policies */
     POLICY_SETUP: 4,

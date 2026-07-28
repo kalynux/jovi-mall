@@ -65,7 +65,7 @@ export class ProductDuplicateService {
             await this.fileReferenceService.reconcile({
                 previousFileIds: [],
                 nextFileIds: clonedData.fileIds,
-                vendorId,
+                actor: { type: 'vendor', id: vendorId },
                 entityType: 'product',
                 entityId: duplicate.id,
             });

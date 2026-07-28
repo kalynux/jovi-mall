@@ -9,6 +9,7 @@ import {
   IDeliveryAgent,
 } from '../../agents';
 import { DeliveryAgencyModel } from '../../delivery/delivery-agency.model';
+import { AgencyMagazinModel } from '../../magazin/models/magazin.model';
 
 /**
  * CodSummaryService - read-only aggregate views of the COD cash chain:
@@ -29,9 +30,16 @@ export class CodSummaryService {
    * The roster now comes from memberships rather than a foreign key on the
    * agent — the same agent may appear in several agencies' summaries, each
    * seeing only the cash they are exposed to.
+   *
+   * The roster is the ALLOCATING set (active | paused | suspended), not merely
+   * `active`: cash can legitimately be held under a paused/suspended contract
+   * (collection and deposit both resolve via `findLive`), so an agent the agency
+   * has suspended while they still sit on its cash must stay visible here — the
+   * `liability` and `unsettledCollections` totals already count that cash, and a
+   * per-agent breakdown that dropped them would understate who is holding what.
    */
   async agencySummary(agencyId: string) {
-    const agentIds = await this.memberships.listActiveAgentIds(agencyId);
+    const agentIds = await this.memberships.listAllocatingAgentIds(agencyId);
 
     const [liability, agents, unsettled] = await Promise.all([
       this.cashAccounts.getBalance('agency', agencyId),
@@ -153,18 +161,26 @@ export class CodSummaryService {
     ]);
 
     const agencyIds = accounts.map((a) => a.owner_id);
-    const agencies = await DeliveryAgencyModel.find({ _id: { $in: agencyIds } })
-      .select('agency_name email phone status')
-      .lean()
-      .exec();
+    // Business name lives on the Magazin (keyed by agency_id); contact fields on the agency.
+    const [agencies, magazins] = await Promise.all([
+      DeliveryAgencyModel.find({ _id: { $in: agencyIds } })
+        .select('email phone status')
+        .lean()
+        .exec(),
+      AgencyMagazinModel.find({ agency_id: { $in: agencyIds } })
+        .select('agency_id name')
+        .lean()
+        .exec(),
+    ]);
     const agencyById = new Map(agencies.map((a: any) => [a._id.toString(), a]));
+    const nameByAgencyId = new Map(magazins.map((m: any) => [m.agency_id.toString(), m.name]));
 
     return {
       data: accounts.map((account) => {
         const agency: any = agencyById.get(account.owner_id.toString());
         return {
           agencyId: account.owner_id.toString(),
-          agencyName: agency?.agency_name ?? null,
+          agencyName: nameByAgencyId.get(account.owner_id.toString()) ?? null,
           email: agency?.email ?? null,
           phone: agency?.phone ?? null,
           status: agency?.status ?? null,

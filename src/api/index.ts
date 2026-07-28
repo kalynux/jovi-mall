@@ -44,6 +44,10 @@ router.use('/vendor/bookings', vendorBookingRoutes);
 import storeRoutes from '../modules/store/routes';
 router.use('/vendor/store', storeRoutes);
 
+// Magazin routes — the agency's business surface (Store-equivalent for agencies)
+import magazinRoutes from '../modules/magazin/routes';
+router.use('/agency/magazin', magazinRoutes);
+
 // Vendor product management routes
 import vendorProductsRoutes from '../modules/catalog/routes/vendor-products.routes';
 router.use('/vendor/products', vendorProductsRoutes);
@@ -52,12 +56,16 @@ router.use('/vendor/products', vendorProductsRoutes);
 import vendorInventoryRoutes from '../modules/catalog/routes/vendor-inventory.routes';
 router.use('/vendor/inventory', vendorInventoryRoutes);
 
-// Billing: vendor pricing plans & credit wallet.
-// Mounted at the role roots so endpoints read as /vendor/plans, /vendor/credits,
-// /admin/plans, /admin/vendors/:vendorId/plan (no extra /billing segment).
+// Billing: pricing plans & credit wallet — same engine for vendor, agency & agent.
+// Mounted at the role roots so endpoints read as /vendor/plans, /agency/plans,
+// /agent/plans, /admin/plans (no extra /billing segment).
 import vendorBillingRoutes from '../modules/billing/routes/vendor-billing.routes';
+import agencyBillingRoutes from '../modules/billing/routes/agency-billing.routes';
+import agentBillingRoutes from '../modules/billing/routes/agent-billing.routes';
 import adminBillingRoutes from '../modules/billing/routes/admin-billing.routes';
 router.use('/vendor', vendorBillingRoutes);
+router.use('/agency', agencyBillingRoutes);
+router.use('/agent', agentBillingRoutes);
 router.use('/admin', adminBillingRoutes);
 
 // Earnings: commission/escrow ledger. Vendor sees held vs withdrawable balances;
@@ -78,10 +86,13 @@ router.use('/admin', adminEarningsRoutes);
 import adminPayoutRequestsRoutes from '../modules/earnings/routes/admin-payout-requests.routes';
 router.use('/admin', adminPayoutRequestsRoutes);
 
-// Unified vendor transactions feed (merges plan purchases, credit top-ups,
-// credit usage and sales earnings into one history).
+// Unified transactions feed (merges plan purchases, credit top-ups, credit usage
+// and earnings into one history) — same engine for vendor, agency & agent.
 import vendorTransactionRoutes from '../modules/transactions/routes/vendor-transaction.routes';
+import { agencyTransactionRouter, agentTransactionRouter } from '../modules/transactions/routes/subscriber-transaction.routes';
 router.use('/vendor/transactions', vendorTransactionRoutes);
+router.use('/agency/transactions', agencyTransactionRouter);
+router.use('/agent/transactions', agentTransactionRouter);
 
 // Customer shopping cart (add/get/remove/clear; checkout lives under /customer/orders)
 import customerCartRoutes from '../modules/cart/routes';
@@ -192,6 +203,11 @@ router.use('/admin', adminRoutes);
 // Saved payment methods (shared across all roles, resolved from req.auth)
 import paymentMethodRoutes from '../modules/payment-methods/routes';
 router.use('/me/payment-methods', paymentMethodRoutes);
+
+// Account routes shared across all roles (password change), resolved from
+// req.auth — the password lives on the User model, not on any role entity.
+import userAccountRoutes from '../modules/users/user.routes';
+router.use('/me', userAccountRoutes);
 
 // File upload and management routes
 import fileRoutes from './routes/file-upload.routes';

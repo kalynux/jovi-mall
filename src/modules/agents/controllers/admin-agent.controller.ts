@@ -17,6 +17,18 @@ import {
 } from '../validators/agent.validator';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
+import { getStorageProvider } from '../../../core/storage';
+import { resolveFileDetail } from '../../catalog/read-models/file-detail.resolver';
+import { IDeliveryAgent } from '../models/agent.model';
+
+const fileRepository = new FileRepositoryMongo();
+const storageProvider = getStorageProvider();
+
+/** Resolve one agent's avatar File reference into a `FileDetail` object (or null). */
+async function agentAvatar(agent: IDeliveryAgent) {
+  return resolveFileDetail(agent.avatar_file_id?.toString(), fileRepository, storageProvider);
+}
 
 function actorOf(req: Request) {
   return { userId: req.auth!.user.id, role: req.auth!.role };
@@ -43,7 +55,7 @@ export class AdminAgentController {
     res.json({
       success: true,
       data: {
-        agent: AgentProfileMapper.toResponseDto(agent),
+        agent: AgentProfileMapper.toResponseDto(agent, new Date(), await agentAvatar(agent)),
         memberships: memberships.map(AgentMembershipMapper.toDto),
       },
     });

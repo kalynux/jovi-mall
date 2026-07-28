@@ -41,6 +41,8 @@ export interface IVendorNotificationPreference extends Document {
         payoutUpdates: boolean;
         /** A delivery agency declined a shipment and the vendor must reassign it. */
         shipmentRejected: boolean;
+        /** Subscription plan lifecycle (plan.expiring / plan.expired). */
+        planUpdates: boolean;
     };
 
     updatedAt: Date;
@@ -122,6 +124,10 @@ const VendorNotificationPreferenceSchema = new Schema<IVendorNotificationPrefere
                 default: true
             },
             shipmentRejected: {
+                type: Boolean,
+                default: true
+            },
+            planUpdates: {
                 type: Boolean,
                 default: true
             }

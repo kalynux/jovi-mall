@@ -50,7 +50,7 @@ parameter — a customer can only read/write **their own** record.
     "phone": "08098765432",
     "email_verified": false,
     "phone_verified": true,
-    "avatar_url": null,
+    "avatar": null,
     "bio": null,
     "date_of_birth": null,
     "saved_addresses": [],
@@ -82,10 +82,11 @@ parameter — a customer can only read/write **their own** record.
 | Field | Type | Required | Validation |
 |---|---|---|---|
 | `name` | string | ❌ | 1–100 chars, trimmed |
-| `avatarUrl` | string \| null | ❌ | must be a valid URL |
-| `bio` | string \| null | ❌ | ≤ 500 chars |
-| `dateOfBirth` | string (date) \| null | ❌ | coercible to a date |
-| `recentProductCode` | string \| null | ❌ | trimmed |
+| `avatarFileId` | string \| null | ❌ | MongoDB ObjectId of a file uploaded via `POST /api/files/upload` — *clearable*. The **write** field for the avatar; reads return the resolved `avatar` file object. |
+| `avatarUrl` | string \| null | ❌ | *(deprecated, no effect on reads)* still accepted for backward compatibility but no longer surfaced — use `avatarFileId`. |
+| `bio` | string \| null | ❌ | ≤ 500 chars — *clearable* |
+| `dateOfBirth` | string (date) \| null | ❌ | coercible to a date; `null` clears |
+| `recentProductCode` | string \| null | ❌ | trimmed — *clearable* |
 | `preferences` | object | ❌ | see below |
 | `preferences.language` | string | ❌ | 2–10 chars (BCP-47) |
 | `preferences.currency` | string | ❌ | exactly 3 chars (ISO-4217), upper-cased |
@@ -93,6 +94,17 @@ parameter — a customer can only read/write **their own** record.
 | `preferences.ai_tone` | string[] | ❌ | non-empty strings |
 | `preferences.ads_compact_mode` | boolean | ❌ | |
 | `preferences.compact_mode` | boolean | ❌ | |
+
+> **Clearable fields**: send `null` **or `""`** to clear (stored and returned as `null`); omit the
+> key to leave the value unchanged. Applies to `avatarFileId`, `bio`, `recentProductCode`,
+> and to `address_line2`/`state` in saved addresses. See [Conventions](../README.md#conventions).
+
+> **Profile avatar is a file reference.** Upload the image via `POST /api/files/upload`, then send the
+> returned file `id` as `avatarFileId`. Reads return `avatar` as a **resolved file object** — the same
+> `{ id, key, url, mimeType, size, originalName }` shape product images use — or `null` when unset;
+> never a bare URL string. While set, that file counts as *in use* — it appears under `usage.references`
+> on `GET /api/files/:id` with `entityType: "customer", field: "avatar"`, and cannot be deleted until you
+> detach it (`avatarFileId: null`). See [File Management — the `usage` object](../vendor/file-management.md#get-apifilesid).
 
 ### Example request
 
@@ -109,7 +121,7 @@ parameter — a customer can only read/write **their own** record.
 ### Example error `400` (validation)
 
 ```json
-{ "success": false, "requestId": "req_abc", "error": { "code": "VALIDATION_ERROR", "message": "Validation failed", "statusCode": 400, "details": { "fields": [{ "path": "avatarUrl", "message": "avatarUrl must be a valid URL", "code": "invalid_string" }] } } }
+{ "success": false, "requestId": "req_abc", "error": { "code": "VALIDATION_ERROR", "message": "Validation failed", "statusCode": 400, "details": { "fields": [{ "path": "avatarFileId", "message": "avatarFileId must be a valid file id", "code": "invalid_string" }] } } }
 ```
 
 ---

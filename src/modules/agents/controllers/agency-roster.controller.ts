@@ -21,6 +21,33 @@ import {
   ListInvitesQuerySchema,
 } from '../validators/agent.validator';
 import { codCashAccountService } from '../../cod/services/cod-cash-account.service';
+import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
+import { getStorageProvider } from '../../../core/storage';
+import { resolveFileDetails } from '../../catalog/read-models/file-detail.resolver';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
+import { IDeliveryAgent } from '../models/agent.model';
+
+const fileRepository = new FileRepositoryMongo();
+const storageProvider = getStorageProvider();
+
+/**
+ * Batch-resolve each agent's avatar File reference into a `FileDetail` object
+ * (same shape as product media), keyed by agentId. Lets the roster views render
+ * file-based avatars without an N+1 lookup.
+ */
+async function resolveAgentAvatars(agents: IDeliveryAgent[]): Promise<Map<string, FileDetail | null>> {
+  const byFileId = await resolveFileDetails(
+    agents.map((a) => a.avatar_file_id?.toString() ?? null),
+    fileRepository,
+    storageProvider,
+  );
+  return new Map(
+    agents.map((a) => {
+      const fid = a.avatar_file_id?.toString() ?? null;
+      return [a._id.toString(), fid ? byFileId.get(fid) ?? null : null];
+    }),
+  );
+}
 
 function agencyId(req: Request): string {
   return req.auth!.role_entity._id.toString();
@@ -88,12 +115,13 @@ export class AgencyRosterController {
     const agents = await agentRepository.findManyByIds(agentIds);
     const agentById = new Map(agents.map((a) => [a._id.toString(), a]));
     const cashBalances = await codCashAccountService.getBalances('agent', agentIds);
+    const avatarByAgent = await resolveAgentAvatars(agents);
 
     const data = memberships.map((membership) => {
       const agent = agentById.get(membership.agent_id.toString());
       return {
         membership: AgentMembershipMapper.toDto(membership),
-        agent: agent ? AgentProfileMapper.toRosterEntryDto(agent) : null,
+        agent: agent ? AgentProfileMapper.toRosterEntryDto(agent, avatarByAgent.get(agent._id.toString()) ?? null) : null,
         cashHeld: cashBalances.get(membership.agent_id.toString()) ?? 0,
       };
     });
@@ -106,12 +134,13 @@ export class AgencyRosterController {
     const { membershipId } = MembershipIdParamSchema.parse(req.params);
     const membership = await agentContractService.getForAgency(agencyId(req), membershipId);
     const agent = await agentRepository.findById(membership.agent_id.toString());
+    const avatar = agent ? (await resolveAgentAvatars([agent])).get(agent._id.toString()) ?? null : null;
 
     res.json({
       success: true,
       data: {
         membership: AgentMembershipMapper.toDto(membership),
-        agent: agent ? AgentProfileMapper.toResponseDto(agent) : null,
+        agent: agent ? AgentProfileMapper.toResponseDto(agent, new Date(), avatar) : null,
       },
     });
   });
@@ -270,7 +299,11 @@ export class AgencyRosterController {
   static listEligible = asyncHandler(async (req: Request, res: Response) => {
     const agentIds = await agentEligibilityService.listEligibleAgentIds(agencyId(req));
     const agents = await agentRepository.findManyByIds(agentIds);
-    res.json({ success: true, data: agents.map(AgentProfileMapper.toRosterEntryDto) });
+    const avatarByAgent = await resolveAgentAvatars(agents);
+    res.json({
+      success: true,
+      data: agents.map((a) => AgentProfileMapper.toRosterEntryDto(a, avatarByAgent.get(a._id.toString()) ?? null)),
+    });
   });
 
   /** GET /api/agency/agents/:agentId/history */

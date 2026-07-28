@@ -64,7 +64,8 @@ A vendor's notification settings — the values the backend reads when deciding 
       "storageAlert": true,
       "connectionUpdated": true,
       "payoutUpdates": true,
-      "shipmentRejected": true
+      "shipmentRejected": true,
+      "planUpdates": true
     }
   }
 }
@@ -109,7 +110,8 @@ The `*Verified` flags are **computed live** from the vendor's account (email ver
     "storageAlert": true,
     "connectionUpdated": true,
     "payoutUpdates": true,
-    "shipmentRejected": true
+    "shipmentRejected": true,
+    "planUpdates": true
   }
 }
 ```
@@ -466,6 +468,7 @@ The subscribable events (`preferences.*` key → notification `type`):
 | `connectionUpdated` | `connection.request_received`, `connection.approved`, `connection.rejected`, `connection.reapproval_needed` | `connection` | An agency connection request/approval/rejection/reapproval-needed happens where the **agency** was the actor. See [Agency connections](./agency-connections.md). The symmetric agency-side events (fired when the **vendor** is the actor) are documented in [Agency Notifications — Events](../agency/notifications.md#events). |
 | `payoutUpdates` | `payout.requested`, `payout.paid`, `payout.rejected` | `payout` | Your own payout request is created, paid, or rejected. `aggregateId` is the `PayoutRequest` id; `action.path` deep-links to `tickets/{ticketId}` — the request is tracked as a ticket, see [Earnings — Requesting a payout](./earnings.md#requesting-a-payout). |
 | `shipmentRejected` | `shipment.rejected` | `order` | A delivery agency declined a shipment; its items move to `pending_agency_reassignment` and you must route them to another agency. `aggregateId` is the order id; `action.path` deep-links to `orders/{orderId}`. The specific reason + note are shown on the order's per-item delivery detail (see [Orders](./orders.md)), not in the notification text. |
+| `planUpdates` | `plan.expiring`, `plan.expired` | `plan` | **Billing.** Your subscription plan is nearing expiry, or has expired (handed over to a queued plan, or downgraded to the free `starter` tier). `aggregateId` is the vendor id; `action.path` deep-links to `plans`. See [Billing](./billing.md). |
 
 ### Delivery channels
 

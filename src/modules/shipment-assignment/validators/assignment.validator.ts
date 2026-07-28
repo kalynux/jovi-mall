@@ -1,4 +1,21 @@
 import { z } from 'zod';
+import { AGENT_CANCELLATION_REASONS, AgentCancellationReason } from '../../shipments/shipment.model';
+
+/**
+ * Agent cancels a shipment mid-delivery (STEP 10). A fixed reason enum plus an
+ * optional free-text note capped at 200 characters — required when the reason is
+ * `other` so a catch-all cancellation is never left unexplained.
+ */
+export const CancelShipmentSchema = z
+  .object({
+    reason: z.enum(AGENT_CANCELLATION_REASONS as [AgentCancellationReason, ...AgentCancellationReason[]]),
+    note: z.string().trim().max(200).optional(),
+  })
+  .refine((v) => v.reason !== 'other' || (v.note && v.note.length > 0), {
+    message: 'A note is required when the cancellation reason is "other"',
+    path: ['note'],
+  });
+export type CancelShipmentInput = z.infer<typeof CancelShipmentSchema>;
 
 /** List an agent's offers. */
 export const ListOffersQuerySchema = z.object({

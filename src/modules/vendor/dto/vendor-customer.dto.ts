@@ -1,4 +1,5 @@
 import { IVendorCustomerFlagSub } from '../../vendors/models/vendor-settings.model';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 
 /**
  * Vendor Customer Management DTOs + mappers.
@@ -21,7 +22,7 @@ export interface VendorCustomerListItemDto {
     realName: string;           // underlying Customer.name (never modified)
     hasNameOverride: boolean;
     email: string | null;
-    avatar: string | null;
+    avatar: FileDetail | null;
     orderCount: number;         // all orders with this vendor
     totalSpent: number;         // paid orders only
     lastOrderAt: Date | null;

@@ -38,10 +38,11 @@ there is no admin-id path parameter.
     "_id": "664adm...",
     "user_id": "664usr...",
     "name": "Site Admin",
-    "avatar_url": null,
+    "avatar": null,
     "job_title": "Operations Lead",
     "department": "Trust & Safety",
     "timezone": "Africa/Douala",
+    "preferredLanguage": "en",
     "last_login_ip": "102.44.12.9",
     "onboarding_step": 0,
     "status": "active"
@@ -62,10 +63,22 @@ there is no admin-id path parameter.
 | Field | Type | Required | Validation |
 |---|---|---|---|
 | `name` | string | ❌ | 1–100 chars, trimmed |
-| `avatar_url` | string \| null | ❌ | must be a valid URL |
-| `job_title` | string \| null | ❌ | 1–100 chars |
-| `department` | string \| null | ❌ | 1–100 chars |
+| `avatar_file_id` | string \| null | ❌ | MongoDB ObjectId of a file uploaded via `POST /api/files/upload` — *clearable*. The **write** field for the avatar; reads return the resolved `avatar` file object. |
+| `avatar_url` | string \| null | ❌ | *(deprecated, no effect on reads)* still accepted for backward compatibility but no longer surfaced — use `avatar_file_id`. |
+| `job_title` | string \| null | ❌ | 1–100 chars — *clearable* |
+| `department` | string \| null | ❌ | 1–100 chars — *clearable* |
 | `timezone` | string | ❌ | non-empty (IANA timezone) |
+| `preferred_language` | string | ❌ | one of `en`, `fr`, `pt`, `es`, `ar` — the admin's language, used for notifications/messaging (no separate notification-language setting) |
+
+> **Clearable fields**: send `null` **or `""`** to clear (stored and returned as `null`); omit the
+> key to leave the value unchanged. See [Conventions](../README.md#conventions).
+
+> **Profile avatar is a file reference.** Upload the image via `POST /api/files/upload`, then send the
+> returned file `id` as `avatar_file_id`. Reads return `avatar` as a **resolved file object** — the same
+> `{ id, key, url, mimeType, size, originalName }` shape product images use — or `null` when unset; never
+> a bare URL string. While set, that file counts as *in use* — it appears under `usage.references` on
+> `GET /api/files/:id` with `entityType: "admin", field: "avatar"`, and cannot be deleted until you detach
+> it (`avatar_file_id: null`). See [File Management — the `usage` object](../vendor/file-management.md#get-apifilesid).
 
 ### Example request
 
@@ -82,7 +95,7 @@ there is no admin-id path parameter.
 ### Example error `400` (validation)
 
 ```json
-{ "success": false, "requestId": "req_abc", "error": { "code": "VALIDATION_ERROR", "message": "Validation failed", "statusCode": 400, "details": { "fields": [{ "path": "avatar_url", "message": "avatar_url must be a valid URL", "code": "invalid_string" }] } } }
+{ "success": false, "requestId": "req_abc", "error": { "code": "VALIDATION_ERROR", "message": "Validation failed", "statusCode": 400, "details": { "fields": [{ "path": "avatar_file_id", "message": "avatar_file_id must be a valid file id", "code": "invalid_string" }] } } }
 ```
 
 ## Possible error codes

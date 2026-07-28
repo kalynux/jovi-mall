@@ -3,6 +3,7 @@ import { VendorNotificationRepository } from '../repositories/vendor-notificatio
 import { VendorNotificationPreferenceRepository } from '../repositories/vendor-notification-preference.repository';
 import { FcmPushService } from './fcm-push.service';
 import { VendorRepository } from '../../vendors/vendor.repository';
+import { StoreRepository } from '../../store/repositories/store.repository';
 import { IVendor } from '../../vendors/vendor.model';
 import { TelegramRepository } from '../../telegram/telegram.repository';
 import { MailService } from '../../mail/mail.service';
@@ -66,6 +67,7 @@ export class VendorNotificationEventHandler {
     private notificationRepo: VendorNotificationRepository;
     private preferenceRepo: VendorNotificationPreferenceRepository;
     private vendorRepo: VendorRepository;
+    private storeRepo: StoreRepository;
     private telegramRepo: TelegramRepository;
     private mailService: MailService;
     private telegramService: TelegramNotificationService;
@@ -76,6 +78,7 @@ export class VendorNotificationEventHandler {
         this.notificationRepo = new VendorNotificationRepository();
         this.preferenceRepo = new VendorNotificationPreferenceRepository();
         this.vendorRepo = new VendorRepository();
+        this.storeRepo = new StoreRepository();
         this.telegramRepo = new TelegramRepository();
         this.mailService = new MailService();
         this.telegramService = new TelegramNotificationService();
@@ -472,6 +475,65 @@ export class VendorNotificationEventHandler {
         }
     }
 
+    /**
+     * Handle plan.expiring — the vendor's subscription plan crosses into its
+     * notice window. Owner-typed event shared across roles; only the vendor case
+     * is ours (the agency/agent consumers handle theirs). Idempotent on the plan's
+     * expiry date so a re-run on the same day does not re-notify.
+     */
+    async handlePlanExpiring(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, planCode, expiresAt, daysUntilExpiry } = event.payload;
+            if (ownerType !== 'vendor') return;
+
+            const prefs = await this.preferenceRepo.getByVendor(ownerId);
+            if (prefs.preferences.planUpdates === false) return; // opted out (default on)
+
+            await this.dispatch({
+                situation: 'plan.expiring',
+                prefs,
+                vendorId: ownerId,
+                aggregateType: 'plan',
+                aggregateId: ownerId,
+                idempotencyKey: `plan.expiring:${ownerId}:${new Date(expiresAt).toISOString()}`,
+                context: {
+                    planCode,
+                    daysUntilExpiry,
+                    expiresDate: new Date(expiresAt).toLocaleDateString()
+                }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle plan.expiring:', error);
+        }
+    }
+
+    /**
+     * Handle plan.expired — the vendor's plan lapsed and was handed over to a
+     * queued plan or downgraded to free. One message covers both (the new plan
+     * code is accurate either way).
+     */
+    async handlePlanExpired(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, expiredPlanCode, newPlanCode } = event.payload;
+            if (ownerType !== 'vendor') return;
+
+            const prefs = await this.preferenceRepo.getByVendor(ownerId);
+            if (prefs.preferences.planUpdates === false) return;
+
+            await this.dispatch({
+                situation: 'plan.expired',
+                prefs,
+                vendorId: ownerId,
+                aggregateType: 'plan',
+                aggregateId: ownerId,
+                idempotencyKey: `plan.expired:${ownerId}:${expiredPlanCode}:${event.occurredAt.toISOString().slice(0, 10)}`,
+                context: { expiredPlanCode, newPlanCode }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle plan.expired:', error);
+        }
+    }
+
     // ─── Dispatch + delivery ─────────────────────────────────────────────────
 
     /**
@@ -719,13 +781,16 @@ export class VendorNotificationEventHandler {
     ): Promise<void> {
         if (!vendor.email_verified || !vendor.email) return;
 
+        // Business name lives on the Store (source of truth).
+        const vendorName = (await this.storeRepo.findNameByVendorId(vendor._id.toString())) ?? vendor.display_name ?? '';
+
         await this.mailService.send({
             to: vendor.email,
             subject: content.subject,
             template: 'vendor-notification',
             type: 'SYSTEM',
             variables: {
-                vendorName: vendor.business_name,
+                vendorName,
                 title: content.subject,
                 message: content.body,
                 actionLabel: button?.label ?? null,

@@ -12,6 +12,12 @@ import {
   UpdateAgentSettingsInput,
 } from '../../validators/agent.validator';
 import { AgentProfileMapper, GetAgentProfileResponseDto, AgentCompletionStatusDto } from '../../dto/agent-profile.dto';
+import mongoose from 'mongoose';
+import { FileRepositoryMongo } from '../../../catalog/repositories/mongo/file.repository.mongo';
+import { FileReferenceRepositoryMongo } from '../../../catalog/repositories/mongo/file-reference.repository.mongo';
+import { FileReferenceService } from '../../../catalog/domain/services/media/FileReferenceService';
+import { getStorageProvider, IStorageProvider } from '../../../../core/storage';
+import { resolveFileDetail } from '../../../catalog/read-models/file-detail.resolver';
 
 /**
  * AgentProfileService — the agent's own record: identity, vehicle, contacts,
@@ -24,11 +30,50 @@ import { AgentProfileMapper, GetAgentProfileResponseDto, AgentCompletionStatusDt
  * person regardless of who they work for.
  */
 export class AgentProfileService {
-  constructor(private readonly agents: AgentRepository = agentRepository) {}
+  private readonly fileRepository: FileRepositoryMongo;
+  private readonly fileReferenceService: FileReferenceService;
+  private readonly storageProvider: IStorageProvider;
+
+  constructor(private readonly agents: AgentRepository = agentRepository) {
+    this.fileRepository = new FileRepositoryMongo();
+    this.fileReferenceService = new FileReferenceService(this.fileRepository, new FileReferenceRepositoryMongo());
+    this.storageProvider = getStorageProvider();
+  }
+
+  /**
+   * Build the profile response with the avatar File reference resolved to a
+   * public URL (falling back to the legacy `avatar_url`). Every profile-returning
+   * method funnels through here so the resolution happens in exactly one place.
+   */
+  private async present(agent: IDeliveryAgent): Promise<GetAgentProfileResponseDto> {
+    const avatar = await resolveFileDetail(agent.avatar_file_id?.toString(), this.fileRepository, this.storageProvider);
+    return AgentProfileMapper.toResponseDto(agent, new Date(), avatar);
+  }
+
+  /**
+   * Keep `file_references` in sync with the agent's avatar slot. Same reconcile
+   * primitive branding uses: authorizes the newly-attached file (must be owned
+   * by this agent or be a system file) and detaches the previous one, under
+   * `entityType: 'agent', field: 'avatar'`.
+   */
+  private async reconcileAvatarFileReference(
+    agentId: string,
+    previous: IDeliveryAgent['avatar_file_id'] | undefined,
+    next: string | null | undefined,
+  ): Promise<void> {
+    await this.fileReferenceService.reconcile({
+      previousFileIds: previous ? [previous.toString()] : [],
+      nextFileIds: next ? [next] : [],
+      actor: { type: 'agent', id: agentId },
+      entityType: 'agent',
+      entityId: agentId,
+      field: 'avatar',
+    });
+  }
 
   async getProfile(agentId: string): Promise<GetAgentProfileResponseDto> {
     const agent = await this.requireAgent(agentId);
-    return AgentProfileMapper.toResponseDto(agent);
+    return this.present(agent);
   }
 
   async getCompletionStatus(agentId: string): Promise<AgentCompletionStatusDto> {
@@ -37,7 +82,11 @@ export class AgentProfileService {
   }
 
   async updateProfile(agentId: string, input: UpdateAgentProfileInput): Promise<GetAgentProfileResponseDto> {
-    await this.requireAgent(agentId);
+    const agent = await this.requireAgent(agentId);
+
+    if (input.avatar_file_id !== undefined) {
+      await this.reconcileAvatarFileReference(agentId, agent.avatar_file_id, input.avatar_file_id);
+    }
 
     const payload = AgentProfileMapper.toUpdatePayload(input);
     const updated = await this.agents.updateProfile(agentId, payload);
@@ -49,7 +98,7 @@ export class AgentProfileService {
       updated.onboarding_step = newStep;
     }
 
-    return AgentProfileMapper.toResponseDto(updated);
+    return this.present(updated);
   }
 
   // ─── Preferences & settings ───────────────────────────────────────────────
@@ -66,7 +115,7 @@ export class AgentProfileService {
     } as Partial<IDeliveryAgent>);
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 
-    return AgentProfileMapper.toResponseDto(updated);
+    return this.present(updated);
   }
 
   /**
@@ -88,7 +137,7 @@ export class AgentProfileService {
     const updated = await this.agents.updateProfile(agentId, { settings: next } as Partial<IDeliveryAgent>);
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 
-    return AgentProfileMapper.toResponseDto(updated);
+    return this.present(updated);
   }
 
   // ─── Onboarding ───────────────────────────────────────────────────────────
@@ -97,19 +146,30 @@ export class AgentProfileService {
     agentId: string,
     input: AgentOnboardingStep1Input
   ): Promise<{ profile: GetAgentProfileResponseDto; completionStatus: AgentCompletionStatusDto }> {
-    await this.requireAgent(agentId);
+    const agent = await this.requireAgent(agentId);
+
+    // Onboarding locks on completion: once COMPLETED, the steps reject writes and
+    // the agent edits these fields through profile settings instead.
+    if (agent.onboarding_step === AgentOnboardingStep.COMPLETED) {
+      throw createAppError(ERROR_CODES.AGENT_ONBOARDING_ALREADY_COMPLETED, 409);
+    }
 
     const updated = await this.agents.updateProfile(agentId, {
       vehicle_info: input.vehicle_info as IAgentVehicleInfo,
     });
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 
-    const newStep = this.recalculateOnboardingStep(updated);
+    // First-time completion advances to Identity Setup (step 2). Re-submitting
+    // step 1 while already on step 2 saves the new data but keeps the agent
+    // there — the "go back and edit while still onboarding" case.
+    const newStep = agent.onboarding_step > AgentOnboardingStep.VEHICLE_SETUP
+      ? (agent.onboarding_step as AgentOnboardingStepValue)
+      : AgentOnboardingStep.IDENTITY_SETUP;
     await this.agents.updateOnboardingStep(agentId, newStep);
     updated.onboarding_step = newStep;
 
     return {
-      profile: AgentProfileMapper.toResponseDto(updated),
+      profile: await this.present(updated),
       completionStatus: this.buildCompletionStatus(updated),
     };
   }
@@ -118,7 +178,13 @@ export class AgentProfileService {
     agentId: string,
     input: AgentOnboardingStep2Input
   ): Promise<{ profile: GetAgentProfileResponseDto; completionStatus: AgentCompletionStatusDto }> {
-    await this.requireAgent(agentId);
+    const agent = await this.requireAgent(agentId);
+
+    // Onboarding locks on completion: once COMPLETED, the steps reject writes and
+    // the agent edits these fields through profile settings instead.
+    if (agent.onboarding_step === AgentOnboardingStep.COMPLETED) {
+      throw createAppError(ERROR_CODES.AGENT_ONBOARDING_ALREADY_COMPLETED, 409);
+    }
 
     if (!input.skip) {
       const updates: Partial<IDeliveryAgent> = {};
@@ -133,7 +199,7 @@ export class AgentProfileService {
     const finalAgent = await this.requireAgent(agentId);
 
     return {
-      profile: AgentProfileMapper.toResponseDto(finalAgent),
+      profile: await this.present(finalAgent),
       completionStatus: this.buildCompletionStatus(finalAgent),
     };
   }
@@ -154,7 +220,7 @@ export class AgentProfileService {
     await this.requireAgent(agentId);
     const updated = await this.agents.setStatus(agentId, status, reason);
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
-    return AgentProfileMapper.toResponseDto(updated);
+    return this.present(updated);
   }
 
   // ─── Internals ────────────────────────────────────────────────────────────

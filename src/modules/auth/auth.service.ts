@@ -7,6 +7,8 @@ import { VendorRepository } from '../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../delivery/delivery-agency.repository';
 import { AgentRepository } from '../agents';
 import { AdminRepository } from '../admins/admin.repository';
+import { StoreProvisioningService } from '../store/service/store-provisioning.service';
+import { MagazinProvisioningService } from '../magazin/service/magazin-provisioning.service';
 import { AddRoleInput, AuthMeInput, LoginInput, RegisterInput } from './auth.schemas';
 import { IUser } from '../users/user.model';
 import { EMAIL_VERIFY_DB, getRedisClient } from '../../infra/redis/redis.factory';
@@ -38,6 +40,8 @@ export class AuthService {
   private agentRepo: AgentRepository;
   private adminRepo: AdminRepository;
   private mailService: MailService;
+  private storeProvisioning: StoreProvisioningService;
+  private magazinProvisioning: MagazinProvisioningService;
   private redisDb = EMAIL_VERIFY_DB;
 
   constructor() {
@@ -48,6 +52,8 @@ export class AuthService {
     this.agentRepo = new AgentRepository();
     this.adminRepo = new AdminRepository();
     this.mailService = new MailService();
+    this.storeProvisioning = new StoreProvisioningService();
+    this.magazinProvisioning = new MagazinProvisioningService();
   }
 
   // ─── Token Generation ───────────────────────────────────────────────────────
@@ -137,15 +143,19 @@ export class AuthService {
         break;
       case 'vendor':
         roleEntity = await this.vendorRepo.create({
-          user_id: user._id, business_name: input.business_name || input.name,
+          user_id: user._id, display_name: input.name,
           email: input.email, phone: input.phone, email_verified: false, phone_verified: false, legit_verified: false
         });
+        // The business name lives on the Store (source of truth) — provision it now.
+        await this.storeProvisioning.ensureStoreForVendor(roleEntity._id.toString(), input.business_name || input.name);
         break;
       case 'agency':
         roleEntity = await this.agencyRepo.create({
-          user_id: user._id, agency_name: input.agency_name || input.name,
+          user_id: user._id, display_name: input.name,
           email: input.email, phone: input.phone, email_verified: false, phone_verified: false, legit_verified: false
         });
+        // The business name lives on the Magazin (source of truth) — provision it now.
+        await this.magazinProvisioning.ensureMagazinForAgency(roleEntity._id.toString(), input.agency_name || input.name);
         break;
       case 'agent':
         roleEntity = await this.agentRepo.create({
@@ -253,17 +263,27 @@ export class AuthService {
         break;
       case 'vendor':
         roleEntity = await this.vendorRepo.create({
-          user_id: user._id, business_name: input.business_name || input.name || '',
+          user_id: user._id, display_name: input.name || undefined,
           email: user.login_email, phone: user.login_phone,
           email_verified: false, phone_verified: false, legit_verified: false,
         });
+        // The business name lives on the Store (source of truth) — provision it now.
+        await this.storeProvisioning.ensureStoreForVendor(
+          roleEntity._id.toString(),
+          input.business_name || input.name || undefined,
+        );
         break;
       case 'agency':
         roleEntity = await this.agencyRepo.create({
-          user_id: user._id, agency_name: input.agency_name || input.name || '',
+          user_id: user._id, display_name: input.name || undefined,
           email: user.login_email, phone: user.login_phone,
           email_verified: false, phone_verified: false, legit_verified: false,
         });
+        // The business name lives on the Magazin (source of truth) — provision it now.
+        await this.magazinProvisioning.ensureMagazinForAgency(
+          roleEntity._id.toString(),
+          input.agency_name || input.name || undefined,
+        );
         break;
       case 'agent':
         roleEntity = await this.agentRepo.create({

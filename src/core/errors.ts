@@ -264,6 +264,7 @@ export function createAppError(
     [ERROR_CODES.DELIVERY_ONBOARDING_STEP_INCOMPLETE]: 'Previous onboarding step has not been completed',
     [ERROR_CODES.DELIVERY_ONBOARDING_ALREADY_COMPLETED]: 'Agency onboarding is already completed',
     [ERROR_CODES.DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION]: 'Agency profile was modified by another request. Please refresh and try again.',
+    [ERROR_CODES.AGENT_ONBOARDING_ALREADY_COMPLETED]: 'Agent onboarding is already completed. Update your details from profile settings instead.',
     [ERROR_CODES.CONNECTION_NOT_FOUND]: 'Connection not found',
     [ERROR_CODES.CONNECTION_VENDOR_NOT_FOUND]: 'Vendor not found or not eligible to connect with',
     [ERROR_CODES.CONNECTION_ALREADY_EXISTS]: 'A connection already exists between you and this counterparty',

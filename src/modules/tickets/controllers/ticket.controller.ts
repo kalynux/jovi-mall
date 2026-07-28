@@ -41,7 +41,8 @@ export class TicketController {
             trackingNumber: validated.trackingNumber,
             attachments: validated.attachments,
             createdByUserId: userId,
-            createdByRole: role
+            createdByRole: role,
+            createdByEntityId: req.auth!.role_entity._id.toString()
         });
 
         const enriched = await enrichmentService.enrichTicket(ticket);

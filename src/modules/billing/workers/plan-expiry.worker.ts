@@ -1,18 +1,20 @@
 import cron from 'node-cron';
 import { eventBus } from '../../../core/events/event-bus';
-import { VendorPlanRepository } from '../repositories/vendor-plan.repository';
-import { VendorPlanService, vendorPlanService } from '../services/vendor-plan.service';
+import { SubscriberPlanRepository } from '../repositories/subscriber-plan.repository';
+import { SubscriberPlanService, subscriberPlanService } from '../services/subscriber-plan.service';
+import { BillingSettingsRepository } from '../repositories/billing-settings.repository';
 import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
+import { BillingOwnerType, freePlanCode } from '../billing.types';
 
 const DAY_MS = 86_400_000;
-/** Upper bound on per-vendor notify windows (matches the setting's max). */
+/** Upper bound on per-owner notify windows (matches the setting's max). */
 const MAX_NOTIFY_WINDOW_DAYS = 90;
 
 /**
- * PlanExpiryWorker - daily sweep that:
+ * PlanExpiryWorker - daily sweep, for EVERY owner type (vendor/agency/agent):
  *  1. Hands over expired active paid plans to their queued pending plan, or
- *     downgrades them to the free tier when nothing is queued.
- *  2. Emits a `vendor.plan.expiring` event when a plan crosses into the vendor's
+ *     downgrades them to the role's free tier when nothing is queued.
+ *  2. Emits a `plan.expiring` event when a plan crosses into the owner's
  *     configured notification window (fires once, on that day).
  *
  * Lifecycle mirrors the analytics aggregation scheduler (node-cron, daily).
@@ -22,9 +24,10 @@ export class PlanExpiryWorker {
   private task: ReturnType<typeof cron.schedule> | null = null;
 
   constructor(
-    private readonly vendorPlanRepo: VendorPlanRepository = new VendorPlanRepository(),
-    private readonly plans: VendorPlanService = vendorPlanService,
-    private readonly settingsRepo: VendorSettingsRepository = new VendorSettingsRepository()
+    private readonly planRepo: SubscriberPlanRepository = new SubscriberPlanRepository(),
+    private readonly plans: SubscriberPlanService = subscriberPlanService,
+    private readonly billingSettings: BillingSettingsRepository = new BillingSettingsRepository(),
+    private readonly vendorSettings: VendorSettingsRepository = new VendorSettingsRepository()
   ) {}
 
   /** Schedule the daily sweep (03:00 server time). */
@@ -53,48 +56,52 @@ export class PlanExpiryWorker {
   }
 
   private async processExpired(now: Date): Promise<void> {
-    const expired = await this.vendorPlanRepo.findExpiredActive(now);
+    const expired = await this.planRepo.findExpiredActive(now);
     for (const plan of expired) {
-      const vendorId = plan.vendor_id.toString();
+      const ownerType = plan.owner_type;
+      const ownerId = plan.owner_id.toString();
       try {
-        const activated = await this.plans.activatePending(vendorId, plan._id);
+        const activated = await this.plans.activatePending(ownerType, ownerId, plan._id);
         if (!activated) {
-          await this.plans.downgradeToFree(vendorId, plan._id);
+          await this.plans.downgradeToFree(ownerType, ownerId, plan._id);
         }
-        await eventBus.publish('vendor.plan.expired', {
-          eventType: 'vendor.plan.expired',
-          aggregateId: vendorId,
+        await eventBus.publish('plan.expired', {
+          eventType: 'plan.expired',
+          aggregateId: ownerId,
           occurredAt: now,
           payload: {
-            vendorId,
+            ownerType,
+            ownerId,
             expiredPlanCode: plan.plan_code,
             handedOverToPending: !!activated,
-            newPlanCode: activated?.plan_code ?? 'starter',
+            newPlanCode: activated?.plan_code ?? freePlanCode(ownerType),
           },
         });
       } catch (err) {
-        console.error(`[PlanExpiryWorker] Failed to transition expired plan for vendor ${vendorId}:`, err);
+        console.error(`[PlanExpiryWorker] Failed to transition expired plan for ${ownerType} ${ownerId}:`, err);
       }
     }
   }
 
   private async processExpiringSoon(now: Date): Promise<void> {
     const horizon = new Date(now.getTime() + MAX_NOTIFY_WINDOW_DAYS * DAY_MS);
-    const upcoming = await this.vendorPlanRepo.findActiveExpiringBefore(horizon);
+    const upcoming = await this.planRepo.findActiveExpiringBefore(horizon);
     for (const plan of upcoming) {
       if (!plan.expires_at) continue;
-      const vendorId = plan.vendor_id.toString();
+      const ownerType = plan.owner_type;
+      const ownerId = plan.owner_id.toString();
       try {
-        const notifyDays = await this.settingsRepo.getNotifyDaysBeforeExpiry(vendorId);
+        const notifyDays = await this.getNotifyDays(ownerType, ownerId);
         const daysUntil = Math.ceil((plan.expires_at.getTime() - now.getTime()) / DAY_MS);
         // Fire once, on the day the plan crosses into the notice window.
         if (daysUntil === notifyDays) {
-          await eventBus.publish('vendor.plan.expiring', {
-            eventType: 'vendor.plan.expiring',
-            aggregateId: vendorId,
+          await eventBus.publish('plan.expiring', {
+            eventType: 'plan.expiring',
+            aggregateId: ownerId,
             occurredAt: now,
             payload: {
-              vendorId,
+              ownerType,
+              ownerId,
               planCode: plan.plan_code,
               expiresAt: plan.expires_at,
               daysUntilExpiry: daysUntil,
@@ -102,9 +109,17 @@ export class PlanExpiryWorker {
           });
         }
       } catch (err) {
-        console.error(`[PlanExpiryWorker] Failed expiry-notice check for vendor ${vendorId}:`, err);
+        console.error(`[PlanExpiryWorker] Failed expiry-notice check for ${ownerType} ${ownerId}:`, err);
       }
     }
+  }
+
+  /** Vendors keep their preference on VendorSettings; agency/agent use BillingSettings. */
+  private async getNotifyDays(ownerType: BillingOwnerType, ownerId: string): Promise<number> {
+    if (ownerType === 'vendor') {
+      return this.vendorSettings.getNotifyDaysBeforeExpiry(ownerId);
+    }
+    return this.billingSettings.getNotifyDaysBeforeExpiry(ownerType, ownerId);
   }
 }
 

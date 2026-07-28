@@ -9,6 +9,7 @@ import {
 import { EarningsLedgerModel, IEarningsLedger } from '../../earnings/models/earnings-ledger.model';
 import { earningsAccountService } from '../../earnings/services/earnings-account.service';
 import { VendorTransaction, TransactionCategory } from '../transaction.types';
+import { BillingOwnerType } from '../../billing/billing.types';
 
 /** Credit ledger rows tied to a top-up — represented by the CreditTopup row instead. */
 const TOPUP_REASON_CODES: CreditReasonCode[] = ['topup_purchase', 'topup_reversal'];
@@ -28,18 +29,20 @@ const CREDIT_DESC_BY_REASON: Partial<Record<CreditReasonCode, string>> = {
 };
 
 /**
- * VendorTransactionService — merges the vendor's billing + earnings history into
- * one normalized, paginated feed. Sources are queried independently and merged
- * in memory (sorted by `created_at` desc). Top-ups are represented once (by their
- * CreditTopup row); the matching credit-ledger rows are filtered out to dedup.
+ * SubscriberTransactionService — merges an owner's (vendor/agency/agent) billing +
+ * earnings history into one normalized, paginated feed. Sources are queried
+ * independently and merged in memory (sorted by `created_at` desc). Top-ups are
+ * represented once (by their CreditTopup row); the matching credit-ledger rows are
+ * filtered out to dedup.
  */
 export class VendorTransactionService {
   async list(
-    vendorId: string,
+    ownerType: BillingOwnerType,
+    ownerIdStr: string,
     opts: { page: number; limit: number; category?: TransactionCategory }
   ): Promise<{ data: VendorTransaction[]; total: number; page: number; limit: number }> {
     const { page, limit, category } = opts;
-    const ownerId = new Types.ObjectId(vendorId);
+    const ownerId = new Types.ObjectId(ownerIdStr);
     const fetchN = page * limit; // enough from each source to satisfy this offset page
 
     const wantPlan = !category || category === 'plan';
@@ -47,18 +50,18 @@ export class VendorTransactionService {
     const wantEarning = !category || category === 'earning';
     // `payout` has no data yet → all flags false → empty feed.
 
-    const planFilter = { vendor_id: ownerId };
-    const topupFilter = { vendor_id: ownerId };
+    const planFilter = { owner_type: ownerType, owner_id: ownerId };
+    const topupFilter = { owner_type: ownerType, owner_id: ownerId };
     const creditFilter = {
-      owner_type: 'vendor',
+      owner_type: ownerType,
       owner_id: ownerId,
       reason_code: { $nin: TOPUP_REASON_CODES },
     };
-    const earningFilter = { owner_type: 'vendor', owner_id: ownerId };
+    const earningFilter = { owner_type: ownerType, owner_id: ownerId };
 
     // Earnings rows don't store their own currency — read it from the account once.
     const earningsCurrency = wantEarning
-      ? (await earningsAccountService.getBalances('vendor', vendorId)).currency
+      ? (await earningsAccountService.getBalances(ownerType, ownerIdStr)).currency
       : 'XAF';
 
     const [planDocs, topupDocs, creditDocs, earningDocs, planCount, topupCount, creditCount, earningCount] =

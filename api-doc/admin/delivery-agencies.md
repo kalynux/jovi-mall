@@ -41,9 +41,11 @@ one product; a broken vendor default blocks every physical product the vendor ha
 **`PATCH /:id/deactivate`**:
 1. Sets the agency's `status` to `inactive`.
 2. Finds every vendor whose `default_delivery_agency_id` currently points at this agency,
-   and suspends **all** of their physical products — regardless of current status (draft,
-   active, pending_review, archived) — moving each to `status: "suspended"` and
-   individually snapshotting its own prior status so it can be restored exactly later.
+   and suspends their **`active`** physical products — moving each to `status: "suspended"`
+   and individually snapshotting its own prior status so it can be restored exactly later.
+   Non-active products (draft/archived/pending_review) are left untouched: they cannot
+   reach `active` without passing the activation gate anyway, and stay freely editable
+   while the agency problem lasts.
 3. Separately, finds every physical product (any vendor) whose **own** delivery-agency
    override points at this agency, and suspends just those specific products the same way
    — independent of whether their vendor's default agency is fine.
@@ -64,7 +66,7 @@ specific reason**; anything suspended/held for a different reason is left alone.
 > restoring, if the saved previous status was `active`, the activation gate is re-checked
 > before flipping the status back — if the *other* reason is still broken, the product stays
 > suspended (with its existing suspension reason left as-is). Non-`active` previous statuses
-> (draft/archived/pending_review) always restore directly.
+> (legacy rows suspended before the active-only rule) always restore directly.
 
 Both actions are **idempotent** — deactivating an already-inactive agency (or reactivating
 an already-active one) is a no-op that returns the current state with everything zeroed out.
@@ -115,7 +117,7 @@ suspension by editing that product's own delivery agency — see
       "id": "683abc1234567890abcdef01",
       "userId": "683abc1234567890abcdef00",
       "agencyName": "Swift Deliveries Cameroon",
-      "logoUrl": "https://cdn.example.com/logos/swift-deliveries.png",
+      "logo": { "id": "507f1f77bcf86cd799439030", "key": "products/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
       "status": "active",
       "onboardingStep": 0,
       "createdAt": "2026-01-10T08:00:00.000Z",
@@ -149,7 +151,7 @@ products (see above). No request body.
     "id": "683abc1234567890abcdef01",
     "userId": "683abc1234567890abcdef00",
     "agencyName": "Swift Deliveries Cameroon",
-    "logoUrl": "https://cdn.example.com/logos/swift-deliveries.png",
+    "logo": { "id": "507f1f77bcf86cd799439030", "key": "products/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
     "status": "inactive",
     "onboardingStep": 0,
     "createdAt": "2026-01-10T08:00:00.000Z",
@@ -180,7 +182,7 @@ products suspended for this reason (see above). No request body.
     "id": "683abc1234567890abcdef01",
     "userId": "683abc1234567890abcdef00",
     "agencyName": "Swift Deliveries Cameroon",
-    "logoUrl": "https://cdn.example.com/logos/swift-deliveries.png",
+    "logo": { "id": "507f1f77bcf86cd799439030", "key": "products/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
     "status": "active",
     "onboardingStep": 0,
     "createdAt": "2026-01-10T08:00:00.000Z",

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { clearable } from '../../../core/validation/zod.helpers';
 
 // Product media. Full-array replacement; duplicates are rejected so the same image
 // can't be attached twice. Shared by create and update; kept in sync with the
@@ -16,7 +17,7 @@ const productFileIdsSchema = z.array(
 // is required when `source` is 'vendor_address' (ignored/omitted otherwise).
 const pickupLocationSchema = z.object({
     source: z.enum(['vendor_address', 'agency_storage']),
-    vendorAddressId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId').nullable().optional(),
+    vendorAddressId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId')),
 }).strict().refine(
     (p) => p.source !== 'vendor_address' || !!p.vendorAddressId,
     { message: 'vendorAddressId is required when source is vendor_address' }
@@ -94,7 +95,7 @@ export const UpdateProductSchema = z.object({
     // Either sub-field may be sent independently (partial update, merged against
     // the existing value in ProductUpdateService); at least one must be present.
     delivery: z.object({
-        agencyId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId').nullable().optional(),
+        agencyId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId')),
         freeDelivery: z.boolean().optional(),
         pickupLocation: pickupLocationSchema.nullable().optional(),
     }).strict().refine(

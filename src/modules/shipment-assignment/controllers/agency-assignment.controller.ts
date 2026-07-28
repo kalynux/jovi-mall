@@ -45,14 +45,14 @@ export class AgencyAssignmentController {
   static autoAssign = asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const agencyId = req.auth!.role_entity._id.toString();
 
-    // Scope check: the shipment must belong to this agency (previewCandidates
-    // enforces it and 404s otherwise).
-    await shipmentAssignmentService.previewCandidates(agencyId, req.params.id);
-
-    const result = await shipmentAssignmentService.autoAssign(req.params.id, {
-      role: 'agency',
-      userId: req.auth!.user.id,
-    });
+    // `autoAssign` scopes the shipment to this agency (404 otherwise) and builds
+    // the ranking once — no separate preview call (which would re-run the geo
+    // ranking a second time).
+    const result = await shipmentAssignmentService.autoAssign(
+      req.params.id,
+      { role: 'agency', userId: req.auth!.user.id },
+      agencyId
+    );
     if (!result) {
       throw createAppError(ERROR_CODES.SHIPMENT_NO_ELIGIBLE_AGENTS, 422, 'No eligible agent is available to take this shipment right now');
     }

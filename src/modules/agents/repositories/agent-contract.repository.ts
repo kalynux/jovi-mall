@@ -140,6 +140,25 @@ export class AgentContractRepository {
     return rows.map((r) => r.agent_id.toString());
   }
 
+  /**
+   * Agent ids whose contract with this agency can still be holding its cash —
+   * the ALLOCATING set (active | paused | suspended), not merely `active`.
+   *
+   * Cash legitimately lands on and stays under a paused/suspended contract: a
+   * collection attributes via `findLive` and a deposit is accepted via
+   * `findLive`, both of which span the allocating set. The agency COD summary
+   * must therefore draw its per-agent breakdown from here, or a suspended agent
+   * still sitting on the agency's cash would vanish from the list while the
+   * agency's liability total still counted it.
+   */
+  async listAllocatingAgentIds(agencyId: string): Promise<string[]> {
+    const rows = await AgentAgencyContractModel.find(
+      { agency_id: agencyId, status: { $in: ALLOCATING_CONTRACT_STATUSES } },
+      { agent_id: 1 }
+    );
+    return rows.map((r) => r.agent_id.toString());
+  }
+
   // ─── Guarded transitions ──────────────────────────────────────────────────
 
   /**

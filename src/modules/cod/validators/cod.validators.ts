@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { clearable } from '../../../core/validation/zod.helpers';
 
 /** Agent submits the customer's delivery code at handoff. */
 export const CollectCashSchema = z.object({
@@ -12,7 +13,7 @@ export const CollectCashSchema = z.object({
     .nullable()
     .optional(),
   /** Free-form device identifier reported by the agent app. */
-  deviceInfo: z.string().trim().max(300).nullable().optional(),
+  deviceInfo: clearable(z.string().trim().max(300)),
 });
 
 export type CollectCashInput = z.infer<typeof CollectCashSchema>;
@@ -39,8 +40,8 @@ export const DeclareDepositSchema = z.object({
   agencyId: ObjectId,
   amount: z.number().int().positive('Amount must be a positive integer (minor units)'),
   recipient: AgentDepositRecipientSchema.default('agency'),
-  reference: z.string().trim().min(1).max(200).nullable().optional(),
-  note: z.string().trim().max(500).nullable().optional(),
+  reference: clearable(z.string().trim().min(1).max(200)),
+  note: clearable(z.string().trim().max(500)),
 });
 
 /** Rejecting a declaration always needs a reason — it is half of a dispute. */

@@ -7,7 +7,8 @@ import mongoose from 'mongoose';
 import { app } from './app';
 import { initAggregationScheduler } from './core/jobs/aggregation-scheduler';
 import { planExpiryWorker } from './modules/billing/workers/plan-expiry.worker';
-import { registerPlanNotificationConsumer } from './modules/billing/events/plan-notification.consumer';
+import { agencyShipmentCapWorker } from './modules/billing/workers/agency-shipment-cap.worker';
+import { registerAgentPlanCapacityConsumer } from './modules/agents/events/agent-plan-capacity.consumer';
 import { initializeVendorNotificationEventConsumers } from './modules/notifications/vendor-notification-event-consumer';
 import { initializeAgencyNotificationEventConsumers } from './modules/notifications/agency-notification-event-consumer';
 import { initializeAgentNotificationEventConsumers } from './modules/notifications/agent-notification-event-consumer';
@@ -39,9 +40,14 @@ async function startServer() {
     // Initialize scheduled jobs
     initAggregationScheduler();
 
-    // Billing: plan-expiry handover/downgrade sweep + expiry notifications
-    registerPlanNotificationConsumer();
+    // Billing: plan-expiry handover/downgrade sweep. Its plan.expiring/plan.expired
+    // events are consumed by the vendor/agency/agent notification stacks below.
     planExpiryWorker.start();
+
+    // Billing: agent plan → capacity sync (plan.activated drives max_active_shipments)
+    // and the agency unterminated-shipment soft-cap monitor (alert only, never blocks).
+    registerAgentPlanCapacityConsumer();
+    agencyShipmentCapWorker.start();
 
     // Vendor notifications: in-app + multi-channel dispatch (incl. storage alerts)
     initializeVendorNotificationEventConsumers();

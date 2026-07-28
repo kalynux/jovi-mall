@@ -12,6 +12,9 @@ import { ProductInactivityDetachService } from '../services/ProductInactivityDet
 import { TicketAttachmentCleanupService } from '../services/TicketAttachmentCleanupService';
 import { LonelyFileDeletionService } from '../services/LonelyFileDeletionService';
 import { StorageAlertService } from '../services/StorageAlertService';
+import { OwnerStorageAlertService } from '../services/OwnerStorageAlertService';
+import { DeliveryAgencyModel } from '../../delivery/delivery-agency.model';
+import { DeliveryAgentModel } from '../../agents/models/agent.model';
 
 /**
  * FileCleanupWorker — daily storage-lifecycle sweep.
@@ -21,7 +24,7 @@ import { StorageAlertService } from '../services/StorageAlertService';
  *   1. product-media detach   (inactive products)
  *   2. ticket-attachment detach (terminal tickets)
  *   3. lonely-file delete      (Stage B — permanent deletion)
- *   4. storage alerts          (notify vendors near their cap)
+ *   4. storage alerts          (notify vendor/agency/agent owners near their cap)
  *
  * Mirrors the billing PlanExpiryWorker (node-cron, daily, idempotent). Honors the
  * master switch, per-stage toggles and dryRun from FileCleanupConfig. `runSweep`
@@ -35,6 +38,8 @@ export class FileCleanupWorker {
   private readonly ticketDetach: TicketAttachmentCleanupService;
   private readonly lonelyDelete: LonelyFileDeletionService;
   private readonly storageAlert: StorageAlertService;
+  private readonly agencyStorageAlert: OwnerStorageAlertService;
+  private readonly agentStorageAlert: OwnerStorageAlertService;
 
   constructor(config: FileCleanupConfig = loadFileCleanupConfig()) {
     this.config = config;
@@ -52,6 +57,27 @@ export class FileCleanupWorker {
     this.ticketDetach = new TicketAttachmentCleanupService(fileReferenceRepository, audit, config);
     this.lonelyDelete = new LonelyFileDeletionService(fileRepository, fileDeleteService, guard, audit, config);
     this.storageAlert = new StorageAlertService(storageUsage, audit, config);
+
+    // Agency/agent storage alerts (usage from MediaStorageService, cap from the
+    // plan). Vendor alerts stay on their product-media-scoped StorageAlertService.
+    this.agencyStorageAlert = new OwnerStorageAlertService(
+      'agency',
+      'agency.storage.alert',
+      async () =>
+        (await DeliveryAgencyModel.find({ status: 'active', deletedAt: null }).select('_id').lean())
+          .map((d) => d._id.toString()),
+      audit,
+      config,
+    );
+    this.agentStorageAlert = new OwnerStorageAlertService(
+      'agent',
+      'agent.storage.alert',
+      async () =>
+        (await DeliveryAgentModel.find({ status: 'active', deletedAt: null }).select('_id').lean())
+          .map((d) => d._id.toString()),
+      audit,
+      config,
+    );
   }
 
   /** Schedule the daily sweep per config.cron (default 04:00 server time). */
@@ -118,9 +144,21 @@ export class FileCleanupWorker {
     if (this.config.stages.storageAlert) {
       try {
         const r = await this.storageAlert.run(sweepId, now);
-        console.log('[FileCleanupWorker] storage alerts:', r);
+        console.log('[FileCleanupWorker] storage alerts (vendor):', r);
       } catch (err) {
-        console.error('[FileCleanupWorker] storage alerts failed:', err);
+        console.error('[FileCleanupWorker] storage alerts (vendor) failed:', err);
+      }
+      try {
+        const r = await this.agencyStorageAlert.run(sweepId, now);
+        console.log('[FileCleanupWorker] storage alerts (agency):', r);
+      } catch (err) {
+        console.error('[FileCleanupWorker] storage alerts (agency) failed:', err);
+      }
+      try {
+        const r = await this.agentStorageAlert.run(sweepId, now);
+        console.log('[FileCleanupWorker] storage alerts (agent):', r);
+      } catch (err) {
+        console.error('[FileCleanupWorker] storage alerts (agent) failed:', err);
       }
     }
 

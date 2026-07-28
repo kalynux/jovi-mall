@@ -108,7 +108,7 @@ Body:
       "user_id": "string",
       "role": "agency",
       "name": "FastTrack Logistics",
-      "avatar_url": "https://cdn.example.com/fasttrack-logo.png"
+      "avatar": { "id": "507f1f77bcf86cd799439030", "key": "products/2026/07/fasttrack-logo.png", "url": "https://cdn.example.com/fasttrack-logo.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" }
     },
     "assigned_to_role": null,
     "assigned_to": null,
@@ -120,7 +120,7 @@ Body:
         "user_id": "string",
         "role": "agency",
         "name": "FastTrack Logistics",
-        "avatar_url": "https://cdn.example.com/fasttrack-logo.png"
+        "avatar": { "id": "507f1f77bcf86cd799439030", "key": "products/2026/07/fasttrack-logo.png", "url": "https://cdn.example.com/fasttrack-logo.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" }
       }
     ],
     "createdAt": "2026-07-05T19:00:00.000Z",
@@ -129,9 +129,9 @@ Body:
 }
 ```
 
-> **Actor summary for `agency`.** `name` resolves to `agency_name` and `avatar_url` to `logo_url`
-> (from the agency's own profile) — used for `created_by`, `assigned_to`, and every entry in
-> `followers` when the actor is an agency.
+> **Actor summary for `agency`.** `name` resolves to `agency_name` and `avatar` to the resolved logo
+> **file object** (from the agency's `logo_file_id`) — used for `created_by`, `assigned_to`, and every
+> entry in `followers` when the actor is an agency.
 >
 > **Entity summary for non-`ORDER`/`PRODUCT`/`BOOKING` types** (e.g. `SHIPMENT`, `DELIVERY`,
 > `AGENCY`) degrades to a generic placeholder: `label` is `"<Type> <last 6 chars of id>"` and
@@ -275,7 +275,7 @@ Body:
         "user_id": "string",
         "role": "agency",
         "name": "FastTrack Logistics",
-        "avatar_url": null
+        "avatar": null
       },
       "assigned_to_role": "admin",
       "assigned_to": null,
@@ -284,7 +284,7 @@ Body:
         "user_id": "string",
         "role": "admin",
         "name": "Kofi Mensah",
-        "avatar_url": null
+        "avatar": null
       },
       "priority_locked": true,
       "createdAt": "2026-07-05T19:00:00.000Z",
@@ -487,7 +487,7 @@ Body:
       "user_id": "string",
       "role": "agency",
       "name": "FastTrack Logistics",
-      "avatar_url": null
+      "avatar": null
     },
     "visible_to_user_ids": [],
     "created_at": "2026-07-05T19:30:00.000Z"
@@ -554,7 +554,7 @@ Body:
       "user_id": "string",
       "role": "agency",
       "name": "FastTrack Logistics",
-      "avatar_url": null
+      "avatar": null
     },
     "createdAt": "2026-07-05T19:30:00.000Z"
   }
@@ -615,12 +615,12 @@ into ready-to-render summary objects. The original `*_id` fields are kept alongs
 **Actor summary** (`created_by`, `assigned_to`, `assigned_admin`, each `followers` entry, note
 `author`, attachment `uploadedByActor`):
 ```json
-{ "user_id": "string", "role": "agency", "name": "FastTrack Logistics", "avatar_url": "https://.../logo.png" }
+{ "user_id": "string", "role": "agency", "name": "FastTrack Logistics", "avatar": { "id": "…", "key": "…", "url": "https://.../logo.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" } }
 ```
 - `name`: admin/customer/agent → `name`; vendor → `display_name` (falls back to `business_name`);
   **agency → `agency_name`**.
-- `avatar_url`: profile photo/logo where one exists — **agency → `logo_url`** — otherwise `null`.
-- Unresolvable references fall back to the capitalised role name (e.g. `"Agency"`) with `avatar_url: null`.
+- `avatar`: profile photo/logo where one exists, as a resolved **file object** (`{ id, key, url, mimeType, size, originalName }`) — **agency → resolved from `logo_file_id`** — otherwise `null`.
+- Unresolvable references fall back to the capitalised role name (e.g. `"Agency"`) with `avatar: null`.
 
 **Entity summary** (ticket `entity` field):
 ```json

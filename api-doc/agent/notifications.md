@@ -54,12 +54,18 @@ one secondary channel; a channel delivers only if enabled **and** verified; prio
 | `cod.deposit.recorded` | An agency recorded a cash deposit from you that you **did not declare** yourself. | Your balance just dropped on the agency's say-so. **If the amount is wrong, this message is how you catch it** — report it via [`POST /api/agent/cod/discrepancies`](./cod-cash.md). |
 | `cod.deposit.confirmed` | The agency (or the platform, for a direct payment) **confirmed a deposit you declared**. | Your claim landed: balance reduced, COD headroom freed. |
 | `cod.deposit.rejected` | The receiving party **rejected a deposit you declared**. | No money moved, the cash is still on your balance, and **your deposit deadline is running again** — the message carries the reason. |
+| `plan.expiring` | Your subscription plan is nearing expiry (within your notice window). | Renew/upgrade before it lapses to keep your higher delivery limit. Gated by `planUpdates`; `aggregateType: plan`, `action` → `plans`. See [Billing](./billing.md). |
+| `plan.expired` | Your plan expired — handed over to a queued plan, or **downgraded to `agent_free`**. | A downgrade **lowers your concurrent-delivery cap** (back to 20). Gated by `planUpdates`; `aggregateType: plan`, `action` → `plans`. |
+| `storage.alert` | Your **own media storage** crossed 80 / 90 / 100% of your plan cap (highest crossed band only, ≤ once per month per band). | Free space or upgrade. Gated by `storageAlert`; `aggregateType: storage`, `action` → `settings/storage`. **Delivery proofs are charged to the agency, not counted here.** See [Storage](./storage.md). |
 
-All three carry an `action` deep-linking to the deposit (`cod/deposits/{id}`), and an
-`aggregateType` of `deposit` with the deposit id as `aggregateId`.
+The three COD-deposit rows carry an `action` deep-linking to the deposit (`cod/deposits/{id}`), and an
+`aggregateType` of `deposit` with the deposit id as `aggregateId`. The `plan.*` rows deep-link to
+`plans` with `aggregateType: plan` and the agent id as `aggregateId`.
 
 There is deliberately **no notification when you declare a deposit** — you did that, so it would be
-noise. The declaration notifies your *agency*, who has to answer it.
+noise. The declaration notifies your *agency*, who has to answer it. (Assignment-offer situations —
+`shipment.offer.received` / `.expired` / `shipment.reassigned_away` — are gated by `assignmentOffers`;
+see [Offers](./offers.md).)
 
 ---
 
@@ -98,7 +104,10 @@ noise. The declaration notifies your *agency*, who has to answer it.
     "telegramVerified": true,
     "whatsappVerified": false,
     "preferences": {
-      "codDepositUpdates": true
+      "codDepositUpdates": true,
+      "assignmentOffers": true,
+      "planUpdates": true,
+      "storageAlert": true
     }
   }
 }
@@ -119,7 +128,10 @@ link, WhatsApp link) — not stored toggles, ignored on write.
   "telegramEnabled": true,
   "whatsappEnabled": false,
   "preferences": {
-    "codDepositUpdates": true
+    "codDepositUpdates": true,
+    "assignmentOffers": true,
+    "planUpdates": true,
+    "storageAlert": true
   }
 }
 ```

@@ -1,7 +1,8 @@
 import { Types } from 'mongoose';
 import { PlanPurchaseModel, IPlanPurchase, PlanPurchaseStatus } from '../models/plan-purchase.model';
+import { BillingOwnerType } from '../billing.types';
 
-/** Persistence for vendor self-serve plan purchases. */
+/** Persistence for owner self-serve plan purchases. */
 export class PlanPurchaseRepository {
   async create(data: Partial<IPlanPurchase>): Promise<IPlanPurchase> {
     return PlanPurchaseModel.create(data);
@@ -39,12 +40,13 @@ export class PlanPurchaseRepository {
     );
   }
 
-  async listByVendor(
-    vendorId: string,
+  async listByOwner(
+    ownerType: BillingOwnerType,
+    ownerId: string,
     page: number,
     limit: number
   ): Promise<{ data: IPlanPurchase[]; total: number }> {
-    const filter = { vendor_id: new Types.ObjectId(vendorId) };
+    const filter = { owner_type: ownerType, owner_id: new Types.ObjectId(ownerId) };
     const [data, total] = await Promise.all([
       PlanPurchaseModel.find(filter)
         .sort({ created_at: -1 })

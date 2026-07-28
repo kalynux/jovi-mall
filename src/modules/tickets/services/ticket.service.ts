@@ -1,6 +1,7 @@
 import { TicketRepository, TicketFilters, PaginationOptions } from '../repositories/ticket.repository';
 import { TicketFollowerService } from './ticket-follower.service';
 import { TicketNoteService } from './ticket-note.service';
+import { TicketAttachmentService } from './ticket-attachment.service';
 import { TicketStatus, TicketPriority, ActorRole, EntityType, TicketImportance, isWaitingStatus, WAITING_STATUS_TARGET_ROLE } from '../types/ticket.types';
 import { ITicket } from '../models/ticket.model';
 import { AppError, createAppError } from '../../../core/errors';
@@ -39,12 +40,14 @@ export class TicketService {
     private ticketRepo: TicketRepository;
     private followerService: TicketFollowerService;
     private noteService: TicketNoteService;
+    private attachmentService: TicketAttachmentService;
     private vendorRepo: VendorRepository;
 
     constructor() {
         this.ticketRepo = new TicketRepository();
         this.followerService = new TicketFollowerService();
         this.noteService = new TicketNoteService();
+        this.attachmentService = new TicketAttachmentService();
         this.vendorRepo = new VendorRepository();
     }
 
@@ -125,6 +128,7 @@ export class TicketService {
         attachments?: string[];
         createdByUserId: string;
         createdByRole: ActorRole;
+        createdByEntityId: string;
     }): Promise<ITicket> {
         // Polymorphic entity validation → also resolves the vendor behind the entity.
         const vendorId = await this.validateEntityReference(input.entityType, input.entityId);
@@ -157,6 +161,21 @@ export class TicketService {
             input.createdByUserId,
             true // silent
         );
+
+        // Persist any files supplied at creation time. This is the SAME path the
+        // edit flow uses (attachFile), so it creates both the TicketAttachment row
+        // and the file_references row that keeps the file out of orphan GC. Skipping
+        // it (the old behaviour) silently dropped attachments given on create.
+        for (const fileId of input.attachments ?? []) {
+            await this.attachmentService.attachFile(
+                ticket.id,
+                fileId,
+                input.createdByUserId,
+                input.createdByRole,
+                input.createdByEntityId,
+                'PUBLIC',
+            );
+        }
 
         // Emit event
         await eventBus.publish('ticket.created', {
@@ -723,6 +742,7 @@ export class TicketService {
             entityId: input.entityId,
             createdByUserId: actorId,
             createdByRole: ActorRole.ADMIN,
+            createdByEntityId: actorId,
         });
     }
 }

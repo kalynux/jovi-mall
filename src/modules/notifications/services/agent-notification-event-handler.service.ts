@@ -2,6 +2,7 @@ import { AgentNotificationRepository } from '../repositories/agent-notification.
 import { AgentNotificationPreferenceRepository } from '../repositories/agent-notification-preference.repository';
 import { AgentRepository, IDeliveryAgent } from '../../agents';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
+import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
 import { TelegramRepository } from '../../telegram/telegram.repository';
 import { MailService } from '../../mail/mail.service';
 import { TelegramNotificationService } from '../../telegram/services/telegram-notification.service';
@@ -59,6 +60,7 @@ export class AgentNotificationEventHandler {
     private preferenceRepo: AgentNotificationPreferenceRepository;
     private agentRepo: AgentRepository;
     private agencyRepo: DeliveryAgencyRepository;
+    private magazinRepo: MagazinRepository;
     private telegramRepo: TelegramRepository;
     private mailService: MailService;
     private telegramService: TelegramNotificationService;
@@ -70,6 +72,7 @@ export class AgentNotificationEventHandler {
         this.preferenceRepo = new AgentNotificationPreferenceRepository();
         this.agentRepo = new AgentRepository();
         this.agencyRepo = new DeliveryAgencyRepository();
+        this.magazinRepo = new MagazinRepository();
         this.telegramRepo = new TelegramRepository();
         this.mailService = new MailService();
         this.telegramService = new TelegramNotificationService();
@@ -228,6 +231,34 @@ export class AgentNotificationEventHandler {
         }
     }
 
+    /**
+     * Handle shipment.offer_reminder — auto-assignment's round-2 nudge that a
+     * still-open offer is waiting. Same preference gate + deep link as the
+     * original offer; idempotent PER ROUND so each round produces one reminder.
+     */
+    async handleOfferReminder(event: DomainEvent): Promise<void> {
+        try {
+            const { offerId, agentId, agencyId, orderNumber, round } = event.payload;
+
+            const prefs = await this.preferenceRepo.getByAgent(agentId);
+            if (!prefs.preferences.assignmentOffers) return;
+
+            const agencyName = await this.resolveAgencyName(agencyId);
+
+            await this.dispatch({
+                situation: 'shipment.offer.reminder',
+                prefs,
+                agentId,
+                aggregateType: 'offer',
+                aggregateId: offerId,
+                idempotencyKey: `shipment.offer.reminder:${offerId}:${round ?? 2}`,
+                context: { offerId, agencyName, orderNumber: orderNumber ?? '—' }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle shipment.offer_reminder:', error);
+        }
+    }
+
     /** Handle shipment.offer_expired — an offer the agent didn't answer lapsed. */
     async handleOfferExpired(event: DomainEvent): Promise<void> {
         try {
@@ -253,14 +284,112 @@ export class AgentNotificationEventHandler {
     }
 
     /**
+     * Handle plan.expiring — this agent's subscription plan crosses into its
+     * notice window. Owner-typed event shared across roles; only the agent case
+     * is ours. Idempotent on the plan's expiry date.
+     */
+    async handlePlanExpiring(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, planCode, expiresAt, daysUntilExpiry } = event.payload;
+            if (ownerType !== 'agent') return;
+
+            const prefs = await this.preferenceRepo.getByAgent(ownerId);
+            if (prefs.preferences.planUpdates === false) return; // opted out (default on)
+
+            await this.dispatch({
+                situation: 'plan.expiring',
+                prefs,
+                agentId: ownerId,
+                aggregateType: 'plan',
+                aggregateId: ownerId,
+                idempotencyKey: `plan.expiring:${ownerId}:${new Date(expiresAt).toISOString()}`,
+                context: {
+                    planCode,
+                    daysUntilExpiry,
+                    expiresDate: new Date(expiresAt).toLocaleDateString()
+                }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle plan.expiring:', error);
+        }
+    }
+
+    /**
+     * Handle plan.expired — this agent's plan lapsed (handed over or downgraded).
+     * A downgrade lowers their concurrent-delivery cap, which the copy calls out.
+     */
+    async handlePlanExpired(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, expiredPlanCode, newPlanCode } = event.payload;
+            if (ownerType !== 'agent') return;
+
+            const prefs = await this.preferenceRepo.getByAgent(ownerId);
+            if (prefs.preferences.planUpdates === false) return;
+
+            await this.dispatch({
+                situation: 'plan.expired',
+                prefs,
+                agentId: ownerId,
+                aggregateType: 'plan',
+                aggregateId: ownerId,
+                idempotencyKey: `plan.expired:${ownerId}:${expiredPlanCode}:${event.occurredAt.toISOString().slice(0, 10)}`,
+                context: { expiredPlanCode, newPlanCode }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle plan.expired:', error);
+        }
+    }
+
+    /**
+     * Handle agent.storage.alert — this agent's OWN media storage crossed a usage
+     * threshold (80/90/100%). Fired by the file-cleanup sweep; the idempotency key
+     * (agent + threshold + month) bounds re-alerts to once per month per band.
+     * (Delivery proofs are charged to the agency, not counted here.)
+     */
+    async handleStorageAlert(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, usageBytes, limitBytes, percentUsed, threshold, idempotencyKey } = event.payload;
+            if (ownerType !== 'agent') return;
+
+            const prefs = await this.preferenceRepo.getByAgent(ownerId);
+            if (prefs.preferences.storageAlert === false) return; // opted out (default on)
+
+            await this.dispatch({
+                situation: 'storage.alert',
+                prefs,
+                agentId: ownerId,
+                aggregateType: 'storage',
+                aggregateId: ownerId,
+                idempotencyKey: idempotencyKey ?? `agent.storage.alert:${ownerId}:${threshold}`,
+                context: {
+                    percentUsed,
+                    usageFormatted: this.formatBytes(usageBytes),
+                    limitFormatted: this.formatBytes(limitBytes),
+                    threshold
+                }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle agent.storage.alert:', error);
+        }
+    }
+
+    /** Human-readable byte size (B/KB/MB/GB). */
+    private formatBytes(bytes: number): string {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+        if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+        return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    }
+
+    /**
      * The agency's display name, or a neutral fallback. Never throws: a missing
      * agency must not cost the agent the notification — the amount is the part
      * that matters, and it is right there in the message.
      */
     private async resolveAgencyName(agencyId: string): Promise<string> {
         try {
-            const agency = await this.agencyRepo.findById(agencyId);
-            return agency?.agency_name ?? 'your agency';
+            // Business name lives on the Magazin (source of truth).
+            return (await this.magazinRepo.findNameByAgencyId(agencyId)) ?? 'your agency';
         } catch {
             return 'your agency';
         }

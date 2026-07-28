@@ -11,6 +11,8 @@ export interface UpdateAgentPreferencesPayload {
     preferences?: {
         codDepositUpdates?: boolean;
         assignmentOffers?: boolean;
+        planUpdates?: boolean;
+        storageAlert?: boolean;
     };
 }
 
@@ -41,7 +43,9 @@ export class AgentNotificationPreferenceRepository {
                 whatsappVerified: false,
                 preferences: {
                     codDepositUpdates: true,
-                    assignmentOffers: true
+                    assignmentOffers: true,
+                    planUpdates: true,
+                    storageAlert: true
                 }
             });
         }
@@ -102,6 +106,10 @@ export class AgentNotificationPreferenceRepository {
                 updates.preferences.codDepositUpdates ?? current.preferences.codDepositUpdates;
             updatePayload['preferences.assignmentOffers'] =
                 updates.preferences.assignmentOffers ?? current.preferences.assignmentOffers ?? true;
+            updatePayload['preferences.planUpdates'] =
+                updates.preferences.planUpdates ?? current.preferences.planUpdates ?? true;
+            updatePayload['preferences.storageAlert'] =
+                updates.preferences.storageAlert ?? current.preferences.storageAlert ?? true;
         }
 
         const result = await AgentNotificationPreferenceModel.findOneAndUpdate(

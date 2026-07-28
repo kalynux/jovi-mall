@@ -145,16 +145,6 @@ const BusinessAddressSchema = new Schema(
   { _id: true }
 );
 
-// ─── Branding Sub-Schema ──────────────────────────────────────────────────────
-
-const BrandingSchema = new Schema(
-  {
-    logo_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },
-    cover_image_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },
-  },
-  { _id: false }
-);
-
 // ─── KYC Details Sub-Schema ───────────────────────────────────────────────────
 
 const VendorKycDetailsSchema = new Schema(
@@ -240,11 +230,6 @@ export interface IVendorBusinessAddress {
   geo: IGeoAddress | null;
 }
 
-export interface IVendorBranding {
-  logo_file_id: mongoose.Types.ObjectId | null;
-  cover_image_file_id: mongoose.Types.ObjectId | null;
-}
-
 export interface IVendorOperatingHours {
   day: 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
   open_time: string;
@@ -269,11 +254,19 @@ export interface IVendor extends Document {
   email_verified: boolean;
   phone?: string;
   phone_verified: boolean;
-  business_name: string;
+  /**
+   * Personal/display name for the vendor account. The public BUSINESS name,
+   * description, logo and banner all live on the vendor's Store (the single
+   * source of truth) — see `src/modules/store/`.
+   */
   display_name?: string;
-  business_description: string | null;
   country: string;                                         // ISO-2 e.g. "CM"
-  branding: IVendorBranding;
+  /**
+   * Vendor's personal profile avatar, held as a File reference (not a URL) so it
+   * registers in `file_references` and is deletion-protected — distinct from the
+   * business logo/banner, which live on the Store.
+   */
+  avatar_file_id: mongoose.Types.ObjectId | null;
   business_addresses: IVendorBusinessAddress[];
   operating_hours: IVendorOperatingHours[];
   payout_details: IPayoutDetails | null;
@@ -322,15 +315,13 @@ export interface IVendor extends Document {
 const VendorSchema = new Schema<IVendor>(
   {
     user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true, unique: true },
-    business_name: { type: String, required: true },
     display_name: { type: String },
-    business_description: { type: String, default: null },
     country: { type: String, default: null, trim: true, uppercase: true },
     email: { type: String, required: true, unique: true },
     phone: { type: String, required: true },
     email_verified: { type: Boolean, default: false },
     phone_verified: { type: Boolean, default: false },
-    branding: { type: BrandingSchema, default: () => ({ logo_file_id: null, cover_image_file_id: null }) },
+    avatar_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },
     business_addresses: { type: [BusinessAddressSchema], default: [] },
     operating_hours: { type: [OperatingHoursSchema], default: [] },
     // Ordered array of payout methods (max 3). The FIRST entry is the preferred one.

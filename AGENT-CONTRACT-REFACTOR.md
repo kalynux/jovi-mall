@@ -3,12 +3,17 @@
 > **Read this before touching `src/modules/agents/`, `src/modules/cod/`, or
 > `src/modules/shipments/shipment.service.ts`.**
 >
-> A large refactor is part-applied. The domain layer is done and the transport
-> layer now compiles, but most of the new surface is still unreachable over HTTP
-> and the mechanism that releases COD headroom does not exist yet.
+> A large refactor is part-applied. The domain layer is done, the COD cash chain
+> is complete and reachable over HTTP, and the mechanism that releases COD
+> headroom now exists (agent→agency deposits draw down the contract balance via
+> `AgentDepositService` → `recordSettlement`). Still incomplete: the agent's cut
+> on PREPAID orders, the trust composite engine, several admin/agent controllers,
+> the collection-rename migration, and the doc refresh.
 >
-> **As of 2026-07-16: `npx tsc --noEmit` and `npm run lint` are both clean, and
-> `src/app.ts` loads.** Step 1 below is finished. Steps 2–8 are not.
+> **As of 2026-07-16: `npx tsc --noEmit` and `npm run lint` are both clean,
+> `src/app.ts` loads, and `npm run test:agent-domain` is green at 88 assertions.**
+> Steps 1–3g below are finished. Steps 3(prepaid)/4–8 are not — see "Not built at
+> all" and "Ordering for the next session".
 >
 > Delete this file when the work below is finished.
 

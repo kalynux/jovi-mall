@@ -15,12 +15,14 @@
 - [`GET /api/agent/shipments`](#list) — shipments assigned to this agent (work queue)
 - [`GET /api/agent/shipments/:id`](#detail) — full detail incl. pickup locations, customer address, COD amount
 - [`PATCH /api/agent/shipments/:id/tracking-number`](#tracking) — set carrier tracking number
+- [`POST /api/agent/shipments/:id/cancel`](#cancel) — cancel a shipment mid-delivery (with reason)
 - `POST /api/agent/shipments/:id/cod/collect` — submit the customer's delivery code (see [cod-cash.md](./cod-cash.md#collect))
 - `POST /api/agent/shipments/:id/cod/resend-code` — resend the delivery code (see [cod-cash.md](./cod-cash.md#resend))
 
 > Shipment **status transitions** (`picked_up`, `in_transit`, `failed`, `returned`) are driven by
-> your agency's dashboard, not by agents — with ONE exception: a cash-on-delivery shipment reaches
-> `delivered` exclusively through the agent submitting the customer's delivery code.
+> your agency's dashboard, not by agents — with TWO exceptions: a cash-on-delivery shipment reaches
+> `delivered` exclusively through the agent submitting the customer's delivery code, and an agent may
+> **cancel** a shipment they hold (below), which releases them and re-offers it automatically.
 
 ---
 
@@ -158,3 +160,64 @@ matches their own. A shipment outside the agent's scope is reported as not found
 **Error Responses**:
 - `400` – `VALIDATION_ERROR` – Missing/invalid `trackingNumber`.
 - `404` – `SHIPMENT_NOT_FOUND` – Shipment does not exist or is not assigned to this agent.
+
+---
+
+<a name="cancel"></a>
+### POST /api/agent/shipments/:id/cancel
+
+**Description**: The assigned agent cancels a shipment they can no longer complete (mid-delivery).
+This **releases** the agent — their capacity slot is returned and their live tracking session is
+closed (a *release*, not a shipment termination) — records the cancellation reason, and **resumes
+the automatic assignment** of this shipment from where it had reached, re-offering it to the next
+ranked candidate without any agency intervention. Ownership is enforced (an agent can only cancel a
+shipment whose `agent_id` is their own).
+
+Cancellable from: `assigned`, `handing_over`, `picked_up`, `in_transit`, `failed`. Pre-pickup the
+shipment returns to `assigned`; once the parcel is with the agent it enters `handing_over` (an
+offerable, non-terminal state) and a handover collection point is recorded for the replacement.
+
+**Path Parameters**:
+- `id` (string, required) — Shipment ID.
+
+**Request Body**:
+```json
+{
+  "reason": "vehicle_breakdown",
+  "note": "Flat tyre on the ring road, cannot continue today"
+}
+```
+- `reason` (string, required) — one of: `vehicle_breakdown`, `personal_emergency`,
+  `customer_unreachable`, `address_not_found`, `package_issue`, `safety_concern`, `too_far`, `other`.
+- `note` (string, optional, ≤ 200 chars) — **required when `reason` is `other`**.
+
+**Success Response** (`200 OK`):
+```json
+{
+  "success": true,
+  "data": {
+    "shipmentId": "507f1f77bcf86cd799439100",
+    "previousStatus": "in_transit",
+    "reason": "vehicle_breakdown",
+    "resumed": true,
+    "shipment": {
+      "id": "507f1f77bcf86cd799439100",
+      "orderId": "507f1f77bcf86cd799439010",
+      "agencyId": "507f1f77bcf86cd799439099",
+      "agentId": null,
+      "status": "handing_over",
+      "assignmentState": "unassigned"
+    }
+  },
+  "message": "Shipment cancelled"
+}
+```
+- `resumed` — `true` when an automatic-assignment ranking existed and the broadcast was resumed from
+  its cursor; `false` when the shipment had no auto-assignment session (it simply returns to the
+  agency queue).
+
+**Error Responses**:
+- `400` – `VALIDATION_ERROR` – Missing/invalid `reason`, `note` too long, or `note` missing when `reason` is `other`.
+- `404` – `SHIPMENT_NOT_FOUND` – Shipment does not exist or is not assigned to this agent.
+- `422` – `SHIPMENT_CANCEL_NOT_ALLOWED` – The shipment's status is not agent-cancellable (e.g. already `delivered`/`returned`), or its order is already completed.
+- `409` – `SHIPMENT_CANCEL_CONFLICT` – The shipment moved (a concurrent reassignment/status change) between read and write; retry from a fresh read.

@@ -90,7 +90,7 @@ Body:
         "id": "string",
         "name": "Jane Doe",
         "email": "jane@example.com",
-        "avatar": "https://..."
+        "avatar": { "id": "507f1f77bcf86cd7994390c1", "key": "products/2026/07/jane-avatar.png", "url": "https://cdn.example.com/jane-avatar.png", "mimeType": "image/png", "size": 15360, "originalName": "avatar.png" }
       },
       "subtotal": 100.00,
       "tax": 10.00,
@@ -152,7 +152,7 @@ Body:
       "name": "Jane Doe",
       "email": "jane@example.com",
       "phone": "+237600000000",
-      "avatar": "https://...",
+      "avatar": { "id": "507f1f77bcf86cd7994390c1", "key": "products/2026/07/jane-avatar.png", "url": "https://cdn.example.com/jane-avatar.png", "mimeType": "image/png", "size": 15360, "originalName": "avatar.png" },
       "orderCount": 5,
       "totalSpent": 75000
     },
@@ -188,7 +188,7 @@ Body:
             "id": "507f1f77bcf86cd799439101",
             "name": "John Doe",
             "phone": "+237600000001",
-            "avatarUrl": "https://..."
+            "avatar": { "id": "507f1f77bcf86cd7994390a1", "key": "products/2026/07/agent-avatar.png", "url": "https://cdn.example.com/agent-avatar.png", "mimeType": "image/png", "size": 15360, "originalName": "avatar.png" }
           }
         }
       }
@@ -215,7 +215,7 @@ Body:
           "id": "507f1f77bcf86cd799439101",
           "name": "John Doe",
           "phone": "+237600000001",
-          "avatarUrl": "https://..."
+          "avatar": { "id": "507f1f77bcf86cd7994390a1", "key": "products/2026/07/agent-avatar.png", "url": "https://cdn.example.com/agent-avatar.png", "mimeType": "image/png", "size": 15360, "originalName": "avatar.png" }
         }
       }
     ],

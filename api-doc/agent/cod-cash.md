@@ -266,8 +266,10 @@ clock resumes.
 - `amount` (number, required) — minor units. Bounded by what you actually owe **this** agency.
 - `recipient` (string, optional, default `agency`) — `agency`, or `platform` to bypass the agency.
 - `reference` (string, required for `platform`) — bank/mobile-money/receipt id. The platform isn't
-  standing there, so this is the only thing tying your claim to real money.
-- `note` (string, optional, ≤500 chars).
+  standing there, so this is the only thing tying your claim to real money. `""` is treated as
+  absent — a `platform` deposit with an empty reference still fails with
+  `COD_DEPOSIT_REFERENCE_REQUIRED`.
+- `note` (string, optional, ≤500 chars). `null` or `""` = no note.
 
 **Success Response** (`201 Created`): the deposit, `status: "declared"`.
 

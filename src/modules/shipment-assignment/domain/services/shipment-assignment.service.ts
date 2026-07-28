@@ -7,8 +7,8 @@ import { PaginationOptions, Page } from '../../../../core/repositories/base.repo
 
 import { ShipmentRepository } from '../../../shipments/shipment.repository';
 import { ShipmentService } from '../../../shipments/shipment.service';
-import { IShipment, ShipmentStatus, IShipmentHandoverPickup } from '../../../shipments/shipment.model';
-import { HandoverPickupService, handoverPickupService, HandoverPickupOverride } from './handover-pickup.service';
+import { IShipment, ShipmentStatus, IShipmentHandoverPickup, AgentCancellationReason } from '../../../shipments/shipment.model';
+import { HandoverPickupService, handoverPickupService } from './handover-pickup.service';
 import { OrderModel, IOrder } from '../../../orders/order.model';
 import {
   AgentRepository,
@@ -32,12 +32,13 @@ import {
   shipmentAssignmentOfferRepository,
 } from '../../repositories/shipment-assignment-offer.repository';
 import {
-  IShipmentAssignmentOffer,
-  IOfferCandidate,
-  OfferStatus,
-} from '../../models/shipment-assignment-offer.model';
+  ShipmentAssignmentSessionRepository,
+  shipmentAssignmentSessionRepository,
+} from '../../repositories/shipment-assignment-session.repository';
+import { IShipmentAssignmentOffer, OfferStatus } from '../../models/shipment-assignment-offer.model';
+import { IShipmentAssignmentSession, ISessionCandidate } from '../../models/shipment-assignment-session.model';
 import { ASSIGNMENT_CONFIG } from '../../config/assignment.config';
-import { AssignmentCandidateService, assignmentCandidateService, ScoredCandidate } from './assignment-candidate.service';
+import { AssignmentCandidateService, assignmentCandidateService, RankedCandidate } from './assignment-candidate.service';
 import { agentAssignmentAuditService } from '../../services/assignment-audit.service';
 
 /** Who is placing an offer. `system` for auto-assignment, `agency` for a manual pick. */
@@ -46,23 +47,20 @@ export interface OfferCreator {
   userId: string | null;
 }
 
-/**
- * A shipment can be offered/accepted while it sits with the agency: `assigned`
- * (the normal case) or `handing_over` (a post-pickup reassignment awaiting its
- * replacement agent). Both carry a null `agent_id` at offer time.
- */
+/** A shipment can be offered/accepted while it sits with the agency. */
 const OFFERABLE_STATUSES: ShipmentStatus[] = ['assigned', 'handing_over'];
 
 /** Statuses a shipment can be reassigned FROM (it still has a bound agent). */
 const REASSIGNABLE_STATUSES: ShipmentStatus[] = ['assigned', 'picked_up', 'in_transit', 'failed', 'returned'];
 
-/**
- * Reassignable statuses where the parcel has already left the agency with the
- * old agent (or come back to the agency after a failed/returned attempt). These
- * are MANUAL-only (no auto-reassignment of an in-flight/returned parcel) and
- * reset the shipment to `handing_over` rather than `assigned`.
- */
+/** Reassignable statuses where the parcel already left with the old agent (manual-only). */
 const POST_PICKUP_REASSIGN_STATUSES: ShipmentStatus[] = ['picked_up', 'in_transit', 'failed', 'returned'];
+
+/** Statuses an assigned agent may cancel their own shipment from (mid-delivery). */
+const AGENT_CANCELLABLE_STATUSES: ShipmentStatus[] = ['assigned', 'handing_over', 'picked_up', 'in_transit', 'failed'];
+
+/** Of those, the ones where a handover collection point must be resolved (parcel is with the agent). */
+const AGENT_CANCEL_POST_PICKUP_STATUSES: ShipmentStatus[] = ['handing_over', 'picked_up', 'in_transit', 'failed'];
 
 export interface OfferResult {
   offer: ReturnType<ShipmentAssignmentService['toOfferSummary']>;
@@ -71,28 +69,29 @@ export interface OfferResult {
 }
 
 /**
- * ShipmentAssignmentService — the agent-acceptance state machine.
+ * ShipmentAssignmentService — the agent-acceptance state machine, now driven by a
+ * temporary per-shipment RANKING SESSION for auto-assignment.
  *
- * Replaces the old direct push (ShipmentService.assignAgent wrote agent_id and
- * issued the COD code with no agent consent). Now every placement — manual pick
- * OR auto-assignment — creates an OFFER the agent must accept; the shipment only
- * gains an `agent_id` on acceptance, which is the moment it becomes trackable
- * and (for COD) the delivery code is issued.
+ *   offerToAgent (manual) → a single one-shot offer the agent accepts/declines.
+ *   autoAssign            → build the ranking (nearest-first via the Geo Provider),
+ *                           persist it as a session, and offer the first candidate.
+ *   [broadcast]           → the session sweep walks the ranking one candidate per
+ *                           2-min window, across up to two rounds; a timed-out
+ *                           (ignored) agent KEEPS an acceptable offer; a reject
+ *                           advances immediately. After round 2 the agency is told.
+ *   accept                → the critical txn: a shipment-level bind CAS makes
+ *                           "first valid approval wins"; capacity + COD ride it.
+ *   reject                → decline; auto advances to the next candidate.
+ *   cancelByAgent         → the assigned agent walks away mid-delivery; the agent
+ *                           is released and the broadcast RESUMES from its cursor.
  *
- *   offerToAgent / autoAssign → pending offer (expires_at = now + timeout)
- *   accept  → agent bound, tracking opens, COD code issued  (the critical txn)
- *   reject  → offer rejected; auto ⇒ next candidate, else back to agency queue
- *   expire  → offer expired (the "Ignore" branch); same advance/release as reject
- *   cancel  → agency withdrew, or a reassignment superseded the shipment
- *
- * Notifications and the spatial audit are decoupled: this service publishes
- * domain events (`shipment.offer_*`, `shipment.no_agent_available`) that the
- * notification consumers and the agent-action audit react to. It never blocks a
- * delivery: geo-tracker/notifications are off the critical path.
+ * The session is disposed of only when the shipment finishes (terminal / permanent
+ * cancel) — see the session-cleanup subscriber — so a reassignment can still resume.
  */
 export class ShipmentAssignmentService {
   constructor(
     private readonly offers: ShipmentAssignmentOfferRepository = shipmentAssignmentOfferRepository,
+    private readonly sessions: ShipmentAssignmentSessionRepository = shipmentAssignmentSessionRepository,
     private readonly shipments: ShipmentRepository = new ShipmentRepository(),
     private readonly agents: AgentRepository = agentRepository,
     private readonly eligibility: AgentEligibilityService = agentEligibilityService,
@@ -106,13 +105,9 @@ export class ShipmentAssignmentService {
     private readonly handoverPickup: HandoverPickupService = handoverPickupService
   ) {}
 
-  // ─── Placement ────────────────────────────────────────────────────────────
+  // ─── Manual placement ───────────────────────────────────────────────────────
 
-  /**
-   * Manual placement: an agency offers a specific agent (requirement — the
-   * "Agency selects an agent" branch). Validates eligibility up front so the
-   * dispatcher gets an immediate answer, then creates a pending offer.
-   */
+  /** Manual placement: an agency offers a specific agent (one-shot, no session). */
   async offerToAgent(
     agencyId: string,
     shipmentId: string,
@@ -124,126 +119,237 @@ export class ShipmentAssignmentService {
     if (!shipment) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
 
     this.assertOfferable(shipment);
-    await this.assertNoLiveOffer(shipmentId);
+    await this.assertNoLiveOfferForAgent(shipmentId, agentId);
 
-    // Fail fast: report every eligibility blocker now rather than after the
-    // agent tries to accept. The accept path re-checks — this is a convenience.
     await this.eligibility.assertEligible(agentId, agencyId);
     const agent = await this.requireAgent(agentId);
     const order = await this.requireOrder(shipment.order_id.toString());
     await this.assertCodAssignable(agent, agencyId, shipment, order);
 
-    return await this.placeOffer(shipment, order, agent, 'manual', creator, [], 0, pickupLocation);
+    return await this.placeManualOffer(shipment, order, agent, creator, pickupLocation);
   }
 
+  // ─── Auto-assignment ────────────────────────────────────────────────────────
+
   /**
-   * Auto-assignment: compute the ranked candidate pool and offer the top agent.
-   * Called by the dispatch subscriber when the agency has auto-assign enabled,
-   * or on demand by the agency. The full ranked pool is snapshotted onto the
-   * offer so a timeout/reject can walk to the next agent WITHOUT recomputing.
+   * Build the ranked candidate pool (nearest-first via the Geo Provider), persist
+   * it as a temporary session, and offer the first candidate. `expectedAgencyId`,
+   * when given, scopes the shipment to a caller's agency (404 otherwise).
    */
-  async autoAssign(shipmentId: string, creator: OfferCreator): Promise<OfferResult | null> {
+  async autoAssign(
+    shipmentId: string,
+    creator: OfferCreator,
+    expectedAgencyId?: string
+  ): Promise<OfferResult | null> {
     const shipment = await this.shipments.findById(shipmentId);
     if (!shipment) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+    if (expectedAgencyId && shipment.agency_id.toString() !== expectedAgencyId) {
+      throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+    }
 
     this.assertOfferable(shipment);
-    await this.assertNoLiveOffer(shipmentId);
 
     const order = await this.requireOrder(shipment.order_id.toString());
-    const pool = await this.candidates.rankCandidates(shipment, order);
-    if (pool.length === 0) {
+    const ranking = await this.candidates.buildRanking(shipment, order);
+    if (ranking.candidates.length === 0) {
       await this.emitNoAgentAvailable(shipment, 'no_candidates');
       return null;
     }
 
-    return await this.offerToPoolIndex(shipment, order, pool, 0, creator);
+    // A fresh auto-assignment replaces any prior ranking (e.g. an agency reassign).
+    await this.sessions.deleteForShipment(shipmentId);
+
+    const isCod = order.payment_method === 'cash_on_delivery';
+    const session = await this.sessions.create({
+      shipment_id: shipment._id as Types.ObjectId,
+      order_id: order._id as Types.ObjectId,
+      agency_id: shipment.agency_id,
+      status: 'active',
+      ranking_source: ranking.source,
+      ranking: ranking.candidates.map((c) => this.toSessionCandidate(c)),
+      cursor: 0,
+      round: 1,
+      renudge_index: 0,
+      is_cod: isCod,
+      expected_cod_amount: isCod ? this.cashCollection.computeExpectedAmount(order, shipment) : null,
+      currency: order.currency ?? null,
+      assigned_agent_id: null,
+      frontier_at: null,
+    });
+
+    // Kick off: offer the top candidate now and arm the frontier for the next.
+    // Walk past any top candidates that vanished/became ineligible since ranking,
+    // so the first real offer goes out immediately rather than after a full window.
+    const sessionId = (session._id as Types.ObjectId).toString();
+    let result = await this.stepSession(session, order, shipment);
+    let guard = session.ranking.length;
+    while (!result && guard-- > 0) {
+      const fresh = await this.sessions.findById(sessionId);
+      if (!fresh || fresh.status !== 'active') break;
+      result = await this.stepSession(fresh, order, shipment);
+    }
+    // `result` may be null if EVERY candidate vanished — the session is still
+    // active and the sweep will keep trying, but there is nothing to hand back now.
+    return result;
   }
 
-  /** Offer the pool entry at `index` (creation and the timeout/reject advance share this). */
-  private async offerToPoolIndex(
-    shipment: IShipment,
-    order: IOrder,
-    pool: ScoredCandidate[],
-    index: number,
-    creator: OfferCreator
+  // ─── The broadcast step (sweep + reject + kickoff share this) ────────────────
+
+  /**
+   * Advance ONE session by one unit of work, multi-instance-safely. Every state
+   * change is a guarded compare-and-set on the exact (status, round, cursor,
+   * renudge_index, frontier_at) read here, so two server instances sweeping at
+   * once cannot both advance the same session. Returns the OfferResult when this
+   * step placed a fresh offer (used by the kickoff), else null.
+   */
+  private async stepSession(
+    session: IShipmentAssignmentSession,
+    order?: IOrder,
+    shipmentArg?: IShipment
   ): Promise<OfferResult | null> {
-    const candidate = pool[index];
-    if (!candidate) {
-      await this.emitNoAgentAvailable(shipment, 'pool_exhausted');
+    const shipmentId = session.shipment_id.toString();
+    const sessionId = (session._id as Types.ObjectId).toString();
+    const shipment = shipmentArg ?? (await this.shipments.findById(shipmentId));
+    if (!shipment) {
+      await this.sessions.deleteForShipment(shipmentId);
+      return null;
+    }
+    // Someone already bound an agent — stop broadcasting and record it.
+    if (shipment.agent_id) {
+      await this.sessions.markAssigned(sessionId, shipment.agent_id.toString());
+      return null;
+    }
+    const now = new Date();
+    const expected = {
+      status: session.status,
+      round: session.round,
+      cursor: session.cursor,
+      renudge_index: session.renudge_index,
+      frontier_at: session.frontier_at,
+    };
+    // The shipment temporarily left the offerable state (an agency reject/cascade).
+    // Back off one window rather than busy-loop; the cleanup subscriber closes it
+    // on a terminal outcome.
+    if (!OFFERABLE_STATUSES.includes(shipment.status)) {
+      await this.sessions.advanceState(sessionId, expected, { frontier_at: this.nextFrontier(now) });
       return null;
     }
 
-    const agent = await this.agents.findById(candidate.agentId);
-    if (!agent) {
-      // Candidate vanished — skip to the next without failing the whole assignment.
-      return await this.offerToPoolIndex(shipment, order, pool, index + 1, creator);
+    const len = session.ranking.length;
+    const maxRounds = Math.max(1, ASSIGNMENT_CONFIG.MAX_ROUNDS);
+
+    if (session.round === 1 && session.cursor < len) {
+      // Round 1: offer the candidate at the cursor, then arm the next frontier.
+      const claimed = await this.sessions.advanceState(sessionId, expected, {
+        cursor: session.cursor + 1,
+        frontier_at: this.nextFrontier(now),
+      });
+      if (!claimed) return null; // another instance advanced first
+      const ord = order ?? (await this.requireOrder(session.order_id.toString()));
+      return await this.offerSessionCandidate(claimed, session.ranking[session.cursor], shipment, ord);
     }
 
-    return await this.placeOffer(
-      shipment,
-      order,
-      agent,
-      'auto',
-      creator,
-      pool.map(this.toCandidateDoc),
-      index
-    );
+    if (session.round === 1) {
+      // Round 1 exhausted the ranking. Start round 2 (re-nudge) or give up.
+      if (maxRounds >= 2) {
+        await this.sessions.advanceState(sessionId, expected, {
+          round: 2,
+          renudge_index: 0,
+          frontier_at: this.nextFrontier(now),
+        });
+      } else {
+        await this.exhaust(session, expected, shipment);
+      }
+      return null;
+    }
+
+    // Round >= 2: re-nudge the still-standing (ignored) offers.
+    if (session.renudge_index < len) {
+      const claimed = await this.sessions.advanceState(sessionId, expected, {
+        renudge_index: session.renudge_index + 1,
+        frontier_at: this.nextFrontier(now),
+      });
+      if (!claimed) return null;
+      await this.renudgeSessionCandidate(claimed, session.ranking[session.renudge_index], shipment);
+      return null;
+    }
+
+    // Round finished. Another re-nudge round, or exhausted.
+    if (session.round < maxRounds) {
+      await this.sessions.advanceState(sessionId, expected, {
+        round: session.round + 1,
+        renudge_index: 0,
+        frontier_at: this.nextFrontier(now),
+      });
+    } else {
+      await this.exhaust(session, expected, shipment);
+    }
+    return null;
   }
 
-  /** Shared offer write + notify + optional auto-accept. */
-  private async placeOffer(
-    shipment: IShipment,
-    order: IOrder,
-    agent: IDeliveryAgent,
-    origin: 'manual' | 'auto',
-    creator: OfferCreator,
-    pool: IOfferCandidate[],
-    poolIndex: number,
-    pickupLocation: IShipmentHandoverPickup | null = null
-  ): Promise<OfferResult> {
-    const shipmentId = (shipment._id as Types.ObjectId).toString();
-    const agentId = agent._id.toString();
-    const isCod = order.payment_method === 'cash_on_delivery';
-    const expectedCod = isCod ? this.cashCollection.computeExpectedAmount(order, shipment) : null;
-    const chosen = pool[poolIndex] ?? null;
+  /** Give up after the last round: mark exhausted and tell the agency. */
+  private async exhaust(
+    session: IShipmentAssignmentSession,
+    expected: Parameters<ShipmentAssignmentSessionRepository['advanceState']>[1],
+    shipment: IShipment
+  ): Promise<void> {
+    const claimed = await this.sessions.advanceState((session._id as Types.ObjectId).toString(), expected, {
+      status: 'exhausted',
+      frontier_at: null,
+    });
+    if (claimed) await this.emitNoAgentAvailable(shipment, 'timed_out');
+  }
 
-    let offer: IShipmentAssignmentOffer;
-    try {
-      offer = await this.offers.create({
-        shipment_id: shipment._id as any,
-        order_id: order._id as any,
-        agency_id: shipment.agency_id,
-        agent_id: new Types.ObjectId(agentId),
-        status: 'pending',
-        origin,
-        created_by: {
-          role: creator.role,
-          user_id: creator.userId ? new Types.ObjectId(creator.userId) : null,
-        },
-        expires_at: new Date(Date.now() + ASSIGNMENT_CONFIG.OFFER_TIMEOUT_SECONDS * 1000),
-        score: chosen?.score ?? null,
-        score_breakdown: chosen?.breakdown ?? null,
-        candidate_pool: pool,
-        pool_index: poolIndex,
-        is_cod: isCod,
-        expected_cod_amount: expectedCod,
-        currency: order.currency ?? null,
-        pickup_location: pickupLocation,
-      });
-    } catch (err: any) {
-      // The partial unique index (one pending offer per shipment) rejected a
-      // racing second placement. Report it rather than crash.
-      if (err?.code === 11000) {
-        throw createAppError(ERROR_CODES.SHIPMENT_ALREADY_HAS_PENDING_OFFER, 409, undefined, { shipmentId });
-      }
-      throw err;
-    }
+  /**
+   * Offer the given candidate the shipment. Best-effort: an agent who vanished or
+   * became ineligible since ranking is skipped (the broadcast simply moves on),
+   * and an agent who already holds a standing offer is not offered twice.
+   */
+  private async offerSessionCandidate(
+    session: IShipmentAssignmentSession,
+    candidate: ISessionCandidate,
+    shipment: IShipment,
+    order: IOrder
+  ): Promise<OfferResult | null> {
+    const agentId = candidate.agent_id.toString();
+    const shipmentId = shipment._id.toString();
+
+    const agent = await this.agents.findById(agentId);
+    if (!agent) return null; // candidate vanished
+
+    // Stale-ranking guard: re-validate eligibility at OFFER time, not just at rank.
+    const elig = await this.eligibility.evaluate(agentId, session.agency_id.toString());
+    if (!elig.eligible) return null;
+
+    // Never place two standing offers on the same agent for the same shipment.
+    const existing = await this.offers.findPendingForShipmentAndAgent(shipmentId, agentId);
+    if (existing) return null;
+
+    const offer = await this.offers.create({
+      shipment_id: shipment._id as Types.ObjectId,
+      order_id: session.order_id,
+      agency_id: session.agency_id,
+      agent_id: new Types.ObjectId(agentId),
+      status: 'pending',
+      origin: 'auto',
+      session_id: session._id as Types.ObjectId,
+      round: session.round,
+      created_by: { role: 'system', user_id: null },
+      expires_at: this.nextFrontier(new Date()),
+      score: candidate.score,
+      score_breakdown: candidate.breakdown,
+      candidate_pool: [],
+      pool_index: 0,
+      is_cod: session.is_cod,
+      expected_cod_amount: session.expected_cod_amount,
+      currency: session.currency,
+      pickup_location: shipment.handover?.pickup ?? null,
+    });
 
     await this.shipments.markOffered(shipmentId, (offer._id as Types.ObjectId).toString(), agentId);
     this.emitOfferEvent('shipment.offer_created', offer, order);
 
-    // An agent who opted into auto-accept is bound immediately — the offer still
-    // exists as the audit record, it just resolves in the same breath.
+    // Auto-accept agents resolve in the same breath (the offer row remains as audit).
     if (agent.settings?.auto_accept_assignments === true) {
       try {
         const accepted = await this.accept(agentId, (offer._id as Types.ObjectId).toString());
@@ -257,31 +363,50 @@ export class ShipmentAssignmentService {
     return { offer: this.toOfferSummary(offer), shipment: this.toShipmentSummary(refreshed), autoAccepted: false };
   }
 
-  // ─── Agent responses ──────────────────────────────────────────────────────
+  /** Round-2 nudge: re-notify a still-standing (ignored) offer; skip rejected ones. */
+  private async renudgeSessionCandidate(
+    session: IShipmentAssignmentSession,
+    candidate: ISessionCandidate,
+    shipment: IShipment
+  ): Promise<void> {
+    const agentId = candidate.agent_id.toString();
+    const offer = await this.offers.findPendingForShipmentAndAgent(shipment._id.toString(), agentId);
+    if (!offer) return; // rejected / superseded / never offered — nothing to remind
+    const order = await OrderModel.findById(offer.order_id).select('order_number').lean().exec();
+    this.emitOfferReminder(offer, session.round, (order as any)?.order_number ?? null);
+  }
 
-  /**
-   * Accept an offer — the critical path. Binds the agent, reserves capacity,
-   * issues the COD code, and informs geo-tracker, all so the customer's tracking
-   * goes live the instant the agent takes the job.
-   */
+  /** Drain due sessions — the auto-assignment sweep's entry point. Returns count advanced. */
+  async advanceDueSessions(): Promise<number> {
+    const due = await this.sessions.findDueForAdvance(new Date(), ASSIGNMENT_CONFIG.OFFER_EXPIRY_SWEEP_BATCH);
+    let advanced = 0;
+    for (const session of due) {
+      try {
+        await this.stepSession(session);
+        advanced++;
+      } catch (err) {
+        console.error(`[ShipmentAssignmentService] failed to advance session ${session._id}:`, err);
+      }
+    }
+    return advanced;
+  }
+
+  // ─── Accept (the critical path) ─────────────────────────────────────────────
+
   async accept(agentId: string, offerId: string): Promise<Omit<OfferResult, 'autoAccepted'>> {
     const offer = await this.offers.findByIdAndAgent(offerId, agentId);
     if (!offer) throw createAppError(ERROR_CODES.SHIPMENT_OFFER_NOT_FOUND, 404);
 
     if (offer.status !== 'pending') {
-      throw createAppError(
-        offer.status === 'expired' ? ERROR_CODES.SHIPMENT_OFFER_EXPIRED : ERROR_CODES.SHIPMENT_OFFER_NOT_PENDING,
-        409,
-        undefined,
-        { status: offer.status }
-      );
-    }
-
-    const now = new Date();
-    if (offer.expires_at.getTime() <= now.getTime()) {
-      // Beat the sweep to it: expire + advance now, then tell the agent it lapsed.
-      await this.expireOffer(offer);
-      throw createAppError(ERROR_CODES.SHIPMENT_OFFER_EXPIRED, 409, undefined, { expiredAt: offer.expires_at });
+      // superseded/cancelled ⇒ someone else won or it was withdrawn; expired ⇒ a
+      // lapsed MANUAL offer; otherwise already responded.
+      const code =
+        offer.status === 'superseded' || offer.status === 'cancelled'
+          ? ERROR_CODES.SHIPMENT_ALREADY_HAS_AGENT
+          : offer.status === 'expired'
+            ? ERROR_CODES.SHIPMENT_OFFER_EXPIRED
+            : ERROR_CODES.SHIPMENT_OFFER_NOT_PENDING;
+      throw createAppError(code, 409, undefined, { status: offer.status });
     }
 
     const agencyId = offer.agency_id.toString();
@@ -289,20 +414,22 @@ export class ShipmentAssignmentService {
 
     const shipment = await this.shipments.findById(shipmentId);
     if (!shipment) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
-    if (shipment.agent_id) throw createAppError(ERROR_CODES.SHIPMENT_ALREADY_HAS_AGENT, 409);
-    // The shipment may have left the offerable state since the offer was placed
-    // (the agency rejected it for reassignment, or an admin cascade held it).
-    // `handing_over` is offerable too — a replacement agent accepting a post-pickup
-    // reassignment binds exactly as an `assigned` acceptance does.
+
+    // Already taken by another agent — the requirement's STEP 7 answer. Retire my
+    // now-stale standing offer so my app stops showing an accept button.
+    if (shipment.agent_id) {
+      void this.offers.transitionFromPending(offerId, 'superseded').catch(() => undefined);
+      throw createAppError(ERROR_CODES.SHIPMENT_ALREADY_HAS_AGENT, 409, 'Another agent has already accepted this shipment');
+    }
     if (!OFFERABLE_STATUSES.includes(shipment.status)) {
+      void this.offers.transitionFromPending(offerId, 'superseded').catch(() => undefined);
       throw createAppError(ERROR_CODES.SHIPMENT_NOT_OFFERABLE, 409, undefined, { status: shipment.status });
     }
 
     const order = await this.requireOrder(offer.order_id.toString());
     const agent = await this.requireAgent(agentId);
 
-    // Hard re-check: the offer may have sat while the agent went offline, lost
-    // tracking, or filled up. Refuse now rather than bind on stale state.
+    // Hard re-check: the offer may have sat while the agent went offline / filled up.
     await this.eligibility.assertEligible(agentId, agencyId);
     const isCod = order.payment_method === 'cash_on_delivery';
     if (isCod) {
@@ -314,14 +441,17 @@ export class ShipmentAssignmentService {
     let boundShipment: IShipment | null = null;
     let issuedCode: { collection: ICashCollection; code: string | null } | null = null;
 
-    await transactionManager.runInTransaction(async (session) => {
-      // Claim the offer first (guarded compare-and-set): the double-accept and
-      // accept-after-timeout guard. Null ⇒ someone/the sweep beat us.
-      const claimed = await this.offers.claimForAccept(offerId, agentId, now, session);
+    // withRetry: two agents accepting the SAME shipment at the same instant produce
+    // a write-conflict on the shipment doc; the driver retries the loser, which then
+    // re-reads the bound state and gets the honest "already assigned" answer.
+    await transactionManager.runInTransactionWithRetry(async (session) => {
+      const claimed = await this.offers.claimForAccept(offerId, agentId, session);
       if (!claimed) throw createAppError(ERROR_CODES.SHIPMENT_OFFER_NOT_PENDING, 409);
 
-      // Atomic admission control — this is where "capacity free" is actually
-      // enforced. Rolls back with the transaction if anything below fails.
+      // THE serialisation point — only one concurrent accept matches `agent_id: null`.
+      const bound = await this.shipments.bindAgentIfUnassigned(shipmentId, agentId, OFFERABLE_STATUSES, session);
+      if (!bound) throw createAppError(ERROR_CODES.SHIPMENT_ALREADY_HAS_AGENT, 409, 'Another agent has already accepted this shipment');
+
       const reserved = await this.capacity.tryReserve(agentId, session);
       if (!reserved) {
         throw createAppError(ERROR_CODES.AGENT_AT_CAPACITY, 422, undefined, {
@@ -330,10 +460,12 @@ export class ShipmentAssignmentService {
         });
       }
 
-      boundShipment = await this.shipments.assignAgent(shipmentId, agentId, session);
-
-      if (isCod && boundShipment) {
-        issuedCode = await this.cashCollection.ensureForShipmentInSession(order, boundShipment, session);
+      boundShipment = bound;
+      if (isCod) {
+        issuedCode = await this.cashCollection.ensureForShipmentInSession(order, bound, session);
+      }
+      if (offer.session_id) {
+        await this.sessions.markAssigned(offer.session_id.toString(), agentId, session);
       }
     });
 
@@ -342,26 +474,33 @@ export class ShipmentAssignmentService {
     if (issued?.code) {
       await this.cashCollection.notifyCodeIssued(order, issued.collection, issued.code);
     }
-
-    // Tell geo-tracker: agent_id is now populated, so the shipment (already in a
-    // trackable status) opens its tracking session and the customer can watch.
     this.emitTrackingStatusChanged(boundShipment!, order.customer_id?.toString() ?? null);
-
     void this.availability
       .recomputeWorkingState(agentId)
       .catch((err) => console.error('[ShipmentAssignmentService] working state recompute failed:', err));
-
     void agentAssignmentAuditService
       .emitOfferResponse(boundShipment!, agentId, 'accept', 'success')
       .catch((err) => console.error('[ShipmentAssignmentService] accept audit failed:', err));
-
     this.emitOfferEvent('shipment.offer_accepted', offer, order, { agentName: agent.name });
 
-    return { offer: this.toOfferSummary({ ...offer.toObject(), status: 'accepted', responded_at: now } as any), shipment: this.toShipmentSummary(boundShipment!) };
+    // Retire every OTHER standing offer now that this agent won (STEP 7 losers).
+    void this.offers
+      .supersedeOtherPendingForShipment(shipmentId, offerId)
+      .catch((err) => console.error('[ShipmentAssignmentService] supersede losers failed:', err));
+
+    return {
+      offer: this.toOfferSummary({ ...offer.toObject(), status: 'accepted', responded_at: new Date() } as any),
+      shipment: this.toShipmentSummary(boundShipment!),
+    };
   }
 
-  /** Reject an offer (the agent declines). Advances to the next candidate (auto) or releases the shipment. */
-  async reject(agentId: string, offerId: string, reason: string | null): Promise<{ offer: ReturnType<ShipmentAssignmentService['toOfferSummary']> }> {
+  // ─── Reject ─────────────────────────────────────────────────────────────────
+
+  async reject(
+    agentId: string,
+    offerId: string,
+    reason: string | null
+  ): Promise<{ offer: ReturnType<ShipmentAssignmentService['toOfferSummary']> }> {
     const offer = await this.offers.findByIdAndAgent(offerId, agentId);
     if (!offer) throw createAppError(ERROR_CODES.SHIPMENT_OFFER_NOT_FOUND, 404);
     if (offer.status !== 'pending') {
@@ -373,27 +512,37 @@ export class ShipmentAssignmentService {
 
     const order = await OrderModel.findById(offer.order_id);
     this.emitOfferEvent('shipment.offer_rejected', updated, order, { reason });
-
     void agentAssignmentAuditService
       .emitOfferResponseById(offer.shipment_id.toString(), agentId, 'reject', 'success', reason)
       .catch((err) => console.error('[ShipmentAssignmentService] reject audit failed:', err));
 
-    await this.advanceOrRelease(updated);
+    if (updated.session_id) {
+      // Auto: remove this agent (their offer is now `rejected`) and offer the next
+      // candidate IMMEDIATELY, rather than waiting for the frontier tick.
+      const session = await this.sessions.findById(updated.session_id.toString());
+      if (session && session.status === 'active') await this.stepSession(session);
+    } else {
+      // Manual: no ranking to walk — back to the agency queue.
+      await this.releaseManualOffer(updated);
+    }
+
     return { offer: this.toOfferSummary(updated) };
   }
 
-  // ─── Timeout (the "Ignore" branch) ────────────────────────────────────────
+  // ─── Manual-offer timeout (the sweep's other half) ──────────────────────────
 
-  /**
-   * Expire every pending offer past its deadline, then advance/release each.
-   * Driven by the expiry worker on a short interval. Returns how many expired.
-   */
+  /** Expire every due MANUAL offer past its deadline. Auto offers never expire here. */
   async expireDueOffers(): Promise<number> {
     const due = await this.offers.findDueForExpiry(new Date(), ASSIGNMENT_CONFIG.OFFER_EXPIRY_SWEEP_BATCH);
     let expired = 0;
     for (const offer of due) {
       try {
-        if (await this.expireOffer(offer)) expired++;
+        const updated = await this.offers.transitionFromPending((offer._id as Types.ObjectId).toString(), 'expired');
+        if (!updated) continue;
+        const order = await OrderModel.findById(offer.order_id);
+        this.emitOfferEvent('shipment.offer_expired', updated, order);
+        await this.releaseManualOffer(updated);
+        expired++;
       } catch (err) {
         console.error(`[ShipmentAssignmentService] failed to expire offer ${offer._id}:`, err);
       }
@@ -401,26 +550,25 @@ export class ShipmentAssignmentService {
     return expired;
   }
 
-  /** Expire one offer + advance/release. Returns false if it was already resolved. */
-  private async expireOffer(offer: IShipmentAssignmentOffer): Promise<boolean> {
-    const updated = await this.offers.transitionFromPending((offer._id as Types.ObjectId).toString(), 'expired');
-    if (!updated) return false;
-
-    const order = await OrderModel.findById(offer.order_id);
-    this.emitOfferEvent('shipment.offer_expired', updated, order);
-    await this.advanceOrRelease(updated);
-    return true;
+  /** A manual offer lapsed/declined and there is no ranking — return to the queue. */
+  private async releaseManualOffer(offer: IShipmentAssignmentOffer): Promise<void> {
+    const shipment = await this.shipments.findById(offer.shipment_id.toString());
+    if (!shipment) return;
+    if (shipment.agent_id || shipment.assignment?.state === 'offered') return;
+    await this.emitNoAgentAvailable(shipment, offer.status === 'expired' ? 'timed_out' : 'rejected');
+    await this.shipments.markUnassigned(offer.shipment_id.toString());
   }
 
-  // ─── Agency withdrawal / reassignment supersede ───────────────────────────
+  // ─── Agency withdrawal ──────────────────────────────────────────────────────
 
-  /** Cancel a shipment's live offer (agency withdraws, or a reassignment supersedes it). */
+  /** Withdraw a shipment's live offers AND dispose of its ranking (agency action). */
   async cancelActiveOffer(agencyId: string, shipmentId: string): Promise<{ cancelled: number }> {
     const shipment = await this.shipments.findByIdAndAgency(shipmentId, agencyId);
     if (!shipment) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
 
     const pending = await this.offers.findPendingForShipment(shipmentId);
     const cancelled = await this.offers.cancelPendingForShipment(shipmentId);
+    await this.sessions.deleteForShipment(shipmentId);
     if (cancelled > 0) {
       await this.shipments.markUnassigned(shipmentId);
       if (pending) this.emitOfferEvent('shipment.offer_cancelled', pending, await OrderModel.findById(shipment.order_id));
@@ -428,33 +576,81 @@ export class ShipmentAssignmentService {
     return { cancelled };
   }
 
-  // ─── Agent → agent reassignment ───────────────────────────────────────────
+  // ─── Agent-initiated cancellation + resume (STEP 8 / STEP 10) ───────────────
 
   /**
-   * Reassign a shipment from its current agent to a new one — the "change agents"
-   * flow, for the critical case where the bound agent picked the parcel up but
-   * cannot deliver it (or, pre-pickup, simply needs replacing).
-   *
-   * It is deliberately guarded and two-phase:
-   *   1. **Thorough pre-checks** (before touching anything): the shipment must
-   *      still have a bound agent and be in a reassignable status; past pickup the
-   *      caller MUST name a replacement (no auto-reassignment of an in-flight
-   *      parcel); a named replacement must differ from the current agent and pass
-   *      the full eligibility + COD-exposure gate up front, so a bad target fails
-   *      fast and never strands the shipment.
-   *   2. **Detach then re-offer**: `ShipmentService.reassignAgent` performs the
-   *      guarded compare-and-set that removes the old agent (releasing their
-   *      tracking session — a release, NOT a terminal — and their capacity), resets
-   *      the status (`assigned` pre-pickup, `handing_over` post-pickup), and
-   *      re-mirrors the order. The shipment is then offerable again, so the new
-   *      offer reuses the ordinary `offerToAgent` / `autoAssign` paths. The new
-   *      agent's tracking session opens only when THEY accept — so at no point are
-   *      two agents tracked for one shipment.
+   * The assigned agent cancels mid-delivery. Releases the agent (capacity +
+   * tracking), records the reason, then RESUMES the auto-assignment broadcast from
+   * its stored cursor — never from the top.
    */
+  async cancelByAgent(
+    agentId: string,
+    shipmentId: string,
+    input: { reason: AgentCancellationReason; note: string | null }
+  ): Promise<{
+    shipmentId: string;
+    previousStatus: ShipmentStatus;
+    reason: AgentCancellationReason;
+    resumed: boolean;
+    shipment: ReturnType<ShipmentAssignmentService['toShipmentSummary']>;
+  }> {
+    const shipment = await this.shipments.findByIdAndAgent(shipmentId, agentId);
+    if (!shipment) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+    if (!AGENT_CANCELLABLE_STATUSES.includes(shipment.status)) {
+      throw createAppError(ERROR_CODES.SHIPMENT_CANCEL_NOT_ALLOWED, 422, undefined, { status: shipment.status });
+    }
+
+    const order = await this.requireOrder(shipment.order_id.toString());
+
+    // Where a replacement collects, for a post-pickup cancellation. Best-effort:
+    // if it cannot be resolved, the replacement falls back to the order's pickup.
+    let pickup: IShipmentHandoverPickup | null = null;
+    if (AGENT_CANCEL_POST_PICKUP_STATUSES.includes(shipment.status)) {
+      try {
+        pickup = await this.handoverPickup.resolve({
+          shipment,
+          order,
+          previousStatus: shipment.status,
+          previousAgentId: agentId,
+          agencyId: shipment.agency_id.toString(),
+          override: null,
+        });
+      } catch (err) {
+        console.error('[ShipmentAssignmentService] cancel handover resolve failed; using no pickup:', err);
+      }
+    }
+
+    const { shipment: released, previousStatus } = await this.shipmentSvc.releaseForAgentCancel(
+      agentId,
+      shipmentId,
+      input.reason,
+      input.note,
+      pickup
+    );
+
+    void this.availability
+      .recomputeWorkingState(agentId)
+      .catch((err) => console.error('[ShipmentAssignmentService] cancel working-state recompute failed:', err));
+
+    // Resume the broadcast from the cursor (if this shipment had an auto session).
+    const resumedSession = await this.sessions.resumeForShipment(shipmentId, new Date());
+    if (resumedSession) await this.stepSession(resumedSession, order, released);
+
+    return {
+      shipmentId,
+      previousStatus,
+      reason: input.reason,
+      resumed: !!resumedSession,
+      shipment: this.toShipmentSummary(released),
+    };
+  }
+
+  // ─── Agent → agent reassignment (agency action) ─────────────────────────────
+
   async reassign(
     agencyId: string,
     shipmentId: string,
-    input: { agentId?: string | null; reason: string; pickupLocation?: HandoverPickupOverride | null },
+    input: { agentId?: string | null; reason: string; pickupLocation?: Parameters<HandoverPickupService['resolve']>[0]['override'] },
     creator: OfferCreator
   ): Promise<{ reassignedFrom: string; previousStatus: ShipmentStatus; pickupLocation: IShipmentHandoverPickup | null } & OfferResult> {
     const { agentId, reason, pickupLocation: override } = input;
@@ -472,31 +668,23 @@ export class ShipmentAssignmentService {
     }
 
     const isPostPickup = POST_PICKUP_REASSIGN_STATUSES.includes(shipment.status);
-    // Past pickup the parcel is physically with the old agent (or back at the
-    // agency after a failed/returned attempt) — the agency must name the
-    // replacement; there is no auto-reassignment of an in-flight/returned parcel.
     if (isPostPickup && !agentId) {
       throw createAppError(ERROR_CODES.SHIPMENT_REASSIGN_REQUIRES_MANUAL_AGENT, 422,
         'A picked-up, failed or returned shipment must be reassigned to a specific agent, not auto-assigned');
     }
     if (agentId && agentId === currentAgentId) {
-      throw createAppError(ERROR_CODES.SHIPMENT_REASSIGN_SAME_AGENT, 422,
-        'The shipment is already assigned to this agent');
+      throw createAppError(ERROR_CODES.SHIPMENT_REASSIGN_SAME_AGENT, 422, 'The shipment is already assigned to this agent');
     }
 
     const previousStatus = shipment.status;
     const order = await this.requireOrder(shipment.order_id.toString());
 
-    // Thorough pre-validation of the replacement BEFORE any detach.
     if (agentId) {
       await this.eligibility.assertEligible(agentId, agencyId);
       const agent = await this.requireAgent(agentId);
       await this.assertCodAssignable(agent, agencyId, shipment, order);
     }
 
-    // Determine WHERE the replacement collects — the automatic default from the
-    // shipment's status (Rules 1/2/3), or the agency's manual override (Part 3).
-    // Resolved from the pre-detach state (previous agent + status still intact).
     const pickup = await this.handoverPickup.resolve({
       shipment,
       order,
@@ -506,24 +694,20 @@ export class ShipmentAssignmentService {
       override,
     });
 
-    // Detach the old agent (guarded CAS + tracking release + capacity give-back),
-    // storing the handover pickup on the shipment.
     const detach = await this.shipmentSvc.reassignAgent(agencyId, shipmentId, reason, creator.userId, pickup);
 
-    // The old agent's active-shipment count changed — refresh their working state.
+    // A deliberate re-pick disposes of any prior auto-assignment ranking.
+    await this.sessions.deleteForShipment(shipmentId);
+
     void this.availability
       .recomputeWorkingState(detach.previousAgentId)
       .catch((err) => console.error('[ShipmentAssignmentService] reassign working-state recompute failed:', err));
 
-    // Offer the now-offerable shipment to the replacement, carrying the pickup so
-    // they see where to collect BEFORE accepting. Post-pickup is manual-only
-    // (guarded above); pre-pickup may auto-assign when no agent named.
     const result = agentId
       ? await this.offerToAgent(agencyId, shipmentId, agentId, creator, pickup)
       : await this.autoAssign(shipmentId, creator);
 
     if (!result) {
-      // Detached but nobody available — the shipment is safely back in the queue.
       throw createAppError(ERROR_CODES.SHIPMENT_NO_ELIGIBLE_AGENTS, 422,
         'The shipment was released from its agent but no replacement is available right now');
     }
@@ -531,36 +715,14 @@ export class ShipmentAssignmentService {
     return { reassignedFrom: detach.previousAgentId, previousStatus: detach.previousStatus, pickupLocation: pickup, ...result };
   }
 
-  // ─── The advance-or-release branch (shared by reject + expire) ─────────────
+  // ─── Session lifecycle (called by the terminal-status subscriber) ───────────
 
-  /**
-   * After an offer is rejected/expired: if it was an AUTO offer with a next
-   * candidate, offer that one (the spec's "next agent in the previously computed
-   * list"); otherwise return the shipment to the agency queue and tell them.
-   */
-  private async advanceOrRelease(offer: IShipmentAssignmentOffer): Promise<void> {
-    const shipment = await this.shipments.findById(offer.shipment_id.toString());
-    if (!shipment) return;
-    // If something else already bound an agent or opened a new offer, stop.
-    if (shipment.agent_id || (shipment.assignment?.state === 'offered')) return;
-
-    if (offer.origin === 'auto' && offer.candidate_pool.length > 0) {
-      const order = await this.requireOrder(offer.order_id.toString());
-      const pool = offer.candidate_pool.map(this.toScoredCandidate);
-      const result = await this.offerToPoolIndex(shipment, order, pool, offer.pool_index + 1, {
-        role: 'system',
-        userId: null,
-      });
-      if (result) return; // next candidate offered
-      // pool exhausted → offerToPoolIndex already emitted no_agent_available
-    } else {
-      await this.emitNoAgentAvailable(shipment, offer.status === 'expired' ? 'timed_out' : 'rejected');
-    }
-
-    await this.shipments.markUnassigned(offer.shipment_id.toString());
+  /** Dispose of a shipment's ranking — completed or permanently cancelled (STEP 9). */
+  async disposeSessionForShipment(shipmentId: string): Promise<number> {
+    return await this.sessions.deleteForShipment(shipmentId);
   }
 
-  // ─── Reads (controllers) ──────────────────────────────────────────────────
+  // ─── Reads (controllers) ────────────────────────────────────────────────────
 
   async listForAgent(
     agentId: string,
@@ -578,16 +740,65 @@ export class ShipmentAssignmentService {
   }
 
   /** Preview the ranked candidates for a shipment (agency dispatch screen). */
-  async previewCandidates(agencyId: string, shipmentId: string): Promise<ScoredCandidate[]> {
+  async previewCandidates(agencyId: string, shipmentId: string): Promise<RankedCandidate[]> {
     const shipment = await this.shipments.findByIdAndAgency(shipmentId, agencyId);
     if (!shipment) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
     const order = await this.requireOrder(shipment.order_id.toString());
-    return await this.candidates.rankCandidates(shipment, order);
+    const ranking = await this.candidates.buildRanking(shipment, order);
+    return ranking.candidates;
   }
 
-  // ─── Guards & helpers ─────────────────────────────────────────────────────
+  // ─── Guards & helpers ───────────────────────────────────────────────────────
 
-  /** A shipment can be offered only while it's with the agency and has no agent. */
+  private placeManualOffer = async (
+    shipment: IShipment,
+    order: IOrder,
+    agent: IDeliveryAgent,
+    creator: OfferCreator,
+    pickupLocation: IShipmentHandoverPickup | null
+  ): Promise<OfferResult> => {
+    const shipmentId = (shipment._id as Types.ObjectId).toString();
+    const agentId = agent._id.toString();
+    const isCod = order.payment_method === 'cash_on_delivery';
+    const expectedCod = isCod ? this.cashCollection.computeExpectedAmount(order, shipment) : null;
+
+    const offer = await this.offers.create({
+      shipment_id: shipment._id as Types.ObjectId,
+      order_id: order._id as Types.ObjectId,
+      agency_id: shipment.agency_id,
+      agent_id: new Types.ObjectId(agentId),
+      status: 'pending',
+      origin: 'manual',
+      session_id: null,
+      round: 0,
+      created_by: { role: creator.role, user_id: creator.userId ? new Types.ObjectId(creator.userId) : null },
+      expires_at: this.nextFrontier(new Date()),
+      score: null,
+      score_breakdown: null,
+      candidate_pool: [],
+      pool_index: 0,
+      is_cod: isCod,
+      expected_cod_amount: expectedCod,
+      currency: order.currency ?? null,
+      pickup_location: pickupLocation,
+    });
+
+    await this.shipments.markOffered(shipmentId, (offer._id as Types.ObjectId).toString(), agentId);
+    this.emitOfferEvent('shipment.offer_created', offer, order);
+
+    if (agent.settings?.auto_accept_assignments === true) {
+      try {
+        const accepted = await this.accept(agentId, (offer._id as Types.ObjectId).toString());
+        return { ...accepted, autoAccepted: true };
+      } catch (err) {
+        console.error('[ShipmentAssignmentService] manual auto-accept failed; leaving offer pending:', err);
+      }
+    }
+
+    const refreshed = (await this.shipments.findById(shipmentId)) ?? shipment;
+    return { offer: this.toOfferSummary(offer), shipment: this.toShipmentSummary(refreshed), autoAccepted: false };
+  };
+
   private assertOfferable(shipment: IShipment): void {
     if (shipment.agent_id) throw createAppError(ERROR_CODES.SHIPMENT_ALREADY_HAS_AGENT, 409);
     if (!OFFERABLE_STATUSES.includes(shipment.status)) {
@@ -595,8 +806,8 @@ export class ShipmentAssignmentService {
     }
   }
 
-  private async assertNoLiveOffer(shipmentId: string): Promise<void> {
-    const pending = await this.offers.findPendingForShipment(shipmentId);
+  private async assertNoLiveOfferForAgent(shipmentId: string, agentId: string): Promise<void> {
+    const pending = await this.offers.findPendingForShipmentAndAgent(shipmentId, agentId);
     if (pending) throw createAppError(ERROR_CODES.SHIPMENT_ALREADY_HAS_PENDING_OFFER, 409);
   }
 
@@ -619,7 +830,22 @@ export class ShipmentAssignmentService {
     return order;
   }
 
-  // ─── Event emission (post-commit, fire-and-forget) ────────────────────────
+  private nextFrontier(now: Date): Date {
+    return new Date(now.getTime() + ASSIGNMENT_CONFIG.OFFER_TIMEOUT_SECONDS * 1000);
+  }
+
+  private toSessionCandidate(c: RankedCandidate): ISessionCandidate {
+    return {
+      agent_id: new Types.ObjectId(c.agentId),
+      rank: c.rank,
+      distance_m: c.distanceMeters,
+      duration_s: c.durationSeconds,
+      score: c.score,
+      breakdown: c.breakdown,
+    };
+  }
+
+  // ─── Event emission (post-commit, fire-and-forget) ──────────────────────────
 
   private emitOfferEvent(
     type:
@@ -655,6 +881,26 @@ export class ShipmentAssignmentService {
       .catch((err) => console.error(`[ShipmentAssignmentService] ${type} emit failed:`, err));
   }
 
+  /** Round-2 re-nudge of a still-standing offer — a fresh push, keyed per round. */
+  private emitOfferReminder(offer: IShipmentAssignmentOffer, round: number, orderNumber: string | null): void {
+    void eventBus
+      .publish('shipment.offer_reminder', {
+        eventType: 'shipment.offer_reminder',
+        aggregateId: (offer._id as Types.ObjectId).toString(),
+        occurredAt: new Date(),
+        payload: {
+          offerId: (offer._id as Types.ObjectId).toString(),
+          shipmentId: offer.shipment_id.toString(),
+          orderId: offer.order_id.toString(),
+          orderNumber,
+          agencyId: offer.agency_id.toString(),
+          agentId: offer.agent_id.toString(),
+          round,
+        },
+      })
+      .catch((err) => console.error('[ShipmentAssignmentService] offer_reminder emit failed:', err));
+  }
+
   private async emitNoAgentAvailable(shipment: IShipment, reason: string): Promise<void> {
     const order = await OrderModel.findById(shipment.order_id).select('order_number').lean().exec();
     void eventBus
@@ -673,7 +919,6 @@ export class ShipmentAssignmentService {
       .catch((err) => console.error('[ShipmentAssignmentService] no_agent_available emit failed:', err));
   }
 
-  /** Mirror of ShipmentService._emitTrackingStatusChanged — informs geo-tracker of the bound agent. */
   private emitTrackingStatusChanged(shipment: IShipment, customerId: string | null): void {
     void eventBus
       .publish('shipment.status_changed', {
@@ -692,21 +937,7 @@ export class ShipmentAssignmentService {
       .catch((err) => console.error('[ShipmentAssignmentService] tracking emit failed:', err));
   }
 
-  // ─── Mappers ──────────────────────────────────────────────────────────────
-
-  private toCandidateDoc = (c: ScoredCandidate): IOfferCandidate => ({
-    agent_id: new Types.ObjectId(c.agentId),
-    rank: c.rank,
-    score: c.score,
-    breakdown: c.breakdown,
-  });
-
-  private toScoredCandidate = (c: IOfferCandidate): ScoredCandidate => ({
-    agentId: c.agent_id.toString(),
-    rank: c.rank,
-    score: c.score,
-    breakdown: c.breakdown as any,
-  });
+  // ─── Mappers ────────────────────────────────────────────────────────────────
 
   toOfferSummary(offer: IShipmentAssignmentOffer) {
     return {
@@ -717,14 +948,13 @@ export class ShipmentAssignmentService {
       agentId: offer.agent_id.toString(),
       status: offer.status,
       origin: offer.origin,
+      round: offer.round ?? 0,
       expiresAt: offer.expires_at,
       respondedAt: offer.responded_at ?? null,
       rejectionReason: offer.rejection_reason ?? null,
       isCod: offer.is_cod,
       expectedCodAmount: offer.expected_cod_amount ?? null,
       currency: offer.currency ?? null,
-      // Where to collect, for a reassignment offer (null on a first-assignment
-      // offer — the agent uses the order's per-item pickup locations instead).
       pickupLocation: offer.pickup_location ?? null,
       score: offer.score ?? null,
       createdAt: offer.created_at,

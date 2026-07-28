@@ -75,6 +75,34 @@ const DEPOSIT_BUTTON: ButtonDef = {
     urlSuffix: 'cod/deposits/{{depositId}}'
 };
 
+const MANAGE_PLAN_LABEL: Record<Language, string> = {
+    en: 'Manage plan',
+    fr: 'Gérer le forfait',
+    pt: 'Gerir plano',
+    es: 'Gestionar plan',
+    ar: 'إدارة الباقة'
+};
+
+const PLAN_BUTTON: ButtonDef = {
+    type: 'url',
+    label: MANAGE_PLAN_LABEL,
+    urlSuffix: 'plans'
+};
+
+const MANAGE_STORAGE_LABEL: Record<Language, string> = {
+    en: 'Manage storage',
+    fr: 'Gérer le stockage',
+    pt: 'Gerir armazenamento',
+    es: 'Gestionar almacenamiento',
+    ar: 'إدارة التخزين'
+};
+
+const STORAGE_BUTTON: ButtonDef = {
+    type: 'url',
+    label: MANAGE_STORAGE_LABEL,
+    urlSuffix: 'settings/storage'
+};
+
 // ─── Catalog ─────────────────────────────────────────────────────────────────
 
 // NOTE: the WhatsApp template names below (agency_*) still need to be created
@@ -302,6 +330,70 @@ export const AGENCY_NOTIFICATION_CATALOG: Record<AgencyNotificationType, Situati
             }
         },
         button: DEPOSIT_BUTTON
+    },
+
+    'plan.expiring': {
+        base: {
+            en: { subject: 'Your plan is expiring soon', body: 'Your {{planCode}} plan expires in {{daysUntilExpiry}} day(s), on {{expiresDate}}. Renew or upgrade to avoid interruption.' },
+            fr: { subject: 'Votre forfait expire bientôt', body: 'Votre forfait {{planCode}} expire dans {{daysUntilExpiry}} jour(s), le {{expiresDate}}. Renouvelez ou améliorez-le pour éviter toute interruption.' },
+            pt: { subject: 'O seu plano expira em breve', body: 'O seu plano {{planCode}} expira em {{daysUntilExpiry}} dia(s), a {{expiresDate}}. Renove ou faça upgrade para evitar interrupções.' },
+            es: { subject: 'Tu plan expira pronto', body: 'Tu plan {{planCode}} expira en {{daysUntilExpiry}} día(s), el {{expiresDate}}. Renuévalo o mejóralo para evitar interrupciones.' },
+            ar: { subject: 'باقتك على وشك الانتهاء', body: 'تنتهي باقة {{planCode}} خلال {{daysUntilExpiry}} يوم/أيام، بتاريخ {{expiresDate}}. جدّدها أو قم بترقيتها لتجنب الانقطاع.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_plan_expiring', bodyParams: ['{{planCode}}', '{{daysUntilExpiry}}', '{{expiresDate}}'] }
+        },
+        button: PLAN_BUTTON
+    },
+
+    'plan.expired': {
+        base: {
+            en: { subject: 'Your plan has expired', body: 'Your {{expiredPlanCode}} plan has expired. You are now on the {{newPlanCode}} plan. Renew or upgrade anytime from your plan settings.' },
+            fr: { subject: 'Votre forfait a expiré', body: 'Votre forfait {{expiredPlanCode}} a expiré. Vous êtes maintenant sur le forfait {{newPlanCode}}. Renouvelez ou améliorez à tout moment depuis vos paramètres de forfait.' },
+            pt: { subject: 'O seu plano expirou', body: 'O seu plano {{expiredPlanCode}} expirou. Está agora no plano {{newPlanCode}}. Renove ou faça upgrade a qualquer momento nas definições do plano.' },
+            es: { subject: 'Tu plan ha expirado', body: 'Tu plan {{expiredPlanCode}} ha expirado. Ahora estás en el plan {{newPlanCode}}. Renueva o mejora en cualquier momento desde la configuración de tu plan.' },
+            ar: { subject: 'انتهت صلاحية باقتك', body: 'انتهت صلاحية باقة {{expiredPlanCode}}. أنت الآن على باقة {{newPlanCode}}. يمكنك التجديد أو الترقية في أي وقت من إعدادات باقتك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_plan_expired', bodyParams: ['{{expiredPlanCode}}', '{{newPlanCode}}'] }
+        },
+        button: PLAN_BUTTON
+    },
+
+    // Soft cap: deliveries are NOT blocked, so the copy reassures while nudging an
+    // upgrade — never implies work stopped.
+    'shipment.cap.exceeded': {
+        base: {
+            en: { subject: 'Shipment limit reached', body: 'You have {{current}} active shipments, at or above your {{planCode}} plan limit of {{cap}}. Deliveries keep flowing — upgrade for more headroom.' },
+            fr: { subject: 'Limite d\'expéditions atteinte', body: 'Vous avez {{current}} expéditions actives, au niveau ou au-dessus de la limite de {{cap}} de votre forfait {{planCode}}. Les livraisons continuent — améliorez votre forfait pour plus de marge.' },
+            pt: { subject: 'Limite de remessas atingido', body: 'Tem {{current}} remessas ativas, no limite ou acima do limite de {{cap}} do seu plano {{planCode}}. As entregas continuam — faça upgrade para mais margem.' },
+            es: { subject: 'Límite de envíos alcanzado', body: 'Tienes {{current}} envíos activos, en o por encima del límite de {{cap}} de tu plan {{planCode}}. Las entregas continúan — mejora tu plan para más margen.' },
+            ar: { subject: 'تم بلوغ حد الشحنات', body: 'لديك {{current}} شحنة نشطة، عند حد باقة {{planCode}} البالغ {{cap}} أو أعلى منه. تستمر عمليات التوصيل — قم بالترقية لمزيد من السعة.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_shipment_cap_exceeded', bodyParams: ['{{current}}', '{{planCode}}', '{{cap}}'] }
+        },
+        button: PLAN_BUTTON
+    },
+
+    // Media storage crossed a usage threshold (80/90/100%). Uploads are only
+    // blocked at 100% — below that this is a heads-up to free space or upgrade.
+    'storage.alert': {
+        base: {
+            en: { subject: 'Storage almost full', body: 'Your media storage is at {{percentUsed}}% ({{usageFormatted}} of {{limitFormatted}}). Free up space or upgrade your plan.' },
+            fr: { subject: 'Stockage presque plein', body: 'Votre stockage multimédia est à {{percentUsed}}% ({{usageFormatted}} sur {{limitFormatted}}). Libérez de l\'espace ou améliorez votre forfait.' },
+            pt: { subject: 'Armazenamento quase cheio', body: 'O seu armazenamento de mídia está em {{percentUsed}}% ({{usageFormatted}} de {{limitFormatted}}). Libere espaço ou faça upgrade do seu plano.' },
+            es: { subject: 'Almacenamiento casi lleno', body: 'Tu almacenamiento multimedia está al {{percentUsed}}% ({{usageFormatted}} de {{limitFormatted}}). Libera espacio o mejora tu plan.' },
+            ar: { subject: 'مساحة التخزين ممتلئة تقريبًا', body: 'مساحة تخزين الوسائط لديك عند {{percentUsed}}% ({{usageFormatted}} من {{limitFormatted}}). حرّر مساحة أو قم بترقية باقتك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_storage_alert', bodyParams: ['{{percentUsed}}', '{{usageFormatted}}', '{{limitFormatted}}'] }
+        },
+        button: STORAGE_BUTTON
     }
 };
 

@@ -1,19 +1,21 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import { BillingOwnerType, BILLING_OWNER_TYPES } from '../billing.types';
 
 /**
  * CreditWallet - A running credit balance owned by a marketplace participant.
  *
- * `owner_type` is a discriminator so the same wallet powers vendors today and
- * delivery agencies later (agent-dispatch WhatsApp credits) with no schema
- * change. Exactly one wallet per (owner_type, owner_id), created lazily.
+ * `owner_type` is a discriminator so the same wallet powers vendors, delivery
+ * agencies and agents with no schema change. Exactly one wallet per
+ * (owner_type, owner_id), created lazily.
  *
  * Credits NEVER expire or reset: plan allowances, top-ups and leftovers from a
  * previous plan all accumulate here. `version` provides optimistic locking so
  * concurrent debits can't double-spend.
  */
 
-export type WalletOwnerType = 'vendor' | 'agency';
+/** A wallet's owner type IS its plan role — see `billing.types.ts`. */
+export type WalletOwnerType = BillingOwnerType;
 
 export interface ICreditWallet extends Document {
   owner_type: WalletOwnerType;
@@ -28,7 +30,7 @@ export interface ICreditWallet extends Document {
 
 const CreditWalletSchema = new Schema<ICreditWallet>(
   {
-    owner_type: { type: String, enum: ['vendor', 'agency'], required: true },
+    owner_type: { type: String, enum: BILLING_OWNER_TYPES, required: true },
     owner_id: { type: Schema.Types.ObjectId, required: true },
     balance: { type: Number, required: true, default: 0, min: 0 },
     currency_unit: { type: String, enum: ['credit'], default: 'credit' },

@@ -77,7 +77,7 @@ export class ProductDraftService {
     await this.fileReferenceService.reconcile({
       previousFileIds: [],
       nextFileIds: fileIds,
-      vendorId: input.vendorId,
+      actor: { type: 'vendor', id: input.vendorId },
       entityType: 'product',
       entityId: product.id,
     });

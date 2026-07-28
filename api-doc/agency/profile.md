@@ -4,8 +4,12 @@
 
 The Agency Profile Management API allows a delivery agency to view and update its profile — logistics, payout, branding, KYC, and policy data — outside of the first-time onboarding flow. All endpoints require authentication and are restricted to `agency` accounts.
 
+> [!IMPORTANT]
+> **The business name, description and logo live on the agency's [Magazin](./magazin.md), not on this profile** — mirroring how a vendor's business identity lives on their Store. This profile now carries the agency's **personal** surface: `displayName` + `avatar`, alongside logistics/payout/policies. `GET /api/agency/profile` no longer returns `agencyName` or a business `logo`; use [`GET`/`PATCH /api/agency/magazin`](./magazin.md) for those.
+
 > [!TIP]
 > This document covers the **profile endpoints**. For:
+> - The **business name / description / logo / support contacts**, see [magazin.md](./magazin.md).
 > - The **full field dictionary and TypeScript interfaces** (every field on the profile object, validation rules, masking behavior), see [profile-schema.md](./profile-schema.md).
 > - The **first-time onboarding flow** (`POST /api/agency`, `PUT /api/agency/onboarding/*`), see [onboarding.md](./onboarding.md).
 
@@ -41,12 +45,19 @@ Authorization: Bearer <jwt_token>
   "success": true,
   "data": {
     "id": "6641abc123def456",
-    "agencyName": "FastTrack Logistics",
+    "displayName": "Jean-Paul (FastTrack)",
     "email": "contact@fasttrack.cm",
     "emailVerified": true,
     "phone": "+237612345678",
     "phoneVerified": false,
-    "logoUrl": "https://cdn.example.com/fasttrack-logo.png",
+    "avatar": {
+      "id": "507f1f77bcf86cd799439030",
+      "key": "agencies/2026/07/jp-avatar.png",
+      "url": "https://cdn.example.com/jp-avatar.png",
+      "mimeType": "image/png",
+      "size": 24576,
+      "originalName": "me.png"
+    },
     "coverageAreas": ["littoral", "centre"],
     "headquartersAddresses": [
       {
@@ -111,6 +122,7 @@ Authorization: Bearer <jwt_token>
     "wa": null,
     "timezone": "Africa/Douala",
     "preferredLanguage": "en",
+    "country": "CM",
     "status": "pending_verification",
     "onboardingStep": 0,
     "version": 4,
@@ -173,8 +185,8 @@ Content-Type: application/json
 
 ```json
 {
-  "agency_name": "FastTrack Logistics SARL",
-  "logo_url": "https://cdn.example.com/fasttrack-logo-v2.png",
+  "displayName": "Jean-Paul (FastTrack)",
+  "avatarFileId": "507f1f77bcf86cd799439030",
   "timezone": "Africa/Douala",
   "preferred_language": "fr",
   "payout_details": [
@@ -197,17 +209,23 @@ All fields are **optional** — send only what changed. This maps 1:1 to `Update
 
 | Field | Type | Validation | Onboarding step it maps to | Notes |
 |-------|------|------------|----------------------------|-------|
-| `agency_name` | `string` | 1–200 chars | Init (`POST /api/agency`) | Registered agency name. |
-| `logo_url` | `string \| null` | Valid absolute URL, or `null` | Step 3 (Branding) | Full replace of this field. |
+| `displayName` | `string` | 2–100 chars | — (general) | The agency's **personal/contact** display name. The **business** name is on the [Magazin](./magazin.md), not here. |
+| `avatarFileId` | `string \| null` | Valid MongoDB ObjectId of a file uploaded via `POST /api/files/upload`, or `null` | — (general) | The agency's **personal profile avatar** (distinct from the business logo, which is on the [Magazin](./magazin.md)). The response returns the resolved `avatar` file object. *Clearable*: `null` or `""` clears. Registers a `file_references` row so the file is not garbage-collected while set. |
 | `timezone` | `string` | Min 1 char, IANA tz | Step 3 (Branding) | E.g. `"Africa/Douala"`. |
-| `preferred_language` | `string` | Enum: `"en"`, `"fr"`, `"pt"`, `"es"`, `"ar"` | — (general) | Drives notification/UI language. |
+| `preferred_language` | `string` | Enum: `"en"`, `"fr"`, `"pt"`, `"es"`, `"ar"` | — (general) | The agency's language, used for **all notifications** — there is no separate notification-language setting. |
+| `country` | `string` | Exactly 2 chars, ISO-2 (auto-uppercased) | Step 1 (Logistics) | **SET-ONCE / IMMUTABLE.** Fixed during onboarding; sending a *different* value → `403 PROFILE_COUNTRY_IMMUTABLE`. Echoing the current value is a no-op. Legacy profiles that predate the field (`country: null`) may set it once here — rejected (`400 ADDRESS_COUNTRY_MISMATCH`) if existing geocoded HQ addresses resolve elsewhere. |
 | `coverage_areas` | `string[]` | Min 1 item, each a region key from `locations.json` | Step 1 (Logistics) | Full replace. |
-| `headquarters_addresses` | `object[]` | Min 1 entry; see [Step 1 field reference](./onboarding.md#step-1-logistics-setup-required) | Step 1 (Logistics) | Full replace. Index 0 = primary HQ. |
+| `headquarters_addresses` | `object[]` | Min 1 entry; see [Step 1 field reference](./onboarding.md#step-1-logistics-setup-required) | Step 1 (Logistics) | Full replace. Index 0 = primary HQ. Every **new or edited** entry must carry a `geo` (selected `/api/geo/search` result) resolving **inside `country`** — else `400 ADDRESS_GEO_REQUIRED` / `400 ADDRESS_COUNTRY_MISMATCH`; entries re-submitted byte-identical are grandfathered. |
 | `payout_details` | `object[]` | 1–2 entries, ordered (index 0 = preferred); see [Step 2 field reference](./onboarding.md#step-2-payout-setup-required) | Step 2 (Payout) | Full replace. |
 | `kyc_details` | `object` | `{ registration_number?, transport_license_id? }`, both nullable strings | — (general) | `legit_verified` is **admin-only** and ignored if sent. |
 | `policies` | `object` | `{ pricing, returns, damage, documents? }` — see [Step 4 field reference](./onboarding.md#step-4-policy-setup-required) | Step 4 (Policy Setup) | Full replace of the **whole** `policies` object. `damage.inspector`/`damage.investigation_fee` are preserved server-side regardless of what (if anything) you send for them. `documents` (max 2 URLs) is cleared if omitted — resend existing URLs to keep them. |
 
 > **Not editable here:** `email`, `phone` (no route exposes agency-initiated email/phone changes today), `status`, `kycVerified` (`kyc_details.legit_verified`), `onboardingStep`, `version` — all server/admin-controlled.
+
+> **Clearable fields**: nullable strings (`avatarFileId`, `kyc_details.registration_number`,
+> `kyc_details.transport_license_id`, HQ `support_contact.email`) accept `null` **or `""`** to clear —
+> both are stored and returned as `null`. Omit a key to leave it unchanged.
+> See [Conventions](../README.md#conventions).
 
 #### Response
 
@@ -218,12 +236,19 @@ All fields are **optional** — send only what changed. This maps 1:1 to `Update
   "success": true,
   "data": {
     "id": "6641abc123def456",
-    "agencyName": "FastTrack Logistics SARL",
+    "displayName": "Jean-Paul (FastTrack)",
     "email": "contact@fasttrack.cm",
     "emailVerified": true,
     "phone": "+237612345678",
     "phoneVerified": false,
-    "logoUrl": "https://cdn.example.com/fasttrack-logo-v2.png",
+    "avatar": {
+      "id": "507f1f77bcf86cd799439030",
+      "key": "agencies/2026/07/jp-avatar-v2.png",
+      "url": "https://cdn.example.com/jp-avatar-v2.png",
+      "mimeType": "image/png",
+      "size": 24576,
+      "originalName": "me-v2.png"
+    },
     "coverageAreas": ["littoral", "centre"],
     "headquartersAddresses": [ ],
     "payoutDetails": [
@@ -243,6 +268,7 @@ All fields are **optional** — send only what changed. This maps 1:1 to `Update
     "wa": null,
     "timezone": "Africa/Douala",
     "preferredLanguage": "fr",
+    "country": "CM",
     "status": "pending_verification",
     "onboardingStep": 0,
     "version": 5,

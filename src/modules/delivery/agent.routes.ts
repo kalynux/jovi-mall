@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
 import { ShipmentController } from '../shipments/shipment.controller';
+import { AgentDeliveryProofController, uploadDeliveryProof } from '../shipments/agent-delivery-proof.controller';
 import { AgentCodController } from '../cod/controllers/agent-cod.controller';
 import { AgentOfferController } from '../shipment-assignment/controllers/agent-offer.controller';
 import { AgentNotificationController } from './controllers/agent-notification.controller';
@@ -79,6 +80,32 @@ router.get('/shipments/:id', ShipmentController.getDetailForAgent);
  * Body: { trackingNumber: string }
  */
 router.patch('/shipments/:id/tracking-number', ShipmentController.setTrackingNumber);
+
+/**
+ * POST /api/agent/shipments/:id/cancel
+ * The assigned agent cancels this shipment mid-delivery. Body: { reason, note? }.
+ * Releases the agent (capacity + tracking) and resumes auto-assignment from where
+ * it had reached — the shipment is re-offered to the next candidate automatically.
+ * Body: { reason: <enum>, note?: string(<=200) }  (note required when reason='other')
+ */
+router.post('/shipments/:id/cancel', AgentOfferController.cancelShipment);
+
+// ─── Delivery proof (optional single image, charged to the AGENCY's storage) ──
+
+/**
+ * POST /api/agent/shipments/:id/delivery-proof
+ * Attach/replace ONE optional image as proof of delivery. Allowed only at/after
+ * the delivery outcome (agent_delivered / delivered / failed). The image is
+ * uploaded and owned by the shipment's AGENCY (counts against the agency's media
+ * storage), not the agent. Multipart, field `file` (jpeg/png/webp, ≤10 MB).
+ */
+router.post('/shipments/:id/delivery-proof', uploadDeliveryProof, AgentDeliveryProofController.upload);
+
+/** GET /api/agent/shipments/:id/delivery-proof — the current proof, or null. */
+router.get('/shipments/:id/delivery-proof', AgentDeliveryProofController.get);
+
+/** DELETE /api/agent/shipments/:id/delivery-proof — remove the proof. */
+router.delete('/shipments/:id/delivery-proof', AgentDeliveryProofController.remove);
 
 // ─── COD (cash on delivery) ───────────────────────────────────────────────────
 

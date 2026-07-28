@@ -31,11 +31,20 @@ export function initializeAgentNotificationEventConsumers(): void {
     // NOT notified — the agent took the action, so telling them is noise (the
     // same reason `cod.deposit.declared` is not sent to the agent).
     eventBus.subscribe('shipment.offer_created', handler.handleOfferReceived.bind(handler));
+    // Auto-assignment round-2 reminder that a still-open offer is waiting.
+    eventBus.subscribe('shipment.offer_reminder', handler.handleOfferReminder.bind(handler));
     eventBus.subscribe('shipment.offer_expired', handler.handleOfferExpired.bind(handler));
 
     // Reassignment: the previous agent is told they're off the shipment (and their
     // live access to it is already revoked by the detach).
     eventBus.subscribe('shipment.reassigned', handler.handleReassignedAway.bind(handler));
+
+    // Subscription plan lifecycle (owner-typed; handler no-ops on non-agent owners).
+    eventBus.subscribe('plan.expiring', handler.handlePlanExpiring.bind(handler));
+    eventBus.subscribe('plan.expired', handler.handlePlanExpired.bind(handler));
+
+    // Media storage threshold alerts (80/90/100%), from the file-cleanup sweep.
+    eventBus.subscribe('agent.storage.alert', handler.handleStorageAlert.bind(handler));
 
     console.log(
         `[AgentNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`

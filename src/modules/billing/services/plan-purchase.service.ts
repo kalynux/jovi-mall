@@ -3,25 +3,24 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { PlanPurchaseRepository } from '../repositories/plan-purchase.repository';
 import { PricingPlanRepository } from '../repositories/pricing-plan.repository';
-import { VendorPlanRepository } from '../repositories/vendor-plan.repository';
-import { VendorPlanService, vendorPlanService } from './vendor-plan.service';
+import { SubscriberPlanRepository } from '../repositories/subscriber-plan.repository';
+import { SubscriberPlanService, subscriberPlanService } from './subscriber-plan.service';
 import { IPlanPurchase, PlanPurchaseGateway } from '../models/plan-purchase.model';
-import { IVendorPlan } from '../models/vendor-plan.model';
+import { ISubscriberPlan } from '../models/subscriber-plan.model';
+import { BillingOwnerType } from '../billing.types';
 import { PaymentGateway, PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
 import { NotchPayGateway } from '../../payments/gateways/notchpay.gateway';
 import { MyCoolPayGateway } from '../../payments/gateways/mycoolpay.gateway';
 import { StripeGateway } from '../../payments/gateways/stripe.gateway';
 
 /**
- * PlanPurchaseService - vendor SELF-SERVE plan purchase.
+ * PlanPurchaseService - owner SELF-SERVE plan purchase (vendor/agency/agent).
  *
- * The vendor buys a paid plan; once the gateway confirms the payment, the plan is
+ * The owner buys a paid plan; once the gateway confirms the payment, the plan is
  * assigned/activated on their account automatically (no admin step) by delegating
- * to VendorPlanService.assignPlan — which applies the two-plan rule (activate now
- * if free/lapsed, else queue as pending). Mirrors CreditTopupService: reuses the
- * payment gateway adapters and confirms via the gateway verify path
- * (`verifyAndComplete`); a future payment webhook can call `completePurchase`
- * directly with no other changes.
+ * to SubscriberPlanService.assignPlan — which applies the two-plan rule (activate
+ * now if free/lapsed, else queue as pending). The owner is stored on the purchase
+ * row, so completion (verify poll or webhook) needs no owner argument.
  */
 export class PlanPurchaseService {
   private readonly gateways: Map<PlanPurchaseGateway, PaymentGateway>;
@@ -29,8 +28,8 @@ export class PlanPurchaseService {
   constructor(
     private readonly repo: PlanPurchaseRepository = new PlanPurchaseRepository(),
     private readonly planRepo: PricingPlanRepository = new PricingPlanRepository(),
-    private readonly vendorPlanRepo: VendorPlanRepository = new VendorPlanRepository(),
-    private readonly vendorPlans: VendorPlanService = vendorPlanService
+    private readonly subscriberPlanRepo: SubscriberPlanRepository = new SubscriberPlanRepository(),
+    private readonly plans: SubscriberPlanService = subscriberPlanService
   ) {
     this.gateways = new Map<PlanPurchaseGateway, PaymentGateway>([
       ['NOTCHPAY', new NotchPayGateway()],
@@ -41,7 +40,8 @@ export class PlanPurchaseService {
 
   /** Start a plan purchase: validate, create a pending record, open a gateway charge. */
   async initiatePurchase(
-    vendorId: string,
+    ownerType: BillingOwnerType,
+    ownerId: string,
     planId: string,
     gateway: PlanPurchaseGateway,
     channel: PaymentChannelInfo
@@ -49,8 +49,12 @@ export class PlanPurchaseService {
     const plan = await this.planRepo.findById(planId);
     if (!plan) throw createAppError(ERROR_CODES.BILLING_PLAN_NOT_FOUND, 404, 'Pricing plan not found');
     if (!plan.is_active) throw createAppError(ERROR_CODES.BILLING_PLAN_INACTIVE, 409, 'Plan is not active');
-    if (plan.role !== 'vendor') {
-      throw createAppError(ERROR_CODES.BILLING_PLAN_ROLE_MISMATCH, 409, 'Plan does not belong to the vendor role');
+    if (plan.role !== ownerType) {
+      throw createAppError(
+        ERROR_CODES.BILLING_PLAN_ROLE_MISMATCH,
+        409,
+        `Plan does not belong to the ${ownerType} role`
+      );
     }
     if (plan.price <= 0) {
       throw createAppError(
@@ -66,7 +70,11 @@ export class PlanPurchaseService {
     }
 
     // Don't take money we can't apply: only one pending plan may be queued at a time.
-    const existingPending = await this.vendorPlanRepo.findByVendorAndStatus(vendorId, 'pending_activation');
+    const existingPending = await this.subscriberPlanRepo.findByOwnerAndStatus(
+      ownerType,
+      ownerId,
+      'pending_activation'
+    );
     if (existingPending) {
       throw createAppError(
         ERROR_CODES.BILLING_PENDING_PLAN_EXISTS,
@@ -76,7 +84,8 @@ export class PlanPurchaseService {
     }
 
     const purchase = await this.repo.create({
-      vendor_id: new Types.ObjectId(vendorId),
+      owner_type: ownerType,
+      owner_id: new Types.ObjectId(ownerId),
       plan_id: plan._id,
       plan_code: plan.code,
       price: plan.price,
@@ -87,11 +96,16 @@ export class PlanPurchaseService {
 
     const result = await adapter.initiatePayment({
       orderId: purchase._id.toString(), // adapters use this only as a reference label
-      userId: vendorId,
+      userId: ownerId,
       amount: plan.price,
       currency: plan.currency,
       channel,
-      metadata: { purpose: 'plan_purchase', planId: plan._id.toString(), purchaseId: purchase._id.toString() },
+      metadata: {
+        purpose: 'plan_purchase',
+        planId: plan._id.toString(),
+        purchaseId: purchase._id.toString(),
+        ownerType,
+      },
     });
 
     if (!result.success) {
@@ -114,14 +128,15 @@ export class PlanPurchaseService {
 
   /** Poll the gateway and apply/fail the purchase accordingly. */
   async verifyAndComplete(
-    vendorId: string,
+    ownerType: BillingOwnerType,
+    ownerId: string,
     purchaseId: string
-  ): Promise<{ purchase: IPlanPurchase; vendorPlan: IVendorPlan | null }> {
+  ): Promise<{ purchase: IPlanPurchase; subscriberPlan: ISubscriberPlan | null }> {
     const purchase = await this.repo.findById(purchaseId);
-    if (!purchase || purchase.vendor_id.toString() !== vendorId) {
+    if (!purchase || purchase.owner_type !== ownerType || purchase.owner_id.toString() !== ownerId) {
       throw createAppError(ERROR_CODES.BILLING_PLAN_PURCHASE_NOT_FOUND, 404, 'Plan purchase not found');
     }
-    if (purchase.status === 'paid') return { purchase, vendorPlan: null }; // idempotent
+    if (purchase.status === 'paid') return { purchase, subscriberPlan: null }; // idempotent
     if (!purchase.gateway || !purchase.gateway_ref) {
       throw createAppError(ERROR_CODES.BILLING_PURCHASE_INVALID_STATE, 409, 'Purchase has no gateway reference yet');
     }
@@ -134,9 +149,9 @@ export class PlanPurchaseService {
     }
     if (verification.status === 'FAILED' || verification.status === 'CANCELLED') {
       const failed = (await this.repo.setStatus(purchase._id, 'failed')) ?? purchase;
-      return { purchase: failed, vendorPlan: null };
+      return { purchase: failed, subscriberPlan: null };
     }
-    return { purchase, vendorPlan: null }; // still pending
+    return { purchase, subscriberPlan: null }; // still pending
   }
 
   /**
@@ -148,7 +163,7 @@ export class PlanPurchaseService {
    */
   async completePurchase(
     purchaseId: string
-  ): Promise<{ purchase: IPlanPurchase; vendorPlan: IVendorPlan | null }> {
+  ): Promise<{ purchase: IPlanPurchase; subscriberPlan: ISubscriberPlan | null }> {
     const purchase = await this.repo.findById(purchaseId);
     if (!purchase) {
       throw createAppError(ERROR_CODES.BILLING_PLAN_PURCHASE_NOT_FOUND, 404, 'Plan purchase not found');
@@ -158,20 +173,21 @@ export class PlanPurchaseService {
     if (!claimed) {
       // Already paid/failed or claimed concurrently — return current state (idempotent).
       const current = (await this.repo.findById(purchaseId)) ?? purchase;
-      return { purchase: current, vendorPlan: null };
+      return { purchase: current, subscriberPlan: null };
     }
 
     try {
-      const vendorPlan = await this.vendorPlans.assignPlan(
-        claimed.vendor_id.toString(),
+      const subscriberPlan = await this.plans.assignPlan(
+        claimed.owner_type,
+        claimed.owner_id.toString(),
         claimed.plan_id.toString(),
         { paymentRef: claimed.gateway_ref, adminId: null }
       );
       const finalDoc =
-        (await this.repo.setStatus(claimed._id, 'paid', { vendor_plan_id: vendorPlan._id })) ?? claimed;
-      return { purchase: finalDoc, vendorPlan };
+        (await this.repo.setStatus(claimed._id, 'paid', { subscriber_plan_id: subscriberPlan._id })) ?? claimed;
+      return { purchase: finalDoc, subscriberPlan };
     } catch (err) {
-      // Couldn't apply the plan — revert so the vendor/admin can retry.
+      // Couldn't apply the plan — revert so the owner/admin can retry.
       await this.repo.setStatus(claimed._id, 'pending');
       throw err;
     }
@@ -180,10 +196,10 @@ export class PlanPurchaseService {
   /**
    * Reverse a paid plan purchase located by its gateway PaymentIntent reference
    * (charge-back / refund). Marks the purchase `reversed` and unwinds the plan:
-   * if the resulting VendorPlan is still `active` it is downgraded to the free
+   * if the resulting SubscriberPlan is still `active` it is downgraded to the free
    * tier; if it was only queued (`pending_activation`) it is cancelled. Idempotent
    * — a non-paid purchase is a no-op. An admin can re-assign the paid plan later
-   * via the admin billing endpoint if the dispute is resolved in the vendor's favour.
+   * via the admin billing endpoint if the dispute resolves in the owner's favour.
    *
    * Returns the affected purchase, or null if none matches the reference.
    */
@@ -193,17 +209,17 @@ export class PlanPurchaseService {
     if (purchase.status !== 'paid') return purchase; // idempotent: only a paid purchase reverses
 
     // Unwind the granted plan, if any.
-    if (purchase.vendor_plan_id) {
-      const vendorPlan = await this.vendorPlanRepo.findById(purchase.vendor_plan_id);
-      if (vendorPlan && vendorPlan.status === 'active') {
-        await this.vendorPlans.downgradeToFree(purchase.vendor_id.toString(), vendorPlan._id);
-      } else if (vendorPlan && vendorPlan.status === 'pending_activation') {
-        await this.vendorPlanRepo.setStatus(vendorPlan._id, { status: 'cancelled' });
+    if (purchase.subscriber_plan_id) {
+      const subscriberPlan = await this.subscriberPlanRepo.findById(purchase.subscriber_plan_id);
+      if (subscriberPlan && subscriberPlan.status === 'active') {
+        await this.plans.downgradeToFree(purchase.owner_type, purchase.owner_id.toString(), subscriberPlan._id);
+      } else if (subscriberPlan && subscriberPlan.status === 'pending_activation') {
+        await this.subscriberPlanRepo.setStatus(subscriberPlan._id, { status: 'cancelled' });
       }
     }
 
     const reversed = (await this.repo.setStatus(purchase._id, 'reversed')) ?? purchase;
-    console.log(`[PlanPurchase] Reversed purchase ${purchase._id} (${gatewayRef}); vendor downgraded to free`);
+    console.log(`[PlanPurchase] Reversed purchase ${purchase._id} (${gatewayRef}); ${purchase.owner_type} downgraded to free`);
     return reversed;
   }
 }

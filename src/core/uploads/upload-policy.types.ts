@@ -1,9 +1,11 @@
 /**
  * Upload Policy Types
- * 
+ *
  * Core types and interfaces for the upload security layer.
  * Defines contracts for validators, processors, observers, and error handling.
  */
+
+import { FileOwnerType } from '../../modules/catalog/models/file.model';
 
 /**
  * User role for permission validation
@@ -13,7 +15,7 @@ export type UserRole = 'admin' | 'vendor' | 'user';
 /**
  * Upload folder destinations
  */
-export type UploadFolder = 'products' | 'variants' | 'digital' | 'videos' | 'system';
+export type UploadFolder = 'products' | 'variants' | 'digital' | 'videos' | 'system' | 'shipments';
 
 /**
  * Upload request context - who is uploading
@@ -22,6 +24,16 @@ export interface UploadRequestContext {
   userId: string;
   vendorId?: string;
   role: UserRole;
+  /**
+   * Original-uploader identity stamped onto the created File (`File.ownerType` /
+   * `File.ownerId`). Resolved by the api layer from the authenticated role +
+   * role_entity so every role owns its own uploads — this is what lets the
+   * file-reference layer authorize an attach (see FileReferenceService
+   * assertAttachable) and keeps per-owner storage aggregates honest. When
+   * omitted, falls back to the legacy vendor-only stamping.
+   */
+  ownerType?: FileOwnerType;
+  ownerId?: string;
   /**
    * Plan-driven storage cap (bytes) for this owner. When set, the
    * UserQuotaValidator enforces it instead of the static config default.

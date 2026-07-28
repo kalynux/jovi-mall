@@ -32,6 +32,9 @@ export function initializeVendorNotificationEventConsumers(): void {
     eventBus.subscribe('payout.paid', handler.handlePayoutPaid.bind(handler));
     eventBus.subscribe('payout.rejected', handler.handlePayoutRejected.bind(handler));
     eventBus.subscribe('shipment.rejected', handler.handleShipmentRejected.bind(handler));
+    // Subscription plan lifecycle (owner-typed; handler no-ops on non-vendor owners).
+    eventBus.subscribe('plan.expiring', handler.handlePlanExpiring.bind(handler));
+    eventBus.subscribe('plan.expired', handler.handlePlanExpired.bind(handler));
 
     console.log(
         `[VendorNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`

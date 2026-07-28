@@ -27,6 +27,7 @@ import { ProductOptionValueModel } from '../../models/product-option-value.model
 import { FileModel } from '../../models/file.model';
 import { DigitalAssetModel } from '../../../digital-delivery/models/digital-asset.model';
 import { VendorModel } from '../../../vendors/vendor.model';
+import { StoreModel } from '../../../store/models/store.model';
 import { creditWalletService } from '../../../billing/services/credit-wallet.service';
 import { VECTORISATION_COST } from '../../../billing/config/credit.config';
 
@@ -255,11 +256,13 @@ export class VectorisationService {
     if (product.vendorId) {
       const vendorDoc = await VendorModel.findById(product.vendorId).lean();
       if (vendorDoc) {
+        // Business name/description live on the Store (source of truth).
+        const store = await StoreModel.findOne({ vendor_id: vendorDoc._id }).select('name description').lean();
         vendor = {
           id: vendorDoc._id.toString(),
-          business_name: vendorDoc.business_name,
+          business_name: store?.name ?? null,
           display_name: vendorDoc.display_name,
-          business_description: vendorDoc.business_description,
+          business_description: store?.description ?? null,
           country: vendorDoc.country,
           email: vendorDoc.email,
           status: vendorDoc.status,

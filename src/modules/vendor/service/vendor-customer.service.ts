@@ -12,6 +12,9 @@ import {
     VendorCustomerListItemDto,
     VendorCustomerDetailDto
 } from '../dto/vendor-customer.dto';
+import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
+import { getStorageProvider, IStorageProvider } from '../../../core/storage';
+import { resolveFileDetails, resolveFileDetail } from '../../catalog/read-models/file-detail.resolver';
 
 /**
  * VendorCustomerService
@@ -37,10 +40,14 @@ import {
 export class VendorCustomerService {
     private relationRepo: VendorCustomerRepository;
     private settingsRepo: VendorSettingsRepository;
+    private fileRepository: FileRepositoryMongo;
+    private storageProvider: IStorageProvider;
 
     constructor() {
         this.relationRepo = new VendorCustomerRepository();
         this.settingsRepo = new VendorSettingsRepository();
+        this.fileRepository = new FileRepositoryMongo();
+        this.storageProvider = getStorageProvider();
     }
 
     // ─── Flag CRUD (vendor-defined tags) ──────────────────────────────────────
@@ -118,16 +125,23 @@ export class VendorCustomerService {
             this.buildFlagMap(vendorId)
         ]);
 
+        const avatarByFileId = await resolveFileDetails(
+            rows.map((row) => row.customer?.avatar_file_id?.toString() ?? null),
+            this.fileRepository,
+            this.storageProvider,
+        );
+
         const data: VendorCustomerListItemDto[] = rows.map((row) => {
             const realName = row.customer?.name ?? 'Unknown';
             const override = row.display_name_override ?? null;
+            const avatarFid = row.customer?.avatar_file_id?.toString();
             return {
                 customerId: row.customer_id.toString(),
                 displayName: override ?? realName,
                 realName,
                 hasNameOverride: !!override,
                 email: row.customer?.email ?? null,
-                avatar: row.customer?.avatar_url ?? null,
+                avatar: avatarFid ? avatarByFileId.get(avatarFid) ?? null : null,
                 orderCount: row.order_count ?? 0,
                 totalSpent: row.total_spent ?? 0,
                 lastOrderAt: row.last_order_at ?? null,
@@ -154,7 +168,7 @@ export class VendorCustomerService {
 
         const [customer, statsAgg, flagMap] = await Promise.all([
             CustomerModel.findById(customerId)
-                .select('name email phone avatar_url saved_addresses')
+                .select('name email phone avatar_file_id avatar_url saved_addresses')
                 .lean()
                 .exec() as Promise<any>,
             // Live order stats (source of truth for displayed detail numbers).
@@ -186,6 +200,8 @@ export class VendorCustomerService {
         const realName = customer?.name ?? 'Unknown';
         const override = relation.display_name_override ?? null;
 
+        const avatar = await resolveFileDetail(customer?.avatar_file_id?.toString(), this.fileRepository, this.storageProvider);
+
         const defaultAddr =
             customer?.saved_addresses?.find((a: any) => a.is_default) ??
             customer?.saved_addresses?.[0] ??
@@ -198,7 +214,7 @@ export class VendorCustomerService {
             hasNameOverride: !!override,
             email: customer?.email ?? null,
             phone: customer?.phone ?? null,
-            avatar: customer?.avatar_url ?? null,
+            avatar,
             orderCount: stats.orderCount ?? 0,
             totalSpent: stats.totalSpent ?? 0,
             lastOrderAt: stats.lastOrderAt ?? null,

@@ -42,6 +42,13 @@ export interface IAgencyNotificationPreference extends Document {
          * to hear about it.
          */
         codDepositUpdates: boolean;
+        /**
+         * Billing notifications: plan lifecycle (plan.expiring / plan.expired) and
+         * the unterminated-shipment soft-cap alert (shipment.cap.exceeded).
+         */
+        planUpdates: boolean;
+        /** Media storage threshold alerts (storage.alert, 80/90/100%). */
+        storageAlert: boolean;
     };
 
     updatedAt: Date;
@@ -99,6 +106,14 @@ const AgencyNotificationPreferenceSchema = new Schema<IAgencyNotificationPrefere
                 default: true
             },
             codDepositUpdates: {
+                type: Boolean,
+                default: true
+            },
+            planUpdates: {
+                type: Boolean,
+                default: true
+            },
+            storageAlert: {
                 type: Boolean,
                 default: true
             }

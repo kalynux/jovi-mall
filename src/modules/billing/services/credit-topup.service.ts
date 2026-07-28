@@ -7,19 +7,20 @@ import { CreditWalletService, creditWalletService } from './credit-wallet.servic
 import { findCreditPack } from '../config/credit.config';
 import { ICreditTopup, CreditTopupGateway } from '../models/credit-topup.model';
 import { CreditTopupModel } from '../models/credit-topup.model';
+import { BillingOwnerType } from '../billing.types';
 import { PaymentGateway, PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
 import { NotchPayGateway } from '../../payments/gateways/notchpay.gateway';
 import { MyCoolPayGateway } from '../../payments/gateways/mycoolpay.gateway';
 import { StripeGateway } from '../../payments/gateways/stripe.gateway';
 
 /**
- * CreditTopupService - vendor purchase of credit packs.
+ * CreditTopupService - an owner's (vendor/agency/agent) purchase of credit packs.
  *
  * Reuses the payments-module gateway adapters directly (they treat the order
  * reference as a plain label, so no Order/PaymentTransaction is involved).
- * Completion is idempotent and credits the wallet. Confirmation is driven by the
- * gateway's verify path (`verifyAndComplete`); a production webhook can later
- * call `completeTopup` directly without other changes.
+ * Completion is idempotent and credits the owner's wallet. The owner is stored on
+ * the top-up row, so `completeTopup` (from a verify poll or a payment webhook)
+ * needs no owner argument.
  */
 export class CreditTopupService {
   private readonly gateways: Map<CreditTopupGateway, PaymentGateway>;
@@ -37,7 +38,8 @@ export class CreditTopupService {
 
   /** Start a top-up: create a pending record and open a gateway charge. */
   async initiateTopup(
-    vendorId: string,
+    ownerType: BillingOwnerType,
+    ownerId: string,
     packCode: string,
     gateway: CreditTopupGateway,
     channel: PaymentChannelInfo
@@ -52,7 +54,8 @@ export class CreditTopupService {
     }
 
     const topup = await this.repo.create({
-      vendor_id: new Types.ObjectId(vendorId),
+      owner_type: ownerType,
+      owner_id: new Types.ObjectId(ownerId),
       pack_code: pack.code,
       credits: pack.credits,
       price: pack.price,
@@ -63,11 +66,11 @@ export class CreditTopupService {
 
     const result = await adapter.initiatePayment({
       orderId: topup._id.toString(), // used by adapters only as a reference label
-      userId: vendorId,
+      userId: ownerId,
       amount: pack.price,
       currency: pack.currency,
       channel,
-      metadata: { purpose: 'credit_topup', topupId: topup._id.toString() },
+      metadata: { purpose: 'credit_topup', topupId: topup._id.toString(), ownerType },
     });
 
     if (!result.success) {
@@ -88,9 +91,13 @@ export class CreditTopupService {
   }
 
   /** Poll the gateway and complete/fail the top-up accordingly. */
-  async verifyAndComplete(vendorId: string, topupId: string): Promise<ICreditTopup> {
+  async verifyAndComplete(
+    ownerType: BillingOwnerType,
+    ownerId: string,
+    topupId: string
+  ): Promise<ICreditTopup> {
     const topup = await this.repo.findById(topupId);
-    if (!topup || topup.vendor_id.toString() !== vendorId) {
+    if (!topup || topup.owner_type !== ownerType || topup.owner_id.toString() !== ownerId) {
       throw createAppError(ERROR_CODES.BILLING_TOPUP_NOT_FOUND, 404, 'Top-up not found');
     }
     if (topup.status === 'paid') return topup; // idempotent
@@ -111,7 +118,7 @@ export class CreditTopupService {
   }
 
   /**
-   * Idempotently mark a top-up paid and credit the wallet, atomically.
+   * Idempotently mark a top-up paid and credit the owner's wallet, atomically.
    * Safe to call from a verify poll or a future payment webhook.
    */
   async completeTopup(topupId: string): Promise<ICreditTopup> {
@@ -125,8 +132,8 @@ export class CreditTopupService {
       topup.status = 'paid';
       await topup.save({ session });
       await this.wallet.creditInSession(
-        'vendor',
-        topup.vendor_id.toString(),
+        topup.owner_type,
+        topup.owner_id.toString(),
         topup.credits,
         'topup',
         'topup_purchase',
@@ -140,14 +147,11 @@ export class CreditTopupService {
   /**
    * Reverse a previously-paid top-up (charge-back / refund claw-back).
    *
-   * Atomically flips `paid → reversed` and debits the granted credits back out
-   * of the wallet. The debit is a FORCED movement (negative credit) — it may
-   * drive the balance negative if the vendor already spent the credits, which is
-   * the correct outcome for a lost dispute. Idempotent: a top-up is only
-   * reversed once (the atomic status claim guards concurrent webhook deliveries).
-   *
-   * Note: this only undoes the internal credit grant. The customer's money is
-   * returned by Stripe itself (the dispute/refund) — we do NOT call the refund API.
+   * Atomically flips `paid → reversed` and debits the granted credits back out of
+   * the wallet. The debit is a FORCED movement (negative credit) — it may drive
+   * the balance negative if the owner already spent the credits, which is the
+   * correct outcome for a lost dispute. Idempotent: a top-up is only reversed once
+   * (the atomic status claim guards concurrent webhook deliveries).
    */
   async reverseTopup(topupId: string, reason: 'chargeback' | 'refund' = 'chargeback'): Promise<ICreditTopup | null> {
     return transactionManager.runInTransaction(async (session) => {
@@ -160,8 +164,8 @@ export class CreditTopupService {
       if (!claimed) return null; // not paid / already reversed → no-op
 
       await this.wallet.creditInSession(
-        'vendor',
-        claimed.vendor_id.toString(),
+        claimed.owner_type,
+        claimed.owner_id.toString(),
         -claimed.credits, // negative = forced claw-back, may go below zero
         'refund',
         'topup_reversal',
@@ -179,7 +183,6 @@ export class CreditTopupService {
     if (!topup) return null;
     return this.reverseTopup(topup._id.toString(), reason);
   }
-
 }
 
 export const creditTopupService = new CreditTopupService();

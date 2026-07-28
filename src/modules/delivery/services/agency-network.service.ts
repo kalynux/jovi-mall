@@ -25,7 +25,7 @@ export class AgencyNetworkService {
         return {
             data: page.data.map(v => ({
                 id: v._id.toString(),
-                businessName: v.business_name,
+                businessName: v.store?.name ?? '',
                 displayName: v.display_name ?? null,
                 email: v.email ?? null,
                 phone: v.phone ?? null,

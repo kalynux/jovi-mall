@@ -30,12 +30,16 @@ router.get('/', StoreProfileController.getStore);
  * Update authenticated vendor's store profile
  * 
  * Body: {
- *   name?, logoUrl?, bannerUrl?, description?,
- *   address?, city?, supportEmail?, supportPhone?, supportWhatsapp?,
+ *   name?, logoFileId?, bannerFileId?, description?,
+ *   supportEmail?, supportPhone?, supportWhatsapp?,
  *   version
  * }
- * 
- * NOT allowed: slug, country (immutable)
+ * logoFileId/bannerFileId are ids of files uploaded via POST /api/files/upload
+ * ('' or null clears the slot). The response returns the resolved `logo`/`banner`
+ * file objects ({ id, key, url, mimeType, size, originalName } | null).
+ *
+ * NOT allowed: slug (immutable). Addresses/country live on the vendor
+ * profile (business_addresses + set-once country), not on the store.
  */
 router.patch('/', StoreProfileController.updateStore);
 

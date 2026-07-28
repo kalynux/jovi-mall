@@ -8,6 +8,7 @@ import {
 import { IOrder } from '../../../orders/order.model';
 import { AgentRepository, agentRepository } from '../../../agents';
 import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repository';
+import { MagazinRepository } from '../../../magazin/repositories/magazin.repository';
 
 /**
  * The agency's manual override of the automatic pickup location (Part 3). Any
@@ -51,7 +52,8 @@ export interface HandoverPickupOverride {
 export class HandoverPickupService {
   constructor(
     private readonly agents: AgentRepository = agentRepository,
-    private readonly agencies: DeliveryAgencyRepository = new DeliveryAgencyRepository()
+    private readonly agencies: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
+    private readonly magazins: MagazinRepository = new MagazinRepository()
   ) {}
 
   async resolve(params: {
@@ -159,8 +161,10 @@ export class HandoverPickupService {
     const agency = await this.agencies.findById(agencyId);
     const hq = agency?.headquarters_addresses?.[0] ?? null;
     const hqGeo: IGeoAddress | null = hq?.geo ?? null;
-    const label = agency?.agency_name
-      ? `${agency.agency_name}${hq?.city ? ` — ${hq.city}` : ''}`
+    // Business name lives on the Magazin (source of truth).
+    const agencyName = await this.magazins.findNameByAgencyId(agencyId);
+    const label = agencyName
+      ? `${agencyName}${hq?.city ? ` — ${hq.city}` : ''}`
       : hq?.city ?? 'Agency business location';
 
     return {

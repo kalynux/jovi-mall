@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { VendorProfileMapper, GetVendorProfileResponseDto, VendorCompletionStatusDto, VendorOnboardingStatusDto } from '../dto/vendor-profile.dto';
 import { VendorAgencyMapper, VendorAgencyListItemDto, AgencyListMeta } from '../dto/vendor-agency.dto';
@@ -7,9 +8,15 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
 import { auditLogger } from '../../../core/audit/audit-logger';
 import { VendorOnboardingStep, VendorOnboardingStepValue } from '../../../core/constants/onboarding-steps';
-import { IVendor, IVendorBranding, IVendorPolicies, IVendorSupportChannel, IVendorSupportPolicy } from '../../vendors/vendor.model';
+import { IVendor, IVendorPolicies, IVendorSupportChannel, IVendorSupportPolicy } from '../../vendors/vendor.model';
 import { withGeoAddress } from '../../../core/types/geo-address.types';
+import { assertGeoInCountry, geoAddressEquals } from '../../../core/validation/address-country.helper';
+import { StoreProvisioningService } from '../../store/service/store-provisioning.service';
+import { StoreRepository } from '../../store/repositories/store.repository';
+import { IStore } from '../../store/models/store.model';
+import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
 import { DeliveryAgencyRepository, AgencyListQueryParams } from '../../delivery/delivery-agency.repository';
+import { IDeliveryAgency } from '../../delivery/delivery-agency.model';
 import { TransactionManager, transactionManager } from '../../../core/database/transaction.manager';
 import { ProductDeliveryAgencySuspensionService } from '../../catalog/domain/services/ProductDeliveryAgencySuspensionService';
 import { ProductStatus } from '../../catalog/models/product.model';
@@ -17,6 +24,7 @@ import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
 import { FileReferenceRepositoryMongo } from '../../catalog/repositories/mongo/file-reference.repository.mongo';
 import { FileReferenceService } from '../../catalog/domain/services/media/FileReferenceService';
+import { resolveFileDetail, resolveFileDetails } from '../../catalog/read-models/file-detail.resolver';
 import { getStorageProvider, IStorageProvider } from '../../../core/storage';
 import { VendorOrderService } from '../../orders/vendor-order.service';
 import { ConnectionService } from '../../agency-connections/connection.service';
@@ -51,6 +59,9 @@ export class VendorProfileService {
   private fileRepository: FileRepositoryMongo;
   private fileReferenceService: FileReferenceService;
   private storageProvider: IStorageProvider;
+  private storeProvisioningService: StoreProvisioningService;
+  private storeRepo: StoreRepository;
+  private magazinRepo: MagazinRepository;
 
   constructor() {
     this.vendorRepo = new VendorRepository();
@@ -62,38 +73,73 @@ export class VendorProfileService {
     this.fileRepository = new FileRepositoryMongo();
     this.fileReferenceService = new FileReferenceService(this.fileRepository, new FileReferenceRepositoryMongo());
     this.storageProvider = getStorageProvider();
+    this.storeProvisioningService = new StoreProvisioningService();
+    this.storeRepo = new StoreRepository();
+    this.magazinRepo = new MagazinRepository();
   }
 
   /**
-   * Keep `file_references` in sync with the vendor's branding slots (logo,
-   * cover image) whenever `branding` is written. Mirrors the reconciliation
-   * ProductUpdateService runs for product media: authorizes every newly
-   * attached file (must be owned by this vendor or be a system file) and
-   * detaches the previous file, if any, from each slot. Runs before the
-   * vendor write so an unauthorized file reference is rejected before it is
-   * ever persisted.
+   * Apply an onboarding branding change (logo/cover) to the vendor's STORE — the
+   * business branding's single source of truth. Get-or-create the store,
+   * reconcile the logo (→ store.logo) and cover (→ store.banner) file references,
+   * then persist. The vendor profile no longer holds any branding. Runs the
+   * reconcile before the write so an unauthorized file reference is rejected
+   * before it is persisted. A slot is only touched when its field is present.
    */
-  private async reconcileBrandingFileReferences(
+  private async applyBrandingToStore(
     vendorId: string,
-    previous: IVendorBranding | undefined,
-    next: { logo_file_id?: string | null; cover_image_file_id?: string | null },
+    branding: { logo_file_id?: string | null; cover_image_file_id?: string | null },
+  ): Promise<void> {
+    const store = await this.storeProvisioningService.ensureStoreForVendor(vendorId);
+    const updates: Partial<IStore> = {};
+
+    if (branding.logo_file_id !== undefined) {
+      await this.fileReferenceService.reconcile({
+        previousFileIds: store.logo_file_id ? [store.logo_file_id.toString()] : [],
+        nextFileIds: branding.logo_file_id ? [branding.logo_file_id] : [],
+        actor: { type: 'vendor', id: vendorId },
+        entityType: 'store',
+        entityId: store._id.toString(),
+        field: 'logo',
+      });
+      updates.logo_file_id = branding.logo_file_id ? new mongoose.Types.ObjectId(branding.logo_file_id) : null;
+    }
+
+    if (branding.cover_image_file_id !== undefined) {
+      await this.fileReferenceService.reconcile({
+        previousFileIds: store.banner_file_id ? [store.banner_file_id.toString()] : [],
+        nextFileIds: branding.cover_image_file_id ? [branding.cover_image_file_id] : [],
+        actor: { type: 'vendor', id: vendorId },
+        entityType: 'store',
+        entityId: store._id.toString(),
+        field: 'banner',
+      });
+      updates.banner_file_id = branding.cover_image_file_id ? new mongoose.Types.ObjectId(branding.cover_image_file_id) : null;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await this.storeRepo.updateByVendorId(vendorId, store.version, updates);
+    }
+  }
+
+  /**
+   * Keep `file_references` in sync with the vendor's personal profile avatar
+   * (a File reference distinct from the business logo/cover). Same reconcile
+   * primitive as branding — authorizes the newly-attached file and detaches the
+   * previous one — under `entityType: 'vendor', field: 'avatar'`.
+   */
+  private async reconcileAvatarFileReference(
+    vendorId: string,
+    previous: IVendor['avatar_file_id'] | undefined,
+    next: string | null | undefined,
   ): Promise<void> {
     await this.fileReferenceService.reconcile({
-      previousFileIds: previous?.logo_file_id ? [previous.logo_file_id.toString()] : [],
-      nextFileIds: next.logo_file_id ? [next.logo_file_id] : [],
-      vendorId,
+      previousFileIds: previous ? [previous.toString()] : [],
+      nextFileIds: next ? [next] : [],
+      actor: { type: 'vendor', id: vendorId },
       entityType: 'vendor',
       entityId: vendorId,
-      field: 'logo',
-    });
-
-    await this.fileReferenceService.reconcile({
-      previousFileIds: previous?.cover_image_file_id ? [previous.cover_image_file_id.toString()] : [],
-      nextFileIds: next.cover_image_file_id ? [next.cover_image_file_id] : [],
-      vendorId,
-      entityType: 'vendor',
-      entityId: vendorId,
-      field: 'cover',
+      field: 'avatar',
     });
   }
 
@@ -133,6 +179,76 @@ export class VendorProfileService {
         409,
         'One or more business addresses you removed are still set as a pickup location on a product. Reassign or remove that pickup location first.',
         { blockedAddresses },
+      );
+    }
+  }
+
+  /**
+   * Business addresses are the vendor's physical store locations (and pickup
+   * points), so each must be geolocatable and inside the vendor's registered
+   * country. Every NEW or EDITED entry in this full-replace array must carry a
+   * geocoded `geo` whose country matches; entries echoed back byte-identical to
+   * what is stored (same loose fields, same geo) are grandfathered — legacy
+   * plain-text addresses keep working until the vendor next touches them.
+   */
+  private assertBusinessAddressesInCountry(
+    country: string | null | undefined,
+    incoming: NonNullable<UpdateVendorProfileInput['business_addresses']>,
+    existing: IVendor['business_addresses'] | undefined,
+  ): void {
+    const previous = existing ?? [];
+    incoming.forEach((entry, index) => {
+      const match = entry._id
+        ? previous.find((p) => p._id.toString() === entry._id)
+        : undefined;
+      const unchanged =
+        !!match &&
+        entry.label === match.label &&
+        entry.address_line1 === match.address_line1 &&
+        (entry.address_line2 ?? null) === (match.address_line2 ?? null) &&
+        entry.city === match.city &&
+        (entry.state ?? null) === (match.state ?? null) &&
+        geoAddressEquals(entry.geo, match.geo);
+      if (unchanged) return;
+
+      assertGeoInCountry(entry.geo, country ?? null, { index, label: entry.label ?? null });
+    });
+  }
+
+  /**
+   * Country anchors the address policy above, so it is SET-ONCE: choose it in
+   * onboarding Step 1, never change it after. Changing it while addresses
+   * already resolve elsewhere would silently orphan them.
+   */
+  private assertCountryUnchangedOrFirstSet(vendor: IVendor, incomingCountry: string | undefined): void {
+    if (incomingCountry === undefined) return;
+    if (vendor.country && incomingCountry !== vendor.country) {
+      throw createAppError(
+        ERROR_CODES.PROFILE_COUNTRY_IMMUTABLE,
+        403,
+        'Country cannot be changed once set. It was fixed during onboarding for tax, shipping and address policy.',
+        { currentCountry: vendor.country },
+      );
+    }
+  }
+
+  /**
+   * Guard for the rare case where the country is (re)set while geocoded
+   * business addresses already exist — every one of them must resolve inside
+   * the new country, or the change is rejected. Addresses without a geo are
+   * unverifiable legacy entries and don't block.
+   */
+  private assertExistingAddressesMatchCountry(vendor: IVendor, newCountry: string): void {
+    const mismatched = (vendor.business_addresses ?? [])
+      .filter((a) => a.geo?.components?.country_code && a.geo.components.country_code.toUpperCase() !== newCountry.toUpperCase())
+      .map((a) => ({ addressId: a._id.toString(), label: a.label, countryCode: a.geo!.components.country_code }));
+
+    if (mismatched.length > 0) {
+      throw createAppError(
+        ERROR_CODES.ADDRESS_COUNTRY_MISMATCH,
+        400,
+        `You already have business addresses located outside ${newCountry.toUpperCase()}. Remove or re-pick them before changing your country.`,
+        { mismatchedAddresses: mismatched, requiredCountry: newCountry.toUpperCase() },
       );
     }
   }
@@ -186,12 +302,25 @@ export class VendorProfileService {
       }
     }
 
-    if (input.business_addresses !== undefined) {
-      await this.assertRemovedAddressesNotInUse(vendorId, vendor.business_addresses, input.business_addresses);
+    // POLICY: Country is set-once (onboarding Step 1) — reject changes, allow
+    // an idempotent echo of the current value or a first set on legacy rows.
+    this.assertCountryUnchangedOrFirstSet(vendor, input.country);
+    if (input.country !== undefined && !vendor.country) {
+      // First set on a legacy profile — existing geocoded addresses must fit.
+      this.assertExistingAddressesMatchCountry(vendor, input.country);
     }
 
-    if (input.branding !== undefined) {
-      await this.reconcileBrandingFileReferences(vendorId, vendor.branding, input.branding);
+    if (input.business_addresses !== undefined) {
+      await this.assertRemovedAddressesNotInUse(vendorId, vendor.business_addresses, input.business_addresses);
+      this.assertBusinessAddressesInCountry(
+        input.country ?? vendor.country ?? null,
+        input.business_addresses,
+        vendor.business_addresses,
+      );
+    }
+
+    if (input.avatarFileId !== undefined) {
+      await this.reconcileAvatarFileReference(vendorId, vendor.avatar_file_id, input.avatarFileId);
     }
 
     const updatePayload = VendorProfileMapper.toUpdatePayload(input);
@@ -248,6 +377,13 @@ export class VendorProfileService {
       throw createAppError(ERROR_CODES.VENDOR_ONBOARDING_ALREADY_COMPLETED, 409);
     }
 
+    // Country may still be corrected while onboarding is in progress (it locks
+    // at completion), but never in a way that orphans geocoded addresses the
+    // vendor already added in Step 3.
+    if (input.country !== vendor.country) {
+      this.assertExistingAddressesMatchCountry(vendor, input.country);
+    }
+
     const data = {
       country: input.country,
       timezone: input.timezone,
@@ -277,6 +413,13 @@ export class VendorProfileService {
       expectedVersion,
     );
     if (!updated) throw createAppError(ERROR_CODES.VENDOR_ONBOARDING_CONCURRENT_MODIFICATION, 409);
+
+    // Provision the vendor's storefront record. Best-effort: the store module
+    // also get-or-creates on first access, so a failure here must not fail
+    // onboarding.
+    void this.storeProvisioningService.ensureStoreForVendor(vendorId).catch((err) => {
+      console.error(`[VendorProfileService] store provisioning failed for vendor ${vendorId}:`, err);
+    });
 
     await this.auditOnboardingStep(vendorId, 'BASIC_SETUP', 1, newStep);
     return {
@@ -372,11 +515,12 @@ export class VendorProfileService {
     const brandingData: Partial<IVendor> = {};
     if (!input.skip) {
       if (input.branding) {
-        brandingData.branding = input.branding as IVendor['branding'];
-        await this.reconcileBrandingFileReferences(vendorId, vendor.branding, input.branding);
+        // Business branding (logo/cover) lives on the Store, not the vendor.
+        await this.applyBrandingToStore(vendorId, input.branding);
       }
       if (input.business_addresses) {
         await this.assertRemovedAddressesNotInUse(vendorId, vendor.business_addresses, input.business_addresses);
+        this.assertBusinessAddressesInCountry(vendor.country ?? null, input.business_addresses, vendor.business_addresses);
         // `_id` (when provided) is a hex string here — Mongoose casts it to
         // ObjectId on write, preserving identity instead of minting a new one.
         // `withGeoAddress` normalises each entry's selected geo result into a
@@ -596,7 +740,14 @@ export class VendorProfileService {
     const agency = await agencyRepo.findById(vendor.default_delivery_agency_id.toString());
     if (!agency) return null;
 
-    return VendorAgencyMapper.toListItemDto(agency);
+    return this.toVendorAgencyDto(agency);
+  }
+
+  /** Map one agency to the vendor-facing DTO, resolving its business name + logo from the Magazin. */
+  private async toVendorAgencyDto(agency: IDeliveryAgency): Promise<VendorAgencyListItemDto> {
+    const magazin = await this.magazinRepo.findByAgencyIdOrNull(agency._id.toString());
+    const logo = await resolveFileDetail(magazin?.logo_file_id?.toString(), this.fileRepository, this.storageProvider);
+    return VendorAgencyMapper.toListItemDto(agency, magazin?.name ?? '', logo);
   }
 
   /**
@@ -664,7 +815,7 @@ export class VendorProfileService {
         ? await this.suspensionService.restoreForVendor(vendorId, { session })
         : [];
 
-      return { agency: VendorAgencyMapper.toListItemDto(agency), restoredProducts };
+      return { agency: await this.toVendorAgencyDto(agency), restoredProducts };
     });
 
     const reassignedOrders = (previousAgencyId && previousAgencyId !== agencyId)
@@ -687,8 +838,22 @@ export class VendorProfileService {
     const agencyRepo = new DeliveryAgencyRepository();
     const { agencies, total } = await agencyRepo.findAvailableForVendors(params);
 
+    // Business name/logo come from the joined Magazin. Batch-resolve logos.
+    const detailByFileId = await resolveFileDetails(
+      agencies.map(a => a.magazin?.logo_file_id?.toString() ?? null),
+      this.fileRepository,
+      this.storageProvider,
+    );
+
     return {
-      agencies: agencies.map(VendorAgencyMapper.toListItemDto),
+      agencies: agencies.map(a => {
+        const fileId = a.magazin?.logo_file_id?.toString();
+        return VendorAgencyMapper.toListItemDto(
+          a,
+          a.magazin?.name ?? '',
+          fileId ? detailByFileId.get(fileId) ?? null : null,
+        );
+      }),
       meta: {
         total,
         page: params.page,

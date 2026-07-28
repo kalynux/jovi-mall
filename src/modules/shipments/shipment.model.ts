@@ -22,6 +22,24 @@ export type ShipmentStatus =
   | 'pending_agency_reassignment';
 
 /**
+ * "Unterminated" shipments for the billing/plan cap: every status except the
+ * genuinely terminal ones (`delivered`/`returned`/`failed`) and `rejected` (a
+ * rejected shipment has left this agency — its items are re-homed to a *new*
+ * shipment on another agency). Used by the agency soft-cap sweep. Distinct from
+ * `ACTIVE_SHIPMENT_STATUSES` (agent capacity) and `TRACKABLE_SHIPMENT_STATUSES`
+ * (geo-tracker visibility) — those disagree on `pending`/`failed`.
+ */
+export const UNTERMINATED_SHIPMENT_STATUSES: ShipmentStatus[] = [
+  'pending',
+  'assigned',
+  'handing_over',
+  'picked_up',
+  'in_transit',
+  'agent_delivered',
+  'pending_agency_reassignment',
+];
+
+/**
  * Reason an agency declined an assigned shipment. Fixed set (mirrors
  * ProductSuspensionReason) so rejections can be reported/analysed, not free text.
  */
@@ -31,6 +49,48 @@ export type ShipmentRejectionReason =
   | 'invalid_address'
   | 'vendor_item_not_ready'
   | 'other';
+
+/**
+ * Reason an ASSIGNED agent cancels a shipment mid-delivery (the agent-initiated
+ * cancellation flow). Fixed enum so cancellations are reportable/analysable, with
+ * a bounded free-text `note` (≤200 chars) for the specifics. Distinct from
+ * `ShipmentRejectionReason`, which is the agency declining a shipment before an
+ * agent ever took it — this is an agent walking away from one they had accepted.
+ */
+export type AgentCancellationReason =
+  | 'vehicle_breakdown'
+  | 'personal_emergency'
+  | 'customer_unreachable'
+  | 'address_not_found'
+  | 'package_issue'
+  | 'safety_concern'
+  | 'too_far'
+  | 'other';
+
+export const AGENT_CANCELLATION_REASONS: AgentCancellationReason[] = [
+  'vehicle_breakdown',
+  'personal_emergency',
+  'customer_unreachable',
+  'address_not_found',
+  'package_issue',
+  'safety_concern',
+  'too_far',
+  'other',
+];
+
+/**
+ * The last agent-initiated cancellation on this shipment. Overwritten if the
+ * shipment is cancelled again by a later agent (resume can hand it to a new
+ * agent who also cancels); the durable per-cancellation audit is the emitted
+ * `shipment.agent_cancelled` event + the agent-action audit in geo-tracker.
+ */
+export interface IShipmentAgentCancellation {
+  reason: AgentCancellationReason;
+  note: string | null;
+  cancelled_by_agent_id: mongoose.Types.ObjectId;
+  from_status: ShipmentStatus;
+  cancelled_at: Date;
+}
 
 export interface IShipmentItem {
   order_item_id: mongoose.Types.ObjectId;
@@ -170,6 +230,15 @@ export interface IShipment extends Document {
     confirmed_by: mongoose.Types.ObjectId | null;
     auto: boolean;
   } | null;
+  /**
+   * Optional single delivery-proof image an agent may attach at/after the
+   * delivery outcome (agent_delivered / delivered / failed). The File is owned by
+   * the shipment's AGENCY (charged to the agency's media storage), not the agent
+   * who uploaded it. Null until a proof is attached; replaced wholesale on
+   * re-upload; cleared on delete. Referenced via file_references
+   * (entityType 'shipment', field 'delivery_proof').
+   */
+  delivery_proof_file_id?: mongoose.Types.ObjectId | null;
   // Append-only status audit trail, feeding the multi-agency order timeline.
   status_history: IShipmentStatusHistoryEntry[];
   // Agent-acceptance workflow state (see IShipmentAssignmentInfo). Null/absent
@@ -178,6 +247,9 @@ export interface IShipment extends Document {
   // Reassignment-handover collection point (see IShipmentHandover). Set when the
   // shipment is reassigned agent → agent; null otherwise.
   handover?: IShipmentHandover | null;
+  // Last agent-initiated cancellation (see IShipmentAgentCancellation). Set when
+  // an assigned agent cancels mid-delivery; null otherwise.
+  agent_cancellation?: IShipmentAgentCancellation | null;
   items: IShipmentItem[];
   created_at: Date;
   updated_at: Date;
@@ -201,6 +273,7 @@ const ShipmentSchema = new Schema<IShipment>({
     default: null,
   },
   tracking_number: { type: String, default: null, trim: true },
+  delivery_proof_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },
   rejection: {
     type: {
       reason: {
@@ -297,6 +370,23 @@ const ShipmentSchema = new Schema<IShipment>({
     ),
     default: null,
   },
+  agent_cancellation: {
+    type: new Schema<IShipmentAgentCancellation>(
+      {
+        reason: {
+          type: String,
+          enum: AGENT_CANCELLATION_REASONS,
+          required: true,
+        },
+        note: { type: String, default: null, trim: true, maxlength: 200 },
+        cancelled_by_agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, required: true },
+        from_status: { type: String, required: true },
+        cancelled_at: { type: Date, required: true },
+      },
+      { _id: false }
+    ),
+    default: null,
+  },
   items: [{
     order_item_id: { type: Schema.Types.ObjectId, required: true },
     product_id: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT, required: true },
@@ -305,5 +395,15 @@ const ShipmentSchema = new Schema<IShipment>({
 }, {
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' }
 });
+
+// ── Indexes ────────────────────────────────────────────────────────────────
+// The Shipment collection previously carried no indexes; every dispatch/agent
+// query scanned. These back the hot access patterns:
+//   • the agency dispatch board + auto-assignment candidate lookups (by agency
+//     and status), • an agent's work queue (by agent and status), • and the
+//     order → shipments join used all over the order/fulfillment code.
+ShipmentSchema.index({ agency_id: 1, status: 1 });
+ShipmentSchema.index({ agent_id: 1, status: 1 });
+ShipmentSchema.index({ order_id: 1 });
 
 export const ShipmentModel = mongoose.model<IShipment>(MODELS.SHIPMENT, ShipmentSchema, COLLECTIONS.SHIPMENT);

@@ -269,6 +269,9 @@ export class VendorProductController {
         const input = VendorChangeProductStatusSchema.parse(req.body);
         const product = await productRepository.findById(id, vendorId);
         if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+        // Transition gate first (e.g. 'suspended' is a system lock a vendor can't
+        // leave; activation only from 'draft'), then target-status requirements.
+        productStatusValidationService.assertVendorTransition(product, input.status);
         await productStatusValidationService.validate(product, input.status);
         const updatedProduct = await productRepository.update(id, vendorId, { status: input.status });
 

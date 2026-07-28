@@ -46,6 +46,35 @@ export class ShipmentAssignmentOfferRepository {
     return await q.exec();
   }
 
+  /** ALL live (pending) offers for a shipment — plural under auto-assignment. */
+  async listPendingForShipment(
+    shipmentId: string,
+    session?: ClientSession
+  ): Promise<IShipmentAssignmentOffer[]> {
+    const q = ShipmentAssignmentOfferModel.find({ shipment_id: shipmentId, status: 'pending' });
+    if (session) q.session(session);
+    return await q.exec();
+  }
+
+  /**
+   * This agent's standing (pending) offer for a shipment, if any — the broadcast
+   * uses it to avoid re-offering an agent who already holds an acceptable offer
+   * (idempotent re-entry / round-2 re-nudge reuse the same offer).
+   */
+  async findPendingForShipmentAndAgent(
+    shipmentId: string,
+    agentId: string,
+    session?: ClientSession
+  ): Promise<IShipmentAssignmentOffer | null> {
+    const q = ShipmentAssignmentOfferModel.findOne({
+      shipment_id: shipmentId,
+      agent_id: agentId,
+      status: 'pending',
+    });
+    if (session) q.session(session);
+    return await q.exec();
+  }
+
   /** The agent's offers, newest first, paginated; optional status filter. */
   async listForAgent(
     agentId: string,
@@ -74,24 +103,46 @@ export class ShipmentAssignmentOfferRepository {
   }
 
   /**
-   * Atomically claim a pending, unexpired offer for acceptance. Returns the
-   * updated offer, or null if it was not claimable (already responded, expired,
-   * or not this agent's) — the double-accept / accept-after-timeout guard.
+   * Atomically claim a pending offer for acceptance. Returns the updated offer,
+   * or null if it was not claimable (already responded, or not this agent's) —
+   * the double-accept guard for THIS offer.
    *
-   * MUST run inside the acceptance transaction: if the assignment later aborts,
-   * this claim rolls back with it and the offer returns to pending.
+   * There is deliberately no `expires_at` guard: under auto-assignment a
+   * timed-out (ignored) agent keeps an acceptable offer, so the offer's deadline
+   * does not gate acceptance. The real "is the shipment still available" check is
+   * the shipment-level bind CAS the accept transaction runs next. MUST run inside
+   * that transaction: if the assignment later aborts, this claim rolls back.
    */
   async claimForAccept(
     offerId: string,
     agentId: string,
-    now: Date,
     session: ClientSession
   ): Promise<IShipmentAssignmentOffer | null> {
     return await ShipmentAssignmentOfferModel.findOneAndUpdate(
-      { _id: offerId, agent_id: agentId, status: 'pending', expires_at: { $gt: now } },
-      { $set: { status: 'accepted', responded_at: now } },
+      { _id: offerId, agent_id: agentId, status: 'pending' },
+      { $set: { status: 'accepted', responded_at: new Date() } },
       { new: true, session }
     ).exec();
+  }
+
+  /**
+   * Retire every OTHER standing (pending) offer for a shipment once one agent has
+   * won it — the losing ignored agents' offers become `superseded` so their app
+   * stops showing a stale "accept" button. Best-effort, run post-commit: a
+   * straggler that misses it self-heals on its own accept attempt (the shipment
+   * bind CAS fails and returns "already assigned"). Returns how many were retired.
+   */
+  async supersedeOtherPendingForShipment(
+    shipmentId: string,
+    exceptOfferId: string,
+    session?: ClientSession
+  ): Promise<number> {
+    const res = await ShipmentAssignmentOfferModel.updateMany(
+      { shipment_id: shipmentId, status: 'pending', _id: { $ne: exceptOfferId } },
+      { $set: { status: 'superseded', responded_at: new Date() } },
+      { session: session ?? undefined }
+    ).exec();
+    return res.modifiedCount ?? 0;
   }
 
   /**
@@ -132,12 +183,15 @@ export class ShipmentAssignmentOfferRepository {
   }
 
   /**
-   * Pending offers whose deadline has passed — the expiry sweep's input.
+   * MANUAL offers whose deadline has passed — the manual-expiry sweep's input.
+   * Auto offers (`session_id` set) are EXCLUDED: they never expire on timeout;
+   * their lifecycle is driven by the assignment session, not the offer deadline.
    * Oldest first so the longest-waiting shipments are reaped first.
    */
   async findDueForExpiry(now: Date, limit: number): Promise<IShipmentAssignmentOffer[]> {
     return await ShipmentAssignmentOfferModel.find({
       status: 'pending',
+      session_id: null,
       expires_at: { $lte: now },
     })
       .sort({ expires_at: 1 })

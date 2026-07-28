@@ -1,6 +1,7 @@
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
+import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
 
 /**
  * CodEligibilityService - decides whether an order may be placed as
@@ -13,7 +14,8 @@ import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.reposit
  */
 export class CodEligibilityService {
   constructor(
-    private readonly agencyRepo: DeliveryAgencyRepository = new DeliveryAgencyRepository()
+    private readonly agencyRepo: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
+    private readonly magazinRepo: MagazinRepository = new MagazinRepository(),
   ) {}
 
   /**
@@ -39,18 +41,23 @@ export class CodEligibilityService {
     }
 
     const distinctIds = [...new Set(agencyIds)];
-    const agencies = await this.agencyRepo.findByIds(distinctIds);
+    const [agencies, magazinNames] = await Promise.all([
+      this.agencyRepo.findByIds(distinctIds),
+      this.magazinRepo.findNamesByAgencyIds(distinctIds),
+    ]);
     const byId = new Map(agencies.map((a) => [(a._id as any).toString(), a]));
 
     for (const agencyId of distinctIds) {
       const agency = byId.get(agencyId);
+      // Business name lives on the Magazin (source of truth).
+      const agencyName = magazinNames.get(agencyId)?.name ?? null;
 
       // A missing/inactive agency shouldn't be orderable at all; report it as
       // COD-unsupported rather than leaking internals.
       if (!agency || agency.status !== 'active' || !agency.policies?.cod?.enabled) {
         throw createAppError(ERROR_CODES.COD_AGENCY_NOT_SUPPORTED, 422, undefined, {
           agencyId,
-          agencyName: agency?.agency_name ?? null,
+          agencyName,
         });
       }
 
@@ -58,7 +65,7 @@ export class CodEligibilityService {
       if (cap !== null && cap !== undefined && totalAmount > cap) {
         throw createAppError(ERROR_CODES.COD_ORDER_AMOUNT_EXCEEDS_LIMIT, 422, undefined, {
           agencyId,
-          agencyName: agency.agency_name,
+          agencyName,
           maxOrderAmount: cap,
           orderTotal: totalAmount,
         });

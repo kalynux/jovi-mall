@@ -1,14 +1,19 @@
 # WhatsApp Templates
 
 This is the source-of-truth for the WhatsApp Business templates used by the
-platform — vendor notifications (§1–7) and the customer-facing COD delivery
-code (§8). Create each template in **WhatsApp Business Manager → Message
-Templates** exactly as specified, in **all 5 languages**. Until a template is
-approved, out-of-24h-window sends for that event will fail — for vendor
-notifications the failure is recorded on the notification's `deliveryErrors`
-(never breaking the flow); for the COD code it is logged and the code simply
+platform — vendor notifications (§1–7), the customer-facing COD delivery
+code (§8), and the cross-role **billing / plan-lifecycle** templates (§9). Create
+each template in **WhatsApp Business Manager → Message Templates** exactly as
+specified, in **all 5 languages**. Until a template is approved, out-of-24h-window
+sends for that event will fail — for role notifications the failure is recorded on
+the notification's `deliveryErrors` (never breaking the flow: in-app, push, email
+and Telegram still deliver); for the COD code it is logged and the code simply
 stays available in the customer's own order view (see
 [customer/orders.md](../customer/orders.md#cod)).
+
+> The button URL base is `VENDOR_APP_URL` for vendor templates. Agency and agent
+> templates use `AGENCY_APP_URL` / `AGENT_APP_URL` respectively as their button
+> base — configure each template's URL base to match the app it points at.
 
 ## Conventions
 
@@ -146,6 +151,45 @@ minimized by design — the paid template is never the first attempt.
 
 ---
 
+## 9. Billing / plan-lifecycle templates (all roles)
+
+New with the cross-role billing engine. **Same copy across roles** for the plan
+situations (only the template *name* differs per role, so each app can carry its
+own button base). All use a single dynamic **URL** button → static suffix `plans`,
+label **"Manage plan"** (fr *Gérer le forfait* · pt_PT *Gerir plano* · es *Gestionar
+plan* · ar *إدارة الباقة*). Category `UTILITY`. The full 5-language body copy is the
+source-of-truth in the catalogs — copy it verbatim when creating the templates:
+[notification-catalog.ts](../../src/modules/notifications/catalog/notification-catalog.ts)
+(vendor), [agency-notification-catalog.ts](../../src/modules/notifications/catalog/agency-notification-catalog.ts),
+[agent-notification-catalog.ts](../../src/modules/notifications/catalog/agent-notification-catalog.ts).
+
+| Template name | Role | Body params | English body (en) |
+|---|---|---|---|
+| `vendor_plan_expiring` | vendor | `{{1}}`=plan code, `{{2}}`=days left, `{{3}}`=expiry date | Your {{1}} plan expires in {{2}} day(s), on {{3}}. Renew or upgrade to avoid interruption. |
+| `vendor_plan_expired` | vendor | `{{1}}`=expired plan code, `{{2}}`=new plan code | Your {{1}} plan has expired. You are now on the {{2}} plan. Renew or upgrade anytime from your plan settings. |
+| `agency_plan_expiring` | agency | `{{1}}`, `{{2}}`, `{{3}}` (as above) | *(same as `vendor_plan_expiring`)* |
+| `agency_plan_expired` | agency | `{{1}}`, `{{2}}` | *(same as `vendor_plan_expired`)* |
+| `agent_plan_expiring` | agent | `{{1}}`, `{{2}}`, `{{3}}` | Your {{1}} plan expires in {{2}} day(s), on {{3}}. Renew or upgrade to keep your higher delivery limit. |
+| `agent_plan_expired` | agent | `{{1}}`, `{{2}}` | Your {{1}} plan has expired. You are now on the {{2}} plan, which may lower how many deliveries you can hold at once. Upgrade anytime from your plan settings. |
+
+### `agency_shipment_cap_exceeded` (agency only)
+
+Soft-cap monitoring alert (deliveries are never blocked). Header **"Shipment limit reached"**, button → `plans` ("Manage plan").
+
+- **Body params:** `{{1}}`=current active shipments, `{{2}}`=plan code, `{{3}}`=cap
+
+| Lang | Body |
+|---|---|
+| en | You have {{1}} active shipments, at or above your {{2}} plan limit of {{3}}. Deliveries keep flowing — upgrade for more headroom. |
+| fr | Vous avez {{1}} expéditions actives, au niveau ou au-dessus de la limite de {{3}} de votre forfait {{2}}. Les livraisons continuent — améliorez votre forfait pour plus de marge. |
+| pt_PT | Tem {{1}} remessas ativas, no limite ou acima do limite de {{3}} do seu plano {{2}}. As entregas continuam — faça upgrade para mais margem. |
+| es | Tienes {{1}} envíos activos, en o por encima del límite de {{3}} de tu plan {{2}}. Las entregas continúan — mejora tu plan para más margen. |
+| ar | لديك {{1}} شحنة نشطة، عند حد باقة {{2}} البالغ {{3}} أو أعلى منه. تستمر عمليات التوصيل — قم بالترقية لمزيد من السعة. |
+
+> Until these are approved, plan/cap notifications still reach the recipient via **in-app + push + email/Telegram** — only the WhatsApp channel (outside the 24h window) waits on approval.
+
+---
+
 ## Required env
 
 | Var | Purpose |
@@ -153,4 +197,6 @@ minimized by design — the paid template is never the first attempt.
 | `WHATSAPP_ACCESS_TOKEN` | Meta Cloud API permanent token |
 | `WHATSAPP_PHONE_NUMBER_ID` | Sender phone number ID |
 | `WHATSAPP_API_URL` | Optional; defaults to `https://graph.facebook.com/v18.0` |
-| `VENDOR_APP_URL` | Deep-link base for the URL buttons (must match the URL base configured in each template) |
+| `VENDOR_APP_URL` | Deep-link base for the vendor URL buttons (must match the URL base configured in each vendor template) |
+| `AGENCY_APP_URL` | Deep-link base for agency notification buttons (agency templates) |
+| `AGENT_APP_URL` | Deep-link base for agent notification buttons (agent templates) |

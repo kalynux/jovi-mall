@@ -1,4 +1,8 @@
 import { ICustomer, ICustomerSavedAddress, ICustomerPreferences } from '../customer.model';
+import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
+import { IStorageProvider } from '../../../core/storage';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
+import { resolveFileDetail } from '../../catalog/read-models/file-detail.resolver';
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
@@ -18,7 +22,8 @@ export interface GetCustomerProfileResponseDto {
     emailVerified: boolean;
     phone: string | null;
     phoneVerified: boolean;
-    avatarUrl: string | null;
+    /** Profile avatar as a resolved file object (same shape as product media), or null. */
+    avatar: FileDetail | null;
     bio: string | null;
     savedAddresses: ICustomerSavedAddress[];
     dateOfBirth: Date | null;
@@ -55,10 +60,12 @@ export class CustomerProfileMapper {
      * - gateway_customer_id and gateway_instrument_id are NEVER included
      * - Only display_label, provider, method_type, is_default exposed
      */
-    static toResponseDto(
+    static async toResponseDto(
         customer: ICustomer,
-        savedPaymentMethods: CustomerPaymentMethodDto[]
-    ): GetCustomerProfileResponseDto {
+        savedPaymentMethods: CustomerPaymentMethodDto[],
+        fileRepo: FileRepositoryMongo,
+        storage: IStorageProvider,
+    ): Promise<GetCustomerProfileResponseDto> {
         return {
             id: customer._id.toString(),
             name: customer.name,
@@ -66,7 +73,7 @@ export class CustomerProfileMapper {
             emailVerified: customer.email_verified,
             phone: customer.phone ?? null,
             phoneVerified: customer.phone_verified,
-            avatarUrl: customer.avatar_url,
+            avatar: await resolveFileDetail(customer.avatar_file_id?.toString(), fileRepo, storage),
             bio: customer.bio,
             savedAddresses: customer.saved_addresses,
             dateOfBirth: customer.date_of_birth,

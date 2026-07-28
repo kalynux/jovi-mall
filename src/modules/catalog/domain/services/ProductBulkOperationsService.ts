@@ -1,8 +1,19 @@
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
 import { BulkOperationResponse } from '../../dto/product.dto';
-import { ProductStatusValidationService } from './ProductStatusValidationService';
-import { ProductModel } from '../../models/product.model';
+import { ProductStatusValidationService, VENDOR_STATUS_TRANSITIONS } from './ProductStatusValidationService';
+import { ProductModel, ProductStatus } from '../../models/product.model';
 import { Types } from 'mongoose';
+
+/**
+ * Statuses a vendor-triggered bulk change to `target` may start from — the bulk
+ * mirror of assertVendorTransition (same map, plus the same-status no-op).
+ * Products in any other status are silently skipped by the updateMany filter and
+ * surface in the response as failures by count.
+ */
+function vendorAllowedSourceStatuses(target: string): ProductStatus[] {
+    return (Object.keys(VENDOR_STATUS_TRANSITIONS) as ProductStatus[])
+        .filter(from => from === target || VENDOR_STATUS_TRANSITIONS[from].includes(target as ProductStatus));
+}
 
 /**
  * ProductBulkOperationsService
@@ -90,7 +101,7 @@ export class ProductBulkOperationsService {
         const { eligible, pending } = await this.partitionByVectorisationLock(productIds);
 
         const modifiedCount = eligible.length > 0
-            ? await this.productRepository.bulkUpdateStatus(eligible, vendorId, status)
+            ? await this.productRepository.bulkUpdateStatus(eligible, vendorId, status, vendorAllowedSourceStatuses(status))
             : 0;
 
         const errors = pending.map(productId => ({
@@ -141,7 +152,9 @@ export class ProductBulkOperationsService {
                     continue;
                 }
 
-                // Validate status transition
+                // Transition gate first (suspended/pending_review are locked to
+                // vendors; activation only from draft), then target requirements.
+                this.statusValidationService.assertVendorTransition(product, status as ProductStatus);
                 await this.statusValidationService.validate(product, status);
 
                 // Update status

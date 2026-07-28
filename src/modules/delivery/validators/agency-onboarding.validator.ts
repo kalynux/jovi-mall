@@ -3,12 +3,13 @@ import { GeoPointZodSchema } from '../../../core/types/geo.types';
 import { GeoAddressZodSchema } from '../../../core/types/geo-address.types';
 import { PayoutDetailsZodSchema } from '../../../core/types/payout.types';
 import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
+import { clearable } from '../../../core/validation/zod.helpers';
 
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
 
 const SupportContactSchema = z.object({
     phone: z.string().min(6).max(20).trim().regex(/^\+?[0-9\s\-()]+$/, 'Invalid phone number format'),
-    email: z.string().email('Invalid email format').nullable().optional(),
+    email: clearable(z.string().email('Invalid email format')),
 });
 
 // ─── Agency Creation ──────────────────────────────────────────────────────────
@@ -34,14 +35,17 @@ const HeadquartersAddressSchema = z.object({
 });
 
 const KycDetailsSchema = z.object({
-    registration_number: z.string().min(1).trim().nullable().optional(),
-    transport_license_id: z.string().min(1).trim().nullable().optional(),
+    registration_number: clearable(z.string().min(1).trim()),
+    transport_license_id: clearable(z.string().min(1).trim()),
 });
 
 // ─── Step 1: Logistics Setup (REQUIRED) ───────────────────────────────────────
-//   coverage_areas (min 1), headquarters_addresses (min 1, first = primary)
+//   country, coverage_areas (min 1), headquarters_addresses (min 1, first = primary)
 
 export const AgencyOnboardingStep1Schema = z.object({
+    // ISO-2, e.g. "CM". Set once here; immutable after onboarding completes.
+    // Headquarters addresses must geocode inside this country.
+    country: z.string().length(2, 'Country must be an ISO-2 code (e.g. "CM")').toUpperCase(),
     coverage_areas: z
         .array(z.string().min(1).trim())
         .min(1, 'At least one coverage area (region) is required'),
@@ -66,7 +70,8 @@ export type AgencyOnboardingStep2Input = z.infer<typeof AgencyOnboardingStep2Sch
 export const AgencyOnboardingStep3Schema = z.object({
     /** Set to true to skip this step without providing branding data. */
     skip: z.boolean().optional().default(false),
-    logo_url: z.string().url('logo_url must be a valid URL').nullable().optional(),
+    // Id of a file uploaded via POST /api/files/upload ('' or null clears it).
+    logo_file_id: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'logo_file_id must be a valid file id')),
     timezone: z.string().min(1).trim().optional(),
 });
 
@@ -154,10 +159,18 @@ export type AgencyOnboardingStep4Input = z.infer<typeof AgencyOnboardingStep4Sch
 // ─── General Profile Update ───────────────────────────────────────────────────
 
 export const UpdateAgencyProfileSchema = z.object({
-    agency_name: z.string().min(1).max(200).trim().optional(),
-    logo_url: z.string().url().nullable().optional(),
+    // Personal/contact display name. The BUSINESS name lives on the Magazin
+    // (PATCH /api/agency/magazin), not here — mirroring the vendor Store split.
+    displayName: z.string().min(2).max(100).trim().optional(),
+    // Personal profile avatar as a File reference ('' / null clears it). The
+    // business logo lives on the Magazin.
+    avatarFileId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'avatarFileId must be a valid file id')),
     timezone: z.string().min(1).trim().optional(),
     preferred_language: z.enum(SUPPORTED_LANGUAGES).optional(),
+    // SET-ONCE: accepted only while the profile has no country yet (legacy
+    // rows) or as an idempotent echo of the current value — changes are
+    // rejected by the service (PROFILE_COUNTRY_IMMUTABLE).
+    country: z.string().length(2, 'Country must be an ISO-2 code (e.g. "CM")').toUpperCase().optional(),
     coverage_areas: z.array(z.string().min(1).trim()).min(1).optional(),
     headquarters_addresses: z.array(HeadquartersAddressSchema).min(1).optional(),
     payout_details: PayoutDetailsZodSchema.optional(), // array of IPayoutMethod

@@ -64,7 +64,7 @@ because they hold N shipments, not because someone said so.
 ```
 
 - `state` (required) – `online` | `offline` | `on_break`
-- `reason` (optional, max 200 chars) – free-text note
+- `reason` (optional, max 200 chars) – free-text note; `null` or `""` = no reason (stored as `null`)
 
 **Success Response** (`200 OK`):
 ```json

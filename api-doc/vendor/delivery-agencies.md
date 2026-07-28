@@ -64,7 +64,7 @@ Only agencies that meet **both** of the following conditions are returned:
     {
       "id": "683abc1234567890abcdef01",
       "agencyName": "Swift Deliveries Cameroon",
-      "logoUrl": "https://cdn.example.com/logos/swift-deliveries.png",
+      "logo": { "id": "507f1f77bcf86cd799439030", "key": "products/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
       "kycVerified": true,
       "headquartersAddress": {
         "region": "Littoral",
@@ -119,7 +119,7 @@ Only agencies that meet **both** of the following conditions are returned:
 |-------|------|-------------|
 | `id` | `string` | Agency MongoDB ObjectId as string. Use this as `default_delivery_agency_id` in Step 2 of onboarding. |
 | `agencyName` | `string` | Registered agency name. |
-| `logoUrl` | `string \| null` | Absolute URL to the agency logo. `null` if not set. |
+| `logo` | `FileDetail \| null` | Agency logo as a resolved file object (`{ id, key, url, mimeType, size, originalName }`). `null` if not set. |
 | `kycVerified` | `boolean` | Whether admin has verified the agency's business documents (KYC). `true` = verified. |
 | `headquartersAddress` | `object \| null` | Primary headquarters address (always index 0). See below. |
 | `coverageAreas` | `string[]` | Region keys this agency serves (e.g. `["littoral", "centre"]`). |
@@ -221,7 +221,7 @@ export interface VendorAgencyPolicySummaryDto {
 export interface VendorAgencyListItemDto {
   id: string;
   agencyName: string;
-  logoUrl: string | null;
+  logo: FileDetail | null;
   kycVerified: boolean;
   headquartersAddress: VendorAgencyHQAddressDto | null;
   coverageAreas: string[];

@@ -44,9 +44,18 @@ Authorization: Bearer <access_token>
   "entityType": "string (required) - Related entity type. Enum: order, product, booking, account, other",
   "entityId": "string (optional for `other`, required otherwise) - ID of the related entity (e.g., order ID). For `other`, defaults to the requester's own id.",
   "trackingNumber": "string (optional, max 120) - Required only for ORDER tickets when the vendor's support policy lists `tracking_number`",
-  "attachments": "string[] (optional, max 5) - File references; required for ORDER/PRODUCT tickets when the vendor's support policy lists `product_photo_video`"
+  "attachments": "string[] (optional, max 5) - File ids previously uploaded via POST /api/files/upload; required for ORDER/PRODUCT tickets when the vendor's support policy lists `product_photo_video`"
 }
 ```
+
+> **Attachments provided at creation are persisted.** Each file id in `attachments`
+> is attached to the new ticket exactly as if posted to
+> `POST /api/vendor/tickets/:ticketId/attachments` — an attachment record is
+> created and a `file_references` row registered (so the file is not
+> garbage-collected). They are returned by
+> `GET /api/vendor/tickets/:ticketId/attachments`, not inline in the create
+> response. Each must be a file you own (or a system file); the 5-attachment cap
+> applies. (Previously, attachments sent at creation were silently dropped.)
 
 > **Entity validation.** When `entityType` is `order`/`booking`/`product`, the `entityId`
 > must exist or the request returns `404 TICKET_ENTITY_NOT_FOUND`. For `other` (general or
@@ -92,7 +101,7 @@ Body:
       "user_id": "string",
       "role": "vendor",
       "name": "Acme Store",
-      "avatar_url": null
+      "avatar": null
     },
     "assigned_to_role": null,
     "assigned_to": null,
@@ -104,7 +113,7 @@ Body:
         "user_id": "string",
         "role": "vendor",
         "name": "Acme Store",
-        "avatar_url": null
+        "avatar": null
       }
     ],
     "createdAt": "2026-02-11T19:00:00.000Z",
@@ -267,7 +276,7 @@ Body:
         "user_id": "string",
         "role": "vendor",
         "name": "Acme Store",
-        "avatar_url": null
+        "avatar": null
       },
       "assigned_to_role": "admin",
       "assigned_to": null,
@@ -276,7 +285,7 @@ Body:
         "user_id": "string",
         "role": "admin",
         "name": "Kofi Mensah",
-        "avatar_url": null
+        "avatar": null
       },
       "priority_locked": true,
       "createdAt": "2026-02-11T19:00:00.000Z",
@@ -343,7 +352,7 @@ Body:
       "user_id": "string",
       "role": "vendor",
       "name": "Acme Store",
-      "avatar_url": null
+      "avatar": null
     },
     "assigned_to_role": "admin",
     "assigned_to": null,
@@ -352,7 +361,7 @@ Body:
       "user_id": "string",
       "role": "admin",
       "name": "Kofi Mensah",
-      "avatar_url": "https://.../kofi.png"
+      "avatar": { "id": "…", "key": "…", "url": "https://.../kofi.png", "mimeType": "image/png", "size": 15360, "originalName": "kofi.png" }
     },
     "priority_locked": true,
     "followers": [
@@ -360,13 +369,13 @@ Body:
         "user_id": "string",
         "role": "vendor",
         "name": "Acme Store",
-        "avatar_url": null
+        "avatar": null
       },
       {
         "user_id": "string",
         "role": "agent",
         "name": "Lena Park",
-        "avatar_url": null
+        "avatar": null
       }
     ],
     "createdAt": "2026-02-11T19:00:00.000Z",
@@ -652,7 +661,7 @@ Body:
       "user_id": "string",
       "role": "vendor",
       "name": "Acme Store",
-      "avatar_url": null
+      "avatar": null
     },
     "visible_to_user_ids": [],
     "created_at": "2026-02-11T19:30:00.000Z"
@@ -704,7 +713,7 @@ Body:
         "user_id": "string",
         "role": "admin",
         "name": "Kofi Mensah",
-        "avatar_url": "https://.../kofi.png"
+        "avatar": { "id": "…", "key": "…", "url": "https://.../kofi.png", "mimeType": "image/png", "size": 15360, "originalName": "kofi.png" }
       },
       "visible_to_user_ids": [],
       "created_at": "2026-02-11T19:30:00.000Z"
@@ -721,7 +730,7 @@ Body:
         "user_id": "string",
         "role": "admin",
         "name": "Kofi Mensah",
-        "avatar_url": "https://.../kofi.png"
+        "avatar": { "id": "…", "key": "…", "url": "https://.../kofi.png", "mimeType": "image/png", "size": 15360, "originalName": "kofi.png" }
       },
       "visible_to_user_ids": ["admin1", "admin2"],
       "created_at": "2026-02-11T19:31:00.000Z"
@@ -787,7 +796,7 @@ Body:
       "user_id": "string",
       "role": "vendor",
       "name": "Acme Store",
-      "avatar_url": null
+      "avatar": null
     },
     "createdAt": "2026-02-11T19:30:00.000Z"
   }
@@ -840,7 +849,7 @@ Body:
         "user_id": "string",
         "role": "vendor",
         "name": "Acme Store",
-        "avatar_url": null
+        "avatar": null
       },
       "createdAt": "2026-02-11T19:30:00.000Z"
     }
@@ -872,13 +881,13 @@ each entry in `followers`, the note `author`, and the attachment
   "user_id": "string",
   "role": "vendor",
   "name": "Acme Store",
-  "avatar_url": "https://.../logo.png"
+  "avatar": { "id": "…", "key": "…", "url": "https://.../logo.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" }
 }
 ```
 
 - `name` is resolved from the role-specific profile: admin/customer/agent → `name`, vendor → `display_name` (falls back to `business_name`), agency → `agency_name`.
-- `avatar_url` is the profile photo / logo where one exists, otherwise `null`.
-- If a reference cannot be resolved (deleted profile, etc.), `name` falls back to the capitalised role (e.g. `"Vendor"`) and `avatar_url` is `null`.
+- `avatar` is the profile photo / logo where one exists — a resolved **file object** (`{ id, key, url, mimeType, size, originalName }`, the same shape product images use) — otherwise `null`.
+- If a reference cannot be resolved (deleted profile, etc.), `name` falls back to the capitalised role (e.g. `"Vendor"`) and `avatar` is `null`.
 - A `null` value (e.g. `assigned_to: null`, `assigned_admin: null`) means the corresponding `*_id` is unset.
 
 **Entity summary** — used for the ticket `entity` field:

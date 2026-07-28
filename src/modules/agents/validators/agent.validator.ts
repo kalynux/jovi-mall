@@ -1,18 +1,19 @@
 import { z } from 'zod';
 import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 import { AGENT_CONFIG } from '../config/agent.config';
+import { clearable } from '../../../core/validation/zod.helpers';
 
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
 
 const VehicleInfoSchema = z.object({
     vehicle_type: z.enum(['bike', 'car', 'van', 'truck']),
-    plate_number: z.string().trim().nullable().optional(),
+    plate_number: clearable(z.string().trim()),
     color: z.string().min(1).max(50).trim(),
 });
 
 const LegalIdentitySchema = z.object({
-    drivers_license_number: z.string().trim().nullable().optional(),
-    national_id_number: z.string().trim().nullable().optional(),
+    drivers_license_number: clearable(z.string().trim()),
+    national_id_number: clearable(z.string().trim()),
 });
 
 const EmergencyContactSchema = z.object({
@@ -32,7 +33,7 @@ export type AgentOnboardingStep1Input = z.infer<typeof AgentOnboardingStep1Schem
 export const AgentOnboardingStep2Schema = z.object({
     /** Set to true to skip this step without providing identity data. */
     skip: z.boolean().optional().default(false),
-    avatar_url: z.string().url('avatar_url must be a valid URL').nullable().optional(),
+    avatar_url: clearable(z.string().url('avatar_url must be a valid URL')),
     timezone: z.string().min(1).trim().optional(),
 });
 export type AgentOnboardingStep2Input = z.infer<typeof AgentOnboardingStep2Schema>;
@@ -41,7 +42,10 @@ export type AgentOnboardingStep2Input = z.infer<typeof AgentOnboardingStep2Schem
 
 export const UpdateAgentProfileSchema = z.object({
     name: z.string().min(1).max(100).trim().optional(),
-    avatar_url: z.string().url().nullable().optional(),
+    // Canonical avatar: id of a file uploaded via POST /api/files/upload ('' / null clears it).
+    avatar_file_id: clearable(ObjectIdSchema),
+    /** @deprecated Prefer avatar_file_id. Accepted for backward compatibility. */
+    avatar_url: clearable(z.string().url()),
     timezone: z.string().min(1).trim().optional(),
     preferred_language: z.enum(SUPPORTED_LANGUAGES).optional(),
     vehicle_info: VehicleInfoSchema.optional(),
@@ -83,7 +87,7 @@ export type UpdateAgentSettingsInput = z.infer<typeof UpdateAgentSettingsSchema>
 
 export const SetAvailabilitySchema = z.object({
     state: z.enum(['online', 'offline', 'on_break']),
-    reason: z.string().max(200).trim().nullable().optional().default(null),
+    reason: clearable(z.string().max(200).trim()).default(null),
 });
 export type SetAvailabilityInput = z.infer<typeof SetAvailabilitySchema>;
 
@@ -97,7 +101,7 @@ export type SetAvailabilityInput = z.infer<typeof SetAvailabilitySchema>;
 export const ReportDeviceCapabilitiesSchema = z
     .object({
         platform: z.enum(['android', 'ios', 'web', 'unknown']).optional(),
-        app_version: z.string().max(50).trim().nullable().optional(),
+        app_version: clearable(z.string().max(50).trim()),
         location_permission: z.enum(['always', 'while_in_use', 'denied', 'unknown']).optional(),
         location_services_enabled: z.boolean().nullable().optional(),
         background_location_enabled: z.boolean().nullable().optional(),
@@ -128,7 +132,7 @@ export const SuspendMembershipSchema = z.object({
 export type SuspendMembershipInput = z.infer<typeof SuspendMembershipSchema>;
 
 export const RemoveMembershipSchema = z.object({
-    reason: z.string().max(300).trim().nullable().optional().default(null),
+    reason: clearable(z.string().max(300).trim()).default(null),
 });
 export type RemoveMembershipInput = z.infer<typeof RemoveMembershipSchema>;
 
@@ -137,7 +141,7 @@ export const DeclineRequestSchema = RemoveMembershipSchema;
 export const UpdateEmploymentSchema = z
     .object({
         employment_type: z.enum(['employee', 'contractor', 'freelancer']).optional(),
-        employee_ref: z.string().max(60).trim().nullable().optional(),
+        employee_ref: clearable(z.string().max(60).trim()),
         started_at: z.coerce.date().nullable().optional(),
         ends_at: z.coerce.date().nullable().optional(),
     })
@@ -187,7 +191,7 @@ export const TransferAgentSchema = z.object({
     agentId: ObjectIdSchema,
     fromAgencyId: ObjectIdSchema,
     toAgencyId: ObjectIdSchema,
-    reason: z.string().max(300).trim().nullable().optional().default(null),
+    reason: clearable(z.string().max(300).trim()).default(null),
 });
 export type TransferAgentInput = z.infer<typeof TransferAgentSchema>;
 
@@ -196,7 +200,7 @@ export type TransferAgentInput = z.infer<typeof TransferAgentSchema>;
 export const SetTrackingAllowedSchema = z.object({
     allowed: z.boolean(),
     /** Required when disabling — a silent revocation is unauditable. */
-    reason: z.string().max(300).trim().nullable().optional().default(null),
+    reason: clearable(z.string().max(300).trim()).default(null),
 }).refine((v) => v.allowed || (v.reason !== null && v.reason !== undefined && v.reason.length > 0), {
     message: 'A reason is required when disabling tracking',
     path: ['reason'],
@@ -207,7 +211,7 @@ export type SetTrackingAllowedInput = z.infer<typeof SetTrackingAllowedSchema>;
 
 export const SetAgentStatusSchema = z.object({
     status: z.enum(['pending_verification', 'active', 'inactive', 'suspended']),
-    reason: z.string().max(300).trim().nullable().optional().default(null),
+    reason: clearable(z.string().max(300).trim()).default(null),
 }).refine((v) => v.status !== 'suspended' || (v.reason !== null && v.reason !== undefined && v.reason.length > 0), {
     message: 'A reason is required when suspending an agent',
     path: ['reason'],

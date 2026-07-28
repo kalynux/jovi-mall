@@ -25,8 +25,12 @@ export class UserQuotaValidator implements IUploadValidator {
     }
 
     const { userId, vendorId, role, storageLimitBytes, currentUsageBytes } = context.request.context;
-    const ownerId = role === 'vendor' && vendorId ? vendorId : userId;
-    const ownerType = role === 'vendor' ? 'vendor' : 'system';
+    // Prefer the explicit owner stamped by the api layer (vendor/agency/agent/…);
+    // fall back to the legacy vendor-or-system derivation for callers that don't
+    // set it. This keeps the violation metadata and the fallback usage query
+    // attributed to the real owner, not always 'vendor'/'system'.
+    const ownerId = context.request.context.ownerId ?? (role === 'vendor' && vendorId ? vendorId : userId);
+    const ownerType = context.request.context.ownerType ?? (role === 'vendor' ? 'vendor' : 'system');
 
     // Plan-driven storage limit (resolved by the caller) overrides the static
     // config cap when provided. Storage is the meaningful, plan-tiered lever.

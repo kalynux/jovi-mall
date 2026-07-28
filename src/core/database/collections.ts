@@ -28,6 +28,9 @@ export const MODELS = Object.freeze({
   // Store
   STORE: 'Store',
 
+  // Magazin (delivery agency's business surface — the Store-equivalent for agencies)
+  AGENCY_MAGAZIN: 'AgencyMagazin',
+
   // Catalog
   PRODUCT: 'Product',
   PRODUCT_VARIANT: 'ProductVariant',
@@ -54,6 +57,7 @@ export const MODELS = Object.freeze({
   // Shipments & delivery
   SHIPMENT: 'Shipment',
   SHIPMENT_ASSIGNMENT_OFFER: 'ShipmentAssignmentOffer',
+  SHIPMENT_ASSIGNMENT_SESSION: 'ShipmentAssignmentSession',
   DELIVERY_AGENCY: 'DeliveryAgency',
   DELIVERY_AGENT: 'DeliveryAgent',
   AGENT_INVITE: 'AgentInvite',
@@ -112,11 +116,12 @@ export const MODELS = Object.freeze({
 
   // Billing (pricing plans & credit wallet)
   PRICING_PLAN: 'PricingPlan',
-  VENDOR_PLAN: 'VendorPlan',
+  SUBSCRIBER_PLAN: 'SubscriberPlan',
   CREDIT_WALLET: 'CreditWallet',
   CREDIT_TRANSACTION: 'CreditTransaction',
   CREDIT_TOPUP: 'CreditTopup',
   PLAN_PURCHASE: 'PlanPurchase',
+  BILLING_SETTINGS: 'BillingSettings',
 
   // Earnings (commission, escrow & payout ledger)
   EARNINGS_ACCOUNT: 'EarningsAccount',
@@ -145,6 +150,9 @@ export const COLLECTIONS = Object.freeze({
   // Store
   STORE: 'stores',
 
+  // Magazin (delivery agency's business surface — the Store-equivalent for agencies)
+  AGENCY_MAGAZIN: 'agency_magazins',
+
   // Catalog
   PRODUCT: 'products',
   PRODUCT_VARIANT: 'product_variants',
@@ -171,6 +179,7 @@ export const COLLECTIONS = Object.freeze({
   // Shipments & delivery
   SHIPMENT: 'shipments',
   SHIPMENT_ASSIGNMENT_OFFER: 'shipment_assignment_offers',
+  SHIPMENT_ASSIGNMENT_SESSION: 'shipment_assignment_sessions',
   DELIVERY_AGENCY: 'delivery_agencies',
   DELIVERY_AGENT: 'delivery_agents',
   AGENT_INVITE: 'agent_invites',
@@ -229,11 +238,12 @@ export const COLLECTIONS = Object.freeze({
 
   // Billing (pricing plans & credit wallet)
   PRICING_PLAN: 'pricing_plans',
-  VENDOR_PLAN: 'vendor_plans',
+  SUBSCRIBER_PLAN: 'subscriber_plans',
   CREDIT_WALLET: 'credit_wallets',
   CREDIT_TRANSACTION: 'credit_transactions',
   CREDIT_TOPUP: 'credit_topups',
   PLAN_PURCHASE: 'plan_purchases',
+  BILLING_SETTINGS: 'billing_settings',
 
   // Earnings (commission, escrow & payout ledger)
   EARNINGS_ACCOUNT: 'earnings_accounts',

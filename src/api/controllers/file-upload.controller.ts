@@ -6,6 +6,7 @@ import { getAcceptableClaimedMimeTypes, isAcceptableClaimedMimeType } from '../.
 import { getStorageProvider } from '../../core/storage';
 import { FileRepositoryMongo } from '../../modules/catalog/repositories/mongo/file.repository.mongo';
 import { IUploadObserver, IVirusScanner } from '../../core/uploads/upload-policy.types';
+import { FileOwnerType } from '../../modules/catalog/models/file.model';
 import { entitlementService } from '../../modules/billing/services/entitlement.service';
 import { mediaStorageService } from '../../modules/catalog/domain/services/media/MediaStorageService';
 
@@ -28,21 +29,28 @@ const ACCEPTABLE_VIDEO_CLAIMED_TYPES = getAcceptableClaimedMimeTypes(
     Object.keys(getVideoUploadConfig().perMimeType),
 );
 
+/** Owner types whose uploads are metered against a plan-driven storage cap. */
+type MeteredOwnerType = 'vendor' | 'agency' | 'agent';
+
 /**
- * Resolve the vendor's plan-driven storage limit and current media usage so the
- * upload pipeline can enforce it. Returns an empty object for non-vendors (their
- * uploads fall back to the static config quota). Kept here (api layer) so
- * `core/uploads` stays decoupled from the billing module.
+ * Resolve the owner's plan-driven storage limit and current media usage so the
+ * upload pipeline can enforce it. Returns an empty object for owner types that
+ * are not plan-metered (their uploads fall back to the static config quota).
+ * Kept here (api layer) so `core/uploads` stays decoupled from the billing module.
  */
-async function resolveVendorStorageContext(
-    vendorId?: string,
+async function resolveStorageContext(
+    ownerType: string,
+    ownerId?: string,
 ): Promise<{ storageLimitBytes?: number; currentUsageBytes?: number }> {
-    if (!vendorId) return {};
-    const [entitlements, currentUsageBytes] = await Promise.all([
-        entitlementService.getEntitlements(vendorId),
-        mediaStorageService.getUsedBytes('vendor', vendorId),
+    if (!ownerId || (ownerType !== 'vendor' && ownerType !== 'agency' && ownerType !== 'agent')) {
+        return {};
+    }
+    const metered = ownerType as MeteredOwnerType;
+    const [storageLimitBytes, currentUsageBytes] = await Promise.all([
+        entitlementService.resolveMaxStorageBytes(metered, ownerId),
+        mediaStorageService.getUsedBytes(metered, ownerId),
     ]);
-    return { storageLimitBytes: entitlements.maxStorageBytes, currentUsageBytes };
+    return { storageLimitBytes, currentUsageBytes };
 }
 
 // No-op implementations for observer and scanner
@@ -158,8 +166,9 @@ export class FileUploadController {
                 virusScanner
             );
 
-            // Resolve plan-driven storage limit + current usage for vendors.
-            const storageCtx = await resolveVendorStorageContext(vendorId);
+            // Resolve plan-driven storage limit + current usage for the uploading
+            // owner (vendor/agency/agent).
+            const storageCtx = await resolveStorageContext(userRole, req.auth!.role_entity?._id?.toString());
 
             // Execute upload
             const uploadedFiles = await uploadIntakeService.execute({
@@ -168,6 +177,10 @@ export class FileUploadController {
                     userId,
                     vendorId,
                     role: userRole === 'admin' ? 'admin' : userRole === 'vendor' ? 'vendor' : 'user',
+                    // Stamp the real per-role uploader so the file is owned by (and
+                    // only attachable by) this actor — see FileReferenceService.
+                    ownerType: userRole as FileOwnerType,
+                    ownerId: req.auth!.role_entity?._id?.toString(),
                     ...storageCtx,
                 },
                 files: req.files.map(file => ({
@@ -274,8 +287,9 @@ export class FileUploadController {
                 virusScanner
             );
 
-            // Resolve plan-driven storage limit + current usage for vendors.
-            const storageCtx = await resolveVendorStorageContext(vendorId);
+            // Resolve plan-driven storage limit + current usage for the uploading
+            // owner (vendor/agency/agent).
+            const storageCtx = await resolveStorageContext(userRole, req.auth!.role_entity?._id?.toString());
 
             // Execute upload
             const uploadedFiles = await uploadIntakeService.execute({
@@ -284,6 +298,10 @@ export class FileUploadController {
                     userId,
                     vendorId,
                     role: userRole === 'admin' ? 'admin' : userRole === 'vendor' ? 'vendor' : 'user',
+                    // Stamp the real per-role uploader so the file is owned by (and
+                    // only attachable by) this actor — see FileReferenceService.
+                    ownerType: userRole as FileOwnerType,
+                    ownerId: req.auth!.role_entity?._id?.toString(),
                     ...storageCtx,
                 },
                 files: req.files.map(file => ({

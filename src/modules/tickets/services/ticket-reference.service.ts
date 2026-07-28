@@ -3,9 +3,11 @@ import { OrderModel } from '../../orders/order.model';
 import { ShipmentModel } from '../../shipments/shipment.model';
 import { ProductModel } from '../../catalog/models/product.model';
 import { CustomerModel } from '../../customers/customer.model';
-import { DeliveryAgencyModel } from '../../delivery/delivery-agency.model';
+import { AgencyMagazinModel } from '../../magazin/models/magazin.model';
 import { FileModel } from '../../catalog/models/file.model';
 import { getStorageProvider } from '../../../core/storage/storage.instance';
+import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
+import { resolveFileDetails } from '../../catalog/read-models/file-detail.resolver';
 
 /**
  * Ticket Reference Service
@@ -111,9 +113,16 @@ export class TicketReferenceService {
         // ── Batch-resolve customer labels ──
         const customerIds = [...new Set(orders.map(o => o.customer_id?.toString()).filter(Boolean))] as string[];
         const customers = customerIds.length
-            ? await CustomerModel.find({ _id: { $in: customerIds } }).select('name avatar_url').lean()
+            ? await CustomerModel.find({ _id: { $in: customerIds } }).select('name avatar_file_id avatar_url').lean()
             : [];
         const customerMap = new Map(customers.map(c => [c._id.toString(), c as any]));
+
+        // Resolve customer avatar File references into FileDetail objects.
+        const avatarByFileId = await resolveFileDetails(
+            customers.map((c: any) => c.avatar_file_id?.toString() ?? null),
+            new FileRepositoryMongo(),
+            getStorageProvider(),
+        );
 
         // ── Shipments for this page, scoped to the actor for agency/agent ──
         const orderIds = orders.map(o => o._id);
@@ -125,12 +134,12 @@ export class TicketReferenceService {
             .select('order_id agency_id agent_id tracking_number status')
             .lean();
 
-        // ── Batch-resolve agency names ──
+        // ── Batch-resolve agency names (from the Magazin, keyed by agency_id) ──
         const agencyIds = [...new Set(shipments.map(s => s.agency_id?.toString()).filter(Boolean))] as string[];
-        const agencies = agencyIds.length
-            ? await DeliveryAgencyModel.find({ _id: { $in: agencyIds } }).select('agency_name').lean()
+        const magazins = agencyIds.length
+            ? await AgencyMagazinModel.find({ agency_id: { $in: agencyIds } }).select('agency_id name').lean()
             : [];
-        const agencyNameMap = new Map(agencies.map(a => [a._id.toString(), (a as any).agency_name]));
+        const agencyNameMap = new Map(magazins.map(m => [(m as any).agency_id.toString(), (m as any).name]));
 
         const shipmentsByOrder = new Map<string, any[]>();
         for (const s of shipments) {
@@ -156,7 +165,7 @@ export class TicketReferenceService {
                 fulfillmentStatus: o.fulfillment_status,
                 createdAt: o.created_at,
                 customerName: customer?.name ?? null,
-                customerAvatarUrl: customer?.avatar_url ?? null,
+                customerAvatar: (customer?.avatar_file_id ? avatarByFileId.get(customer.avatar_file_id.toString()) ?? null : null),
                 shipments: shipmentsByOrder.get(o._id.toString()) ?? []
             };
         });

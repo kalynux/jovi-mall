@@ -282,8 +282,25 @@ export interface IDeliveryAgency extends Document {
   email_verified: boolean;
   phone?: string;
   phone_verified: boolean;
-  agency_name: string;
-  logo_url: string | null;
+  /**
+   * Personal/contact display name for this agency account. The public BUSINESS
+   * name lives on the agency's Magazin (see `src/modules/magazin/`), not here —
+   * mirroring how a vendor's business name lives on their Store.
+   */
+  display_name?: string;
+  /**
+   * Personal profile avatar, held as a File reference (not a URL) so it registers
+   * in `file_references` and is deletion-protected — distinct from the business
+   * logo on the Magazin.
+   */
+  avatar_file_id: mongoose.Types.ObjectId | null;
+  /**
+   * ISO-2 country the agency operates in (e.g. "CM"). Set once during
+   * onboarding Step 1 and immutable afterwards — headquarters addresses are
+   * validated against it. Null only on legacy documents that predate the
+   * field (they may set it once via the profile PATCH).
+   */
+  country: string | null;
   /**
    * Regions covering this agency's service areas.
    * Min 1 when onboarding is complete.
@@ -341,8 +358,9 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
     email_verified: { type: Boolean, default: false },
     phone: { type: String, trim: true },
     phone_verified: { type: Boolean, default: false },
-    agency_name: { type: String, required: true },
-    logo_url: { type: String, default: null },
+    display_name: { type: String },
+    avatar_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },
+    country: { type: String, default: null, trim: true, uppercase: true },
     coverage_areas: { type: [String], default: [] },
     headquarters_addresses: { type: [HeadquartersAddressSchema], default: [] },
     payout_details: { type: [PayoutMethodSchema], default: [] },

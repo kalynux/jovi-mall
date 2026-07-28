@@ -197,7 +197,7 @@ history, and the parent order's merged multi-agency timeline.
         "country": "CM"
       }
     },
-    "agent": { "id": "507f1f77bcf86cd799439077", "name": "Paul Biya Jr.", "phone": "+237670000003", "avatarUrl": null },
+    "agent": { "id": "507f1f77bcf86cd799439077", "name": "Paul Biya Jr.", "phone": "+237670000003", "avatar": null },
     "handover": null,
     "statusHistory": [
       { "status": "assigned", "changedAt": "2026-07-05T09:00:00.000Z", "changedByUserId": null, "changedByRole": "system" },
@@ -275,15 +275,23 @@ one transaction.
 | Paid | `agent_delivered` → `delivered` when | Auto-confirm? |
 |---|---|---|
 | Online | the **customer** confirms that shipment ([customer orders](../customer/orders.md)) | Yes — after a **7-day** dispute window |
-| COD | the **agent submits the customer's delivery code** ([`collect`](../agent/cod-cash.md#collect)) | **Never** |
+| COD | the **agent submits the customer's delivery code** ([`collect`](../agent/cod-cash.md#collect)) | Yes — after **7 days** the cash is recorded as collected *without* a code |
 
-> **COD:** `delivered` is rejected as a status change — the code submission is the only way there.
-> The response to `agent_delivered` carries `requiresDeliveryCode: true`, which is the agent app's
-> cue to ask for the code. COD is **excluded from the 7-day auto-confirm** on purpose: time passing
-> is not evidence of payment, and auto-confirming would release everyone's earnings against cash
-> nobody collected. A COD customer who will not pay ends at `failed` → `returned`.
+> **COD:** `delivered` is rejected as a status change — a recorded cash collection is the only way
+> there, so `delivered` and "cash collected" are always the same event. The normal route is the agent
+> submitting the customer's code: the response to `agent_delivered` carries `requiresDeliveryCode:
+> true`, the agent app's cue to ask for it.
 >
-> `picked_up` additionally requires an assigned agent (`COD_AGENT_NOT_ASSIGNED`). A `returned` COD
+> If the shipment sits at `agent_delivered` for **7 days** with no code, the auto-confirm sweep records
+> the cash as **collected without a code** (`verification.method: "auto_no_code"`), marks the shipment
+> `delivered`, and makes the **agent** liable for that cash — leaving a shipment at `agent_delivered`
+> for the whole window is treated as an implicit assertion that the cash was taken. So an agent who was
+> **not** paid must move the shipment `failed` → `returned` **within the window**, or they will be
+> booked as holding cash they never collected. This auto-collect never releases anyone's earnings
+> prematurely: COD earnings carry `requires_cash_settlement` and cannot release until the platform
+> physically holds the remitted cash (see [cod-cash-management.md](./cod-cash-management.md)).
+>
+> `picked_up` additionally requires an assigned agent (`SHIPMENT_AGENT_NOT_ASSIGNED`). A `returned` COD
 > shipment voids its pending cash collection.
 
 **Success Response** (`200 OK`):

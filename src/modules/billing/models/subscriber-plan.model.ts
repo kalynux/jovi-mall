@@ -1,26 +1,32 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import { BillingOwnerType, BILLING_OWNER_TYPES } from '../billing.types';
 
 /**
- * VendorPlan - A vendor's assignment to a pricing plan.
+ * SubscriberPlan - An owner's assignment to a pricing plan.
  *
- * A vendor holds at most TWO non-terminal records at once:
+ * `owner_type` + `owner_id` identify the subscriber (a vendor, agency or agent),
+ * mirroring the credit wallet. An owner holds at most TWO non-terminal records:
  *   - one `active`            — the plan currently in force
  *   - one `pending_activation`— a plan bought in advance, scheduled to take over
  *                               the moment the active plan expires (no lost days)
  *
  * `expires_at` is null for the free/never-expiring tier. `allowance_granted`
  * guards the one-time credit grant so a plan can never be granted twice.
+ *
+ * (Formerly `VendorPlan`; generalized to owner scope — see billing.types and the
+ * `migrate:billing-owner-scope` migration.)
  */
 
-export type VendorPlanStatus = 'active' | 'pending_activation' | 'expired' | 'cancelled';
+export type SubscriberPlanStatus = 'active' | 'pending_activation' | 'expired' | 'cancelled';
 
-export interface IVendorPlan extends Document {
-  vendor_id: mongoose.Types.ObjectId;
+export interface ISubscriberPlan extends Document {
+  owner_type: BillingOwnerType;
+  owner_id: mongoose.Types.ObjectId;
   plan_id: mongoose.Types.ObjectId;
   /** Denormalized plan code for fast entitlement reads without a populate. */
   plan_code: string;
-  status: VendorPlanStatus;
+  status: SubscriberPlanStatus;
   /** When this plan became active. Null while `pending_activation`. */
   started_at: Date | null;
   /** When this plan expires. Null for the never-expiring free tier. */
@@ -35,9 +41,10 @@ export interface IVendorPlan extends Document {
   updated_at: Date;
 }
 
-const VendorPlanSchema = new Schema<IVendorPlan>(
+const SubscriberPlanSchema = new Schema<ISubscriberPlan>(
   {
-    vendor_id: { type: Schema.Types.ObjectId, ref: MODELS.VENDOR, required: true },
+    owner_type: { type: String, enum: BILLING_OWNER_TYPES, required: true },
+    owner_id: { type: Schema.Types.ObjectId, required: true },
     plan_id: { type: Schema.Types.ObjectId, ref: MODELS.PRICING_PLAN, required: true },
     plan_code: { type: String, required: true, trim: true },
     status: {
@@ -54,21 +61,21 @@ const VendorPlanSchema = new Schema<IVendorPlan>(
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );
 
-// Enforce the "at most one active + one pending" invariant per vendor.
+// Enforce the "at most one active + one pending" invariant per owner.
 // Distinct index names are required since the key pattern is shared.
-VendorPlanSchema.index(
-  { vendor_id: 1 },
-  { unique: true, name: 'uniq_active_per_vendor', partialFilterExpression: { status: 'active' } }
+SubscriberPlanSchema.index(
+  { owner_type: 1, owner_id: 1 },
+  { unique: true, name: 'uniq_active_per_owner', partialFilterExpression: { status: 'active' } }
 );
-VendorPlanSchema.index(
-  { vendor_id: 1 },
-  { unique: true, name: 'uniq_pending_per_vendor', partialFilterExpression: { status: 'pending_activation' } }
+SubscriberPlanSchema.index(
+  { owner_type: 1, owner_id: 1 },
+  { unique: true, name: 'uniq_pending_per_owner', partialFilterExpression: { status: 'pending_activation' } }
 );
 // Worker scans active plans by expiry.
-VendorPlanSchema.index({ status: 1, expires_at: 1 });
+SubscriberPlanSchema.index({ status: 1, expires_at: 1 });
 
-export const VendorPlanModel = mongoose.model<IVendorPlan>(
-  MODELS.VENDOR_PLAN,
-  VendorPlanSchema,
-  COLLECTIONS.VENDOR_PLAN
+export const SubscriberPlanModel = mongoose.model<ISubscriberPlan>(
+  MODELS.SUBSCRIBER_PLAN,
+  SubscriberPlanSchema,
+  COLLECTIONS.SUBSCRIBER_PLAN
 );

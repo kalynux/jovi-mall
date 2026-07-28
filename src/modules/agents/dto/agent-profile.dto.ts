@@ -9,9 +9,11 @@ import {
     IAgentSettings,
     AgentTrackingStateStatus,
 } from '../models/agent.model';
+import mongoose from 'mongoose';
 import { IGeoPoint } from '../../../core/types/geo.types';
 import { UpdateAgentProfileInput } from '../validators/agent.validator';
 import { AGENT_CONFIG } from '../config/agent.config';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
@@ -40,7 +42,8 @@ export interface GetAgentProfileResponseDto {
     emailVerified: boolean;
     phone: string | null;
     phoneVerified: boolean;
-    avatarUrl: string | null;
+    /** Profile avatar as a resolved file object (same shape as product media), or null. */
+    avatar: FileDetail | null;
     vehicleInfo: IAgentVehicleInfo | null;
     /**
      * SECURITY: legal_identity (drivers_license_number, national_id_number)
@@ -77,7 +80,7 @@ export interface AgentRosterEntryDto {
     name: string;
     email: string | null;
     phone: string | null;
-    avatarUrl: string | null;
+    avatar: FileDetail | null;
     status: string;
     vehicleInfo: IAgentVehicleInfo | null;
     availability: IAgentAvailability['state'];
@@ -97,7 +100,11 @@ export class AgentProfileMapper {
      *   agencies, and which of them the caller may see is the membership
      *   endpoints' business, not this mapper's
      */
-    static toResponseDto(agent: IDeliveryAgent, now: Date = new Date()): GetAgentProfileResponseDto {
+    static toResponseDto(
+        agent: IDeliveryAgent,
+        now: Date = new Date(),
+        avatar: FileDetail | null = null,
+    ): GetAgentProfileResponseDto {
         return {
             id: agent._id.toString(),
             name: agent.name,
@@ -105,7 +112,8 @@ export class AgentProfileMapper {
             emailVerified: agent.email_verified,
             phone: agent.phone ?? null,
             phoneVerified: agent.phone_verified,
-            avatarUrl: agent.avatar_url,
+            // Resolved by the caller (the agent has an id-only reference on the doc).
+            avatar,
             vehicleInfo: agent.vehicle_info,
             emergencyContact: agent.emergency_contact,
             availability: agent.availability,
@@ -152,13 +160,13 @@ export class AgentProfileMapper {
         };
     }
 
-    static toRosterEntryDto(agent: IDeliveryAgent): AgentRosterEntryDto {
+    static toRosterEntryDto(agent: IDeliveryAgent, avatar: FileDetail | null = null): AgentRosterEntryDto {
         return {
             id: agent._id.toString(),
             name: agent.name,
             email: agent.email ?? null,
             phone: agent.phone ?? null,
-            avatarUrl: agent.avatar_url,
+            avatar,
             status: agent.status,
             vehicleInfo: agent.vehicle_info,
             availability: agent.availability?.state ?? 'offline',
@@ -173,6 +181,9 @@ export class AgentProfileMapper {
         const payload: Partial<IDeliveryAgent> = {};
 
         if (input.name !== undefined) payload.name = input.name;
+        if (input.avatar_file_id !== undefined) {
+            payload.avatar_file_id = input.avatar_file_id ? new mongoose.Types.ObjectId(input.avatar_file_id) : null;
+        }
         if (input.avatar_url !== undefined) payload.avatar_url = input.avatar_url as string | null;
         if (input.timezone !== undefined) payload.timezone = input.timezone;
         if (input.preferred_language !== undefined) payload.preferred_language = input.preferred_language;

@@ -1,15 +1,16 @@
 import { z } from 'zod';
 import { GeoPointZodSchema } from '../../../core/types/geo.types';
 import { GeoAddressZodSchema } from '../../../core/types/geo-address.types';
+import { clearable } from '../../../core/validation/zod.helpers';
 
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
 
 const SavedAddressSchema = z.object({
     label: z.string().min(1).max(50).trim(),
     address_line1: z.string().min(1).max(200).trim(),
-    address_line2: z.string().max(200).trim().nullable().optional(),
+    address_line2: clearable(z.string().max(200).trim()),
     city: z.string().min(1).max(100).trim(),
-    state: z.string().max(100).trim().nullable().optional(),
+    state: clearable(z.string().max(100).trim()),
     country: z.string().length(2).toUpperCase().default('CM'),
     is_default: z.boolean().default(false),
     /** @deprecated Prefer `geo`; kept for backward compatibility. */
@@ -44,10 +45,13 @@ const SavedPaymentMethodSchema = z.object({
 
 export const UpdateCustomerProfileSchema = z.object({
     name: z.string().min(1).max(100).trim().optional(),
-    avatarUrl: z.string().url('avatarUrl must be a valid URL').nullable().optional(),
-    bio: z.string().max(500).trim().nullable().optional(),
+    // Canonical avatar: id of a file uploaded via POST /api/files/upload ('' / null clears it).
+    avatarFileId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'avatarFileId must be a valid file id')),
+    /** @deprecated Prefer avatarFileId. Accepted for backward compatibility. */
+    avatarUrl: clearable(z.string().url('avatarUrl must be a valid URL')),
+    bio: clearable(z.string().max(500).trim()),
     dateOfBirth: z.coerce.date().nullable().optional(),
-    recentProductCode: z.string().trim().nullable().optional(),
+    recentProductCode: clearable(z.string().trim()),
     preferences: PreferencesSchema.optional(),
 });
 

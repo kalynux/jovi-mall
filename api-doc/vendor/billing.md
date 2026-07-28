@@ -4,6 +4,16 @@ Vendor-facing endpoints for pricing plans, the credit wallet, top-up purchases
 and billing settings. Read [overview.md](./overview.md) first for concepts and
 shared data shapes.
 
+> **Now one engine across roles.** The billing engine was generalized so
+> **agencies** and **agents** have the identical surface under `/api/agency` and
+> `/api/agent` (see [agency/billing.md](../agency/billing.md),
+> [agent/billing.md](../agent/billing.md), and the cross-role
+> [overview](../billing-plans-across-roles.md)). Two response-shape changes landed
+> here as a result: the plan-assignment object is now keyed **`subscriberPlan`**
+> (was `vendorPlan`) and carries `owner_type`/`owner_id` (was `vendor_id`), and the
+> purchase field is **`subscriber_plan_id`** (was `vendor_plan_id`). Update any
+> code reading the old names.
+
 ## Base Path
 ```
 /api/vendor
@@ -101,8 +111,8 @@ Every endpoint is automatically scoped to the authenticated vendor.
         "currency": "XAF", "term_days": 30, "credit_allowance": 850,
         "max_active_products": 150, "commission_percent": 5, "is_active": true
       },
-      "vendorPlan": {
-        "_id": "667a0001", "vendor_id": "6601", "plan_id": "665f0002",
+      "subscriberPlan": {
+        "_id": "667a0001", "owner_type": "vendor", "owner_id": "6601", "plan_id": "665f0002",
         "plan_code": "growth", "status": "active",
         "started_at": "2026-06-19T10:00:00.000Z",
         "expires_at": "2026-07-19T10:00:00.000Z",
@@ -112,8 +122,8 @@ Every endpoint is automatically scoped to the authenticated vendor.
     },
     "pending": {
       "plan": { "_id": "665f0003", "code": "business", "name": "Business", "price": 25000, "term_days": 30, "credit_allowance": 4500, "max_active_products": null, "commission_percent": 3 },
-      "vendorPlan": {
-        "_id": "667a0002", "plan_code": "business", "status": "pending_activation",
+      "subscriberPlan": {
+        "_id": "667a0002", "owner_type": "vendor", "plan_code": "business", "status": "pending_activation",
         "started_at": "2026-07-19T10:00:00.000Z",
         "expires_at": "2026-08-18T10:00:00.000Z",
         "allowance_granted": false
@@ -127,7 +137,7 @@ Every endpoint is automatically scoped to the authenticated vendor.
   }
 }
 ```
-`pending` is `null` when nothing is queued. For the free tier, `active.vendorPlan.expires_at` is `null`.
+`pending` is `null` when nothing is queued. For the free tier, `active.subscriberPlan.expires_at` is `null`.
 
 `storage` reflects the active plan's media storage limit and the vendor's current product-media usage (bytes). `limitBytes` = the active plan's `max_storage_bytes`; `usedBytes` excludes digital-product assets; `remainingBytes` is clamped at 0. For a full per-category breakdown use the media endpoints (`GET /api/files` / `GET /api/files/storage`).
 
@@ -171,7 +181,7 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
     "purchase": {
       "_id": "66cc01", "plan_code": "growth", "price": 5000, "currency": "XAF",
       "status": "pending", "gateway": "NOTCHPAY", "gateway_ref": "notch_tx_p1",
-      "vendor_plan_id": null,
+      "subscriber_plan_id": null,
       "created_at": "2026-06-19T14:00:00.000Z", "updated_at": "2026-06-19T14:00:00.000Z"
     },
     "instructions": { "ussdCode": "*126#", "message": "Dial to approve", "expiresAt": "2026-06-19T14:15:00.000Z" }
@@ -195,7 +205,7 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
 
 ### POST /api/vendor/plan-purchases/:id/verify
 
-**Description**: Verify a plan purchase against the gateway and apply it. **Idempotent** — safe to poll. On confirmed success the purchase becomes `paid` and the plan is assigned/activated (or queued); the resulting `VendorPlan` is returned. On gateway failure/cancellation it becomes `failed`; while processing it stays `pending`.
+**Description**: Verify a plan purchase against the gateway and apply it. **Idempotent** — safe to poll. On confirmed success the purchase becomes `paid` and the plan is assigned/activated (or queued); the resulting `SubscriberPlan` (`subscriberPlan`) is returned. On gateway failure/cancellation it becomes `failed`; while processing it stays `pending`.
 
 **Request Headers**: `Authorization: Bearer <token>`
 
@@ -212,19 +222,19 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
     "purchase": {
       "_id": "66cc01", "plan_code": "growth", "price": 5000, "currency": "XAF",
       "status": "paid", "gateway": "NOTCHPAY", "gateway_ref": "notch_tx_p1",
-      "vendor_plan_id": "667a0005",
+      "subscriber_plan_id": "667a0005",
       "created_at": "2026-06-19T14:00:00.000Z", "updated_at": "2026-06-19T14:03:00.000Z"
     },
-    "vendorPlan": {
-      "_id": "667a0005", "plan_code": "growth", "status": "active",
+    "subscriberPlan": {
+      "_id": "667a0005", "owner_type": "vendor", "plan_code": "growth", "status": "active",
       "started_at": "2026-06-19T14:03:00.000Z", "expires_at": "2026-07-19T14:03:00.000Z",
       "allowance_granted": true, "payment_reference": "notch_tx_p1"
     }
   }
 }
 ```
-- `purchase.status`: `paid` → applied (read `vendorPlan` / refresh `GET /vendor/plan`); `pending` → keep polling (`vendorPlan` is `null`); `failed` → show retry; **`reversed` → the card payment was charged back/refunded after the fact and the plan was undone — the vendor was dropped to the free tier (see "Payment disputes" below).**
-- `vendorPlan.status` is `active` (activated now) or `pending_activation` (queued behind the current paid plan). On an idempotent re-call after it was already paid, `vendorPlan` may be `null` — read `GET /vendor/plan` for the current state.
+- `purchase.status`: `paid` → applied (read `subscriberPlan` / refresh `GET /vendor/plan`); `pending` → keep polling (`subscriberPlan` is `null`); `failed` → show retry; **`reversed` → the card payment was charged back/refunded after the fact and the plan was undone — the vendor was dropped to the free tier (see "Payment disputes" below).**
+- `subscriberPlan.status` is `active` (activated now) or `pending_activation` (queued behind the current paid plan). On an idempotent re-call after it was already paid, `subscriberPlan` may be `null` — read `GET /vendor/plan` for the current state.
 
 **Error Responses**:
 - `404 BILLING_PLAN_PURCHASE_NOT_FOUND` — id unknown / not owned by this vendor.

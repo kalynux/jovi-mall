@@ -104,8 +104,10 @@ export class UploadIntakeService {
           size: fileContext.size,
           checksum: fileContext.hash || storageResult.checksum,  // Use fingerprint hash if available
           originalName: fileContext.originalName,
-          ownerType: request.context.vendorId ? 'vendor' : 'system',
-          ownerId: request.context.vendorId || undefined,
+          // Prefer the explicit per-role owner resolved by the api layer; fall
+          // back to the legacy vendor-only stamping for callers that don't set it.
+          ownerType: request.context.ownerType ?? (request.context.vendorId ? 'vendor' : 'system'),
+          ownerId: request.context.ownerId ?? request.context.vendorId ?? undefined,
           deletedAt: null,
           purgeAt: null,
         });

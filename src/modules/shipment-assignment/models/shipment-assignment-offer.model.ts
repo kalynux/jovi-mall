@@ -27,16 +27,27 @@ import { IShipmentHandoverPickup } from '../../shipments/shipment.model';
  * One row per (shipment, agent) attempt, appended in sequence. Reading a
  * shipment's offers in order tells the whole story: who it was offered to, why
  * (score + breakdown), and what they did (accept / reject / ignore-timeout).
- * Nothing is mutated except an offer's own terminal transition + `responded_at`.
+ *
+ * ── Several offers can be live at once (auto-assignment) ──────────────────────
+ *
+ * Under the auto-assignment requirement a timed-out (ignored) agent KEEPS their
+ * offer and can still accept while the shipment is unassigned. So for an AUTO
+ * offer, a timeout does NOT move the offer off `pending` — the broadcast simply
+ * also offers the next agent, and several `pending` offers accumulate for the
+ * one shipment (linked by `session_id`). The single serialisation point is the
+ * shipment-level bind CAS (`ShipmentRepository.bindAgentIfUnassigned`), not an
+ * offer-uniqueness constraint — which is why the old one-pending-offer partial
+ * unique index is gone. `expired` therefore applies only to MANUAL offers (which
+ * remain one-shot). MANUAL offers still expire on timeout.
  */
 
 export type OfferStatus =
   | 'pending'
   | 'accepted'
   | 'rejected'
-  | 'expired' // agent ignored it past expires_at (the "Ignore" branch)
-  | 'cancelled' // the agency withdrew it, or a reassignment superseded the shipment
-  | 'superseded'; // defensive: another offer for the same shipment won the race
+  | 'expired' // a MANUAL offer the agent ignored past expires_at (auto offers stay pending)
+  | 'cancelled' // the agency withdrew it, or the session was disposed of
+  | 'superseded'; // another agent won the shipment; this standing offer is retired
 
 /** How the offer was created. */
 export type OfferOrigin = 'manual' | 'auto';
@@ -70,6 +81,16 @@ export interface IShipmentAssignmentOffer extends Document {
 
   status: OfferStatus;
   origin: OfferOrigin;
+
+  /**
+   * The auto-assignment session (temporary ranking) this offer belongs to, for
+   * an AUTO offer. Null for a manual pick. Auto offers never expire on the sweep
+   * — their lifecycle is driven by the session; only manual offers (null here)
+   * are reaped on timeout.
+   */
+  session_id: mongoose.Types.ObjectId | null;
+  /** Which broadcast round created (or last re-nudged) this offer. 0 for manual. */
+  round: number;
 
   /** Who created the offer. `system` for auto, `agency` for a manual pick. */
   created_by: {
@@ -147,6 +168,8 @@ const ShipmentAssignmentOfferSchema = new Schema<IShipmentAssignmentOffer>(
       required: true,
     },
     origin: { type: String, enum: ['manual', 'auto'], required: true },
+    session_id: { type: Schema.Types.ObjectId, ref: MODELS.SHIPMENT_ASSIGNMENT_SESSION, default: null },
+    round: { type: Number, default: 0 },
     created_by: {
       type: new Schema(
         {
@@ -218,17 +241,21 @@ const ShipmentAssignmentOfferSchema = new Schema<IShipmentAssignmentOffer>(
 
 // Agent work queue: "my offers", newest first.
 ShipmentAssignmentOfferSchema.index({ agent_id: 1, status: 1, created_at: -1 });
-// A shipment's offer history / current live offer.
+// A shipment's offer history + the "supersede the losing standing offers" sweep.
 ShipmentAssignmentOfferSchema.index({ shipment_id: 1, status: 1 });
-// The expiry sweep: pending rows past their deadline.
-ShipmentAssignmentOfferSchema.index({ status: 1, expires_at: 1 });
-// At most ONE live (pending) offer per shipment — the sequential invariant. A
-// partial unique index enforces it at the storage layer, so a race between two
-// offer-creators for the same shipment cannot produce two pending offers.
-ShipmentAssignmentOfferSchema.index(
-  { shipment_id: 1 },
-  { unique: true, partialFilterExpression: { status: 'pending' } }
-);
+// The accept path: this agent's standing offer for this shipment (there is at
+// most one pending offer PER AGENT per shipment — the broadcast never re-offers
+// the same agent twice; enforced in the repository, not with a unique index).
+ShipmentAssignmentOfferSchema.index({ shipment_id: 1, agent_id: 1, status: 1 });
+// The MANUAL-offer expiry sweep: pending manual (session_id: null) rows past
+// their deadline. Auto offers never expire, so they are excluded by the query.
+ShipmentAssignmentOfferSchema.index({ session_id: 1, status: 1, expires_at: 1 });
+//
+// NOTE: the old partial-unique index on `{ shipment_id }` where status:'pending'
+// (one live offer per shipment) was DELETED on purpose. The auto-assignment
+// requirement needs several standing offers per shipment at once (a timed-out
+// agent keeps an acceptable offer); the single winner is now decided by the
+// shipment-level bind CAS, not by an offer-uniqueness constraint.
 
 export const ShipmentAssignmentOfferModel = mongoose.model<IShipmentAssignmentOffer>(
   MODELS.SHIPMENT_ASSIGNMENT_OFFER,

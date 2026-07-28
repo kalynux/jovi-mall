@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
+import { clearable } from '../../../core/validation/zod.helpers';
 import { agentDepositService } from '../services/agent-deposit.service';
 import { agencyRemittanceService } from '../services/agency-remittance.service';
 import { codDiscrepancyService } from '../services/cod-discrepancy.service';
@@ -14,7 +15,7 @@ import {
 const RecordDepositSchema = z.object({
   agentId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid agent ID'),
   amount: z.number().int().positive('Amount must be a positive integer (minor units)'),
-  note: z.string().trim().max(500).nullable().optional(),
+  note: clearable(z.string().trim().max(500)),
 });
 
 const ListDepositsQuerySchema = CodPaginationQuerySchema.extend({
@@ -25,7 +26,7 @@ const ListDepositsQuerySchema = CodPaginationQuerySchema.extend({
 const DeclareRemittanceSchema = z.object({
   amount: z.number().int().positive('Amount must be a positive integer (minor units)'),
   reference: z.string().trim().min(1, 'A transfer/receipt reference is required').max(200),
-  note: z.string().trim().max(500).nullable().optional(),
+  note: clearable(z.string().trim().max(500)),
 });
 
 const ListRemittancesQuerySchema = CodPaginationQuerySchema.extend({

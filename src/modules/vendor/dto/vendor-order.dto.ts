@@ -6,6 +6,7 @@
  */
 
 import { IGeoAddress } from '../../../core/types/geo-address.types';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 
 export interface VendorOrderListItemDTO {
     id: string;
@@ -17,7 +18,7 @@ export interface VendorOrderListItemDTO {
         id: string;
         name: string | null;
         email: string | null;
-        avatar: string | null;
+        avatar: FileDetail | null;
     };
 
     subtotal: number;
@@ -63,7 +64,7 @@ export interface DeliveryAgentDTO {
     id: string;
     name: string;
     phone: string | null;
-    avatarUrl: string | null;
+    avatar: FileDetail | null;
 }
 
 export interface OrderDeliveryDTO {
@@ -87,7 +88,7 @@ export interface VendorOrderDetailsDTO {
         name: string | null;
         email: string | null;
         phone: string | null;
-        avatar: string | null;
+        avatar: FileDetail | null;
         orderCount: number;
         totalSpent: number;
     };

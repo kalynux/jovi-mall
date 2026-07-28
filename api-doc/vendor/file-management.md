@@ -583,6 +583,10 @@ Retrieve metadata for a single file by ID.
     "updatedAt": "2026-02-13T06:00:00Z",
     "usage": {
       "totalReferences": 2,
+      "references": [
+        { "entityType": "product", "entityId": "65e1a2b3c4d5e6f7a8b9c0d2", "field": "media", "label": "Premium Cotton T-Shirt" },
+        { "entityType": "store", "entityId": "65e1a2b3c4d5e6f7a8b9c0d9", "field": "logo", "label": "TechSolutions Store" }
+      ],
       "products": [
         { "id": "65e1a2b3c4d5e6f7a8b9c0d2", "title": "Premium Cotton T-Shirt", "type": "physical", "status": "active" }
       ],
@@ -595,16 +599,17 @@ Retrieve metadata for a single file by ID.
 }
 ```
 
-**The `usage` object** resolves *where* the file is referenced so a client can show what would break before deleting it (and explain a non-zero `usageCount`):
+**The `usage` object** resolves *where* the file is referenced so a client can show what would break before deleting it:
 
 | Field             | Description                                                            |
 |-------------------|------------------------------------------------------------------------|
-| `totalReferences` | Count of products + variants + digital assets referencing this file.   |
-| `products`        | Products whose `fileIds` contain this file.                            |
-| `variants`        | Variants whose `fileIds` contain this file.                           |
-| `digitalAssets`   | Digital assets (downloadable goods) backed by this file.              |
+| `totalReferences` | Count of **every** live reference to this file, across all entity types. |
+| `references`      | **Preferred, future-proof shape.** One entry per live reference: `{ entityType, entityId, field, label }`, where `label` is a human-readable name (product title, ticket subject, store/agency/vendor/customer/agent/admin name…). Covers **any** referencing entity — `product`, `variant`, `digital_asset`, `ticket`, `vendor`, `store`, `agency`, `customer`, `agent`, `admin`, and any type added later (which falls back to a generic label). `field` names the slot (`media`, `logo`, `banner`, `cover`, `avatar`, `attachment`). A profile avatar shows up here as `{ entityType: "<role>", field: "avatar" }` — which is why a file backing someone's avatar can't be deleted until they detach it. |
+| `products`        | *(Legacy)* Products whose `fileIds` contain this file — kept for backward compatibility; prefer `references`. |
+| `variants`        | *(Legacy)* Variants whose `fileIds` contain this file.                |
+| `digitalAssets`   | *(Legacy)* Digital assets (downloadable goods) backed by this file.  |
 
-> `totalReferences` is derived from live references and should match `usageCount`. A mismatch indicates legacy data attached before reference-counting was enforced — see [Reference Counting](#reference-counting).
+> `totalReferences` is derived from the live `file_references` collection. `DELETE /api/files/:id` is rejected (409 `CATALOG_FILE_STILL_REFERENCED`) while `totalReferences > 0`.
 
 **Error Responses:**
 

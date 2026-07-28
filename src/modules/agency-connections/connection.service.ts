@@ -2,9 +2,12 @@ import { ClientSession, Types } from 'mongoose';
 import { ConnectionRepository } from './connection.repository';
 import { VendorRepository, VendorListQueryParams } from '../vendors/vendor.repository';
 import { DeliveryAgencyRepository, AgencyListQueryParams } from '../delivery/delivery-agency.repository';
+import { StoreRepository } from '../store/repositories/store.repository';
+import { MagazinRepository } from '../magazin/repositories/magazin.repository';
 import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.repository.mongo';
 import { ProductDeliveryAgencySuspensionService } from '../catalog/domain/services/ProductDeliveryAgencySuspensionService';
 import { FileRepositoryMongo } from '../catalog/repositories/mongo/file.repository.mongo';
+import { resolveFileDetails } from '../catalog/read-models/file-detail.resolver';
 import { getStorageProvider, IStorageProvider } from '../../core/storage';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
@@ -39,6 +42,8 @@ export class ConnectionService {
   private connectionRepo: ConnectionRepository;
   private vendorRepo: VendorRepository;
   private agencyRepo: DeliveryAgencyRepository;
+  private storeRepo: StoreRepository;
+  private magazinRepo: MagazinRepository;
   private productRepo: ProductRepositoryMongo;
   private suspensionService: ProductDeliveryAgencySuspensionService;
   private txManager: TransactionManager;
@@ -49,6 +54,8 @@ export class ConnectionService {
     this.connectionRepo = new ConnectionRepository();
     this.vendorRepo = new VendorRepository();
     this.agencyRepo = new DeliveryAgencyRepository();
+    this.storeRepo = new StoreRepository();
+    this.magazinRepo = new MagazinRepository();
     this.productRepo = new ProductRepositoryMongo();
     this.suspensionService = new ProductDeliveryAgencySuspensionService();
     this.txManager = transactionManager;
@@ -192,9 +199,9 @@ export class ConnectionService {
     }
 
     if (actorRole === 'agency') {
-      await this.notifyVendor('connection.request_received', result._id.toString(), vendorId, agency.agency_name);
+      await this.notifyVendor('connection.request_received', result._id.toString(), vendorId, (await this.magazinRepo.findNameByAgencyId(agencyId)) ?? '');
     } else {
-      await this.notifyAgency('connection.request_received', result._id.toString(), agencyId, vendor.business_name);
+      await this.notifyAgency('connection.request_received', result._id.toString(), agencyId, (await this.storeRepo.findNameByVendorId(vendorId)) ?? '');
     }
 
     return result;
@@ -266,14 +273,9 @@ export class ConnectionService {
       );
       if (!updated) throw createAppError(ERROR_CODES.CONNECTION_NOT_FOUND, 404);
 
-      if (isReapproval) {
-        await this.restoreForConnection(vendorId, agencyId, session);
-      }
-
       // First-ever approved connection for this vendor becomes their default —
       // a reapproval can never be "first" (this same rule already resolved the
-      // default the first time this connection went active), so no products
-      // could be suspended for a default-agency reason yet — nothing to restore.
+      // default the first time this connection went active).
       if (!isReapproval && !vendor.default_delivery_agency_id) {
         await this.vendorRepo.updateProfile(vendorId, { default_delivery_agency_id: agency._id }, session);
         await auditLogger.log({
@@ -285,6 +287,14 @@ export class ConnectionService {
         });
       }
 
+      // Restore on EVERY approval, not just reapproval: a terminated connection is
+      // re-established via re-request -> pending -> plain approval (isReapproval is
+      // false there), and the products it suspended at termination must come back.
+      // Safe when there is nothing to restore (no-op), and never blind — each
+      // product re-runs the activation gate first. Runs AFTER the possible
+      // auto-default assignment above so the gate sees the fresh default.
+      await this.restoreForConnection(vendorId, agencyId, session);
+
       await auditLogger.log({
         actor: { userId: actorUserId, role: actorRole },
         action: isReapproval ? 'AGENCY_CONNECTION_REAPPROVED' : 'AGENCY_CONNECTION_APPROVED',
@@ -294,9 +304,9 @@ export class ConnectionService {
       });
 
       if (actorRole === 'agency') {
-        await this.notifyVendor('connection.approved', updated._id.toString(), vendorId, agency.agency_name);
+        await this.notifyVendor('connection.approved', updated._id.toString(), vendorId, (await this.magazinRepo.findNameByAgencyId(agencyId)) ?? '');
       } else {
-        await this.notifyAgency('connection.approved', updated._id.toString(), agencyId, vendor.business_name);
+        await this.notifyAgency('connection.approved', updated._id.toString(), agencyId, (await this.storeRepo.findNameByVendorId(vendorId)) ?? '');
       }
 
       return updated;
@@ -331,11 +341,11 @@ export class ConnectionService {
     if (!updated) throw createAppError(ERROR_CODES.CONNECTION_NOT_FOUND, 404);
 
     if (actorRole === 'agency') {
-      const agency = await this.agencyRepo.findById(actorEntityId);
-      if (agency) await this.notifyVendor('connection.rejected', updated._id.toString(), connection.vendor_id.toString(), agency.agency_name);
+      const agencyName = await this.magazinRepo.findNameByAgencyId(actorEntityId);
+      if (agencyName) await this.notifyVendor('connection.rejected', updated._id.toString(), connection.vendor_id.toString(), agencyName);
     } else {
-      const vendor = await this.vendorRepo.findById(actorEntityId);
-      if (vendor) await this.notifyAgency('connection.rejected', updated._id.toString(), connection.agency_id.toString(), vendor.business_name);
+      const vendorName = await this.storeRepo.findNameByVendorId(actorEntityId);
+      if (vendorName) await this.notifyAgency('connection.rejected', updated._id.toString(), connection.agency_id.toString(), vendorName);
     }
 
     return updated;
@@ -450,8 +460,8 @@ export class ConnectionService {
     // for the changed side (findActiveOrPausedForEntity filtered on it). The
     // OTHER party (reapprovalRequiredFrom) is who gets notified, so we need
     // their counterparty's display name.
-    const agencyName = role === 'agency' ? (await this.agencyRepo.findById(entityId, session))?.agency_name : null;
-    const vendorName = role === 'vendor' ? (await this.vendorRepo.findById(entityId))?.business_name : null;
+    const agencyName = role === 'agency' ? await this.magazinRepo.findNameByAgencyId(entityId) : null;
+    const vendorName = role === 'vendor' ? await this.storeRepo.findNameByVendorId(entityId) : null;
 
     for (const connection of connections) {
       await this.connectionRepo.applyTransition(
@@ -486,7 +496,7 @@ export class ConnectionService {
   // would over-suspend products tied to the vendor's OTHER, unaffected connections.
 
   private async suspendForConnection(vendorId: string, agencyId: string, session: ClientSession): Promise<void> {
-    const vendor = await this.vendorRepo.findById(vendorId);
+    const vendor = await this.vendorRepo.findById(vendorId, session);
     if (vendor?.default_delivery_agency_id?.toString() === agencyId) {
       await this.suspensionService.suspendForVendor(vendorId, { session }, CONNECTION_PAUSED_REASON);
     }
@@ -498,7 +508,9 @@ export class ConnectionService {
   }
 
   private async restoreForConnection(vendorId: string, agencyId: string, session: ClientSession): Promise<void> {
-    const vendor = await this.vendorRepo.findById(vendorId);
+    // Session read: the auto-default assignment in finalizeApproval may have just
+    // written default_delivery_agency_id inside this same transaction.
+    const vendor = await this.vendorRepo.findById(vendorId, session);
     if (vendor?.default_delivery_agency_id?.toString() === agencyId) {
       await this.suspensionService.restoreForVendor(vendorId, { session });
     }
@@ -530,8 +542,17 @@ export class ConnectionService {
     ]);
     const byAgencyId = new Map(connections.map((c) => [c.agency_id.toString(), c]));
 
+    // Business name/logo come from the joined Magazin. Batch-resolve logos.
+    const logoByFileId = await resolveFileDetails(
+      agencies.map((a) => a.magazin?.logo_file_id?.toString() ?? null),
+      this.fileRepository,
+      this.storageProvider,
+    );
+
     const items = agencies.map((agency) => {
-      const dto = VendorAgencyMapper.toListItemDto(agency);
+      const logoFileId = agency.magazin?.logo_file_id?.toString();
+      const logo = logoFileId ? logoByFileId.get(logoFileId) ?? null : null;
+      const dto = VendorAgencyMapper.toListItemDto(agency, agency.magazin?.name ?? '', logo);
       const connection = byAgencyId.get(dto.id);
       return {
         ...dto,
@@ -562,17 +583,17 @@ export class ConnectionService {
     ]);
     const byVendorId = new Map(connections.map((c) => [c.vendor_id.toString(), c]));
 
-    // Batch-resolve branding logo file ids into public URLs (one query for the page).
-    const logoFileIds = [...new Set(
-      vendors.map((v) => v.branding?.logo_file_id?.toString()).filter((id): id is string => !!id),
-    )];
-    const logoFiles = logoFileIds.length > 0 ? await this.fileRepository.findManyByIds(logoFileIds) : [];
-    const logoUrlByFileId = new Map(logoFiles.map((f) => [f.id, this.storageProvider.getPublicUrl(f.key)]));
+    // Business name/logo come from the joined Store. Batch-resolve logos.
+    const logoByFileId = await resolveFileDetails(
+      vendors.map((v) => v.store?.logo_file_id?.toString() ?? null),
+      this.fileRepository,
+      this.storageProvider,
+    );
 
     const items = vendors.map((vendor) => {
-      const logoFileId = vendor.branding?.logo_file_id?.toString();
-      const logoUrl = logoFileId ? logoUrlByFileId.get(logoFileId) ?? null : null;
-      const dto = AgencyVendorMapper.toListItemDto(vendor, logoUrl);
+      const logoFileId = vendor.store?.logo_file_id?.toString();
+      const logo = logoFileId ? logoByFileId.get(logoFileId) ?? null : null;
+      const dto = AgencyVendorMapper.toListItemDto(vendor, vendor.store?.name ?? '', logo);
       const connection = byVendorId.get(dto.id);
       return {
         ...dto,

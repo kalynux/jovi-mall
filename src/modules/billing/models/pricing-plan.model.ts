@@ -1,23 +1,32 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import { BillingOwnerType, BILLING_OWNER_TYPES } from '../billing.types';
 
 /**
  * PricingPlan - Admin-managed catalog of subscription tiers, scoped by role.
  *
- * Plans differ ONLY by price, credit allowance, max active products and
- * commission percentage — all other capabilities are universal across plans.
- * The free Starter tier has `term_days = null` (never expires) and `price = 0`.
+ * Every role (vendor, agency, agent) has its own tiers. Plans differ only by
+ * price, credit allowance and a handful of role-specific limits — all other
+ * capabilities are universal across plans within a role. The free tier of each
+ * role has `term_days = null` (never expires) and `price = 0`.
+ *
+ * Role-specific limit fields are nullable/optional so a plan carries only the
+ * limits its role uses:
+ *   - vendor → `max_active_products`, `commission_percent`
+ *   - agency / agent → `max_unterminated_shipments`
+ *   - `max_storage_bytes` → media-storage cap, applies to vendor/agency/agent
+ *   - `live_tracking_enabled` applies to agency/agent (see below), universal today
  *
  * Seeded via `npm run seed:plans` (idempotent upsert by `role + code`) and
  * editable through the admin API.
  */
 
-/** Role a plan belongs to. Only `vendor` is built for now; reserved for future roles. */
-export type PlanRole = 'vendor';
+/** Role a plan belongs to — identical to the wallet owner type (see billing.types). */
+export type PlanRole = BillingOwnerType;
 
 export interface IPricingPlan extends Document {
   role: PlanRole;
-  /** Stable, role-unique identifier (e.g. 'starter', 'growth', 'business'). */
+  /** Stable, role-unique identifier (e.g. 'starter', 'growth', 'agency_free'). */
   code: string;
   name: string;
   /** Price in `currency` per term. 0 for the free tier. */
@@ -25,14 +34,36 @@ export interface IPricingPlan extends Document {
   currency: string;
   /** Length of a paid term in days. `null` = never-expiring (free tier). */
   term_days: number | null;
-  /** Credits granted ONCE when this plan is activated for a vendor. */
+  /** Credits granted ONCE when this plan is activated for the owner. */
   credit_allowance: number;
+
+  // ── Vendor-only limits (null/absent for agency & agent plans) ───────────────
   /** Max active products allowed. `null` = unlimited. */
   max_active_products: number | null;
-  /** Max total product-media storage in bytes (excludes digital-product assets). */
-  max_storage_bytes: number;
+  /**
+   * Max total media storage in bytes. Applies to vendor, agency AND agent plans.
+   * For vendors this excludes digital-product assets (billed under their own
+   * per-asset cap). `null` = falls back to EntitlementService's default cap.
+   */
+  max_storage_bytes: number | null;
   /** Marketplace commission percentage applied to the vendor's sales. */
-  commission_percent: number;
+  commission_percent: number | null;
+
+  // ── Agency / agent limits (null/absent for vendor plans) ────────────────────
+  /**
+   * Max "unterminated" shipments the owner may hold at once. For an agency this
+   * is a soft cap (surfaced + alerted, never blocks checkout); for an agent it
+   * drives `capacity.max_active_shipments` and is enforced hard on accept.
+   * `null` = unlimited.
+   */
+  max_unterminated_shipments: number | null;
+  /**
+   * Whether live GPS tracking is available on this plan. Defaults `true` on every
+   * seeded tier today (tracking is universal); reserved as a future free-tier
+   * restriction — see EntitlementService.isLiveTrackingEnabled.
+   */
+  live_tracking_enabled: boolean;
+
   is_active: boolean;
   sort_order: number;
   deletedAt: Date | null;
@@ -42,7 +73,7 @@ export interface IPricingPlan extends Document {
 
 const PricingPlanSchema = new Schema<IPricingPlan>(
   {
-    role: { type: String, enum: ['vendor'], required: true, default: 'vendor' },
+    role: { type: String, enum: BILLING_OWNER_TYPES, required: true, default: 'vendor' },
     code: { type: String, required: true, trim: true, lowercase: true },
     name: { type: String, required: true, trim: true },
     price: { type: Number, required: true, min: 0 },
@@ -50,8 +81,10 @@ const PricingPlanSchema = new Schema<IPricingPlan>(
     term_days: { type: Number, default: null, min: 1 },
     credit_allowance: { type: Number, required: true, min: 0 },
     max_active_products: { type: Number, default: null, min: 0 },
-    max_storage_bytes: { type: Number, required: true, default: 1024 * 1024 * 1024, min: 0 },
-    commission_percent: { type: Number, required: true, min: 0, max: 100 },
+    max_storage_bytes: { type: Number, default: null, min: 0 },
+    commission_percent: { type: Number, default: null, min: 0, max: 100 },
+    max_unterminated_shipments: { type: Number, default: null, min: 0 },
+    live_tracking_enabled: { type: Boolean, default: true },
     is_active: { type: Boolean, default: true },
     sort_order: { type: Number, default: 0 },
     deletedAt: { type: Date, default: null },

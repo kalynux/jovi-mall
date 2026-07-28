@@ -1,5 +1,5 @@
 /**
- * Shipment-assignment module — the agent-acceptance workflow.
+ * Shipment-assignment module — the agent-acceptance workflow + auto-assignment.
  *
  * Public surface for the application layer (server.ts) and any cross-module
  * caller. Routes are mounted from delivery/agent.routes.ts and
@@ -17,21 +17,29 @@ export {
   distanceScore,
   haversineKm,
 } from './domain/services/assignment-candidate.service';
-export type { ScoredCandidate, CandidateScoreInput, CandidateScoreBreakdown } from './domain/services/assignment-candidate.service';
+export type {
+  ScoredCandidate,
+  RankedCandidate,
+  RankingResult,
+  CandidateScoreInput,
+  CandidateScoreBreakdown,
+} from './domain/services/assignment-candidate.service';
 
 export { ASSIGNMENT_CONFIG } from './config/assignment.config';
 export { ShipmentAssignmentOfferModel } from './models/shipment-assignment-offer.model';
+export { ShipmentAssignmentSessionModel } from './models/shipment-assignment-session.model';
+export { geoRoutingClient, GeoRoutingClient } from './services/geo-routing.client';
 export { registerAssignmentEventSubscriber } from './services/assignment-event-subscriber';
-export { offerExpiryWorker } from './workers/offer-expiry.worker';
+export { assignmentSweepWorker, offerExpiryWorker } from './workers/offer-expiry.worker';
 
 import { registerAssignmentEventSubscriber } from './services/assignment-event-subscriber';
-import { offerExpiryWorker } from './workers/offer-expiry.worker';
+import { assignmentSweepWorker } from './workers/offer-expiry.worker';
 
 /**
- * Register the auto-assignment subscriber and start the offer-expiry sweep.
- * Call once at boot, after the Mongo connection is up.
+ * Register the auto-assignment subscriber and start the assignment sweep (session
+ * advancement + manual-offer expiry). Call once at boot, after Mongo connects.
  */
 export function initializeShipmentAssignment(): void {
   registerAssignmentEventSubscriber();
-  offerExpiryWorker.start();
+  assignmentSweepWorker.start();
 }

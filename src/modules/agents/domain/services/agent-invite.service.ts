@@ -14,7 +14,7 @@ import {
 import { AgentContractService, agentContractService, Actor } from './agent-contract.service';
 import { IDeliveryAgent } from '../../models/agent.model';
 import { IAgentAgencyMembership } from '../../models/agent-agency-membership.model';
-import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repository';
+import { MagazinRepository } from '../../../magazin/repositories/magazin.repository';
 
 /**
  * AgentInviteService — the invitation half of the membership lifecycle.
@@ -34,7 +34,7 @@ export class AgentInviteService {
     private readonly memberships: AgentContractRepository = agentContractRepository,
     private readonly contractService: AgentContractService = agentContractService,
     private readonly events: AgentMembershipEventRepository = agentMembershipEventRepository,
-    private readonly agencies: DeliveryAgencyRepository = new DeliveryAgencyRepository()
+    private readonly magazins: MagazinRepository = new MagazinRepository()
   ) {}
 
   // ─── Agency side ──────────────────────────────────────────────────────────
@@ -130,13 +130,13 @@ export class AgentInviteService {
     const invites = await this.invites.listPendingByEmail(agent.email);
 
     const agencyIds = [...new Set(invites.map((i) => i.agency_id.toString()))];
+    // Business name lives on the Magazin (source of truth), keyed by agency_id.
+    const magazinNames = await this.magazins.findNamesByAgencyIds(agencyIds);
     const nameById = new Map<string, string>();
-    await Promise.all(
-      agencyIds.map(async (id) => {
-        const agency = await this.agencies.findById(id);
-        if (agency) nameById.set(id, agency.agency_name);
-      })
-    );
+    for (const id of agencyIds) {
+      const name = magazinNames.get(id)?.name;
+      if (name) nameById.set(id, name);
+    }
 
     return invites.map((invite) => ({
       ...this.toInviteDto(invite),

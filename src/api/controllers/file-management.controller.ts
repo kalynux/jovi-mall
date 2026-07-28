@@ -53,6 +53,11 @@ export class FileManagementController {
                     ownerType: 'vendor',
                     ownerId: userRoleEntity._id.toString(),
                 };
+            } else if (userRole === 'agency') {
+                ownerFilter = {
+                    ownerType: 'agency',
+                    ownerId: userRoleEntity._id.toString(),
+                };
             } else if (userRole === 'customer') {
                 ownerFilter = {
                     ownerType: 'customer',
@@ -63,6 +68,15 @@ export class FileManagementController {
                     ownerType: 'agent',
                     ownerId: userRoleEntity._id.toString(),
                 };
+            } else {
+                // Fail closed: an unrecognised non-admin role must NEVER fall
+                // through to an empty filter (which would list every file in the
+                // system). Deny access rather than leak.
+                throw createAppError(
+                    ERROR_CODES.AUTH_FORBIDDEN,
+                    403,
+                    'Your account type cannot list files',
+                );
             }
         }
         // Admins: no owner filter (see all files)
@@ -163,7 +177,7 @@ export class FileManagementController {
     /**
      * GET /api/files/storage
      * Lightweight storage usage + limit summary for the authenticated owner
-     * (vendor/customer/agent). Same `storage` shape embedded in the file list.
+     * (vendor/agency/agent/customer). Same `storage` shape embedded in the file list.
      */
     static getStorageSummary = asyncHandler(async (req: Request, res: Response) => {
         const userRole = req.auth!.role;
@@ -180,7 +194,7 @@ export class FileManagementController {
             throw createAppError(
                 ERROR_CODES.AUTH_FORBIDDEN,
                 403,
-                'Storage analytics are only available for vendor, customer or agent accounts',
+                'Storage analytics are only available for vendor, agency, agent or customer accounts',
             );
         }
 
@@ -189,8 +203,8 @@ export class FileManagementController {
 
     /**
      * Build the per-owner storage summary: total used, per-category breakdown,
-     * and (for vendors) the plan storage limit + remaining. Returns `null` for
-     * admins (unscoped/global) and any role without an owner scope.
+     * and (for vendor/agency/agent) the plan storage limit + remaining. Returns
+     * `null` for admins (unscoped/global) and any role without an owner scope.
      */
     private static async buildStorageSummary(
         role: string,
@@ -208,6 +222,9 @@ export class FileManagementController {
         if (role === 'vendor') {
             ownerType = 'vendor';
             ownerId = roleEntity._id.toString();
+        } else if (role === 'agency') {
+            ownerType = 'agency';
+            ownerId = roleEntity._id.toString();
         } else if (role === 'customer') {
             ownerType = 'customer';
             ownerId = userId;
@@ -221,10 +238,11 @@ export class FileManagementController {
 
         const usage = await mediaStorageService.getUsageBreakdown(ownerType, ownerId);
 
+        // Plan-driven storage cap for the metered owner types (vendor/agency/agent).
+        // Customers have no plan → no limit (unlimited).
         let limitBytes: number | null = null;
-        if (ownerType === 'vendor') {
-            const entitlements = await entitlementService.getEntitlements(ownerId);
-            limitBytes = entitlements.maxStorageBytes;
+        if (ownerType === 'vendor' || ownerType === 'agency' || ownerType === 'agent') {
+            limitBytes = await entitlementService.resolveMaxStorageBytes(ownerType, ownerId);
         }
         const remainingBytes = limitBytes === null ? null : Math.max(0, limitBytes - usage.total);
 
@@ -275,17 +293,30 @@ export class FileManagementController {
     /**
      * Resolve where a file is referenced, using the `file_references` collection
      * as the source of truth. `totalReferences` counts every live reference (so a
-     * brand-new entity type is counted automatically); the per-type arrays enrich
-     * the known types with display fields for the UI.
+     * brand-new entity type is counted automatically).
+     *
+     * `references[]` is the future-proof, UI-facing shape: one entry per live
+     * reference with `{ entityType, entityId, field, label }`, where `label` is a
+     * human-readable name resolved per entity type. Adding a new file-referencing
+     * module means adding ONE entry to `LABEL_RESOLVERS` below — unknown types
+     * still surface with a generic fallback label rather than disappearing.
+     *
+     * The `products`/`variants`/`digitalAssets` arrays are retained for backward
+     * compatibility with existing consumers and carry a few extra type-specific
+     * fields; new UI should prefer `references[]`.
      */
     private static async resolveFileUsage(fileId: string): Promise<{
         totalReferences: number;
+        references: Array<{ entityType: string; entityId: string; field: string; label: string }>;
         products: Array<{ id: string; title: string; type: string; status: string }>;
         variants: Array<{ id: string; productId: string; sku: string; status: string }>;
         digitalAssets: Array<{ id: string; originalName: string }>;
     }> {
         const fileReferenceRepository = new FileReferenceRepositoryMongo();
         const links = await fileReferenceRepository.findByFile(fileId);
+
+        // Build the labelled, entity-type-agnostic reference list.
+        const references = await FileManagementController.buildReferenceLabels(links);
 
         // Group the referenced entity ids by type so we can batch-enrich each.
         const productIds = links.filter(l => l.entityType === 'product').map(l => l.entityId);
@@ -312,6 +343,7 @@ export class FileManagementController {
 
         return {
             totalReferences: links.length,
+            references,
             products: products.map((p: any) => ({
                 id: p._id.toString(),
                 title: p.title,
@@ -329,6 +361,121 @@ export class FileManagementController {
                 originalName: a.originalName,
             })),
         };
+    }
+
+    /**
+     * Resolve a human-readable label for each file reference. Groups ids by
+     * entity type, runs the matching resolver (batched, one query per type), and
+     * falls back to `"<entityType> <id>"` for any type without a resolver — so a
+     * new file-referencing module surfaces in the UI even before it is added here.
+     *
+     * To support a new entity type's display name, add one resolver entry.
+     * Dynamic import() keeps these off the module load graph (no import cycles).
+     */
+    private static async buildReferenceLabels(
+        links: Array<{ entityType: string; entityId: string; field: string }>,
+    ): Promise<Array<{ entityType: string; entityId: string; field: string; label: string }>> {
+        const idsByType = new Map<string, string[]>();
+        for (const l of links) {
+            const list = idsByType.get(l.entityType) ?? [];
+            list.push(l.entityId);
+            idsByType.set(l.entityType, list);
+        }
+
+        const LABEL_RESOLVERS: Record<string, (ids: string[]) => Promise<Map<string, string>>> = {
+            product: async (ids) => {
+                const { ProductModel } = await import('../../modules/catalog/models/product.model');
+                const docs = await ProductModel.find({ _id: { $in: ids } }).select('_id title').lean().exec();
+                return new Map(docs.map((d: any) => [d._id.toString(), d.title || 'Product']));
+            },
+            variant: async (ids) => {
+                const { ProductVariantModel } = await import('../../modules/catalog/models/product-variant.model');
+                const docs = await ProductVariantModel.find({ _id: { $in: ids } }).select('_id sku').lean().exec();
+                return new Map(docs.map((d: any) => [d._id.toString(), d.sku || 'Variant']));
+            },
+            digital_asset: async (ids) => {
+                const { DigitalAssetModel } = await import('../../modules/digital-delivery/models/digital-asset.model');
+                const docs = await DigitalAssetModel.find({ _id: { $in: ids } }).select('_id originalName').lean().exec();
+                return new Map(docs.map((d: any) => [d._id.toString(), d.originalName || 'Digital asset']));
+            },
+            ticket: async (ids) => {
+                const { TicketModel } = await import('../../modules/tickets/models/ticket.model');
+                const docs = await TicketModel.find({ _id: { $in: ids } }).select('_id subject').lean().exec();
+                return new Map(docs.map((d: any) => [d._id.toString(), d.subject || 'Ticket']));
+            },
+            vendor: async (ids) => {
+                // The vendor's business name lives on the Store; this entity label
+                // uses the vendor's personal display name (avatar owner).
+                const { VendorModel } = await import('../../modules/vendors/vendor.model');
+                const docs = await VendorModel.find({ _id: { $in: ids } }).select('_id display_name').lean().exec();
+                return new Map(docs.map((d: any) => [d._id.toString(), d.display_name || 'Vendor']));
+            },
+            store: async (ids) => {
+                const { StoreModel } = await import('../../modules/store/models/store.model');
+                const docs = await StoreModel.find({ _id: { $in: ids } }).select('_id name').lean().exec();
+                return new Map(docs.map((d: any) => [d._id.toString(), d.name || 'Store']));
+            },
+            agency: async (ids) => {
+                // The agency's business name lives on the Magazin; this entity label
+                // uses the agency's personal display name (avatar owner).
+                const { DeliveryAgencyModel } = await import('../../modules/delivery/delivery-agency.model');
+                const docs = await DeliveryAgencyModel.find({ _id: { $in: ids } }).select('_id display_name').lean().exec();
+                return new Map(docs.map((d: any) => [d._id.toString(), d.display_name || 'Agency']));
+            },
+            agency_magazin: async (ids) => {
+                const { AgencyMagazinModel } = await import('../../modules/magazin/models/magazin.model');
+                const docs = await AgencyMagazinModel.find({ _id: { $in: ids } }).select('_id name').lean().exec();
+                return new Map(docs.map((d: any) => [d._id.toString(), d.name || 'Magazin']));
+            },
+            customer: async (ids) => {
+                const { CustomerModel } = await import('../../modules/customers/customer.model');
+                const docs = await CustomerModel.find({ _id: { $in: ids } }).select('_id name').lean().exec();
+                return new Map(docs.map((d: any) => [d._id.toString(), d.name || 'Customer']));
+            },
+            agent: async (ids) => {
+                const { DeliveryAgentModel } = await import('../../modules/agents/models/agent.model');
+                const docs = await DeliveryAgentModel.find({ _id: { $in: ids } }).select('_id name').lean().exec();
+                return new Map(docs.map((d: any) => [d._id.toString(), d.name || 'Agent']));
+            },
+            admin: async (ids) => {
+                const { AdminModel } = await import('../../modules/admins/admin.model');
+                const docs = await AdminModel.find({ _id: { $in: ids } }).select('_id name').lean().exec();
+                return new Map(docs.map((d: any) => [d._id.toString(), d.name || 'Admin']));
+            },
+            shipment: async (ids) => {
+                // Delivery proofs attach to shipments; label by parent order number.
+                const { ShipmentModel } = await import('../../modules/shipments/shipment.model');
+                const { OrderModel } = await import('../../modules/orders/order.model');
+                const docs = await ShipmentModel.find({ _id: { $in: ids } }).select('_id order_id').lean().exec();
+                const orderIds = docs.map((d: any) => d.order_id).filter(Boolean);
+                const orders = orderIds.length
+                    ? await OrderModel.find({ _id: { $in: orderIds } }).select('_id order_number').lean().exec()
+                    : [];
+                const orderNumById = new Map(orders.map((o: any) => [o._id.toString(), o.order_number]));
+                return new Map(docs.map((d: any) => {
+                    const num = orderNumById.get(d.order_id?.toString());
+                    return [d._id.toString(), num ? `Delivery proof — Order ${num}` : 'Delivery proof'];
+                }));
+            },
+        };
+
+        // Resolve labels for every present type in parallel, keyed "type:id".
+        const labelByKey = new Map<string, string>();
+        await Promise.all(
+            [...idsByType.entries()].map(async ([type, ids]) => {
+                const resolver = LABEL_RESOLVERS[type];
+                if (!resolver) return;
+                const map = await resolver(ids);
+                for (const [id, label] of map) labelByKey.set(`${type}:${id}`, label);
+            }),
+        );
+
+        return links.map((l) => ({
+            entityType: l.entityType,
+            entityId: l.entityId,
+            field: l.field,
+            label: labelByKey.get(`${l.entityType}:${l.entityId}`) ?? `${l.entityType} ${l.entityId}`,
+        }));
     }
 
     /**
@@ -523,6 +670,10 @@ export class FileManagementController {
         roleEntityId?: string
     ): boolean {
         if (userRole === 'vendor' && file.ownerType === 'vendor') {
+            return file.ownerId === roleEntityId;
+        }
+
+        if (userRole === 'agency' && file.ownerType === 'agency') {
             return file.ownerId === roleEntityId;
         }
 

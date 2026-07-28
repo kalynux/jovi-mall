@@ -6,6 +6,7 @@ import { VendorOrderController } from './controller/vendor-order.controller';
 import { VendorNotificationController } from './controller/vendor-notification.controller';
 import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
 import { VendorCustomerController } from './controller/vendor-customer.controller';
+import { UserController } from '../users/user.controller';
 
 const router = Router();
 
@@ -46,10 +47,11 @@ router.patch('/profile', VendorProfileController.updateProfile);
 /**
  * PATCH /api/vendor/profile/password
  *
- * Change authenticated vendor's password.
+ * DEPRECATED alias — use PATCH /api/me/password (role-agnostic, same handler).
+ * Kept so existing vendor frontends keep working.
  * Body: { oldPassword, newPassword }
  */
-router.patch('/profile/password', VendorProfileController.updatePassword);
+router.patch('/profile/password', UserController.updatePassword);
 
 /**
  * GET /api/vendor/delivery-agencies

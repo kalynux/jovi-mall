@@ -11,13 +11,19 @@ import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product
 import { OrderRepository } from '../../orders/order.repository';
 import { AdminAgencyListItemDto, AdminAgencyListMeta, AdminAgencyMapper } from '../dto/admin-agency.dto';
 import { ProductStatus } from '../../catalog/models/product.model';
+import { IDeliveryAgency } from '../delivery-agency.model';
+import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
+import { resolveFileDetail, resolveFileDetails } from '../../catalog/read-models/file-detail.resolver';
+import { getStorageProvider, IStorageProvider } from '../../../core/storage';
+import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
 
 /**
  * AdminAgencyService: admin-facing delivery agency management.
  *
  * Deactivating an agency:
- *  1. Suspends every vendor's physical products (any status) where this agency is
+ *  1. Suspends every vendor's ACTIVE physical products where this agency is
  *     currently their DEFAULT — see ProductDeliveryAgencySuspensionService.
+ *     (Drafts etc. are untouched: they can't activate without the gate anyway.)
  *  2. Suspends any physical product, across ANY vendor, whose OWN delivery-agency
  *     OVERRIDE points at this agency — independent of that vendor's default.
  *  3. Puts every still pending/assigned order item currently riding this agency on
@@ -33,7 +39,17 @@ export class AdminAgencyService {
         private readonly txManager: TransactionManager = transactionManager,
         private readonly productRepo: IProductRepository = new ProductRepositoryMongo(),
         private readonly orderRepo: OrderRepository = new OrderRepository(),
+        private readonly fileRepo: FileRepositoryMongo = new FileRepositoryMongo(),
+        private readonly storage: IStorageProvider = getStorageProvider(),
+        private readonly magazinRepo: MagazinRepository = new MagazinRepository(),
     ) { }
+
+    /** Map one agency, resolving its business name + logo from the Magazin. */
+    private async toDto(agency: IDeliveryAgency): Promise<AdminAgencyListItemDto> {
+        const magazin = await this.magazinRepo.findByAgencyIdOrNull(agency._id.toString());
+        const logo = await resolveFileDetail(magazin?.logo_file_id?.toString(), this.fileRepo, this.storage);
+        return AdminAgencyMapper.toListItemDto(agency, magazin?.name ?? '', logo);
+    }
 
     async list(params: {
         status?: 'active' | 'pending_verification' | 'inactive';
@@ -41,8 +57,23 @@ export class AdminAgencyService {
         limit: number;
     }): Promise<{ agencies: AdminAgencyListItemDto[]; meta: AdminAgencyListMeta }> {
         const { agencies, total } = await this.agencyRepo.findAllForAdmin(params);
+
+        // Business name/logo come from the joined Magazin. Batch-resolve logos.
+        const detailByFileId = await resolveFileDetails(
+            agencies.map(a => a.magazin?.logo_file_id?.toString() ?? null),
+            this.fileRepo,
+            this.storage,
+        );
+
         return {
-            agencies: agencies.map(AdminAgencyMapper.toListItemDto),
+            agencies: agencies.map(a => {
+                const fileId = a.magazin?.logo_file_id?.toString();
+                return AdminAgencyMapper.toListItemDto(
+                    a,
+                    a.magazin?.name ?? '',
+                    fileId ? detailByFileId.get(fileId) ?? null : null,
+                );
+            }),
             meta: {
                 total,
                 page: params.page,
@@ -55,7 +86,7 @@ export class AdminAgencyService {
     async getById(agencyId: string): Promise<AdminAgencyListItemDto> {
         const agency = await this.agencyRepo.findById(agencyId);
         if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, 'Delivery agency not found');
-        return AdminAgencyMapper.toListItemDto(agency);
+        return this.toDto(agency);
     }
 
     /**
@@ -71,7 +102,7 @@ export class AdminAgencyService {
             if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, 'Delivery agency not found');
 
             if (agency.status === 'inactive') {
-                return { agency: AdminAgencyMapper.toListItemDto(agency), affectedProductIds: [], heldOrderItemCount: 0 };
+                return { agency: await this.toDto(agency), affectedProductIds: [], heldOrderItemCount: 0 };
             }
 
             const updated = await this.agencyRepo.updateStatusById(agencyId, 'inactive', session);
@@ -94,7 +125,7 @@ export class AdminAgencyService {
                 timestamp: new Date(),
             });
 
-            return { agency: AdminAgencyMapper.toListItemDto(updated!), affectedProductIds, heldOrderItemCount: heldItems.length };
+            return { agency: await this.toDto(updated!), affectedProductIds, heldOrderItemCount: heldItems.length };
         });
     }
 
@@ -111,7 +142,7 @@ export class AdminAgencyService {
             if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, 'Delivery agency not found');
 
             if (agency.status === 'active') {
-                return { agency: AdminAgencyMapper.toListItemDto(agency), restoredProducts: [], unheldOrderItemCount: 0 };
+                return { agency: await this.toDto(agency), restoredProducts: [], unheldOrderItemCount: 0 };
             }
 
             const updated = await this.agencyRepo.updateStatusById(agencyId, 'active', session);
@@ -134,7 +165,7 @@ export class AdminAgencyService {
                 timestamp: new Date(),
             });
 
-            return { agency: AdminAgencyMapper.toListItemDto(updated!), restoredProducts, unheldOrderItemCount: unheldItems.length };
+            return { agency: await this.toDto(updated!), restoredProducts, unheldOrderItemCount: unheldItems.length };
         });
     }
 

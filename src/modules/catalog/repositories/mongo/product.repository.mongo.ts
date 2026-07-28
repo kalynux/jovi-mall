@@ -4,7 +4,7 @@ import { IProduct, ProductModel } from '../../models';
 import { IProductRepository } from '../interfaces/product.repository.interface';
 import { Product, ProductMapper } from '../mappers/product.mapper';
 import { ProductListProjection } from '../../read-models/product-detail.read-model';
-import { ProductSuspensionReason } from '../../models/product.model';
+import { ProductStatus, ProductSuspensionReason } from '../../models/product.model';
 
 export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> implements IProductRepository {
   constructor() {
@@ -69,9 +69,18 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
   async update(id: string, vendorId: string, updates: Partial<Product>, options?: RepositoryOptions): Promise<Product | null> {
     if (!Types.ObjectId.isValid(id)) return null;
 
+    // Invariant: `suspension` only carries meaning while status === 'suspended'
+    // (see product.model.ts). Any status write that leaves 'suspended' — vendor
+    // manual reactivation via PATCH /:id/status, bulk activate, system restore —
+    // must drop the snapshot, or a stale one lingers on an active/draft product.
+    const set: Partial<Product> = { ...updates };
+    if (updates.status && updates.status !== 'suspended' && updates.suspension === undefined) {
+      set.suspension = null;
+    }
+
     const query = this.model.findOneAndUpdate(
       { _id: id, vendorId, deletedAt: null },
-      { $set: updates },
+      { $set: set },
       { new: true, session: options?.session }
     );
 
@@ -255,6 +264,7 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
     productIds: string[],
     vendorId: string,
     status: string,
+    allowedFromStatuses?: ProductStatus[],
     options?: RepositoryOptions
   ): Promise<number> {
     const validIds = productIds.filter(id => Types.ObjectId.isValid(id));
@@ -266,9 +276,14 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
         _id: { $in: validIds.map(id => new Types.ObjectId(id)) },
         vendorId: vendorId as any,
         deletedAt: null,
+        // Caller-supplied transition constraint (e.g. vendors can't move a
+        // 'suspended' product — that status is a system lock). Ineligible
+        // products are skipped, not errored.
+        ...(allowedFromStatuses && { status: { $in: allowedFromStatuses } }),
       },
       {
-        $set: { status, updatedAt: new Date() },
+        // Same invariant as update(): leaving 'suspended' drops the suspension snapshot.
+        $set: { status, updatedAt: new Date(), ...(status !== 'suspended' && { suspension: null }) },
       },
       options?.session ? { session: options.session } : {}
     ).exec();
@@ -294,6 +309,10 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
         _id: { $in: validIds.map(id => new Types.ObjectId(id)) },
         vendorId: vendorId as any,
         deletedAt: null,
+        // Mirror of ProductArchiveService's single-product rule: only draft and
+        // active products are archivable — 'suspended' is a system lock a vendor
+        // can't route around via bulk, and re-archiving archived is pointless.
+        status: { $in: ['draft', 'active'] },
       },
       {
         $set: { status: 'archived', updatedAt: new Date() },
@@ -305,9 +324,15 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
   }
 
   /**
-   * Suspend all of a vendor's physical products (any status except already-'suspended'),
-   * capturing each product's own current status via an aggregation-pipeline update so it
-   * can be restored to that exact status later.
+   * Suspend all of a vendor's currently-ACTIVE physical products, capturing each
+   * product's own current status via an aggregation-pipeline update so it can be
+   * restored to that exact status later.
+   *
+   * Only 'active' products are suspended: a draft/archived/pending_review product
+   * can never reach 'active' without passing the activation gate
+   * (ProductStatusValidationService requires an active default agency + active
+   * connection), so suspending it adds nothing — and would needlessly lock the
+   * vendor out of editing it while the agency problem lasts.
    */
   async suspendVendorPhysicalProducts(
     vendorId: string,
@@ -318,7 +343,7 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
     const filter: FilterQuery<IProduct> = {
       vendorId: vendorId as any,
       type: 'physical',
-      status: { $ne: 'suspended' },
+      status: 'active',
       deletedAt: null,
       vectorisationStatus: { $ne: 'pending' },
     };
@@ -345,8 +370,9 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
   }
 
   /**
-   * Suspend a single physical product (no-op if already suspended), capturing its
-   * current status. Returns whether it was suspended.
+   * Suspend a single physical product (no-op unless currently 'active' — see
+   * suspendVendorPhysicalProducts for why non-active statuses are left alone),
+   * capturing its current status. Returns whether it was suspended.
    */
   async suspendProduct(
     productId: string,
@@ -362,7 +388,7 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
         _id: productId,
         vendorId: vendorId as any,
         type: 'physical',
-        status: { $ne: 'suspended' },
+        status: 'active',
         deletedAt: null,
         vectorisationStatus: { $ne: 'pending' },
       },

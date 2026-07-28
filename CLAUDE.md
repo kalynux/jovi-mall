@@ -5,19 +5,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > ## ⚠️ A refactor is in flight — compiles, but incomplete
 >
 > A large agent-contract / COD-shared-pool refactor is part-applied. As of
-> **2026-07-16** `npx tsc --noEmit` and `npm run lint` are clean and the app loads,
-> but most of the new surface is still unreachable over HTTP and the mechanism
-> that releases COD headroom (the settlement service) does not exist yet — so a
-> COD pool currently fills and never drains.
+> **2026-07-16** `npx tsc --noEmit` and `npm run lint` are clean and the app loads.
+> Steps 1–3g are done: the COD cash chain is complete and reachable, and the
+> mechanism that **releases COD headroom now exists** — an agent→agency deposit
+> (`POST /api/agent/cod/deposits` declare → agency confirm, or the agency's
+> one-step `POST /api/agency/cod/deposits`) draws down the contract's outstanding
+> balance via `AgentDepositService` → `recordSettlement`, so a COD pool drains.
+> What is still missing: the agent's cut on **prepaid** orders, the trust
+> composite engine, several admin/agent controllers (threshold, contract terms,
+> settlements, KYC/ban, status-request inbox), the collection-rename migration,
+> and the doc refresh.
 >
 > **Read [AGENT-CONTRACT-REFACTOR.md](./AGENT-CONTRACT-REFACTOR.md) before touching
 > `src/modules/agents/`, `src/modules/cod/`, or `src/modules/shipments/shipment.service.ts`.**
 > It lists what is built, what is not, decisions already settled with the product
 > owner, and the order to finish in.
 >
-> `npm run test:agent-domain` was stale against the new model and is **repaired**
-> as of 2026-07-16 (47 assertions, green). It is DB-free, so it still cannot cover
-> the COD allocation race — see the handoff doc.
+> `npm run test:agent-domain` was stale against the new model and is **repaired**;
+> it is green at **88 assertions** as of 2026-07-16. It is DB-free, so it still
+> cannot cover the COD allocation race or the money movements — see the handoff doc.
 >
 > Parts of this file below still describe the *pre-refactor* model (notably
 > per-agency `cod.max_exposure_override` and membership statuses). The handoff doc
@@ -124,6 +130,8 @@ The agent's self-service write paths *on shipments* are: **accept/reject an assi
 
 ### Agent-acceptance workflow (`src/modules/shipment-assignment/`)
 Assignment is **offer-based, not a direct push**. `PATCH /api/agency/shipments/:id/assign-agent` (and `POST …/auto-assign`, gated by the agency's `assignment_settings.auto_assign_enabled`) create a `ShipmentAssignmentOffer` the agent must **accept** before the shipment is theirs. The shipment stays `assigned` (to the agency) with `agent_id = null` until acceptance — the moment `agent_id` is written, the shipment becomes trackable and (COD) the delivery code issues. **No new shipment status was added**, deliberately: that enum is the geo-tracker contract. State is mirrored on a `shipment.assignment` sub-doc (`unassigned | offered | accepted`), which is *not* the status. Offer timeout is a platform default (`SHIPMENT_OFFER_TIMEOUT_SECONDS`, 120s); the expiry sweep (`OfferExpiryWorker`) reaps ignored offers and, for auto offers, walks the snapshotted candidate pool to the next agent. Capacity admission control (`AgentCapacityService.tryReserve`/`release`) — previously inert — is now live: reserved on accept, released on `delivered`/`returned`/`rejected`, reconciled nightly. Full design in [SHIPMENT-ASSIGNMENT.md](./SHIPMENT-ASSIGNMENT.md); API in `api-doc/agent/offers.md` + `api-doc/agency/assignment.md`.
+
+**Auto-assignment** (the system-driven branch) is documented separately in [AUTO-ASSIGNMENT.md](./AUTO-ASSIGNMENT.md). It ranks up to 20 eligible agents nearest-first via geo-tracker's routing matrix (`GeoRoutingClient`, haversine fallback — geo-tracker stays off the critical path), stores the ranking as a temporary `ShipmentAssignmentSession` (cursor + round + state; deleted when the shipment finishes), and broadcasts down it one candidate per 2-min window across **two rounds**. Several agents can hold an acceptable offer at once — "first valid approval wins" is enforced by a shipment-level CAS (`ShipmentRepository.bindAgentIfUnassigned`) under `runInTransactionWithRetry`, **not** by an offer-uniqueness index (that index was removed). An agent may **cancel mid-delivery** (`POST /api/agent/shipments/:id/cancel`, reason enum + ≤200-char note) — `ShipmentService.releaseForAgentCancel` releases them and the broadcast **resumes from its cursor**. The `AssignmentSweepWorker` drives session advancement + manual-offer expiry, multi-instance-safe via guarded compare-and-set.
 
 **Agent → agent reassignment** (`POST /api/agency/shipments/:id/reassign`, `ShipmentAssignmentService.reassign` → `ShipmentService.reassignAgent`) changes the agent handling a shipment — the critical case where the bound agent picked up but cannot deliver. It **releases** the old agent (session closed, not terminated — a `shipment.agent_released` event; capacity returned) then re-offers to a replacement who must accept before their tracking opens, so two agents are never tracked for one shipment. Detach is a guarded compare-and-set (`claimForReassignment`, the race guard → `SHIPMENT_REASSIGNMENT_CONFLICT`). Pre-pickup it resets to `assigned` (auto or manual); **post-pickup (`picked_up`/`in_transit`/`failed`/`returned`) it enters `handing_over`** — a new, trackable, non-terminal status that lasts until the replacement picks the parcel up — and is **manual-only** (`agentId` required). `reason` is mandatory. `handing_over` is a jovi-mall-only status addition (added to `TRACKABLE_SHIPMENT_STATUSES`, `ACTIVE_SHIPMENT_STATUSES`, fulfillment `SHIPPED_OR_BEYOND`); geo-tracker consumes the trackable *verdict*, not the status, so it needs no enum change.
 

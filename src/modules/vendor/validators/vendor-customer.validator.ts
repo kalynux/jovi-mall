@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { clearable } from '../../../core/validation/zod.helpers';
 
 /**
  * Vendor Customer Management API Validators
@@ -45,7 +46,7 @@ export type SetCustomerFlagsDto = z.infer<typeof SetCustomerFlagsSchema>;
 export const CreateFlagSchema = z.object({
     name: z.string().trim().min(1, 'Name is required').max(60),
     color: hexColor,
-    description: z.string().trim().max(200).nullable().optional()
+    description: clearable(z.string().trim().max(200))
 });
 
 export type CreateFlagDto = z.infer<typeof CreateFlagSchema>;
@@ -54,7 +55,7 @@ export const UpdateFlagSchema = z
     .object({
         name: z.string().trim().min(1).max(60).optional(),
         color: hexColor.optional(),
-        description: z.string().trim().max(200).nullable().optional()
+        description: clearable(z.string().trim().max(200))
     })
     .refine((data) => Object.keys(data).length > 0, {
         message: 'At least one field must be provided'

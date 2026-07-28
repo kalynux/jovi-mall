@@ -9,6 +9,28 @@ import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repo
 import { ConnectionRepository } from '../../../agency-connections/connection.repository';
 import { AvailabilityRule } from '../../../booking/models/availability-rule.model';
 import { PickupLocationValidationService } from './PickupLocationValidationService';
+import { RepositoryOptions } from '../../repositories/types';
+import { ProductStatus } from '../../models/product.model';
+
+/**
+ * Status transitions a VENDOR may trigger (PATCH /:id/status and the bulk
+ * endpoints). Everything absent is reserved:
+ *   - `suspended` is a system/admin lock (delivery-agency cascade) — a vendor can
+ *     never leave it directly. It clears only via the system restore paths
+ *     (agency/connection/default fixed, or the product's own delivery.agencyId
+ *     repointed at a working agency), which re-validate before reactivating.
+ *   - `pending_review` belongs to admin moderation.
+ *   - Activation happens from `draft` only; an `archived` product must be
+ *     unarchived to `draft` first.
+ * Same-status writes are treated as no-op-allowed by the assert, not listed here.
+ */
+export const VENDOR_STATUS_TRANSITIONS: Readonly<Record<ProductStatus, readonly ProductStatus[]>> = {
+    draft: ['active', 'archived'],
+    active: ['draft', 'archived'],
+    archived: ['draft'],
+    pending_review: [],
+    suspended: [],
+};
 
 /**
  * ProductStatusValidationService: Validates product status transitions based on business rules.
@@ -33,14 +55,42 @@ export class ProductStatusValidationService {
         private readonly pickupLocationValidationService: PickupLocationValidationService = new PickupLocationValidationService(),
     ) { }
 
-    async validate(product: Product, newStatus: string): Promise<void> {
+    /**
+     * Gate on WHERE a vendor-triggered status change may start from — see
+     * VENDOR_STATUS_TRANSITIONS. `validate()` below checks the requirements of
+     * the TARGET status; this checks the transition itself. System restore paths
+     * deliberately bypass this (they reactivate FROM 'suspended', which no vendor
+     * transition allows).
+     */
+    assertVendorTransition(product: Product, newStatus: ProductStatus): void {
+        if (product.status === newStatus) return; // idempotent no-op
+        if (!VENDOR_STATUS_TRANSITIONS[product.status].includes(newStatus)) {
+            const message = product.status === 'suspended'
+                ? 'This product was suspended by the system (delivery-agency issue). It cannot be reactivated manually — it is restored automatically once the underlying agency/connection problem is resolved.'
+                : `A ${product.status} product cannot be moved to ${newStatus} directly.`;
+            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_STATE, 422, message, {
+                status: product.status,
+                requested: newStatus,
+            });
+        }
+    }
+
+    /**
+     * `options.session` matters when this runs inside a transaction that ALSO
+     * wrote the state being validated (e.g. a restore cascade that just set a
+     * new default agency, flipped a connection to 'active', or reactivated an
+     * agency in the same transaction). Without the session, these reads see the
+     * pre-transaction snapshot and the gate fails against stale state.
+     */
+    async validate(product: Product, newStatus: string, options?: RepositoryOptions): Promise<void> {
         if (newStatus !== 'active') return;
+        const session = options?.session;
 
         if (!product.description?.trim()) {
             throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NO_DESCRIPTION, 422);
         }
 
-        const variants = await this.variantRepository.findByProduct(product.id);
+        const variants = await this.variantRepository.findByProduct(product.id, options);
 
         if (variants.length === 0) {
             throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NO_VARIANTS, 422, undefined, { type: product.type });
@@ -63,7 +113,7 @@ export class ProductStatusValidationService {
         }
 
         if (product.type === 'physical') {
-            const vendor = await this.vendorRepository.findById(product.vendorId);
+            const vendor = await this.vendorRepository.findById(product.vendorId, session);
             if (!vendor?.default_delivery_agency_id) {
                 throw createAppError(
                     ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
@@ -72,7 +122,7 @@ export class ProductStatusValidationService {
                 );
             }
 
-            const agency = await this.deliveryAgencyRepository.findById(vendor.default_delivery_agency_id.toString());
+            const agency = await this.deliveryAgencyRepository.findById(vendor.default_delivery_agency_id.toString(), session);
             if (!agency || agency.status !== 'active') {
                 throw createAppError(
                     ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
@@ -84,6 +134,7 @@ export class ProductStatusValidationService {
             const defaultConnection = await this.connectionRepository.findByVendorAndAgency(
                 product.vendorId,
                 vendor.default_delivery_agency_id.toString(),
+                session,
             );
             if (!defaultConnection || defaultConnection.status !== 'active') {
                 throw createAppError(
@@ -97,7 +148,7 @@ export class ProductStatusValidationService {
             // it doesn't replace the vendor-default check above, it's an extra one.
             let effectiveAgency = agency;
             if (product.delivery?.agencyId) {
-                const overrideAgency = await this.deliveryAgencyRepository.findById(product.delivery.agencyId);
+                const overrideAgency = await this.deliveryAgencyRepository.findById(product.delivery.agencyId, session);
                 if (!overrideAgency || overrideAgency.status !== 'active') {
                     throw createAppError(
                         ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
@@ -109,6 +160,7 @@ export class ProductStatusValidationService {
                 const overrideConnection = await this.connectionRepository.findByVendorAndAgency(
                     product.vendorId,
                     product.delivery.agencyId,
+                    session,
                 );
                 if (!overrideConnection || overrideConnection.status !== 'active') {
                     throw createAppError(
@@ -172,7 +224,7 @@ export class ProductStatusValidationService {
                 productId: product.id,
                 isActive: true,
                 deletedAt: null,
-            });
+            }).session(session ?? null);
             if (activeRules === 0) {
                 throw createAppError(ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_AVAILABILITY, 422);
             }

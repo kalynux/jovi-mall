@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { ShipmentRepository } from './shipment.repository';
-import { IShipment, ShipmentStatus, ShipmentRejectionReason, IShipmentHandover, IShipmentHandoverPickup } from './shipment.model';
+import { IShipment, ShipmentStatus, ShipmentRejectionReason, IShipmentHandover, IShipmentHandoverPickup, AgentCancellationReason, IShipmentAgentCancellation } from './shipment.model';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
@@ -12,11 +12,16 @@ import { OrderCompletionService, orderCompletionService } from '../orders/order-
 import { transactionManager } from '../../core/database/transaction.manager';
 import { VendorRepository } from '../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../delivery/delivery-agency.repository';
+import { StoreRepository } from '../store/repositories/store.repository';
+import { MagazinRepository } from '../magazin/repositories/magazin.repository';
 import {
     AgentRepository,
     agentCapacityService,
 } from '../agents';
 import { CustomerModel } from '../customers/customer.model';
+import { FileRepositoryMongo } from '../catalog/repositories/mongo/file.repository.mongo';
+import { getStorageProvider, IStorageProvider } from '../../core/storage';
+import { resolveFileDetail } from '../catalog/read-models/file-detail.resolver';
 import { cashCollectionService } from '../cod/services/cash-collection.service';
 import { eventBus } from '../../core/events/event-bus';
 import { agentActionAuditService } from '../tracking-integration/services/agent-action-audit.service';
@@ -57,6 +62,21 @@ const REASSIGNMENT_TARGET_STATUS: Partial<Record<ShipmentStatus, ShipmentStatus>
     returned: 'handing_over',
 };
 
+// Agent-initiated mid-delivery cancellation: the status a shipment resets to
+// when its own agent walks away. Pre-pickup it returns to the agency queue as
+// `assigned` (the parcel never left); once picked up (or already handing over),
+// the parcel is physically with that agent, so it enters `handing_over` — an
+// offerable state — until a replacement picks it up. Auto-assignment then RESUMES
+// from where it had reached. `returned`/`agent_delivered`/terminal are not
+// agent-cancellable (the shipment has left the agent's active delivery).
+const AGENT_CANCEL_TARGET_STATUS: Partial<Record<ShipmentStatus, ShipmentStatus>> = {
+    assigned: 'assigned',
+    handing_over: 'handing_over',
+    picked_up: 'handing_over',
+    in_transit: 'handing_over',
+    failed: 'handing_over',
+};
+
 /**
  * Shipment Service
  *
@@ -72,18 +92,26 @@ export class ShipmentService {
     private orderRepo: OrderRepository;
     private vendorRepo: VendorRepository;
     private agencyRepo: DeliveryAgencyRepository;
+    private storeRepo: StoreRepository;
+    private magazinRepo: MagazinRepository;
     private agentRepo: AgentRepository;
     private aggregationService: OrderFulfillmentAggregationService;
     private completionService: OrderCompletionService;
+    private fileRepository: FileRepositoryMongo;
+    private storageProvider: IStorageProvider;
 
     constructor() {
         this.shipmentRepo = new ShipmentRepository();
         this.orderRepo = new OrderRepository();
         this.vendorRepo = new VendorRepository();
         this.agencyRepo = new DeliveryAgencyRepository();
+        this.storeRepo = new StoreRepository();
+        this.magazinRepo = new MagazinRepository();
         this.agentRepo = new AgentRepository();
         this.aggregationService = orderFulfillmentAggregationService;
         this.completionService = orderCompletionService;
+        this.fileRepository = new FileRepositoryMongo();
+        this.storageProvider = getStorageProvider();
     }
 
     /**
@@ -227,6 +255,9 @@ export class ShipmentService {
             this.shipmentRepo.findByOrderId(shipment.order_id.toString()),
         ]);
 
+        // The vendor's business name lives on the Store (source of truth).
+        const vendorBusinessName = vendor ? await this.storeRepo.findNameByVendorId(vendor._id.toString()) : null;
+
         // Items: join shipment's order_item_id references against the order's own
         // item snapshots for title/sku/price. Pickup location (#3) is resolved
         // per item from the snapshot taken at order-creation time (the product's
@@ -258,6 +289,12 @@ export class ShipmentService {
 
         const defaultAddr = customer?.saved_addresses?.find((a: any) => a.is_default) ?? customer?.saved_addresses?.[0] ?? null;
 
+        // Resolve the agent's avatar File reference into a FileDetail object.
+        const agentAvatar = await resolveFileDetail(agent?.avatar_file_id?.toString(), this.fileRepository, this.storageProvider);
+
+        // Resolve the (optional, agency-owned) delivery-proof image.
+        const deliveryProof = await resolveFileDetail(shipment.delivery_proof_file_id?.toString(), this.fileRepository, this.storageProvider);
+
         // Merged multi-agency timeline: every sibling shipment's history for this
         // order, labeled by agency, sorted chronologically.
         const timeline = await this._mergeShipmentTimelines(siblingShipments);
@@ -275,7 +312,7 @@ export class ShipmentService {
             paymentMethod: (order as any).payment_method ?? 'online',
             cod,
             items,
-            vendor: vendor ? { id: vendor._id.toString(), businessName: vendor.business_name, phone: vendor.phone ?? null, email: vendor.email ?? null } : null,
+            vendor: vendor ? { id: vendor._id.toString(), businessName: vendorBusinessName ?? '', phone: vendor.phone ?? null, email: vendor.email ?? null } : null,
             customer: customer ? {
                 id: customer._id.toString(),
                 name: customer.name,
@@ -290,7 +327,7 @@ export class ShipmentService {
                     country: defaultAddr.country,
                 } : null,
             } : null,
-            agent: agent ? { id: agent._id.toString(), name: agent.name, phone: agent.phone ?? null, avatarUrl: agent.avatar_url ?? null } : null,
+            agent: agent ? { id: agent._id.toString(), name: agent.name, phone: agent.phone ?? null, avatar: agentAvatar } : null,
             // Reassignment handover: where the (replacement) agent collects this
             // shipment, when it was reassigned. Null for a first-assigned shipment.
             handover: shipment.handover ? {
@@ -317,6 +354,8 @@ export class ShipmentService {
                 confirmedBy: shipment.customer_confirmation.confirmed_by?.toString() ?? null,
                 auto: shipment.customer_confirmation.auto ?? false,
             } : null,
+            // Optional delivery-proof image (agency-owned), or null.
+            deliveryProof,
             orderTimeline: timeline,
         };
     }
@@ -578,7 +617,7 @@ export class ShipmentService {
     private async _emitShipmentRejected(shipment: IShipment, reason: ShipmentRejectionReason, note: string | null): Promise<void> {
         const order = await OrderModel.findById(shipment.order_id).select('order_number vendor_id').lean().exec();
         if (!order) return;
-        const agency = await this.agencyRepo.findById(shipment.agency_id.toString());
+        const agencyName = await this.magazinRepo.findNameByAgencyId(shipment.agency_id.toString());
 
         await eventBus.publish('shipment.rejected', {
             eventType: 'shipment.rejected',
@@ -590,7 +629,7 @@ export class ShipmentService {
                 orderNumber: (order as any).order_number ?? null,
                 vendorId: (order as any).vendor_id?.toString() ?? null,
                 agencyId: shipment.agency_id.toString(),
-                agencyName: agency?.agency_name ?? null,
+                agencyName: agencyName ?? null,
                 reason,
                 note,
             },
@@ -727,6 +766,120 @@ export class ShipmentService {
         this._emitReassigned(detached!, previousAgentId, previousStatus, reason, order?.order_number ?? null);
 
         return { shipment: detached!, previousAgentId, previousStatus };
+    }
+
+    /**
+     * Release a shipment because ITS OWN AGENT cancelled it mid-delivery — the
+     * agent-initiated counterpart of `reassignAgent`.
+     *
+     * Structurally identical to a reassignment detach, but:
+     *   • agent-SCOPED (a guarded CAS on `agent_id: thisAgent`, so an agent can
+     *     only cancel a shipment that is actually theirs), and
+     *   • it records the cancellation reason + note on the shipment
+     *     (`agent_cancellation`) for the audit the requirement asks for.
+     *
+     * It clears `agent_id`, resets the status to the offerable target (`assigned`
+     * pre-pickup, `handing_over` post-pickup), releases the agent's capacity and
+     * tracking session, and re-mirrors the order. The caller (the assignment
+     * service) then RESUMES the auto-assignment broadcast from its stored cursor.
+     * A settled order is never re-opened.
+     */
+    async releaseForAgentCancel(
+        agentId: string,
+        shipmentId: string,
+        reason: AgentCancellationReason,
+        note: string | null,
+        handoverPickup: IShipmentHandoverPickup | null
+    ): Promise<{ shipment: IShipment; previousStatus: ShipmentStatus }> {
+        const shipment = await this.shipmentRepo.findByIdAndAgent(shipmentId, agentId);
+        if (!shipment) throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+
+        const previousStatus = shipment.status;
+        const targetStatus = AGENT_CANCEL_TARGET_STATUS[previousStatus];
+        if (!targetStatus) {
+            throw createAppError(ERROR_CODES.SHIPMENT_CANCEL_NOT_ALLOWED, 422, undefined, { status: previousStatus });
+        }
+
+        const orderId = shipment.order_id.toString();
+        const order = await OrderModel.findById(orderId);
+        if (order?.completion?.confirmed_at) {
+            throw createAppError(ERROR_CODES.SHIPMENT_CANCEL_NOT_ALLOWED, 422,
+                'This order has already been completed and can no longer be cancelled', { status: previousStatus });
+        }
+
+        const now = new Date();
+        const handover: IShipmentHandover | null = handoverPickup
+            ? { pickup: handoverPickup, from_agent_id: new Types.ObjectId(agentId), from_status: previousStatus, reassigned_at: now }
+            : null;
+        const cancellation: IShipmentAgentCancellation = {
+            reason,
+            note: note ?? null,
+            cancelled_by_agent_id: new Types.ObjectId(agentId),
+            from_status: previousStatus,
+            cancelled_at: now,
+        };
+
+        let detached: IShipment | null = null;
+        await transactionManager.runInTransactionWithRetry(async (session) => {
+            detached = await this.shipmentRepo.claimForAgentCancel(
+                shipmentId, agentId, previousStatus, targetStatus, cancellation, handover, session
+            );
+            // The CAS missed — the shipment moved since we read it (a concurrent
+            // reassign / status change). Fail closed, don't double-detach.
+            if (!detached) {
+                throw createAppError(ERROR_CODES.SHIPMENT_CANCEL_CONFLICT, 409, undefined, {
+                    expectedAgentId: agentId,
+                    expectedStatus: previousStatus,
+                });
+            }
+            if (targetStatus !== previousStatus) {
+                await this.orderRepo.setItemDeliveryStatusByShipment(shipmentId, targetStatus, session);
+                await this.aggregationService.recomputeFulfillmentStatus(orderId, session);
+            }
+            // Deliberately does NOT cancel the OTHER agents' standing offers: those
+            // ignored offers stay acceptable, and the broadcast resumes from cursor.
+        });
+
+        // ── post-commit teardown of the cancelling agent ────────────────────────
+        this._emitAgentReleased(detached!, agentId, order?.customer_id?.toString() ?? null);
+        void agentCapacityService
+            .release(agentId, 'cancelled')
+            .catch((err) => console.error('[ShipmentService] agent-cancel capacity release failed:', err));
+        this._emitAgentCancelled(detached!, agentId, previousStatus, reason, note, order?.order_number ?? null);
+
+        return { shipment: detached!, previousStatus };
+    }
+
+    /**
+     * Fire-and-forget business audit of an agent-initiated cancellation. The
+     * tracking release rides `_emitAgentReleased`; the durable record is the
+     * shipment's `agent_cancellation` + `status_history`. Carries the reason so an
+     * agency dashboard / future consumer can surface why an agent walked away.
+     */
+    private _emitAgentCancelled(
+        shipment: IShipment,
+        agentId: string,
+        previousStatus: ShipmentStatus,
+        reason: AgentCancellationReason,
+        note: string | null,
+        orderNumber: string | null
+    ): void {
+        void eventBus.publish('shipment.agent_cancelled', {
+            eventType: 'shipment.agent_cancelled',
+            aggregateId: shipment._id.toString(),
+            occurredAt: new Date(),
+            payload: {
+                shipmentId: shipment._id.toString(),
+                orderId: shipment.order_id.toString(),
+                orderNumber,
+                agencyId: shipment.agency_id.toString(),
+                agentId,
+                previousStatus,
+                newStatus: shipment.status,
+                reason,
+                note,
+            },
+        }).catch((err) => console.error('[ShipmentService] agent_cancelled emit failed:', err));
     }
 
     /**
@@ -939,10 +1092,12 @@ export class ShipmentService {
 
     private async _batchResolveVendorNames(vendorIds: string[]): Promise<Map<string, any>> {
         const map = new Map<string, any>();
+        // Business names come from the Store (source of truth); contact phone from the vendor.
+        const storeNames = await this.storeRepo.findNamesByVendorIds(vendorIds);
         await Promise.all(vendorIds.map(async id => {
             const vendor = await this.vendorRepo.findById(id);
             if (vendor) {
-                map.set(id, { id, businessName: vendor.business_name, phone: vendor.phone ?? null });
+                map.set(id, { id, businessName: storeNames.get(id)?.name ?? '', phone: vendor.phone ?? null });
             }
         }));
         return map;
@@ -964,11 +1119,13 @@ export class ShipmentService {
     /** Merge every shipment's status_history for an order into one sorted, agency-labeled timeline. */
     private async _mergeShipmentTimelines(shipments: IShipment[]): Promise<any[]> {
         const agencyIds = [...new Set(shipments.map(s => s.agency_id.toString()))];
+        // Business names live on the Magazin (source of truth), keyed by agency_id.
+        const magazinNames = await this.magazinRepo.findNamesByAgencyIds(agencyIds);
         const agencyNameMap = new Map<string, string>();
-        await Promise.all(agencyIds.map(async id => {
-            const agency = await this.agencyRepo.findById(id);
-            if (agency) agencyNameMap.set(id, agency.agency_name);
-        }));
+        for (const id of agencyIds) {
+            const name = magazinNames.get(id)?.name;
+            if (name) agencyNameMap.set(id, name);
+        }
 
         const entries = shipments.flatMap(s =>
             s.status_history.map(h => ({

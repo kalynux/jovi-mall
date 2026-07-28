@@ -60,7 +60,7 @@ Only vendors with `status ≠ "inactive"` and completed onboarding (`onboardingS
       "id": "507f1f77bcf86cd799439aaa",
       "businessName": "Acme Store",
       "displayName": "Acme",
-      "logoUrl": "https://cdn.example.com/logos/acme.png",
+      "logo": { "id": "507f1f77bcf86cd799439030", "key": "products/2026/07/acme-logo.png", "url": "https://cdn.example.com/logos/acme.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
       "kycVerified": true,
       "primaryAddress": { "label": "Main Shop", "addressLine1": "12 Rue de la Paix", "city": "Douala", "state": "Littoral" },
       "policies": {
@@ -167,7 +167,7 @@ interface AgencyVendorListItemDto {
   id: string;
   businessName: string;
   displayName: string | null;
-  logoUrl: string | null;
+  logo: FileDetail | null;
   kycVerified: boolean;
   primaryAddress: { label: string; addressLine1: string; city: string; state: string | null } | null;
   policies: {

@@ -157,7 +157,7 @@ Captures the vendor's country, timezone, and payout method.
 
 | Field | Type | Required? | Validation | Notes |
 |-------|------|-----------|------------|-------|
-| `country` | `string` | Yes | Exactly 2 chars, ISO-2 country code | Auto-uppercased (e.g. `"CM"`, `"NG"`). |
+| `country` | `string` | Yes | Exactly 2 chars, ISO-2 country code | Auto-uppercased (e.g. `"CM"`, `"NG"`). **Locks at onboarding completion** — it can still be corrected on step re-edits while onboarding is in progress, but never afterwards (`403 PROFILE_COUNTRY_IMMUTABLE` on the profile PATCH). Correcting it is rejected (`400 ADDRESS_COUNTRY_MISMATCH`) if geocoded business addresses added in Step 3 already resolve in the old country. All business addresses must be located within it. |
 | `timezone` | `string` | Yes | Min 1 char, IANA timezone string | E.g. `"Africa/Douala"`, `"Africa/Lagos"`. |
 | `payout_details` | `object[]` | Yes | Min 1 entry, Max 3 entries | Ordered array — index 0 is the preferred method. Same schema as agency payout. |
 | `payout_details[].method` | `string` | Yes | Enum: `"mobile_money"` or `"bank"` | Determines which sub-object is required. |
@@ -264,6 +264,9 @@ Any other field (e.g. a legacy client still sending `default_delivery_agency_id`
 
 Captures the vendor's branding (logo, cover image) and business addresses. This step is optional — the user can skip it and onboarding will be marked as complete.
 
+> [!NOTE]
+> The `branding` (logo/cover) you submit here is the **business** branding and is stored on the vendor's [Store](./store.md) — its `logo` and `banner`. `business_addresses` stay on the profile. Edit branding later via `PATCH /api/vendor/store`.
+
 > [!IMPORTANT]
 > **Branding images are attached files, not raw URLs.** This mirrors product media (see
 > [Vendor Product Upload Reference — Media Handling](./product-upload-flow.md#media-handling)):
@@ -317,13 +320,21 @@ Captures the vendor's branding (logo, cover image) and business addresses. This 
 | `business_addresses[].address_line2` | `string \| null` | No | Max 200 chars | Secondary address (suite, floor, etc.). |
 | `business_addresses[].city` | `string` | Yes | Min 1, Max 100 chars | City name. |
 | `business_addresses[].state` | `string \| null` | No | Max 100 chars | State or region. |
-| `business_addresses[].location` | `GeoPoint \| null` | No | `{ type: "Point", coordinates: [lng, lat] }` | Geographic coordinates for map display. |
+| `business_addresses[].location` | `GeoPoint \| null` | No | `{ type: "Point", coordinates: [lng, lat] }` | **Deprecated** — prefer `geo` (which carries coordinates plus the resolved address). |
+| `business_addresses[].geo` | `GeoAddress \| null` | **Yes on new/edited entries** | A selected `/api/geo/search` result (see [Geospatial addresses](../geo/README.md)) | **Required on every new or edited entry**, and must resolve **inside the vendor's registered `country`** (Step 1) — else `400 ADDRESS_GEO_REQUIRED` / `400 ADDRESS_COUNTRY_MISMATCH`. Entries echoed back byte-identical to what is stored are grandfathered (legacy plain-text addresses keep working until next touched). |
+
+> **Clearable fields**: the nullable strings above (`branding.*_file_id`, `address_line2`, `state`)
+> accept `null` **or `""`** to clear — both are stored and returned as `null`.
+> See [Conventions](../README.md#conventions).
 
 > [!NOTE]
-> **These addresses become selectable pickup locations for your physical products.** Each physical
-> product must have a `delivery.pickupLocation` pointing at one of these addresses (or at the
-> delivery agency's own storage, if that agency offers it) before it can be activated — see
-> [Vendor Products — Update Product](./products.md#update-product).
+> **These addresses are the vendor's physical store locations** — and they become selectable pickup
+> locations for physical products. Each physical product must have a `delivery.pickupLocation`
+> pointing at one of these addresses (or at the delivery agency's own storage, if that agency
+> offers it) before it can be activated — see
+> [Vendor Products — Update Product](./products.md#update-product). Because they are physical
+> places shown on maps to customers, agencies and agents, each new/edited entry needs a geocoded
+> `geo` inside the registered country (see the field reference above).
 >
 > **You cannot remove (or resubmit without its `_id`, which has the same effect) an address that's
 > still set as a pickup location on one or more physical products.** Doing so rejects the **entire**

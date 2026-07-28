@@ -11,9 +11,11 @@ export interface CreatePlanInput {
   currency?: string;
   term_days: number | null;
   credit_allowance: number;
-  max_active_products: number | null;
-  max_storage_bytes: number;
-  commission_percent: number;
+  max_active_products?: number | null;
+  max_storage_bytes?: number | null;
+  commission_percent?: number | null;
+  max_unterminated_shipments?: number | null;
+  live_tracking_enabled?: boolean;
   is_active?: boolean;
   sort_order?: number;
 }

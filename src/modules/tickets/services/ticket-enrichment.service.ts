@@ -5,6 +5,8 @@ import { ITicketAttachment } from '../models/ticket-attachment.model';
 import { ActorRole } from '../types/ticket.types';
 import { AdminModel } from '../../admins/admin.model';
 import { VendorModel } from '../../vendors/vendor.model';
+import { StoreModel } from '../../store/models/store.model';
+import { AgencyMagazinModel } from '../../magazin/models/magazin.model';
 import { CustomerModel } from '../../customers/customer.model';
 import { DeliveryAgentModel } from '../../agents';
 import { DeliveryAgencyModel } from '../../delivery/delivery-agency.model';
@@ -14,6 +16,8 @@ import { Booking } from '../../booking/models/booking.model';
 import { TicketFollowerModel } from '../models/ticket-follower.model';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
 import { getStorageProvider, IStorageProvider } from '../../../core/storage';
+import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
+import { resolveFileDetails } from '../../catalog/read-models/file-detail.resolver';
 
 /**
  * TicketEnrichmentService
@@ -35,7 +39,8 @@ export interface ActorSummary {
     user_id: string;
     role: string;
     name: string;
-    avatar_url: string | null;
+    /** The actor's picture (avatar, or logo for vendor/agency) as a resolved file object. */
+    avatar: FileDetail | null;
 }
 
 export interface EntitySummary {
@@ -204,15 +209,11 @@ export class TicketEnrichmentService {
     }
 
     /**
-     * Batch-resolve File ids into public URLs (e.g. a vendor's branding logo).
-     * Used instead of a stored URL now that branding is attached-file based —
-     * see FileDetail-style resolution in enrich-product-detail.ts.
+     * Batch-resolve File ids into `FileDetail` objects (an actor's avatar, or a
+     * vendor/agency branding logo). Same wire shape product media uses.
      */
-    private async resolveFileUrls(fileIds: string[]): Promise<Map<string, string>> {
-        const uniqueIds = [...new Set(fileIds)];
-        if (uniqueIds.length === 0) return new Map();
-        const files = await this.fileRepository.findManyByIds(uniqueIds);
-        return new Map(files.map(f => [f.id, this.storageProvider.getPublicUrl(f.key)]));
+    private async resolveActorFiles(fileIds: string[]): Promise<Map<string, FileDetail>> {
+        return resolveFileDetails(fileIds, this.fileRepository, this.storageProvider);
     }
 
     private entityKey(type: string, id: string): string {
@@ -240,56 +241,91 @@ export class TicketEnrichmentService {
             switch (role) {
                 case ActorRole.ADMIN: {
                     const docs = await AdminModel.find({ user_id: { $in: ids } })
-                        .select('user_id name avatar_url').lean();
+                        .select('user_id name avatar_file_id avatar_url').lean();
+                    const avatarByFileId = await this.resolveActorFiles(
+                        docs.map(d => d.avatar_file_id?.toString()).filter((id): id is string => !!id),
+                    );
                     for (const d of docs) {
+                        const fileId = d.avatar_file_id?.toString();
                         result.set(this.actorKey(d.user_id.toString(), role), {
-                            user_id: d.user_id.toString(), role, name: d.name, avatar_url: d.avatar_url ?? null
+                            user_id: d.user_id.toString(), role, name: d.name,
+                            avatar: (fileId ? avatarByFileId.get(fileId) : undefined) ?? null
                         });
                     }
                     break;
                 }
                 case ActorRole.VENDOR: {
+                    // Business name/logo live on the Store (keyed by vendor _id).
                     const docs = await VendorModel.find({ user_id: { $in: ids } })
-                        .select('user_id business_name display_name branding.logo_file_id').lean();
-                    const logoUrlByFileId = await this.resolveFileUrls(
-                        docs.map(d => d.branding?.logo_file_id?.toString()).filter((id): id is string => !!id),
+                        .select('user_id display_name').lean();
+                    const vendorIds = docs.map(d => d._id.toString());
+                    const stores = vendorIds.length
+                        ? await StoreModel.find({ vendor_id: { $in: vendorIds } }).select('vendor_id name logo_file_id').lean()
+                        : [];
+                    const storeByVendor = new Map(stores.map((s: any) => [s.vendor_id.toString(), s]));
+                    const logoByFileId = await this.resolveActorFiles(
+                        stores.map((s: any) => s.logo_file_id?.toString()).filter((id: string | undefined): id is string => !!id),
                     );
                     for (const d of docs) {
-                        const logoFileId = d.branding?.logo_file_id?.toString();
+                        const store: any = storeByVendor.get(d._id.toString());
+                        const logoFileId = store?.logo_file_id?.toString();
                         result.set(this.actorKey(d.user_id.toString(), role), {
                             user_id: d.user_id.toString(), role,
-                            name: d.display_name || d.business_name,
-                            avatar_url: (logoFileId ? logoUrlByFileId.get(logoFileId) : undefined) ?? null
+                            name: d.display_name || store?.name || '',
+                            avatar: (logoFileId ? logoByFileId.get(logoFileId) : undefined) ?? null
                         });
                     }
                     break;
                 }
                 case ActorRole.CUSTOMER: {
                     const docs = await CustomerModel.find({ user_id: { $in: ids } })
-                        .select('user_id name avatar_url').lean();
+                        .select('user_id name avatar_file_id avatar_url').lean();
+                    const avatarByFileId = await this.resolveActorFiles(
+                        docs.map(d => d.avatar_file_id?.toString()).filter((id): id is string => !!id),
+                    );
                     for (const d of docs) {
+                        const fileId = d.avatar_file_id?.toString();
                         result.set(this.actorKey(d.user_id.toString(), role), {
-                            user_id: d.user_id.toString(), role, name: d.name, avatar_url: d.avatar_url ?? null
+                            user_id: d.user_id.toString(), role, name: d.name,
+                            avatar: (fileId ? avatarByFileId.get(fileId) : undefined) ?? null
                         });
                     }
                     break;
                 }
                 case ActorRole.AGENT: {
                     const docs = await DeliveryAgentModel.find({ user_id: { $in: ids } })
-                        .select('user_id name').lean();
+                        .select('user_id name avatar_file_id avatar_url').lean();
+                    const avatarByFileId = await this.resolveActorFiles(
+                        docs.map(d => d.avatar_file_id?.toString()).filter((id): id is string => !!id),
+                    );
                     for (const d of docs) {
+                        const fileId = d.avatar_file_id?.toString();
                         result.set(this.actorKey(d.user_id.toString(), role), {
-                            user_id: d.user_id.toString(), role, name: d.name, avatar_url: null
+                            user_id: d.user_id.toString(), role, name: d.name,
+                            avatar: (fileId ? avatarByFileId.get(fileId) : undefined) ?? null
                         });
                     }
                     break;
                 }
                 case ActorRole.AGENCY: {
+                    // Business name/logo live on the Magazin (keyed by agency _id).
                     const docs = await DeliveryAgencyModel.find({ user_id: { $in: ids } })
-                        .select('user_id agency_name logo_url').lean();
+                        .select('user_id display_name').lean();
+                    const agencyIds = docs.map(d => d._id.toString());
+                    const magazins = agencyIds.length
+                        ? await AgencyMagazinModel.find({ agency_id: { $in: agencyIds } }).select('agency_id name logo_file_id').lean()
+                        : [];
+                    const magazinByAgency = new Map(magazins.map((m: any) => [m.agency_id.toString(), m]));
+                    const logoByFileId = await this.resolveActorFiles(
+                        magazins.map((m: any) => m.logo_file_id?.toString()).filter((id: string | undefined): id is string => !!id),
+                    );
                     for (const d of docs) {
+                        const magazin: any = magazinByAgency.get(d._id.toString());
+                        const logoFileId = magazin?.logo_file_id?.toString();
                         result.set(this.actorKey(d.user_id.toString(), role), {
-                            user_id: d.user_id.toString(), role, name: d.agency_name, avatar_url: d.logo_url ?? null
+                            user_id: d.user_id.toString(), role,
+                            name: (d as any).display_name || magazin?.name || '',
+                            avatar: (logoFileId ? logoByFileId.get(logoFileId) : undefined) ?? null
                         });
                     }
                     break;
@@ -311,11 +347,17 @@ export class TicketEnrichmentService {
         const objectIds = [...new Set(ids)].map(id => new mongoose.Types.ObjectId(id));
         const docs = await AdminModel.find({
             $or: [{ user_id: { $in: objectIds } }, { _id: { $in: objectIds } }]
-        }).select('user_id name avatar_url').lean();
+        }).select('user_id name avatar_file_id avatar_url').lean();
+
+        const avatarByFileId = await this.resolveActorFiles(
+            docs.map(d => d.avatar_file_id?.toString()).filter((id): id is string => !!id),
+        );
 
         for (const d of docs) {
+            const fileId = d.avatar_file_id?.toString();
             const summary: ActorSummary = {
-                user_id: d.user_id.toString(), role: ActorRole.ADMIN, name: d.name, avatar_url: d.avatar_url ?? null
+                user_id: d.user_id.toString(), role: ActorRole.ADMIN, name: d.name,
+                avatar: (fileId ? avatarByFileId.get(fileId) : undefined) ?? null
             };
             // Index by both possible reference forms so lookup by either id hits.
             result.set(d._id.toString(), summary);
@@ -391,7 +433,7 @@ export class TicketEnrichmentService {
 
     private fallbackActor(userId: string, role: string): ActorSummary {
         const label = role ? `${role.charAt(0).toUpperCase()}${role.slice(1)}` : 'Unknown user';
-        return { user_id: userId, role, name: label, avatar_url: null };
+        return { user_id: userId, role, name: label, avatar: null };
     }
 
     private fallbackEntity(type: string, id: string): EntitySummary {

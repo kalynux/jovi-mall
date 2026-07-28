@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { pricingPlanService } from '../services/pricing-plan.service';
-import { vendorPlanService } from '../services/vendor-plan.service';
+import { subscriberPlanService } from '../services/subscriber-plan.service';
 import { creditWalletService } from '../services/credit-wallet.service';
 import { creditTopupService } from '../services/credit-topup.service';
 import { planPurchaseService } from '../services/plan-purchase.service';
@@ -30,7 +30,7 @@ export class VendorBillingController {
   static getMyPlan = asyncHandler(async (req: Request, res: Response) => {
     const vendorId = req.auth!.role_entity._id.toString();
     const [view, entitlements, usedBytes] = await Promise.all([
-      vendorPlanService.getVendorPlanView(vendorId),
+      subscriberPlanService.getPlanView('vendor', vendorId),
       entitlementService.getEntitlements(vendorId),
       mediaStorageService.getUsedBytes('vendor', vendorId),
     ]);
@@ -46,13 +46,13 @@ export class VendorBillingController {
   static purchasePlan = asyncHandler(async (req: Request, res: Response) => {
     const vendorId = req.auth!.role_entity._id.toString();
     const { gateway, channel } = InitiatePlanPurchaseSchema.parse(req.body);
-    const result = await planPurchaseService.initiatePurchase(vendorId, req.params.planId, gateway, channel);
+    const result = await planPurchaseService.initiatePurchase('vendor', vendorId, req.params.planId, gateway, channel);
     res.status(201).json({ success: true, data: result, message: 'Plan purchase initiated' });
   });
 
   static verifyPlanPurchase = asyncHandler(async (req: Request, res: Response) => {
     const vendorId = req.auth!.role_entity._id.toString();
-    const result = await planPurchaseService.verifyAndComplete(vendorId, req.params.id);
+    const result = await planPurchaseService.verifyAndComplete('vendor', vendorId, req.params.id);
     res.json({ success: true, data: result });
   });
 
@@ -69,13 +69,13 @@ export class VendorBillingController {
   static initiateTopup = asyncHandler(async (req: Request, res: Response) => {
     const vendorId = req.auth!.role_entity._id.toString();
     const { packCode, gateway, channel } = InitiateTopupSchema.parse(req.body);
-    const result = await creditTopupService.initiateTopup(vendorId, packCode, gateway, channel);
+    const result = await creditTopupService.initiateTopup('vendor', vendorId, packCode, gateway, channel);
     res.status(201).json({ success: true, data: result, message: 'Top-up initiated' });
   });
 
   static verifyTopup = asyncHandler(async (req: Request, res: Response) => {
     const vendorId = req.auth!.role_entity._id.toString();
-    const topup = await creditTopupService.verifyAndComplete(vendorId, req.params.id);
+    const topup = await creditTopupService.verifyAndComplete('vendor', vendorId, req.params.id);
     res.json({ success: true, data: topup });
   });
 

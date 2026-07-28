@@ -1,7 +1,17 @@
-import { ClientSession, FilterQuery } from 'mongoose';
+import { ClientSession, PipelineStage, Types } from 'mongoose';
 import { VendorModel, IVendor } from './vendor.model';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
 import { VendorOnboardingStep } from '../../core/constants/onboarding-steps';
+import { COLLECTIONS } from '../../core/database/collections';
+
+/**
+ * A vendor row joined to its Store's business name + logo. The public business
+ * name/logo live on the Store (see `src/modules/store/`), not on the vendor, so
+ * list/browse queries `$lookup` it and expose it as this lean sub-field.
+ */
+export type VendorWithStore = IVendor & {
+  store?: { name?: string; logo_file_id?: Types.ObjectId | null } | null;
+};
 
 // ─── Query Params Types ───────────────────────────────────────────────────────
 
@@ -31,8 +41,10 @@ export class VendorRepository {
     return await VendorModel.findOne({ user_id: userId });
   }
 
-  async findById(vendorId: string): Promise<IVendor | null> {
-    return await VendorModel.findById(vendorId);
+  async findById(vendorId: string, session?: ClientSession): Promise<IVendor | null> {
+    const query = VendorModel.findById(vendorId);
+    if (session) query.session(session);
+    return query.exec();
   }
 
   async markEmailVerified(userId: string): Promise<IVendor | null> {
@@ -151,20 +163,41 @@ export class VendorRepository {
    * (requirement #7). Read-only, field-projected — vendors cannot see or change
    * this from the agency side.
    */
-  async findByDefaultAgency(agencyId: string, pagination: PaginationOptions = { page: 1, limit: 20 }): Promise<Page<IVendor>> {
+  async findByDefaultAgency(agencyId: string, pagination: PaginationOptions = { page: 1, limit: 20 }): Promise<Page<VendorWithStore>> {
     const { page, limit } = pagination;
-    const filter = { default_delivery_agency_id: agencyId };
+    const match = { default_delivery_agency_id: new Types.ObjectId(agencyId) };
 
-    const [total, docs] = await Promise.all([
-      VendorModel.countDocuments(filter).exec(),
-      VendorModel.find(filter)
-        .select('business_name display_name email phone status business_addresses')
-        .sort({ business_name: 1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .exec(),
-    ]);
+    // Business name lives on the Store — join it and sort by its name.
+    const pipeline: PipelineStage[] = [
+      { $match: match },
+      { $lookup: { from: COLLECTIONS.STORE, localField: '_id', foreignField: 'vendor_id', as: 'store' } },
+      { $addFields: { store: { $arrayElemAt: ['$store', 0] } } },
+      {
+        $facet: {
+          data: [
+            { $sort: { 'store.name': 1 } },
+            { $skip: (page - 1) * limit },
+            { $limit: limit },
+            {
+              $project: {
+                display_name: 1,
+                email: 1,
+                phone: 1,
+                status: 1,
+                business_addresses: 1,
+                'store.name': 1,
+                'store.logo_file_id': 1,
+              },
+            },
+          ],
+          total: [{ $count: 'count' }],
+        },
+      },
+    ];
 
+    const [result] = await VendorModel.aggregate(pipeline).exec();
+    const docs = (result?.data ?? []) as VendorWithStore[];
+    const total = result?.total?.[0]?.count ?? 0;
     return { data: docs, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
   }
 
@@ -195,53 +228,68 @@ export class VendorRepository {
    */
   async findAvailableForAgencies(
     params: VendorListQueryParams,
-  ): Promise<{ vendors: IVendor[]; total: number }> {
+  ): Promise<{ vendors: VendorWithStore[]; total: number }> {
     const { search, city, state, return_eligible, cancellable, page, limit } = params;
 
-    const filter: FilterQuery<IVendor> = {
+    // Non-name filters run on the vendor document itself.
+    const baseMatch: Record<string, unknown> = {
       status: { $ne: 'inactive' },
       onboarding_step: VendorOnboardingStep.COMPLETED,
     };
+    if (city && city.trim()) baseMatch['business_addresses.city'] = new RegExp(city.trim(), 'i');
+    if (state && state.trim()) baseMatch['business_addresses.state'] = new RegExp(state.trim(), 'i');
+    if (return_eligible === true) baseMatch['policies.return_policy.return_eligible'] = true;
+    if (cancellable === true) baseMatch['policies.cancellation_policy.cancellable'] = true;
+
+    // Business name/logo live on the Store — join it; free-text search and the
+    // name sort operate on `store.name`.
+    const pipeline: PipelineStage[] = [
+      { $match: baseMatch },
+      { $lookup: { from: COLLECTIONS.STORE, localField: '_id', foreignField: 'vendor_id', as: 'store' } },
+      { $addFields: { store: { $arrayElemAt: ['$store', 0] } } },
+    ];
 
     if (search && search.trim()) {
       const searchRegex = new RegExp(search.trim(), 'i');
-      filter.$or = [
-        { business_name: searchRegex },
-        { display_name: searchRegex },
-        { 'business_addresses.city': searchRegex },
-        { 'business_addresses.state': searchRegex },
-        { 'business_addresses.address_line1': searchRegex },
-      ];
+      pipeline.push({
+        $match: {
+          $or: [
+            { 'store.name': searchRegex },
+            { display_name: searchRegex },
+            { 'business_addresses.city': searchRegex },
+            { 'business_addresses.state': searchRegex },
+            { 'business_addresses.address_line1': searchRegex },
+          ],
+        },
+      });
     }
 
-    if (city && city.trim()) {
-      filter['business_addresses.city'] = new RegExp(city.trim(), 'i');
-    }
+    pipeline.push({
+      $facet: {
+        data: [
+          { $sort: { 'store.name': 1 } },
+          { $skip: (page - 1) * limit },
+          { $limit: limit },
+          {
+            $project: {
+              display_name: 1,
+              business_addresses: 1,
+              'kyc_details.legit_verified': 1,
+              policies: 1,
+              status: 1,
+              'store.name': 1,
+              'store.logo_file_id': 1,
+            },
+          },
+        ],
+        total: [{ $count: 'count' }],
+      },
+    });
 
-    if (state && state.trim()) {
-      filter['business_addresses.state'] = new RegExp(state.trim(), 'i');
-    }
-
-    if (return_eligible === true) {
-      filter['policies.return_policy.return_eligible'] = true;
-    }
-
-    if (cancellable === true) {
-      filter['policies.cancellation_policy.cancellable'] = true;
-    }
-
-    const [vendors, total] = await Promise.all([
-      VendorModel.find(filter)
-        .select('business_name display_name branding business_addresses kyc_details.legit_verified policies status')
-        .sort({ business_name: 1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .lean()
-        .exec(),
-      VendorModel.countDocuments(filter).exec(),
-    ]);
-
-    return { vendors: vendors as unknown as IVendor[], total };
+    const [result] = await VendorModel.aggregate(pipeline).exec();
+    const vendors = (result?.data ?? []) as VendorWithStore[];
+    const total = result?.total?.[0]?.count ?? 0;
+    return { vendors, total };
   }
 
   async unlinkWhatsApp(userId: string): Promise<IVendor | null> {

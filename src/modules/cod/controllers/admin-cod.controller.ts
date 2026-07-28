@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
+import { clearable } from '../../../core/validation/zod.helpers';
 import { agencyRemittanceService } from '../services/agency-remittance.service';
 import { agentDepositService } from '../services/agent-deposit.service';
 import { codDiscrepancyService } from '../services/cod-discrepancy.service';
@@ -33,7 +34,7 @@ const RecordDirectDepositSchema = z.object({
   agencyId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid agency ID'),
   amount: z.number().int().positive('Amount must be a positive integer (minor units)'),
   reference: z.string().trim().min(1, 'A transfer/receipt reference is required').max(200),
-  note: z.string().trim().max(500).nullable().optional(),
+  note: clearable(z.string().trim().max(500)),
 });
 
 const ListDiscrepanciesQuerySchema = CodPaginationQuerySchema.extend({

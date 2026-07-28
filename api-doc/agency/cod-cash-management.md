@@ -146,7 +146,7 @@ agent is holding 300,000 of which only 100,000 was collected for you, you can re
 100,000 — the rest is another agency's to receive.
 
 **Error Responses**:
-- `404` – `DELIVERY_AGENT_NOT_IN_AGENCY` – Agent isn't on this roster.
+- `404` – `AGENT_MEMBERSHIP_NOT_FOUND` – Agent has no live contract with this agency.
 - `422` – `COD_DEPOSIT_INVALID_AMOUNT` – Not a positive integer.
 - `422` – `COD_DEPOSIT_EXCEEDS_BALANCE` – More than the agent physically holds across all agencies
   (`details.outstanding`).
@@ -317,7 +317,7 @@ resolves the flag.
 ```
 
 **Error Responses**:
-- `404` – `DELIVERY_AGENT_NOT_IN_AGENCY`.
+- `404` – `AGENT_MEMBERSHIP_NOT_FOUND` – Agent has no live contract with this agency.
 
 ---
 
@@ -338,10 +338,15 @@ resolves the flag.
 
 - **Agent exposure limits** — assignment of a COD shipment fails
   (`COD_AGENT_EXPOSURE_EXCEEDED`) when the agent's held + expected cash would exceed their
-  effective limit. Configure per-agent caps via
-  [`PATCH /agents/:id/cod-limit`](./agents.md#cod-limit).
-- **Trust tiers** — an agent's effective limit is scaled by their trust score
-  (≥80 full, 50–79 halved, <50 blocked: `COD_AGENT_TRUST_TOO_LOW`).
+  effective limit. The base limit is the **COD threshold on your contract with that agent** — a
+  per-contract sub-allocation of the agent's own shared COD pool (an agent serving several agencies
+  splits one pool between them, so your slice binds only your dispatches). Set it via
+  [`PATCH /api/agency/agents/:membershipId/cod-limit`](./agents.md#cod-limit) with `{ "threshold": … }`;
+  `0` grants no COD headroom at all. A raise can be refused if the agent's pool is already fully
+  allocated across their contracts.
+- **Trust tiers** — the base threshold is then scaled by the agent's trust score
+  (≥80 → full, 50–79 → halved, <50 → blocked: `COD_AGENT_TRUST_TOO_LOW`). An open `cash_shortfall`
+  discrepancy also blocks new COD assignments outright until an admin resolves it.
 - **Rolling reserve** — a percentage (default 10%) of your released COD earnings parks in a
   `reserve` balance for 30 days and only releases while you have **no open discrepancies**
   (see [earnings.md](./earnings.md)).

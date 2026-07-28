@@ -1,23 +1,36 @@
 import { z } from 'zod';
 
-/** Admin: create a pricing plan. */
+const PlanRoleSchema = z.enum(['vendor', 'agency', 'agent']);
+
+/**
+ * Admin: create a pricing plan. Limit fields are role-specific and nullable —
+ * vendor plans carry products/storage/commission; agency/agent plans carry
+ * `max_unterminated_shipments`. `live_tracking_enabled` defaults true everywhere.
+ */
 export const CreatePlanSchema = z.object({
-  role: z.literal('vendor').default('vendor'),
+  role: PlanRoleSchema.default('vendor'),
   code: z.string().trim().min(2).max(40),
   name: z.string().trim().min(2).max(80),
   price: z.number().min(0),
   currency: z.string().trim().length(3).optional(),
   term_days: z.number().int().min(1).nullable(),
   credit_allowance: z.number().int().min(0),
-  max_active_products: z.number().int().min(0).nullable(),
-  max_storage_bytes: z.number().int().min(0),
-  commission_percent: z.number().min(0).max(100),
+  max_active_products: z.number().int().min(0).nullable().optional(),
+  max_storage_bytes: z.number().int().min(0).nullable().optional(),
+  commission_percent: z.number().min(0).max(100).nullable().optional(),
+  max_unterminated_shipments: z.number().int().min(0).nullable().optional(),
+  live_tracking_enabled: z.boolean().optional(),
   is_active: z.boolean().optional(),
   sort_order: z.number().int().optional(),
 });
 
 /** Admin: update a pricing plan (code/role are immutable, ignored if sent). */
 export const UpdatePlanSchema = CreatePlanSchema.partial().omit({ role: true, code: true });
+
+/** Admin: filter the plan catalog by role (optional). */
+export const ListPlansQuerySchema = z.object({
+  role: PlanRoleSchema.optional(),
+});
 
 /** Admin: assign a plan to a vendor. */
 export const AssignPlanSchema = z.object({

@@ -87,7 +87,10 @@ currentStep === 4  →  /onboarding/policies
 
 ## 2. Initialization
 
-Called immediately after the user adds the "agency" role. Sets the agency name and unlocks Step 1.
+Called immediately after the user adds the "agency" role. Sets the agency's business name and unlocks Step 1.
+
+> [!NOTE]
+> The `agency_name` you send here is the **business name**, which is stored on the agency's [Magazin](./magazin.md) (its Store-equivalent), not on the profile. Edit it later via `PATCH /api/agency/magazin`. Step 3 (Branding) likewise stores the business `logo` on the Magazin.
 
 - **Endpoint**: `POST /api/agency`
 - **Auth**: Yes (Agency role)
@@ -144,12 +147,13 @@ Once a step is marked complete you may re-submit its endpoint to update the data
 - **Auth**: Yes (Agency role)
 - **Prerequisite**: Agency initialized (`POST /api/agency` called)
 
-Captures the geographic regions served by the agency and at least one physical headquarters address.
+Captures the agency's operating country, the geographic regions served, and at least one physical headquarters address.
 
 #### Request Body
 
 ```json
 {
+  "country": "CM",
   "coverage_areas": ["littoral", "centre", "ouest"],
   "headquarters_addresses": [
     {
@@ -186,6 +190,7 @@ Captures the geographic regions served by the agency and at least one physical h
 
 | Field | Type | Required? | Validation | Notes |
 |-------|------|-----------|------------|-------|
+| `country` | `string` | **Yes** | Exactly 2 chars, ISO-2 (auto-uppercased) | The country the agency operates in (e.g. `"CM"`). **Locks at onboarding completion** — correctable on step re-edits while onboarding is in progress, immutable afterwards (`403 PROFILE_COUNTRY_IMMUTABLE` on the profile PATCH). All headquarters addresses must geocode inside it. |
 | `coverage_areas` | `string[]` | Yes | Min 1 item. Each string is a region key from `locations.json`. | Keys must be lowercase (e.g. `"littoral"`, `"centre"`). |
 | `headquarters_addresses` | `object[]` | Yes | Min 1 entry. | **Index 0 is always the primary headquarters.** Additional entries are branch offices. |
 | `headquarters_addresses[].region` | `string` | Yes | Min 1, Max 100 chars | State/region name (display label). |
@@ -194,7 +199,7 @@ Captures the geographic regions served by the agency and at least one physical h
 | `headquarters_addresses[].support_contact.phone` | `string` | Yes | Min 6, Max 20 chars. Regex `/^\+?[0-9\s\-()]+$/` | Phone number for this location. |
 | `headquarters_addresses[].support_contact.email` | `string \| null` | No | Valid email format | Contact email for this location. |
 | `headquarters_addresses[].location` | `object` | **Yes** | GeoJSON Point `{ type: "Point", coordinates: [lng, lat] }`; lng ∈ [-180,180], lat ∈ [-90,90] | Map coordinates. Required so the agency is geolocatable and auto-assignment can measure distance to pickup. |
-| `headquarters_addresses[].geo` | `object \| null` | No | A selected address-search result (`GeoAddress`) — see [Geospatial addresses](../geo/README.md) | The canonical geospatial address (formatted address + coordinates + admin components). Optional and back-compatible; `location` stays required. Prefer sending `geo` (search → select) going forward. |
+| `headquarters_addresses[].geo` | `object \| null` | **Yes on new/edited entries** | A selected address-search result (`GeoAddress`) — see [Geospatial addresses](../geo/README.md) | The canonical geospatial address (formatted address + coordinates + admin components). **Required on every new or edited entry, and must resolve inside the agency's `country`** — else `400 ADDRESS_GEO_REQUIRED` / `400 ADDRESS_COUNTRY_MISMATCH`. Entries re-submitted byte-identical to what is stored (same region/city/description, same geo) are grandfathered, so legacy `location`-only entries keep working until next touched. `location` stays required alongside it. |
 | `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard. |
 
 ---
@@ -295,7 +300,7 @@ Captures the agency logo and operating timezone. This step is optional — the u
 
 ```json
 {
-  "logo_url": "https://cdn.example.com/fasttrack-logo.png",
+  "logo_file_id": "507f1f77bcf86cd799439030",
   "timezone": "Africa/Douala",
   "version": 1
 }
@@ -316,7 +321,7 @@ Send `skip: true` to bypass this step without providing branding data. The flow 
 | Field | Type | Required? | Validation | Notes |
 |-------|------|-----------|------------|-------|
 | `skip` | `boolean` | No | — | Set `true` to skip this step entirely and advance to Policy Setup. |
-| `logo_url` | `string \| null` | No | Must be a valid absolute URL | Ignored if `skip: true`. |
+| `logo_file_id` | `string \| null` | No | Valid MongoDB ObjectId of a file uploaded via `POST /api/files/upload` | Ignored if `skip: true`. *Clearable*: `null` or `""` clears. The profile response returns the derived `logoUrl`. Registers a `file_references` row so the file is not garbage-collected while set. |
 | `timezone` | `string` | No | IANA timezone string | Defaults to `"Africa/Douala"` if not provided. Ignored if `skip: true`. |
 | `version` | `number (integer)` | No | Must match profile `version` if provided | Ignored if `skip: true`. |
 
@@ -523,7 +528,7 @@ All `PUT` step submissions return the full updated profile and a `completionStat
       "emailVerified": false,
       "phone": null,
       "phoneVerified": false,
-      "logoUrl": null,
+      "logo": null,
       "coverageAreas": ["littoral", "centre"],
       "headquartersAddresses": [
         {

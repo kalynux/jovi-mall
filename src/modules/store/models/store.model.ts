@@ -11,15 +11,18 @@ export interface IStore extends Document {
   vendor_id: mongoose.Types.ObjectId; // Owner (UNIQUE - one store per vendor)
   name: string; // Store display name
   slug: string; // UNIQUE, URL-safe, lowercase (IMMUTABLE in vendor API)
-  logo_url?: string; // Store logo
-  banner_url?: string; // Store banner/hero image
-  description?: string; // Store description
-  address?: string; // Physical address
-  city?: string; // City
-  country: string; // Country (IMMUTABLE - tax/shipping compliance)
-  support_email?: string; // Support contact email
-  support_phone?: string; // Support contact phone
-  support_whatsapp?: string; // Support WhatsApp number
+  // Logo/banner are stored as File references (not URLs) so they register a
+  // file_references row and are exempt from orphan garbage collection. The public
+  // URL is derived at read time. null = cleared by vendor.
+  logo_file_id?: mongoose.Types.ObjectId | null; // Store logo
+  banner_file_id?: mongoose.Types.ObjectId | null; // Store banner/hero image
+  description?: string | null; // Store description (null = cleared)
+  // NO address/city/country here: physical locations are the vendor's
+  // business_addresses (geocoded, country-anchored) and the country lives on
+  // the vendor profile — the store API serves it read-only from there.
+  support_email?: string | null; // Support contact email (null = cleared)
+  support_phone?: string | null; // Support contact phone (null = cleared)
+  support_whatsapp?: string | null; // Support WhatsApp number (null = cleared)
   is_open: boolean; // Vendor-controlled vacation mode (true = open for business)
   version: number; // Optimistic locking counter
   created_at: Date;
@@ -28,13 +31,10 @@ export interface IStore extends Document {
 
 /**
  * Store Schema
- * 
+ *
  * Indexes:
  * - vendor_id (UNIQUE) - One store per vendor, fast vendor lookup
  * - slug (UNIQUE) - URL routing, SEO
- * 
- * Immutability:
- * - country: { immutable: true } - Mongoose-level safety net
  */
 const StoreSchema = new Schema<IStore>(
   {
@@ -59,28 +59,19 @@ const StoreSchema = new Schema<IStore>(
       index: true,
       match: /^[a-z0-9]+(?:-[a-z0-9]+)*$/, // URL-safe validation
     },
-    logo_url: {
-      type: String,
+    logo_file_id: {
+      type: Schema.Types.ObjectId,
+      ref: MODELS.FILE,
+      default: null,
     },
-    banner_url: {
-      type: String,
+    banner_file_id: {
+      type: Schema.Types.ObjectId,
+      ref: MODELS.FILE,
+      default: null,
     },
     description: {
       type: String,
       maxlength: 1000,
-    },
-    address: {
-      type: String,
-      maxlength: 200,
-    },
-    city: {
-      type: String,
-      maxlength: 100,
-    },
-    country: {
-      type: String,
-      required: true,
-      immutable: true, // Mongoose-level enforcement
     },
     support_email: {
       type: String,

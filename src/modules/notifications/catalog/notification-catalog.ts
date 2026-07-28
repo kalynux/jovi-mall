@@ -88,6 +88,16 @@ const MANAGE_STORAGE_LABEL: Record<Language, string> = {
     ar: 'إدارة التخزين'
 };
 
+const MANAGE_PLAN_LABEL: Record<Language, string> = {
+    en: 'Manage plan',
+    fr: 'Gérer le forfait',
+    pt: 'Gerir plano',
+    es: 'Gestionar plan',
+    ar: 'إدارة الباقة'
+};
+
+const PLAN_BUTTON: ButtonDef = { type: 'url', label: MANAGE_PLAN_LABEL, urlSuffix: 'plans' };
+
 const VIEW_CONNECTION_LABEL: Record<Language, string> = {
     en: 'View connection',
     fr: 'Voir la connexion',
@@ -210,6 +220,36 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> =
             template: { name: 'vendor_storage_alert', bodyParams: ['{{percentUsed}}', '{{usageFormatted}}', '{{limitFormatted}}'] }
         },
         button: { type: 'url', label: MANAGE_STORAGE_LABEL, urlSuffix: 'settings/storage' }
+    },
+
+    'plan.expiring': {
+        base: {
+            en: { subject: 'Your plan is expiring soon', body: 'Your {{planCode}} plan expires in {{daysUntilExpiry}} day(s), on {{expiresDate}}. Renew or upgrade to avoid interruption.' },
+            fr: { subject: 'Votre forfait expire bientôt', body: 'Votre forfait {{planCode}} expire dans {{daysUntilExpiry}} jour(s), le {{expiresDate}}. Renouvelez ou améliorez-le pour éviter toute interruption.' },
+            pt: { subject: 'O seu plano expira em breve', body: 'O seu plano {{planCode}} expira em {{daysUntilExpiry}} dia(s), a {{expiresDate}}. Renove ou faça upgrade para evitar interrupções.' },
+            es: { subject: 'Tu plan expira pronto', body: 'Tu plan {{planCode}} expira en {{daysUntilExpiry}} día(s), el {{expiresDate}}. Renuévalo o mejóralo para evitar interrupciones.' },
+            ar: { subject: 'باقتك على وشك الانتهاء', body: 'تنتهي باقة {{planCode}} خلال {{daysUntilExpiry}} يوم/أيام، بتاريخ {{expiresDate}}. جدّدها أو قم بترقيتها لتجنب الانقطاع.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_plan_expiring', bodyParams: ['{{planCode}}', '{{daysUntilExpiry}}', '{{expiresDate}}'] }
+        },
+        button: PLAN_BUTTON
+    },
+
+    'plan.expired': {
+        base: {
+            en: { subject: 'Your plan has expired', body: 'Your {{expiredPlanCode}} plan has expired. You are now on the {{newPlanCode}} plan. Renew or upgrade anytime from your plan settings.' },
+            fr: { subject: 'Votre forfait a expiré', body: 'Votre forfait {{expiredPlanCode}} a expiré. Vous êtes maintenant sur le forfait {{newPlanCode}}. Renouvelez ou améliorez à tout moment depuis vos paramètres de forfait.' },
+            pt: { subject: 'O seu plano expirou', body: 'O seu plano {{expiredPlanCode}} expirou. Está agora no plano {{newPlanCode}}. Renove ou faça upgrade a qualquer momento nas definições do plano.' },
+            es: { subject: 'Tu plan ha expirado', body: 'Tu plan {{expiredPlanCode}} ha expirado. Ahora estás en el plan {{newPlanCode}}. Renueva o mejora en cualquier momento desde la configuración de tu plan.' },
+            ar: { subject: 'انتهت صلاحية باقتك', body: 'انتهت صلاحية باقة {{expiredPlanCode}}. أنت الآن على باقة {{newPlanCode}}. يمكنك التجديد أو الترقية في أي وقت من إعدادات باقتك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_plan_expired', bodyParams: ['{{expiredPlanCode}}', '{{newPlanCode}}'] }
+        },
+        button: PLAN_BUTTON
     },
 
     // NOTE: the WhatsApp template names below (vendor_connection_*) still need to be

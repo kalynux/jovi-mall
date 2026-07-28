@@ -110,6 +110,13 @@ export interface ICustomer extends Document {
   phone?: string;
   phone_verified: boolean;
   name: string;
+  /**
+   * Profile avatar as a File reference — registers in `file_references` and is
+   * deletion-protected. Canonical going forward; `avatar_url` is the deprecated
+   * read-fallback for legacy/OAuth string avatars.
+   */
+  avatar_file_id: mongoose.Types.ObjectId | null;
+  /** @deprecated Prefer `avatar_file_id`. Kept as a read-fallback for legacy avatars. */
   avatar_url: string | null;
   bio: string | null;
   saved_addresses: ICustomerSavedAddress[];
@@ -145,6 +152,7 @@ const CustomerSchema = new Schema<ICustomer>(
     phone: { type: String, trim: true },
     phone_verified: { type: Boolean, default: false },
     name: { type: String, required: true },
+    avatar_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },
     avatar_url: { type: String, default: null },
     bio: { type: String, default: null },
     saved_addresses: { type: [SavedAddressSchema], default: [] },

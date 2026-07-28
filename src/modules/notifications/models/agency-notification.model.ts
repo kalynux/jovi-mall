@@ -25,8 +25,15 @@ export type AgencyNotificationType =
     /** An agent declared a cash hand-over this agency must confirm or reject. */
     | 'cod.deposit.declared'
     /** An agent paid the platform directly; this agency's liability fell with it. */
-    | 'cod.deposit.direct_to_platform';
-export type AgencyAggregateType = 'connection' | 'shipment' | 'payout' | 'deposit';
+    | 'cod.deposit.direct_to_platform'
+    /** Subscription plan lifecycle (billing). */
+    | 'plan.expiring'
+    | 'plan.expired'
+    /** This agency crossed its plan's (soft) unterminated-shipment cap. */
+    | 'shipment.cap.exceeded'
+    /** This agency's media storage crossed a usage threshold (80/90/100%). */
+    | 'storage.alert';
+export type AgencyAggregateType = 'connection' | 'shipment' | 'payout' | 'deposit' | 'plan' | 'storage';
 
 /**
  * Deep-link action for a notification, localized in the agency's language.
@@ -78,13 +85,17 @@ const AgencyNotificationSchema = new Schema<IAgencyNotification>(
                 'payout.paid',
                 'payout.rejected',
                 'cod.deposit.declared',
-                'cod.deposit.direct_to_platform'
+                'cod.deposit.direct_to_platform',
+                'plan.expiring',
+                'plan.expired',
+                'shipment.cap.exceeded',
+                'storage.alert'
             ],
             required: true
         },
         title: { type: String, required: true, trim: true, maxlength: 200 },
         message: { type: String, required: true, trim: true, maxlength: 1000 },
-        aggregateType: { type: String, enum: ['connection', 'shipment', 'payout', 'deposit'], required: true },
+        aggregateType: { type: String, enum: ['connection', 'shipment', 'payout', 'deposit', 'plan', 'storage'], required: true },
         aggregateId: { type: Schema.Types.ObjectId, required: true },
         action: {
             type: new Schema(

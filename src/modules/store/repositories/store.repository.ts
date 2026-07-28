@@ -30,6 +30,16 @@ export class StoreRepository {
   }
 
   /**
+   * VENDOR-FACING: Find store by vendor ID, or null when none exists yet.
+   *
+   * Used by the provisioning path (get-or-create) — unlike findByVendorId,
+   * a missing store here is a normal state, not a bug.
+   */
+  async findByVendorIdOrNull(vendorId: string): Promise<IStore | null> {
+    return await StoreModel.findOne({ vendor_id: vendorId });
+  }
+
+  /**
    * VENDOR-FACING: Update store by vendor ID with optimistic locking
    * 
    * @param vendorId - Vendor ID
@@ -97,13 +107,44 @@ export class StoreRepository {
   }
 
   /**
-   * ONBOARDING ONLY: Create store
-   * 
-   * Called ONLY during vendor onboarding.
+   * PROVISIONING ONLY: Create store
+   *
+   * Called ONLY by StoreProvisioningService (onboarding Step 1 hook and the
+   * get-or-create path on first store access).
    * Not exposed in store profile management API.
    */
   async create(storeData: Partial<IStore>): Promise<IStore> {
     const store = new StoreModel(storeData);
     return await store.save();
+  }
+
+  /**
+   * Batch-resolve vendor ids → their business name + logo file id, keyed by
+   * vendor id string. Vendors without a store are simply absent from the map.
+   * The Store is the source of truth for a vendor's business name/logo, so any
+   * read-heavy path (orders, connections, notifications, admin) that used to read
+   * `vendor.business_name` resolves it here instead — in ONE query, not N+1.
+   */
+  async findNamesByVendorIds(
+    vendorIds: Array<string>,
+  ): Promise<Map<string, { name: string; logoFileId: string | null }>> {
+    const ids = [...new Set(vendorIds.filter((id): id is string => !!id))];
+    if (ids.length === 0) return new Map();
+    const rows = await StoreModel.find({ vendor_id: { $in: ids } })
+      .select('vendor_id name logo_file_id')
+      .lean()
+      .exec();
+    return new Map(
+      rows.map((r) => [
+        r.vendor_id.toString(),
+        { name: r.name, logoFileId: r.logo_file_id ? r.logo_file_id.toString() : null },
+      ]),
+    );
+  }
+
+  /** Convenience single-id name lookup. Returns null when no store exists yet. */
+  async findNameByVendorId(vendorId: string): Promise<string | null> {
+    const row = await StoreModel.findOne({ vendor_id: vendorId }).select('name').lean().exec();
+    return row?.name ?? null;
   }
 }

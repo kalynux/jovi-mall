@@ -1,5 +1,6 @@
 import { Types, ClientSession } from 'mongoose';
 import { CreditTopupModel, ICreditTopup, CreditTopupStatus } from '../models/credit-topup.model';
+import { BillingOwnerType } from '../billing.types';
 
 /** Persistence for credit top-up purchases. */
 export class CreditTopupRepository {
@@ -27,12 +28,13 @@ export class CreditTopupRepository {
     );
   }
 
-  async listByVendor(
-    vendorId: string,
+  async listByOwner(
+    ownerType: BillingOwnerType,
+    ownerId: string,
     page: number,
     limit: number
   ): Promise<{ data: ICreditTopup[]; total: number }> {
-    const filter = { vendor_id: new Types.ObjectId(vendorId) };
+    const filter = { owner_type: ownerType, owner_id: new Types.ObjectId(ownerId) };
     const [data, total] = await Promise.all([
       CreditTopupModel.find(filter)
         .sort({ created_at: -1 })

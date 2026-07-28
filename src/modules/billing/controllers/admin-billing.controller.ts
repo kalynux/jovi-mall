@@ -1,17 +1,21 @@
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { pricingPlanService } from '../services/pricing-plan.service';
-import { vendorPlanService } from '../services/vendor-plan.service';
-import { CreatePlanSchema, UpdatePlanSchema, AssignPlanSchema } from '../validators/billing.validators';
+import { subscriberPlanService } from '../services/subscriber-plan.service';
+import { CreatePlanSchema, UpdatePlanSchema, AssignPlanSchema, ListPlansQuerySchema } from '../validators/billing.validators';
+import { BILLING_OWNER_TYPES, BillingOwnerType } from '../billing.types';
 
 /**
- * Admin-facing billing endpoints: pricing plan catalog CRUD and assigning a plan
- * to a vendor (after a payment is confirmed out of band).
+ * Admin-facing billing endpoints: pricing plan catalog CRUD (any role) and
+ * assigning a plan to a vendor / agency / agent (after a payment is confirmed
+ * out of band).
  */
 export class AdminBillingController {
-  static listPlans = asyncHandler(async (_req: Request, res: Response) => {
-    const plans = await pricingPlanService.listForRole('vendor', false);
-    res.json({ success: true, data: plans });
+  static listPlans = asyncHandler(async (req: Request, res: Response) => {
+    const { role } = ListPlansQuerySchema.parse(req.query);
+    const roles: BillingOwnerType[] = role ? [role] : [...BILLING_OWNER_TYPES];
+    const groups = await Promise.all(roles.map((r) => pricingPlanService.listForRole(r, false)));
+    res.json({ success: true, data: groups.flat() });
   });
 
   static createPlan = asyncHandler(async (req: Request, res: Response) => {
@@ -32,12 +36,29 @@ export class AdminBillingController {
   });
 
   static assignPlanToVendor = asyncHandler(async (req: Request, res: Response) => {
+    await AdminBillingController.assign('vendor', req.params.vendorId, req, res);
+  });
+
+  static assignPlanToAgency = asyncHandler(async (req: Request, res: Response) => {
+    await AdminBillingController.assign('agency', req.params.agencyId, req, res);
+  });
+
+  static assignPlanToAgent = asyncHandler(async (req: Request, res: Response) => {
+    await AdminBillingController.assign('agent', req.params.agentId, req, res);
+  });
+
+  private static async assign(
+    ownerType: BillingOwnerType,
+    ownerId: string,
+    req: Request,
+    res: Response
+  ): Promise<void> {
     const adminUserId = req.auth!.user._id.toString();
     const { planId, paymentRef } = AssignPlanSchema.parse(req.body);
-    const vendorPlan = await vendorPlanService.assignPlan(req.params.vendorId, planId, {
+    const subscriberPlan = await subscriberPlanService.assignPlan(ownerType, ownerId, planId, {
       paymentRef: paymentRef ?? null,
       adminId: adminUserId,
     });
-    res.json({ success: true, data: vendorPlan, message: 'Plan assigned' });
-  });
+    res.json({ success: true, data: subscriberPlan, message: 'Plan assigned' });
+  }
 }

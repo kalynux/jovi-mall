@@ -14,6 +14,7 @@
     "migrate:customer-payment-methods": "ts-node scripts/migrate-customer-payment-methods.ts",
     "migrate:agent-memberships": "ts-node scripts/migrate-agent-memberships.ts",
     "migrate:agent-deposits": "ts-node scripts/migrate-agent-deposits.ts",
+    "migrate:billing-owner-scope": "ts-node scripts/migrate-billing-owner-scope.ts",
     "test:agent-domain": "ts-node scripts/test/test-agent-domain.ts",
     "test:agent-action-audit": "ts-node scripts/test/test-agent-action-audit.ts",
     "test:assignment": "ts-node scripts/test/test-assignment.ts",
@@ -22,6 +23,8 @@
     "seed:plans": "ts-node scripts/seed/seed-pricing-plans.ts",
     "seed:cod": "ts-node scripts/seed/seed-cod.ts",
     "seed:cod:clean": "ts-node scripts/seed/seed-cod.ts --clean",
+    "seed:agent-app": "ts-node scripts/seed/seed-agent-app.ts",
+    "seed:agent-app:clean": "ts-node scripts/seed/seed-agent-app.ts --clean",
     "simulate:notifications": "ts-node scripts/simulate-vendor-notifications.ts"
   },
   "keywords": [],

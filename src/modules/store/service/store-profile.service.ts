@@ -1,14 +1,21 @@
 import { StoreRepository } from '../repositories/store.repository';
+import { StoreProvisioningService } from './store-provisioning.service';
 import {
   StoreProfileMapper,
   GetStoreProfileResponseDto,
   UpdateStoreProfileInputDto,
   UpdateStoreStatusInputDto,
 } from '../dto/store-profile.dto';
+import { VendorRepository } from '../../vendors/vendor.repository';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
 import { auditLogger } from '../../../core/audit/audit-logger';
+import { IStore } from '../models/store.model';
+import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
+import { FileReferenceRepositoryMongo } from '../../catalog/repositories/mongo/file-reference.repository.mongo';
+import { FileReferenceService } from '../../catalog/domain/services/media/FileReferenceService';
+import { getStorageProvider, IStorageProvider } from '../../../core/storage';
 
 /**
  * Store Profile Service
@@ -29,25 +36,83 @@ import { auditLogger } from '../../../core/audit/audit-logger';
  */
 export class StoreProfileService {
   private storeRepo: StoreRepository;
+  private provisioningService: StoreProvisioningService;
+  private vendorRepo: VendorRepository;
+  private fileRepository: FileRepositoryMongo;
+  private fileReferenceService: FileReferenceService;
+  private storageProvider: IStorageProvider;
 
   constructor() {
     this.storeRepo = new StoreRepository();
+    this.provisioningService = new StoreProvisioningService();
+    this.vendorRepo = new VendorRepository();
+    this.fileRepository = new FileRepositoryMongo();
+    this.fileReferenceService = new FileReferenceService(this.fileRepository, new FileReferenceRepositoryMongo());
+    this.storageProvider = getStorageProvider();
+  }
+
+  /**
+   * Keep `file_references` in sync with the store's branding slots (logo, banner)
+   * whenever they change. Mirrors the vendor-profile reconciliation: authorizes
+   * every newly-attached file and detaches the previous one. Runs before the store
+   * write so an unauthorized file reference is rejected before it is persisted.
+   * A slot is only touched when its input field is present (PATCH semantics).
+   */
+  private async reconcileStoreBrandingReferences(
+    vendorId: string,
+    storeId: string,
+    current: IStore,
+    input: UpdateStoreProfileInputDto,
+  ): Promise<void> {
+    if (input.logoFileId !== undefined) {
+      await this.fileReferenceService.reconcile({
+        previousFileIds: current.logo_file_id ? [current.logo_file_id.toString()] : [],
+        nextFileIds: input.logoFileId ? [input.logoFileId] : [],
+        actor: { type: 'vendor', id: vendorId },
+        entityType: 'store',
+        entityId: storeId,
+        field: 'logo',
+      });
+    }
+    if (input.bannerFileId !== undefined) {
+      await this.fileReferenceService.reconcile({
+        previousFileIds: current.banner_file_id ? [current.banner_file_id.toString()] : [],
+        nextFileIds: input.bannerFileId ? [input.bannerFileId] : [],
+        actor: { type: 'vendor', id: vendorId },
+        entityType: 'store',
+        entityId: storeId,
+        field: 'banner',
+      });
+    }
+  }
+
+  /**
+   * The store's `country` is not stored on the store — it is the vendor
+   * profile's set-once country, served read-only here.
+   */
+  private async getVendorCountry(vendorId: string): Promise<string | null> {
+    const vendor = await this.vendorRepo.findById(vendorId);
+    return vendor?.country ?? null;
   }
 
   /**
    * Get store profile
-   * 
-   * FAILS LOUDLY if store not found (system bug).
-   * 
+   *
+   * Get-or-create: a vendor without a store row (pre-provisioning accounts)
+   * gets one created on first access.
+   *
    * @param vendorId - Vendor ID
    * @returns Sanitized store profile with publicUrl
-   * @throws NotFoundError if store not found
    */
   async getStore(vendorId: string): Promise<GetStoreProfileResponseDto> {
-    // Repository throws NotFoundError if not found
-    const store = await this.storeRepo.findByVendorId(vendorId);
+    const store = await this.provisioningService.ensureStoreForVendor(vendorId);
 
-    return StoreProfileMapper.toResponseDto(store);
+    return StoreProfileMapper.toResponseDto(
+      store,
+      await this.getVendorCountry(vendorId),
+      this.fileRepository,
+      this.storageProvider,
+    );
   }
 
   /**
@@ -73,8 +138,8 @@ export class StoreProfileService {
     vendorId: string,
     input: UpdateStoreProfileInputDto
   ): Promise<GetStoreProfileResponseDto> {
-    // 1. Load current store (fail-fast if not found)
-    const currentStore = await this.storeRepo.findByVendorId(vendorId);
+    // 1. Load current store (created on the fly for pre-provisioning vendors)
+    const currentStore = await this.provisioningService.ensureStoreForVendor(vendorId);
 
     // 2. BUSINESS POLICY: Reject attempts to modify immutable fields
     // Note: This is defensive. The DTO mapper already ignores these fields,
@@ -84,11 +149,20 @@ export class StoreProfileService {
       throw createAppError(ERROR_CODES.AUTH_FORBIDDEN, 403, 'Slug cannot be modified. Contact support if you need to change your store URL.');
     }
     if (rawInput.country !== undefined) {
-      throw createAppError(ERROR_CODES.AUTH_FORBIDDEN, 403, 'Country cannot be modified. This is locked for tax and shipping compliance.');
+      throw createAppError(ERROR_CODES.PROFILE_COUNTRY_IMMUTABLE, 403, 'Country is not stored on the store. It lives on your vendor profile and is set once during onboarding.');
     }
 
     // 3. Map input to update payload (explicit field mapping, no mass assignment)
     const updatePayload = StoreProfileMapper.toUpdatePayload(input);
+
+    // 3b. Keep file references in sync BEFORE the write, so an unauthorized file
+    // reference is rejected before anything is persisted (mirrors vendor branding).
+    await this.reconcileStoreBrandingReferences(
+      vendorId,
+      currentStore._id.toString(),
+      currentStore,
+      input,
+    );
 
     // 4. OPTIMISTIC LOCKING: Update with version check
     const updated = await this.storeRepo.updateByVendorId(
@@ -132,7 +206,12 @@ export class StoreProfileService {
     });
 
     // 8. Return sanitized profile
-    return StoreProfileMapper.toResponseDto(updated);
+    return StoreProfileMapper.toResponseDto(
+      updated,
+      await this.getVendorCountry(vendorId),
+      this.fileRepository,
+      this.storageProvider,
+    );
   }
 
   /**
@@ -154,6 +233,9 @@ export class StoreProfileService {
     vendorId: string,
     input: UpdateStoreStatusInputDto
   ): Promise<GetStoreProfileResponseDto> {
+    // 0. Ensure the store exists (created on the fly for pre-provisioning vendors)
+    await this.provisioningService.ensureStoreForVendor(vendorId);
+
     // 1. OPTIMISTIC LOCKING: Update status with version check
     const updated = await this.storeRepo.updateStatusByVendorId(
       vendorId,
@@ -196,7 +278,12 @@ export class StoreProfileService {
     });
 
     // 4. Return sanitized profile
-    return StoreProfileMapper.toResponseDto(updated);
+    return StoreProfileMapper.toResponseDto(
+      updated,
+      await this.getVendorCountry(vendorId),
+      this.fileRepository,
+      this.storageProvider,
+    );
   }
 
   /**
@@ -215,19 +302,21 @@ export class StoreProfileService {
     // Track updateable fields
     const fields = [
       'name',
-      'logo_url',
-      'banner_url',
+      'logo_file_id',
+      'banner_file_id',
       'description',
-      'address',
-      'city',
       'support_email',
       'support_phone',
       'support_whatsapp',
     ];
 
+    // Normalise so ObjectId slots (logo/banner file ids) compare by value, not by
+    // reference — otherwise every update would report them as changed.
+    const norm = (v: any): string | null => (v == null ? null : v.toString());
+
     for (const field of fields) {
-      if (oldStore[field] !== newStore[field]) {
-        changes[field] = { from: oldStore[field], to: newStore[field] };
+      if (norm(oldStore[field]) !== norm(newStore[field])) {
+        changes[field] = { from: norm(oldStore[field]), to: norm(newStore[field]) };
       }
     }
 

@@ -333,6 +333,76 @@ export function getVideoUploadConfig(): UploadPolicyConfig {
 }
 
 /**
+ * Upload configuration for an agent's delivery-proof image (served by the
+ * dedicated `POST /api/agent/shipments/:id/delivery-proof` route).
+ *
+ * Deliberately narrow: exactly ONE image per request (jpeg/png/webp), so an
+ * agent can attach a single photo as proof of a delivery. Image transforms stay
+ * on (a proof photo may be resized/compressed to save the agency's storage).
+ * `userQuotas.enabled` is true so the proof counts against the AGENCY's media
+ * cap — the api layer stamps the file `ownerType: 'agency'` and injects that
+ * owner's limit + usage. Duplicate collapsing is OFF: each shipment's proof is
+ * its own File and must never be merged with another shipment's identical photo.
+ */
+export function getDeliveryProofUploadConfig(): UploadPolicyConfig {
+  const MB = 1024 * 1024;
+
+  return {
+    maxFilesPerRequest: 1,
+    maxTotalSizeBytes: 10 * MB,
+
+    perMimeType: {
+      'image/jpeg': {
+        allowed: true,
+        maxSizeBytes: 10 * MB,
+        transforms: { resize: { maxWidth: 2048, maxHeight: 2048 }, compress: true },
+      },
+      'image/png': {
+        allowed: true,
+        maxSizeBytes: 10 * MB,
+        transforms: { resize: { maxWidth: 2048, maxHeight: 2048 }, convertTo: 'webp', compress: true },
+      },
+      'image/webp': {
+        allowed: true,
+        maxSizeBytes: 10 * MB,
+        transforms: { resize: { maxWidth: 2048, maxHeight: 2048 }, compress: true },
+      },
+    },
+
+    virusScan: {
+      enabled: true,
+      provider: 'mock',
+      blockOnFailure: true,
+    },
+
+    // Counts against the agency's plan-driven media cap (limit + usage injected
+    // by the api layer for the agency owner).
+    userQuotas: {
+      enabled: true,
+      maxFilesTotal: 1000,
+      maxStorageBytes: 5 * 1024 * 1024 * 1024, // fallback only; real cap injected per-agency
+    },
+
+    fingerprinting: {
+      algorithm: 'sha256',
+      enabled: true,
+    },
+
+    // Each shipment's proof is its own File — never collapse two shipments'
+    // identical photos into one shared record.
+    duplicateDetection: {
+      enabled: false,
+      blockDuplicates: false,
+    },
+
+    observability: {
+      enabled: true,
+      logLevel: 'info',
+    },
+  };
+}
+
+/**
  * Load upload configuration from environment variables
  * Falls back to defaults for missing values
  */
