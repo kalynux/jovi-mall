@@ -18,6 +18,13 @@ server job). Activating a plan grants its `credit_allowance` once into the role'
 **credit wallet**; the wallet can also be topped up with credit packs. There is no
 "spend credits" endpoint — credits are metered by other actions.
 
+> **Plan and credit purchases do NOT use the `/api/payments` surface.** Billing talks to the gateway
+> through its own adapter and creates **no `PaymentTransaction`** row, so its purchases are polled
+> with `POST /api/{role}/plan-purchases/:id/verify` and `POST /api/{role}/credits/topups/:id/verify`
+> — never `GET /api/payments/:transactionId`. The 2026-07-29 change that made that endpoint
+> authenticated and owner-scoped therefore has **no effect on vendor, agency or agent billing**. It
+> concerns customer order/cart/booking payments only — see [payments/README.md](./payments/README.md).
+
 ## Per-dashboard summary
 
 | | Vendor | Agency | Agent | Admin |

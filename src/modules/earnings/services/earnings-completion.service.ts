@@ -4,6 +4,7 @@ import { EarningsAllocationRepository } from '../repositories/earnings-allocatio
 import { EarningsSourceType } from '../models/earnings-allocation.model';
 import { EARNINGS_CONFIG, daysFromNow } from '../config/earnings.config';
 import { CashCollectionModel } from '../../cod/models/cash-collection.model';
+import { ShipmentModel } from '../../shipments/shipment.model';
 
 /**
  * EarningsCompletionService - reacts to an order/booking being completed
@@ -16,11 +17,16 @@ import { CashCollectionModel } from '../../cod/models/cash-collection.model';
  *
  * ── One order, one maturity date, every actor ────────────────────────────────
  *
- * An order's money does not all hang off the order row. A COD order splits per
- * SHIPMENT (`source_type: 'cod_collection'`, one per cash handoff) because that
- * is when the cash exists and who collected it is known. Those allocations still
- * belong to the same order, and `onOrderCompleted` matures them with it — see
- * the note there.
+ * An order's money does not all hang off the order row, and for the same reason
+ * in both cases — the delivery fee cannot be divided until it is known who made
+ * the delivery:
+ *  - A COD order splits per cash handoff (`source_type: 'cod_collection'`),
+ *    because that is when the cash exists and who collected it is known.
+ *  - A PREPAID order splits its delivery fee per SHIPMENT
+ *    (`source_type: 'shipment'`) at `agent_delivered`, when the agent is known.
+ *
+ * Those allocations still belong to the same order, and `onOrderCompleted`
+ * matures all of them with it — see the note there.
  */
 export class EarningsCompletionService {
   constructor(
@@ -28,13 +34,21 @@ export class EarningsCompletionService {
   ) {}
 
   /**
-   * Mature every allocation an order produced — its own row AND the per-shipment
-   * COD collection rows — on one date.
+   * Mature every allocation an order produced — its own row, its per-collection
+   * COD rows AND its per-shipment prepaid delivery rows — on one date.
    *
-   * Sourcing the COD rows by order is the whole point: `markCompletedBySource`
-   * is keyed by source, and a COD order's sources are its collections, not
-   * itself. Stamping only `('order', orderId)` therefore silently leaves COD
+   * Sourcing those rows by order is the whole point: `markCompletedBySource` is
+   * keyed by source, and an order's money is spread across three source types.
+   * Stamping only `('order', orderId)` therefore silently leaves the delivery
    * money held forever, since `findMaturedHeld` skips a null `hold_release_at`.
+   * That failure was caught once for COD; the prepaid shipment rows added here
+   * are the same trap, and any FUTURE source type belonging to an order must be
+   * swept here too.
+   *
+   * This is also what makes the hold window uniform: agency and agent shares of a
+   * prepaid delivery become withdrawable HOLD_DAYS after the order completes,
+   * exactly like the vendor's, the platform's, and a COD agent's — never at
+   * delivery, and never on a per-shipment clock.
    *
    * Idempotent by the same rule as markCompletedBySource: only rows with no
    * completion date are touched, so a re-confirm or a second sweep is a no-op.
@@ -48,6 +62,14 @@ export class EarningsCompletionService {
     );
     for (const collection of collections) {
       await this.onSourceCompleted('cod_collection', collection._id.toString(), completedAt);
+    }
+
+    const shipments = await ShipmentModel.find(
+      { order_id: new Types.ObjectId(orderId) },
+      { _id: 1 }
+    );
+    for (const shipment of shipments) {
+      await this.onSourceCompleted('shipment', shipment._id.toString(), completedAt);
     }
   }
 

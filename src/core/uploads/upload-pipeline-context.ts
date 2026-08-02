@@ -112,7 +112,8 @@ export class UploadPipelineContextImpl implements UploadPipelineContext {
   }
 
   /**
-   * Get upload folder
+   * Get the request's folder strategy — a concrete folder, or `'by-type'` when
+   * each file is filed under its own media type (resolved at storage time).
    */
   getFolder(): string {
     return this.request.folder;

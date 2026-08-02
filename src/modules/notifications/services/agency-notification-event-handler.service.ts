@@ -35,6 +35,24 @@ import { DomainEvent } from '../../../core/events/event-bus';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
+/**
+ * Agent-driven shipment status → the agency notification situation it renders.
+ *
+ * Four situations rather than one with a `{{statusLabel}}` placeholder: the
+ * render context is built here, BEFORE `dispatch` resolves the agency's
+ * language, so a status label would inject an English word into a French or
+ * Arabic body. Four keys also let each outcome read naturally.
+ *
+ * `in_transit` is absent by design — the domain never emits for it (see
+ * AGENT_TRANSITIONS_NOTIFYING_AGENCY); this map is the second fence.
+ */
+const AGENT_STATUS_SITUATION: Record<string, AgencyNotificationType | undefined> = {
+    picked_up: 'shipment.agent.picked_up',
+    agent_delivered: 'shipment.agent.delivered',
+    failed: 'shipment.agent.failed',
+    returned: 'shipment.agent.returned',
+};
+
 interface DispatchParams {
     situation: AgencyNotificationType;
     prefs: IAgencyNotificationPreference;
@@ -176,6 +194,81 @@ export class AgencyNotificationEventHandler {
         }
     }
 
+    // ─── Agent contract handshake ────────────────────────────────────────────
+    //
+    // The agent↔agency relationship, NOT the vendor↔agency one above. Same
+    // shape and the same `recipientRole` discriminator, but a different
+    // counterparty, a different preference flag and a different deep link.
+
+    /** An agent applied to deliver for this agency — pending its approval. */
+    async handleAgentContractRequestReceived(event: DomainEvent): Promise<void> {
+        try {
+            const { contractId, recipientRole, agencyId, agentName } = event.payload;
+            if (recipientRole !== 'agency') return;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.contractUpdated) return;
+
+            await this.dispatch({
+                situation: 'agent_contract.request_received',
+                prefs,
+                agencyId,
+                aggregateType: 'contract',
+                aggregateId: contractId,
+                idempotencyKey: `agent_contract.request_received:${contractId}:agency`,
+                context: { agentName, contractId }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle agent_contract.request_received:', error);
+        }
+    }
+
+    /** An agent accepted a request this agency raised. */
+    async handleAgentContractApproved(event: DomainEvent): Promise<void> {
+        try {
+            const { contractId, recipientRole, agencyId, agentName } = event.payload;
+            if (recipientRole !== 'agency') return;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.contractUpdated) return;
+
+            await this.dispatch({
+                situation: 'agent_contract.approved',
+                prefs,
+                agencyId,
+                aggregateType: 'contract',
+                aggregateId: contractId,
+                idempotencyKey: `agent_contract.approved:${contractId}:agency:${event.occurredAt.toISOString()}`,
+                context: { agentName, contractId }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle agent_contract.approved:', error);
+        }
+    }
+
+    /** An agent declined a request this agency raised. */
+    async handleAgentContractRejected(event: DomainEvent): Promise<void> {
+        try {
+            const { contractId, recipientRole, agencyId, agentName } = event.payload;
+            if (recipientRole !== 'agency') return;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.contractUpdated) return;
+
+            await this.dispatch({
+                situation: 'agent_contract.rejected',
+                prefs,
+                agencyId,
+                aggregateType: 'contract',
+                aggregateId: contractId,
+                idempotencyKey: `agent_contract.rejected:${contractId}:agency:${event.occurredAt.toISOString()}`,
+                context: { agentName, contractId }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle agent_contract.rejected:', error);
+        }
+    }
+
     /** Handle shipment.assigned event (a vendor dispatched an order to this agency). */
     async handleShipmentAssigned(event: DomainEvent): Promise<void> {
         try {
@@ -245,6 +338,55 @@ export class AgencyNotificationEventHandler {
             });
         } catch (error) {
             console.error('[AgencyNotificationHandler] Failed to handle shipment.no_agent_available:', error);
+        }
+    }
+
+    /**
+     * Handle shipment.agent_status_changed — this agency's AGENT advanced one of
+     * its shipments from the agent app (POST /api/agent/shipments/:id/status).
+     *
+     * The event is only emitted for the four transitions worth pushing (see
+     * AGENT_TRANSITIONS_NOTIFYING_AGENCY in shipment.service.ts — `in_transit` is
+     * excluded as a routine progress ping); the map below is defence in depth, so
+     * an unmapped status returns rather than throwing on a missing situation.
+     *
+     * Like handleAssignmentUnfilled, the idempotency key carries the event time:
+     * a shipment can legitimately fail twice (failed → in_transit → failed), and
+     * a shipment-only key would dedup the second failure into silence.
+     */
+    async handleAgentStatusChanged(event: DomainEvent): Promise<void> {
+        try {
+            const { shipmentId, agencyId, agentId, orderNumber, status, reason, note } = event.payload;
+
+            const situation = AGENT_STATUS_SITUATION[status as string];
+            if (!situation) return;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.shipmentAssigned) return;
+
+            // The agent's own words, appended after a dash rather than woven into
+            // the sentence: it is raw agent text and is NOT localized, so it must
+            // not sit mid-clause in a French or Arabic body. Empty when none was
+            // given — the full record is on the shipment's `deliveryFailures`.
+            const detail = note || reason || null;
+
+            const at = new Date(event.occurredAt ?? Date.now()).getTime();
+            await this.dispatch({
+                situation,
+                prefs,
+                agencyId,
+                aggregateType: 'shipment',
+                aggregateId: shipmentId,
+                idempotencyKey: `${situation}:${shipmentId}:${at}`,
+                context: {
+                    shipmentId,
+                    orderNumber: orderNumber ?? '—',
+                    agentName: await this.resolveAgentName(agentId),
+                    reasonSuffix: detail ? ` — ${detail}` : ''
+                }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle shipment.agent_status_changed:', error);
         }
     }
 

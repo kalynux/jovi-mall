@@ -1,4 +1,5 @@
-import { ClientSession, Types } from 'mongoose';
+import { ClientSession, FilterQuery, Types } from 'mongoose';
+import { PaginationOptions, Page } from '../../../core/repositories/base.repository';
 import {
   AgentAgencyContractModel,
   IAgentAgencyContract,
@@ -104,22 +105,63 @@ export class AgentContractRepository {
     }).session(session ?? null);
   }
 
-  async listForAgent(agentId: string, status?: ContractStatus): Promise<IAgentAgencyContract[]> {
-    return await AgentAgencyContractModel.find({
-      agent_id: agentId,
-      status: status ? status : { $in: LIVE_CONTRACT_STATUSES },
-    }).sort({ created_at: -1 });
+  /**
+   * One party's contracts, paginated.
+   *
+   * **No `status` means every status, terminal rows included** — the same rule as
+   * ConnectionRepository.listForVendor. These back the "Connections" views, and a
+   * relationship history that silently omits the rejected/withdrawn/deactivated
+   * rows is not a history. Callers that want only live contracts pass a status,
+   * or use the purpose-built `findLive`/`findActive`/`listAllocating` above,
+   * which is what every dispatch-path caller already does.
+   */
+  async listForAgent(
+    agentId: string,
+    filters: { status?: ContractStatus },
+    pagination: PaginationOptions
+  ): Promise<Page<IAgentAgencyContract>> {
+    return await this.paginateBy({ agent_id: agentId }, filters, pagination);
   }
 
+  async listForAgency(
+    agencyId: string,
+    filters: { status?: ContractStatus },
+    pagination: PaginationOptions
+  ): Promise<Page<IAgentAgencyContract>> {
+    return await this.paginateBy({ agency_id: agencyId }, filters, pagination);
+  }
+
+  /**
+   * Every contract an agent has ever held, unpaginated.
+   *
+   * Exists for the admin agent view, which is explicitly "the profile plus every
+   * membership" and must not silently truncate at a page boundary. Deliberately
+   * not exposed to the agent or agency — they get `listForAgent`/`listForAgency`,
+   * which page.
+   */
   async listAllForAgent(agentId: string): Promise<IAgentAgencyContract[]> {
-    return await AgentAgencyContractModel.find({ agent_id: agentId }).sort({ created_at: -1 });
+    return await AgentAgencyContractModel.find({ agent_id: agentId }).sort({ updated_at: -1 });
   }
 
-  async listForAgency(agencyId: string, status?: ContractStatus): Promise<IAgentAgencyContract[]> {
-    return await AgentAgencyContractModel.find({
-      agency_id: agencyId,
-      status: status ? status : { $in: LIVE_CONTRACT_STATUSES },
-    }).sort({ created_at: -1 });
+  private async paginateBy(
+    scope: FilterQuery<IAgentAgencyContract>,
+    filters: { status?: ContractStatus },
+    pagination: PaginationOptions
+  ): Promise<Page<IAgentAgencyContract>> {
+    const { page, limit } = pagination;
+    const filter: FilterQuery<IAgentAgencyContract> = { ...scope };
+    if (filters.status) filter.status = filters.status;
+
+    const [total, docs] = await Promise.all([
+      AgentAgencyContractModel.countDocuments(filter).exec(),
+      AgentAgencyContractModel.find(filter)
+        .sort({ updated_at: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .exec(),
+    ]);
+
+    return { data: docs, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
   }
 
   /** Contracts counting toward the agent's max-relationships cap. */
@@ -157,6 +199,41 @@ export class AgentContractRepository {
       { agent_id: 1 }
     );
     return rows.map((r) => r.agent_id.toString());
+  }
+
+  // ─── Directory annotation ─────────────────────────────────────────────────
+  //
+  // Both browse endpoints left-join the caller's contracts onto a page of
+  // counterparties so the UI can render Request / Pending / Connected states.
+  // Scoped to the PAGE's ids rather than fetching the caller's whole contract
+  // set — the vendor↔agency equivalent (ConnectionRepository.findAllForEntity)
+  // pulls every row unpaginated, which is a wart worth not reproducing.
+  //
+  // Every status is returned, terminal rows included: unlike the vendor model's
+  // one-document-per-pair, a pair here accumulates a row per contract, so the
+  // caller picks the live one and falls back to the most recent terminal one.
+  // Sorted newest-first so that fallback is just "the first match".
+
+  async findForAgencyAndAgents(
+    agencyId: string,
+    agentIds: string[]
+  ): Promise<IAgentAgencyContract[]> {
+    if (agentIds.length === 0) return [];
+    return await AgentAgencyContractModel.find({
+      agency_id: agencyId,
+      agent_id: { $in: agentIds.map((id) => new Types.ObjectId(id)) },
+    }).sort({ created_at: -1 });
+  }
+
+  async findForAgentAndAgencies(
+    agentId: string,
+    agencyIds: string[]
+  ): Promise<IAgentAgencyContract[]> {
+    if (agencyIds.length === 0) return [];
+    return await AgentAgencyContractModel.find({
+      agent_id: agentId,
+      agency_id: { $in: agencyIds.map((id) => new Types.ObjectId(id)) },
+    }).sort({ created_at: -1 });
   }
 
   // ─── Guarded transitions ──────────────────────────────────────────────────

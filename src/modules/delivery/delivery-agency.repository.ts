@@ -1,21 +1,28 @@
 import { ClientSession, PipelineStage, Types } from 'mongoose';
 import { DeliveryAgencyModel, IDeliveryAgency } from './delivery-agency.model';
+import { IAgencyHeadquartersAddress } from '../magazin/models/magazin.model';
 import { AgencyOnboardingStepValue } from '../../core/constants/onboarding-steps';
 import { COLLECTIONS } from '../../core/database/collections';
 
 /**
- * An agency row joined to its Magazin's business name + logo. The public business
- * name/logo live on the Magazin (see `src/modules/magazin/`), not on the agency,
- * so list/browse queries `$lookup` it and expose it as this lean sub-field.
+ * An agency row joined to its Magazin's business surface (name, logo, coverage
+ * areas, HQ addresses). Those all live on the Magazin (see `src/modules/magazin/`),
+ * not on the agency, so list/browse queries `$lookup` it and expose it as this
+ * lean sub-field.
  */
 export type AgencyWithMagazin = IDeliveryAgency & {
-  magazin?: { name?: string; logo_file_id?: Types.ObjectId | null } | null;
+  magazin?: {
+    name?: string;
+    logo_file_id?: Types.ObjectId | null;
+    coverage_areas?: string[];
+    headquarters_addresses?: IAgencyHeadquartersAddress[];
+  } | null;
 };
 
 // ─── Query Params Types ───────────────────────────────────────────────────────
 
 export interface AgencyListQueryParams {
-  /** Free-text search across agency_name, coverage_areas, and headquarters_addresses.city / region / address_description */
+  /** Free-text search across agency_name, coverage_areas, and headquarters_addresses.city / region / address_description / geo.formatted_address */
   search?: string;
   /** Filter by coverage area region key (e.g. 'littoral') */
   region?: string;
@@ -236,15 +243,23 @@ export class DeliveryAgencyRepository {
   /**
    * Find delivery agencies available for vendor selection.
    *
+   * Also serves the AGENT-facing directory (AgentDirectoryService
+   * .browseAgenciesForAgent) — the hard filter is the same question either way
+   * ("is this agency open for business?"), and an agent simply leaves the
+   * vendor-only policy filters unpassed. The name is kept for its existing
+   * vendor call sites.
+   *
    * Hard filters (always applied):
    *   - status ≠ 'inactive'
    *   - onboarding_step = 0 (fully completed)
    *
    * Optional filters:
    *   - search: regex match on agency_name, coverage_areas[], headquarters_addresses[].city,
-   *             headquarters_addresses[].region, headquarters_addresses[].address_description
+   *             headquarters_addresses[].region, headquarters_addresses[].address_description,
+   *             headquarters_addresses[].geo.formatted_address
    *   - region: exact match on coverage_areas[] values
-   *   - hq_city: case-insensitive match on headquarters_addresses[0].city
+   *   - hq_city: case-insensitive match on headquarters_addresses[0].city (derived from the
+   *              geocode, so an address whose geocode names no city never matches it)
    *   - storage_based: policies.pricing.storage_based.enabled === true
    *   - pickup_based:  policies.pricing.pickup_based.enabled === true
    *   - returns_payer: policies.returns.payer === value
@@ -257,13 +272,13 @@ export class DeliveryAgencyRepository {
   ): Promise<{ agencies: AgencyWithMagazin[]; total: number }> {
     const { search, region, hq_city, storage_based, pickup_based, returns_payer, min_claim_deadline_days, page, limit } = params;
 
-    // Non-name filters run on the agency document itself.
+    // Policy/status filters run on the agency document itself. Name, coverage
+    // areas and HQ addresses live on the Magazin, so those filters run after the
+    // $lookup below.
     const baseMatch: Record<string, unknown> = {
       status: { $ne: 'inactive' },
       onboarding_step: 0,
     };
-    if (region && region.trim()) baseMatch.coverage_areas = new RegExp(region.trim(), 'i');
-    if (hq_city && hq_city.trim()) baseMatch['headquarters_addresses.0.city'] = new RegExp(hq_city.trim(), 'i');
     if (storage_based === true) baseMatch['policies.pricing.storage_based.enabled'] = true;
     if (pickup_based === true) baseMatch['policies.pricing.pickup_based.enabled'] = true;
     if (returns_payer) baseMatch['policies.returns.payer'] = returns_payer;
@@ -271,13 +286,17 @@ export class DeliveryAgencyRepository {
       baseMatch['policies.damage.claim_deadline_days'] = { $gte: min_claim_deadline_days };
     }
 
-    // The business name/logo live on the Magazin, so join it — the free-text search
-    // and the name sort operate on `magazin.name`.
     const pipeline: PipelineStage[] = [
       { $match: baseMatch },
       { $lookup: { from: COLLECTIONS.AGENCY_MAGAZIN, localField: '_id', foreignField: 'agency_id', as: 'magazin' } },
       { $addFields: { magazin: { $arrayElemAt: ['$magazin', 0] } } },
     ];
+
+    // Coverage-region + HQ-city filters (on the joined Magazin).
+    const magazinMatch: Record<string, unknown> = {};
+    if (region && region.trim()) magazinMatch['magazin.coverage_areas'] = new RegExp(region.trim(), 'i');
+    if (hq_city && hq_city.trim()) magazinMatch['magazin.headquarters_addresses.0.city'] = new RegExp(hq_city.trim(), 'i');
+    if (Object.keys(magazinMatch).length > 0) pipeline.push({ $match: magazinMatch });
 
     if (search && search.trim()) {
       const searchRegex = new RegExp(search.trim(), 'i');
@@ -285,16 +304,20 @@ export class DeliveryAgencyRepository {
         $match: {
           $or: [
             { 'magazin.name': searchRegex },
-            { coverage_areas: searchRegex },
-            { 'headquarters_addresses.city': searchRegex },
-            { 'headquarters_addresses.region': searchRegex },
-            { 'headquarters_addresses.address_description': searchRegex },
+            { 'magazin.coverage_areas': searchRegex },
+            { 'magazin.headquarters_addresses.city': searchRegex },
+            { 'magazin.headquarters_addresses.region': searchRegex },
+            { 'magazin.headquarters_addresses.address_description': searchRegex },
+            // city/region are derived from the geocode and are null when it
+            // resolves none; the formatted address always names the place.
+            { 'magazin.headquarters_addresses.geo.formatted_address': searchRegex },
           ],
         },
       });
     }
 
-    // Field-projected result (no payout details, no KYC numbers) + the magazin name/logo.
+    // Field-projected result (no payout details, no KYC numbers) + the magazin
+    // name/logo/coverage/HQ.
     pipeline.push({
       $facet: {
         data: [
@@ -304,12 +327,12 @@ export class DeliveryAgencyRepository {
           {
             $project: {
               'kyc_details.legit_verified': 1,
-              headquarters_addresses: 1,
-              coverage_areas: 1,
               policies: 1,
               status: 1,
               'magazin.name': 1,
               'magazin.logo_file_id': 1,
+              'magazin.coverage_areas': 1,
+              'magazin.headquarters_addresses': 1,
             },
           },
         ],

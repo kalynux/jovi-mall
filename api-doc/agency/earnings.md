@@ -22,8 +22,7 @@
 
 Every time one of this agency's shipments is part of a customer's **paid physical order**, the
 agency's share of that order is computed from its own pricing policy (`policies.pricing`, set via
-`PUT /api/agency/onboarding/policies` — see [profile-schema.md](./profile-schema.md)) and held in
-escrow immediately, the same way a vendor's net proceeds are held:
+`PUT /api/agency/onboarding/policies` — see [profile-schema.md](./profile-schema.md)):
 
 - If any item on the shipment is picked up from the **vendor's own address**
   (`pickupLocation.mode: "pickup_based"` in [shipment detail](./shipments.md#detail) terms), the
@@ -34,20 +33,33 @@ escrow immediately, the same way a vendor's net proceeds are held:
   once per shipment.
 - A shipment mixing both kinds of items (some collected from the vendor, some already warehoused)
   is credited **both** amounts — real, distinct fulfillment work happens for each.
-- An order whose items are split across multiple shipments to the **same** agency has its fees
-  summed into a single balance entry for that agency, not one per shipment.
+- An order whose items are split across multiple shipments to the **same** agency earns **one entry
+  per shipment** — each run is paid for separately.
 
 > **Not yet charged (planned, in this order):** per-kg weight surcharges (`additional_per_kg`),
 > out-of-region surcharges (`out_of_region_surcharge` / `out_of_region_delivery_fee`),
 > peak-season surcharges, monthly per-SKU storage rent (`monthly_storage_fee_per_sku` — a
-> recurring charge, not tied to a single order), and failed-delivery / return-to-origin fees
-> (`failed_delivery_fee`, `rto_fee`). These will be added in later phases as the underlying data
-> (item weight, region matching, a failed/returned-shipment hook) becomes available. Do not build
-> UI assuming they're already reflected in the balance below.
+> recurring charge, not tied to a single order), and the failed-delivery fee
+> (`failed_delivery_fee` — a delivery can fail and be retried, so it needs its own charge path
+> rather than a slice of the delivery fee). `rto_fee` **is** now charged; see below. Do not build
+> UI assuming the rest are already reflected in the balance below.
 
-Funds are **held** (`pending`) the moment the order is paid, and move to **available**
-(withdrawable) once the order is completed by the customer and a hold window elapses — the same
-escrow model already used for vendor earnings.
+### When it lands, and why not sooner
+
+The fee is **earned at delivery, not at payment**. When the shipment reaches `agent_delivered` the
+fee is divided and held (`pending`); it moves to **available** (withdrawable) once the whole
+**order** is completed and the hold window elapses.
+
+It cannot be credited at payment time, because the fee is shared: the agent who makes the delivery
+takes their contracted cut of it (`fee_split` on their contract with this agency — see
+[agent-roster.md](./agent-roster.md)), and at payment nobody has been dispatched yet. So the
+agency's entry is **the fee minus the agent's cut**, and the agent's own entry is the remainder.
+The vendor pays the same total either way.
+
+**If the shipment comes back** (`returned`), the run happened but the delivery did not: the agency
+earns its `policies.pricing.additional_fees.rto_fee` instead of the full delivery fee (capped at
+that fee), the agent takes their contracted share of *that*, and the unused remainder is returned
+to the vendor.
 
 ---
 
@@ -61,10 +73,15 @@ customer's delivery code:
 - your `policies.pricing.additional_fees.cod_handling_fee` — `percentage` of the collected amount
   (floored) or a `fixed` amount per collection.
 
+The agent's cut is carved out of the delivery fee here too, exactly as on a prepaid order. The
+`cod_handling_fee` is **not** shared — it stays whole with the agency, which is the party carrying
+the cash accountability.
+
 COD earnings differ from prepaid earnings in two ways:
 
-1. **The hold window starts at collection** (the verified code IS the delivery confirmation), so
-   there is no separate wait for customer confirmation.
+1. **The trigger is the cash handoff**, not `agent_delivered` — the verified delivery code is what
+   creates the entry. The hold window itself is the same: it starts when the **order** completes,
+   not at collection, so every actor on an order matures together.
 2. **Release is additionally gated on cash settlement**: a COD entry only moves to `available`
    once the physical cash covering it has been remitted to the platform and confirmed
    (remittances settle collections oldest-first). Held-up remittances = held-up earnings.

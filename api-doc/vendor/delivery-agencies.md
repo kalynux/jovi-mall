@@ -64,7 +64,7 @@ Only agencies that meet **both** of the following conditions are returned:
     {
       "id": "683abc1234567890abcdef01",
       "agencyName": "Swift Deliveries Cameroon",
-      "logo": { "id": "507f1f77bcf86cd799439030", "key": "products/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
+      "logo": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
       "kycVerified": true,
       "headquartersAddress": {
         "region": "Littoral",
@@ -130,9 +130,9 @@ Only agencies that meet **both** of the following conditions are returned:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `region` | `string` | State/region name (display label, e.g. `"Littoral"`). |
-| `city` | `string` | City name (e.g. `"Douala"`). |
-| `address_description` | `string` | Full street address, building, or landmark. |
+| `region` | `string \| null` | State/region name (e.g. `"Littoral"`), derived from the entry's geocode. `null` when it resolves none. |
+| `city` | `string \| null` | City name (e.g. `"Douala"`), derived from the entry's geocode. `null` when it resolves none (rural / landmark addresses). |
+| `address_description` | `string` | Full street address, building, or landmark. Always present — use it when `region`/`city` are null. |
 
 > **Note**: Only the primary HQ address is returned. Branch addresses and per-location support contacts are intentionally omitted from this listing endpoint.
 
@@ -195,8 +195,8 @@ activated against it. Before presenting the pickup-location picker to a vendor, 
 // ─── Agency Listing ───────────────────────────────────────────────────────────
 
 export interface VendorAgencyHQAddressDto {
-  region: string;
-  city: string;
+  region: string | null;
+  city: string | null;
   address_description: string;
 }
 

@@ -6,7 +6,23 @@
  * mappers and repositories remain clean.
  */
 
-import { ProductStatus, ProductType, VectorisationStatus } from '../models/product.model';
+import { ErrorCode } from '../../../core/error-codes';
+import { ProductMode, ProductStatus, ProductType, VectorisationStatus } from '../models/product.model';
+
+/**
+ * One unmet requirement standing between a product and `status: 'active'`.
+ *
+ * Produced by ProductStatusValidationService.collectActivationBlockers() and
+ * returned by the simple-product endpoints so a vendor sees the whole publish
+ * checklist at once instead of discovering it one 422 at a time. `message` is
+ * the AppError's message verbatim — which is why those default messages have to
+ * read as instructions to a vendor (see defaultMessages in core/errors.ts).
+ */
+export interface ActivationBlocker {
+  code: ErrorCode;
+  message: string;
+  details?: Record<string, unknown>;
+}
 
 export interface FileDetail {
   id: string;
@@ -36,6 +52,8 @@ export interface ProductListItem {
   title: string;
   type: ProductType;
   status: ProductStatus;
+  /** Tells the UI which editor to open for this row — simple or advanced. */
+  mode: ProductMode;
   category: string;
   fileIds: FileDetail[];
   hasVariants: boolean;
@@ -53,6 +71,7 @@ export interface ProductListProjection {
   title: string;
   type: ProductType;
   status: ProductStatus;
+  mode: ProductMode;
   category: string;
   fileIds: string[];
   hasVariants: boolean;

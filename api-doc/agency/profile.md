@@ -5,7 +5,7 @@
 The Agency Profile Management API allows a delivery agency to view and update its profile — logistics, payout, branding, KYC, and policy data — outside of the first-time onboarding flow. All endpoints require authentication and are restricted to `agency` accounts.
 
 > [!IMPORTANT]
-> **The business name, description and logo live on the agency's [Magazin](./magazin.md), not on this profile** — mirroring how a vendor's business identity lives on their Store. This profile now carries the agency's **personal** surface: `displayName` + `avatar`, alongside logistics/payout/policies. `GET /api/agency/profile` no longer returns `agencyName` or a business `logo`; use [`GET`/`PATCH /api/agency/magazin`](./magazin.md) for those.
+> **The business name, description, logo, coverage areas and headquarters/pickup addresses live on the agency's [Magazin](./magazin.md), not on this profile** — mirroring how a vendor's business identity lives on their Store. This profile now carries only the agency's **personal + account** surface: `displayName`, personal `avatar`, email/phone, payout, policies, KYC, and the set-once `country`. `GET /api/agency/profile` no longer returns `agencyName`, a business `logo`, `coverageAreas`, or `headquartersAddresses`; use [`GET`/`PATCH /api/agency/magazin`](./magazin.md) for those.
 
 > [!TIP]
 > This document covers the **profile endpoints**. For:
@@ -58,16 +58,6 @@ Authorization: Bearer <jwt_token>
       "size": 24576,
       "originalName": "me.png"
     },
-    "coverageAreas": ["littoral", "centre"],
-    "headquartersAddresses": [
-      {
-        "_id": "6641abc123def457",
-        "region": "Littoral",
-        "city": "Douala",
-        "address_description": "Akwa, Rue Sylvani, immeuble ABC",
-        "support_contact": { "phone": "+237612345678", "email": "douala@fasttrack.cm" }
-      }
-    ],
     "payoutDetails": [
       {
         "method": "mobile_money",
@@ -177,7 +167,7 @@ Content-Type: application/json
 #### How to send
 
 - **Partial update**: send **only** the fields you want to change. Omitted fields are left untouched.
-- **Object/array fields are a full replace, not a merge.** When you send `coverage_areas`, `headquarters_addresses`, `payout_details`, or `policies`, the value you send **replaces** the entire stored value. To edit one entry, send the complete desired array/object (including the parts you want to keep).
+- **Object/array fields are a full replace, not a merge.** When you send `payout_details` or `policies`, the value you send **replaces** the entire stored value. To edit one entry, send the complete desired array/object (including the parts you want to keep). (`coverage_areas` + `headquarters_addresses` moved to the [Magazin](./magazin.md).)
 - **`policies.damage.inspector` / `policies.damage.investigation_fee` are preserved automatically.** These two sub-fields are admin-controlled presets. Even though `policies` is otherwise a full replace, the server re-injects the agency's existing `inspector`/`investigation_fee` values (or platform defaults `"agency"` / `1000` if none set yet) into the response — the frontend never needs to send them and cannot override them here.
 - **`onboardingStep` may change as a side-effect.** After every save, the server recalculates `onboardingStep` from the resulting data completeness (coverage areas + HQ addresses → step 1 done; payout details → step 2 done; `policies` present → complete). Clearing a previously-set field (e.g. sending an empty `payout_details` is rejected by validation, but removing all `policies` is not possible via this endpoint) can in principle move `onboardingStep` backwards. In practice this only surfaces if a field that was previously complete becomes incomplete.
 
@@ -214,8 +204,8 @@ All fields are **optional** — send only what changed. This maps 1:1 to `Update
 | `timezone` | `string` | Min 1 char, IANA tz | Step 3 (Branding) | E.g. `"Africa/Douala"`. |
 | `preferred_language` | `string` | Enum: `"en"`, `"fr"`, `"pt"`, `"es"`, `"ar"` | — (general) | The agency's language, used for **all notifications** — there is no separate notification-language setting. |
 | `country` | `string` | Exactly 2 chars, ISO-2 (auto-uppercased) | Step 1 (Logistics) | **SET-ONCE / IMMUTABLE.** Fixed during onboarding; sending a *different* value → `403 PROFILE_COUNTRY_IMMUTABLE`. Echoing the current value is a no-op. Legacy profiles that predate the field (`country: null`) may set it once here — rejected (`400 ADDRESS_COUNTRY_MISMATCH`) if existing geocoded HQ addresses resolve elsewhere. |
-| `coverage_areas` | `string[]` | Min 1 item, each a region key from `locations.json` | Step 1 (Logistics) | Full replace. |
-| `headquarters_addresses` | `object[]` | Min 1 entry; see [Step 1 field reference](./onboarding.md#step-1-logistics-setup-required) | Step 1 (Logistics) | Full replace. Index 0 = primary HQ. Every **new or edited** entry must carry a `geo` (selected `/api/geo/search` result) resolving **inside `country`** — else `400 ADDRESS_GEO_REQUIRED` / `400 ADDRESS_COUNTRY_MISMATCH`; entries re-submitted byte-identical are grandfathered. |
+| ~~`coverage_areas`~~ | — | — | — | **Moved to the [Magazin](./magazin.md)** (`PATCH /api/agency/magazin`). |
+| ~~`headquarters_addresses`~~ | — | — | — | **Moved to the [Magazin](./magazin.md)** (`PATCH /api/agency/magazin`). |
 | `payout_details` | `object[]` | 1–2 entries, ordered (index 0 = preferred); see [Step 2 field reference](./onboarding.md#step-2-payout-setup-required) | Step 2 (Payout) | Full replace. |
 | `kyc_details` | `object` | `{ registration_number?, transport_license_id? }`, both nullable strings | — (general) | `legit_verified` is **admin-only** and ignored if sent. |
 | `policies` | `object` | `{ pricing, returns, damage, documents? }` — see [Step 4 field reference](./onboarding.md#step-4-policy-setup-required) | Step 4 (Policy Setup) | Full replace of the **whole** `policies` object. `damage.inspector`/`damage.investigation_fee` are preserved server-side regardless of what (if anything) you send for them. `documents` (max 2 URLs) is cleared if omitted — resend existing URLs to keep them. |
@@ -249,8 +239,6 @@ All fields are **optional** — send only what changed. This maps 1:1 to `Update
       "size": 24576,
       "originalName": "me-v2.png"
     },
-    "coverageAreas": ["littoral", "centre"],
-    "headquartersAddresses": [ ],
     "payoutDetails": [
       {
         "method": "mobile_money",
@@ -314,7 +302,7 @@ All fields are **optional** — send only what changed. This maps 1:1 to `Update
 #### Notes
 
 - **Editing onboarding fields**: After onboarding completes, this endpoint is the **only** way to change values originally captured during onboarding (logistics, payout, branding, policies). The onboarding step endpoints are locked (`409`) once complete.
-- **Full-replace semantics**: `coverage_areas`, `headquarters_addresses`, `payout_details`, and `policies` overwrite the stored value wholesale. Always send the complete desired value, not a delta.
+- **Full-replace semantics**: `payout_details` and `policies` overwrite the stored value wholesale. Always send the complete desired value, not a delta. (`coverage_areas` + `headquarters_addresses` live on the [Magazin](./magazin.md).)
 - **No optimistic locking**: see the `[!WARNING]` above — this endpoint has no `version` check, unlike the vendor equivalent and unlike this same agency's onboarding step endpoints.
 - **Admin-controlled fields are protected**: `kyc_details.legit_verified` and `policies.damage.{inspector, investigation_fee}` cannot be changed here even if included in the request body.
 

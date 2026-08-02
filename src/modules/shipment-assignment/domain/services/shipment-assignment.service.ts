@@ -10,6 +10,9 @@ import { ShipmentService } from '../../../shipments/shipment.service';
 import { IShipment, ShipmentStatus, IShipmentHandoverPickup, AgentCancellationReason } from '../../../shipments/shipment.model';
 import { HandoverPickupService, handoverPickupService } from './handover-pickup.service';
 import { OrderModel, IOrder } from '../../../orders/order.model';
+import { CustomerModel } from '../../../customers/customer.model';
+import { AddressDetail, fromHandoverPickup } from '../../../../core/read-models/address-detail.resolver';
+import { EarningsQuoteService, earningsQuoteService } from '../../../earnings/services/earnings-quote.service';
 import {
   AgentRepository,
   agentRepository,
@@ -45,6 +48,32 @@ import { agentAssignmentAuditService } from '../../services/assignment-audit.ser
 export interface OfferCreator {
   role: 'agency' | 'system';
   userId: string | null;
+}
+
+/**
+ * The customer's first name — what a pending offer shows instead of their full
+ * identity. Enough for an agent to recognise the job on their list; not enough
+ * to identify the person to anyone who ends up declining.
+ */
+export function firstNameOf(name: string | null | undefined): string | null {
+  if (!name) return null;
+  return name.trim().split(/\s+/)[0] ?? null;
+}
+
+/**
+ * Coarsen a drop-off address for a pending offer: keep the city, the region and
+ * the coordinates — everything needed to judge distance and decide — and drop
+ * the street line that identifies the household.
+ */
+export function redactAddress(address: AddressDetail | null, revealed: boolean): AddressDetail | null {
+  if (!address || revealed) return address;
+  return {
+    ...address,
+    label: null,
+    addressLine1: null,
+    addressLine2: null,
+    formattedAddress: [address.city, address.state, address.country].filter(Boolean).join(', ') || null,
+  };
 }
 
 /** A shipment can be offered/accepted while it sits with the agency. */
@@ -102,7 +131,8 @@ export class ShipmentAssignmentService {
     private readonly exposure: CodExposureService = codExposureService,
     private readonly candidates: AssignmentCandidateService = assignmentCandidateService,
     private readonly shipmentSvc: ShipmentService = new ShipmentService(),
-    private readonly handoverPickup: HandoverPickupService = handoverPickupService
+    private readonly handoverPickup: HandoverPickupService = handoverPickupService,
+    private readonly earningsQuotes: EarningsQuoteService = earningsQuoteService
   ) {}
 
   // ─── Manual placement ───────────────────────────────────────────────────────
@@ -726,17 +756,107 @@ export class ShipmentAssignmentService {
 
   async listForAgent(
     agentId: string,
-    filters: { status?: OfferStatus } = {},
+    filters: { status?: OfferStatus; q?: string } = {},
     pagination: PaginationOptions = { page: 1, limit: 20 }
-  ): Promise<Page<ReturnType<ShipmentAssignmentService['toOfferSummary']>>> {
-    const page = await this.offers.listForAgent(agentId, filters, pagination);
-    return { data: page.data.map((o) => this.toOfferSummary(o)), meta: page.meta };
+  ): Promise<Page<any>> {
+    // Text search reaches offers through the shipments it matches, so searching
+    // offers means exactly what searching the shipment list means.
+    const shipmentIds = filters.q ? await this.shipments.findIdsMatchingSearch(filters.q) : undefined;
+    if (shipmentIds && shipmentIds.length === 0) {
+      return { data: [], meta: { total: 0, page: pagination.page, limit: pagination.limit, pages: 0 } };
+    }
+
+    const page = await this.offers.listForAgent(
+      agentId,
+      { status: filters.status, shipmentIds },
+      pagination
+    );
+    return { data: await this._enrichOffers(page.data, agentId), meta: page.meta };
   }
 
-  async getForAgent(agentId: string, offerId: string): Promise<ReturnType<ShipmentAssignmentService['toOfferSummary']>> {
+  async getForAgent(agentId: string, offerId: string): Promise<any> {
     const offer = await this.offers.findByIdAndAgent(offerId, agentId);
     if (!offer) throw createAppError(ERROR_CODES.SHIPMENT_OFFER_NOT_FOUND, 404);
-    return this.toOfferSummary(offer);
+    const [enriched] = await this._enrichOffers([offer], agentId);
+    return enriched;
+  }
+
+  /**
+   * Turn bare offer rows into something an agent can actually decide on.
+   *
+   * The raw offer carries ids and money only — no order number, no customer, no
+   * products, no addresses — while the shipment those describe is unreadable to
+   * the agent until they accept (`findByIdAndAgent` is scoped on `agent_id`,
+   * which is still null). So accepting or declining was a blind choice; this is
+   * what makes it an informed one.
+   *
+   * Customer PII is gated on the offer having been accepted — see
+   * `ASSIGNMENT_CONFIG.OFFER_PII_REVEAL` for why that is the default.
+   */
+  private async _enrichOffers(offers: IShipmentAssignmentOffer[], agentId: string): Promise<any[]> {
+    if (offers.length === 0) return [];
+
+    const shipmentIds = [...new Set(offers.map((o) => o.shipment_id.toString()))];
+    const orderIds = [...new Set(offers.map((o) => o.order_id.toString()))];
+
+    const [shipments, orders] = await Promise.all([
+      this.shipments.findManyByIds(shipmentIds),
+      OrderModel.find({ _id: { $in: orderIds } })
+        .select('order_number vendor_id customer_id items delivery_address payment_method total_amount currency')
+        .lean()
+        .exec() as Promise<any[]>,
+    ]);
+
+    const shipmentById = new Map(shipments.map((s) => [(s._id as Types.ObjectId).toString(), s]));
+    const orderById = new Map(orders.map((o) => [o._id.toString(), o]));
+
+    const customerIds = [...new Set(orders.map((o) => o.customer_id.toString()))];
+    const [customers, earningByShipment, listContext] = await Promise.all([
+      CustomerModel.find({ _id: { $in: customerIds } }).select('name phone').lean().exec() as Promise<any[]>,
+      this.earningsQuotes.quoteForShipments(shipments, orderById as any, agentId),
+      this.shipmentSvc.buildShipmentContext(shipments, orderById),
+    ]);
+    const customerById = new Map(customers.map((c) => [c._id.toString(), c]));
+
+    return offers.map((offer) => {
+      const summary = this.toOfferSummary(offer);
+      const shipment = shipmentById.get(offer.shipment_id.toString());
+      const order = orderById.get(offer.order_id.toString());
+      const customer = order ? customerById.get(order.customer_id.toString()) : null;
+      const context = shipment ? listContext.get((shipment._id as Types.ObjectId).toString()) : null;
+      const earning = shipment ? earningByShipment.get((shipment._id as Types.ObjectId).toString()) : null;
+
+      // An accepted offer means the shipment is this agent's; anything earlier
+      // is still a proposal that may go to someone else.
+      const revealed =
+        ASSIGNMENT_CONFIG.OFFER_PII_REVEAL === 'on_offer' || offer.status === 'accepted';
+
+      return {
+        ...summary,
+        orderNumber: order?.order_number ?? null,
+        shipmentStatus: shipment?.status ?? null,
+        itemCount: shipment?.items.length ?? 0,
+        items: context?.items ?? [],
+        vendor: context?.vendor ?? null,
+        customer: customer
+          ? {
+              // First name only until accepted — enough to recognise the job.
+              name: revealed ? customer.name : firstNameOf(customer.name),
+              phone: revealed ? (customer.phone ?? null) : null,
+              redacted: !revealed,
+            }
+          : null,
+        // The offer's own pickup_location (set on a reassignment handover) is
+        // authoritative; otherwise the shipment's resolved pickup.
+        pickup: offer.pickup_location
+          ? { address: fromHandoverPickup(offer.pickup_location), mode: 'pickup_based' as const, count: 1 }
+          : (context?.pickup ?? null),
+        deliveryAddress: redactAddress(context?.deliveryAddress ?? null, revealed),
+        orderValue: order ? { total: order.total_amount ?? null, currency: order.currency ?? null } : null,
+        earning: earning?.earning ?? null,
+        earningUnavailable: earning?.earningUnavailable ?? null,
+      };
+    });
   }
 
   /** Preview the ranked candidates for a shipment (agency dispatch screen). */

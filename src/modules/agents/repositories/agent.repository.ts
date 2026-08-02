@@ -1,4 +1,4 @@
-import { ClientSession } from 'mongoose';
+import { ClientSession, PipelineStage } from 'mongoose';
 import {
   DeliveryAgentModel,
   IDeliveryAgent,
@@ -6,9 +6,28 @@ import {
   IAgentDeviceCapabilities,
   IAgentLastKnownTrackingState,
   AgentStatus,
+  AgentAvailabilityState,
   AgentWorkingState,
 } from '../models/agent.model';
 import { IGeoPoint } from '../../../core/types/geo.types';
+import { AgentOnboardingStep } from '../../../core/constants/onboarding-steps';
+
+/** Mean Earth radius in km — converts a radius to radians for $centerSphere. */
+const EARTH_RADIUS_KM = 6378.1;
+
+export interface AgentDirectoryQueryParams {
+  search?: string;
+  vehicle_type?: 'bike' | 'car' | 'van' | 'truck';
+  availability?: AgentAvailabilityState;
+  min_trust_score?: number;
+  /** All three required together, or none — validated in the Zod schema. */
+  lng?: number;
+  lat?: number;
+  radius_km?: number;
+  sort: 'trust' | 'name';
+  page: number;
+  limit: number;
+}
 
 /**
  * AgentRepository — persistence for the agent aggregate.
@@ -40,6 +59,99 @@ export class AgentRepository {
   async findManyByIds(agentIds: string[]): Promise<IDeliveryAgent[]> {
     if (agentIds.length === 0) return [];
     return await DeliveryAgentModel.find({ _id: { $in: agentIds } });
+  }
+
+  // ─── Directory (agency-facing discovery) ──────────────────────────────────
+
+  /**
+   * Agents an agency may browse and send a contract request to.
+   *
+   * The four hard filters are exactly `AgentGateService.assertCanHoldContract`
+   * plus completed onboarding — the gate every request must clear anyway.
+   * Listing an agent who fails it would render a Request button whose request
+   * is refused, so the directory refuses to show them instead.
+   *
+   * Note what is NOT filtered: a contract with a rival agency. Agents are
+   * multi-agency by design (AGENT_CONFIG.MAX_AGENCY_RELATIONSHIPS), so serving
+   * someone else is not a reason to be invisible. Nor is an existing contract
+   * with the CALLER — the caller's own standing is annotated onto each row by
+   * AgentDirectoryService rather than filtered out, so the UI can show
+   * "Connected" instead of silently dropping the agent from the list.
+   *
+   * Returns a field-projected, lean result — see AgentDirectoryMapper's
+   * SECURITY note for what the projection deliberately omits.
+   */
+  async findAvailableForAgencies(
+    params: AgentDirectoryQueryParams
+  ): Promise<{ agents: IDeliveryAgent[]; total: number }> {
+    const { search, vehicle_type, availability, min_trust_score, lng, lat, radius_km, sort, page, limit } =
+      params;
+
+    const match: Record<string, unknown> = {
+      status: 'active',
+      onboarding_step: AgentOnboardingStep.COMPLETED,
+      'kyc.status': 'verified',
+      'platform_ban.banned': { $ne: true },
+    };
+
+    if (vehicle_type) match['vehicle_info.vehicle_type'] = vehicle_type;
+    if (availability) match['availability.state'] = availability;
+    if (min_trust_score !== undefined) match['cod.trust_score'] = { $gte: min_trust_score };
+
+    // Radius search on the agent's declared home base. $geoWithin rather than
+    // $geoNear so it composes inside this $match — $geoNear must be the first
+    // stage of the pipeline and would force distance ordering, overriding the
+    // caller's sort.
+    if (lng !== undefined && lat !== undefined && radius_km !== undefined) {
+      match['home_base.location'] = {
+        $geoWithin: { $centerSphere: [[lng, lat], radius_km / EARTH_RADIUS_KM] },
+      };
+    }
+
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim(), 'i');
+      match.$or = [{ name: searchRegex }, { 'home_base.label': searchRegex }];
+    }
+
+    // Trust-first by default: for a directory of couriers, "who is most
+    // reliable" is the useful ordering, where the vendor/agency browses sort by
+    // business name. `name` is the secondary key either way so paging is stable
+    // across equal scores.
+    const sortStage: Record<string, 1 | -1> =
+      sort === 'name' ? { name: 1 } : { 'cod.trust_score': -1, name: 1 };
+
+    const pipeline: PipelineStage[] = [
+      { $match: match },
+      {
+        $facet: {
+          data: [
+            { $sort: sortStage },
+            { $skip: (page - 1) * limit },
+            { $limit: limit },
+            {
+              $project: {
+                name: 1,
+                avatar_file_id: 1,
+                'vehicle_info.vehicle_type': 1,
+                home_base: 1,
+                'cod.trust_score': 1,
+                'kyc.status': 1,
+                'availability.state': 1,
+                'working_state.state': 1,
+                trust_signals: 1,
+              },
+            },
+          ],
+          total: [{ $count: 'count' }],
+        },
+      },
+    ];
+
+    const [result] = await DeliveryAgentModel.aggregate(pipeline).exec();
+    return {
+      agents: (result?.data ?? []) as IDeliveryAgent[],
+      total: result?.total?.[0]?.count ?? 0,
+    };
   }
 
   async updateProfile(

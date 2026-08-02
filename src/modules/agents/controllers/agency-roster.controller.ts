@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { agentContractService } from '../domain/services/agent-contract.service';
 import { agentCodThresholdService } from '../domain/services/agent-cod-threshold.service';
-import { agentInviteService } from '../domain/services/agent-invite.service';
+import { agentDirectoryService } from '../domain/services/agent-directory.service';
 import { agentEligibilityService } from '../domain/services/agent-eligibility.service';
 import { agentRepository } from '../repositories/agent.repository';
 import { agentMembershipEventRepository } from '../repositories/agent-membership-event.repository';
@@ -15,12 +15,18 @@ import {
   RemoveMembershipSchema,
   DeclineRequestSchema,
   UpdateEmploymentSchema,
+  UpdateContractTermsSchema,
   SetCodLimitSchema,
   ListMembershipsQuerySchema,
-  InviteAgentSchema,
-  ListInvitesQuerySchema,
+  BrowseAgentsQuerySchema,
+  RequestAgentContractSchema,
+  WithdrawContractSchema,
+  RequestIdParamSchema,
+  ResolveStatusRequestSchema,
 } from '../validators/agent.validator';
 import { codCashAccountService } from '../../cod/services/cod-cash-account.service';
+import { agentDepositService } from '../../cod/services/agent-deposit.service';
+import { CodPaginationQuerySchema } from '../../cod/validators/cod.validators';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
 import { getStorageProvider } from '../../../core/storage';
 import { resolveFileDetails } from '../../catalog/read-models/file-detail.resolver';
@@ -65,59 +71,91 @@ function actorOf(req: Request) {
  * agency should not be able to probe whether an agent belongs to a rival).
  */
 export class AgencyRosterController {
-  // ─── Invites ────────────────────────────────────────────────────────────
+  // ─── Directory & requests ───────────────────────────────────────────────
 
   /**
-   * POST /api/agency/agents/invites — Body: { email }
-   * An agent already serving another agency is a valid invitee; only a live
-   * membership with THIS agency blocks it.
+   * GET /api/agency/agents/browse — the platform-wide agent directory.
+   *
+   * Every row carries `contract: { id, status, ... } | null` so the client can
+   * render Request / Pending / Connected without a second call. Mirrors
+   * GET /api/agency/vendor-connections/browse.
    */
-  static invite = asyncHandler(async (req: Request, res: Response) => {
-    const { email } = InviteAgentSchema.parse(req.body);
-    const invite = await agentInviteService.invite(agencyId(req), email, req.auth!.user.id);
+  static browseAgents = asyncHandler(async (req: Request, res: Response) => {
+    const { page, limit, ...filters } = BrowseAgentsQuerySchema.parse(req.query);
+    const result = await agentDirectoryService.browseAgentsForAgency(agencyId(req), {
+      ...filters,
+      page,
+      limit,
+    });
+    res.json({ success: true, data: result.agents, meta: result.meta });
+  });
+
+  /**
+   * POST /api/agency/agents/requests — Body: { agentId }
+   *
+   * Asks a specific agent to contract. Lands `pending`; the AGENT approves.
+   * An agent already serving another agency is a valid target — only a live
+   * contract with THIS agency blocks it.
+   */
+  static requestAgent = asyncHandler(async (req: Request, res: Response) => {
+    const { agentId } = RequestAgentContractSchema.parse(req.body);
+    const contract = await agentContractService.requestFromAgency(
+      agencyId(req),
+      agentId,
+      actorOf(req),
+    );
 
     res.status(201).json({
       success: true,
-      data: {
-        id: invite._id.toString(),
-        email: invite.email,
-        status: invite.status,
-        createdAt: invite.created_at,
-      },
-      message: 'Invite sent. The agent will see it once signed up with this email.',
+      data: AgentMembershipMapper.toDto(contract),
+      message: 'Request sent. The agent must accept before the contract becomes active.',
     });
   });
 
-  /** GET /api/agency/agents/invites?status= */
-  static listInvites = asyncHandler(async (req: Request, res: Response) => {
-    const { status } = ListInvitesQuerySchema.parse(req.query);
-    const invites = await agentInviteService.listInvites(agencyId(req), status);
-    res.json({ success: true, data: invites });
-  });
-
-  /** DELETE /api/agency/agents/invites/:id */
-  static revokeInvite = asyncHandler(async (req: Request, res: Response) => {
-    const invite = await agentInviteService.revokeInvite(agencyId(req), req.params.id, actorOf(req));
-    res.json({ success: true, data: invite, message: 'Invite revoked.' });
+  /**
+   * POST /api/agency/agents/:membershipId/withdraw — Body: { reason? }
+   *
+   * Pulls back a request THIS agency raised, while it is still pending.
+   * Declining an agent's application is `/decline` — the initiator guard keeps
+   * the two apart.
+   */
+  static withdrawRequest = asyncHandler(async (req: Request, res: Response) => {
+    const { membershipId } = MembershipIdParamSchema.parse(req.params);
+    const { reason } = WithdrawContractSchema.parse(req.body ?? {});
+    const membership = await agentContractService.withdrawRequest(
+      agencyId(req),
+      membershipId,
+      reason ?? null,
+      actorOf(req),
+    );
+    res.json({
+      success: true,
+      data: AgentMembershipMapper.toDto(membership),
+      message: 'Request withdrawn.',
+    });
   });
 
   // ─── Roster ─────────────────────────────────────────────────────────────
 
   /**
-   * GET /api/agency/agents?status=
-   * The roster: memberships joined to their agent records, with cash held.
+   * GET /api/agency/agents?status=&page=&limit=
+   *
+   * The roster: contracts joined to their agent records, with cash held. Every
+   * status by default, terminal rows included — this is the agency's
+   * relationship history, not only who is working today. Filter by `status` (or
+   * use `/eligible`) for the live view.
    */
   static listAgents = asyncHandler(async (req: Request, res: Response) => {
-    const { status } = ListMembershipsQuerySchema.parse(req.query);
-    const memberships = await agentContractService.listForAgency(agencyId(req), status);
+    const { status, page, limit } = ListMembershipsQuerySchema.parse(req.query);
+    const result = await agentContractService.listForAgency(agencyId(req), { status }, { page, limit });
 
-    const agentIds = memberships.map((m) => m.agent_id.toString());
+    const agentIds = result.data.map((m) => m.agent_id.toString());
     const agents = await agentRepository.findManyByIds(agentIds);
     const agentById = new Map(agents.map((a) => [a._id.toString(), a]));
     const cashBalances = await codCashAccountService.getBalances('agent', agentIds);
     const avatarByAgent = await resolveAgentAvatars(agents);
 
-    const data = memberships.map((membership) => {
+    const data = result.data.map((membership) => {
       const agent = agentById.get(membership.agent_id.toString());
       return {
         membership: AgentMembershipMapper.toDto(membership),
@@ -126,7 +164,16 @@ export class AgencyRosterController {
       };
     });
 
-    res.json({ success: true, data });
+    res.json({
+      success: true,
+      data,
+      meta: {
+        total: result.meta.total,
+        page: result.meta.page,
+        limit: result.meta.limit,
+        totalPages: result.meta.pages,
+      },
+    });
   });
 
   /** GET /api/agency/agents/:membershipId */
@@ -145,9 +192,9 @@ export class AgencyRosterController {
     });
   });
 
-  // ─── Approval ───────────────────────────────────────────────────────────
+  // ─── The handshake ──────────────────────────────────────────────────────
 
-  /** POST /api/agency/agents/:membershipId/approve — approve a join request. */
+  /** POST /api/agency/agents/:membershipId/approve — accept an agent's application. */
   static approve = asyncHandler(async (req: Request, res: Response) => {
     const { membershipId } = MembershipIdParamSchema.parse(req.params);
     const membership = await agentContractService.approve(agencyId(req), membershipId, actorOf(req));
@@ -158,8 +205,8 @@ export class AgencyRosterController {
     });
   });
 
-  /** POST /api/agency/agents/:membershipId/decline — decline a join request. */
-  static decline = asyncHandler(async (req: Request, res: Response) => {
+  /** POST /api/agency/agents/:membershipId/reject — refuse an agent's application. */
+  static reject = asyncHandler(async (req: Request, res: Response) => {
     const { membershipId } = MembershipIdParamSchema.parse(req.params);
     const { reason } = DeclineRequestSchema.parse(req.body ?? {});
     const membership = await agentContractService.declineRequest(
@@ -168,7 +215,7 @@ export class AgencyRosterController {
       reason ?? null,
       actorOf(req)
     );
-    res.json({ success: true, data: AgentMembershipMapper.toDto(membership), message: 'Request declined.' });
+    res.json({ success: true, data: AgentMembershipMapper.toDto(membership), message: 'Request rejected.' });
   });
 
   // ─── Suspension ─────────────────────────────────────────────────────────
@@ -194,6 +241,29 @@ export class AgencyRosterController {
     });
   });
 
+  /**
+   * POST /api/agency/agents/:membershipId/pause
+   *
+   * The softer sibling of suspend: both stop new work, but `paused` reads as a
+   * mutual break while `suspended` reads as a sanction, and only `paused` is a
+   * transition the agent may also raise. Reinstate returns from either.
+   */
+  static pause = asyncHandler(async (req: Request, res: Response) => {
+    const { membershipId } = MembershipIdParamSchema.parse(req.params);
+    const { reason } = RemoveMembershipSchema.parse(req.body);
+    const membership = await agentContractService.pause(
+      agencyId(req),
+      membershipId,
+      reason ?? null,
+      actorOf(req)
+    );
+    res.json({
+      success: true,
+      data: AgentMembershipMapper.toDto(membership),
+      message: 'Agent paused. They keep current shipments but receive no new ones.',
+    });
+  });
+
   /** POST /api/agency/agents/:membershipId/reinstate */
   static reinstate = asyncHandler(async (req: Request, res: Response) => {
     const { membershipId } = MembershipIdParamSchema.parse(req.params);
@@ -201,18 +271,23 @@ export class AgencyRosterController {
     res.json({ success: true, data: AgentMembershipMapper.toDto(membership), message: 'Agent reinstated.' });
   });
 
-  // ─── Removal ────────────────────────────────────────────────────────────
+  // ─── Termination ────────────────────────────────────────────────────────
 
   /**
-   * DELETE /api/agency/agents/:membershipId
+   * POST /api/agency/agents/:membershipId/terminate
+   * DELETE /api/agency/agents/:membershipId — the same handler, kept as an alias.
    *
    * Proposes termination; it does not perform it. Ending a contract needs the
    * agent's consent AND the §4 conditions (their cash returned, their wages
    * paid), so this returns the REQUEST and the contract stays live until both
-   * are satisfied. `contract` is null whenever the request is still pending —
+   * are satisfied. `membership` is null whenever the request is still pending —
    * which, for an agency-initiated deactivation, is always on this first call.
+   *
+   * Note this differs from the vendor↔agency `terminate`, which IS unilateral
+   * and immediate. Cash and wages are the reason: no such obligations exist
+   * between a vendor and an agency.
    */
-  static remove = asyncHandler(async (req: Request, res: Response) => {
+  static terminate = asyncHandler(async (req: Request, res: Response) => {
     const { membershipId } = MembershipIdParamSchema.parse(req.params);
     const { reason } = RemoveMembershipSchema.parse(req.body ?? {});
     const { request, contract } = await agentContractService.requestDeactivation(
@@ -234,6 +309,50 @@ export class AgencyRosterController {
     });
   });
 
+  // ─── Status-request inbox ───────────────────────────────────────────────
+
+  /**
+   * GET /api/agency/agents/status-requests
+   *
+   * Transitions an agent has raised that need this agency's consent. Without
+   * this, an agent's `deactivate` — which the authority matrix makes
+   * `requires_counterparty` from both sides — would sit pending forever.
+   */
+  static listStatusRequests = asyncHandler(async (req: Request, res: Response) => {
+    const requests = await agentContractService.listPendingRequestsForAgency(agencyId(req));
+    res.json({ success: true, data: requests.map(ContractStatusRequestMapper.toDto) });
+  });
+
+  /**
+   * POST /api/agency/agents/status-requests/:requestId/resolve
+   * Body: { decision: 'approve' | 'reject', note? }
+   *
+   * The service refuses a request this agency raised itself — consent has to
+   * come from the other party for it to mean anything.
+   */
+  static resolveStatusRequest = asyncHandler(async (req: Request, res: Response) => {
+    const { requestId } = RequestIdParamSchema.parse(req.params);
+    const { decision, note } = ResolveStatusRequestSchema.parse(req.body);
+
+    const { request, contract } = await agentContractService.resolveRequestAs(
+      'agency',
+      agencyId(req),
+      requestId,
+      decision,
+      actorOf(req),
+      note
+    );
+
+    res.json({
+      success: true,
+      data: {
+        request: ContractStatusRequestMapper.toDto(request),
+        membership: contract ? AgentMembershipMapper.toDto(contract) : null,
+      },
+      message: decision === 'approve' ? 'Request approved.' : 'Request rejected.',
+    });
+  });
+
   // ─── Agency-scoped agent config ─────────────────────────────────────────
 
   /** PATCH /api/agency/agents/:membershipId/employment */
@@ -250,6 +369,31 @@ export class AgencyRosterController {
       success: true,
       data: AgentMembershipMapper.toDto(membership),
       message: 'Employment details updated.',
+    });
+  });
+
+  /**
+   * PATCH /api/agency/agents/:membershipId/terms
+   *
+   * Every negotiated term except the COD threshold, which is bounded by the
+   * agent's shared pool and has its own endpoint below. `fee_split` is the one
+   * that moves money: it is what the earnings split divides by at delivery.
+   */
+  static updateTerms = asyncHandler(async (req: Request, res: Response) => {
+    const { membershipId } = MembershipIdParamSchema.parse(req.params);
+    const input = UpdateContractTermsSchema.parse(req.body);
+
+    const membership = await agentContractService.updateTerms(
+      agencyId(req),
+      membershipId,
+      input,
+      actorOf(req)
+    );
+
+    res.json({
+      success: true,
+      data: AgentMembershipMapper.toDto(membership),
+      message: 'Contract terms updated.',
     });
   });
 
@@ -280,6 +424,43 @@ export class AgencyRosterController {
       success: true,
       data: { membershipId, ...result },
       message: 'COD threshold updated.',
+    });
+  });
+
+  /**
+   * GET /api/agency/agents/:membershipId/settlements?page=&limit=
+   *
+   * This contract's cash history: every hand-over the agent declared or the
+   * agency recorded, plus what is still outstanding under it. Deliberately a
+   * projection of the deposits rather than its own ledger — the movements are
+   * already recorded by AgentDeposit and CodCashLedger, and a third copy would
+   * be one more thing to keep in agreement with the balance.
+   */
+  static listSettlements = asyncHandler(async (req: Request, res: Response) => {
+    const { membershipId } = MembershipIdParamSchema.parse(req.params);
+    const { page, limit } = CodPaginationQuerySchema.parse(req.query);
+    const contract = await agentContractService.getForAgency(agencyId(req), membershipId);
+
+    const deposits = await agentDepositService.listForContract(
+      contract.agent_id.toString(),
+      agencyId(req),
+      page,
+      limit
+    );
+
+    res.json({
+      success: true,
+      data: {
+        membershipId,
+        cod: {
+          threshold: contract.cod?.threshold ?? 0,
+          outstandingBalance: contract.cod?.outstanding_balance ?? 0,
+          lifetimeSettled: contract.cod?.lifetime_settled ?? 0,
+          lastSettledAt: contract.cod?.last_settled_at ?? null,
+        },
+        deposits: deposits.data,
+      },
+      meta: deposits.meta,
     });
   });
 

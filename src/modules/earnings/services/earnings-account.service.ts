@@ -3,9 +3,22 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { EarningsAccountRepository } from '../repositories/earnings-account.repository';
 import { EarningsLedgerRepository } from '../repositories/earnings-ledger.repository';
-import { IEarningsAllocation } from '../models/earnings-allocation.model';
+import { IEarningsAllocation, EarningsSourceType } from '../models/earnings-allocation.model';
 import { IEarningsAccount, EarningsOwnerType } from '../models/earnings-account.model';
+import { EarningsLedgerReasonCode } from '../models/earnings-ledger.model';
 import { EARNINGS_CONFIG } from '../config/earnings.config';
+
+/**
+ * Which split a `hold` ledger row came from. One reason code per source type so
+ * a beneficiary's history says *why* money arrived: at payment (`order_split`),
+ * on a COD cash handoff (`cod_split`), or when a prepaid shipment was delivered
+ * and its delivery fee was divided between agency and agent (`delivery_split`).
+ */
+function holdReasonCode(sourceType: EarningsSourceType): EarningsLedgerReasonCode {
+  if (sourceType === 'cod_collection') return 'cod_split';
+  if (sourceType === 'shipment') return 'delivery_split';
+  return 'order_split';
+}
 
 /**
  * EarningsAccountService - the single entry point for moving MONEY between an
@@ -44,7 +57,7 @@ export class EarningsAccountService {
         source_type: allocation.source_type,
         source_id: allocation.source_id.toString(),
         allocation_id: allocation._id,
-        reason_code: allocation.source_type === 'cod_collection' ? 'cod_split' : 'order_split',
+        reason_code: holdReasonCode(allocation.source_type),
       },
       session
     );

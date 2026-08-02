@@ -84,8 +84,9 @@ This step captures the avatar and timezone. Since it is optional, the user can c
 
 > [!NOTE]
 > **Onboarding still takes a legacy `avatar_url` (a plain URL string).** The **canonical** avatar is a
-> **file reference** set on the profile-settings endpoint (`PATCH /api/agent/profile`, field
-> `avatar_file_id`): upload the image via `POST /api/files/upload`, then send the returned file `id`.
+> **file reference** set on the profile endpoint (`PATCH /api/agent/profile`, field
+> `avatar_file_id` — see [profile.md](./profile.md#patch-agentprofile)): upload the image via
+> `POST /api/files/upload`, then send the returned file `id`.
 > While set, that file counts as *in use* — it appears under `usage.references` on `GET /api/files/:id`
 > with `entityType: "agent", field: "avatar"`, and cannot be deleted until you detach it
 > (`avatar_file_id: null`). Profile reads return `avatar` as a **resolved file object** —
@@ -174,7 +175,8 @@ closed**: any submission to `PATCH /api/agent/onboarding/step` returns `409`.
 
 The frontend must **not** send an onboarding step after completion. Vehicle
 info, avatar and timezone remain fully editable afterwards through the profile
-settings endpoints (`PATCH /api/agent/profile`, `PATCH /api/agent/settings`),
-which never reopen onboarding. On `PATCH /api/agent/profile` the avatar is set as
-a **file reference** via `avatar_file_id` (see the note under Step 2 above), not a
-raw URL.
+endpoints — `PATCH /api/agent/profile`, `PATCH /api/agent/preferences` and
+`PATCH /api/agent/dispatch-settings`, all specced in
+[profile.md](./profile.md) — which never reopen onboarding. On
+`PATCH /api/agent/profile` the avatar is set as a **file reference** via
+`avatar_file_id` (see the note under Step 2 above), not a raw URL.

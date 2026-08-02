@@ -5,7 +5,7 @@ import { clearable } from '../../../core/validation/zod.helpers';
 // can't be attached twice. Shared by create and update; kept in sync with the
 // variant validator. Per-type count caps (physical/service 7, digital 1) are
 // enforced in the service layer, where the product type is known.
-const productFileIdsSchema = z.array(
+export const productFileIdsSchema = z.array(
     z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid file ID')
 ).refine(
     (arr) => new Set(arr).size === arr.length,
@@ -15,7 +15,7 @@ const productFileIdsSchema = z.array(
 // Where the delivery agency should collect this product from — one of the
 // vendor's own business addresses, or the agency's own storage. `vendorAddressId`
 // is required when `source` is 'vendor_address' (ignored/omitted otherwise).
-const pickupLocationSchema = z.object({
+export const pickupLocationSchema = z.object({
     source: z.enum(['vendor_address', 'agency_storage']),
     vendorAddressId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId')),
 }).strict().refine(

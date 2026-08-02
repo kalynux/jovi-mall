@@ -14,7 +14,7 @@ jovi-mall decides; geo-tracker enforces. geo-tracker must never reimplement the 
 jovi-mall must never serve a live position. If an endpoint here starts answering *"where is this
 agent?"*, the boundary has been broken.
 
-Related: [visible-agents](./visible-agents.md) answers *who may watch whom*. This page answers
+Related: [live-tracking](./live-tracking.md) answers *who may watch whom*. This page answers
 *may this agent be tracked at all*. Both live in jovi-mall for the same reason.
 
 ---
@@ -38,11 +38,17 @@ It feeds two places:
 |---|---|
 | `agent.tracking.allowed === true` | `tracking_disabled` |
 | `agent.status === 'active'` | `agent_not_active` |
-| the agent has ≥1 **approved** membership | `no_approved_agency` |
+| the agent holds ≥1 **`active` contract** | `no_approved_agency` |
 | the agent exists | `agent_not_found` |
 
-The last one is deliberate: tracking exists to serve a delivery relationship. Nobody is entitled to
+The third one is deliberate: tracking exists to serve a delivery relationship. Nobody is entitled to
 watch an unaffiliated person move around.
+
+> **`no_approved_agency` and `approvedAgencyIds` are the real wire names**, but both are computed
+> from contracts in status **`active`** (`listActiveAgencyIds`) — a `pending`, `paused` or
+> `suspended` contract does not count. The "approved" wording predates the `approved` → `active`
+> status rename; the names are kept because clients consume them. See
+> [agency/agent-roster.md](../agency/agent-roster.md#status-lifecycle) for the status set.
 
 ---
 

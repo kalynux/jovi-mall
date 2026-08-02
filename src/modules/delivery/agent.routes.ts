@@ -62,24 +62,55 @@ router.post('/offers/:id/reject', AgentOfferController.reject);
 
 /**
  * GET /api/agent/shipments
- * Shipments assigned to this agent, newest first. Query: status?, page?, limit?
+ * Shipments assigned to this agent, newest first. Query: status?, q?, page?, limit?
  * An agent may hold several at once — this list is routinely plural.
+ * `q` searches the customer's name/phone, the product titles, the order number
+ * and the tracking number (min 2 chars). Each row carries the pickup and
+ * drop-off addresses and the agent's estimated earning.
  */
 router.get('/shipments', ShipmentController.listForAgent);
 
 /**
  * GET /api/agent/shipments/:id
- * Full detail: items, pickup locations, customer + delivery address, and (COD)
- * the cash to collect. The customer's delivery code is never included.
+ * Full detail: items, pickup locations, customer + delivery address, the order
+ * value and this agent's estimated earning, and (COD) the cash to collect. The
+ * customer's delivery code is never included.
  */
 router.get('/shipments/:id', ShipmentController.getDetailForAgent);
 
 /**
- * PATCH /api/agent/shipments/:id/tracking-number
- * Record/replace the carrier tracking number on a shipment assigned to this agent.
- * Body: { trackingNumber: string }
+ * GET /api/agent/shipments/:id/route
+ * The pickup → drop-off line, for drawing the delivery on a map. Road-network
+ * geometry when geo-tracker is reachable, straight line otherwise; never errors
+ * on a geo-tracker problem.
+ *
+ * Declared BEFORE '/shipments/:id' would otherwise be ambiguous — Express
+ * matches in order and ':id' does not swallow a second path segment, so the
+ * position here is for readability, not correctness.
  */
-router.patch('/shipments/:id/tracking-number', ShipmentController.setTrackingNumber);
+router.get('/shipments/:id/route', ShipmentController.getRouteForAgent);
+
+// NOTE: PATCH /shipments/:id/tracking-number is GONE. A shipment's tracking
+// number is generated when the shipment is created and is read-only — it is
+// returned on every shipment payload (`trackingNumber`) and never accepted on
+// one. See TrackingNumberGenerator.
+
+/**
+ * POST /api/agent/shipments/:id/status
+ * Advance this agent's own shipment: picked_up, in_transit, agent_delivered, or
+ * a failed/returned outcome.
+ * Body: { status, reason?, note? }  — reason/note are accepted ONLY on 'failed'
+ * and 'returned' (note required when reason='other'), and are appended to the
+ * shipment's delivery_failures log.
+ *
+ * Validated against TRIGGERABLE_TRANSITIONS — the SAME map the agency endpoint
+ * uses, including `handing_over → picked_up|returned`, so an agent who accepted
+ * a reassigned shipment drives it exactly like a first-assigned one. COD still
+ * reaches 'delivered' only via the delivery code. Guarded by a from-status
+ * compare-and-set: 409 SHIPMENT_STATUS_CONFLICT if the agency (or another
+ * request) moved the shipment first.
+ */
+router.post('/shipments/:id/status', ShipmentController.updateStatusByAgent);
 
 /**
  * POST /api/agent/shipments/:id/cancel
@@ -125,6 +156,12 @@ router.post('/shipments/:id/cod/resend-code', AgentCodController.resendCode);
 
 /** GET /api/agent/cod/balance — cash this agent currently holds (owed to the agency). */
 router.get('/cod/balance', AgentCodController.getBalance);
+
+/**
+ * GET /api/agent/cod/allocation — how the agent's one COD pool is sub-allocated
+ * across the agencies they serve, plus the unallocated headroom.
+ */
+router.get('/cod/allocation', AgentCodController.getAllocation);
 
 /** GET /api/agent/cod/ledger — append-only history of this agent's cash movements. */
 router.get('/cod/ledger', AgentCodController.getLedger);

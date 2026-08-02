@@ -5,6 +5,7 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { ProductRepositoryMongo } from '../repositories/mongo/product.repository.mongo';
 import { OptionRepositoryMongo } from '../repositories/mongo/option.repository.mongo';
 import { OptionValueRepositoryMongo } from '../repositories/mongo/option-value.repository.mongo';
+import { assertNotSimpleMode } from '../domain/services/simple/mode-guard';
 import {
     CreateOptionSchema,
     UpdateOptionSchema,
@@ -43,6 +44,11 @@ export class VendorOptionController {
 
         if (product.type !== 'physical')
             throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_TYPE, 400, 'Only physical products can have options');
+
+        // Simple products have no options by definition. Guarding creation alone
+        // is sufficient — every other option endpoint resolves an option that must
+        // belong to this product, and a simple product has none to resolve.
+        assertNotSimpleMode(product, 'adding options');
 
         const input = CreateOptionSchema.parse(req.body);
         const position = input.position ?? (await optionRepository.countByProduct(productId)) + 1;

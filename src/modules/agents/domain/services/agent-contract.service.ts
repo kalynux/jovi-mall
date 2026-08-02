@@ -2,6 +2,9 @@ import { ClientSession } from 'mongoose';
 import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import { transactionManager } from '../../../../core/database/transaction.manager';
+import { eventBus } from '../../../../core/events/event-bus';
+import { PaginationOptions, Page } from '../../../../core/repositories/base.repository';
+import { MagazinRepository } from '../../../magazin/repositories/magazin.repository';
 import { AgentRepository, agentRepository } from '../../repositories/agent.repository';
 import {
   AgentContractRepository,
@@ -19,7 +22,12 @@ import {
   IAgentAgencyContract,
   ContractStatus,
   ALLOCATING_CONTRACT_STATUSES,
+  IContractFeeSplit,
+  IContractRemittanceTerms,
+  IContractCoverage,
+  IMembershipEmployment,
 } from '../../models/agent-agency-membership.model';
+import { MembershipEventType } from '../../models/agent-membership-event.model';
 import {
   ContractTransition,
   ContractParty,
@@ -32,6 +40,20 @@ import { AgentGateService, agentGateService } from './agent-gate.service';
 export interface Actor {
   userId: string | null;
   role: string;
+}
+
+/**
+ * The negotiated terms an agency may patch. Every group is partial — the
+ * repository dot-flattens each into `$set`, so an untouched key keeps its value.
+ * `cod.threshold` is deliberately absent: it is bounded by the agent's shared
+ * pool and must go through AgentCodThresholdService to be checked against it.
+ */
+export interface ContractTermsUpdate {
+  employment?: Partial<IMembershipEmployment>;
+  remittance_terms?: Partial<IContractRemittanceTerms>;
+  coverage?: Partial<IContractCoverage>;
+  fee_split?: Partial<IContractFeeSplit>;
+  shipment_value_ceiling?: number | null;
 }
 
 /** Who may drive a transition without the counterparty's consent. */
@@ -61,10 +83,21 @@ type Authority = 'unilateral' | 'requires_counterparty' | 'forbidden';
  *  - deactivate — always requires the counterparty, AND the §4 conditions.
  *               Ending a relationship is not one party's call.
  *  - approve/reject — only the side that did not initiate the contract.
+ *  - withdraw — only the side that DID initiate it, and only while pending.
+ *               Pulling back your own unanswered request needs nobody's
+ *               agreement; it is `reject` seen from the other end.
+ *
+ * NOTE the authority matrix cannot express "whoever did not initiate", because
+ * it is keyed on the party alone and the initiator is a property of the
+ * CONTRACT. `approve`/`reject`/`withdraw` therefore read `unilateral` for both
+ * parties here and are constrained separately by the initiator guard in
+ * `requestTransition` — see `initiatorOf`. Both checks are required: the matrix
+ * decides whether the action self-clears, the guard decides who may take it.
  */
 const TRANSITION_AUTHORITY: Record<ContractTransition, Record<'agent' | 'agency', Authority>> = {
   approve: { agency: 'unilateral', agent: 'unilateral' },
   reject: { agency: 'unilateral', agent: 'unilateral' },
+  withdraw: { agency: 'unilateral', agent: 'unilateral' },
   pause: { agency: 'unilateral', agent: 'requires_counterparty' },
   suspend: { agency: 'unilateral', agent: 'forbidden' },
   reactivate: { agency: 'unilateral', agent: 'requires_counterparty' },
@@ -75,6 +108,7 @@ const TRANSITION_AUTHORITY: Record<ContractTransition, Record<'agent' | 'agency'
 const TRANSITION_TARGET: Record<ContractTransition, ContractStatus> = {
   approve: 'active',
   reject: 'rejected',
+  withdraw: 'withdrawn',
   pause: 'paused',
   suspend: 'suspended',
   reactivate: 'active',
@@ -85,10 +119,21 @@ const TRANSITION_TARGET: Record<ContractTransition, ContractStatus> = {
 const TRANSITION_FROM: Record<ContractTransition, ContractStatus[]> = {
   approve: ['pending'],
   reject: ['pending'],
+  withdraw: ['pending'],
   pause: ['active'],
   suspend: ['active', 'paused'],
   reactivate: ['paused', 'suspended'],
   deactivate: ['pending', 'active', 'paused', 'suspended'],
+};
+
+/**
+ * Transitions whose permitted party depends on who raised the contract rather
+ * than on the authority matrix. `true` = only the initiator may take it.
+ */
+const INITIATOR_SCOPED_TRANSITIONS: Partial<Record<ContractTransition, boolean>> = {
+  approve: false,
+  reject: false,
+  withdraw: true,
 };
 
 export interface DeactivationBlockers {
@@ -124,50 +169,85 @@ export class AgentContractService {
     private readonly events: AgentMembershipEventRepository = agentMembershipEventRepository,
     private readonly requests: ContractStatusRequestRepository = contractStatusRequestRepository,
     private readonly thresholds: AgentCodThresholdService = agentCodThresholdService,
-    private readonly gates: AgentGateService = agentGateService
+    private readonly gates: AgentGateService = agentGateService,
+    private readonly magazins: MagazinRepository = new MagazinRepository()
   ) {}
+
+  // ─── Handshake notifications ──────────────────────────────────────────────
+
+  /**
+   * Tell the other party about a handshake event.
+   *
+   * Post-commit and fire-and-forget, per the module convention — a notification
+   * must never fail the contract write that caused it. Both role stacks
+   * subscribe to these event names and discriminate on `recipientRole`, the
+   * same pattern the vendor↔agency `connection.*` events use.
+   *
+   * This is not optional polish. Until now the agency reached an agent by
+   * email; with the directory there is nothing outside the platform carrying
+   * the request, so an unnotified request is one nobody ever sees.
+   */
+  private notifyHandshake(
+    situation: 'agent_contract.request_received' | 'agent_contract.approved' | 'agent_contract.rejected',
+    contract: IAgentAgencyContract,
+    recipientRole: 'agent' | 'agency'
+  ): void {
+    const contractId = contract._id.toString();
+    const agentId = contract.agent_id.toString();
+    const agencyId = contract.agency_id.toString();
+
+    void (async () => {
+      // Only the name the RECIPIENT needs is looked up — the agent is told who
+      // the agency is, and vice versa.
+      const [agent, agencyName] =
+        recipientRole === 'agent'
+          ? [null, await this.magazins.findNameByAgencyId(agencyId)]
+          : [await this.agents.findById(agentId), null];
+
+      await eventBus.publish(situation, {
+        eventType: situation,
+        aggregateId: contractId,
+        occurredAt: new Date(),
+        payload: {
+          contractId,
+          recipientRole,
+          agentId,
+          agencyId,
+          agentName: agent?.name ?? '',
+          agencyName: agencyName ?? '',
+        },
+      });
+    })().catch((err) => console.error(`[AgentContractService] ${situation} emit failed:`, err));
+  }
 
   // ─── Creation ─────────────────────────────────────────────────────────────
 
   /**
-   * Agent accepts an agency invitation → an active contract.
+   * Agency asks a specific agent to contract → a pending contract the AGENT
+   * approves.
    *
-   * The invite was the agency's consent and accepting is the agent's, so no
-   * further approval step applies. The threshold check still runs: an agency
-   * can invite an agent whose pool is full, and the contract simply cannot take
-   * a non-zero slice until there is room.
+   * The mirror image of `requestToJoin`, and deliberately identical in shape:
+   * the two creation paths differ only in who raised the request (`origin`) and
+   * which stamp records it. Both land in `pending`; neither shortcuts to
+   * `active`. The agency's request is its consent, the agent's approval is
+   * theirs, and `resolveRequest` is the single place both are honoured.
+   *
+   * **Deliberately not blocked by threshold or relationship capacity**, for the
+   * same reason as `requestToJoin` below — approval is what those bind.
    */
-  async createFromAcceptedInvite(
-    agentId: string,
-    agencyId: string,
-    invitedByUserId: string | null,
-    invitedAt: Date | null,
-    actor: Actor,
-    codThreshold = 0
-  ): Promise<IAgentAgencyContract> {
+  async requestFromAgency(agencyId: string, agentId: string, actor: Actor): Promise<IAgentAgencyContract> {
     await this.gates.assertCanHoldContract(agentId);
     await this.assertNoLiveContract(agentId, agencyId);
 
-    return await transactionManager.runInTransaction(async (session) => {
-      await this.assertRelationshipCapacity(agentId, session);
-      if (codThreshold > 0) {
-        await this.thresholds.assertContractThresholdAllowed(agentId, null, codThreshold, session);
-      }
-
-      const isFirst = (await this.contracts.countAllocatingForAgent(agentId, session)) === 0;
-
+    const contract = await transactionManager.runInTransaction(async (session) => {
       const contract = await this.contracts.create(
         {
           agentId,
           agencyId,
-          status: 'active',
+          status: 'pending',
           origin: 'invitation',
-          isPrimary: isFirst,
-          codThreshold,
-          invitedByUserId,
-          invitedAt,
-          approvedAt: new Date(),
-          approvedByUserId: invitedByUserId,
+          invitedAt: new Date(),
+          invitedByUserId: actor.userId,
         },
         session
       );
@@ -177,18 +257,20 @@ export class AgentContractService {
           membershipId: contract._id.toString(),
           agentId,
           agencyId,
-          type: 'invite_accepted',
+          type: 'invited',
           fromStatus: null,
-          toStatus: 'active',
+          toStatus: 'pending',
           actorUserId: actor.userId,
           actorRole: actor.role,
-          metadata: { isPrimary: isFirst, codThreshold },
         },
         session
       );
 
       return contract;
     });
+
+    this.notifyHandshake('agent_contract.request_received', contract, 'agent');
+    return contract;
   }
 
   /**
@@ -204,15 +286,15 @@ export class AgentContractService {
     await this.gates.assertCanHoldContract(agentId);
     await this.assertNoLiveContract(agentId, agencyId);
 
-    return await transactionManager.runInTransaction(async (session) => {
-      const contract = await this.contracts.create(
+    const contract = await transactionManager.runInTransaction(async (session) => {
+      const created = await this.contracts.create(
         { agentId, agencyId, status: 'pending', origin: 'join_request', requestedAt: new Date() },
         session
       );
 
       await this.events.append(
         {
-          membershipId: contract._id.toString(),
+          membershipId: created._id.toString(),
           agentId,
           agencyId,
           type: 'join_requested',
@@ -224,8 +306,11 @@ export class AgentContractService {
         session
       );
 
-      return contract;
+      return created;
     });
+
+    this.notifyHandshake('agent_contract.request_received', contract, 'agency');
+    return contract;
   }
 
   // ─── The transition workflow ──────────────────────────────────────────────
@@ -243,6 +328,8 @@ export class AgentContractService {
   ): Promise<{ request: IContractStatusRequest; contract: IAgentAgencyContract | null }> {
     const contract = await this.contracts.findById(contractId);
     if (!contract) throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
+
+    this.assertInitiatorRule(contract, transition, party);
 
     const authority = TRANSITION_AUTHORITY[transition][party];
     if (authority === 'forbidden') {
@@ -294,6 +381,20 @@ export class AgentContractService {
         { userId: actor.userId, role: actor.role },
         { autoApproved: true, codThreshold: options.codThreshold }
       );
+
+      // Tell the party who RAISED the contract how it was answered. Only the
+      // handshake pair — the lifecycle transitions (pause/suspend/deactivate)
+      // have their own status-request inbox and are not notified here. Emitted
+      // from this one place because both HTTP paths, agency and agent, funnel
+      // through it.
+      if ((transition === 'approve' || transition === 'reject') && applied.contract) {
+        this.notifyHandshake(
+          transition === 'approve' ? 'agent_contract.approved' : 'agent_contract.rejected',
+          applied.contract,
+          this.initiatorOf(contract)
+        );
+      }
+
       return { request: applied.request, contract: applied.contract };
     }
 
@@ -443,18 +544,122 @@ export class AgentContractService {
     };
   }
 
-  // ─── Queries ──────────────────────────────────────────────────────────────
+  // ─── Status-request inbox ─────────────────────────────────────────────────
 
-  async listForAgent(agentId: string, status?: ContractStatus): Promise<IAgentAgencyContract[]> {
-    return await this.contracts.listForAgent(agentId, status);
+  /** Requests awaiting THIS agent's decision. */
+  async listPendingRequestsForAgent(agentId: string): Promise<IContractStatusRequest[]> {
+    return await this.requests.listPendingForAgent(agentId);
   }
 
-  async listForAgency(agencyId: string, status?: ContractStatus): Promise<IAgentAgencyContract[]> {
-    return await this.contracts.listForAgency(agencyId, status);
+  /** Requests awaiting THIS agency's decision. */
+  async listPendingRequestsForAgency(agencyId: string): Promise<IContractStatusRequest[]> {
+    return await this.requests.listPendingForAgency(agencyId);
+  }
+
+  /**
+   * Resolve a request as one of the two parties.
+   *
+   * `resolveRequest` deliberately does not check who is resolving — it is also
+   * the auto-approval path for unilateral transitions, where there is no
+   * counterparty. That makes this wrapper the only safe entry point for a
+   * request that arrived over HTTP: without the two checks below, the party who
+   * RAISED a `requires_counterparty` request could approve it themselves, which
+   * is precisely the consent the authority matrix exists to require.
+   */
+  async resolveRequestAs(
+    party: 'agent' | 'agency',
+    ownerId: string,
+    requestId: string,
+    decision: 'approve' | 'reject',
+    actor: Actor,
+    note: string | null = null
+  ): Promise<{ request: IContractStatusRequest; contract: IAgentAgencyContract | null }> {
+    const request = await this.requests.findById(requestId);
+    if (!request) throw createAppError(ERROR_CODES.CONTRACT_STATUS_REQUEST_NOT_FOUND, 404);
+
+    // Scope: is this request even addressed to this agent/agency? A foreign
+    // request 404s rather than 403s — the resolver should not learn it exists.
+    const owner = party === 'agent' ? request.agent_id.toString() : request.agency_id.toString();
+    if (owner !== ownerId) {
+      throw createAppError(ERROR_CODES.CONTRACT_STATUS_REQUEST_NOT_FOUND, 404);
+    }
+
+    // Consent: the counterparty decides, never the requester.
+    if (request.requested_by_role === party) {
+      throw createAppError(ERROR_CODES.CONTRACT_STATUS_REQUEST_NOT_YOURS, 403, undefined, {
+        requestedByRole: request.requested_by_role,
+        hint: 'The other party must resolve a request you raised.',
+      });
+    }
+
+    return await this.resolveRequest(requestId, decision, actor, { note });
+  }
+
+  /**
+   * Raise a transition as the AGENT.
+   *
+   * The agent-side façade for `requestTransition`; the agency has one method per
+   * transition because its set is fixed, whereas the agent's permitted set is
+   * exactly what the authority matrix says is not `forbidden`, so the transition
+   * is a parameter and the matrix does the refusing.
+   */
+  async requestTransitionAsAgent(
+    agentId: string,
+    contractId: string,
+    transition: ContractTransition,
+    actor: Actor,
+    reason: string | null = null
+  ): Promise<{ request: IContractStatusRequest; contract: IAgentAgencyContract | null }> {
+    const contract = await this.contracts.findById(contractId);
+    if (!contract || contract.agent_id.toString() !== agentId) {
+      throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
+    }
+
+    return await this.requestTransition(contractId, transition, 'agent', actor, { reason });
+  }
+
+  // ─── Queries ──────────────────────────────────────────────────────────────
+
+  /**
+   * One party's contracts, paginated, **every status by default** — see the note
+   * on AgentContractRepository.listForAgent. These back the two "Connections"
+   * views; nothing on the dispatch path reads them.
+   */
+  async listForAgent(
+    agentId: string,
+    filters: { status?: ContractStatus },
+    pagination: PaginationOptions
+  ): Promise<Page<IAgentAgencyContract>> {
+    return await this.contracts.listForAgent(agentId, filters, pagination);
+  }
+
+  async listForAgency(
+    agencyId: string,
+    filters: { status?: ContractStatus },
+    pagination: PaginationOptions
+  ): Promise<Page<IAgentAgencyContract>> {
+    return await this.contracts.listForAgency(agencyId, filters, pagination);
+  }
+
+  /** Admin only — the whole trail, unpaginated. See the repository's note. */
+  async listAllForAgent(agentId: string): Promise<IAgentAgencyContract[]> {
+    return await this.contracts.listAllForAgent(agentId);
   }
 
   async getForAgency(agencyId: string, contractId: string): Promise<IAgentAgencyContract> {
     return await this.loadForAgency(contractId, agencyId);
+  }
+
+  /**
+   * The agent side of `getForAgency`. A contract belonging to someone else 404s
+   * rather than 403s, for the same reason: the caller should not learn it exists.
+   */
+  async getForAgent(agentId: string, contractId: string): Promise<IAgentAgencyContract> {
+    const contract = await this.contracts.findById(contractId);
+    if (!contract || contract.agent_id.toString() !== agentId) {
+      throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
+    }
+    return contract;
   }
 
   async requireActive(agentId: string, agencyId: string): Promise<IAgentAgencyContract> {
@@ -533,6 +738,24 @@ export class AgentContractService {
     return result.contract!;
   }
 
+  /**
+   * Pull back a request this agency raised, before the agent has answered.
+   *
+   * Distinct from `declineRequest`: that refuses the agent's application, this
+   * cancels the agency's own. The initiator guard in `requestTransition` is what
+   * keeps the two from being interchangeable.
+   */
+  async withdrawRequest(
+    agencyId: string,
+    contractId: string,
+    reason: string | null,
+    actor: Actor
+  ): Promise<IAgentAgencyContract> {
+    await this.loadForAgency(contractId, agencyId);
+    const result = await this.requestTransition(contractId, 'withdraw', 'agency', actor, { reason });
+    return result.contract!;
+  }
+
   /** Stops new assignments. Deliberately NOT gated by outstanding COD (§4). */
   async suspend(
     agencyId: string,
@@ -578,27 +801,81 @@ export class AgentContractService {
     return await this.requestTransition(contractId, 'deactivate', 'agency', actor, { reason });
   }
 
-  /** Update negotiated terms other than the COD threshold. */
+  /** Update employment terms. Thin wrapper over `updateTerms`, kept for its route. */
   async updateEmployment(
     agencyId: string,
     contractId: string,
     employment: Record<string, unknown>,
     actor: Actor
   ): Promise<IAgentAgencyContract> {
+    return await this.updateTerms(agencyId, contractId, { employment }, actor, 'employment_updated');
+  }
+
+  /**
+   * Update the negotiated terms of a contract — everything except the COD
+   * threshold, which is bounded by the agent's pool and so has its own path
+   * through AgentCodThresholdService.
+   *
+   * `fee_split` is the load-bearing one: `EarningsQuoteService` divides by it at
+   * both the offer estimate and the delivery split, so an incoherent split (a
+   * percentage model carrying a flat fee, say) would not fail here but silently
+   * mispay an agent at delivery. It is validated up front instead.
+   */
+  async updateTerms(
+    agencyId: string,
+    contractId: string,
+    terms: ContractTermsUpdate,
+    actor: Actor,
+    eventType: MembershipEventType = 'terms_updated'
+  ): Promise<IAgentAgencyContract> {
     const contract = await this.loadForAgency(contractId, agencyId);
-    const updated = await this.contracts.updateTerms(contractId, { employment });
+
+    if (terms.fee_split) {
+      this.assertFeeSplitCoherent(terms.fee_split, contract.fee_split);
+    }
+
+    const updated = await this.contracts.updateTerms(contractId, terms);
     if (!updated) throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
 
     await this.events.append({
       membershipId: contractId,
       agentId: contract.agent_id.toString(),
       agencyId,
-      type: 'employment_updated',
+      type: eventType,
       actorUserId: actor.userId,
       actorRole: actor.role,
-      metadata: { employment },
+      metadata: terms as Record<string, unknown>,
     });
     return updated;
+  }
+
+  /**
+   * A fee split must carry exactly the field its model pays from.
+   *
+   * The incoming patch is merged over the stored split before checking, because
+   * a partial update — switching `model` to 'flat' in one call having set
+   * `agent_flat_fee` in a previous one — is legitimate and must not be rejected
+   * for a field it is not changing.
+   */
+  private assertFeeSplitCoherent(
+    patch: Partial<IContractFeeSplit>,
+    current: IContractFeeSplit
+  ): void {
+    const next = { ...current, ...patch };
+
+    if (next.model === 'percentage' && (next.agent_share_percent === null || next.agent_share_percent === undefined)) {
+      throw createAppError(ERROR_CODES.CONTRACT_FEE_SPLIT_INVALID, 422, undefined, {
+        model: next.model,
+        hint: 'agent_share_percent is required when the fee split model is "percentage".',
+      });
+    }
+
+    if (next.model === 'flat' && (next.agent_flat_fee === null || next.agent_flat_fee === undefined)) {
+      throw createAppError(ERROR_CODES.CONTRACT_FEE_SPLIT_INVALID, 422, undefined, {
+        model: next.model,
+        hint: 'agent_flat_fee is required when the fee split model is "flat".',
+      });
+    }
   }
 
   // ─── Admin: transfer ──────────────────────────────────────────────────────
@@ -747,6 +1024,49 @@ export class AgentContractService {
 
   // ─── Guards ───────────────────────────────────────────────────────────────
 
+  /**
+   * Which party raised this contract.
+   *
+   * `origin` is the discriminator — the agent↔agency equivalent of
+   * `requester_role` on the vendor↔agency connection. Only `join_request` is
+   * agent-raised; `invitation` (an agency requesting a specific agent),
+   * `transfer`, `admin` and `migration` are all agency- or platform-raised, and
+   * in each of those the agent is the party who consents.
+   */
+  private initiatorOf(contract: IAgentAgencyContract): 'agent' | 'agency' {
+    return contract.origin === 'join_request' ? 'agent' : 'agency';
+  }
+
+  /**
+   * Enforce "the other side answers, your side withdraws" for the three
+   * transitions whose permitted party depends on who raised the contract.
+   *
+   * Without this, `TRANSITION_AUTHORITY.approve` being `unilateral` for both
+   * parties would let whoever raised a pending contract approve it themselves —
+   * which is exactly the consent the handshake exists to obtain. It went
+   * unnoticed until now only because the agent had no route to `approve`.
+   */
+  private assertInitiatorRule(
+    contract: IAgentAgencyContract,
+    transition: ContractTransition,
+    party: 'agent' | 'agency'
+  ): void {
+    const initiatorOnly = INITIATOR_SCOPED_TRANSITIONS[transition];
+    if (initiatorOnly === undefined) return;
+
+    const initiator = this.initiatorOf(contract);
+    if (initiatorOnly === (party === initiator)) return;
+
+    throw createAppError(ERROR_CODES.CONTRACT_TRANSITION_NOT_PERMITTED, 403, undefined, {
+      transition,
+      party,
+      initiator,
+      hint: initiatorOnly
+        ? 'Only the party that raised this request may withdraw it.'
+        : 'The other party must respond to a request you raised.',
+    });
+  }
+
   private async loadForAgency(contractId: string, agencyId: string): Promise<IAgentAgencyContract> {
     const contract = await this.contracts.findById(contractId);
     // A foreign contract reports 404, not 403 — an agency must not be able to
@@ -814,6 +1134,8 @@ export class AgentContractService {
         return { approved_at: now, approved_by_user_id: actor.userId };
       case 'reject':
         return { rejected_at: now, rejection_reason: reason };
+      case 'withdraw':
+        return { withdrawn_at: now, withdrawal_reason: reason };
       case 'pause':
         return { paused_at: now, pause_reason: reason };
       case 'suspend':
@@ -840,6 +1162,7 @@ export class AgentContractService {
     const map = {
       approve: 'approved',
       reject: 'request_declined',
+      withdraw: 'withdrawn',
       pause: 'paused',
       suspend: 'suspended',
       reactivate: 'reinstated',

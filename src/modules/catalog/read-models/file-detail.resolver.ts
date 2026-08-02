@@ -13,7 +13,7 @@ interface FileLike {
   size: number;
   originalName?: string;
 }
-interface FileLookup {
+export interface FileLookup {
   findManyByIds(ids: string[]): Promise<FileLike[]>;
 }
 

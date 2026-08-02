@@ -26,6 +26,14 @@ export function initializeAgentNotificationEventConsumers(): void {
     eventBus.subscribe('cod.deposit.recorded', handler.handleDepositRecorded.bind(handler));
     eventBus.subscribe('cod.deposit.rejected', handler.handleDepositRejected.bind(handler));
 
+    // The agent↔agency contract handshake. Shared with the agency consumer —
+    // both subscribe to the same event names and each handler no-ops on
+    // payloads whose `recipientRole` isn't theirs, exactly as the connection.*
+    // events do across the vendor and agency stacks.
+    eventBus.subscribe('agent_contract.request_received', handler.handleContractRequestReceived.bind(handler));
+    eventBus.subscribe('agent_contract.approved', handler.handleContractApproved.bind(handler));
+    eventBus.subscribe('agent_contract.rejected', handler.handleContractRejected.bind(handler));
+
     // Agent-acceptance workflow: a new offer to answer, and the timeout that
     // lapsed one they didn't. The accept/reject confirmations are deliberately
     // NOT notified — the agent took the action, so telling them is noise (the

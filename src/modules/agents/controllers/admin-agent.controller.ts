@@ -4,6 +4,8 @@ import { agentProfileService } from '../domain/services/agent-profile.service';
 import { agentTrackingPolicyService } from '../domain/services/agent-tracking-policy.service';
 import { agentContractService } from '../domain/services/agent-contract.service';
 import { agentEligibilityService } from '../domain/services/agent-eligibility.service';
+import { agentGateService } from '../domain/services/agent-gate.service';
+import { agentCodThresholdService } from '../domain/services/agent-cod-threshold.service';
 import { agentRepository } from '../repositories/agent.repository';
 import { agentMembershipEventRepository } from '../repositories/agent-membership-event.repository';
 import { AgentMembershipMapper } from '../dto/agent-membership.dto';
@@ -14,6 +16,9 @@ import {
   TransferAgentSchema,
   AgentIdParamSchema,
   EligibilityQuerySchema,
+  SetKycStatusSchema,
+  SetPlatformBanSchema,
+  SetAgentThresholdSchema,
 } from '../validators/agent.validator';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -50,7 +55,10 @@ export class AdminAgentController {
     const agent = await agentRepository.findById(agentId);
     if (!agent) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 
-    const memberships = await agentContractService.listForAgent(agentId);
+    // Unpaginated on purpose: the admin view is "this agent's whole history",
+    // and a page boundary would quietly hide contracts an investigation needs.
+    // The agent's and agency's own list endpoints page; this one must not.
+    const memberships = await agentContractService.listAllForAgent(agentId);
 
     res.json({
       success: true,
@@ -127,6 +135,77 @@ export class AdminAgentController {
       },
       message: 'Agent transferred.',
     });
+  });
+
+  /**
+   * PUT /api/admin/agents/:agentId/kyc
+   * Body: { status, reference?, rejectionReason? } — reason required on reject.
+   *
+   * `kyc.status` defaults to `unverified` and eligibility requires `verified`,
+   * so until an admin calls this an agent cannot be dispatched at all.
+   */
+  static setKyc = asyncHandler(async (req: Request, res: Response) => {
+    const { agentId } = AgentIdParamSchema.parse(req.params);
+    const { status, reference, rejectionReason } = SetKycStatusSchema.parse(req.body);
+
+    const agent = await agentGateService.setKycStatus(agentId, status, actorOf(req), {
+      reference,
+      rejectionReason,
+    });
+
+    res.json({
+      success: true,
+      data: { agentId, kyc: agent.kyc },
+      message: `KYC set to ${status}.`,
+    });
+  });
+
+  /**
+   * PUT /api/admin/agents/:agentId/ban
+   * Body: { banned: boolean, reason? } — reason required when banning.
+   *
+   * Deliberately does NOT cascade to contracts: flipping each to paused would
+   * be lossy, since un-banning could not tell which were already paused.
+   */
+  static setBan = asyncHandler(async (req: Request, res: Response) => {
+    const { agentId } = AgentIdParamSchema.parse(req.params);
+    const { banned, reason } = SetPlatformBanSchema.parse(req.body);
+
+    const agent = await agentGateService.setPlatformBan(agentId, banned, reason, actorOf(req));
+
+    res.json({
+      success: true,
+      data: { agentId, platformBan: agent.platform_ban },
+      message: banned ? 'Agent banned from the platform.' : 'Platform ban lifted.',
+    });
+  });
+
+  /**
+   * PUT /api/admin/agents/:agentId/cod-threshold
+   * Body: { maxThreshold }
+   *
+   * The agent's whole COD pool. Lowering below what contracts already
+   * sub-allocate is rejected with the shortfall and the offending contracts.
+   */
+  static setCodThreshold = asyncHandler(async (req: Request, res: Response) => {
+    const { agentId } = AgentIdParamSchema.parse(req.params);
+    const { maxThreshold } = SetAgentThresholdSchema.parse(req.body);
+
+    await agentCodThresholdService.setAgentThreshold(agentId, maxThreshold);
+    const allocation = await agentCodThresholdService.getAllocation(agentId);
+
+    res.json({ success: true, data: allocation, message: 'COD pool updated.' });
+  });
+
+  /**
+   * GET /api/admin/agents/:agentId/cod-allocation
+   * The pool, every contract's slice of it, and the unallocated headroom — the
+   * view to consult before changing either level.
+   */
+  static getCodAllocation = asyncHandler(async (req: Request, res: Response) => {
+    const { agentId } = AgentIdParamSchema.parse(req.params);
+    const allocation = await agentCodThresholdService.getAllocation(agentId);
+    res.json({ success: true, data: allocation });
   });
 
   /** GET /api/admin/agents/:agentId/history — the full membership trail. */

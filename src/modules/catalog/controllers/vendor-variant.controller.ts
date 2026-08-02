@@ -11,6 +11,7 @@ import { enrichVariant, enrichVariants } from '../read-models/enrich-product-det
 import { ProductStatusValidationService } from '../domain/services/ProductStatusValidationService';
 import { FileReferenceService } from '../domain/services/media/FileReferenceService';
 import { assertVariantImageLimit } from '../domain/services/media/image-limits';
+import { assertNotSimpleMode } from '../domain/services/simple/mode-guard';
 import { DEFAULT_VARIANT_SIGNATURE } from '../domain/services/variants/constants';
 import { Variant } from '../repositories/mappers/variant.mapper';
 import {
@@ -51,6 +52,10 @@ export class VendorVariantController {
 
         const product = await productRepository.findById(productId, vendorId);
         if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+
+        // A simple product's one variant is created by POST /products/simple, so
+        // anything reaching here is a second variant by definition.
+        assertNotSimpleMode(product, 'adding another variant');
 
         const input = CreateVariantSchema.parse(req.body);
 
@@ -409,6 +414,14 @@ export class VendorVariantController {
             return;
         }
 
+        // Archiving the lone variant of a simple product would clear
+        // defaultVariantId and hasVariants below, breaking the invariant and
+        // leaving PATCH /:id/simple permanently unusable. Re-activating is
+        // harmless, so this gates on the target status, not the operation.
+        if (status === 'archived') {
+            assertNotSimpleMode(product, 'archiving its only variant');
+        }
+
         if (status === 'active') {
             await productStatusValidationService.validateVariantActivation(product, variant);
         }
@@ -442,6 +455,11 @@ export class VendorVariantController {
 
         const product = await productRepository.findById(productId, vendorId);
         if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+
+        // Same reasoning as changeStatus: this is the lone variant, and archiving
+        // it would leave a simple product that can never be edited or published
+        // again. Archive the product itself instead.
+        assertNotSimpleMode(product, 'archiving its only variant');
 
         const variant = await variantRepository.findById(variantId);
         if (!variant || variant.productId !== productId) throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);

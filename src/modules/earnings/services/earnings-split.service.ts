@@ -21,21 +21,76 @@ import {
   agentContractRepository,
 } from '../../agents/repositories/agent-contract.repository';
 import { ICashCollection } from '../../cod/models/cash-collection.model';
+import { EarningsQuoteService, earningsQuoteService } from './earnings-quote.service';
+
+/** How a shipment's delivery run ended, for the purposes of dividing its fee. */
+export type ShipmentDeliveryOutcome = 'delivered' | 'returned';
 
 /**
- * EarningsSplitService - splits a freshly-paid order/booking into per-beneficiary
+ * What a shipment's delivery run actually earned, out of the fee reserved for it
+ * at payment.
+ *
+ * A completed delivery earns the whole reserved fee. A shipment that came back
+ * earns the agency's own return-to-origin rate instead — real work was done, but
+ * not the work that was quoted — clamped to the reserved fee, because the split
+ * can only divide money that was actually charged. Whatever is left over is
+ * returned to the vendor by the caller, so an order's gross always adds back up.
+ *
+ * Pure and exported so it can be tested without a database (the convention used
+ * by `deriveWorkingState` / `effectiveLimit` in the agent domain).
+ */
+export function resolveEarnedFee(
+  outcome: ShipmentDeliveryOutcome,
+  reservedFee: number,
+  policies: IAgencyPolicies | null
+): number {
+  if (reservedFee <= 0) return 0;
+  if (outcome === 'delivered') return reservedFee;
+  const rtoFee = policies?.pricing?.additional_fees?.rto_fee ?? 0;
+  return Math.max(0, Math.min(rtoFee, reservedFee));
+}
+
+/**
+ * EarningsSplitService - splits a paid order/booking into per-beneficiary
  * allocations and holds each share in escrow.
  *
- * The split runs at payment success so a vendor immediately sees their NET
- * (post-fee) earnings, even though the money stays held until the order is
- * completed. Idempotent: re-firing a payment webhook never double-splits
- * (guarded by a unique index on (source, beneficiary) plus an up-front check).
+ * ── One order's gross is divided across TWO moments ──────────────────────────
  *
- * The agency's per-order delivery-fee share is computed from that agency's
- * own `policies.pricing` (pickup-based and/or storage-based flat components),
- * derived from the order's real Shipment documents — not a flat per-agency
- * constant. See `computeAgencyDeliveryFees` below for the exact MINIMAL
- * formula and every deferred pricing component (kept as TODOs).
+ * At PAYMENT (`splitOrder`) the platform's commission and the vendor's net are
+ * allocated. The vendor's net is already reduced by the delivery fee, but that
+ * fee is NOT allocated to anyone yet: at payment success an order's shipments
+ * exist but sit at `pending` with `agent_id: null`, so the agent who will earn a
+ * share of it is not yet known — nobody has been dispatched.
+ *
+ * At DELIVERY (`splitShipmentDelivery`) the fee reserved for each shipment is
+ * divided between the agency and that agent, mirroring what COD has always done
+ * in `splitCodCollection`. COD orders skip the payment split entirely (there is
+ * no payment to split until the cash is handed over) and go through
+ * `splitCodCollection` alone.
+ *
+ * Deferring the fee is what makes an agent paid on an ONLINE-paid delivery, not
+ * only a cash one. It changes only WHEN the agency's share is allocated, never
+ * the vendor's or the platform's economics.
+ *
+ * Both splits are idempotent: re-firing a payment webhook or re-running a
+ * delivery transition never double-splits (a unique index on
+ * (source, beneficiary) plus an up-front `existsForSource` check).
+ *
+ * ── Escrow is resolved per ORDER, for every actor at once ────────────────────
+ *
+ * Allocations from both moments are created `held` with no maturity date.
+ * `OrderCompletionService` → `EarningsCompletionService.onOrderCompleted` stamps
+ * `completed_at` + `hold_release_at` on all of them together when the ORDER
+ * completes, and the release worker frees them HOLD_DAYS later. So an agent's cut
+ * of a prepaid delivery waits exactly as long as the vendor's, the platform's and
+ * a COD agent's — and any new source type MUST be swept there or its money is
+ * held forever.
+ *
+ * The agency's delivery fee is computed from that agency's own `policies.pricing`
+ * (pickup-based and/or storage-based flat components), derived from the order's
+ * real Shipment documents — not a flat per-agency constant. See
+ * `computeShipmentDeliveryFee` below for the exact MINIMAL formula and every
+ * deferred pricing component (kept as TODOs).
  *
  * All amounts are integers in minor currency units.
  */
@@ -46,12 +101,28 @@ export class EarningsSplitService {
     private readonly entitlements: EntitlementService = entitlementService,
     private readonly shipmentRepo: ShipmentRepository = new ShipmentRepository(),
     private readonly agencyRepo: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
-    private readonly contracts: AgentContractRepository = agentContractRepository
+    private readonly contracts: AgentContractRepository = agentContractRepository,
+    /** Owns the delivery-fee + agent-cut formulas; see EarningsQuoteService. */
+    private readonly quotes: EarningsQuoteService = earningsQuoteService
   ) {}
 
   /**
-   * Split a paid order: platform commission, per-agency delivery fee, vendor net.
-   * Digital orders have no delivery agency, so only commission + vendor net.
+   * Split a paid order at PAYMENT time: platform commission + vendor net.
+   *
+   * The delivery fee is computed here — the vendor's net is reduced by it, so the
+   * vendor immediately sees the true post-fee figure — but it is deliberately NOT
+   * allocated to anyone yet. At payment success the order's shipments exist and
+   * sit at `pending` with `agent_id: null`: no agent has been dispatched, and the
+   * agent's cut comes out of that same fee. The fee is instead snapshotted onto
+   * each shipment and divided by `splitShipmentDelivery` when the delivery
+   * actually happens and the agent is known.
+   *
+   * The gross therefore reconciles across two moments, not one:
+   *   gross = commission + vendorNet + Σ(agency + agent + vendor-refund per shipment)
+   *
+   * Digital orders have no shipments, so there is no delivery fee and nothing is
+   * deferred. COD orders never reach this method at all — they have no payment to
+   * split until the cash is collected (see `splitCodCollection`).
    */
   async splitOrder(order: IOrder): Promise<void> {
     const sourceId = order._id.toString();
@@ -67,11 +138,11 @@ export class EarningsSplitService {
     // Per-shipment, policy-driven agency delivery fee (physical orders only —
     // digital orders have no shipments). See computeAgencyDeliveryFees for the
     // exact MINIMAL formula and every deferred pricing component.
-    const deliveryFeesByAgency =
+    const { byAgency, byShipment } =
       order.order_type === 'physical'
         ? await this.computeAgencyDeliveryFees(order)
-        : new Map<string, number>();
-    const deliveryTotal = [...deliveryFeesByAgency.values()].reduce((sum, v) => sum + v, 0);
+        : { byAgency: new Map<string, number>(), byShipment: new Map<string, number>() };
+    const deliveryTotal = [...byAgency.values()].reduce((sum, v) => sum + v, 0);
 
     const vendorNet = gross - commission - deliveryTotal;
     if (vendorNet < 0) {
@@ -81,6 +152,12 @@ export class EarningsSplitService {
         deliveryTotal,
       });
     }
+
+    // Record what each shipment was charged BEFORE allocating anything. The
+    // delivery-time split divides exactly these numbers rather than recomputing
+    // from an agency policy that may have changed in the meantime — see
+    // IShipment.delivery_fee_snapshot.
+    await this.shipmentRepo.setDeliveryFeeSnapshots(byShipment);
 
     const allocations: CreateAllocationInput[] = [
       {
@@ -103,47 +180,50 @@ export class EarningsSplitService {
         amount: commission,
         currency,
       },
-      ...[...deliveryFeesByAgency.entries()].map(([agencyId, amount]) => ({
-        source_type: 'order' as const,
-        source_id: sourceId,
-        beneficiary_type: 'agency' as const,
-        beneficiary_id: agencyId,
-        gross_snapshot: gross,
-        commission_percent_snapshot: commissionPercent,
-        amount,
-        currency,
-      })),
     ];
 
     await this.persist(allocations);
 
-    await this.emitSplit('order', sourceId, vendorId, { gross, commission, deliveryTotal, vendorNet });
+    await this.emitSplit('order', sourceId, vendorId, {
+      gross,
+      commission,
+      // Charged to the vendor now, allocated to the agency/agent at delivery.
+      deliveryDeferred: deliveryTotal,
+      vendorNet,
+    });
   }
 
   /**
-   * Computes each agency's delivery-fee share for a physical order, per the
-   * MINIMAL formula (see module docs), merged to ONE total per distinct
-   * agency.
+   * The delivery fee a physical order owes, per the MINIMAL formula (see module
+   * docs) — both per shipment and totalled per distinct agency.
    *
-   * Fee is computed PER SHIPMENT (the real unit of "one agency's one
-   * delivery run for this order" — see ShipmentModel), from that shipment's
-   * own agency's `policies.pricing`, then summed into one total per agency.
-   * An agency can have more than one shipment on the same order (e.g. a late
-   * item routed to a new shipment after the first left `pending`/`assigned`
-   * — see ShipmentRepository.findGroupableByOrderAndAgency). Summing here —
-   * rather than creating one allocation row PER SHIPMENT — is deliberate:
-   * EarningsAllocation's uniqueness constraint is
-   * `(source_type, source_id, beneficiary_type, beneficiary_id)`, i.e. one
-   * row per (order, agency). Two shipments for the same agency on the same
-   * order would collide on that index if each tried to insert its own row.
-   * Summing preserves the existing constraint with zero schema change.
+   * Fee is computed PER SHIPMENT (the real unit of "one agency's one delivery
+   * run for this order" — see ShipmentModel) from that shipment's own agency's
+   * `policies.pricing`. Callers need both views and they are not
+   * interchangeable:
+   *  - `byShipment` is what each shipment is charged, and is snapshotted onto the
+   *    shipment so the delivery-time split divides the same number the vendor was
+   *    charged.
+   *  - `byAgency` sums those, and is only used to reduce the vendor's net. An
+   *    agency can have more than one shipment on the same order (e.g. a late item
+   *    routed to a new shipment after the first left `pending`/`assigned` — see
+   *    ShipmentRepository.findGroupableByOrderAndAgency), and the vendor is
+   *    charged for every one of them.
+   *
+   * The payment-time split no longer creates agency allocations, so the
+   * `(order, agency)` uniqueness collision that used to force this summing is
+   * gone: the delivery-time rows are sourced by SHIPMENT id, which is unique per
+   * run by construction.
    */
-  private async computeAgencyDeliveryFees(order: IOrder): Promise<Map<string, number>> {
+  private async computeAgencyDeliveryFees(
+    order: IOrder
+  ): Promise<{ byAgency: Map<string, number>; byShipment: Map<string, number> }> {
     const orderId = (order._id as any).toString();
-    const totals = new Map<string, number>();
+    const byAgency = new Map<string, number>();
+    const byShipment = new Map<string, number>();
 
     const shipments = await this.shipmentRepo.findByOrderId(orderId);
-    if (shipments.length === 0) return totals; // defensive: no shipments yet for a paid physical order
+    if (shipments.length === 0) return { byAgency, byShipment }; // defensive: no shipments yet for a paid physical order
 
     // Batch-fetch every distinct agency's policy in ONE query (avoid N+1).
     const agencyIds = [...new Set(shipments.map((s) => s.agency_id.toString()))];
@@ -160,40 +240,31 @@ export class EarningsSplitService {
         orderItemsById,
         orderId
       );
-      totals.set(agencyId, (totals.get(agencyId) ?? 0) + shipmentFee);
+      byShipment.set((shipment._id as any).toString(), shipmentFee);
+      byAgency.set(agencyId, (byAgency.get(agencyId) ?? 0) + shipmentFee);
     }
 
     // NOTE(earnings): additional_fees.cod_handling_fee is charged only on COD
     // collections (see splitCodCollection) — prepaid orders never trigger it.
+    // NOTE(earnings): additional_fees.rto_fee IS now charged, but not here —
+    // it replaces the delivery fee at delivery time when a shipment comes back
+    // rather than being delivered. See resolveEarnedFee.
     // TODO(earnings): additional_fees.peak_season_surcharge — deferred. No
     // "peak season" concept is defined anywhere in the codebase.
-    // TODO(earnings): additional_fees.failed_delivery_fee / rto_fee —
-    // deferred. Natural hook: a new call from ShipmentService.updateStatus()
-    // on a 'failed'/'returned' transition, once this base per-shipment split
-    // has been validated in production. Not wired in this task.
-    // TODO(agent): PREPAID orders do not yet pay the agent their fee_split cut.
-    // COD does (see splitCodCollection + computeAgentCut), but the two splits
-    // fire at different moments and only one of them knows who the agent is:
-    // this split runs at PAYMENT success, when an order's shipments exist but
-    // are still `pending` with no agent_id — nobody has been dispatched yet. The
-    // COD split runs after the handoff, so `collection.agent_id` is known.
-    //
-    // So the agent's cut cannot simply be carved out here. It needs a
-    // delivery-time allocation, and that is a real design decision rather than a
-    // missing line: the agency's full delivery fee is already `held` from
-    // payment, so paying the agent later means either moving money out of an
-    // allocation that already exists (there is no transfer primitive — reversal
-    // is all-or-nothing per row), or deferring the agency's own delivery-fee
-    // allocation until delivery, which would change when an agency sees its
-    // pending earnings. Do not guess; settle it with the product owner.
+    // TODO(earnings): additional_fees.failed_delivery_fee — deferred. Unlike
+    // rto_fee it is not a division of the fee already charged but an EXTRA
+    // charge to the vendor for a wasted attempt, and 'failed' is not terminal
+    // (failed → in_transit | returned), so a shipment can fail repeatedly. It
+    // needs its own charge path, not a slice of this one.
 
-    return totals;
+    return { byAgency, byShipment };
   }
 
   /**
-   * ONE shipment's delivery fee from its agency's `policies.pricing` — the
-   * MINIMAL formula shared by the prepaid per-order split (summed per agency)
-   * and the COD per-collection split.
+   * ONE shipment's delivery fee — delegated to {@link EarningsQuoteService},
+   * which owns the formula so that the agent's OFFER-TIME estimate and this
+   * DELIVERY-TIME actual are provably the same arithmetic. Every deferred
+   * pricing component is documented there.
    */
   private computeShipmentDeliveryFee(
     shipment: IShipment,
@@ -201,72 +272,7 @@ export class EarningsSplitService {
     orderItemsById: Map<string, IOrderItem>,
     orderId: string
   ): number {
-    if (!policies) {
-      // Defensive fallback, not expected in practice: AgencyOnboardingStep
-      // POLICY_SETUP (step 4) is a REQUIRED onboarding step for agencies
-      // (core/constants/onboarding-steps.ts), and only fully-onboarded
-      // (onboarding_step: 0) agencies are selectable by vendors
-      // (DeliveryAgencyRepository.findAvailableForVendors). So an agency
-      // reachable by a dispatched shipment should always have `policies`
-      // set. Charge the safe fallback constant (0 by default) rather than
-      // a fabricated number, and log loudly so a real occurrence gets
-      // investigated.
-      console.error(
-        `[EarningsSplitService] Agency ${shipment.agency_id.toString()} has no policies configured — ` +
-          `falling back to EARNINGS_CONFIG.DELIVERY_FLAT_FEE for shipment ` +
-          `${(shipment._id as any).toString()} (order ${orderId}).`
-      );
-      return EARNINGS_CONFIG.DELIVERY_FLAT_FEE;
-    }
-
-    let hasPickupBased = false;
-    let hasStorageBased = false;
-    for (const item of shipment.items) {
-      const orderItem = orderItemsById.get(item.order_item_id.toString());
-      const source = orderItem?.delivery?.pickup_location?.source;
-      if (source === 'vendor_address') hasPickupBased = true;
-      if (source === 'agency_storage') hasStorageBased = true;
-      // else: no matching order item, or a legacy item with
-      // pickup_location: null (predates this feature) — can't classify;
-      // contributes no fee component.
-    }
-
-    let shipmentFee = 0;
-    // A shipment mixing both fulfillment modes (each product
-    // independently configured — see ShipmentService.getDetailForAgency)
-    // is charged BOTH components: real distinct fulfillment work happens
-    // for each class.
-    if (hasPickupBased) {
-      shipmentFee += policies.pricing.pickup_based.base_rate_first_kg;
-      // TODO(earnings): additional_per_kg — deferred. Needs a weight
-      // snapshot that doesn't exist on IOrderItem; weight only lives on
-      // ProductVariant today. Add `+ additional_per_kg * extraKg` here
-      // once order items snapshot a weight at checkout.
-      // TODO(earnings): out_of_region_surcharge — deferred. No
-      // region-matching concept (customer delivery region vs the vendor
-      // pickup address / agency coverage_areas) exists anywhere yet.
-    }
-    if (hasStorageBased) {
-      shipmentFee +=
-        policies.pricing.storage_based.local_delivery_fee +
-        policies.pricing.storage_based.pick_pack_fee_per_order;
-      // TODO(earnings): out_of_region_delivery_fee — deferred, same
-      // reason as pickup_based.out_of_region_surcharge above.
-      // TODO(earnings): monthly_storage_fee_per_sku — intentionally
-      // EXCLUDED from this per-order split. It's a recurring rent-style
-      // charge (per SKU stored, per month), not tied to any single
-      // order. Future work: bill it on its own recurring cadence
-      // (separate job/module), not here.
-    }
-
-    // TODO(earnings): free_delivery — IOrderItem.delivery.free_delivery
-    // is a per-item flag; this per-shipment computation doesn't consult
-    // it, so a shipment carrying a free-delivery item is still charged
-    // its flat component(s) in full. Revisit once fee calc needs
-    // item-level granularity below the two shipment-level flat
-    // components above.
-
-    return shipmentFee;
+    return this.quotes.computeShipmentDeliveryFee(shipment, policies, orderItemsById, orderId);
   }
 
   /**
@@ -323,6 +329,13 @@ export class EarningsSplitService {
       agency?.policies ?? null,
       orderItemsById,
       order._id.toString()
+    );
+    // Record it for audit. COD computes the fee once, at collection, so it cannot
+    // drift the way a prepaid order's can — but nothing else persists what a
+    // delivery was charged, and an agency questioning a payout has no other
+    // record to check against.
+    await this.shipmentRepo.setDeliveryFeeSnapshots(
+      new Map([[(shipment._id as any).toString(), deliveryFee]])
     );
 
     const codFeeConfig = agency?.policies?.pricing?.additional_fees?.cod_handling_fee ?? null;
@@ -406,6 +419,161 @@ export class EarningsSplitService {
   }
 
   /**
+   * Divide ONE prepaid shipment's delivery fee between the agency and the agent
+   * who ran it — the online-paid mirror of `splitCodCollection`.
+   *
+   * This is where an agent finally gets paid on an ONLINE-paid order. The fee was
+   * charged to the vendor at payment (`splitOrder`) but held back from allocation
+   * because no agent existed yet; now the run is over and `shipment.agent_id` is
+   * whoever actually made it — including after a reassignment, where that is not
+   * the agent who picked the parcel up.
+   *
+   * Called at `agent_delivered`, NOT at the customer's confirmation: the agent
+   * must learn what they earned when they finish the job, and a customer who
+   * never clicks confirm must not be able to withhold it. That is safe because
+   * the rows are created `held` with no maturity — they still cannot be released
+   * until the ORDER completes and the HOLD_DAYS window elapses, exactly like
+   * every other actor's share.
+   *
+   * Also called at `returned`, where the run happened but the delivery did not:
+   * the agency earns its own `rto_fee` instead (see resolveEarnedFee), the agent
+   * their contracted cut of that, and the unspent remainder goes back to the
+   * vendor so the order's gross still reconciles.
+   *
+   * COD never reaches here — `splitCodCollection` already pays all four parties
+   * off the collection, and a returned COD shipment collected no cash, so there
+   * is nothing to divide.
+   */
+  async splitShipmentDelivery(
+    order: IOrder,
+    shipment: IShipment,
+    outcome: ShipmentDeliveryOutcome
+  ): Promise<void> {
+    if (order.payment_method === 'cash_on_delivery') return; // paid via splitCodCollection
+    if (order.order_type !== 'physical') return; // no shipments, no delivery fee
+
+    const sourceId = (shipment._id as any).toString();
+    if (await this.allocationRepo.existsForSource('shipment', sourceId)) return; // idempotent
+
+    const orderId = order._id.toString();
+    const vendorId = order.vendor_id.toString();
+    const agencyId = shipment.agency_id.toString();
+    const currency = order.currency;
+
+    // Orders paid BEFORE the fee was deferred already banked the agency's whole
+    // delivery fee at payment time, as an ('order', agency) row. Splitting again
+    // here would pay it twice. Those orders keep the old behaviour and the agent
+    // goes unpaid on them — the alternative is inventing money that was never
+    // reserved for it.
+    const orderAllocations = await this.allocationRepo.findBySource('order', orderId);
+    const legacyAgencyRow = orderAllocations.find(
+      (a) => a.beneficiary_type === 'agency' && a.beneficiary_id?.toString() === agencyId
+    );
+    if (legacyAgencyRow) {
+      console.warn(
+        `[EarningsSplitService] Shipment ${sourceId} belongs to order ${orderId}, which was split ` +
+          `under the payment-time agency allocation; skipping the delivery split to avoid paying ` +
+          `agency ${agencyId} twice.`
+      );
+      return;
+    }
+
+    const agency = await this.agencyRepo.findById(agencyId);
+    const policies = agency?.policies ?? null;
+
+    // The fee the vendor was actually charged. Recomputing would risk dividing a
+    // different number than was charged if the agency edited its pricing since —
+    // see IShipment.delivery_fee_snapshot. A missing snapshot means the shipment
+    // was created after its order was split (a late item routed to a new
+    // shipment), so nothing was ever charged for it; compute live and log, since
+    // that allocation is not covered by the vendor's net.
+    let reservedFee = shipment.delivery_fee_snapshot ?? null;
+    if (reservedFee === null) {
+      const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
+      reservedFee = this.computeShipmentDeliveryFee(shipment, policies, orderItemsById, orderId);
+      console.error(
+        `[EarningsSplitService] Shipment ${sourceId} (order ${orderId}) has no delivery_fee_snapshot — ` +
+          `computing the fee live at ${reservedFee}. The vendor's net was not reduced by it.`
+      );
+    }
+
+    const earnedFee = resolveEarnedFee(outcome, reservedFee, policies);
+    // The agent's cut comes OUT of what the run earned, never on top: the vendor
+    // pays the same either way and the agency shares with whoever did the work.
+    // A shipment can end `returned` with no agent ever bound (the agency took it
+    // back before anyone accepted) — then there is no cut and the agency keeps it.
+    const agentId = shipment.agent_id ? shipment.agent_id.toString() : null;
+    const agentCut = agentId ? await this.computeAgentCut(agentId, agencyId, earnedFee) : 0;
+    const vendorRefund = reservedFee - earnedFee;
+
+    // Inherit the order's maturity when it has ALREADY completed, exactly as the
+    // COD split does. A `returned` shipment can settle the last outstanding item
+    // and the recovery sweep re-splits long after the fact; without this the rows
+    // sit held forever, since findMaturedHeld skips a null hold_release_at.
+    const orderCompletedAt = order.completion?.confirmed_at ?? null;
+    const shipmentDefaults = {
+      source_type: 'shipment' as const,
+      source_id: sourceId,
+      // What this row divides — the fee, not the order total. The order's gross
+      // and the commission taken off it live on the ('order', …) rows; no
+      // commission is charged a second time here, hence 0.
+      gross_snapshot: reservedFee,
+      commission_percent_snapshot: 0,
+      currency,
+      // The money is already at the platform (the customer paid the gateway), so
+      // unlike COD there is no cash chain to wait on.
+      requires_cash_settlement: false,
+      ...(orderCompletedAt
+        ? {
+            completed_at: orderCompletedAt,
+            hold_release_at: daysFromNow(EARNINGS_CONFIG.HOLD_DAYS, orderCompletedAt),
+          }
+        : {}),
+    };
+
+    const allocations: CreateAllocationInput[] = [
+      {
+        ...shipmentDefaults,
+        beneficiary_type: 'agency',
+        beneficiary_id: agencyId,
+        amount: earnedFee - agentCut,
+      },
+      // Paid by the PLATFORM like any other beneficiary — hold → release →
+      // available → payout — even though it is the AGENCY that owes it under the
+      // contract's fee_split. Nobody is paid off-platform.
+      ...(agentId
+        ? [
+            {
+              ...shipmentDefaults,
+              beneficiary_type: 'agent' as const,
+              beneficiary_id: agentId,
+              amount: agentCut,
+            },
+          ]
+        : []),
+      // A run that earned less than was reserved for it returns the difference to
+      // the vendor, who was charged the full fee at payment. Zero on a normal
+      // delivery, and `persist` drops zero-value rows.
+      {
+        ...shipmentDefaults,
+        beneficiary_type: 'vendor',
+        beneficiary_id: vendorId,
+        amount: vendorRefund,
+      },
+    ];
+
+    await this.persist(allocations);
+
+    await this.emitSplit('shipment', sourceId, vendorId, {
+      reservedFee,
+      earnedFee,
+      agentCut,
+      agencyNet: earnedFee - agentCut,
+      vendorRefund,
+    });
+  }
+
+  /**
    * The agent's share of one delivery's fee, per the contract they made the
    * delivery under (`fee_split`).
    *
@@ -421,37 +589,16 @@ export class EarningsSplitService {
    * is logged. This mirrors the attribution gap in
    * CashCollectionService.attributeToContractInSession and has the same cause: a
    * contract terminated with a shipment still in flight.
+   *
+   * The arithmetic itself lives in {@link EarningsQuoteService} so the agent's
+   * offer-time estimate cannot drift from what this actually pays.
    */
   private async computeAgentCut(
     agentId: string,
     agencyId: string,
     deliveryFee: number
   ): Promise<number> {
-    if (deliveryFee <= 0) return 0;
-
-    const contract = await this.contracts.findLive(agentId, agencyId);
-    if (!contract) {
-      console.error(
-        `[EarningsSplitService] No live contract for agent ${agentId} at agency ${agencyId} — ` +
-          `no agent cut taken; the full delivery fee stays with the agency.`
-      );
-      return 0;
-    }
-
-    const split = contract.fee_split;
-    const raw =
-      split?.model === 'flat'
-        ? (split.agent_flat_fee ?? 0)
-        : Math.floor((deliveryFee * (split?.agent_share_percent ?? 0)) / 100);
-
-    const cut = Math.max(0, Math.min(raw, deliveryFee));
-    if (raw > deliveryFee) {
-      console.error(
-        `[EarningsSplitService] Contract ${contract._id.toString()} owes agent ${agentId} ` +
-          `${raw} but the delivery fee is only ${deliveryFee}; clamped to ${cut}.`
-      );
-    }
-    return cut;
+    return await this.quotes.computeAgentCut(agentId, agencyId, deliveryFee);
   }
 
   /**

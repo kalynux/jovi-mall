@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { ShipmentRepository } from './shipment.repository';
-import { IShipment, ShipmentStatus, ShipmentRejectionReason, IShipmentHandover, IShipmentHandoverPickup, AgentCancellationReason, IShipmentAgentCancellation } from './shipment.model';
+import { IShipment, ShipmentStatus, ShipmentRejectionReason, IShipmentHandover, IShipmentHandoverPickup, AgentCancellationReason, IShipmentAgentCancellation, IShipmentDeliveryFailure, ShipmentFailureReason } from './shipment.model';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
@@ -22,16 +22,50 @@ import { CustomerModel } from '../customers/customer.model';
 import { FileRepositoryMongo } from '../catalog/repositories/mongo/file.repository.mongo';
 import { getStorageProvider, IStorageProvider } from '../../core/storage';
 import { resolveFileDetail } from '../catalog/read-models/file-detail.resolver';
+import { FileDetail } from '../catalog/read-models/product-detail.read-model';
+import { ProductImageRef, productImageKey, resolveProductImages } from '../catalog/read-models/product-image.resolver';
+import {
+    AddressDetail,
+    toAddressDetail,
+    fromSavedAddress,
+    fromPickupSnapshot,
+    fromHqAddress,
+    fromHandoverPickup,
+} from '../../core/read-models/address-detail.resolver';
+import { EarningsQuoteService, earningsQuoteService, AgentEarningQuoteResult } from '../earnings/services/earnings-quote.service';
+import { earningsSplitService } from '../earnings/services/earnings-split.service';
 import { cashCollectionService } from '../cod/services/cash-collection.service';
 import { eventBus } from '../../core/events/event-bus';
 import { agentActionAuditService } from '../tracking-integration/services/agent-action-audit.service';
 import { shipmentAssignmentOfferRepository } from '../shipment-assignment/repositories/shipment-assignment-offer.repository';
+import { geoRoutingClient } from '../shipment-assignment/services/geo-routing.client';
+import { haversineKm } from '../../core/utils/geo-distance.util';
+import { IGeoPoint } from '../../core/types/geo.types';
 
-// Shipment-status transitions an AGENCY may trigger directly via PATCH .../status.
-// 'assigned' (system, on payment dispatch), 'delivered' (system, on customer
-// confirmation only), 'rejected' (its own dedicated endpoint), and
-// 'pending_agency_reassignment' (admin-deactivation cascade) are excluded.
-const AGENCY_TRIGGERABLE_TRANSITIONS: Partial<Record<ShipmentStatus, ShipmentStatus[]>> = {
+/**
+ * Shipment-status transitions that may be triggered directly on the status
+ * endpoints — `PATCH /api/agency/shipments/:id/status` for the agency, and
+ * `POST /api/agent/shipments/:id/status` for the assigned agent.
+ *
+ * ONE map, shared by both actors, because they have the same rights over the
+ * lifecycle: the agent is the person physically collecting, driving and
+ * knocking on the door, and the agency's endpoint is the desk mirroring that.
+ * A reassigned shipment is no different from a first-assigned one — the
+ * replacement agent records their own pickup out of `handing_over` just as the
+ * original agent does out of `assigned`.
+ *
+ * Whoever moves it is recorded in `status_history.changed_by_role`; ownership
+ * (agency_id vs agent_id) is what differs between the two doors, not the rules.
+ * If the two ever need to genuinely diverge, split this into two maps and
+ * select on `actor.role` in `_transitionStatus` — do NOT let a role-specific
+ * exception creep in here.
+ *
+ * Excluded on purpose: 'assigned' (system, on payment dispatch), 'delivered'
+ * (system — the customer's confirmation, or for COD the delivery code),
+ * 'rejected' (its own dedicated agency endpoint), and
+ * 'pending_agency_reassignment' (admin-deactivation cascade).
+ */
+export const TRIGGERABLE_TRANSITIONS: Partial<Record<ShipmentStatus, ShipmentStatus[]>> = {
     assigned: ['picked_up'],
     picked_up: ['in_transit'],
     in_transit: ['agent_delivered', 'failed'],
@@ -42,10 +76,65 @@ const AGENCY_TRIGGERABLE_TRANSITIONS: Partial<Record<ShipmentStatus, ShipmentSta
     agent_delivered: ['failed'],
     failed: ['in_transit', 'returned'],
     // A shipment handed over after a post-pickup reassignment resumes when its
-    // replacement agent picks the parcel up (guarded on agent_id, so the new
-    // agent must have accepted first); 'returned' is the escape hatch.
+    // replacement agent picks the parcel up — guarded on agent_id, so the new
+    // agent must have accepted first, which is also what makes this reachable
+    // from the AGENT endpoint: acceptance binds agent_id while the status is
+    // still `handing_over` (see ShipmentRepository.bindAgentIfUnassigned and
+    // OFFERABLE_STATUSES). 'returned' is the escape hatch when the handover is
+    // abandoned.
     handing_over: ['picked_up', 'returned'],
 };
+
+/**
+ * The agent-driven transitions the shipment's AGENCY is told about. `in_transit`
+ * is excluded: it is a routine progress ping, not something an agency needs
+ * pushed at it. Filtered here, in the domain, rather than in the notification
+ * layer — so the product decision lives with the state machine and no needless
+ * event reaches the bus.
+ */
+export const AGENT_TRANSITIONS_NOTIFYING_AGENCY: ShipmentStatus[] = [
+    'picked_up',
+    'agent_delivered',
+    'failed',
+    'returned',
+];
+
+/**
+ * Statuses that carry an agent-reported non-delivery reason. Used to decide
+ * whether a `failure` payload is persisted onto `delivery_failures`.
+ */
+const FAILURE_REPORTING_STATUSES: ShipmentStatus[] = ['failed', 'returned'];
+
+/**
+ * How many item thumbnails a LIST row carries (`itemImages`). A list row is
+ * deliberately item-less — it reports `itemCount`, not the items — so this is a
+ * capped, deduplicated preview stack, not the item array in disguise: enough for
+ * an agent to recognise the job in their queue, bounded so a 30-item shipment
+ * cannot make a 20-row page enormous. The full per-item image is on the detail.
+ */
+const SHIPMENT_LIST_IMAGE_LIMIT = 3;
+
+/**
+ * Who is driving a status transition. A discriminated union rather than
+ * `{ role, agencyId?, agentId? }`: the ownership scope only exists for the role
+ * that has one, so the shared core can never read an `agencyId` off an agent
+ * transition. `role` doubles as the value written to
+ * `status_history.changed_by_role` and as the `actorRole` on the geo-tracker
+ * agent-action audit.
+ */
+type ShipmentStatusActor =
+    | { role: 'agency'; agencyId: string; userId: string }
+    | { role: 'agent'; agentId: string; userId: string };
+
+/**
+ * A non-delivery outcome an AGENT reported alongside `failed`/`returned`. Never
+ * set on the agency path — the agency status endpoint is deliberately
+ * reason-less.
+ */
+export interface AgentFailureReport {
+    reason: ShipmentFailureReason | null;
+    note: string | null;
+}
 
 // Agent → agent reassignment: the status a shipment resets to when it is pulled
 // off its current agent. Pre-pickup it goes back to the agency queue as
@@ -99,6 +188,7 @@ export class ShipmentService {
     private completionService: OrderCompletionService;
     private fileRepository: FileRepositoryMongo;
     private storageProvider: IStorageProvider;
+    private earningsQuotes: EarningsQuoteService;
 
     constructor() {
         this.shipmentRepo = new ShipmentRepository();
@@ -112,40 +202,7 @@ export class ShipmentService {
         this.completionService = orderCompletionService;
         this.fileRepository = new FileRepositoryMongo();
         this.storageProvider = getStorageProvider();
-    }
-
-    /**
-     * Set the carrier tracking number on a shipment.
-     *
-     * Ownership is enforced at the query level: an agency may only touch its own
-     * shipments (`agency_id`), an agent only the ones assigned to them
-     * (`agent_id`). A shipment that does not match the actor's scope is reported
-     * as not found, so existence of other actors' shipments is never leaked.
-     */
-    async setTrackingNumber(
-        role: string,
-        roleEntityId: string,
-        shipmentId: string,
-        trackingNumber: string
-    ): Promise<any> {
-        const filter: Record<string, unknown> = { _id: shipmentId };
-
-        if (role === 'agency') {
-            filter.agency_id = roleEntityId;
-        } else if (role === 'agent') {
-            filter.agent_id = roleEntityId;
-        } else {
-            // Routes already restrict to agency/agent; defensive guard.
-            throw createAppError(ERROR_CODES.AUTH_ROLE_NOT_FOUND, 403);
-        }
-
-        const shipment = await this.shipmentRepo.setTrackingNumber(filter, trackingNumber);
-
-        if (!shipment) {
-            throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
-        }
-
-        return this.toSummary(shipment);
+        this.earningsQuotes = earningsQuoteService;
     }
 
     /**
@@ -154,7 +211,7 @@ export class ShipmentService {
      */
     async listForAgency(
         agencyId: string,
-        filters: { status?: ShipmentStatus } = {},
+        filters: { status?: ShipmentStatus; q?: string } = {},
         pagination: PaginationOptions = { page: 1, limit: 20 }
     ): Promise<Page<any>> {
         const page = await this.shipmentRepo.findByAgencyPaginated(agencyId, filters, pagination);
@@ -163,40 +220,83 @@ export class ShipmentService {
 
     /**
      * List shipments assigned to an AGENT (the agent app's work queue), with
-     * the same vendor/customer enrichment as the agency list.
+     * the same vendor/customer enrichment as the agency list, plus the two
+     * things only an agent needs: where to collect and drop off, and what the
+     * delivery pays them.
      */
     async listForAgent(
         agentId: string,
-        filters: { status?: ShipmentStatus } = {},
+        filters: { status?: ShipmentStatus; q?: string } = {},
         pagination: PaginationOptions = { page: 1, limit: 20 }
     ): Promise<Page<any>> {
         const page = await this.shipmentRepo.findByAgentPaginated(agentId, filters, pagination);
-        return this._enrichShipmentPage(page);
+        return this._enrichShipmentPage(page, agentId);
     }
 
-    /** Shared list enrichment: vendor + redacted customer/order summary per shipment. */
-    private async _enrichShipmentPage(page: Page<IShipment>): Promise<Page<any>> {
+    /**
+     * Shared list enrichment: vendor + redacted customer/order summary per
+     * shipment, plus the pickup/drop-off addresses that make a row actionable
+     * (an agent navigates from the list, not the detail).
+     *
+     * When `agentId` is given (the agent's own queue) each row also carries the
+     * agent's estimated earning — see EarningsQuoteService for why that is
+     * COD-only today.
+     *
+     * Rows also carry `itemImages`: a capped preview of what is in the parcel,
+     * so a queue is scannable by sight rather than by reading titles.
+     */
+    private async _enrichShipmentPage(page: Page<IShipment>, agentId?: string): Promise<Page<any>> {
         if (page.data.length === 0) return { data: [], meta: page.meta };
 
         const orderIds = [...new Set(page.data.map(s => s.order_id.toString()))];
+        // `items` and `delivery_address` are needed for the per-row pickup and
+        // drop-off; `payment_method`/`total_amount`/`currency` for the money.
         const orders = await OrderModel.find({ _id: { $in: orderIds } })
-            .select('order_number vendor_id customer_id')
+            .select('order_number vendor_id customer_id items delivery_address payment_method total_amount currency')
             .lean()
             .exec();
         const orderMap = new Map(orders.map((o: any) => [o._id.toString(), o]));
 
         const vendorIds = [...new Set(orders.map((o: any) => o.vendor_id.toString()))];
         const customerIds = [...new Set(orders.map((o: any) => o.customer_id.toString()))];
+        const agencyIds = [...new Set(page.data.map(s => s.agency_id.toString()))];
 
-        const [vendorMap, customerMap] = await Promise.all([
+        const [vendorMap, customerMap, hqMap, earningMap] = await Promise.all([
             this._batchResolveVendorNames(vendorIds),
             this._batchResolveCustomerNames(customerIds),
+            // Storage-based items are collected from the agency's own HQ, which
+            // is resolved live rather than snapshotted onto the order.
+            this.magazinRepo.findHqAddressesByAgencyIds(agencyIds),
+            agentId
+                ? this.earningsQuotes.quoteForShipments(page.data, orderMap as any, agentId)
+                : Promise.resolve(new Map<string, AgentEarningQuoteResult>()),
         ]);
+
+        // Legacy orders predate `order.delivery_address`; those rows fall back
+        // to the customer's current default saved address, so the saved list has
+        // to come along on the customer lookup.
+        const customerAddressMap = await this._batchResolveCustomerAddresses(
+            orders.filter((o: any) => !o.delivery_address).map((o: any) => o.customer_id.toString())
+        );
+
+        // Item thumbnails for every row in one pass — see SHIPMENT_LIST_IMAGE_LIMIT.
+        const refsByShipment = new Map(
+            page.data.map(s => [
+                (s._id as Types.ObjectId).toString(),
+                this._imageRefsFor(s, orderMap.get(s.order_id.toString())),
+            ])
+        );
+        const imageMap = await resolveProductImages(
+            [...refsByShipment.values()].flat(),
+            this.fileRepository,
+            this.storageProvider
+        );
 
         const data = page.data.map(shipment => {
             const order = orderMap.get(shipment.order_id.toString());
             const vendor = order ? vendorMap.get(order.vendor_id.toString()) : null;
             const customer = order ? customerMap.get(order.customer_id.toString()) : null;
+            const earning = earningMap.get((shipment._id as Types.ObjectId).toString());
 
             return {
                 ...this.toSummary(shipment),
@@ -204,10 +304,319 @@ export class ShipmentService {
                 vendor: vendor ?? null,
                 customer: customer ?? null,
                 itemCount: shipment.items.length,
+                itemImages: this._previewImages(
+                    refsByShipment.get((shipment._id as Types.ObjectId).toString()) ?? [],
+                    imageMap
+                ),
+                pickup: this._resolvePickup(shipment, order, hqMap),
+                deliveryAddress: this._resolveDeliveryAddress(
+                    order,
+                    order ? customerAddressMap.get(order.customer_id.toString()) : null
+                ),
+                ...(agentId
+                    ? {
+                          earning: earning?.earning ?? null,
+                          earningUnavailable: earning?.earningUnavailable ?? null,
+                      }
+                    : {}),
             };
         });
 
         return { data, meta: page.meta };
+    }
+
+    /**
+     * The (product, variant) pairs whose pictures this shipment needs.
+     *
+     * The variant is not on the shipment — a shipment item carries `product_id`
+     * and a reference back to the order item, and it is the order item that
+     * records which variant was sold. So the pair can only be assembled by
+     * joining the two, exactly as the item views already do. A shipment item
+     * whose order snapshot is missing (a legacy row) still yields a ref: the
+     * resolver falls back to the product's own media.
+     */
+    private _imageRefsFor(shipment: IShipment, order: any): ProductImageRef[] {
+        const orderItemsById = new Map<string, any>(
+            (order?.items ?? []).map((i: any) => [i._id.toString(), i])
+        );
+        return shipment.items.map(si => ({
+            productId: si.product_id.toString(),
+            variantId: orderItemsById.get(si.order_item_id.toString())?.variant_id?.toString() ?? null,
+        }));
+    }
+
+    /**
+     * A list row's thumbnail stack: the shipment's item images, deduplicated by
+     * file (two variants of one product share a cover shot) and capped.
+     */
+    private _previewImages(refs: ProductImageRef[], imageMap: Map<string, FileDetail[]>): FileDetail[] {
+        const seen = new Set<string>();
+        const images: FileDetail[] = [];
+        for (const ref of refs) {
+            // One thumbnail per item — the gallery belongs to the detail view.
+            const image = imageMap.get(productImageKey(ref.productId, ref.variantId))?.[0];
+            if (!image || seen.has(image.id)) continue;
+            seen.add(image.id);
+            images.push(image);
+            if (images.length === SHIPMENT_LIST_IMAGE_LIMIT) break;
+        }
+        return images;
+    }
+
+    /**
+     * The pickup → drop-off route for one of the agent's own shipments, for
+     * drawing the delivery on a map.
+     *
+     * Road-network geometry from geo-tracker when it is reachable
+     * (`source: 'road'`), otherwise the straight line between the endpoints
+     * (`source: 'straight'`) with a haversine distance and no duration. Never
+     * throws on a geo-tracker problem: geo-tracker is off the critical path by
+     * contract, and a missing polyline must not cost the agent their address.
+     *
+     * When either endpoint has no coordinates — a legacy order with no
+     * `delivery_address`, or a vendor address that was never geocoded — the
+     * response is still 200 with `source: 'unavailable'` and a `reason`, since
+     * "this shipment cannot be drawn" is an answer, not a failure.
+     */
+    async getRouteForAgent(agentId: string, shipmentId: string): Promise<any> {
+        const shipment = await this.shipmentRepo.findByIdAndAgent(shipmentId, agentId);
+        if (!shipment) {
+            throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+        }
+
+        const order = await OrderModel.findById(shipment.order_id)
+            .select('customer_id items delivery_address')
+            .lean()
+            .exec() as any;
+        if (!order) {
+            throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
+        }
+
+        const hqMap = await this.magazinRepo.findHqAddressesByAgencyIds([shipment.agency_id.toString()]);
+        const pickups = this._resolveAllPickups(shipment, order, hqMap);
+        const origin = pickups[0] ?? null;
+        const waypoints = pickups.slice(1);
+
+        const fallbackSaved = order.delivery_address
+            ? null
+            : (await this._batchResolveCustomerAddresses([order.customer_id.toString()])).get(order.customer_id.toString());
+        const destination = this._resolveDeliveryAddress(order, fallbackSaved);
+
+        const base = { origin, destination, waypoints };
+
+        if (!origin?.coordinates) {
+            return { ...base, source: 'unavailable', reason: 'missing_pickup_coordinates', distanceMeters: null, durationSeconds: null, geometry: [] };
+        }
+        if (!destination?.coordinates) {
+            return { ...base, source: 'unavailable', reason: 'missing_delivery_coordinates', distanceMeters: null, durationSeconds: null, geometry: [] };
+        }
+
+        const toPoint = (a: AddressDetail): IGeoPoint => ({
+            type: 'Point',
+            coordinates: [a.coordinates!.lng, a.coordinates!.lat],
+        });
+        const viaPoints = waypoints.filter(w => w?.coordinates).map(w => toPoint(w!));
+
+        const road = await geoRoutingClient.route(toPoint(origin), toPoint(destination), viaPoints);
+        if (road) {
+            return { ...base, source: 'road', reason: null, ...road };
+        }
+
+        // Straight-line fallback: the endpoints in order, and the great-circle
+        // distance through any intermediate pickups.
+        const line = [origin, ...waypoints.filter(w => w?.coordinates), destination] as AddressDetail[];
+        let distanceMeters = 0;
+        for (let i = 1; i < line.length; i++) {
+            distanceMeters += haversineKm(toPoint(line[i - 1]), toPoint(line[i])) * 1000;
+        }
+
+        return {
+            ...base,
+            source: 'straight',
+            reason: null,
+            distanceMeters: Math.round(distanceMeters),
+            // Unknown without a road network — a straight-line ETA would be a
+            // guess dressed as a number.
+            durationSeconds: null,
+            geometry: line.map(a => ({ lat: a.coordinates!.lat, lng: a.coordinates!.lng })),
+        };
+    }
+
+    /**
+     * The decision context for a set of shipments — items, vendor, pickup and
+     * drop-off — keyed by shipment id.
+     *
+     * Exists so the ASSIGNMENT module can show an agent what they are being
+     * offered without reimplementing any of this. An offer references a shipment
+     * the agent cannot yet read (`findByIdAndAgent` is scoped on `agent_id`,
+     * still null before acceptance), so the offer list has to assemble the same
+     * view from the same rules — and it must be the same rules, or the job an
+     * agent accepts is not the job they were shown.
+     *
+     * `ordersById` is supplied by the caller (it has already loaded the orders),
+     * keyed by order id string.
+     */
+    async buildShipmentContext(
+        shipments: IShipment[],
+        ordersById: Map<string, any>
+    ): Promise<Map<string, { items: any[]; vendor: any; pickup: any; deliveryAddress: AddressDetail | null }>> {
+        const result = new Map<string, { items: any[]; vendor: any; pickup: any; deliveryAddress: AddressDetail | null }>();
+        if (shipments.length === 0) return result;
+
+        const orders = [...ordersById.values()];
+        const agencyIds = [...new Set(shipments.map(s => s.agency_id.toString()))];
+        const vendorIds = [...new Set(orders.map((o: any) => o.vendor_id?.toString()).filter(Boolean))];
+
+        const [hqMap, vendorMap, customerAddressMap, imageMap] = await Promise.all([
+            this.magazinRepo.findHqAddressesByAgencyIds(agencyIds),
+            this._batchResolveVendorNames(vendorIds),
+            this._batchResolveCustomerAddresses(
+                orders.filter((o: any) => !o.delivery_address).map((o: any) => o.customer_id.toString())
+            ),
+            resolveProductImages(
+                shipments.flatMap(s => this._imageRefsFor(s, ordersById.get(s.order_id.toString()))),
+                this.fileRepository,
+                this.storageProvider
+            ),
+        ]);
+
+        for (const shipment of shipments) {
+            const order = ordersById.get(shipment.order_id.toString());
+            const orderItemsById = new Map<string, any>(
+                (order?.items ?? []).map((i: any) => [i._id.toString(), i])
+            );
+
+            result.set((shipment._id as Types.ObjectId).toString(), {
+                items: shipment.items.map(si => {
+                    const orderItem = orderItemsById.get(si.order_item_id.toString());
+                    return {
+                        productId: si.product_id.toString(),
+                        quantity: si.quantity,
+                        title: orderItem?.title ?? null,
+                        variantTitle: orderItem?.variant_title ?? null,
+                        // What it looks like — the deciding detail for an agent
+                        // judging an offer they cannot open the shipment for.
+                        // The thumbnail only; the full gallery is on the detail.
+                        image:
+                            imageMap.get(
+                                productImageKey(si.product_id.toString(), orderItem?.variant_id?.toString() ?? null)
+                            )?.[0] ?? null,
+                    };
+                }),
+                vendor: order ? (vendorMap.get(order.vendor_id.toString()) ?? null) : null,
+                pickup: this._resolvePickup(shipment, order, hqMap),
+                deliveryAddress: this._resolveDeliveryAddress(
+                    order,
+                    order ? customerAddressMap.get(order.customer_id.toString()) : null
+                ),
+            });
+        }
+
+        return result;
+    }
+
+    /**
+     * Where this shipment's agent physically collects the parcel, and how many
+     * distinct pickup points it has.
+     *
+     * Precedence matters: after an agent→agent reassignment the replacement
+     * collects from `handover.pickup` (the previous agent's location, the
+     * agency's counter, …) and NOT from the vendor address the order snapshot
+     * still names. Getting that order wrong sends the agent to the wrong place.
+     *
+     * A shipment can legitimately have several pickups — one vendor with two
+     * business addresses, or a mix of vendor-collected and agency-stored items —
+     * so `count` reports that and `mode: 'mixed'` flags it. The detail view
+     * keeps the full per-item breakdown; this is the summary.
+     */
+    private _resolvePickup(
+        shipment: IShipment,
+        order: any,
+        hqMap: Map<string, any>
+    ): { address: AddressDetail | null; mode: 'pickup_based' | 'storage_based' | 'mixed' | null; count: number } {
+        const resolved = this._resolvePickupEntries(shipment, order, hqMap);
+        if (resolved.length === 0) return { address: null, mode: null, count: 0 };
+        const modes = new Set(resolved.map(r => r.mode));
+        return {
+            address: resolved[0].address,
+            mode: modes.size > 1 ? 'mixed' : resolved[0].mode,
+            count: resolved.length,
+        };
+    }
+
+    /** Every distinct pickup address for a shipment, in collection order. */
+    private _resolveAllPickups(shipment: IShipment, order: any, hqMap: Map<string, any>): Array<AddressDetail | null> {
+        return this._resolvePickupEntries(shipment, order, hqMap).map(r => r.address);
+    }
+
+    /**
+     * The shipment's distinct pickup points, deduped by what the agent would
+     * actually drive to.
+     *
+     * Precedence matters: after an agent→agent reassignment the replacement
+     * collects from `handover.pickup` (the previous agent's location, the
+     * agency's counter, …) and NOT from the vendor address the order snapshot
+     * still names. Getting that order wrong sends the agent to the wrong place.
+     */
+    private _resolvePickupEntries(
+        shipment: IShipment,
+        order: any,
+        hqMap: Map<string, any>
+    ): Array<{ address: AddressDetail | null; mode: 'pickup_based' | 'storage_based' }> {
+        if (shipment.handover?.pickup) {
+            return [{ address: fromHandoverPickup(shipment.handover.pickup), mode: 'pickup_based' }];
+        }
+
+        const agencyHq = hqMap.get(shipment.agency_id.toString()) ?? null;
+        const orderItemsById = new Map<string, any>(
+            (order?.items ?? []).map((i: any) => [i._id.toString(), i])
+        );
+
+        const resolved: Array<{ address: AddressDetail | null; mode: 'pickup_based' | 'storage_based' }> = [];
+        const seen = new Set<string>();
+        for (const item of shipment.items) {
+            const pl = orderItemsById.get(item.order_item_id.toString())?.delivery?.pickup_location;
+            if (!pl) continue; // legacy order item predating the pickup snapshot
+            const entry =
+                pl.source === 'agency_storage'
+                    ? { address: fromHqAddress(agencyHq), mode: 'storage_based' as const }
+                    : { address: fromPickupSnapshot(pl.address_snapshot), mode: 'pickup_based' as const };
+            const key = `${entry.mode}:${entry.address?.formattedAddress ?? ''}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            resolved.push(entry);
+        }
+        return resolved;
+    }
+
+    /**
+     * The drop-off for a shipment: the order's geocoded checkout snapshot,
+     * falling back to the customer's current default saved address.
+     *
+     * The snapshot must win. It is the address the customer actually ordered
+     * to; their saved default can be edited or replaced afterwards, and reading
+     * it live would silently re-route an in-flight delivery. The fallback exists
+     * only for orders created before `order.delivery_address` existed.
+     */
+    private _resolveDeliveryAddress(order: any, fallbackSavedAddress: any): AddressDetail | null {
+        if (order?.delivery_address) return toAddressDetail(order.delivery_address);
+        return fromSavedAddress(fallbackSavedAddress);
+    }
+
+    /** Batch-resolve customer ids → their default saved address (legacy fallback only). */
+    private async _batchResolveCustomerAddresses(customerIds: string[]): Promise<Map<string, any>> {
+        const ids = [...new Set(customerIds)];
+        if (ids.length === 0) return new Map();
+        const customers = await CustomerModel.find({ _id: { $in: ids } })
+            .select('saved_addresses')
+            .lean()
+            .exec() as any[];
+        const map = new Map<string, any>();
+        for (const c of customers) {
+            const addr = c.saved_addresses?.find((a: any) => a.is_default) ?? c.saved_addresses?.[0] ?? null;
+            if (addr) map.set(c._id.toString(), addr);
+        }
+        return map;
     }
 
     /**
@@ -235,11 +644,14 @@ export class ShipmentService {
         if (!shipment) {
             throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
         }
-        return this._buildDetail(shipment);
+        return this._buildDetail(shipment, agentId);
     }
 
-    /** Shared detail assembly for the agency and agent views. */
-    private async _buildDetail(shipment: IShipment): Promise<any> {
+    /**
+     * Shared detail assembly for the agency and agent views. `agentId` is set
+     * only on the agent's own view and adds their estimated earning.
+     */
+    private async _buildDetail(shipment: IShipment, agentId?: string): Promise<any> {
         const agencyId = shipment.agency_id.toString();
 
         const order = await OrderModel.findById(shipment.order_id).lean().exec();
@@ -266,16 +678,28 @@ export class ShipmentService {
         // a shipment can carry several of the vendor's products, each configured
         // differently. The agency's own HQ address is still resolved live (not
         // snapshotted) since it isn't vendor/product-specific.
-        const agencyHq = agency?.headquarters_addresses?.[0] ?? null;
+        // HQ addresses live on the Magazin now.
+        const agencyMagazin = agency ? await this.magazinRepo.findByAgencyIdOrNull(agency._id.toString()) : null;
+        const agencyHq = agencyMagazin?.headquarters_addresses?.[0] ?? null;
         const orderItemsById = new Map((order as any).items.map((i: any) => [i._id.toString(), i]));
+        // What each item looks like: the variant's own media, else the product's.
+        // Resolved live rather than from the order snapshot — see the resolver.
+        // The detail carries EVERY image (thumbnail first): this is the screen an
+        // agent stares at while matching a parcel on a counter to their job, and
+        // one angle is often not enough to tell two boxes apart.
+        const imageMap = await resolveProductImages(
+            this._imageRefsFor(shipment, order),
+            this.fileRepository,
+            this.storageProvider
+        );
         const items = shipment.items.map(si => {
             const orderItem: any = orderItemsById.get(si.order_item_id.toString());
             const pl = orderItem?.delivery?.pickup_location;
             const pickupLocation = !pl
                 ? null // legacy order item predating this feature
                 : pl.source === 'agency_storage'
-                    ? { mode: 'storage_based' as const, alreadyInYourStorage: true, address: agencyHq }
-                    : { mode: 'pickup_based' as const, alreadyInYourStorage: false, address: pl.address_snapshot ?? null };
+                    ? { mode: 'storage_based' as const, alreadyInYourStorage: true, address: fromHqAddress(agencyHq) }
+                    : { mode: 'pickup_based' as const, alreadyInYourStorage: false, address: fromPickupSnapshot(pl.address_snapshot) };
             return {
                 orderItemId: si.order_item_id.toString(),
                 productId: si.product_id.toString(),
@@ -283,11 +707,25 @@ export class ShipmentService {
                 title: orderItem?.title ?? null,
                 sku: orderItem?.sku ?? null,
                 variantTitle: orderItem?.variant_title ?? null,
+                // Every image, thumbnail first — `images[0]` is exactly the
+                // `image` the list and offer views show for the same item.
+                images:
+                    imageMap.get(
+                        productImageKey(si.product_id.toString(), orderItem?.variant_id?.toString() ?? null)
+                    ) ?? [],
                 pickupLocation,
             };
         });
 
-        const defaultAddr = customer?.saved_addresses?.find((a: any) => a.is_default) ?? customer?.saved_addresses?.[0] ?? null;
+        // Drop-off: the geocoded snapshot taken at checkout is authoritative —
+        // it is the address the customer ordered to. Their saved default is only
+        // a fallback for orders predating `order.delivery_address`; reading it
+        // live (as this once did) silently re-routes an in-flight delivery when
+        // the customer edits their profile, and throws away the coordinates.
+        const fallbackSavedAddr = (order as any).delivery_address
+            ? null
+            : customer?.saved_addresses?.find((a: any) => a.is_default) ?? customer?.saved_addresses?.[0] ?? null;
+        const deliveryAddress = this._resolveDeliveryAddress(order, fallbackSavedAddr);
 
         // Resolve the agent's avatar File reference into a FileDetail object.
         const agentAvatar = await resolveFileDetail(agent?.avatar_file_id?.toString(), this.fileRepository, this.storageProvider);
@@ -305,12 +743,28 @@ export class ShipmentService {
             ? await cashCollectionService.getCodSummaryForShipment((shipment._id as Types.ObjectId).toString())
             : null;
 
+        // What this delivery pays the agent. COD-only today — see
+        // EarningsQuoteService. Absent entirely from the agency's view.
+        const earning = agentId
+            ? await this.earningsQuotes.quoteForShipment(shipment, order as any, agentId)
+            : null;
+
         return {
             ...this.toSummary(shipment),
             orderId: shipment.order_id.toString(),
             orderNumber: (order as any).order_number,
             paymentMethod: (order as any).payment_method ?? 'online',
             cod,
+            // The value of the WHOLE order. Distinct from `cod.expectedAmount`,
+            // which is only this shipment's cash: an order can split into
+            // several shipments across agencies. Do not conflate them.
+            orderValue: {
+                total: (order as any).total_amount ?? null,
+                currency: (order as any).currency ?? null,
+            },
+            ...(agentId
+                ? { earning: earning?.earning ?? null, earningUnavailable: earning?.earningUnavailable ?? null }
+                : {}),
             items,
             vendor: vendor ? { id: vendor._id.toString(), businessName: vendorBusinessName ?? '', phone: vendor.phone ?? null, email: vendor.email ?? null } : null,
             customer: customer ? {
@@ -318,20 +772,25 @@ export class ShipmentService {
                 name: customer.name,
                 phone: customer.phone ?? null,
                 email: customer.email ?? null,
-                deliveryAddress: defaultAddr ? {
-                    label: defaultAddr.label,
-                    addressLine1: defaultAddr.address_line1,
-                    addressLine2: defaultAddr.address_line2,
-                    city: defaultAddr.city,
-                    state: defaultAddr.state,
-                    country: defaultAddr.country,
-                } : null,
+                deliveryAddress,
             } : null,
+            // The single pickup an agent navigates to (handover point after a
+            // reassignment, else the item snapshot), summarising `items[].pickupLocation`.
+            pickup: this._resolvePickup(
+                shipment,
+                order,
+                new Map(agency ? [[agency._id.toString(), agencyHq]] : [])
+            ),
             agent: agent ? { id: agent._id.toString(), name: agent.name, phone: agent.phone ?? null, avatar: agentAvatar } : null,
             // Reassignment handover: where the (replacement) agent collects this
             // shipment, when it was reassigned. Null for a first-assigned shipment.
             handover: shipment.handover ? {
-                pickup: shipment.handover.pickup,
+                pickup: {
+                    source: shipment.handover.pickup.source,
+                    address: fromHandoverPickup(shipment.handover.pickup),
+                    note: shipment.handover.pickup.note ?? null,
+                    isFallback: shipment.handover.pickup.is_fallback ?? false,
+                },
                 fromAgentId: shipment.handover.from_agent_id?.toString() ?? null,
                 fromStatus: shipment.handover.from_status,
                 reassignedAt: shipment.handover.reassigned_at,
@@ -341,6 +800,18 @@ export class ShipmentService {
                 changedAt: h.changed_at,
                 changedByUserId: h.changed_by_user_id?.toString() ?? null,
                 changedByRole: h.changed_by_role,
+            })),
+            // Append-only log of agent-reported non-delivery outcomes, oldest
+            // first — two `customer_unreachable` attempts then a return is a
+            // different story from one. Empty when every failure/return on this
+            // shipment was driven by the agency (that endpoint records no reason).
+            deliveryFailures: (shipment.delivery_failures ?? []).map(f => ({
+                status: f.status,
+                reason: f.reason ?? null,
+                note: f.note ?? null,
+                fromStatus: f.from_status,
+                reportedByAgentId: f.reported_by_agent_id?.toString() ?? null,
+                reportedAt: f.reported_at,
             })),
             rejection: shipment.rejection ? {
                 reason: shipment.rejection.reason,
@@ -363,9 +834,14 @@ export class ShipmentService {
     /**
      * Agency-driven status transition (requirement #10): picked_up, in_transit,
      * agent_delivered, or a failed→in_transit/returned retry. Validated against
-     * AGENCY_TRIGGERABLE_TRANSITIONS. Mirrors the new status onto every order
-     * item riding this shipment and recomputes the order's fulfillment_status,
-     * all inside one transaction.
+     * TRIGGERABLE_TRANSITIONS. Mirrors the new status onto every order item
+     * riding this shipment and recomputes the order's fulfillment_status, all
+     * inside one transaction.
+     *
+     * A thin scoping wrapper over `_transitionStatus`, which the agent path
+     * shares. The signature is unchanged from before agents could transition,
+     * and the agency never supplies a failure reason — see
+     * `updateStatusByAgent` for why the two are separate entry points.
      */
     async updateStatus(agencyId: string, shipmentId: string, newStatus: ShipmentStatus, actorUserId: string): Promise<any> {
         const shipment = await this.shipmentRepo.findByIdAndAgency(shipmentId, agencyId);
@@ -373,7 +849,73 @@ export class ShipmentService {
             throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
         }
 
-        const allowed = AGENCY_TRIGGERABLE_TRANSITIONS[shipment.status] ?? [];
+        return await this._transitionStatus(
+            shipment,
+            newStatus,
+            { role: 'agency', agencyId, userId: actorUserId },
+            null
+        );
+    }
+
+    /**
+     * Agent-driven status transition on the agent's OWN shipment: picked_up,
+     * in_transit, agent_delivered, or a failed→in_transit/returned retry.
+     * Validated against the SAME `TRIGGERABLE_TRANSITIONS` the agency uses — an
+     * agent has the same rights over the lifecycle whether the shipment was
+     * assigned to them first or handed over by a reassignment, so a replacement
+     * agent records their own pickup out of `handing_over` too.
+     *
+     * A SEPARATE entry point rather than an actor parameter on `updateStatus`:
+     * the agent path takes a `failure` argument that must never be reachable
+     * from the agency call (the agency endpoint is deliberately reason-less),
+     * and a shared optional parameter would be silently acceptable there.
+     *
+     * Ownership is enforced at the query level — a shipment that is not this
+     * agent's reads as not-found, so existence is never leaked (404, not 403).
+     */
+    async updateStatusByAgent(
+        agentId: string,
+        shipmentId: string,
+        newStatus: ShipmentStatus,
+        actorUserId: string,
+        failure: AgentFailureReport | null
+    ): Promise<any> {
+        const shipment = await this.shipmentRepo.findByIdAndAgent(shipmentId, agentId);
+        if (!shipment) {
+            throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+        }
+
+        return await this._transitionStatus(
+            shipment,
+            newStatus,
+            { role: 'agent', agentId, userId: actorUserId },
+            // Belt and braces over the Zod schema: a reason on a status that
+            // records none is dropped rather than persisted where nothing reads it.
+            FAILURE_REPORTING_STATUSES.includes(newStatus) ? failure : null
+        );
+    }
+
+    /**
+     * The shared transition core, driven by an already ownership-scoped shipment
+     * and a discriminated actor. Everything below this line is identical for the
+     * agency and the agent — only the transition map, the recorded actor role,
+     * and whether a failure reason is captured differ.
+     */
+    private async _transitionStatus(
+        shipment: IShipment,
+        newStatus: ShipmentStatus,
+        actor: ShipmentStatusActor,
+        failure: AgentFailureReport | null
+    ): Promise<any> {
+        const shipmentId = shipment._id.toString();
+        // The status the transition was validated against — and therefore the
+        // `from` the compare-and-set below must still find on the document.
+        const fromStatus = shipment.status;
+
+        // One map for both actors — see TRIGGERABLE_TRANSITIONS. What differs
+        // between the agency and the agent is ownership scoping (already applied
+        // by the caller) and the recorded role, never the rules.
+        const allowed = TRIGGERABLE_TRANSITIONS[shipment.status] ?? [];
         if (!allowed.includes(newStatus)) {
             throw createAppError(ERROR_CODES.SHIPMENT_INVALID_STATUS_TRANSITION, 400, undefined, {
                 from: shipment.status,
@@ -394,6 +936,10 @@ export class ShipmentService {
         // acceptance, so its absence means no agent has taken the job. (This was
         // previously a COD-only guard for cash accountability; it now holds for
         // prepaid too — a shipment must not leave the agency unaccepted.)
+        //
+        // Unreachable on the AGENT path (findByIdAndAgent returning a document
+        // already implies `agent_id`), load-bearing on the agency one. Do not
+        // "simplify" it away after reading only the agent flow.
         if (newStatus === 'picked_up' && !shipment.agent_id) {
             throw createAppError(ERROR_CODES.SHIPMENT_AGENT_NOT_ASSIGNED, 422,
                 'An agent must accept this shipment before it can be picked up');
@@ -415,13 +961,64 @@ export class ShipmentService {
             }
         }
 
+        // The non-delivery outcome this agent reported, persisted in the same
+        // atomic write as the transition. Null on the agency path and on any
+        // status that records no reason.
+        const recordedFailure: IShipmentDeliveryFailure | null =
+            actor.role === 'agent' && failure && FAILURE_REPORTING_STATUSES.includes(newStatus)
+                ? {
+                    status: newStatus as 'failed' | 'returned',
+                    reason: failure.reason,
+                    note: failure.note,
+                    from_status: fromStatus,
+                    reported_by_agent_id: new Types.ObjectId(actor.agentId),
+                    reported_by_user_id: actor.userId ? new Types.ObjectId(actor.userId) : null,
+                    reported_at: new Date(),
+                }
+                : null;
+
         // Captured inside the transaction, used for the post-commit customer
         // notification (the plaintext code never lives in the txn scope alone).
         // `code` is null when the collection already existed — nothing to send.
         let issuedCode: { collection: ICashCollection; code: string | null } | null = null;
+        // The document the guarded write returned — the authoritative post-state
+        // of THIS transition. Every side effect below reads it rather than a
+        // fresh findById, so a concurrent transition landing between commit and
+        // read can never make this call emit verdicts for a status it did not set.
+        let committed: IShipment | null = null;
 
-        await transactionManager.runInTransaction(async (session) => {
-            await this.shipmentRepo.applyStatusChange(shipmentId, newStatus, { userId: actorUserId, role: 'agency' }, session);
+        // ...WithRetry, not runInTransaction: the compare-and-set below is a
+        // contended write now that two actors drive the same document (the same
+        // reasoning as releaseForAgentCancel). A CAS miss is not transient, so it
+        // aborts and rethrows rather than spinning.
+        await transactionManager.runInTransactionWithRetry(async (session) => {
+            // Reset per attempt — a value from an aborted attempt must not leak
+            // into the post-commit notify below.
+            issuedCode = null;
+
+            committed = await this.shipmentRepo.applyStatusChangeIfCurrent({
+                shipmentId,
+                fromStatus,
+                toStatus: newStatus,
+                actor: { userId: actor.userId, role: actor.role },
+                agencyId: actor.role === 'agency' ? actor.agencyId : null,
+                agentId: actor.role === 'agent' ? actor.agentId : null,
+                failure: recordedFailure,
+            }, session);
+
+            if (!committed) {
+                // Someone else moved the shipment between the read that
+                // validated this transition and this write — the other of
+                // agency/agent got there first. Fail rather than clobber: the
+                // post-commit block below (earnings split, capacity release, COD
+                // return handling) would otherwise run for a status nobody is in.
+                throw createAppError(ERROR_CODES.SHIPMENT_STATUS_CONFLICT, 409,
+                    'This shipment was updated by someone else — reload it and try again', {
+                    expectedStatus: fromStatus,
+                    to: newStatus,
+                });
+            }
+
             await this.orderRepo.setItemDeliveryStatusByShipment(shipmentId, newStatus, session);
             await this.aggregationService.recomputeFulfillmentStatus(orderId, session);
 
@@ -447,7 +1044,7 @@ export class ShipmentService {
             await cashCollectionService.notifyCodeIssued(order, picked.collection, picked.code);
         }
 
-        const updated = await this.shipmentRepo.findById(shipmentId);
+        const updated = committed as IShipment | null;
         this._emitTrackingStatusChanged(updated!, order.customer_id?.toString() ?? null);
         // A returned shipment has left the agent's active set — give the capacity
         // slot reserved on acceptance back. ('failed' stays active: the agent is
@@ -457,10 +1054,50 @@ export class ShipmentService {
         }
         // Phase 6: record the agent-action audit for a pickup/delivery/return/
         // cancel transition (fire-and-forget; a no-op for other statuses or when
-        // the shipment carries no agent).
+        // the shipment carries no agent). `actor.role` is the audit's actorRole —
+        // geo-tracker stores it as free text and already receives 'agent' from
+        // the COD collect path, so agent-driven transitions need no change there.
         void agentActionAuditService
-            .emitShipmentTransition(updated!, 'agency')
+            .emitShipmentTransition(updated!, actor.role)
             .catch((err) => console.error('[ShipmentService] agent-action audit emit failed:', err));
+
+        // Tell the agency its agent moved the shipment. Agent-driven only — an
+        // agency does not need to be notified of its own dashboard action — and
+        // only for the outcomes worth pushing (in_transit is a routine progress
+        // ping; see AGENT_TRANSITIONS_NOTIFYING_AGENCY).
+        if (actor.role === 'agent' && AGENT_TRANSITIONS_NOTIFYING_AGENCY.includes(newStatus)) {
+            this._emitAgentStatusChanged(
+                updated!,
+                actor.agentId,
+                fromStatus,
+                (order as any).order_number ?? null,
+                recordedFailure
+            );
+        }
+
+        // The delivery run is over: divide the fee the vendor was charged at
+        // payment between this agency and the agent who actually made it. THIS is
+        // what pays an agent on an online-paid order — COD pays them off the cash
+        // collection instead, so it is excluded here.
+        //
+        // Hooked at `agent_delivered` rather than the customer's confirmation so
+        // an agent learns what they earned on finishing the job; the rows are
+        // created `held` with no maturity, so nothing becomes withdrawable until
+        // the ORDER completes and the hold window elapses. `returned` splits too:
+        // the run happened, and the agency's rto_fee is what it earned.
+        //
+        // Post-commit and best-effort, like the emits above — an earnings failure
+        // must never block a delivery. The release worker's recovery stage
+        // re-splits anything that never landed.
+        if (!isCod && (newStatus === 'agent_delivered' || newStatus === 'returned')) {
+            // `agent_delivered` IS the successful outcome here — it is the point
+            // the run ended, and the later customer confirmation only matures
+            // what this creates.
+            const outcome = newStatus === 'returned' ? 'returned' : 'delivered';
+            void earningsSplitService
+                .splitShipmentDelivery(order, updated!, outcome)
+                .catch((err) => console.error('[ShipmentService] delivery earnings split failed:', err));
+        }
 
         // A COD agent who has just announced arrival is not finished: the parcel
         // is handed over against the customer's code, and only that code marks it
@@ -475,6 +1112,18 @@ export class ShipmentService {
             ...(requiresDeliveryCode
                 ? { nextAction: 'Ask the customer for their delivery code and submit it to record the cash and complete the delivery.' }
                 : {}),
+            // Echo of the entry appended to `delivery_failures`, or null. Always
+            // present (null on the agency path) so both status endpoints return
+            // one shape.
+            recordedFailure: recordedFailure
+                ? {
+                    status: recordedFailure.status,
+                    reason: recordedFailure.reason,
+                    note: recordedFailure.note,
+                    fromStatus: recordedFailure.from_status,
+                    reportedAt: recordedFailure.reported_at,
+                }
+                : null,
         };
     }
 
@@ -880,6 +1529,42 @@ export class ShipmentService {
                 note,
             },
         }).catch((err) => console.error('[ShipmentService] agent_cancelled emit failed:', err));
+    }
+
+    /**
+     * Fire-and-forget notify the AGENCY that its agent moved one of its
+     * shipments (POST /api/agent/shipments/:id/status). Emitted only for the
+     * transitions worth pushing — see AGENT_TRANSITIONS_NOTIFYING_AGENCY, which
+     * excludes `in_transit`.
+     *
+     * Distinct from `shipment.status_changed`, which is the geo-tracker outbox
+     * feed and fires for every transition by every actor: this one exists purely
+     * so the agency notification stack has an agent-scoped event to render, and
+     * carries the reason so the notification can say WHY a delivery failed.
+     */
+    private _emitAgentStatusChanged(
+        shipment: IShipment,
+        agentId: string,
+        previousStatus: ShipmentStatus,
+        orderNumber: string | null,
+        failure: IShipmentDeliveryFailure | null
+    ): void {
+        void eventBus.publish('shipment.agent_status_changed', {
+            eventType: 'shipment.agent_status_changed',
+            aggregateId: shipment._id.toString(),
+            occurredAt: new Date(),
+            payload: {
+                shipmentId: shipment._id.toString(),
+                orderId: shipment.order_id.toString(),
+                orderNumber,
+                agencyId: shipment.agency_id.toString(),
+                agentId,
+                previousStatus,
+                status: shipment.status,
+                reason: failure?.reason ?? null,
+                note: failure?.note ?? null,
+            },
+        }).catch((err) => console.error('[ShipmentService] agent_status_changed emit failed:', err));
     }
 
     /**

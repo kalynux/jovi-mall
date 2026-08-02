@@ -24,6 +24,10 @@ control the tracking-allow flag, transfer an agent between agencies, and inspect
 | `PATCH` | `/admin/agents/:agentId/status` | Set account status (activate/suspend/…) |
 | `PUT` | `/admin/agents/:agentId/tracking-allow` | Enable/disable tracking-allow |
 | `GET` | `/admin/agents/:agentId/tracking-policy` | The tracking policy geo-tracker would see |
+| `PUT` | `/admin/agents/:agentId/kyc` | Set the KYC verdict — **required before the agent can be dispatched** |
+| `PUT` | `/admin/agents/:agentId/ban` | Ban or unban platform-wide |
+| `PUT` | `/admin/agents/:agentId/cod-threshold` | Set the agent's whole COD pool |
+| `GET` | `/admin/agents/:agentId/cod-allocation` | The pool, every contract's slice, and the headroom |
 | `GET` | `/admin/agents/:agentId/history` | Membership/lifecycle history |
 | `GET` | `/admin/agents/:agentId/eligibility?agencyId=` | Assignment-eligibility check for an agency |
 
@@ -83,7 +87,7 @@ able to pull an agent off a rival's roster.
       "availability": "online",
       "working_state": "available",
       "tracking": { "allowed": true },
-      "capacity": { "active_shipment_count": 1, "max_concurrent_shipments": 5 },
+      "capacity": { "active_shipment_count": 1, "max_active_shipments": 20 },
       "cod": { "max_threshold": 500000, "trust_score": 82 },
       "vehicle_info": { "vehicle_type": "bike", "color": "red" }
     },
@@ -157,6 +161,148 @@ service sees). Read-only.
 
 ---
 
+## PUT `/admin/agents/:agentId/kyc`
+
+**Purpose**: Record the KYC verdict for an agent.
+
+**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+
+> **This is what lets an agent work.** `kyc.status` starts at `unverified` and assignment
+> eligibility passes only on `verified` — so until an admin calls this, every offer the agent tries
+> to accept fails with `kyc_not_verified`, regardless of availability, capacity or tracking.
+
+### Request body
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `status` | string | ✅ | one of `unverified`, `pending`, `verified`, `rejected` |
+| `reference` | string \| null | ❌ | External provider reference, ≤200 chars — *clearable*. **Omit to leave the stored reference untouched**; send `null`/`""` to clear it |
+| `rejectionReason` | string \| null | ❌ | ≤300 chars. **Required when `status` is `rejected`** |
+
+Side effects: `verified_at` and `verified_by_user_id` are stamped only on `verified`;
+`rejection_reason` is persisted only on `rejected`; an `agent.kyc_status_changed` event is emitted.
+
+### Example request
+
+```json
+{ "status": "verified", "reference": "SUMSUB-8891" }
+```
+
+### Example success `200`
+
+```json
+{
+  "success": true,
+  "data": {
+    "agentId": "664agt...",
+    "kyc": {
+      "status": "verified",
+      "verified_at": "2026-07-29T10:00:00.000Z",
+      "verified_by_user_id": "664usr...",
+      "rejection_reason": null,
+      "reference": "SUMSUB-8891"
+    }
+  },
+  "message": "KYC set to verified."
+}
+```
+
+---
+
+## PUT `/admin/agents/:agentId/ban`
+
+**Purpose**: Ban or unban an agent platform-wide.
+
+**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+
+### Request body
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `banned` | boolean | ✅ | — |
+| `reason` | string \| null | ❌ | ≤300 chars. **Required when `banned` is `true`** |
+
+> **A ban is an override, not a cascade.** It does not walk the agent's contracts flipping each to
+> paused — that would be lossy, since un-banning could not know which were already paused. Every
+> gate consults the flag instead, so one field suppresses every agency at once and lifting it
+> restores exactly the prior state.
+>
+> The subtle consequence: an agency **can** still `reactivate` a contract while the ban is set, and
+> the contract will read `active` — but the agent stays unusable because every gate still refuses.
+> That is intended: the contract describes the agency relationship, the ban describes the
+> platform's.
+
+### Example request
+
+```json
+{ "banned": true, "reason": "Confirmed cash theft — case #4471" }
+```
+
+---
+
+## PUT `/admin/agents/:agentId/cod-threshold`
+
+**Purpose**: Set the agent's **whole COD pool** — the most cash they may carry across every agency.
+
+**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+
+### Request body
+
+| Field | Type | Required | Validation |
+|---|---|---|---|
+| `maxThreshold` | integer | ✅ | 0 – 5,000,000 (minor units) |
+
+> Bounded differently from a **contract's** threshold (`PATCH /agency/agents/:membershipId/cod-limit`,
+> 0 – 1,000,000). This is the pool; that is a slice of it. Lowering below what contracts already
+> hold is refused rather than silently over-committing them.
+>
+> The pool defaults to `0`, so a new agent can carry no COD at all until this is set.
+
+### Example success `200`
+
+Returns the same shape as `GET /admin/agents/:agentId/cod-allocation`.
+
+### Errors specific to this endpoint
+
+| `error.code` | Status | When |
+|---|---|---|
+| `AGENT_COD_THRESHOLD_OUT_OF_BOUNDS` | 422 | Outside 0–5,000,000. `details: { requested, min, max }` |
+| `AGENT_COD_THRESHOLD_BELOW_ALLOCATED` | 422 | Below the sum of the contracts' slices. `details: { requested, currentlyAllocated, shortfall, contracts[] }` — lower those first |
+
+---
+
+## GET `/admin/agents/:agentId/cod-allocation`
+
+**Purpose**: The agent's pool, each contract's slice of it, and the unallocated headroom. The view
+to consult before changing either level.
+
+**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+
+### Example success `200`
+
+```json
+{
+  "success": true,
+  "data": {
+    "agentId": "664agt...",
+    "maxThreshold": 500000,
+    "allocated": 350000,
+    "headroom": 150000,
+    "contracts": [
+      {
+        "contractId": "664ctr...",
+        "agencyId": "664agc...",
+        "status": "active",
+        "threshold": 200000,
+        "outstandingBalance": 45000
+      }
+    ]
+  }
+}
+```
+
+---
+
 ## GET `/admin/agents/:agentId/history`
 
 **Purpose**: Return the agent's append-only membership/lifecycle history.
@@ -168,8 +314,14 @@ service sees). Read-only.
 ## GET `/admin/agents/:agentId/eligibility`
 
 **Purpose**: Evaluate whether the agent is eligible for assignment **for a given agency**, reporting
-**every** failed rule at once (active · approved with the dispatching agency · online · tracking allowed
-· device location not disabled · under capacity).
+**every** failed rule at once (not banned · KYC verified · account active · holds an **active
+contract** with the dispatching agency · online · tracking allowed · device location not disabled ·
+under capacity).
+
+> The rule is named `approved` and its failure reason `membership_not_approved`, but it passes only
+> on an `active` contract — `observed.contractStatus` reports what was actually seen. Both names
+> predate the `approved` → `active` status rename and are kept because they are part of the wire
+> contract. See [agency/agent-roster.md](../agency/agent-roster.md#get-apiagencyagentsagentideligibility).
 
 **Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
 
@@ -207,6 +359,7 @@ service sees). Read-only.
 - [../tracking/agent-tracking-policy.md](../tracking/agent-tracking-policy.md)
 
 > **Refactor in flight.** A shared-pool COD / contract-status refactor is part-applied in the agent
-> domain; some newer agent/contract admin surfaces (threshold, contract terms, settlements, KYC/ban,
-> status-request inbox) are **not yet mounted**. The endpoints in this doc are the currently-reachable
-> admin agent surface. See `../../AGENT-CONTRACT-REFACTOR.md`.
+> domain. The admin surfaces it needed — KYC/ban, the agent COD pool and its allocation view — are
+> now mounted and documented above; contract terms, settlements and the status-request inbox landed
+> on the **agency** side ([../agency/agent-roster.md](../agency/agent-roster.md)). Still outstanding:
+> the trust-composite engine and the collection-rename migration. See `../../AGENT-CONTRACT-REFACTOR.md`.

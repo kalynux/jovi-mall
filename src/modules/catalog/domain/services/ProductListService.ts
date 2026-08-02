@@ -86,6 +86,7 @@ export class ProductListService {
             title: p.title,
             type: p.type,
             status: p.status,
+            mode: p.mode,
             category: p.category,
             fileIds: p.fileIds
                 .map(id => fileDetailById.get(id))

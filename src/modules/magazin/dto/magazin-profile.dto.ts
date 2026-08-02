@@ -1,9 +1,42 @@
 import mongoose from 'mongoose';
-import { IAgencyMagazin } from '../models/magazin.model';
+import { IAgencyMagazin, IAgencyHeadquartersAddress } from '../models/magazin.model';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
 import { IStorageProvider } from '../../../core/storage';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 import { resolveFileDetail } from '../../catalog/read-models/file-detail.resolver';
+import { toGeoAddress } from '../../../core/types/geo-address.types';
+import { MagazinHeadquartersAddressInput } from '../validators/magazin.validator';
+
+/**
+ * Normalise validated HQ input entries into their persistence shape: normalise
+ * `geo` (assign resolved_at, null-fill components) and DERIVE the legacy
+ * `location` GeoPoint from `geo.coordinates` so downstream readers (the
+ * auto-assignment distance factor) keep working while clients send only `geo`.
+ *
+ * `region` and `city` are derived the same way, from `geo.components` — the
+ * selected map result is the source of truth for where a place is. A value the
+ * client sent is used only as a fallback for what the geocode omits (Nominatim
+ * resolves no city for many rural/landmark results), never as an override, so a
+ * stale typed city can't contradict the pin. Both stay null when neither source
+ * has one; nothing downstream requires them.
+ */
+export function toPersistableHeadquarters(
+  entries: MagazinHeadquartersAddressInput[],
+): IAgencyHeadquartersAddress[] {
+  return entries.map((e) => {
+    const geo = e.geo ? toGeoAddress(e.geo) : null;
+    const location = geo ? geo.coordinates : (e.location ?? null);
+    return {
+      label: e.label,
+      region: geo?.components.region ?? e.region ?? null,
+      city: geo?.components.city ?? e.city ?? null,
+      address_description: e.address_description,
+      support_contact: { phone: e.support_contact.phone, email: e.support_contact.email ?? null },
+      location,
+      geo,
+    } as unknown as IAgencyHeadquartersAddress;
+  });
+}
 
 /**
  * Get Magazin Profile Response DTO
@@ -22,6 +55,10 @@ export interface GetMagazinProfileResponseDto {
   supportEmail?: string | null;
   supportPhone?: string | null;
   supportWhatsapp?: string | null;
+  /** Regions the agency serves (region keys of its country). */
+  coverageAreas: string[];
+  /** Physical / pickup locations; index 0 is the primary headquarters. */
+  headquartersAddresses: IAgencyHeadquartersAddress[];
   version: number; // For optimistic locking
   createdAt: Date;
   updatedAt: Date;
@@ -40,6 +77,9 @@ export interface UpdateMagazinProfileInputDto {
   supportEmail?: string | null;
   supportPhone?: string | null;
   supportWhatsapp?: string | null;
+  // Coverage/HQ are validated against the agency's country in the service layer.
+  coverage_areas?: string[];
+  headquarters_addresses?: MagazinHeadquartersAddressInput[];
   version: number; // REQUIRED for optimistic locking
 }
 
@@ -58,6 +98,8 @@ export class MagazinProfileMapper {
       supportEmail: magazin.support_email ?? null,
       supportPhone: magazin.support_phone ?? null,
       supportWhatsapp: magazin.support_whatsapp ?? null,
+      coverageAreas: magazin.coverage_areas ?? [],
+      headquartersAddresses: magazin.headquarters_addresses ?? [],
       version: magazin.version,
       createdAt: magazin.created_at,
       updatedAt: magazin.updated_at,

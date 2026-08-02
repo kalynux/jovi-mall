@@ -3,7 +3,7 @@
 
 import { IMapper } from "../../../../core/database/mapper.interface";
 import { IProduct } from "../../models";
-import { ProductSuspension, VectorisationStatus } from "../../models/product.model";
+import { ProductMode, ProductSuspension, VectorisationStatus } from "../../models/product.model";
 
 // Domain Entity (Simplified for now, matching IProduct structure but purely decoupled if needed later)
 // For Phase 3, we can reuse the interface logic or define a specific class. 
@@ -15,6 +15,8 @@ export interface Product {
   vendorId: string;
   type: 'physical' | 'digital' | 'service';
   status: 'draft' | 'active' | 'archived' | 'pending_review' | 'suspended';
+  /** Authoring mode — see ProductMode in product.model.ts. Never undefined here. */
+  mode: ProductMode;
   title: string;
   description: string;
   slug: string;
@@ -69,6 +71,9 @@ export class ProductMapper implements IMapper<Product, IProduct> {
       vendorId: doc.vendorId.toString(),
       type: doc.type,
       status: doc.status,
+      // Products created before `mode` existed have no such key — coerce here so
+      // the domain type can stay non-optional and no migration is needed.
+      mode: doc.mode ?? 'advanced',
       title: doc.title,
       description: doc.description,
       slug: doc.slug,
@@ -118,6 +123,7 @@ export class ProductMapper implements IMapper<Product, IProduct> {
       vendorId: domain.vendorId,
       type: domain.type,
       status: domain.status,
+      mode: domain.mode,
       title: domain.title,
       description: domain.description,
       slug: domain.slug,

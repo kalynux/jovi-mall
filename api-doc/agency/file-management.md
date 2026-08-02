@@ -21,6 +21,7 @@ scoped to the caller — an agency only ever sees and manages **files it owns**
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/files/upload` | Upload 1–10 files (`multipart/form-data`, field `files`). Owner-stamped `agency`. |
+| `POST` | `/api/files/upload/video` | Upload 1–3 videos (field `videos`; mp4/mov/webm, ≤70 MB each). Owner-stamped `agency`. |
 | `GET` | `/api/files` | List the agency's own files (paginated, filterable by `category`, `mimeType`, name `search`, size/date ranges). Includes the `storage` summary. |
 | `GET` | `/api/files/storage` | Usage + plan limit summary (see [Storage](./storage.md)). |
 | `GET` | `/api/files/:id` | One file's metadata + where it is referenced (`usage`). |
@@ -31,6 +32,11 @@ Notes specific to the agency:
 - Uploaded files are referenced elsewhere by their returned `id` — e.g. the
   agency avatar (`PATCH /api/agency/profile`) and the magazin logo
   (`PATCH /api/agency/magazin`, field `logoFileId`).
+- `POST /api/files/upload` is open to the agency for **every** allowed type
+  (images, documents, archives, audio; videos on the dedicated route). Each file
+  is stored under the folder for its own detected type — `images/`, `documents/`
+  … — so the returned `key` is not a purpose, just a storage path: reference the
+  file by `id` and display it by `url`.
 - **Agent delivery proofs** are agency-owned files but are **not** uploaded or
   deleted here — the agent manages them through
   `/api/agent/shipments/:id/delivery-proof` (see [Agent → Delivery proof](../agent/delivery-proof.md)).

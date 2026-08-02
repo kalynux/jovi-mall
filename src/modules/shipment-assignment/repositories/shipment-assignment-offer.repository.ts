@@ -75,15 +75,20 @@ export class ShipmentAssignmentOfferRepository {
     return await q.exec();
   }
 
-  /** The agent's offers, newest first, paginated; optional status filter. */
+  /**
+   * The agent's offers, newest first, paginated; optional status filter and an
+   * optional restriction to a set of shipment ids (how text search reaches
+   * offers — see ShipmentRepository.findIdsMatchingSearch).
+   */
   async listForAgent(
     agentId: string,
-    filters: { status?: OfferStatus } = {},
+    filters: { status?: OfferStatus; shipmentIds?: Types.ObjectId[] } = {},
     pagination: PaginationOptions = { page: 1, limit: 20 }
   ): Promise<Page<IShipmentAssignmentOffer>> {
     const { page, limit } = pagination;
     const filter: FilterQuery<IShipmentAssignmentOffer> = { agent_id: agentId };
     if (filters.status) filter.status = filters.status;
+    if (filters.shipmentIds) filter.shipment_id = { $in: filters.shipmentIds };
 
     const [total, data] = await Promise.all([
       ShipmentAssignmentOfferModel.countDocuments(filter).exec(),

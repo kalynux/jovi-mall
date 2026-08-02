@@ -12,7 +12,7 @@ import {
   AgentDepositStatusSchema,
   AgentRaiseDiscrepancySchema,
 } from '../validators/cod.validators';
-import { IDeliveryAgent } from '../../agents';
+import { IDeliveryAgent, agentCodThresholdService } from '../../agents';
 import {
   agentActionAuditService,
   outcomeFromError,
@@ -119,6 +119,21 @@ export class AgentCodController {
         trustScore: agent.cod?.trust_score ?? 100,
       },
     });
+  });
+
+  /**
+   * GET /api/agent/cod/allocation
+   *
+   * How the agent's one COD pool is split across the agencies they serve, and
+   * what is left unallocated. `/cod/balance` answers "how much cash am I
+   * holding?"; this answers "how much am I permitted to hold, and who granted
+   * it?" — the question an agent asks when an agency's dispatch is refused on
+   * exposure while another agency's still goes through.
+   */
+  static getAllocation = asyncHandler(async (req: Request, res: Response) => {
+    const agentId = req.auth!.role_entity._id.toString();
+    const allocation = await agentCodThresholdService.getAllocation(agentId);
+    res.json({ success: true, data: allocation });
   });
 
   /** GET /api/agent/cod/ledger — append-only history of this agent's cash movements. */

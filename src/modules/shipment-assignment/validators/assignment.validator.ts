@@ -22,6 +22,13 @@ export const ListOffersQuerySchema = z.object({
   status: z
     .enum(['pending', 'accepted', 'rejected', 'expired', 'cancelled', 'superseded'])
     .optional(),
+  /**
+   * Free-text search over the same fields as the shipment list — customer
+   * name/phone, product titles, order number, tracking number — resolved to the
+   * shipments those match and then to the offers on them. Minimum 2 characters;
+   * see ShipmentRepository.buildSearchClause.
+   */
+  q: z.string().trim().min(2, 'Search term must be at least 2 characters').max(100).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });

@@ -80,3 +80,36 @@ export function assertGeoInCountry(
         );
     }
 }
+
+/**
+ * Assert every NEW or EDITED headquarters/address entry in a full-replace array
+ * carries a geocoded `geo` inside the registered country. HQ entries carry no
+ * client `_id`, so "unchanged" is content-based — same `address_description` and
+ * the same geocoded place — and those entries are grandfathered. Shared by the
+ * agency onboarding flow and the Magazin update endpoint.
+ *
+ * Deliberately excluded from that comparison:
+ * - `region` / `city`, because they are now DERIVED from `geo` rather than typed.
+ *   A client that omits them (as it should) would otherwise make every legacy
+ *   plain-text row look edited and demand a re-geocode just to re-save the list.
+ * - `label`, because naming a location is not moving it. Legacy rows have no
+ *   label, so the first save that adds one would otherwise trip the same trap.
+ * Both are safe to ignore: neither can change *where* the entry is, which is all
+ * this assertion protects.
+ */
+export function assertHeadquartersInCountry(
+    incoming: Array<{ label?: string | null; address_description: string; geo?: GeoAddressInput | null }>,
+    existing: Array<{ address_description: string; geo?: IGeoAddress | null }> | undefined,
+    country: string | null | undefined,
+): void {
+    const previous = existing ?? [];
+    incoming.forEach((entry, index) => {
+        const unchanged = previous.some(
+            (p) =>
+                entry.address_description === p.address_description &&
+                geoAddressEquals(entry.geo, p.geo),
+        );
+        if (unchanged) return;
+        assertGeoInCountry(entry.geo, country, { index, label: entry.label ?? null });
+    });
+}

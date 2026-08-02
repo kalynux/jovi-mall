@@ -166,6 +166,60 @@ attempts). Resets the attempt counter. Rate-limited (min 60s between sends).
 
 ---
 
+### GET /api/agent/cod/allocation
+
+**Description**: How your one COD pool is split across the agencies you serve, and how much of it is
+unallocated.
+
+`/cod/balance` answers *"how much cash am I holding?"*. This answers *"how much am I permitted to
+hold, and who granted it?"* — the question to ask when one agency's dispatch is refused on exposure
+while another's still goes through.
+
+**Success Response** (`200 OK`):
+```json
+{
+  "success": true,
+  "data": {
+    "agentId": "507f1f77bcf86cd799439011",
+    "maxThreshold": 500000,
+    "allocated": 350000,
+    "headroom": 150000,
+    "contracts": [
+      {
+        "contractId": "665f1f77bcf86cd799439300",
+        "agencyId": "507f1f77bcf86cd799439099",
+        "status": "active",
+        "threshold": 200000,
+        "outstandingBalance": 45000
+      },
+      {
+        "contractId": "665f1f77bcf86cd799439301",
+        "agencyId": "507f1f77bcf86cd799439098",
+        "status": "active",
+        "threshold": 150000,
+        "outstandingBalance": 0
+      }
+    ]
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `maxThreshold` | `number` | Your whole pool — the most COD cash the platform will let you carry, across every agency. Admin-set. |
+| `allocated` | `number` | Sum of the slices your live contracts hold. Can never exceed `maxThreshold`. |
+| `headroom` | `number` | `maxThreshold - allocated`. What is left for a new agency to be granted. |
+| `contracts[].threshold` | `number` | That agency's slice. It binds *that agency's* dispatches only. |
+| `contracts[].outstandingBalance` | `number` | Cash you hold attributable to that agency. Must reach 0 before you can leave it. |
+
+> **Why a pool and not a cap per agency.** Three agencies each granting you 1M independently would
+> put 3M of real cash on one person while every agency believed the exposure was 1M. A pool cannot
+> be over-committed: a raise at one agency is refused when another's slice already spends the
+> headroom. Your `maxThreshold` defaults to `0` — an admin sets it before you can carry any COD at
+> all.
+
+---
+
 ### GET /api/agent/cod/ledger
 
 **Description**: Append-only history of your cash movements (collections up, deposits down).

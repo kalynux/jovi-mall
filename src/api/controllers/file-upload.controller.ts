@@ -10,9 +10,12 @@ import { FileOwnerType } from '../../modules/catalog/models/file.model';
 import { entitlementService } from '../../modules/billing/services/entitlement.service';
 import { mediaStorageService } from '../../modules/catalog/domain/services/media/MediaStorageService';
 
-// Role-based file size limits (in bytes)
+// Role-based file size limits (in bytes). Coarse per-request ceiling only — the
+// per-MIME-type caps in the upload config (and the plan storage quota) are
+// stricter and are what actually bind for images/documents.
 const ROLE_UPLOAD_LIMITS = {
     vendor: 500 * 1024 * 1024,      // 500 MB
+    agency: 200 * 1024 * 1024,      // 200 MB
     agent: 1024 * 1024 * 1024,      // 1 GB
     admin: 2 * 1024 * 1024 * 1024,  // 2 GB
     customer: 100 * 1024 * 1024,    // 100 MB
@@ -170,9 +173,15 @@ export class FileUploadController {
             // owner (vendor/agency/agent).
             const storageCtx = await resolveStorageContext(userRole, req.auth!.role_entity?._id?.toString());
 
-            // Execute upload
+            // Execute upload. This is general media intake for EVERY role: the
+            // caller has not said what these files are for (avatar, branding,
+            // product image, ticket attachment — decided later, when the
+            // returned id is attached), so each file is stored under the folder
+            // for its own media type. Labelling them all 'products' claimed a
+            // purpose they don't have and tripped that folder's vendor-only
+            // permission rule for every other role.
             const uploadedFiles = await uploadIntakeService.execute({
-                folder: 'products',
+                folder: 'by-type',
                 context: {
                     userId,
                     vendorId,
@@ -291,7 +300,9 @@ export class FileUploadController {
             // owner (vendor/agency/agent).
             const storageCtx = await resolveStorageContext(userRole, req.auth!.role_entity?._id?.toString());
 
-            // Execute upload
+            // Execute upload. Stated explicitly rather than via 'by-type' — this
+            // route's allowlist is video-only, so the two agree, and the folder
+            // holds even if a future config widens the allowlist.
             const uploadedFiles = await uploadIntakeService.execute({
                 folder: 'videos',
                 context: {

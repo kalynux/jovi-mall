@@ -4,6 +4,17 @@
 >
 > **Intended Audience**: Frontend engineers implementing product creation, editing, and publishing flows.
 
+> [!TIP]
+> **Selling one thing at one price?** There is a one-call shortcut for physical
+> products with no variants or options: `POST /api/vendor/products/simple`.
+> See **[simple-products.md](./simple-products.md)**.
+>
+> This document describes the **advanced** flow — every product created through
+> it reports `mode: "advanced"`, which is also what every pre-existing product
+> reports. Products created through the simple endpoint report `mode: "simple"`
+> and **reject** the option and multi-variant endpoints below until they are
+> converted. Read `product.mode` to decide which editor to render.
+
 ---
 
 ## Table of Contents
@@ -1128,6 +1139,9 @@ variant.serviceConfig.durationMinutes = 60;
 |--------|----------|---------|
 | `GET` | `/api/vendor/products` | List products with filters |
 | `POST` | `/api/vendor/products` | Create product draft |
+| `POST` | `/api/vendor/products/simple` | **One-shot** create for a simple physical product — see [simple-products.md](./simple-products.md) |
+| `PATCH` | `/api/vendor/products/:id/simple` | One-shot edit of a simple product + its variant |
+| `POST` | `/api/vendor/products/:id/convert-to-advanced` | Unlock the variant/option endpoints on a simple product |
 | `GET` | `/api/vendor/products/:id` | Get single product |
 | `PATCH` | `/api/vendor/products/:id` | Update product |
 | `PATCH` | `/api/vendor/products/:id/status` | Change product status |

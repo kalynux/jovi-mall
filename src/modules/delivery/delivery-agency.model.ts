@@ -1,6 +1,4 @@
 import mongoose, { Schema, Document } from 'mongoose';
-import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
-import { GeoAddressSchema, IGeoAddress } from '../../core/types/geo-address.types';
 import { PayoutMethodSchema, IPayoutMethod } from '../../core/types/payout.types';
 import { AgencyOnboardingStep } from '../../core/constants/onboarding-steps';
 import { SUPPORTED_LANGUAGES, Language } from '../../core/constants/languages';
@@ -139,41 +137,9 @@ const AgencyKycDetailsSchema = new Schema(
   { _id: false }
 );
 
-// ─── Headquarters Address Sub-Schema ─────────────────────────────────────────
-
-const SupportContactSchema = new Schema(
-  {
-    phone: { type: String, required: true, trim: true },
-    email: { type: String, default: null, trim: true, lowercase: true },
-  },
-  { _id: false }
-);
-
-const HeadquartersAddressSchema = new Schema(
-  {
-    region: { type: String, required: true, trim: true },
-    city: { type: String, required: true, trim: true },
-    address_description: { type: String, required: true, trim: true },
-    support_contact: { type: SupportContactSchema, required: true },
-    /**
-     * Map coordinates for this location. Required at onboarding (see the agency
-     * logistics validator), so an agency is geolocatable and the auto-assignment
-     * distance factor can measure from the pickup point. Kept non-required at the
-     * schema level so legacy documents still hydrate; the validator enforces it
-     * on every write.
-     */
-    location: { type: GeoPointSchema, default: null },
-    /**
-     * Canonical geospatial address (formatted address + coordinates + provider
-     * place id + admin components), populated when the agency selects an
-     * address-search result. `location` remains the required geolocation used by
-     * the auto-assignment distance factor; `geo` enriches it and is null on
-     * legacy documents.
-     */
-    geo: { type: GeoAddressSchema, default: null },
-  },
-  { _id: true }
-);
+// Coverage areas + headquarters addresses (the agency's logistics footprint)
+// live on the Magazin — the agency's business surface — not here. See
+// `src/modules/magazin/models/magazin.model.ts`.
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -248,23 +214,6 @@ export interface IAgencyKycDetails {
   legit_verified: boolean;
 }
 
-export interface IAgencySupportContact {
-  phone: string;
-  email: string | null;
-}
-
-export interface IAgencyHeadquartersAddress {
-  _id: mongoose.Types.ObjectId;
-  region: string;
-  city: string;
-  address_description: string;
-  support_contact: IAgencySupportContact;
-  /** Map coordinates. Required at onboarding; null only on legacy documents. */
-  location: IGeoPoint | null;
-  /** Canonical geospatial address; null on legacy/plain-text entries. */
-  geo: IGeoAddress | null;
-}
-
 /**
  * Auto-assignment participation. When enabled, a shipment handed to this agency
  * is auto-offered to the top-ranked eligible agent (closest to pickup, free
@@ -296,21 +245,12 @@ export interface IDeliveryAgency extends Document {
   avatar_file_id: mongoose.Types.ObjectId | null;
   /**
    * ISO-2 country the agency operates in (e.g. "CM"). Set once during
-   * onboarding Step 1 and immutable afterwards — headquarters addresses are
-   * validated against it. Null only on legacy documents that predate the
-   * field (they may set it once via the profile PATCH).
+   * onboarding Step 1 and immutable afterwards — it anchors the Magazin's
+   * coverage areas (must be regions of this country) and headquarters-address
+   * geo policy. Null only on legacy documents that predate the field.
    */
   country: string | null;
-  /**
-   * Regions covering this agency's service areas.
-   * Min 1 when onboarding is complete.
-   */
-  coverage_areas: string[];
-  /**
-   * Physical locations. Min 1 entry required.
-   * First entry (index 0) is always the PRIMARY headquarters.
-   */
-  headquarters_addresses: IAgencyHeadquartersAddress[];
+  // NOTE: coverage_areas + headquarters_addresses live on the Magazin, not here.
   /**
    * Ordered list of payout methods. The FIRST entry is the preferred / default method.
    * Min 1 entry when onboarding is complete.
@@ -361,8 +301,7 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
     display_name: { type: String },
     avatar_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },
     country: { type: String, default: null, trim: true, uppercase: true },
-    coverage_areas: { type: [String], default: [] },
-    headquarters_addresses: { type: [HeadquartersAddressSchema], default: [] },
+    // coverage_areas + headquarters_addresses moved to the Magazin.
     payout_details: { type: [PayoutMethodSchema], default: [] },
     kyc_details: {
       type: AgencyKycDetailsSchema,
@@ -408,10 +347,6 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );
 
-// Geospatial index on HQ locations — supports proximity queries and the
-// auto-assignment distance factor (pickup point ← agency storage). Sparse:
-// legacy documents may have no coordinates yet.
-DeliveryAgencySchema.index({ 'headquarters_addresses.location': '2dsphere' }, { sparse: true });
-DeliveryAgencySchema.index({ 'headquarters_addresses.geo.coordinates': '2dsphere' }, { sparse: true });
+// HQ geospatial indexes moved to the Magazin schema (coverage/HQ live there now).
 
 export const DeliveryAgencyModel = mongoose.model<IDeliveryAgency>(MODELS.DELIVERY_AGENCY, DeliveryAgencySchema, COLLECTIONS.DELIVERY_AGENCY);

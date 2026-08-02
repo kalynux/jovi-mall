@@ -19,6 +19,7 @@ The limit caps the total bytes of media the **agent owns**:
 
 - the agent's **avatar**
 - any **images / documents** the agent uploads through `POST /api/files/upload`
+- any **videos** the agent uploads through `POST /api/files/upload/video`
 
 > **Delivery proofs do NOT count here.** When an agent attaches a proof-of-delivery
 > photo to a shipment, that file is owned by the **agency** and charged to the
@@ -64,11 +65,22 @@ The same `storage` object is embedded in `GET /api/files` under `data.storage`.
 ## 3. Uploading (and the quota gate)
 
 `POST /api/files/upload` (`multipart/form-data`, field **`files`**, 1–10 files),
-owner-stamped `agent`. Before storing, the pipeline enforces **current usage +
+or `POST /api/files/upload/video` (field **`videos`**, 1–3 files, mp4/mov/webm),
+both owner-stamped `agent`. Before storing, the pipeline enforces **current usage +
 this upload ≤ plan `max_storage_bytes`**; an over-quota request is rejected whole
 with `UPLOAD_POLICY_VIOLATION` → a `QUOTA_EXCEEDED` entry in
 `error.details.violations[]` (`metadata.ownerType: "agent"`). Free space by
 deleting unreferenced files (`DELETE /api/files/:id`).
+
+### Per-file caps (independent of the storage limit)
+| Upload route | Per-file cap |
+|---|---|
+| `POST /api/files/upload` | image (jpeg/png/webp) **10 MB**, gif **5 MB**, pdf **25 MB**, zip **50 MB** |
+| `POST /api/files/upload/video` | **70 MB** per video, max **3** per request |
+
+A coarse per-role request ceiling of **1 GB per file** also applies to
+`POST /api/files/upload` for agents, but the per-type caps above are stricter and
+are what you will actually hit.
 
 ---
 

@@ -51,6 +51,17 @@ Every endpoint is automatically scoped to the authenticated agent (`role_entity.
 | PATCH | `/api/agent/settings` | Update billing settings |
 | GET | `/api/agent/transactions` | Unified billing + earnings history |
 
+> ⚠️ **`/api/agent/settings` is billing settings only** — the plan-expiry notice window, nothing
+> else. Dispatch behaviour (auto-accept) lives on `/api/agent/dispatch-settings`, documented in
+> [profile.md](./profile.md#patch-agentdispatch-settings). The two routers share the `/agent`
+> prefix and this one is mounted first, so a body meant for the other one is validated against
+> `notifyDaysBeforeExpiry` and `400`s.
+
+> **Your plan sets your concurrent-delivery cap.** `max_unterminated_shipments` on the active plan
+> is written straight onto the agent's capacity, which is what the platform admits new offers
+> against. Read it back as `capacity` on [profile.md](./profile.md#capacity-is-read-only) or
+> `GET /api/agent/dispatch-settings` — it is not settable anywhere else.
+
 ---
 
 ### GET /api/agent/plans

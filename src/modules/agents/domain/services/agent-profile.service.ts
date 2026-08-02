@@ -1,15 +1,20 @@
 import { AgentRepository, agentRepository } from '../../repositories/agent.repository';
 import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
-import { IDeliveryAgent, IAgentVehicleInfo, IAgentEmergencyContact } from '../../models/agent.model';
+import {
+  IDeliveryAgent,
+  IAgentVehicleInfo,
+  IAgentEmergencyContact,
+  IAgentSettings,
+  IAgentPreferences,
+} from '../../models/agent.model';
 import { AgentOnboardingStep, AgentOnboardingStepValue } from '../../../../core/constants/onboarding-steps';
-import { AGENT_CONFIG } from '../../config/agent.config';
 import {
   UpdateAgentProfileInput,
   AgentOnboardingStep1Input,
   AgentOnboardingStep2Input,
   UpdateAgentPreferencesInput,
-  UpdateAgentSettingsInput,
+  UpdateAgentDispatchSettingsInput,
 } from '../../validators/agent.validator';
 import { AgentProfileMapper, GetAgentProfileResponseDto, AgentCompletionStatusDto } from '../../dto/agent-profile.dto';
 import mongoose from 'mongoose';
@@ -109,32 +114,31 @@ export class AgentProfileService {
   ): Promise<GetAgentProfileResponseDto> {
     const agent = await this.requireAgent(agentId);
 
-    const merged = { ...agent.preferences, ...stripUndefined(input) };
-    const updated = await this.agents.updateProfile(agentId, {
-      preferences: merged,
-    } as Partial<IDeliveryAgent>);
+    const merged: IAgentPreferences = { ...agent.preferences, ...stripUndefined(input) };
+    const updated = await this.agents.updateProfile(agentId, { preferences: merged });
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 
     return this.present(updated);
   }
 
   /**
-   * Settings affect dispatch, so they are bounded rather than free.
-   * An agent raising their own concurrency to 500 would silently defeat the
-   * capacity rule; the platform ceiling is the backstop.
+   * Dispatch settings the agent controls.
+   *
+   * The concurrency ceiling is NOT one of them: `capacity.max_active_shipments`
+   * comes from the agent's billing plan and is read-only here. This method used
+   * to clamp a `max_concurrent_shipments` key that no schema declared, so the
+   * strict cast dropped it on the way to Mongo and the caller got a 200 back
+   * describing a write that never happened.
    */
-  async updateSettings(agentId: string, input: UpdateAgentSettingsInput): Promise<GetAgentProfileResponseDto> {
+  async updateDispatchSettings(
+    agentId: string,
+    input: UpdateAgentDispatchSettingsInput
+  ): Promise<GetAgentProfileResponseDto> {
     const agent = await this.requireAgent(agentId);
 
-    const next = { ...agent.settings, ...stripUndefined(input) };
-    if (next.max_concurrent_shipments !== undefined) {
-      next.max_concurrent_shipments = Math.min(
-        next.max_concurrent_shipments,
-        AGENT_CONFIG.MAX_ACTIVE_SHIPMENTS_MAX
-      );
-    }
+    const next: IAgentSettings = { ...agent.settings, ...stripUndefined(input) };
 
-    const updated = await this.agents.updateProfile(agentId, { settings: next } as Partial<IDeliveryAgent>);
+    const updated = await this.agents.updateProfile(agentId, { settings: next });
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 
     return this.present(updated);

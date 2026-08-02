@@ -37,6 +37,30 @@ router.put('/:agentId/tracking-allow', AdminAgentController.setTrackingAllowed);
 /** GET /api/admin/agents/:agentId/tracking-policy — what geo-tracker would see. */
 router.get('/:agentId/tracking-policy', AdminAgentController.getTrackingPolicy);
 
+/**
+ * PUT /api/admin/agents/:agentId/kyc
+ * Body: { status, reference?, rejectionReason? } — reason required on reject.
+ * Eligibility passes only on `verified`, so this is what lets an agent work.
+ */
+router.put('/:agentId/kyc', AdminAgentController.setKyc);
+
+/**
+ * PUT /api/admin/agents/:agentId/ban
+ * Body: { banned: boolean, reason? } — reason required when banning.
+ * An override consulted by every gate, not a cascade over contracts.
+ */
+router.put('/:agentId/ban', AdminAgentController.setBan);
+
+/**
+ * PUT /api/admin/agents/:agentId/cod-threshold
+ * Body: { maxThreshold } — the agent's whole COD pool, which every contract
+ * sub-allocates from. Lowering below what is already allocated is rejected.
+ */
+router.put('/:agentId/cod-threshold', AdminAgentController.setCodThreshold);
+
+/** GET /api/admin/agents/:agentId/cod-allocation — pool, slices, headroom. */
+router.get('/:agentId/cod-allocation', AdminAgentController.getCodAllocation);
+
 /** GET /api/admin/agents/:agentId/history */
 router.get('/:agentId/history', AdminAgentController.getHistory);
 

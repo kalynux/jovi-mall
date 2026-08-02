@@ -75,6 +75,7 @@ verification status, and per-event subscriptions.
     "whatsappVerified": false,
     "preferences": {
       "connectionUpdated": true,
+      "contractUpdated": true,
       "shipmentAssigned": true,
       "payoutUpdates": true,
       "codDepositUpdates": true,
@@ -110,6 +111,7 @@ notification off does not stop the clock — so surface that in the settings UI.
   "whatsappEnabled": false,
   "preferences": {
     "connectionUpdated": true,
+    "contractUpdated": true,
     "shipmentAssigned": true,
     "payoutUpdates": true,
     "codDepositUpdates": true
@@ -253,8 +255,9 @@ notification-preferences payload.
 
 | Preference key | Notification `type` | `aggregateType` | Fires when |
 |---|---|---|---|
-| `connectionUpdated` | `connection.request_received`, `connection.approved`, `connection.rejected`, `connection.reapproval_needed` | `connection` | A vendor connection request/approval/rejection/reapproval-needed happens — the agency-side mirror of the vendor's `connectionUpdated`. See [Vendor connections](./vendor-connections.md). |
-| `shipmentAssigned` | `shipment.assigned` | `shipment` | A vendor dispatches an order to this agency (manual dispatch or auto-redirect on payment) — the shipment moves `pending` → `assigned` and appears on `GET /api/agency/shipments`. `aggregateId` is the `Shipment` id; `action.path` deep-links to `shipments/{shipmentId}`. See [Shipments](./shipments.md). |
+| `connectionUpdated` | `connection.request_received`, `connection.approved`, `connection.rejected`, `connection.reapproval_needed` | `connection` | A **vendor** connection request/approval/rejection/reapproval-needed happens — the agency-side mirror of the vendor's `connectionUpdated`. See [Vendor connections](./vendor-connections.md). |
+| `contractUpdated` | `agent_contract.request_received`, `agent_contract.approved`, `agent_contract.rejected` | `contract` | An **agent** applied to deliver for you, or answered a request you raised. A separate switch from `connectionUpdated` on purpose: recruiting couriers and taking on vendors are different jobs, often different people. `aggregateId` is the contract id; `action.path` deep-links to `agents/{contractId}`. See [Agent roster](./agent-roster.md). |
+| `shipmentAssigned` | `shipment.assigned`, `shipment.offer.accepted`, `shipment.assignment.unfilled`, `shipment.agent.picked_up`, `shipment.agent.delivered`, `shipment.agent.failed`, `shipment.agent.returned` | `shipment` | The **whole shipment lifecycle**, despite the key's narrow name. See the breakdown below. `aggregateId` is always the `Shipment` id; `action.path` deep-links to `shipments/{shipmentId}`. See [Shipments](./shipments.md). |
 | `payoutUpdates` | `payout.requested`, `payout.paid`, `payout.rejected` | `payout` | Your own payout request is created, paid, or rejected. `aggregateId` is the `PayoutRequest` id; `action.path` deep-links to `tickets/{ticketId}`. See [Earnings — Requesting a payout](./earnings.md#requesting-a-payout). |
 | `codDepositUpdates` | `cod.deposit.declared`, `cod.deposit.direct_to_platform` | `deposit` | An agent declares a hand-over you must confirm/reject, or pays the platform directly. `action.path` deep-links to `cod/deposits/{depositId}`. See [COD cash management](./cod-cash-management.md). |
 | `planUpdates` | `plan.expiring`, `plan.expired`, `shipment.cap.exceeded` | `plan` | **Billing.** Your subscription plan is nearing expiry / has expired (handed over to a queued plan or downgraded to free), or you crossed your plan's unterminated-shipment **soft** cap. `aggregateId` is the agency id; `action.path` deep-links to `plans`. See [Agency Billing](./billing.md). The shipment-cap alert is monitoring-only — deliveries are never blocked. |
@@ -264,6 +267,28 @@ Note the direction: these fire when the **vendor** is the actor on a connection 
 about (vendor sent a request, approved/rejected/reapproved one). The symmetric vendor-side events
 (fired when the **agency** is the actor) are documented in
 [Vendor Notifications — Events](../vendor/notifications.md#events).
+
+#### The `shipmentAssigned` situations in detail
+
+| `type` | Fires when |
+|---|---|
+| `shipment.assigned` | A vendor dispatches an order to you (manual dispatch or auto-redirect on payment) — the shipment moves `pending` → `assigned` and appears on `GET /api/agency/shipments`. |
+| `shipment.offer.accepted` | An agent accepted an assignment offer; the shipment is now theirs. |
+| `shipment.assignment.unfilled` | Nobody accepted (declined / timed out / the auto pool was exhausted) — assign manually. |
+| `shipment.agent.picked_up` | Your **agent** recorded the pickup themselves, from the agent app. |
+| `shipment.agent.delivered` | Your agent marked the delivery complete (`agent_delivered`) — awaiting the customer's confirmation, or (COD) their delivery code. |
+| `shipment.agent.failed` | Your agent's delivery attempt failed. Carries their reason/note when they gave one. The parcel is **still with them**: they can retry or return it. |
+| `shipment.agent.returned` | Your agent returned the parcel. Terminal. Carries their reason/note when they gave one. |
+
+The four `shipment.agent.*` situations fire only for **agent-driven** transitions
+([`POST /api/agent/shipments/:id/status`](../agent/shipments.md#status)) — your own dashboard
+actions are not pushed back at you. `in_transit` is deliberately **not** notified: it is a routine
+progress ping, and the shipment list already shows it. The agent's reason, when present, is their
+own words and is appended to the message after a dash rather than translated; the structured record
+is the shipment's `deliveryFailures` (see the [shipment detail](./shipments.md#detail)).
+
+A shipment can legitimately fail more than once (`failed` → `in_transit` → `failed`), and each
+failure notifies — the idempotency key carries the event time, so the second is not deduped away.
 
 ### Delivery channels
 

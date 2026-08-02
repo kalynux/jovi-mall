@@ -13,9 +13,33 @@ import { FileOwnerType } from '../../modules/catalog/models/file.model';
 export type UserRole = 'admin' | 'vendor' | 'user';
 
 /**
+ * Purpose folders — the caller already knows what the file is FOR, and the
+ * folder therefore carries an access rule (see PermissionValidator).
+ */
+export type PurposeUploadFolder = 'products' | 'variants' | 'digital' | 'system' | 'shipments';
+
+/**
+ * Type folders — derived from the file's own (sniffed) media type rather than
+ * from a purpose. One per `MediaCategory`; see `resolveTypeFolder`.
+ */
+export type TypeUploadFolder = 'images' | 'videos' | 'audio' | 'documents' | 'archives' | 'other';
+
+/**
  * Upload folder destinations
  */
-export type UploadFolder = 'products' | 'variants' | 'digital' | 'videos' | 'system' | 'shipments';
+export type UploadFolder = PurposeUploadFolder | TypeUploadFolder;
+
+/**
+ * How a request picks its destination folder.
+ *
+ * A concrete `UploadFolder` applies to every file in the request. `'by-type'`
+ * means the caller does NOT know what the files are for — the general media
+ * intake (`POST /api/files/upload`), where the same batch may hold an avatar, a
+ * logo and a PDF, and the purpose is only decided later when the returned id is
+ * attached. Each file is then stored under the folder for its own media type,
+ * exactly as the video route stores videos under `videos/`.
+ */
+export type UploadFolderStrategy = UploadFolder | 'by-type';
 
 /**
  * Upload request context - who is uploading
@@ -59,7 +83,8 @@ export interface UploadFileInput {
 export interface UploadRequest {
   context: UploadRequestContext;
   files: UploadFileInput[];
-  folder: UploadFolder;
+  /** Destination folder, or `'by-type'` to derive it per file. */
+  folder: UploadFolderStrategy;
 }
 
 /**

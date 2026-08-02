@@ -5,6 +5,23 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 export type ProductType = 'physical' | 'digital' | 'service';
 export type ProductStatus = 'draft' | 'active' | 'archived' | 'pending_review' | 'suspended';
 export type BookingMode = 'calendar' | 'manual' | 'capacity';
+
+/**
+ * AUTHORING mode — which editor owns this product. Not to be confused with
+ * `BookingMode` above (that one is scheduling, and lives on the service variant).
+ *
+ * `simple` is a locked shape for vendors who just want to list one thing at one
+ * price: physical, exactly ONE variant, ZERO options, and that variant is always
+ * `defaultVariantId`. The advanced endpoints refuse to add a second variant or an
+ * option to it (CATALOG_PRODUCT_SIMPLE_MODE_LOCKED) so the shape stays true, and
+ * `POST /:id/convert-to-advanced` unlocks them — one-way, since a product with
+ * many variants cannot collapse back into one.
+ *
+ * `advanced` is everything the platform did before this field existed, which is
+ * why it is the default: documents written before this field have no `mode` key
+ * at all, and every read path coerces `?? 'advanced'`. No migration needed.
+ */
+export type ProductMode = 'simple' | 'advanced';
 export type VectorisationStatus = 'not_started' | 'pending' | 'completed' | 'failed' | 'skipped_no_credits';
 
 /**
@@ -64,6 +81,8 @@ export interface IProduct extends IBaseDocument {
   vendorId: Types.ObjectId;
   type: ProductType;
   status: ProductStatus;
+  /** Authoring mode — see ProductMode. Absent on documents predating the field. */
+  mode: ProductMode;
 
   title: string;
   description: string;
@@ -125,6 +144,14 @@ const ProductSchema = new Schema<IProduct>({
     enum: ['draft', 'active', 'archived', 'pending_review', 'suspended'],
     default: 'draft',
     index: true
+  },
+  // Deliberately NOT indexed: two values is far too low a cardinality for the
+  // planner to ever pick a standalone index, and the only realistic query is a
+  // vendor-scoped list, which the existing { vendorId } index already serves.
+  mode: {
+    type: String,
+    enum: ['simple', 'advanced'],
+    default: 'advanced'
   },
 
   title: { type: String, required: true },

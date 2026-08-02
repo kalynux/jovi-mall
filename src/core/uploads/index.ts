@@ -9,6 +9,7 @@
 export * from './upload-policy.types';
 export * from './upload-config';
 export * from './upload-pipeline-context';
+export * from './media-folder';
 
 // Main services
 export * from './upload-policy-engine';

@@ -69,20 +69,23 @@ router.use('/agent', agentBillingRoutes);
 router.use('/admin', adminBillingRoutes);
 
 // Earnings: commission/escrow ledger. Vendor sees held vs withdrawable balances;
-// agency sees its own held vs withdrawable delivery-fee balance; admin sees the
-// platform commission account. Mounted at the role roots →
-// /vendor/earnings, /agency/earnings, /admin/earnings/platform.
+// agency sees its own held vs withdrawable delivery-fee balance; agent sees their
+// cut of the delivery fees on runs they completed; admin sees the platform
+// commission account. Mounted at the role roots → /vendor/earnings,
+// /agency/earnings, /agent/earnings, /admin/earnings/platform.
 import vendorEarningsRoutes from '../modules/earnings/routes/vendor-earnings.routes';
 import agencyEarningsRoutes from '../modules/earnings/routes/agency-earnings.routes';
+import agentEarningsRoutes from '../modules/earnings/routes/agent-earnings.routes';
 import adminEarningsRoutes from '../modules/earnings/routes/admin-earnings.routes';
 router.use('/vendor', vendorEarningsRoutes);
 router.use('/agency', agencyEarningsRoutes);
+router.use('/agent', agentEarningsRoutes);
 router.use('/admin', adminEarningsRoutes);
 
-// Payout requests: vendor/agency request a withdrawal of their entire available
-// balance, which opens a PAYOUT_REQUEST ticket for admins to process.
-// /vendor/earnings/payout, /agency/earnings/payout (both mounted above alongside
-// earnings) + the admin processing queue below.
+// Payout requests: vendor/agency/agent request a withdrawal of their entire
+// available balance, which opens a PAYOUT_REQUEST ticket for admins to process.
+// /vendor/earnings/payout, /agency/earnings/payout, /agent/earnings/payout (all
+// mounted above alongside earnings) + the admin processing queue below.
 import adminPayoutRequestsRoutes from '../modules/earnings/routes/admin-payout-requests.routes';
 router.use('/admin', adminPayoutRequestsRoutes);
 
@@ -171,6 +174,15 @@ router.use('/agent', agentRoutes);
 //
 // `agentSelfRoutes` shares the /agent prefix with the work routes above; the
 // two never overlap (this one owns the agent aggregate, that one owns work).
+//
+// ⚠️ FOUR routers now stack on /agent — billing (:68), earnings (:82), work
+// (:168) and this one. Express matches them in MOUNT ORDER, so the earliest
+// mount wins a shared path and the later handler becomes dead code with no
+// warning at boot and no error at request time. This bit once: both billing and
+// this router declared `/settings`, billing won, and the agent-domain handler
+// was unreachable for as long as it existed — a request meant for it 400'd on
+// billing's schema instead. Before adding a path here, check it against
+// agent-billing.routes.ts, agent-earnings.routes.ts and delivery/agent.routes.ts.
 //
 // Imported from their files rather than the module barrel: routers depend on
 // auth.middleware, which depends on auth.service, which imports the barrel —

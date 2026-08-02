@@ -552,7 +552,7 @@ export class ConnectionService {
     const items = agencies.map((agency) => {
       const logoFileId = agency.magazin?.logo_file_id?.toString();
       const logo = logoFileId ? logoByFileId.get(logoFileId) ?? null : null;
-      const dto = VendorAgencyMapper.toListItemDto(agency, agency.magazin?.name ?? '', logo);
+      const dto = VendorAgencyMapper.toListItemDto(agency, agency.magazin ?? null, logo);
       const connection = byAgencyId.get(dto.id);
       return {
         ...dto,

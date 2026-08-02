@@ -341,7 +341,7 @@ resolves the flag.
   effective limit. The base limit is the **COD threshold on your contract with that agent** — a
   per-contract sub-allocation of the agent's own shared COD pool (an agent serving several agencies
   splits one pool between them, so your slice binds only your dispatches). Set it via
-  [`PATCH /api/agency/agents/:membershipId/cod-limit`](./agents.md#cod-limit) with `{ "threshold": … }`;
+  [`PATCH /api/agency/agents/:membershipId/cod-limit`](./agent-roster.md) with `{ "threshold": … }`;
   `0` grants no COD headroom at all. A raise can be refused if the agent's pool is already fully
   allocated across their contracts.
 - **Trust tiers** — the base threshold is then scaled by the agent's trust score

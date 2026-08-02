@@ -28,7 +28,22 @@ export interface IAgencyNotificationPreference extends Document {
     preferences: {
         /** Covers all four connection.* situations (request received, approved, rejected, reapproval needed). */
         connectionUpdated: boolean;
-        /** A vendor's order was dispatched to this agency (shipment.assigned). */
+        /**
+         * The agent↔agency contract handshake (agent_contract.*). Separate from
+         * `connectionUpdated` above, which is the VENDOR relationship — an
+         * agency recruiting couriers and an agency taking on vendors are
+         * different jobs, often different people, and one switch for both would
+         * silence the wrong inbox.
+         */
+        contractUpdated: boolean;
+        /**
+         * The shipment-lifecycle switch, despite the narrow name. Covers a
+         * vendor dispatching to this agency (shipment.assigned), the
+         * agent-acceptance outcomes (shipment.offer.accepted,
+         * shipment.assignment.unfilled) and the agent-driven progress
+         * transitions (shipment.agent.picked_up / .delivered / .failed /
+         * .returned).
+         */
         shipmentAssigned: boolean;
         /** Covers all three payout.* situations (requested, paid, rejected). */
         payoutUpdates: boolean;
@@ -94,6 +109,10 @@ const AgencyNotificationPreferenceSchema = new Schema<IAgencyNotificationPrefere
         },
         preferences: {
             connectionUpdated: {
+                type: Boolean,
+                default: true
+            },
+            contractUpdated: {
                 type: Boolean,
                 default: true
             },

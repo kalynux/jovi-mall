@@ -353,6 +353,14 @@ Read the current payment state of a booking. Accessible by the customer who owns
 
 `transaction` is `null` if no payment has been initiated yet.
 
+> **Use this, not `GET /api/payments/:transactionId`, for bookings.** This endpoint is already scoped
+> to both parties — the customer who booked *and* the vendor who owns it — and returns the booking's
+> `paymentStatus` alongside the transaction.
+>
+> The generic payments read is **owner-only**: since 2026-07-29 it requires authentication and
+> returns a `404` for anyone but the payer (or an admin), so a **vendor cannot** use it to inspect a
+> booking's payment even for their own booking. See [../payments/README.md](../payments/README.md).
+
 **Error Responses:**
 
 - `404 BOOKING_NOT_FOUND`: Booking does not exist

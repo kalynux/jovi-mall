@@ -4,6 +4,7 @@ import {
   MagazinProfileMapper,
   GetMagazinProfileResponseDto,
   UpdateMagazinProfileInputDto,
+  toPersistableHeadquarters,
 } from '../dto/magazin-profile.dto';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -14,6 +15,9 @@ import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repos
 import { FileReferenceRepositoryMongo } from '../../catalog/repositories/mongo/file-reference.repository.mongo';
 import { FileReferenceService } from '../../catalog/domain/services/media/FileReferenceService';
 import { getStorageProvider, IStorageProvider } from '../../../core/storage';
+import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
+import { normalizeCoverageAreasForCountry } from '../../../core/constants/locations.helper';
+import { assertHeadquartersInCountry } from '../../../core/validation/address-country.helper';
 
 /**
  * Magazin Profile Service
@@ -27,6 +31,7 @@ import { getStorageProvider, IStorageProvider } from '../../../core/storage';
 export class MagazinProfileService {
   private magazinRepo: MagazinRepository;
   private provisioningService: MagazinProvisioningService;
+  private agencyRepo: DeliveryAgencyRepository;
   private fileRepository: FileRepositoryMongo;
   private fileReferenceService: FileReferenceService;
   private storageProvider: IStorageProvider;
@@ -34,6 +39,7 @@ export class MagazinProfileService {
   constructor() {
     this.magazinRepo = new MagazinRepository();
     this.provisioningService = new MagazinProvisioningService();
+    this.agencyRepo = new DeliveryAgencyRepository();
     this.fileRepository = new FileRepositoryMongo();
     this.fileReferenceService = new FileReferenceService(this.fileRepository, new FileReferenceRepositoryMongo());
     this.storageProvider = getStorageProvider();
@@ -84,6 +90,21 @@ export class MagazinProfileService {
     const currentMagazin = await this.provisioningService.ensureMagazinForAgency(agencyId);
 
     const updatePayload = MagazinProfileMapper.toUpdatePayload(input);
+
+    // Coverage areas + HQ addresses are anchored to the agency's registered
+    // country (set-once on the profile). Validate/normalise against it.
+    if (input.coverage_areas !== undefined || input.headquarters_addresses !== undefined) {
+      const agency = await this.agencyRepo.findById(agencyId);
+      const country = agency?.country ?? null;
+
+      if (input.coverage_areas !== undefined) {
+        updatePayload.coverage_areas = normalizeCoverageAreasForCountry(input.coverage_areas, country);
+      }
+      if (input.headquarters_addresses !== undefined) {
+        assertHeadquartersInCountry(input.headquarters_addresses, currentMagazin.headquarters_addresses, country);
+        updatePayload.headquarters_addresses = toPersistableHeadquarters(input.headquarters_addresses);
+      }
+    }
 
     // Keep file references in sync BEFORE the write, so an unauthorized file
     // reference is rejected before anything is persisted.

@@ -127,14 +127,16 @@ Every route tree is guarded by role. `✅` = full access to that area's endpoint
 | Catalog browse / product booking availability | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Cart & checkout | — | ✅ | — | — | — | — |
 | Customer orders / confirm delivery | — | ✅ (self) | — | — | — | — |
+| Gateway payments (`/payments`) | initiate/verify only³ | ✅ (self) | —⁴ | — | — | ✅ (all) |
 | Vendor store / products / inventory / analytics | — | — | ✅ (self) | — | — | — |
 | Billing (plans/credits) | — | — | ✅ (self) | ✅ (self) | ✅ (self) | ✅ |
 | Earnings & payout requests | — | — | ✅ (self) | ✅ (self) | via COD¹ | ✅ (platform) |
 | Delivery agency management | — | — | — | ✅ (self) | — | ✅ |
 | Agent roster / memberships | — | — | — | ✅ (its agents) | ✅ (self) | ✅ |
-| Shipment status transitions | — | — | — | ✅ | —² | ✅ |
+| Shipment status transitions | — | — | — | ✅ | ✅ (own)² | ✅ |
 | COD cash chain | — | — | — | ✅ (collect/remit) | ✅ (collect/deposit) | ✅ (confirm/oversight) |
 | Agency ⇄ vendor connections | — | — | ✅ | ✅ | — | — |
+| Agency ⇄ agent contracts | — | — | — | ✅ | ✅ | ✅ (transfer) |
 | Tickets (support) | — | ✅ | ✅ | ✅ | ✅ | ✅ (all) |
 | Notifications & preferences | — | — | ✅ (self) | ✅ (self) | ✅ (self) | — |
 | Saved payment methods (`/me/payment-methods`) | — | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -144,9 +146,21 @@ Every route tree is guarded by role. `✅` = full access to that area's endpoint
 | Tracking authorization (`/tracking/visible-agents`) | — | ✅ (own orders) | — | ✅ (its agents) | ✅ (self) | ✅ (all) |
 
 ¹ Agents are paid via the ordinary payout pipeline; the platform is the payer. See the COD docs.
-² Shipment transitions are **agency-driven**. An agent's only shipment writes are COD-collect and
-setting a tracking number — there is **no** agent pickup/deliver/return/cancel endpoint by design.
-See [agent/shipments.md](./agent/shipments.md).
+² Both the agency and the assigned agent drive the same state machine by the **same transition
+table**, through two endpoints (`PATCH /api/agency/shipments/:id/status`,
+`POST /api/agent/shipments/:id/status`) — including `handing_over`, so a replacement agent records
+their own pickup after a reassignment. What differs is ownership scoping, the optional failure
+reason only the agent may attach, and the recorded `changedByRole`. Concurrent writes are resolved
+by a from-status compare-and-set: the loser gets `409 SHIPMENT_STATUS_CONFLICT`. `delivered` is
+reachable from neither endpoint (COD: the delivery code; prepaid: the customer's confirmation or the
+7-day sweep). See [agent/shipments.md](./agent/shipments.md) and
+[agency/shipments.md](./agency/shipments.md).
+³ `POST /payments/initiate` and `POST /payments/verify` take no credentials; **`GET
+/payments/:transactionId` requires auth and returns only the caller's own transaction** (breaking
+change, 2026-07-29 — it used to be open). See [payments/README.md](./payments/README.md).
+⁴ Vendors read a *booking's* payment state via `GET /api/bookings/:id/payment-status` for bookings
+they own. Vendor/agency/agent **plan and credit purchases are a different surface** and create no
+`PaymentTransaction` — see [billing-plans-across-roles.md](./billing-plans-across-roles.md).
 
 ---
 
@@ -156,7 +170,9 @@ See [agent/shipments.md](./agent/shipments.md).
 (field `videos`) are shared by **all authenticated roles**, with per-role size limits
 (customer 100 MB · vendor 500 MB · agent 1 GB · admin 2 GB · video 70 MB). Manage with
 `GET/PATCH/DELETE /api/files/:id`, `GET /api/files`, `GET /api/files/storage`. Uploaded files are
-referenced elsewhere by their returned `id` (e.g. product images, branding, KYC). Full contract:
+referenced elsewhere by their returned `id` (e.g. product images, branding, KYC) — what a file is
+*for* is decided at that point, not at upload, so each upload is stored by its own detected media
+type (`images/`, `documents/`, `audio/`, `archives/`, `videos/`, `other/`). Full contract:
 [uploads/README.md](./uploads/README.md) (role-neutral) and [vendor/file-management.md](./vendor/file-management.md).
 
 ---
@@ -184,6 +200,7 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [**Billing, plans & credit — cross-dashboard guide**](./billing-plans-across-roles.md) (vendor · agency · agent · admin)
 - [Error catalog](./errors/README.md)
 - [Geospatial addresses & address search](./geo/README.md)
+- [Gateway payments (role-neutral)](./payments/README.md) — initiate · verify · read a transaction
 - [Uploads (role-neutral)](./uploads/README.md)
 - [System uptime / status](./system-uptime-status.md)
 - [WhatsApp](./whatsapp/README.md) · [WhatsApp notification templates](./notifications/whatsapp-templates.md)
@@ -197,24 +214,25 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Store](./vendor/store.md) · [Profile](./vendor/profile.md) · [Onboarding](./vendor/onboarding.md)
 - [Products](./vendor/products.md) · [Product update](./vendor/product-update.md) · [Upload flow](./vendor/product-upload-flow.md) · [Variants](./vendor/variants.md) · [Options & variants](./vendor/option-variant-management.md) · [Digital products](./vendor/digital-products.md)
 - [Inventory](./vendor/inventory.md) · [Orders](./vendor/orders.md) · [Shipping](./vendor/shipping.md) · [Delivery agencies](./vendor/delivery-agencies.md) · [Agency connections](./vendor/agency-connections.md)
-- [Bookings](./vendor/bookings.md) · [Booking guide](./vendor/booking-implementation-guide.md) · [Calendar](./vendor/calendar.md) · [Availability rules](./vendor/availability-rules.md)
+- [Bookings](./vendor/bookings.md) · [Booking guide](./booking-implementation-guide.md) · [Calendar](./vendor/calendar.md) · [Availability rules](./vendor/availability-rules.md)
 - [Billing](./vendor/billing.md) · [Billing overview](./vendor/billing-overview.md) · [Earnings](./vendor/earnings.md) · [Transactions](./vendor/transactions.md) · [Stripe payments](./vendor/stripe-payments.md) · [Payment methods](./vendor/payment-methods.md)
 - [Analytics](./vendor/analytics.md) · [Customer management](./vendor/customer-management.md) · [Storage](./vendor/storage.md) · [File management](./vendor/file-management.md)
 - [Notifications](./vendor/notifications.md) · [Notification channels](./vendor/notification-channels.md) · [Tickets](./vendor/tickets.md)
 
 ### Agency
 - [Profile](./agency/profile.md) · [Profile schema](./agency/profile-schema.md) · [Onboarding](./agency/onboarding.md)
-- [Agents](./agency/agents.md) · [Agent roster](./agency/agent-roster.md) · [Shipments](./agency/shipments.md)
+- [Agent roster & contracts](./agency/agent-roster.md) · [Shipments](./agency/shipments.md)
 - [Billing (plans & credit)](./agency/billing.md) · [COD cash management](./agency/cod-cash-management.md) · [Earnings](./agency/earnings.md) · [Payment methods](./agency/payment-methods.md)
 - [Vendor connections](./agency/vendor-connections.md) · [Vendors](./agency/vendors.md) · [Products](./agency/products.md)
 - [File management](./agency/file-management.md) · [Storage](./agency/storage.md)
 - [Notifications](./agency/notifications.md) · [Tickets](./agency/tickets.md)
 
 ### Agent
-- [Onboarding](./agent/onboarding.md) · [Availability & device](./agent/availability-and-device.md) · [Agency membership](./agent/agency-membership.md)
-- [Shipments](./agent/shipments.md) · [Delivery proof](./agent/delivery-proof.md) · [COD cash](./agent/cod-cash.md) · [Billing (plans & credit)](./agent/billing.md) · [Payment methods](./agent/payment-methods.md)
+- **▶ [Shipment discovery — frontend integration guide](./agent-shipment-discovery-integration.md)** — search, earnings, addresses and the pickup→drop-off route. **Start here if you are integrating the agent app**; it carries the two breaking changes and the migration checklist.
+- [Profile, preferences & dispatch settings](./agent/profile.md) · [Onboarding](./agent/onboarding.md) · [Availability & device](./agent/availability-and-device.md) · [Agency membership](./agent/agency-membership.md)
+- [Shipments](./agent/shipments.md) · [Offers](./agent/offers.md) · [Delivery proof](./agent/delivery-proof.md) · [COD cash](./agent/cod-cash.md) · [Billing (plans & credit)](./agent/billing.md) · [Payment methods](./agent/payment-methods.md)
 - [File management](./agent/file-management.md) · [Storage](./agent/storage.md)
-- [Notifications](./agent/notifications.md) · [Tickets](./agent/tickets.md)
+- [Notifications](./agent/notifications.md) · [Push notifications (Flutter)](./agent/push-notifications.md) · [Tickets](./agent/tickets.md)
 
 ### Admin
 - [Profile](./admin/profile.md) · [Orders (dispute hold)](./admin/orders.md) · [Agents](./admin/agents.md)

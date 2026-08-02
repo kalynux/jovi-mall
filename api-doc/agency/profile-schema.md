@@ -48,8 +48,9 @@ Root-level fields on the agency profile response object.
 | Field | Type | Required? | Validation | Description |
 |-------|------|-----------|------------|-------------|
 | `_id` | `string` | Response only | — | Auto-assigned by the backend. |
-| `region` | `string` | Yes | Min 1, Max 100 chars | State/region name (display label, not the key). E.g. `"Littoral"`. |
-| `city` | `string` | Yes | Min 1, Max 100 chars | City name. E.g. `"Douala"`. |
+| `label` | `string` | Yes on write, `string \| null` on read | Min 1, Max 50 chars | The agency's own name for this location. E.g. `"Douala HQ"`. `null` on entries saved before labels existed — display `"Primary Headquarters"` / `"Branch N"` instead. |
+| `region` | `string \| null` | No — **derived** | Max 100 chars | State/region name, taken from `geo.components.region`. E.g. `"Littoral"`. A sent value is a fallback only, used when the geocode has none. |
+| `city` | `string \| null` | No — **derived** | Max 100 chars | City name, taken from `geo.components.city`. E.g. `"Douala"`. `null` when the geocode resolves no city (rural / landmark results). |
 | `address_description` | `string` | Yes | Min 1, Max 200 chars | Full street address, building name, or landmark. |
 | `support_contact` | `object` | Yes | See below | Dedicated support contact for this specific location. |
 
@@ -239,8 +240,9 @@ export interface SupportContact {
 
 export interface HeadquartersAddress {
   _id: string;           // Assigned by backend — do not send on create
-  region: string;
-  city: string;
+  label: string | null;  // Required when writing; null on pre-label entries
+  region: string | null; // Derived from geo.components.region
+  city: string | null;   // Derived from geo.components.city
   address_description: string;
   support_contact: SupportContact;
 }

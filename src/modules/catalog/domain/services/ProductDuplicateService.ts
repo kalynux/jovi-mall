@@ -1,18 +1,28 @@
 import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
+import { IVariantRepository } from '../../repositories/interfaces/variant.repository.interface';
 import { Product } from '../../repositories/mappers/product.mapper';
 import { SlugService } from './SlugService';
 import { FileReferenceService } from './media/FileReferenceService';
+import { generateSimpleSku } from './simple/sku-generator';
 
 /**
  * ProductDuplicateService: Duplicate a product with collision-safe slug generation
+ *
+ * Variants are deliberately NOT copied for advanced products — the vendor
+ * recreates them on the clone (digital assets and service configs can't be
+ * cloned meaningfully anyway). Simple products are the exception: their whole
+ * contract is "exactly one variant", so a variant-less copy would be born
+ * violating its own invariant, uneditable through the simple editor and
+ * unpublishable. See duplicateSimpleVariant below.
  */
 export class ProductDuplicateService {
     constructor(
         private readonly productRepository: IProductRepository,
         private readonly slugService: SlugService,
-        private readonly fileReferenceService: FileReferenceService
+        private readonly fileReferenceService: FileReferenceService,
+        private readonly variantRepository?: IVariantRepository,
     ) { }
 
     async execute(productId: string, vendorId: string): Promise<Product> {
@@ -29,6 +39,7 @@ export class ProductDuplicateService {
         const clonedData: Omit<Product, 'id' | 'createdAt' | 'updatedAt'> = {
             vendorId,
             type: originalProduct.type,
+            mode: originalProduct.mode,
             status: 'draft',
             title: newTitle,
             description: originalProduct.description || '',
@@ -71,7 +82,65 @@ export class ProductDuplicateService {
             });
         }
 
+        if (originalProduct.mode === 'simple') {
+            return (await this.duplicateSimpleVariant(originalProduct, duplicate, newTitle)) ?? duplicate;
+        }
+
         return duplicate;
+    }
+
+    /**
+     * Clone a simple product's lone variant onto the copy so the invariant
+     * ("simple ⇒ exactly one variant") holds from birth.
+     *
+     * The SKU is regenerated rather than copied — it is globally unique, and it
+     * doubles as the option-less variant's `optionSignature`. Deriving it from
+     * the CLONE's id keeps that guarantee without a probe.
+     */
+    private async duplicateSimpleVariant(
+        originalProduct: Product,
+        duplicate: Product,
+        newTitle: string,
+    ): Promise<Product | null> {
+        // Optional dependency: callers that never duplicate simple products
+        // (none today, but the constructor arg is optional for compatibility)
+        // simply get the variant-less copy.
+        if (!this.variantRepository || !originalProduct.defaultVariantId) return null;
+
+        const source = await this.variantRepository.findById(originalProduct.defaultVariantId);
+        if (!source) return null;
+
+        const sku = generateSimpleSku(newTitle, duplicate.id);
+
+        const variant = await this.variantRepository.create({
+            productId: duplicate.id,
+            sku,
+            name: source.name,
+            status: 'active',
+            optionSignature: sku,
+            price: source.price,
+            compareAtPrice: source.compareAtPrice,
+            stock: source.stock,
+            isInfiniteStock: source.isInfiniteStock,
+            lowStockThreshold: source.lowStockThreshold,
+            allowOversell: source.allowOversell,
+            weight: source.weight,
+            length: source.length,
+            width: source.width,
+            height: source.height,
+            optionValueIds: [],
+            // Variant media is not carried over — matching how product-level
+            // duplication treats per-variant assets elsewhere.
+            fileIds: [],
+            deliveryAgencyId: source.deliveryAgencyId,
+            deletedAt: null,
+            purgeAt: null,
+        });
+
+        return this.productRepository.update(duplicate.id, duplicate.vendorId, {
+            hasVariants: true,
+            defaultVariantId: variant.id,
+        });
     }
 
     private async generateUniqueSlug(baseSlug: string, vendorId: string): Promise<string> {

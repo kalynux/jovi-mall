@@ -18,6 +18,7 @@ import { ProductStatusValidationService } from '../domain/services/ProductStatus
 import { ProductBulkOperationsService } from '../domain/services/ProductBulkOperationsService';
 import { SlugService } from '../domain/services/SlugService';
 import { FileReferenceService } from '../domain/services/media/FileReferenceService';
+import { assertNotSimpleMode } from '../domain/services/simple/mode-guard';
 import {
     CreateProductSchema,
     UpdateProductSchema,
@@ -54,7 +55,7 @@ const productDraftService = new ProductDraftService(productRepository, slugServi
 const productUpdateService = new ProductUpdateService(productRepository, slugService, fileReferenceService);
 const productArchiveService = new ProductArchiveService(productRepository);
 const productListService = new ProductListService(productRepository, fileRepository, storageProvider);
-const productDuplicateService = new ProductDuplicateService(productRepository, slugService, fileReferenceService);
+const productDuplicateService = new ProductDuplicateService(productRepository, slugService, fileReferenceService, variantRepository);
 const productStatusValidationService = new ProductStatusValidationService(productRepository, variantRepository);
 const productBulkOperationsService = new ProductBulkOperationsService(
     productRepository,
@@ -293,6 +294,9 @@ export class VendorProductController {
 
         const product = await productRepository.findById(id, vendorId);
         if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+
+        // Meaningless on a single-variant product — its one variant is always the default.
+        assertNotSimpleMode(product, 'choosing a default variant');
 
         const variant = await variantRepository.findById(input.variantId);
         if (!variant || variant.productId !== id || variant.status !== 'active')

@@ -58,6 +58,27 @@ interface MatrixResponse {
   cells?: MatrixCell[][];
 }
 
+/**
+ * geo-tracker's `/routing/route` response.
+ *
+ * ⚠️ Note the casing difference from `MatrixCell` above: this endpoint's body is
+ * built from `geo.Coordinate`, which DOES carry json tags, so its fields arrive
+ * lowerCamelCase. Do not "fix" this to match the matrix's PascalCase.
+ */
+interface RouteResponse {
+  distanceMeters?: number;
+  durationSeconds?: number;
+  geometry?: Array<{ latitude: number; longitude: number }>;
+}
+
+/** One road-network route between two points. Distances in metres, time in seconds. */
+export interface GeoRouteResult {
+  distanceMeters: number;
+  durationSeconds: number;
+  /** The decoded route line. May be empty if the provider returned no geometry. */
+  geometry: Array<{ lat: number; lng: number }>;
+}
+
 export class GeoRoutingClient {
   /** True when a geo-tracker endpoint is configured to answer routing calls. */
   isEnabled(): boolean {
@@ -105,6 +126,65 @@ export class GeoRoutingClient {
     } catch (err) {
       // Timeout, network error, JSON error — all fall back, never throw upward.
       console.warn('[GeoRoutingClient] matrix call failed; falling back to haversine:', (err as Error)?.message ?? err);
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * The road-network route from `origin` to `destination`, optionally via
+   * `waypoints` (a shipment with several pickup points passes the extras here).
+   *
+   * Returns `null` on ANY problem — integration disabled, timeout, non-200,
+   * unparseable body — on the same contract as `rankByProximity`: geo-tracker
+   * must never be able to break a jovi-mall read. The caller draws a straight
+   * line instead.
+   */
+  async route(
+    origin: IGeoPoint,
+    destination: IGeoPoint,
+    waypoints: IGeoPoint[] = []
+  ): Promise<GeoRouteResult | null> {
+    if (!this.isEnabled()) return null;
+    if (!this.isValidPoint(origin) || !this.isValidPoint(destination)) return null;
+
+    const url = `${TRACKING_INTEGRATION_CONFIG.GEO_TRACKER_BASE_URL}${ASSIGNMENT_CONFIG.GEO_ROUTE_PATH}`;
+    const body = {
+      origin: this.toCoordinate(origin),
+      destination: this.toCoordinate(destination),
+      waypoints: waypoints.filter((w) => this.isValidPoint(w)).map((w) => this.toCoordinate(w)),
+    };
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ASSIGNMENT_CONFIG.GEO_REQUEST_TIMEOUT_MS);
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this.mintServiceToken()}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!resp.ok) {
+        // 501 is geo-tracker telling us the configured provider has no routing
+        // capability — a config fact, not an incident. Everything else is.
+        console.warn(`[GeoRoutingClient] route call returned ${resp.status}; falling back to a straight line`);
+        return null;
+      }
+      const json = (await resp.json()) as RouteResponse;
+      if (!Number.isFinite(json.distanceMeters) || !Number.isFinite(json.durationSeconds)) return null;
+      return {
+        distanceMeters: json.distanceMeters as number,
+        durationSeconds: json.durationSeconds as number,
+        geometry: (json.geometry ?? [])
+          .filter((p) => Number.isFinite(p?.latitude) && Number.isFinite(p?.longitude))
+          .map((p) => ({ lat: p.latitude, lng: p.longitude })),
+      };
+    } catch (err) {
+      console.warn('[GeoRoutingClient] route call failed; falling back to a straight line:', (err as Error)?.message ?? err);
       return null;
     } finally {
       clearTimeout(timer);

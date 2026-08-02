@@ -2,6 +2,7 @@ import { UploadRequest, UploadPolicyViolationError, IUploadObserver, IVirusScann
 import { UploadPolicyConfig } from './upload-config';
 import { UploadPipelineContextImpl } from './upload-pipeline-context';
 import { UploadPolicyEngine } from './upload-policy-engine';
+import { resolveTypeFolder } from './media-folder';
 import { ImageResizeProcessor } from './processors/image-resize.processor';
 import { ImageFormatConvertProcessor } from './processors/image-format-convert.processor';
 import { ImageCompressProcessor } from './processors/image-compress.processor';
@@ -85,10 +86,19 @@ export class UploadIntakeService {
       const uploadedFiles: File[] = [];
 
       for (const fileContext of context.files) {
+        // A purpose folder applies to the whole request; 'by-type' files each
+        // upload under the folder for its own media type. Resolved here (after
+        // processing) so it reflects the DETECTED — and, for a converted image,
+        // the final — MIME type rather than what the client claimed.
+        const folder =
+          request.folder === 'by-type'
+            ? resolveTypeFolder(fileContext.mimeType)
+            : request.folder;
+
         // Upload to storage provider
         const storageResult = await this.storageProvider.put(fileContext.buffer, {
           mimeType: fileContext.mimeType,  // Use detected MIME type
-          folder: request.folder,
+          folder,
           filename: fileContext.originalName,
         });
 

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
 import { uploadSingle } from '../../../api/middlewares/upload.middleware';
 import { VendorProductController } from '../controllers/vendor-product.controller';
+import { VendorSimpleProductController } from '../controllers/vendor-simple-product.controller';
 import { VendorDigitalAssetController } from '../controllers/vendor-digital-asset.controller';
 import { VendorServiceCalendarController } from '../controllers/vendor-service-calendar.controller';
 import { requireProductEditable } from '../middlewares/require-product-editable.middleware';
@@ -58,6 +59,39 @@ router.get('/', VendorProductController.listProducts);
  * }
  */
 router.post('/', VendorProductController.createProduct);
+
+/**
+ * ==========================================
+ * SIMPLE MODE
+ * ==========================================
+ *
+ * One-shot editor for a physical product with a single price and no options —
+ * the corner-shop case, where the six-step flow above is all overhead. Creates
+ * the product, its lone variant and its delivery config in one transaction,
+ * then attempts to publish; an incomplete delivery setup leaves it as a draft
+ * with the blockers listed rather than failing the call.
+ *
+ * Products created here carry `mode: 'simple'`, which locks them to exactly one
+ * variant and zero options until POST /:id/convert-to-advanced is called.
+ * See api-doc/vendor/simple-products.md.
+ *
+ * Declared before '/:id/...' routes: '/simple' is a literal single segment and
+ * would otherwise be a candidate for the ':id' parameter on any same-shape route.
+ */
+router.post('/simple', VendorSimpleProductController.createSimpleProduct);
+
+/**
+ * PATCH /api/vendor/products/:id/simple
+ * Edit a simple product and its single variant from one flat body.
+ * 409 CATALOG_PRODUCT_NOT_SIMPLE_MODE on an advanced product.
+ */
+router.patch('/:id/simple', requireProductEditable, VendorSimpleProductController.updateSimpleProduct);
+
+/**
+ * POST /api/vendor/products/:id/convert-to-advanced
+ * Unlock the full variant/option API for a simple product. Idempotent, one-way.
+ */
+router.post('/:id/convert-to-advanced', requireProductEditable, VendorSimpleProductController.convertToAdvanced);
 
 /**
  * GET /api/vendor/products/:id

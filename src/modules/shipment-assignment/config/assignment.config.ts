@@ -101,6 +101,13 @@ export const ASSIGNMENT_CONFIG = Object.freeze({
    * GeoRoutingClient), so auto-assignment never blocks on geo-tracker.
    */
   GEO_MATRIX_PATH: process.env.SHIPMENT_ASSIGNMENT_GEO_MATRIX_PATH || '/routing/matrix',
+  /**
+   * Path geo-tracker exposes for a single origin→destination route, returning
+   * the decoded road-network polyline. Used to draw an agent's pickup→drop-off
+   * line. Best-effort on the same terms as the matrix: unreachable geo-tracker
+   * degrades to a straight line, never an error.
+   */
+  GEO_ROUTE_PATH: process.env.SHIPMENT_ASSIGNMENT_GEO_ROUTE_PATH || '/routing/route',
   /** Per-request timeout (ms) for the matrix call. Kept tight — we fall back fast. */
   GEO_REQUEST_TIMEOUT_MS: intEnv('SHIPMENT_ASSIGNMENT_GEO_TIMEOUT_MS', 3000),
   /**
@@ -139,4 +146,25 @@ export const ASSIGNMENT_CONFIG = Object.freeze({
   DISTANCE_FULL_SCORE_KM: numEnv('SHIPMENT_ASSIGNMENT_DISTANCE_FULL_KM', 1),
   DISTANCE_ZERO_SCORE_KM: numEnv('SHIPMENT_ASSIGNMENT_DISTANCE_ZERO_KM', 25),
   UNKNOWN_DISTANCE_SCORE: numEnv('SHIPMENT_ASSIGNMENT_UNKNOWN_DISTANCE_SCORE', 0.5),
+
+  /**
+   * When an offer reveals the customer's full identity and street address.
+   *
+   * `'on_accept'` (default) — a PENDING offer shows only what a delivery
+   * decision actually needs: the customer's first name, the drop-off city and
+   * coordinates, the products, and the money. Full name, phone and street line
+   * appear once the agent has accepted and the shipment is theirs.
+   *
+   * `'on_offer'` — everything is visible while the offer is still pending.
+   *
+   * The default is deliberate. Auto-assignment BROADCASTS one offer to several
+   * agents at once and keeps earlier offers standing (see AUTO-ASSIGNMENT.md),
+   * so revealing on offer hands a customer's name, phone and address to every
+   * agent who was offered the job — including all the ones who declined. It also
+   * matches the rule the reassignment path already enforces: clearing `agent_id`
+   * revokes an agent's access to customer PII.
+   */
+  OFFER_PII_REVEAL: (process.env.SHIPMENT_ASSIGNMENT_OFFER_PII_REVEAL === 'on_offer'
+    ? 'on_offer'
+    : 'on_accept') as 'on_accept' | 'on_offer',
 });

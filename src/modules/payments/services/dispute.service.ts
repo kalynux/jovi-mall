@@ -245,7 +245,7 @@ export class PaymentDisputeService {
       { $set: { status: 'REFUNDED' } }
     );
     try {
-      await earningsRefundService.onRefund('order', orderId);
+      await earningsRefundService.onOrderRefund(orderId);
     } catch (error) {
       console.error('[PaymentDispute] Failed to reverse earnings on dispute loss:', error);
     }

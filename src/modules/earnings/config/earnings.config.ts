@@ -43,8 +43,12 @@ export const EARNINGS_CONFIG = {
    * cover it: it only looks at orders whose fulfilment already reached
    * `delivered`, which requires every shipment to have been confirmed already.
    *
-   * COD is unaffected — its shipments are confirmed outright by the delivery
-   * code, never landing in `agent_delivered`.
+   * COD shipments DO land in `agent_delivered` (an agent signals arrival before
+   * asking for the code), but they are not confirmed the prepaid way: the sweep
+   * routes them through `CashCollectionService.autoCollectWithoutCode`, which
+   * records the cash and delivers in one transaction. See
+   * `ShipmentService.autoConfirmStaleDeliveries` for why skipping the collection
+   * would leave an order nobody is ever paid for.
    */
   SHIPMENT_AUTO_CONFIRM_DAYS: intEnv('EARNINGS_SHIPMENT_AUTO_CONFIRM_DAYS', 7),
 
@@ -74,10 +78,11 @@ export const EARNINGS_CONFIG = {
 
   /**
    * `available_balance` level at which the platform automatically opens a
-   * payout request on the vendor/agency's behalf (same ticket/notification
-   * flow as a manual request), so balances never grow unbounded into money
-   * the platform owes. Checked daily by EarningsReleaseWorker. Vendor/agency
-   * only — agents have no EarningsAccount today.
+   * payout request on the owner's behalf (same ticket/notification flow as a
+   * manual request), so balances never grow unbounded into money the platform
+   * owes. Checked daily by EarningsReleaseWorker. Applies to vendors, agencies
+   * and agents alike — an agent earns a cut of the delivery fee on every run,
+   * COD or online-paid.
    */
   AUTO_PAYOUT_THRESHOLD: intEnv('EARNINGS_AUTO_PAYOUT_THRESHOLD', 2_000_000),
 } as const;

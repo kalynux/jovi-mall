@@ -170,7 +170,7 @@ override the displayed name (locally only) and assign flags.
   "email": "jane@example.com",      // or null
   "avatar": {                        // resolved file object (same shape as product media), or null
     "id": "665f0c1a2b3c4d5e6f705678",
-    "key": "products/2026/07/jane-avatar.png",
+    "key": "images/2026/07/jane-avatar.png",
     "url": "https://.../a.png",
     "mimeType": "image/png",
     "size": 15360,

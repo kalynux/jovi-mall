@@ -20,8 +20,16 @@ import { EarningsOwnerType } from './earnings-account.model';
  * 'cod_collection' allocations are sourced from ONE CashCollection (one COD
  * shipment's verified cash handoff — see src/modules/cod/), not a whole order:
  * COD orders collect per shipment, so they split per shipment too.
+ *
+ * 'shipment' allocations are the PREPAID mirror of that: the delivery fee on an
+ * online-paid order is divided between the agency and the agent who made the
+ * run, and neither is known until the shipment is delivered. See
+ * EarningsSplitService.splitShipmentDelivery. Sourcing them by shipment (rather
+ * than summing per agency onto the order, as the payment-time split used to) is
+ * what lets one agency hold two shipments on one order without colliding on the
+ * uniqueness index below.
  */
-export type EarningsSourceType = 'order' | 'booking' | 'cod_collection';
+export type EarningsSourceType = 'order' | 'booking' | 'cod_collection' | 'shipment';
 export type EarningsAllocationStatus = 'held' | 'released' | 'reversed';
 
 export interface IEarningsAllocation extends Document {
@@ -65,7 +73,11 @@ export interface IEarningsAllocation extends Document {
 
 const EarningsAllocationSchema = new Schema<IEarningsAllocation>(
   {
-    source_type: { type: String, enum: ['order', 'booking', 'cod_collection'], required: true },
+    source_type: {
+      type: String,
+      enum: ['order', 'booking', 'cod_collection', 'shipment'],
+      required: true,
+    },
     source_id: { type: Schema.Types.ObjectId, required: true },
 
     beneficiary_type: { type: String, enum: ['vendor', 'agency', 'platform', 'agent'], required: true },

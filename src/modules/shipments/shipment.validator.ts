@@ -1,30 +1,39 @@
 import { z } from 'zod';
+import { SHIPMENT_FAILURE_REASONS, ShipmentFailureReason } from './shipment.model';
 
 /**
  * Shipment API Validators
  */
 
-// Set/update the carrier tracking number on a shipment.
-// Mirrors the tracking-number constraint used by the ticket validator.
-export const SetTrackingNumberSchema = z.object({
-    trackingNumber: z.string().trim().min(1, 'Tracking number is required').max(120, 'Tracking number too long')
-});
+// There is no tracking-number schema: the shipment's tracking number is
+// generated at creation (TrackingNumberGenerator) and read-only, so nothing
+// accepts one on the wire. The ticket validator's `trackingNumber` is a
+// different thing — a CARRIER's number the reporter types into a support
+// ticket — and stays free text.
 
-export type SetTrackingNumberDto = z.infer<typeof SetTrackingNumberSchema>;
-
-// List shipments query parameters (agency self-service list).
+// List shipments query parameters — SHARED by the agency and agent lists.
 // 'pending' is intentionally excluded — a shipment sits there from order
 // creation, before any vendor review/dispatch; an agency never sees it.
 export const ListShipmentsQuerySchema = z.object({
     status: z.enum(['assigned', 'handing_over', 'picked_up', 'in_transit', 'agent_delivered', 'delivered', 'failed', 'returned', 'rejected', 'pending_agency_reassignment']).optional(),
+    /**
+     * Free-text search across the customer's name and phone, the product titles
+     * on the shipment, the order number, and the shipment's tracking number.
+     *
+     * Minimum 2 characters: the search fans out to Customer/Product/Order id
+     * sets before filtering shipments (the Shipment document carries no
+     * denormalised text), so a 1-character term would resolve most of the
+     * platform for nothing. See ShipmentRepository.buildSearchClause.
+     */
+    q: z.string().trim().min(2, 'Search term must be at least 2 characters').max(100).optional(),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
 export type ListShipmentsQuery = z.infer<typeof ListShipmentsQuerySchema>;
 
-// Agency-triggered status transition. Only the subset the agency may set
-// directly — see AGENCY_TRIGGERABLE_TRANSITIONS in shipment.service.ts.
+// Agency-triggered status transition. Only the subset that may be set directly
+// — see TRIGGERABLE_TRANSITIONS in shipment.service.ts.
 export const UpdateShipmentStatusSchema = z.object({
     status: z.enum(['picked_up', 'in_transit', 'agent_delivered', 'failed', 'returned'], {
         errorMap: () => ({ message: 'Invalid shipment status' })
@@ -32,6 +41,61 @@ export const UpdateShipmentStatusSchema = z.object({
 });
 
 export type UpdateShipmentStatusDto = z.infer<typeof UpdateShipmentStatusSchema>;
+
+// Agent-triggered status transition on the agent's own shipment. Same target
+// statuses and same TRIGGERABLE_TRANSITIONS map as the agency — the only
+// difference from UpdateShipmentStatusSchema above is the optional non-delivery
+// reason, which the agency endpoint deliberately does not accept.
+//
+// The reason enum is imported from the model rather than inlined (the pattern
+// assignment.validator.ts uses for AGENT_CANCELLATION_REASONS) so the wire
+// contract and the Mongoose enum cannot drift.
+export const AgentUpdateShipmentStatusSchema = z
+    .object({
+        status: z.enum(['picked_up', 'in_transit', 'agent_delivered', 'failed', 'returned'], {
+            errorMap: () => ({ message: 'Invalid shipment status' })
+        }),
+        // Optional even on failed/returned — an agent may report the outcome
+        // without choosing a reason.
+        reason: z
+            .enum(SHIPMENT_FAILURE_REASONS as [ShipmentFailureReason, ...ShipmentFailureReason[]], {
+                errorMap: () => ({ message: 'Invalid delivery failure reason' })
+            })
+            .optional(),
+        note: z.string().trim().max(200, 'Note must be 200 characters or fewer').optional()
+    })
+    .superRefine((data, ctx) => {
+        const isOutcome = data.status === 'failed' || data.status === 'returned';
+        // Rejected rather than silently dropped: a reason on `picked_up` means
+        // the caller misunderstood the endpoint, and persisting it would create
+        // a record nothing reads.
+        if (!isOutcome && data.reason) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['reason'],
+                message: 'A reason may only be given when the status is "failed" or "returned"'
+            });
+        }
+        if (!isOutcome && data.note) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['note'],
+                message: 'A note may only be given when the status is "failed" or "returned"'
+            });
+        }
+        // `.trim()` has already run, so an all-whitespace note is now '' (falsy).
+        // Mirrors RejectShipmentSchema / CancelShipmentSchema: 'other' is not
+        // self-describing, so it must be explained.
+        if (data.reason === 'other' && !data.note) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['note'],
+                message: 'A note is required when the reason is "other"'
+            });
+        }
+    });
+
+export type AgentUpdateShipmentStatusDto = z.infer<typeof AgentUpdateShipmentStatusSchema>;
 
 // Reject an assigned shipment. Fixed reason enum (not free text) — mirrors
 // ProductSuspensionReason's scoped-reason pattern. The four concrete reasons are

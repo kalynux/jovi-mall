@@ -471,6 +471,18 @@ export class AgentDepositService {
     return this.paginate(query, page, limit);
   }
 
+  /**
+   * The cash movements under ONE contract.
+   *
+   * A deposit carries no contract id — it carries the agent and the agency,
+   * which is the same thing, since a contract is exactly that pair. Filtering on
+   * both is therefore the per-contract history, and it stays correct if the pair
+   * is ever re-contracted.
+   */
+  async listForContract(agentId: string, agencyId: string, page: number, limit: number) {
+    return this.paginate({ agent_id: agentId, agency_id: agencyId }, page, limit);
+  }
+
   /** The admin queue: platform-bound declarations waiting on a confirmation. */
   async listForAdmin(
     page: number,

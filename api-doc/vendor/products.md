@@ -11,6 +11,17 @@ Complete API reference for managing products in the Jovi Mall multi-vendor platf
 
 ---
 
+> [!TIP]
+> **Simple mode.** Physical products with a single price and no options can be
+> created and edited in one call via `POST /api/vendor/products/simple` — see
+> **[simple-products.md](./simple-products.md)**. Those products carry
+> `mode: "simple"` and **reject** the variant/option endpoints documented here
+> until `POST /:id/convert-to-advanced` is called. Everything below applies to
+> `mode: "advanced"` products, which is what every product created through the
+> endpoints on this page (and every pre-existing product) reports.
+
+---
+
 ## Table of Contents
 
 - [Product Object Shape](#product-object-shape)
@@ -34,6 +45,7 @@ This is the full shape of a product object returned by all read endpoints.
   "id": "507f1f77bcf86cd799439011",
   "vendorId": "507f1f77bcf86cd799439012",
   "type": "physical",
+  "mode": "advanced",
   "status": "draft",
   "title": "Blue T-Shirt",
   "description": "Comfortable cotton t-shirt",

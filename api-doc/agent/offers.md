@@ -2,7 +2,8 @@
 
 The agent's side of the **agent-acceptance workflow**. An offer is the agency (or the system)
 asking this agent to take a shipment. The shipment becomes the agent's **only when they accept** —
-until then it carries no `agent_id`, and the offer expires on a timeout if ignored.
+until then it carries no `agent_id`. A **manual** offer expires on a timeout if ignored; an **auto**
+(system) offer stays open and is one of several in a broadcast (see the lifecycle below).
 
 ## Base Path
 
@@ -29,15 +30,27 @@ as `404 SHIPMENT_OFFER_NOT_FOUND` — other agents' offers are never leaked.
 ## Offer lifecycle
 
 ```
-pending ─┬─ accept  → accepted   (agent bound to the shipment; tracking opens; COD code issued)
-         ├─ reject  → rejected   (auto ⇒ next candidate; manual ⇒ back to the agency queue)
-         ├─ timeout → expired    (the "ignore" branch — the expiry sweep reaps it)
-         └─ agency  → cancelled  (agency withdrew, or a reassignment superseded the shipment)
+pending ─┬─ accept          → accepted    (agent bound to the shipment; tracking opens; COD code issued)
+         ├─ reject          → rejected    (auto ⇒ next candidate offered; manual ⇒ back to the agency queue)
+         ├─ timeout         → expired     (MANUAL offers only — the sweep reaps an ignored manual pick)
+         ├─ another accepts → superseded  (an auto offer where a different agent was bound first)
+         └─ agency          → cancelled   (agency withdrew, or a reassignment superseded the shipment)
 ```
 
-- **Timeout** is a platform default (`SHIPMENT_OFFER_TIMEOUT_SECONDS`, default **120s**), returned as
-  `expiresAt` on every offer so the app can count down.
-- At most **one** pending offer exists per shipment at a time (offers are sequential).
+**`origin` tells you which kind of offer you hold, and the two behave differently on timeout:**
+
+- **`origin: "agency"` (manual pick)** — one-shot. If ignored it **expires** at `expiresAt`
+  (`SHIPMENT_OFFER_TIMEOUT_SECONDS`, default **120s**) and the shipment returns to the agency queue.
+  Here `expiresAt` is a real deadline — count down to it.
+- **`origin: "auto"` (system auto-assignment)** — one candidate in a **broadcast**. It does **NOT**
+  expire when `expiresAt` passes; it stays acceptable until you answer, a different agent is bound
+  (⇒ your offer becomes `superseded`), the agency withdraws, or the shipment finishes. `expiresAt` here
+  marks when the system offers the *next* nearest agent — so **several agents can hold a live offer for
+  the same shipment at once, and the first to accept wins**. Your accept can therefore return
+  `SHIPMENT_ALREADY_HAS_AGENT` even though your offer still showed `pending`. Do **not** hide the accept
+  button or count down to a hard expiry for an auto offer; if you ignore it you may receive a **second
+  push** (round 2) as a reminder before it is finally dropped.
+
 - An agent with **auto-accept** enabled (`settings.auto_accept_assignments`) never sees a pending
   offer — it is accepted the instant it is created.
 - A **reassignment** (another agent could not complete the delivery) arrives as an ordinary offer.
@@ -48,8 +61,13 @@ pending ─┬─ accept  → accepted   (agent bound to the shipment; tracking 
 <a name="list"></a>
 ## GET /api/agent/offers
 
-Query: `status?` (`pending|accepted|rejected|expired|cancelled|superseded`), `page?` (default 1),
-`limit?` (default 20, max 100). Results lead with `pending`, then newest first.
+Query: `status?` (`pending|accepted|rejected|expired|cancelled|superseded`),
+`q?` (free-text, min 2 chars — same fields as the [shipment list search](./shipments.md#list),
+resolved to the offers on the shipments that match), `page?` (default 1), `limit?` (default 20,
+max 100). Results lead with `pending`, then newest first.
+
+Each offer carries everything needed to decide **before** accepting — what the job is, where it goes,
+and what it pays — because the shipment itself is not readable until you accept.
 
 ```json
 {
@@ -71,12 +89,69 @@ Query: `status?` (`pending|accepted|rejected|expired|cancelled|superseded`), `pa
       "currency": "XAF",
       "pickupLocation": null,
       "score": 0.87,
-      "createdAt": "2026-07-17T10:30:00.000Z"
+      "createdAt": "2026-07-17T10:30:00.000Z",
+
+      "orderNumber": "ORD-2026-000123",
+      "shipmentStatus": "assigned",
+      "itemCount": 2,
+      "items": [
+        {
+          "productId": "...", "quantity": 1, "title": "Wireless Headphones", "variantTitle": "Black",
+          "image": { "id": "...", "key": "products/abc.jpg", "url": "https://…/products/abc.jpg", "mimeType": "image/jpeg", "size": 84213, "originalName": "headphones.jpg" }
+        }
+      ],
+      "vendor": { "id": "...", "businessName": "TechHub Douala", "phone": "+2376..." },
+      "customer": { "name": "Marie", "phone": null, "redacted": true },
+      "pickup": {
+        "address": { "formattedAddress": "Rue 1234, Akwa, Douala", "coordinates": { "lat": 4.0511, "lng": 9.7043 }, "...": "AddressDetail" },
+        "mode": "pickup_based",
+        "count": 1
+      },
+      "deliveryAddress": {
+        "formattedAddress": "Douala, Littoral, Cameroon",
+        "addressLine1": null,
+        "city": "Douala", "state": "Littoral", "country": "Cameroon",
+        "coordinates": { "lat": 4.0333, "lng": 9.7000 }
+      },
+      "orderValue": { "total": 25000, "currency": "XAF" },
+      "earning": { "amount": 1200, "currency": "XAF", "estimated": true, "deliveryFee": 2000, "basis": "contract_percentage" },
+      "earningUnavailable": null
     }
   ],
   "meta": { "total": 1, "page": 1, "limit": 20, "pages": 1 }
 }
 ```
+
+Addresses use the [`AddressDetail` shape](./shipments.md#address); `earning` is documented
+[here](./shipments.md#earning).
+
+**`items[].image`** is what the thing looks like — the **thumbnail only**, `{ id, key, url, mimeType,
+size, originalName }` or `null` when the item has no picture. You cannot open the shipment until you
+accept, so this is part of what makes the decision an informed one: an offer is judged on whether the
+parcel fits your vehicle as much as on distance and pay. It is the **variant's** own image where the
+variant has one, else the product's first — the variant is what is actually in the box. The full
+gallery arrives on the [shipment detail](./shipments.md#detail) once you have accepted.
+
+Images are **never redacted**: unlike the customer's name and street, what is being shipped is exactly
+what you are being asked to decide about.
+
+### Customer privacy on a pending offer
+
+While an offer is `pending` the job is still a **proposal** — auto-assignment broadcasts the same
+shipment to several agents at once, and the ones who decline never handle the parcel. So a pending
+offer shows only what a delivery decision needs:
+
+| | `pending` (and every non-accepted status) | `accepted` |
+|---|---|---|
+| `customer.name` | **first name only** (`"Marie"`) | full name |
+| `customer.phone` | `null` | full number |
+| `customer.redacted` | `true` | `false` |
+| `deliveryAddress` | city, region, country + **coordinates** — enough to judge the distance | full street address |
+| `pickup`, `items` (images included), `orderValue`, `earning` | full | full |
+
+Accepting reveals the rest immediately, and the shipment detail endpoints open up at the same moment.
+(Deployments that prefer full visibility on pending offers can set
+`SHIPMENT_ASSIGNMENT_OFFER_PII_REVEAL=on_offer`; the default is `on_accept`.)
 
 `pickupLocation` is **null for a first-assignment offer** (use the shipment's per-item pickups). For a
 **reassignment** offer it is the handover collection point, so you know where to pick the parcel up
@@ -100,8 +175,8 @@ data is on the shipment detail under `handover`.
 <a name="detail"></a>
 ## GET /api/agent/offers/:id
 
-Returns the single offer object (same shape as a list entry).
-`404 SHIPMENT_OFFER_NOT_FOUND` if it isn't this agent's.
+Returns the single offer object (same enriched shape as a list entry, including the same
+pending-offer redaction). `404 SHIPMENT_OFFER_NOT_FOUND` if it isn't this agent's.
 
 <a name="accept"></a>
 ## POST /api/agent/offers/:id/accept
@@ -157,7 +232,8 @@ Decline the job. Body: `{ "reason"?: string }` (optional, ≤ 500 chars).
 
 - **`shipment.offer.received`** — a new offer to answer (push is the load-bearing channel; it's
   time-sensitive). Deep-links to the offer.
-- **`shipment.offer.expired`** — an offer you didn't answer in time lapsed.
+- **`shipment.offer.expired`** — a **manual** offer you didn't answer in time lapsed. (Auto offers
+  don't expire this way — an ignored one stays open until another agent is bound or the search ends.)
 - **`shipment.reassigned_away`** — a shipment you were handling was reassigned to another agent. You
   are no longer responsible for it and its customer/tracking details are no longer available to you;
   it stays in your activity history. No action button — there is nothing left to do on it.

@@ -21,10 +21,11 @@ deps into shipments / agents / orders / cod / delivery.
 | Piece | Path |
 |---|---|
 | Offer model (the audit of record) | `models/shipment-assignment-offer.model.ts` |
+| Ranking session (the broadcast state) | `models/shipment-assignment-session.model.ts` |
 | State machine | `domain/services/shipment-assignment.service.ts` |
 | Candidate ranking + pure scoring | `domain/services/assignment-candidate.service.ts` |
 | Auto-assignment trigger | `services/assignment-event-subscriber.ts` (subscribes `shipment.assigned`) |
-| Timeout sweep | `workers/offer-expiry.worker.ts` (`setInterval`, 30s) |
+| Broadcast advance + manual-offer expiry sweep | `workers/offer-expiry.worker.ts` (`AssignmentSweepWorker`, `setInterval`, 30s; `OfferExpiryWorker` is a back-compat alias) |
 | Config | `config/assignment.config.ts` |
 | HTTP | `controllers/{agent-offer,agency-assignment}.controller.ts` → mounted in `delivery/{agent,agency}.routes.ts` |
 | Barrel + boot | `index.ts` → `initializeShipmentAssignment()` in `server.ts` |
@@ -43,20 +44,44 @@ the instant they do (the status is already trackable). A lightweight `shipment.a
 sub-doc (`unassigned | offered | accepted`) mirrors the state for dashboards — it is **not** the
 status and touches no contract.
 
-## Auto-assignment scoring
+## Auto-assignment: ranking + broadcast
 
-`rankCandidates(shipment, order)`:
-1. **Eligibility** — reuse `agentEligibilityService.listEligibleAgentIds(agencyId)` (active · active
+`AssignmentCandidateService.buildRanking(shipment, order)` produces a **proximity-ordered** pool
+(nearest first):
+1. **Eligibility** — `agentEligibilityService.listEligibleAgentIds(agencyId)` (active · active
    contract · online · tracking-allowed · device-location · under-capacity).
-2. **COD gate** — for COD orders, drop agents over their COD headroom (`assertCanTakeCodShipment`).
-   Non-COD keeps every eligible agent ("assign to any").
-3. **Score** — normalised, weighted sum of **distance to pickup** (agency HQ / vendor address
-   coordinates ← agent live position or home base, haversine), **free capacity**, and **trust**.
-   Weights in `assignment.config.ts`. The pure functions (`scoreCandidate`, `rankScored`,
-   `distanceScore`, `haversineKm`) are unit-tested DB-free (`scripts/test/test-assignment.ts`).
+2. **Location gate** — an agent with no resolvable position is dropped (can't be ranked by proximity).
+   Live/last-known position or home base counts; `REQUIRE_LIVE_POSITION` (default off) tightens this to
+   a fresh pushed fix within `POSITION_FRESHNESS_SECONDS`.
+3. **Trust floor** — below `MIN_TRUST_SCORE` (default 0) an agent receives no auto offer.
+4. **COD gate** — for COD orders, drop agents over their COD headroom (`assertCanTakeCodShipment`, run
+   in parallel). Non-COD keeps every survivor ("assign to any").
+5. **Cap + order** — pre-cut to the nearest `MAX_AUTO_CANDIDATES` (default 20) by local haversine, then
+   order nearest-first via the **Geo Provider** road-network matrix (`GeoRoutingClient`), with a
+   local-haversine fallback. The weighted `scoreCandidate` sum (distance/capacity/trust) is retained
+   for the candidate **preview** and tie-breaking only — **proximity is the sort key**. Pure functions
+   (`scoreCandidate`, `rankScored`, `distanceScore`, `haversineKm`) are unit-tested DB-free
+   (`scripts/test/test-assignment.ts`).
 
-The full ranked pool is snapshotted onto the auto offer, so a decline/timeout walks to the next
-candidate **without recomputing** (the "next agent in the previously computed list").
+The ranking is snapshotted onto a temporary **assignment session**
+(`models/shipment-assignment-session.model.ts`), **not** onto an offer, and the session drives a
+**broadcast**:
+- **Round 1** offers the nearest candidate immediately, then the next-nearest every
+  `OFFER_TIMEOUT_SECONDS` (the session "frontier") **while earlier offers still stand** — offers
+  accumulate, so several agents can hold a pending offer at once. First to accept wins (a shipment-level
+  bind CAS); a reject advances to the next candidate immediately; an ignore keeps an acceptable offer
+  (**auto offers never expire**).
+- **Round 2** (up to `MAX_ROUNDS`, default 2) re-nudges the still-standing ignored offers, never the
+  rejected ones. After the last round with nobody accepting, `shipment.no_agent_available` →
+  `shipment.assignment.unfilled` tells the agency to intervene.
+- The session is disposed only when the shipment finishes (`delivered`/`returned`/`rejected`); `failed`
+  keeps it so a recovery can resume, and an agent cancelling mid-delivery **resumes the broadcast from
+  its cursor**.
+
+Two jobs run every `OFFER_EXPIRY_SWEEP_INTERVAL_MS` (30s) in `AssignmentSweepWorker`:
+`advanceDueSessions` (the broadcast) and `expireDueOffers` (**manual** offers only, matched on
+`session_id: null`). Both are guarded compare-and-sets, so multiple server instances cannot
+double-offer or double-expire.
 
 ## The critical transaction (accept)
 
@@ -93,10 +118,16 @@ completed is refused (`SHIPMENT_REASSIGNMENT_NOT_ALLOWED`).
 
 `handing_over` is a **new, trackable, non-terminal** shipment status: the parcel is being handed to a
 replacement, the order stays "shipped", and it resolves when the new agent sets `picked_up`
-(`AGENCY_TRIGGERABLE_TRANSITIONS[handing_over] = ['picked_up', 'returned']`). Adding it was a
+(`TRIGGERABLE_TRANSITIONS[handing_over] = ['picked_up', 'returned']`). Adding it was a
 deliberate exception to the "no new status" rule above — but it stays **jovi-mall-only**: geo-tracker
 consumes the `shipmentTrackable` verdict, never the status, so it needed no change. It is added to
 `TRACKABLE_SHIPMENT_STATUSES`, `ACTIVE_SHIPMENT_STATUSES`, and the fulfillment `SHIPPED_OR_BEYOND` set.
+
+**The replacement agent resolves it themselves.** `TRIGGERABLE_TRANSITIONS` is shared by the agency
+and the agent (`POST /api/agent/shipments/:id/status`), so a handed-over shipment is driven exactly
+like a first-assigned one — no desk in the loop. This works because acceptance binds `agent_id`
+while the status is still `handing_over` (`bindAgentIfUnassigned` over `OFFERABLE_STATUSES`), which
+is also what satisfies the `picked_up`-requires-`agent_id` guard.
 
 **The mechanism** (`ShipmentAssignmentService.reassign` → `ShipmentService.reassignAgent`):
 
@@ -128,8 +159,8 @@ non-terminal "reassigned" action kind is a documented follow-up.
 Detaching clears `agent_id`, and every agent-facing read/action is scoped by it
 (`findByIdAndAgent → 404`). So the instant reassignment commits, the previous agent loses **customer
 PII** (delivery address, phone — via the shipment detail), **live tracking** (the geo-tracker session
-is released and their watcher dropped), and **all shipment actions** (pickup / COD collect /
-tracking-number). What they keep is their **activity history**: their accepted `ShipmentAssignmentOffer`
+is released and their watcher dropped), and **all shipment actions** (pickup / status / COD
+collect). What they keep is their **activity history**: their accepted `ShipmentAssignmentOffer`
 row (which carries no customer PII), so "what did I work?" is still answerable. They are told with a
 **`shipment.reassigned_away`** agent notification (in-app + push, gated on `assignmentOffers`), keyed
 off the `shipment.reassigned` event enriched with `orderNumber`.
@@ -186,11 +217,16 @@ order already settled — that money question is closed and must not re-open.
 
 | Var | Default | Meaning |
 |---|---|---|
-| `SHIPMENT_OFFER_TIMEOUT_SECONDS` | 120 | Offer timeout (platform-wide; no per-agency knob). |
-| `SHIPMENT_OFFER_EXPIRY_SWEEP_INTERVAL_MS` | 30000 | Expiry sweep cadence. |
-| `SHIPMENT_ASSIGNMENT_MAX_CANDIDATES` | 10 | Auto pool size cap. |
-| `SHIPMENT_ASSIGNMENT_WEIGHT_{DISTANCE,CAPACITY,TRUST}` | 50 / 20 / 30 | Scoring weights. |
+| `SHIPMENT_OFFER_TIMEOUT_SECONDS` | 120 | Manual-offer timeout / auto-broadcast frontier window. Platform-wide; no per-agency knob. |
+| `SHIPMENT_OFFER_EXPIRY_SWEEP_INTERVAL_MS` | 30000 | Sweep cadence (advance sessions + expire manual offers). |
+| `SHIPMENT_ASSIGNMENT_MAX_CANDIDATES` | 20 | Auto pool size cap — the ceiling of agents one broadcast tries. |
+| `SHIPMENT_ASSIGNMENT_MAX_ROUNDS` | 2 | Broadcast passes before giving up (round 2 re-nudges ignored offers). |
+| `SHIPMENT_ASSIGNMENT_MIN_TRUST_SCORE` | 0 | Trust floor to receive any auto offer. |
+| `SHIPMENT_ASSIGNMENT_REQUIRE_LIVE_POSITION` | false | If on, only a fresh pushed position counts as "located". |
+| `SHIPMENT_ASSIGNMENT_POSITION_FRESHNESS_SECONDS` | 300 | How recent a live fix must be to count as fresh. |
+| `SHIPMENT_ASSIGNMENT_WEIGHT_{DISTANCE,CAPACITY,TRUST}` | 50 / 20 / 30 | Scoring weights (preview/tie-break; live sort is proximity). |
 | `SHIPMENT_ASSIGNMENT_DISTANCE_{FULL,ZERO}_KM` | 1 / 25 | Distance normalisation. |
+| `SHIPMENT_ASSIGNMENT_GEO_MATRIX_PATH` / `_GEO_TIMEOUT_MS` | `/routing/matrix` / 3000 | Geo Provider proximity matrix (haversine fallback). |
 | `AGENT_CAPACITY_RECONCILE_CRON` | `0 4 * * *` | Nightly capacity reconcile. |
 
 ## Geolocation

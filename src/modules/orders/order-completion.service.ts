@@ -11,7 +11,7 @@ import {
  * Item delivery statuses from which nothing further will happen.
  *
  * `failed` is deliberately absent: a failed delivery is still in the agent's
- * hands and can go back to `in_transit` (see AGENCY_TRIGGERABLE_TRANSITIONS),
+ * hands and can go back to `in_transit` (see TRIGGERABLE_TRANSITIONS),
  * so the order is not finished. `rejected` and `pending_agency_reassignment`
  * are likewise waiting on someone.
  */

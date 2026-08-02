@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 import { AGENT_CONFIG } from '../config/agent.config';
 import { clearable } from '../../../core/validation/zod.helpers';
+import { PayoutDetailsZodSchema } from '../../../core/types/payout.types';
 
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
 
@@ -38,6 +39,22 @@ export const AgentOnboardingStep2Schema = z.object({
 });
 export type AgentOnboardingStep2Input = z.infer<typeof AgentOnboardingStep2Schema>;
 
+// ─── Payout destination ──────────────────────────────────────────────────────
+
+/**
+ * Where the platform pays this agent's earnings.
+ *
+ * Deliberately NOT part of onboarding: an agent can work, and accrue a balance,
+ * before they have told us where to send it — the payout request is what needs a
+ * destination, not the delivery. The same shared schema vendor and agency use, so
+ * "at least one, at most three, first is preferred" means the same thing for
+ * every role.
+ */
+export const SetAgentPayoutMethodsSchema = z.object({
+    payout_details: PayoutDetailsZodSchema,
+});
+export type SetAgentPayoutMethodsInput = z.infer<typeof SetAgentPayoutMethodsSchema>;
+
 // ─── Profile ──────────────────────────────────────────────────────────────────
 
 export const UpdateAgentProfileSchema = z.object({
@@ -56,32 +73,33 @@ export type UpdateAgentProfileInput = z.infer<typeof UpdateAgentProfileSchema>;
 
 // ─── Preferences & settings ───────────────────────────────────────────────────
 
+/**
+ * Client-side choices only. Notification delivery is NOT configured here — that
+ * is `PATCH /api/agent/notification-preferences`, over `AgentNotificationPreference`.
+ * Two `notify_*` flags used to live here and gated nothing, which made turning
+ * them off look like it worked.
+ */
 export const UpdateAgentPreferencesSchema = z
     .object({
-        notify_on_assignment: z.boolean().optional(),
-        notify_on_shipment_update: z.boolean().optional(),
         navigation_app: z.enum(['google_maps', 'waze', 'apple_maps', 'none']).optional(),
     })
     .refine((v) => Object.keys(v).length > 0, { message: 'At least one preference is required' });
 export type UpdateAgentPreferencesInput = z.infer<typeof UpdateAgentPreferencesSchema>;
 
-export const UpdateAgentSettingsSchema = z
+/**
+ * Dispatch behaviour the agent controls.
+ *
+ * The concurrency cap is deliberately NOT here: it is `capacity.max_active_shipments`,
+ * written from the agent's billing plan (`AgentPlanCapacityConsumer`) and readable
+ * on the profile. A `max_concurrent_shipments` key used to be accepted here and was
+ * silently dropped by the strict Mongoose cast, because no such field exists.
+ */
+export const UpdateAgentDispatchSettingsSchema = z
     .object({
-        /**
-         * Bounded at the platform ceiling here as well as in the service: a
-         * validation error explains the limit to the caller, whereas silent
-         * clamping in the service would look like the write was ignored.
-         */
-        max_concurrent_shipments: z
-            .number()
-            .int()
-            .min(1)
-            .max(AGENT_CONFIG.MAX_ACTIVE_SHIPMENTS_MAX)
-            .optional(),
         auto_accept_assignments: z.boolean().optional(),
     })
     .refine((v) => Object.keys(v).length > 0, { message: 'At least one setting is required' });
-export type UpdateAgentSettingsInput = z.infer<typeof UpdateAgentSettingsSchema>;
+export type UpdateAgentDispatchSettingsInput = z.infer<typeof UpdateAgentDispatchSettingsSchema>;
 
 // ─── Availability ─────────────────────────────────────────────────────────────
 
@@ -111,16 +129,65 @@ export const ReportDeviceCapabilitiesSchema = z
     .refine((v) => Object.keys(v).length > 0, { message: 'At least one capability is required' });
 export type ReportDeviceCapabilitiesInput = z.infer<typeof ReportDeviceCapabilitiesSchema>;
 
-// ─── Invites (agency side) ────────────────────────────────────────────────────
+// ─── Directory & contract requests ────────────────────────────────────────────
 
-export const InviteAgentSchema = z.object({
-    email: z.string().trim().email().toLowerCase(),
-});
-export type InviteAgentInput = z.infer<typeof InviteAgentSchema>;
+/**
+ * The agency browsing the agent directory.
+ *
+ * `lng`/`lat`/`radius_km` are a unit — a radius with no centre, or a centre
+ * with no radius, is a mistake rather than a partial filter, so the refine
+ * rejects it instead of silently ignoring the half that was supplied.
+ */
+export const BrowseAgentsQuerySchema = z
+    .object({
+        search: z.string().trim().optional(),
+        vehicle_type: z.enum(['bike', 'car', 'van', 'truck']).optional(),
+        availability: z.enum(['online', 'offline', 'on_break']).optional(),
+        min_trust_score: z.coerce.number().int().min(0).max(100).optional(),
+        lng: z.coerce.number().min(-180).max(180).optional(),
+        lat: z.coerce.number().min(-90).max(90).optional(),
+        radius_km: z.coerce.number().positive().max(500).optional(),
+        sort: z.enum(['trust', 'name']).default('trust'),
+        page: z.coerce.number().int().min(1).default(1),
+        limit: z.coerce.number().int().min(1).max(100).default(20),
+    })
+    .refine(
+        (v) =>
+            [v.lng, v.lat, v.radius_km].every((x) => x === undefined) ||
+            [v.lng, v.lat, v.radius_km].every((x) => x !== undefined),
+        { message: 'lng, lat and radius_km must be supplied together', path: ['radius_km'] }
+    );
+export type BrowseAgentsQuery = z.infer<typeof BrowseAgentsQuerySchema>;
 
-export const ListInvitesQuerySchema = z.object({
-    status: z.enum(['pending', 'accepted', 'declined', 'revoked']).optional(),
+/**
+ * The agent browsing the agency directory — the agent-relevant subset of the
+ * vendor's BrowseAgenciesQuerySchema (modules/agency-connections). The pricing
+ * and returns-policy filters are vendor concerns and are deliberately absent.
+ */
+export const BrowseAgenciesForAgentQuerySchema = z.object({
+    search: z.string().trim().optional(),
+    region: z.string().trim().optional(),
+    hq_city: z.string().trim().optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
 });
+export type BrowseAgenciesForAgentQuery = z.infer<typeof BrowseAgenciesForAgentQuerySchema>;
+
+/** The agency asking a specific agent to contract. */
+export const RequestAgentContractSchema = z.object({
+    agentId: ObjectIdSchema,
+});
+export type RequestAgentContractInput = z.infer<typeof RequestAgentContractSchema>;
+
+/**
+ * Pulling back a request you raised, or refusing one you received. Free text
+ * rather than an enum: unlike an operational rejection this is a business
+ * decision, and the same reasoning as RejectConnectionSchema applies.
+ */
+export const WithdrawContractSchema = z.object({
+    reason: clearable(z.string().max(300).trim()).default(null),
+});
+export type WithdrawContractInput = z.infer<typeof WithdrawContractSchema>;
 
 // ─── Membership (agency side) ─────────────────────────────────────────────────
 
@@ -153,6 +220,63 @@ export const UpdateEmploymentSchema = z
 export type UpdateEmploymentInput = z.infer<typeof UpdateEmploymentSchema>;
 
 /**
+ * Every negotiated term except the COD threshold, which is bounded by the
+ * agent's shared pool and so has its own endpoint.
+ *
+ * The fee-split *shape* is checked here; its *coherence* (a 'percentage' model
+ * carrying a share, a 'flat' one carrying a fee) is checked in the service,
+ * where the stored split can be merged under the patch — a partial update that
+ * changes only `model` is legitimate and must not be rejected for a field it
+ * is not touching.
+ */
+export const UpdateContractTermsSchema = z
+    .object({
+        employment: z
+            .object({
+                employment_type: z.enum(['employee', 'contractor', 'freelancer']).optional(),
+                employee_ref: clearable(z.string().max(60).trim()),
+                started_at: z.coerce.date().nullable().optional(),
+                ends_at: z.coerce.date().nullable().optional(),
+            })
+            .optional(),
+        remittance_terms: z
+            .object({
+                cadence: z
+                    .enum(['per_delivery', 'daily', 'weekly', 'biweekly', 'monthly', 'on_demand'])
+                    .optional(),
+                /** 0=Sunday … 6=Saturday, for weekly/biweekly. */
+                day_of_week: z.number().int().min(0).max(6).nullable().optional(),
+                /** 1–28 — 28 rather than 31 so no month is ambiguous. */
+                day_of_month: z.number().int().min(1).max(28).nullable().optional(),
+                grace_hours: z.number().int().min(0).max(720).optional(),
+            })
+            .optional(),
+        coverage: z
+            .object({
+                regions: z.array(z.string().min(1).max(100).trim()).max(100).optional(),
+                area: z
+                    .object({
+                        type: z.literal('Polygon'),
+                        coordinates: z.array(z.array(z.tuple([z.number(), z.number()]))),
+                    })
+                    .nullable()
+                    .optional(),
+            })
+            .optional(),
+        fee_split: z
+            .object({
+                model: z.enum(['percentage', 'flat']).optional(),
+                agent_share_percent: z.number().min(0).max(100).nullable().optional(),
+                agent_flat_fee: z.number().int().min(0).nullable().optional(),
+                currency: z.string().length(3).trim().toUpperCase().optional(),
+            })
+            .optional(),
+        shipment_value_ceiling: z.number().int().min(0).nullable().optional(),
+    })
+    .refine((v) => Object.keys(v).length > 0, { message: 'At least one term is required' });
+export type UpdateContractTermsInput = z.infer<typeof UpdateContractTermsSchema>;
+
+/**
  * This contract's slice of the agent's COD pool (minor units).
  *
  * Not nullable, unlike the `max_exposure_override` it replaces: null used to
@@ -174,8 +298,46 @@ export const SetCodLimitSchema = z.object({
 });
 export type SetCodLimitInput = z.infer<typeof SetCodLimitSchema>;
 
+// ─── Contract status requests (both parties) ──────────────────────────────────
+
+export const RequestIdParamSchema = z.object({ requestId: ObjectIdSchema });
+
+export const ResolveStatusRequestSchema = z.object({
+    decision: z.enum(['approve', 'reject']),
+    note: clearable(z.string().max(300).trim()).default(null),
+});
+export type ResolveStatusRequestInput = z.infer<typeof ResolveStatusRequestSchema>;
+
+/**
+ * A LIFECYCLE transition the agent raises on an established contract.
+ *
+ * Only the two that have no named endpoint. `approve`, `reject`, `withdraw` and
+ * `deactivate` are absent by design: each has its own route
+ * (`/memberships/:id/{approve,reject,withdraw,terminate}`) because a client
+ * rendering a contract wants named buttons, not one dropdown — and leaving
+ * `deactivate` here as well would be a second way to do the same thing.
+ * Whether the agent may drive these at all — and whether they complete
+ * immediately or wait for the agency — is the authority matrix's call, not this
+ * schema's.
+ */
+export const RequestTransitionSchema = z.object({
+    transition: z.enum(['pause', 'reactivate']),
+    reason: clearable(z.string().max(300).trim()).default(null),
+});
+export type RequestTransitionInput = z.infer<typeof RequestTransitionSchema>;
+
+/**
+ * The "Connections" list on either side. Mirrors ListConnectionsQuerySchema
+ * (modules/agency-connections/connection.validator.ts) — same pagination
+ * defaults, and an omitted `status` means **every** status, terminal rows
+ * included, so one call can render a relationship history.
+ */
 export const ListMembershipsQuerySchema = z.object({
-    status: z.enum(['pending', 'rejected', 'active', 'paused', 'suspended', 'deactivated']).optional(),
+    status: z
+        .enum(['pending', 'rejected', 'withdrawn', 'active', 'paused', 'suspended', 'deactivated'])
+        .optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
 // ─── Membership (agent side) ──────────────────────────────────────────────────
@@ -217,6 +379,72 @@ export const SetAgentStatusSchema = z.object({
     path: ['reason'],
 });
 export type SetAgentStatusInput = z.infer<typeof SetAgentStatusSchema>;
+
+// ─── Platform gates: KYC & ban (admin) ────────────────────────────────────────
+
+/**
+ * KYC verdict.
+ *
+ * `AgentGateService.setKycStatus` does not validate its own `status` argument —
+ * this schema is the only thing standing between a typo and an agent stuck
+ * ineligible, since `agent-eligibility.service.ts` passes only on `'verified'`.
+ */
+export const SetKycStatusSchema = z
+    .object({
+        status: z.enum(['unverified', 'pending', 'verified', 'rejected']),
+        /**
+         * External KYC provider reference, for audit. Deliberately NOT
+         * `.default(null)`: the service only writes it when the key is present,
+         * so defaulting would silently wipe a stored reference every time an
+         * admin changed status without re-sending it.
+         */
+        reference: clearable(z.string().max(200).trim()),
+        rejectionReason: clearable(z.string().max(300).trim()).default(null),
+    })
+    .refine(
+        (v) =>
+            v.status !== 'rejected' ||
+            (v.rejectionReason !== null && v.rejectionReason !== undefined && v.rejectionReason.length > 0),
+        { message: 'A rejection reason is required when rejecting KYC', path: ['rejectionReason'] }
+    );
+export type SetKycStatusInput = z.infer<typeof SetKycStatusSchema>;
+
+/**
+ * Platform ban. An override, not a cascade — contracts are left as they are and
+ * every gate consults the flag instead, so un-banning restores exactly the
+ * prior state.
+ */
+export const SetPlatformBanSchema = z
+    .object({
+        banned: z.boolean(),
+        /** Required when banning — an unexplained ban is unappealable. */
+        reason: clearable(z.string().max(300).trim()).default(null),
+    })
+    .refine((v) => !v.banned || (v.reason !== null && v.reason !== undefined && v.reason.length > 0), {
+        message: 'A reason is required when banning an agent',
+        path: ['reason'],
+    });
+export type SetPlatformBanInput = z.infer<typeof SetPlatformBanSchema>;
+
+// ─── Agent COD threshold (admin) ──────────────────────────────────────────────
+
+/**
+ * The agent's own COD pool — NOT a contract's slice of it.
+ *
+ * Bounded by AGENT_CONFIG.COD_THRESHOLD_{MIN,MAX}, deliberately different
+ * constants from SetCodLimitSchema's CONTRACT_COD_THRESHOLD_{MIN,MAX}: the pool
+ * is the sum every contract sub-allocates from, so its ceiling is higher.
+ * Lowering below what contracts already hold is rejected in the service, where
+ * the allocation can be read transactionally.
+ */
+export const SetAgentThresholdSchema = z.object({
+    maxThreshold: z
+        .number()
+        .int()
+        .min(AGENT_CONFIG.COD_THRESHOLD_MIN)
+        .max(AGENT_CONFIG.COD_THRESHOLD_MAX),
+});
+export type SetAgentThresholdInput = z.infer<typeof SetAgentThresholdSchema>;
 
 // ─── Internal API (geo-tracker → jovi-mall) ───────────────────────────────────
 

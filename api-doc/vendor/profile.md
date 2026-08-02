@@ -516,7 +516,7 @@ Returns the agency details as a vendor-safe `VendorAgencyListItemDto`. Returns `
   "data": {
     "id": "683abc1234567890abcdef01",
     "agencyName": "Swift Deliveries Cameroon",
-    "logo": { "id": "507f1f77bcf86cd799439030", "key": "products/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
+    "logo": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
     "kycVerified": true,
     "headquartersAddress": {
       "region": "Littoral",
@@ -612,7 +612,7 @@ Returns the configured agency details as a vendor-safe `VendorAgencyListItemDto`
   "data": {
     "id": "683abc1234567890abcdef01",
     "agencyName": "Swift Deliveries Cameroon",
-    "logo": { "id": "507f1f77bcf86cd799439030", "key": "products/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
+    "logo": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
     "kycVerified": true,
     "headquartersAddress": {
       "region": "Littoral",

@@ -16,13 +16,22 @@ import { MembershipStatus } from './agent-agency-membership.model';
  */
 
 export type MembershipEventType =
+  /** An agency raised a contract request against a specific agent. */
   | 'invited'
+  /**
+   * Legacy email-invite trail. No longer emitted — the invite subsystem was
+   * replaced by the directory + request handshake — but kept in the enum
+   * because historical rows still carry these values and this is an
+   * append-only log.
+   */
   | 'invite_accepted'
   | 'invite_declined'
   | 'invite_revoked'
   | 'join_requested'
   | 'approved'
   | 'request_declined'
+  /** The party that raised a pending contract pulled it back. */
+  | 'withdrawn'
   | 'suspended'
   | 'paused'
   | 'reinstated'
@@ -31,6 +40,8 @@ export type MembershipEventType =
   | 'transferred_in'
   | 'primary_changed'
   | 'employment_updated'
+  /** Any negotiated term other than employment or the COD threshold. */
+  | 'terms_updated'
   | 'cod_limit_changed';
 
 export interface IAgentMembershipEvent extends Document {
@@ -71,6 +82,7 @@ const AgentMembershipEventSchema = new Schema<IAgentMembershipEvent>(
         'join_requested',
         'approved',
         'request_declined',
+        'withdrawn',
         'suspended',
         'paused',
         'reinstated',
@@ -79,6 +91,7 @@ const AgentMembershipEventSchema = new Schema<IAgentMembershipEvent>(
         'transferred_in',
         'primary_changed',
         'employment_updated',
+        'terms_updated',
         'cod_limit_changed',
       ],
     },

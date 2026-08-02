@@ -79,6 +79,41 @@ export const AGENT_CANCELLATION_REASONS: AgentCancellationReason[] = [
 ];
 
 /**
+ * Why a delivery attempt did not complete, recorded by the AGENT when they set
+ * `failed` or `returned` via POST /api/agent/shipments/:id/status. Optional — an
+ * agent may report the outcome without choosing a reason.
+ *
+ * Deliberately NOT `AgentCancellationReason`, which it partly overlaps. That enum
+ * is why an agent WALKS AWAY from a job — the shipment is released and re-offered
+ * to someone else. This one is why THIS delivery attempt did not land, with the
+ * shipment staying on the same agent. Offering `vehicle_breakdown` here would
+ * invite an agent to strand a parcel at `failed` when they should have cancelled.
+ */
+export type ShipmentFailureReason =
+  | 'customer_unreachable'
+  | 'customer_absent'
+  | 'customer_refused'
+  | 'address_not_found'
+  | 'address_inaccessible'
+  /** COD only: the customer will not pay. */
+  | 'payment_refused'
+  | 'package_damaged'
+  | 'rescheduled_by_customer'
+  | 'other';
+
+export const SHIPMENT_FAILURE_REASONS: ShipmentFailureReason[] = [
+  'customer_unreachable',
+  'customer_absent',
+  'customer_refused',
+  'address_not_found',
+  'address_inaccessible',
+  'payment_refused',
+  'package_damaged',
+  'rescheduled_by_customer',
+  'other',
+];
+
+/**
  * The last agent-initiated cancellation on this shipment. Overwritten if the
  * shipment is cancelled again by a later agent (resume can hand it to a new
  * agent who also cancels); the durable per-cancellation audit is the emitted
@@ -90,6 +125,35 @@ export interface IShipmentAgentCancellation {
   cancelled_by_agent_id: mongoose.Types.ObjectId;
   from_status: ShipmentStatus;
   cancelled_at: Date;
+}
+
+/**
+ * ONE agent-reported non-delivery outcome. Stored as an APPEND-ONLY array on the
+ * shipment, not an overwritten sub-doc like `agent_cancellation` above:
+ * `failed → in_transit → failed → returned` is an allowed cycle, and each
+ * attempt's reason is the operational record (two `customer_unreachable`
+ * attempts then a return is a different story from one).
+ *
+ * The overwrite that `agent_cancellation` gets away with is justified there by
+ * "the durable audit is the emitted event + geo-tracker". That does NOT hold
+ * here — the event bus is in-memory with no persistence, and the geo-tracker
+ * audit row carries only a free-text reason with no enum. This array IS the
+ * durable record.
+ *
+ * `returned` entries live here too: a return is a delivery that did not happen.
+ */
+export interface IShipmentDeliveryFailure {
+  /** Which outcome this entry records. */
+  status: 'failed' | 'returned';
+  /** Optional: an agent may report an outcome without choosing a reason. */
+  reason: ShipmentFailureReason | null;
+  /** Bounded free text (≤200), required by the validator when reason is 'other'. */
+  note: string | null;
+  /** The status the shipment was in when the agent reported this. */
+  from_status: ShipmentStatus;
+  reported_by_agent_id: mongoose.Types.ObjectId;
+  reported_by_user_id: mongoose.Types.ObjectId | null;
+  reported_at: Date;
 }
 
 export interface IShipmentItem {
@@ -204,8 +268,25 @@ export interface IShipment extends Document {
    * exactly, whether via unhold (same agency came back) or reassignment.
    */
   hold?: { previousStatus: 'pending' | 'assigned'; heldAt: Date } | null;
-  // Carrier tracking number, set by the delivery agency/agent handling the
-  // shipment. Null until the shipment is dispatched and a number is recorded.
+  /**
+   * The shipment's public handle — `ACR-YYMMDD-HHMMSS-XXXXX`, e.g.
+   * `FDO-260730-142309-K7Q2M`.
+   *
+   * **Auto-generated and read-only.** It is stamped by
+   * `TrackingNumberGenerator` inside `ShipmentRepository.create`, so every
+   * shipment has one from the instant it exists, and there is no API that sets
+   * or replaces it (the agency/agent PATCH endpoints that used to were removed
+   * when it became generated — a handle a carrier can rewrite is not a handle).
+   *
+   * The `ACR` prefix is the owning agency's acronym, SNAPSHOTTED from its
+   * Magazin business name at creation: an agency that renames itself keeps its
+   * existing shipments' numbers, because a tracking number that changes is
+   * worthless to the customer holding it.
+   *
+   * Nullable only for shipments written before generation existed — the
+   * backfill script (`npm run backfill:shipment-tracking-numbers`) fills those
+   * in, and the unique index below tolerates nulls so it can run gradually.
+   */
   tracking_number?: string | null;
   // Set when the agency declines the assignment (status = 'rejected'). Keeps a
   // permanent record even after the affected items move to a new agency. `note`
@@ -250,6 +331,29 @@ export interface IShipment extends Document {
   // Last agent-initiated cancellation (see IShipmentAgentCancellation). Set when
   // an assigned agent cancels mid-delivery; null otherwise.
   agent_cancellation?: IShipmentAgentCancellation | null;
+  // Append-only log of agent-reported non-delivery outcomes (see
+  // IShipmentDeliveryFailure). Empty on shipments predating this field, and on
+  // any shipment whose failures/returns were driven by the agency — the agency
+  // status endpoint is deliberately reason-less.
+  delivery_failures: IShipmentDeliveryFailure[];
+  /**
+   * The delivery fee (minor units) this shipment was quoted at, snapshotted at
+   * the moment it was charged to the vendor.
+   *
+   * The fee itself is derived from the agency's `policies.pricing`, which the
+   * agency may edit at any time — so for a PREPAID order, where the vendor's net
+   * is reduced by the fee at payment but the agency and agent are not paid until
+   * delivery, recomputing it later could divide a different number than the one
+   * the vendor was charged. This field is the contract between the two moments:
+   * `splitOrder` writes what it charged, `splitShipmentDelivery` divides exactly
+   * that. COD writes it too (there it is computed once, at collection, so it
+   * cannot drift) purely so the number is auditable — nothing else persists it.
+   *
+   * Null on shipments created before this field existed, and on any shipment
+   * whose order has not been split yet; the delivery split falls back to a live
+   * computation and logs when it finds one.
+   */
+  delivery_fee_snapshot?: number | null;
   items: IShipmentItem[];
   created_at: Date;
   updated_at: Date;
@@ -387,6 +491,27 @@ const ShipmentSchema = new Schema<IShipment>({
     ),
     default: null,
   },
+  // Append-only — never cleared. A `failed → in_transit` retry writes nothing
+  // and removes nothing, so `delivery_failures.length` is a truthful count of
+  // reported non-delivery outcomes. `reason` is nullable-by-default rather than
+  // required: Mongoose rejects an explicit null on a required enum, and an agent
+  // may report an outcome without choosing a reason.
+  delivery_failures: {
+    type: [new Schema<IShipmentDeliveryFailure>(
+      {
+        status: { type: String, enum: ['failed', 'returned'], required: true },
+        reason: { type: String, enum: SHIPMENT_FAILURE_REASONS, default: null },
+        note: { type: String, default: null, trim: true, maxlength: 200 },
+        from_status: { type: String, required: true },
+        reported_by_agent_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENT, required: true },
+        reported_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+        reported_at: { type: Date, required: true },
+      },
+      { _id: false }
+    )],
+    default: [],
+  },
+  delivery_fee_snapshot: { type: Number, default: null, min: 0 },
   items: [{
     order_item_id: { type: Schema.Types.ObjectId, required: true },
     product_id: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT, required: true },
@@ -405,5 +530,14 @@ const ShipmentSchema = new Schema<IShipment>({
 ShipmentSchema.index({ agency_id: 1, status: 1 });
 ShipmentSchema.index({ agent_id: 1, status: 1 });
 ShipmentSchema.index({ order_id: 1 });
+// The tracking number is a public handle quoted by customers and support, so it
+// must resolve to exactly one shipment. PARTIAL rather than plainly unique:
+// legacy shipments carry `null`, and a plain unique index treats every null as
+// the same value — it would refuse to build on any existing database. The
+// generator pre-checks candidates, but this is what actually guarantees it.
+ShipmentSchema.index(
+  { tracking_number: 1 },
+  { unique: true, partialFilterExpression: { tracking_number: { $type: 'string' } } }
+);
 
 export const ShipmentModel = mongoose.model<IShipment>(MODELS.SHIPMENT, ShipmentSchema, COLLECTIONS.SHIPMENT);

@@ -49,6 +49,21 @@ const CONNECTION_BUTTON: ButtonDef = {
     urlSuffix: 'vendor-connections/{{connectionId}}'
 };
 
+const VIEW_AGENT_REQUEST_LABEL: Record<Language, string> = {
+    en: 'View request',
+    fr: 'Voir la demande',
+    pt: 'Ver pedido',
+    es: 'Ver solicitud',
+    ar: 'عرض الطلب'
+};
+
+/** Points at the agent roster, not at vendor-connections — a different relationship. */
+const AGENT_CONTRACT_BUTTON: ButtonDef = {
+    type: 'url',
+    label: VIEW_AGENT_REQUEST_LABEL,
+    urlSuffix: 'agents/{{contractId}}'
+};
+
 const TICKET_BUTTON: ButtonDef = {
     type: 'url',
     label: VIEW_TICKET_LABEL,
@@ -170,6 +185,51 @@ export const AGENCY_NOTIFICATION_CATALOG: Record<AgencyNotificationType, Situati
         button: CONNECTION_BUTTON
     },
 
+    'agent_contract.request_received': {
+        base: {
+            en: { subject: 'New agent application', body: '{{agentName}} applied to deliver for you. Review the application to approve or decline it.' },
+            fr: { subject: 'Nouvelle candidature d\'agent', body: '{{agentName}} a postulé pour livrer pour vous. Consultez la candidature pour l\'approuver ou la refuser.' },
+            pt: { subject: 'Nova candidatura de agente', body: '{{agentName}} candidatou-se para fazer entregas para si. Veja a candidatura para a aprovar ou recusar.' },
+            es: { subject: 'Nueva solicitud de agente', body: '{{agentName}} se postuló para hacer entregas para ti. Revisa la solicitud para aprobarla o rechazarla.' },
+            ar: { subject: 'طلب انضمام جديد من وكيل', body: 'تقدّم {{agentName}} للتوصيل لصالحك. راجع الطلب للموافقة عليه أو رفضه.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_agent_contract_request_received', bodyParams: ['{{agentName}}'] }
+        },
+        button: AGENT_CONTRACT_BUTTON
+    },
+
+    'agent_contract.approved': {
+        base: {
+            en: { subject: 'Agent accepted', body: '{{agentName}} accepted your request. They can now receive delivery offers from you.' },
+            fr: { subject: 'Agent accepté', body: '{{agentName}} a accepté votre demande. Vous pouvez désormais lui envoyer des offres de livraison.' },
+            pt: { subject: 'Agente aceitou', body: '{{agentName}} aceitou o seu pedido. Já pode receber as suas ofertas de entrega.' },
+            es: { subject: 'Agente aceptó', body: '{{agentName}} aceptó tu solicitud. Ya puede recibir tus ofertas de entrega.' },
+            ar: { subject: 'قبل الوكيل الطلب', body: 'قبلت {{agentName}} طلبك. يمكنها الآن تلقي عروض التوصيل منك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_agent_contract_approved', bodyParams: ['{{agentName}}'] }
+        },
+        button: AGENT_CONTRACT_BUTTON
+    },
+
+    'agent_contract.rejected': {
+        base: {
+            en: { subject: 'Agent declined', body: '{{agentName}} declined your request.' },
+            fr: { subject: 'Agent a refusé', body: '{{agentName}} a refusé votre demande.' },
+            pt: { subject: 'Agente recusou', body: '{{agentName}} recusou o seu pedido.' },
+            es: { subject: 'Agente rechazó', body: '{{agentName}} rechazó tu solicitud.' },
+            ar: { subject: 'رفض الوكيل الطلب', body: 'رفضت {{agentName}} طلبك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_agent_contract_rejected', bodyParams: ['{{agentName}}'] }
+        },
+        button: AGENT_CONTRACT_BUTTON
+    },
+
     'shipment.assigned': {
         base: {
             en: { subject: 'New shipment assigned', body: 'Order #{{orderNumber}} was dispatched to you — {{itemCount}} item(s) to fulfill.' },
@@ -211,6 +271,73 @@ export const AGENCY_NOTIFICATION_CATALOG: Record<AgencyNotificationType, Situati
         whatsapp: {
             text: {},
             template: { name: 'agency_shipment_assignment_unfilled', bodyParams: ['{{orderNumber}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
+    // ─── Agent-driven shipment progress (POST /api/agent/shipments/:id/status) ──
+    // `{{reasonSuffix}}` is the agent's own words, pre-formatted by the handler
+    // as ' — <note or reason>' or ''. It is raw agent text and is deliberately
+    // NOT localized, which is why it is appended after a dash rather than woven
+    // into the sentence; the structured record is on the shipment's
+    // `deliveryFailures`, reachable through the button.
+
+    'shipment.agent.picked_up': {
+        base: {
+            en: { subject: 'Parcel picked up', body: '{{agentName}} picked up order #{{orderNumber}}. It is on its way.' },
+            fr: { subject: 'Colis récupéré', body: '{{agentName}} a récupéré la commande n°{{orderNumber}}. Elle est en route.' },
+            pt: { subject: 'Encomenda recolhida', body: '{{agentName}} recolheu o pedido nº{{orderNumber}}. Está a caminho.' },
+            es: { subject: 'Paquete recogido', body: '{{agentName}} recogió el pedido n.º{{orderNumber}}. Va en camino.' },
+            ar: { subject: 'تم استلام الطرد', body: 'استلم {{agentName}} الطلب رقم {{orderNumber}}. إنه في الطريق.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_shipment_agent_picked_up', bodyParams: ['{{agentName}}', '{{orderNumber}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
+    'shipment.agent.delivered': {
+        base: {
+            en: { subject: 'Agent marked the delivery complete', body: '{{agentName}} delivered order #{{orderNumber}}. Waiting on the customer\'s confirmation.' },
+            fr: { subject: 'Le livreur a marqué la livraison comme faite', body: '{{agentName}} a livré la commande n°{{orderNumber}}. En attente de la confirmation du client.' },
+            pt: { subject: 'O agente marcou a entrega como concluída', body: '{{agentName}} entregou o pedido nº{{orderNumber}}. A aguardar a confirmação do cliente.' },
+            es: { subject: 'El agente marcó la entrega como completada', body: '{{agentName}} entregó el pedido n.º{{orderNumber}}. Esperando la confirmación del cliente.' },
+            ar: { subject: 'سجّل المندوب إتمام التوصيل', body: 'قام {{agentName}} بتوصيل الطلب رقم {{orderNumber}}. في انتظار تأكيد العميل.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_shipment_agent_delivered', bodyParams: ['{{agentName}}', '{{orderNumber}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
+    'shipment.agent.failed': {
+        base: {
+            en: { subject: 'Delivery attempt failed', body: '{{agentName}} could not deliver order #{{orderNumber}}{{reasonSuffix}}. The parcel is still with them — they can retry or return it.' },
+            fr: { subject: 'Échec de la tentative de livraison', body: '{{agentName}} n\'a pas pu livrer la commande n°{{orderNumber}}{{reasonSuffix}}. Le colis est toujours avec lui — il peut réessayer ou le retourner.' },
+            pt: { subject: 'Tentativa de entrega falhou', body: '{{agentName}} não conseguiu entregar o pedido nº{{orderNumber}}{{reasonSuffix}}. A encomenda ainda está com ele — pode tentar de novo ou devolvê-la.' },
+            es: { subject: 'Intento de entrega fallido', body: '{{agentName}} no pudo entregar el pedido n.º{{orderNumber}}{{reasonSuffix}}. El paquete sigue con él — puede reintentar o devolverlo.' },
+            ar: { subject: 'فشلت محاولة التوصيل', body: 'لم يتمكن {{agentName}} من توصيل الطلب رقم {{orderNumber}}{{reasonSuffix}}. الطرد ما زال معه — يمكنه إعادة المحاولة أو إرجاعه.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_shipment_agent_failed', bodyParams: ['{{agentName}}', '{{orderNumber}}'] }
+        },
+        button: SHIPMENT_BUTTON
+    },
+
+    'shipment.agent.returned': {
+        base: {
+            en: { subject: 'Parcel returned', body: '{{agentName}} returned order #{{orderNumber}}{{reasonSuffix}}. The delivery run is over.' },
+            fr: { subject: 'Colis retourné', body: '{{agentName}} a retourné la commande n°{{orderNumber}}{{reasonSuffix}}. La tournée est terminée.' },
+            pt: { subject: 'Encomenda devolvida', body: '{{agentName}} devolveu o pedido nº{{orderNumber}}{{reasonSuffix}}. A entrega terminou.' },
+            es: { subject: 'Paquete devuelto', body: '{{agentName}} devolvió el pedido n.º{{orderNumber}}{{reasonSuffix}}. El reparto ha terminado.' },
+            ar: { subject: 'تم إرجاع الطرد', body: 'أرجع {{agentName}} الطلب رقم {{orderNumber}}{{reasonSuffix}}. انتهت رحلة التوصيل.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_shipment_agent_returned', bodyParams: ['{{agentName}}', '{{orderNumber}}'] }
         },
         button: SHIPMENT_BUTTON
     },

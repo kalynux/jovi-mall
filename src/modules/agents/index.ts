@@ -132,6 +132,10 @@ export { AgentMembershipMapper } from './dto/agent-membership.dto';
 export type {
   AgentMembershipDto,
   AgentMembershipWithAgencyDto,
+  MembershipEmploymentDto,
+  MembershipRemittanceTermsDto,
+  MembershipCoverageDto,
+  MembershipFeeSplitDto,
   MembershipEventDto,
 } from './dto/agent-membership.dto';
 

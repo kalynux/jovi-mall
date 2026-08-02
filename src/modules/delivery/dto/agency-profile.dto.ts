@@ -1,7 +1,5 @@
 import mongoose from 'mongoose';
-import { IDeliveryAgency, IAgencyHeadquartersAddress, IAgencyKycDetails, IAgencyPolicies } from '../delivery-agency.model';
-import { withGeoAddress } from '../../../core/types/geo-address.types';
-// removed IPolygon
+import { IDeliveryAgency, IAgencyKycDetails, IAgencyPolicies } from '../delivery-agency.model';
 import { IPayoutMethod } from '../../../core/types/payout.types';
 import { UpdateAgencyProfileInput } from '../validators/agency-onboarding.validator';
 import { AgencyOnboardingStep, AgencyOnboardingStepValue } from '../../../core/constants/onboarding-steps';
@@ -53,11 +51,8 @@ export interface GetAgencyProfileResponseDto {
      * afterwards; null only on legacy profiles that predate the field.
      */
     country: string | null;
-    coverageAreas: string[];
-    /**
-     * First entry is always the primary headquarters.
-     */
-    headquartersAddresses: IAgencyHeadquartersAddress[];
+    // NOTE: coverageAreas + headquartersAddresses live on the Magazin
+    // (GET /api/agency/magazin), not on the profile.
     payoutDetails: AgencyPayoutMethodSanitized[];
     kycVerified: boolean;
     policies: IAgencyPolicies | null;
@@ -205,8 +200,6 @@ export class AgencyProfileMapper {
             phoneVerified: agency.phone_verified,
             avatar: await resolveFileDetail(agency.avatar_file_id?.toString(), fileRepo, storage),
             country: agency.country ?? null,
-            coverageAreas: agency.coverage_areas,
-            headquartersAddresses: agency.headquarters_addresses,
             payoutDetails: sanitizePayoutList(agency.payout_details),
             kycVerified: agency.kyc_details?.legit_verified ?? false,
             policies: agency.policies ?? null,
@@ -232,17 +225,26 @@ export class AgencyProfileMapper {
         };
     }
 
-    static toOnboardingStatusDto(agency: IDeliveryAgency): AgencyOnboardingStatusDto {
+    /**
+     * @param coverageCount number of coverage areas on the agency's Magazin
+     * @param hqCount number of headquarters addresses on the agency's Magazin
+     * (both moved off the profile onto the Magazin).
+     */
+    static toOnboardingStatusDto(
+        agency: IDeliveryAgency,
+        coverageCount: number,
+        hqCount: number,
+    ): AgencyOnboardingStatusDto {
         const currentStep = agency.onboarding_step as AgencyOnboardingStepValue;
 
         const completedFields: string[] = [];
         const missingFields: string[] = [];
 
-        // Step 1 fields
-        if (agency.coverage_areas.length > 0) completedFields.push('coverage_areas');
+        // Step 1 fields (coverage + HQ live on the Magazin)
+        if (coverageCount > 0) completedFields.push('coverage_areas');
         else missingFields.push('coverage_areas');
 
-        if (agency.headquarters_addresses.length > 0) completedFields.push('headquarters_addresses');
+        if (hqCount > 0) completedFields.push('headquarters_addresses');
         else missingFields.push('headquarters_addresses (min 1)');
 
         // Step 2 fields
@@ -298,8 +300,7 @@ export class AgencyProfileMapper {
         if (input.preferred_language !== undefined) payload.preferred_language = input.preferred_language;
         // Set-once: the service rejects a change before this mapping runs.
         if (input.country !== undefined) payload.country = input.country;
-        if (input.coverage_areas !== undefined) payload.coverage_areas = input.coverage_areas as string[];
-        if (input.headquarters_addresses !== undefined) payload.headquarters_addresses = input.headquarters_addresses.map(withGeoAddress) as unknown as IAgencyHeadquartersAddress[];
+        // coverage_areas + headquarters_addresses now live on the Magazin.
         if (input.payout_details !== undefined) payload.payout_details = input.payout_details as IPayoutMethod[];
         if (input.kyc_details !== undefined) {
             payload.kyc_details = {

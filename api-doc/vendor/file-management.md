@@ -143,6 +143,29 @@ files: File[] (max 10 files)
 | Admin    | 2 GB          |
 | Customer | 100 MB        |
 
+**Where the file is stored:**
+
+This route is **general media intake** — you are not declaring what the file is *for* (that is
+decided later, when you attach the returned `id`). Each file is therefore stored under the folder
+matching **its own detected media type**:
+
+| Detected type | Folder | Example `key` |
+|---|---|---|
+| images | `images/` | `images/2026/02/13/<uuid>.jpg` |
+| videos (dedicated route) | `videos/` | `videos/2026/02/13/<uuid>.mp4` |
+| audio | `audio/` | `audio/2026/02/13/<uuid>.mp3` |
+| pdf, epub, office, text | `documents/` | `documents/2026/02/13/<uuid>.pdf` |
+| zip, rar, 7z, tar, gzip | `archives/` | `archives/2026/02/13/<uuid>.zip` |
+| anything else | `other/` | `other/2026/02/13/<uuid>` |
+
+The type comes from the file's **actual bytes**, not the declared `Content-Type` or the extension,
+and it follows any conversion the pipeline applies — a `png` stored as `webp` still lands in
+`images/`. The folder set matches `?category=` on [`GET /api/files`](#get-apifiles).
+
+> `key` is an internal storage path: read it, never construct it. Use the returned `id` to reference
+> a file and the derived `url` to display it. Files uploaded before this routing existed keep their
+> original `products/…` keys and continue to resolve normally.
+
 **Success Response (201):**
 ```json
 {
@@ -150,7 +173,7 @@ files: File[] (max 10 files)
   "data": [
     {
       "id": "65f1a2b3c4d5e6f7a8b9c0d1",
-      "key": "products/2026/02/13/550e8400-e29b-41d4-a716-446655440000.jpg",
+      "key": "images/2026/02/13/550e8400-e29b-41d4-a716-446655440000.jpg",
       "provider": "local",
       "mimeType": "image/jpeg",
       "size": 2048576,
@@ -260,7 +283,7 @@ per-file UI messaging rather than the generic top-level `message`.
 | `TOO_MANY_FILES`      | More files than the per-request limit.                                  |
 | `QUOTA_EXCEEDED`      | The actor's storage quota would be exceeded. For vendors this is the plan's `max_storage_bytes` (digital-product assets excluded). |
 | `VIRUS_DETECTED`      | Virus scanner flagged the file.                                         |
-| `PERMISSION_DENIED`   | The actor is not permitted to upload this file.                         |
+| `PERMISSION_DENIED`   | The actor is not permitted to upload to that destination. Not expected on this route — general intake is open to every authenticated role; it belongs to the purpose-scoped upload routes (digital assets, delivery proof, system files). |
 | `TOTAL_SIZE_EXCEEDED` | Combined size of all files in the request exceeds the limit.            |
 | `DUPLICATE_FILE`      | The file (by checksum) was already uploaded.                            |
 | `MIME_TYPE_MISMATCH`  | Declared MIME type does not match the sniffed content.                  |
@@ -480,7 +503,7 @@ GET /api/files?ownerType=vendor&provider=cloudinary
     "files": [
       {
         "id": "65f1a2b3c4d5e6f7a8b9c0d1",
-        "key": "products/2026/02/13/file.jpg",
+        "key": "images/2026/02/13/file.jpg",
         "provider": "local",
         "mimeType": "image/jpeg",
         "size": 2048576,
@@ -570,7 +593,7 @@ Retrieve metadata for a single file by ID.
   "success": true,
   "data": {
     "id": "65f1a2b3c4d5e6f7a8b9c0d1",
-    "key": "products/2026/02/13/file.jpg",
+    "key": "images/2026/02/13/file.jpg",
     "provider": "local",
     "mimeType": "image/jpeg",
     "size": 2048576,
@@ -815,7 +838,7 @@ List orphaned files for garbage collection (admin only).
   "data": [
     {
       "id": "65f1a2b3c4d5e6f7a8b9c0d1",
-      "key": "products/2026/02/06/old-file.jpg",
+      "key": "images/2026/02/06/old-file.jpg",
       "provider": "local",
       "usageCount": 0,
       "createdAt": "2026-02-06T10:00:00Z"
@@ -888,7 +911,7 @@ List orphaned files for garbage collection (admin only).
 **When:** Immediately after successful storage upload
 
 **Fields Stored:**
-- `key`: Storage provider key (e.g., `products/2026/02/13/uuid.jpg`)
+- `key`: Storage provider key (e.g., `images/2026/02/13/uuid.jpg`)
 - `provider`: Storage backend type (`local`, `s3`, etc.)
 - `mimeType`: **Detected** MIME type (NOT client-provided)
 - `size`: File size in bytes
@@ -955,7 +978,7 @@ Product (or Variant):
 **Public URLs:**
 ```typescript
 const publicUrl = storageProvider.getPublicUrl(file.key);
-// Example: http://localhost:3000/uploads/products/2026/02/13/file.jpg
+// Example: http://localhost:3000/uploads/images/2026/02/13/file.jpg
 ```
 
 **Signed URLs (Private Files):**
@@ -1166,7 +1189,7 @@ type FileOwnerType = 'vendor' | 'admin' | 'customer' | 'agent' | 'agency' | 'sys
 **`ownerType` + `ownerId`**: Represents the **original uploader**, not the current user of the file. Once set, these fields NEVER change. A vendor-uploaded file remains owned by that vendor even if attached to multiple products.
 
 **`key`**: The storage provider's identifier for the file. Format varies by provider:
-- Local: `products/2026/02/13/uuid.jpg`
+- Local: `images/2026/02/13/uuid.jpg`
 - S3: `bucket-name/path/to/file.jpg`
 - Cloudinary: `public_id` or URL-safe identifier
 

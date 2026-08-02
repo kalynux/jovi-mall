@@ -105,7 +105,12 @@ export class AgentCapacityService {
   // ─── Settings ─────────────────────────────────────────────────────────────
 
   /**
-   * The agent sets their own ceiling.
+   * Set the ceiling. **Not agent-settable — do not route this.**
+   *
+   * The cap is plan-driven: `AgentPlanCapacityConsumer` writes it from the
+   * `plan.activated` payload, so an agent-facing write would be silently undone
+   * the next time their plan renewed. Agents read the cap on their profile and
+   * change it by changing plan. Admin-facing callers are fine.
    *
    * Lowering below what they are already carrying is rejected: those shipments
    * exist, and a cap beneath reality would describe a state the system cannot

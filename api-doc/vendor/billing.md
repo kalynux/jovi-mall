@@ -1,8 +1,8 @@
 # Vendor Billing API
 
 Vendor-facing endpoints for pricing plans, the credit wallet, top-up purchases
-and billing settings. Read [overview.md](./overview.md) first for concepts and
-shared data shapes.
+and billing settings. Read [billing-overview.md](./billing-overview.md) first for
+concepts and shared data shapes.
 
 > **Now one engine across roles.** The billing engine was generalized so
 > **agencies** and **agents** have the identical surface under `/api/agency` and

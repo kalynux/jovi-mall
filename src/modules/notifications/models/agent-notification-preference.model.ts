@@ -48,6 +48,13 @@ export interface IAgentNotificationPreference extends Document {
          * channel (in-app + push are always delivered).
          */
         assignmentOffers: boolean;
+        /**
+         * The agent↔agency contract handshake (agent_contract.request_received /
+         * .approved / .rejected). Defaults ON: an agency's request now reaches
+         * the agent only through the platform — there is no email invite behind
+         * it any more — so silence here means the request is simply never seen.
+         */
+        contractUpdated: boolean;
         /** Subscription plan lifecycle (plan.expiring / plan.expired). */
         planUpdates: boolean;
         /** The agent's own media storage threshold alerts (storage.alert, 80/90/100%). */
@@ -101,6 +108,10 @@ const AgentNotificationPreferenceSchema = new Schema<IAgentNotificationPreferenc
                 default: true
             },
             assignmentOffers: {
+                type: Boolean,
+                default: true
+            },
+            contractUpdated: {
                 type: Boolean,
                 default: true
             },

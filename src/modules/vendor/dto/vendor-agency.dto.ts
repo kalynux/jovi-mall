@@ -1,11 +1,21 @@
 import { IDeliveryAgency } from '../../delivery/delivery-agency.model';
+import { IAgencyHeadquartersAddress } from '../../magazin/models/magazin.model';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
+
+/** The Magazin fields a vendor-facing agency list item needs (business surface). */
+export interface AgencyMagazinSummary {
+    name?: string;
+    coverage_areas?: string[];
+    headquarters_addresses?: IAgencyHeadquartersAddress[];
+}
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
 export interface VendorAgencyHQAddressDto {
-    region: string;
-    city: string;
+    /** Derived from the entry's geocode; null when it resolves no region. */
+    region: string | null;
+    /** Derived from the entry's geocode; null when it resolves no city. */
+    city: string | null;
     address_description: string;
 }
 
@@ -83,14 +93,15 @@ export class VendorAgencyMapper {
      */
     static toListItemDto(
         agency: IDeliveryAgency,
-        agencyName: string,
+        magazin: AgencyMagazinSummary | null,
         logo: FileDetail | null = null,
     ): VendorAgencyListItemDto {
-        const primaryHQ = agency.headquarters_addresses?.[0] ?? null;
+        // Business name, coverage areas and HQ addresses live on the Magazin.
+        const primaryHQ = magazin?.headquarters_addresses?.[0] ?? null;
 
         return {
             id: agency._id.toString(),
-            agencyName,
+            agencyName: magazin?.name ?? '',
             logo,
             kycVerified: agency.kyc_details?.legit_verified ?? false,
             headquartersAddress: primaryHQ
@@ -100,7 +111,7 @@ export class VendorAgencyMapper {
                       address_description: primaryHQ.address_description,
                   }
                 : null,
-            coverageAreas: agency.coverage_areas ?? [],
+            coverageAreas: magazin?.coverage_areas ?? [],
             // TODO: populate from ratings system when implemented
             rating: null,
             policies: agency.policies

@@ -30,18 +30,30 @@ import { AGENT_CONFIG } from '../config/agent.config';
  *      │                  │  │                    ▲
  *      │                  │  └────pause/suspend───┘
  *      │                  │                   suspended
- *      └──reject──> rejected                       │
- *                         └──deactivate──> deactivated <──┘
+ *      ├──reject──> rejected                        │
+ *      │                  └──deactivate──> deactivated <──┘
+ *      └──withdraw──> withdrawn
  *
  * `approved` is an ACTION, not a resting state — approving a pending contract
  * lands it in `active`. The history event is named `approved`; the status is
  * `active`. Carrying both as statuses would leave a contract sitting "approved
  * but not active" with nothing to move it.
+ *
+ * ── Who may respond to a pending contract ────────────────────────────────────
+ *
+ * `origin` is the approver discriminator, not merely audit metadata: the party
+ * that did NOT raise the contract responds to it, and the party that DID raise
+ * it may withdraw it. `join_request` means the agent asked; every other origin
+ * (`invitation`, `transfer`, `admin`, `migration`) is agency- or
+ * platform-initiated and the agent is the one who consents. See
+ * AgentContractService.initiatorOf — this mirrors `requester_role` on the
+ * vendor↔agency connection (modules/agency-connections/connection.model.ts).
  */
 
 export type ContractStatus =
   | 'pending'
   | 'rejected'
+  | 'withdrawn'
   | 'active'
   | 'paused'
   | 'suspended'
@@ -55,6 +67,8 @@ export type ContractStatus =
  *
  *  - `pending`     — excluded. Never approved; no interaction has occurred.
  *  - `rejected`    — excluded. Terminal, never started.
+ *  - `withdrawn`   — excluded. Terminal, never started — the requester pulled
+ *                    the request before the other side answered.
  *  - `active`      — included, obviously.
  *  - `paused`      — INCLUDED. Pausing does not free capacity: the agent may
  *                    still be holding this agency's cash.
@@ -69,7 +83,15 @@ export type ContractStatus =
  */
 export const ALLOCATING_CONTRACT_STATUSES: ContractStatus[] = ['active', 'paused', 'suspended'];
 
-/** Statuses where the contract still exists as a live relationship. */
+/**
+ * Statuses where the contract still exists as a live relationship.
+ *
+ * `withdrawn` is deliberately absent, alongside `rejected` and `deactivated`:
+ * this list backs the partial unique index on (agent_id, agency_id), so a
+ * terminal status is exactly what lets the same pair contract again on a fresh
+ * row. Adding `withdrawn` here would make a withdrawn request block the
+ * re-request it exists to permit.
+ */
 export const LIVE_CONTRACT_STATUSES: ContractStatus[] = ['pending', 'active', 'paused', 'suspended'];
 
 /** Statuses that count toward the agent's max-relationships cap. */
@@ -204,6 +226,9 @@ export interface IAgentAgencyContract extends Document {
   approved_by_user_id: mongoose.Types.ObjectId | null;
   rejected_at: Date | null;
   rejection_reason: string | null;
+  /** Set when the party that RAISED the pending contract pulled it back. */
+  withdrawn_at: Date | null;
+  withdrawal_reason: string | null;
   paused_at: Date | null;
   pause_reason: string | null;
   suspended_at: Date | null;
@@ -340,7 +365,7 @@ const AgentAgencyContractSchema = new Schema<IAgentAgencyContract>(
     agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, required: true },
     status: {
       type: String,
-      enum: ['pending', 'rejected', 'active', 'paused', 'suspended', 'deactivated'],
+      enum: ['pending', 'rejected', 'withdrawn', 'active', 'paused', 'suspended', 'deactivated'],
       default: 'pending',
       required: true,
     },
@@ -366,6 +391,8 @@ const AgentAgencyContractSchema = new Schema<IAgentAgencyContract>(
     approved_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
     rejected_at: { type: Date, default: null },
     rejection_reason: { type: String, default: null, trim: true },
+    withdrawn_at: { type: Date, default: null },
+    withdrawal_reason: { type: String, default: null, trim: true },
     paused_at: { type: Date, default: null },
     pause_reason: { type: String, default: null, trim: true },
     suspended_at: { type: Date, default: null },

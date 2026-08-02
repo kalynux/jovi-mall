@@ -74,6 +74,20 @@ const MANAGE_STORAGE_LABEL: Record<Language, string> = {
     ar: 'إدارة التخزين'
 };
 
+const VIEW_CONTRACT_LABEL: Record<Language, string> = {
+    en: 'View request',
+    fr: 'Voir la demande',
+    pt: 'Ver pedido',
+    es: 'Ver solicitud',
+    ar: 'عرض الطلب'
+};
+
+const CONTRACT_BUTTON: ButtonDef = {
+    type: 'url',
+    label: VIEW_CONTRACT_LABEL,
+    urlSuffix: 'memberships/{{contractId}}'
+};
+
 const STORAGE_BUTTON: ButtonDef = {
     type: 'url',
     label: MANAGE_STORAGE_LABEL,
@@ -346,6 +360,96 @@ export const AGENT_NOTIFICATION_CATALOG: Record<AgentNotificationType, Situation
             }
         }
         // No button: the agent has no remaining action on a shipment that left them.
+    },
+
+    'agent_contract.request_received': {
+        base: {
+            en: {
+                subject: 'New agency request',
+                body: '{{agencyName}} would like you to deliver for them. Review the request to accept or decline it.'
+            },
+            fr: {
+                subject: 'Nouvelle demande d\'agence',
+                body: '{{agencyName}} souhaite que vous livriez pour eux. Consultez la demande pour l\'accepter ou la refuser.'
+            },
+            pt: {
+                subject: 'Novo pedido de agência',
+                body: '{{agencyName}} gostaria que fizesse entregas para eles. Veja o pedido para o aceitar ou recusar.'
+            },
+            es: {
+                subject: 'Nueva solicitud de agencia',
+                body: '{{agencyName}} quiere que hagas entregas para ellos. Revisa la solicitud para aceptarla o rechazarla.'
+            },
+            ar: {
+                subject: 'طلب جديد من وكالة',
+                body: 'ترغب {{agencyName}} في أن تقوم بالتوصيل لهم. راجع الطلب لقبوله أو رفضه.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_contract_request_received', bodyParams: ['{{agencyName}}'] }
+        },
+        button: CONTRACT_BUTTON
+    },
+
+    'agent_contract.approved': {
+        base: {
+            en: {
+                subject: 'Application approved',
+                body: '{{agencyName}} approved your application. You can now receive delivery offers from them.'
+            },
+            fr: {
+                subject: 'Candidature approuvée',
+                body: '{{agencyName}} a approuvé votre candidature. Vous pouvez désormais recevoir leurs offres de livraison.'
+            },
+            pt: {
+                subject: 'Candidatura aprovada',
+                body: '{{agencyName}} aprovou a sua candidatura. Já pode receber ofertas de entrega desta agência.'
+            },
+            es: {
+                subject: 'Solicitud aprobada',
+                body: '{{agencyName}} aprobó tu solicitud. Ya puedes recibir ofertas de entrega suyas.'
+            },
+            ar: {
+                subject: 'تمت الموافقة على طلبك',
+                body: 'وافقت {{agencyName}} على طلبك. يمكنك الآن تلقي عروض التوصيل منهم.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_contract_approved', bodyParams: ['{{agencyName}}'] }
+        },
+        button: CONTRACT_BUTTON
+    },
+
+    'agent_contract.rejected': {
+        base: {
+            en: {
+                subject: 'Application declined',
+                body: '{{agencyName}} declined your application. You can apply again later, or browse other agencies.'
+            },
+            fr: {
+                subject: 'Candidature refusée',
+                body: '{{agencyName}} a refusé votre candidature. Vous pouvez postuler à nouveau plus tard ou explorer d\'autres agences.'
+            },
+            pt: {
+                subject: 'Candidatura recusada',
+                body: '{{agencyName}} recusou a sua candidatura. Pode candidatar-se novamente mais tarde ou explorar outras agências.'
+            },
+            es: {
+                subject: 'Solicitud rechazada',
+                body: '{{agencyName}} rechazó tu solicitud. Puedes volver a postularte más tarde o explorar otras agencias.'
+            },
+            ar: {
+                subject: 'تم رفض طلبك',
+                body: 'رفضت {{agencyName}} طلبك. يمكنك التقديم مرة أخرى لاحقًا أو استكشاف وكالات أخرى.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_contract_rejected', bodyParams: ['{{agencyName}}'] }
+        },
+        button: CONTRACT_BUTTON
     },
 
     'plan.expiring': {

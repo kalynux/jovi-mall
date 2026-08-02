@@ -35,6 +35,13 @@ export interface AgentTrackingStateDto {
     isStale: boolean;
 }
 
+export interface AgentCapacityDto {
+    maxActiveShipments: number;
+    activeShipmentCount: number;
+    /** How many more shipments this agent can accept right now. Never negative. */
+    remaining: number;
+}
+
 export interface GetAgentProfileResponseDto {
     id: string;
     name: string;
@@ -57,6 +64,12 @@ export interface GetAgentProfileResponseDto {
     lastKnownTrackingState: AgentTrackingStateDto;
     preferences: IAgentPreferences;
     settings: IAgentSettings;
+    /**
+     * Read-only. `maxActiveShipments` is written from the agent's billing plan
+     * (see api-doc/agent/billing.md), never from a profile write — so the app
+     * can show "3 of 20" but must not offer a control for it.
+     */
+    capacity: AgentCapacityDto;
     wa: { verified: boolean; name?: string } | null;
     timezone: string;
     preferredLanguage: string;
@@ -128,6 +141,7 @@ export class AgentProfileMapper {
             lastKnownTrackingState: AgentProfileMapper.toTrackingStateDto(agent, now),
             preferences: agent.preferences,
             settings: agent.settings,
+            capacity: AgentProfileMapper.toCapacityDto(agent),
             wa: agent.wa ? { verified: agent.wa.verified, name: agent.wa.name } : null,
             timezone: agent.timezone,
             preferredLanguage: agent.preferred_language,
@@ -160,6 +174,24 @@ export class AgentProfileMapper {
         };
     }
 
+    /**
+     * `capacity.active_shipment_count` is the authoritative in-flight count — it
+     * is the value `tryReserveCapacity` compare-and-sets on accept. The parallel
+     * `working_state.active_shipment_count` is a recomputed label input and can
+     * lag it, so it must not be reported as the count anywhere.
+     */
+    static toCapacityDto(agent: IDeliveryAgent): AgentCapacityDto {
+        const maxActiveShipments =
+            agent.capacity?.max_active_shipments ?? AGENT_CONFIG.MAX_ACTIVE_SHIPMENTS_DEFAULT;
+        const activeShipmentCount = agent.capacity?.active_shipment_count ?? 0;
+
+        return {
+            maxActiveShipments,
+            activeShipmentCount,
+            remaining: Math.max(0, maxActiveShipments - activeShipmentCount),
+        };
+    }
+
     static toRosterEntryDto(agent: IDeliveryAgent, avatar: FileDetail | null = null): AgentRosterEntryDto {
         return {
             id: agent._id.toString(),
@@ -171,7 +203,7 @@ export class AgentProfileMapper {
             vehicleInfo: agent.vehicle_info,
             availability: agent.availability?.state ?? 'offline',
             workingState: agent.working_state?.state ?? 'idle',
-            activeShipmentCount: agent.working_state?.active_shipment_count ?? 0,
+            activeShipmentCount: agent.capacity?.active_shipment_count ?? 0,
             trackingAllowed: agent.tracking?.allowed ?? false,
             trustScore: agent.cod?.trust_score ?? 100,
         };

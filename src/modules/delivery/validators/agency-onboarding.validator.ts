@@ -1,16 +1,10 @@
 import { z } from 'zod';
-import { GeoPointZodSchema } from '../../../core/types/geo.types';
-import { GeoAddressZodSchema } from '../../../core/types/geo-address.types';
 import { PayoutDetailsZodSchema } from '../../../core/types/payout.types';
 import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 import { clearable } from '../../../core/validation/zod.helpers';
-
-// ─── Re-usable sub-schemas ────────────────────────────────────────────────────
-
-const SupportContactSchema = z.object({
-    phone: z.string().min(6).max(20).trim().regex(/^\+?[0-9\s\-()]+$/, 'Invalid phone number format'),
-    email: clearable(z.string().email('Invalid email format')),
-});
+// Coverage areas + HQ addresses live on the Magazin — reuse its geocoded HQ shape
+// (client sends a `/api/geo/search` result as `geo`; `location` is derived on write).
+import { MagazinHeadquartersAddressSchema } from '../../magazin/validators/magazin.validator';
 
 // ─── Agency Creation ──────────────────────────────────────────────────────────
 
@@ -20,19 +14,7 @@ export const CreateAgencySchema = z.object({
 
 export type CreateAgencyInput = z.infer<typeof CreateAgencySchema>;
 
-const HeadquartersAddressSchema = z.object({
-    region: z.string().min(1).max(100).trim(),
-    city: z.string().min(1).max(100).trim(),
-    address_description: z.string().min(1).max(200).trim(),
-    support_contact: SupportContactSchema,
-    // Map coordinates are REQUIRED — every agency address must be geolocatable
-    // (so the auto-assignment distance factor can measure from pickup, and the
-    // location renders on a map). GeoJSON Point: { type:'Point', coordinates:[lng,lat] }.
-    location: GeoPointZodSchema,
-    // The full selected address-search result. Optional (kept back-compatible for
-    // clients that still send only `location`), but preferred going forward.
-    geo: GeoAddressZodSchema.nullable().optional(),
-});
+const HeadquartersAddressSchema = MagazinHeadquartersAddressSchema;
 
 const KycDetailsSchema = z.object({
     registration_number: clearable(z.string().min(1).trim()),
@@ -171,8 +153,8 @@ export const UpdateAgencyProfileSchema = z.object({
     // rows) or as an idempotent echo of the current value — changes are
     // rejected by the service (PROFILE_COUNTRY_IMMUTABLE).
     country: z.string().length(2, 'Country must be an ISO-2 code (e.g. "CM")').toUpperCase().optional(),
-    coverage_areas: z.array(z.string().min(1).trim()).min(1).optional(),
-    headquarters_addresses: z.array(HeadquartersAddressSchema).min(1).optional(),
+    // coverage_areas + headquarters_addresses moved to the Magazin
+    // (PATCH /api/agency/magazin), where they are validated against `country`.
     payout_details: PayoutDetailsZodSchema.optional(), // array of IPayoutMethod
     kyc_details: KycDetailsSchema.optional(),
     policies: AgencyPoliciesZodSchema.optional(),

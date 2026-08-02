@@ -6,11 +6,29 @@ import { IProductRepository } from '../../repositories/interfaces/product.reposi
 import { IVariantRepository } from '../../repositories/interfaces/variant.repository.interface';
 import { VendorRepository } from '../../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repository';
+import { IDeliveryAgency } from '../../../delivery/delivery-agency.model';
 import { ConnectionRepository } from '../../../agency-connections/connection.repository';
 import { AvailabilityRule } from '../../../booking/models/availability-rule.model';
 import { PickupLocationValidationService } from './PickupLocationValidationService';
 import { RepositoryOptions } from '../../repositories/types';
 import { ProductStatus } from '../../models/product.model';
+import { ActivationBlocker } from '../../read-models/product-detail.read-model';
+
+/**
+ * A blocker plus the AppError it came from. The error is kept so `validate()`
+ * can rethrow the original object (identical code, message, status and details)
+ * rather than reconstructing one — that identity is what makes the collector a
+ * safe refactor of the throwing path. Strip `.error` before serialising: the
+ * wire type is `ActivationBlocker`.
+ */
+export interface CollectedBlocker extends ActivationBlocker {
+    error: AppError;
+}
+
+/** Drop the internal AppError so a blocker can be sent over the wire. */
+export function toActivationBlocker(blocker: CollectedBlocker): ActivationBlocker {
+    return { code: blocker.code, message: blocker.message, details: blocker.details };
+}
 
 /**
  * Status transitions a VENDOR may trigger (PATCH /:id/status and the bulk
@@ -81,27 +99,59 @@ export class ProductStatusValidationService {
      * new default agency, flipped a connection to 'active', or reactivated an
      * agency in the same transaction). Without the session, these reads see the
      * pre-transaction snapshot and the gate fails against stale state.
+     *
+     * Throws the FIRST unmet requirement. That is the same error, in the same
+     * order, that this method has always thrown — it now delegates to
+     * `collectActivationBlockers` so the rule list exists in exactly one place.
+     * Callers that want the whole checklist (the simple-product endpoints) call
+     * the collector directly instead of catching one 422 at a time.
      */
     async validate(product: Product, newStatus: string, options?: RepositoryOptions): Promise<void> {
         if (newStatus !== 'active') return;
+
+        const blockers = await this.collectActivationBlockers(product, options);
+        if (blockers.length > 0) {
+            throw blockers[0].error;
+        }
+    }
+
+    /**
+     * Every unmet requirement between this product and `status: 'active'`, in the
+     * order `validate()` would have thrown them — so `blockers[0].error` is
+     * exactly the AppError the throwing path produces.
+     *
+     * Not a flat list: some checks are chains, and evaluating a dependent check
+     * against unresolved state would report a second, misleading blocker. The
+     * rules are:
+     *   - the four product-level checks are independent and always evaluated;
+     *   - the vendor-default agency chain (set → exists+active → connected) stops
+     *     at its first failure, because the later links have nothing to read;
+     *   - the product-override chain is separate and runs even if the default
+     *     chain failed — they are independent requirements, not alternatives;
+     *   - pickup-location VALIDITY is skipped unless a location is present and an
+     *     effective agency was actually resolved.
+     */
+    async collectActivationBlockers(product: Product, options?: RepositoryOptions): Promise<CollectedBlocker[]> {
         const session = options?.session;
+        const blockers: CollectedBlocker[] = [];
+        const add = (error: AppError): void => { blockers.push({ code: error.code, message: error.message, details: error.details, error }); };
 
         if (!product.description?.trim()) {
-            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NO_DESCRIPTION, 422);
+            add(createAppError(ERROR_CODES.CATALOG_PRODUCT_NO_DESCRIPTION, 422));
         }
 
         const variants = await this.variantRepository.findByProduct(product.id, options);
 
         if (variants.length === 0) {
-            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NO_VARIANTS, 422, undefined, { type: product.type });
+            add(createAppError(ERROR_CODES.CATALOG_PRODUCT_NO_VARIANTS, 422, undefined, { type: product.type }));
         }
 
         for (const variant of variants) {
             if (variant.status !== 'active') continue;
             if (variant.price <= 0) {
-                throw createAppError(ERROR_CODES.CATALOG_PRODUCT_VARIANT_ZERO_PRICE, 422, undefined, {
+                add(createAppError(ERROR_CODES.CATALOG_PRODUCT_VARIANT_ZERO_PRICE, 422, undefined, {
                     variant: variant.name || variant.sku,
-                });
+                }));
             }
         }
 
@@ -109,67 +159,75 @@ export class ProductStatusValidationService {
             v => v.id === product.defaultVariantId && v.status === 'active'
         );
         if (!defaultVariant) {
-            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NO_DEFAULT_VARIANT, 422, undefined, { type: product.type });
+            add(createAppError(ERROR_CODES.CATALOG_PRODUCT_NO_DEFAULT_VARIANT, 422, undefined, { type: product.type }));
         }
 
         if (product.type === 'physical') {
             const vendor = await this.vendorRepository.findById(product.vendorId, session);
+
+            // Vendor-default agency chain. Each link needs the previous one's
+            // result, so a failure ends the chain rather than cascading.
+            let effectiveAgency: IDeliveryAgency | null = null;
             if (!vendor?.default_delivery_agency_id) {
-                throw createAppError(
+                add(createAppError(
                     ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
                     422,
                     'Physical products require an active default delivery agency on your vendor profile.',
-                );
-            }
-
-            const agency = await this.deliveryAgencyRepository.findById(vendor.default_delivery_agency_id.toString(), session);
-            if (!agency || agency.status !== 'active') {
-                throw createAppError(
-                    ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
-                    422,
-                    'Your default delivery agency is not currently active. Set an active default delivery agency to activate physical products.',
-                );
-            }
-
-            const defaultConnection = await this.connectionRepository.findByVendorAndAgency(
-                product.vendorId,
-                vendor.default_delivery_agency_id.toString(),
-                session,
-            );
-            if (!defaultConnection || defaultConnection.status !== 'active') {
-                throw createAppError(
-                    ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
-                    422,
-                    'Your connection with this delivery agency needs to be approved (or reapproved) before this product can be activated.',
-                );
+                ));
+            } else {
+                const agency = await this.deliveryAgencyRepository.findById(vendor.default_delivery_agency_id.toString(), session);
+                if (!agency || agency.status !== 'active') {
+                    add(createAppError(
+                        ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
+                        422,
+                        'Your default delivery agency is not currently active. Set an active default delivery agency to activate physical products.',
+                    ));
+                } else {
+                    const defaultConnection = await this.connectionRepository.findByVendorAndAgency(
+                        product.vendorId,
+                        vendor.default_delivery_agency_id.toString(),
+                        session,
+                    );
+                    if (!defaultConnection || defaultConnection.status !== 'active') {
+                        add(createAppError(
+                            ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
+                            422,
+                            'Your connection with this delivery agency needs to be approved (or reapproved) before this product can be activated.',
+                        ));
+                    } else {
+                        effectiveAgency = agency;
+                    }
+                }
             }
 
             // A product's own override, if set, must independently be active too —
             // it doesn't replace the vendor-default check above, it's an extra one.
-            let effectiveAgency = agency;
             if (product.delivery?.agencyId) {
                 const overrideAgency = await this.deliveryAgencyRepository.findById(product.delivery.agencyId, session);
                 if (!overrideAgency || overrideAgency.status !== 'active') {
-                    throw createAppError(
+                    add(createAppError(
                         ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
                         422,
                         "This product's own delivery agency is not currently active.",
+                    ));
+                } else {
+                    const overrideConnection = await this.connectionRepository.findByVendorAndAgency(
+                        product.vendorId,
+                        product.delivery.agencyId,
+                        session,
                     );
+                    if (!overrideConnection || overrideConnection.status !== 'active') {
+                        add(createAppError(
+                            ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
+                            422,
+                            "Your connection with this product's delivery agency needs to be approved (or reapproved) before this product can be activated.",
+                        ));
+                    } else {
+                        // The override is what actually handles delivery when set —
+                        // so it, not the vendor default, is what pickup is validated against.
+                        effectiveAgency = overrideAgency;
+                    }
                 }
-
-                const overrideConnection = await this.connectionRepository.findByVendorAndAgency(
-                    product.vendorId,
-                    product.delivery.agencyId,
-                    session,
-                );
-                if (!overrideConnection || overrideConnection.status !== 'active') {
-                    throw createAppError(
-                        ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
-                        422,
-                        "Your connection with this product's delivery agency needs to be approved (or reapproved) before this product can be activated.",
-                    );
-                }
-                effectiveAgency = overrideAgency;
             }
 
             // The delivery agency needs to know where to collect this product from.
@@ -177,46 +235,54 @@ export class ProductStatusValidationService {
             // (the product's own override if set, otherwise the vendor default) —
             // the same resolution order used at order-creation time.
             if (!product.delivery?.pickupLocation) {
-                throw createAppError(
+                add(createAppError(
                     ERROR_CODES.CATALOG_PRODUCT_NO_PICKUP_LOCATION,
                     422,
                     'Physical products require a pickup location before they can be activated.',
-                );
+                ));
+            } else if (effectiveAgency && vendor) {
+                // Skipped when no agency resolved: "is this pickup location compatible
+                // with your agency" is unanswerable without one, and reporting it would
+                // just restate the agency blocker in more confusing words.
+                try {
+                    this.pickupLocationValidationService.assertValid(product.delivery.pickupLocation, effectiveAgency, vendor);
+                } catch (err) {
+                    if (!(err instanceof AppError)) throw err;
+                    add(err);
+                }
             }
-            this.pickupLocationValidationService.assertValid(product.delivery.pickupLocation, effectiveAgency, vendor);
         }
 
         if (product.type === 'digital') {
             const activeVariants = variants.filter(v => v.status === 'active');
 
             if (activeVariants.length > 5) {
-                throw createAppError(
-                    ERROR_CODES.CATALOG_DIGITAL_VARIANT_LIMIT_EXCEEDED,
-                    422,
-                );
+                add(createAppError(ERROR_CODES.CATALOG_DIGITAL_VARIANT_LIMIT_EXCEEDED, 422));
             }
 
             for (const v of activeVariants) {
                 if (!v.digitalConfig?.assetId) {
-                    throw createAppError(
+                    add(createAppError(
                         ERROR_CODES.CATALOG_VARIANT_NO_DIGITAL_ASSET,
                         422,
                         undefined,
                         { variant: v.name || v.sku },
-                    );
+                    ));
                 }
             }
         }
 
         if (product.type === 'service') {
-            // Service config + price live on the single default variant.
-            if (!defaultVariant.serviceConfig?.durationMinutes) {
-                throw createAppError(ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_DURATION, 422);
+            // Service config + price live on the single default variant. Without a
+            // default variant there is no config to check, so these are skipped —
+            // the missing-default-variant blocker above already says what to fix.
+            if (defaultVariant && !defaultVariant.serviceConfig?.durationMinutes) {
+                add(createAppError(ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_DURATION, 422));
             }
             // Capacity mode needs a seat count to be bookable.
-            if (defaultVariant.serviceConfig.bookingMode === 'capacity'
+            if (defaultVariant?.serviceConfig?.bookingMode === 'capacity'
                 && !(defaultVariant.serviceConfig.maxBookings && defaultVariant.serviceConfig.maxBookings >= 1)) {
-                throw createAppError(ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_CAPACITY, 422);
+                add(createAppError(ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_CAPACITY, 422));
             }
             // A service is only bookable if it has at least one active availability
             // rule defining when customers can book; otherwise availability is empty.
@@ -226,9 +292,11 @@ export class ProductStatusValidationService {
                 deletedAt: null,
             }).session(session ?? null);
             if (activeRules === 0) {
-                throw createAppError(ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_AVAILABILITY, 422);
+                add(createAppError(ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_AVAILABILITY, 422));
             }
         }
+
+        return blockers;
     }
 
     /**

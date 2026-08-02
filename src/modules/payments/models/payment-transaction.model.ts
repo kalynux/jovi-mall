@@ -42,7 +42,19 @@ export interface IPaymentTransaction extends Document {
   bookingId?: Types.ObjectId;       // Source booking (for service payments)
   cartId?: Types.ObjectId;          // Checkout group (multi-vendor cart → N orders, one payment)
   orderIds?: Types.ObjectId[];      // The group's orders (required when cartId is set)
-  userId: Types.ObjectId;           // Customer making payment
+  /**
+   * Who paid — but NOT one kind of id, despite the `ref` below.
+   *
+   * Order and cart payments write `order.customer_id` (a CUSTOMER id); booking
+   * payments write `booking.userId`, which refs USER. So the collection holds
+   * both, and which one a row carries depends on how it was created.
+   *
+   * Anything scoping a transaction to its payer must therefore accept either —
+   * see the ownership check on `GET /api/payments/:transactionId`. Worth
+   * normalising, but not without a migration: narrowing to one kind first would
+   * lock the other's payer out of their own payment record.
+   */
+  userId: Types.ObjectId;
 
   // Gateway info
   gateway: PaymentGatewayType;      // Which gateway processed this

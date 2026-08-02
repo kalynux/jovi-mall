@@ -63,4 +63,30 @@ export class MagazinRepository {
     const row = await AgencyMagazinModel.findOne({ agency_id: agencyId }).select('name').lean().exec();
     return row?.name ?? null;
   }
+
+  /**
+   * Batch-resolve agency ids → their PRIMARY headquarters address
+   * (`headquarters_addresses[0]`), keyed by agency id string. Agencies with no
+   * magazin, or a magazin with no HQ address recorded, are absent from the map.
+   *
+   * Shipment list views need this: an `agency_storage` item is collected from
+   * the agency's own HQ, which is resolved live rather than snapshotted onto the
+   * order. Resolving it per row via `findByAgencyIdOrNull` would be an N+1.
+   */
+  async findHqAddressesByAgencyIds(
+    agencyIds: Array<string>,
+  ): Promise<Map<string, IAgencyMagazin['headquarters_addresses'][number]>> {
+    const ids = [...new Set(agencyIds.filter((id): id is string => !!id))];
+    if (ids.length === 0) return new Map();
+    const rows = await AgencyMagazinModel.find({ agency_id: { $in: ids } })
+      .select('agency_id headquarters_addresses')
+      .lean()
+      .exec();
+    const map = new Map<string, IAgencyMagazin['headquarters_addresses'][number]>();
+    for (const row of rows) {
+      const hq = row.headquarters_addresses?.[0];
+      if (hq) map.set(row.agency_id.toString(), hq);
+    }
+    return map;
+  }
 }

@@ -162,12 +162,10 @@ router.post('/shipments/:id/offer/cancel', AgencyAssignmentController.cancelOffe
  */
 router.post('/shipments/:id/reassign', AgencyAssignmentController.reassign);
 
-/**
- * PATCH /api/agency/shipments/:id/tracking-number
- * Record/replace the carrier tracking number on a shipment this agency handles.
- * Body: { trackingNumber: string }
- */
-router.patch('/shipments/:id/tracking-number', ShipmentController.setTrackingNumber);
+// NOTE: PATCH /shipments/:id/tracking-number is GONE. A shipment's tracking
+// number is generated when the shipment is created and is read-only — it is
+// returned on every shipment payload (`trackingNumber`) and never accepted on
+// one. See TrackingNumberGenerator.
 
 // ─── COD (cash management) ────────────────────────────────────────────────────
 

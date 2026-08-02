@@ -63,6 +63,24 @@ export const MEDIA_CATEGORY_MATCHERS: Record<MediaCategory, unknown> = {
 };
 
 /**
+ * In-process twin of `categorySwitchExpr`: classify a single MIME type.
+ * Used by the upload pipeline to pick a file's storage folder from its sniffed
+ * type. Branch order MUST match `categorySwitchExpr` below, or a file would be
+ * stored under one category and reported under another.
+ */
+export function resolveMediaCategory(mimeType: string): MediaCategory {
+  const mime = (mimeType || '').toLowerCase();
+
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (DOCUMENT_MIME_TYPES.includes(mime)) return 'document';
+  if (ARCHIVE_MIME_TYPES.includes(mime)) return 'archive';
+
+  return 'other';
+}
+
+/**
  * A MongoDB `$switch` expression that maps a `mimeType` field reference to its
  * `MediaCategory`. Use inside an aggregation `$addFields`/`$project` to group by
  * category. `fieldRef` defaults to `'$mimeType'`.

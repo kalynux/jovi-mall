@@ -24,7 +24,14 @@ import { ContractStatus } from './agent-agency-membership.model';
  * time, never trusted from when the request was raised.
  */
 
-export type ContractTransition = 'approve' | 'reject' | 'pause' | 'suspend' | 'reactivate' | 'deactivate';
+export type ContractTransition =
+  | 'approve'
+  | 'reject'
+  | 'withdraw'
+  | 'pause'
+  | 'suspend'
+  | 'reactivate'
+  | 'deactivate';
 
 export type StatusRequestState = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
@@ -72,17 +79,17 @@ const ContractStatusRequestSchema = new Schema<IContractStatusRequest>(
 
     transition: {
       type: String,
-      enum: ['approve', 'reject', 'pause', 'suspend', 'reactivate', 'deactivate'],
+      enum: ['approve', 'reject', 'withdraw', 'pause', 'suspend', 'reactivate', 'deactivate'],
       required: true,
     },
     target_status: {
       type: String,
-      enum: ['pending', 'rejected', 'active', 'paused', 'suspended', 'deactivated'],
+      enum: ['pending', 'rejected', 'withdrawn', 'active', 'paused', 'suspended', 'deactivated'],
       required: true,
     },
     from_status: {
       type: String,
-      enum: ['pending', 'rejected', 'active', 'paused', 'suspended', 'deactivated'],
+      enum: ['pending', 'rejected', 'withdrawn', 'active', 'paused', 'suspended', 'deactivated'],
       required: true,
     },
 

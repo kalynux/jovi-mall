@@ -14,11 +14,31 @@ export type AgencyNotificationType =
     | 'connection.approved'
     | 'connection.rejected'
     | 'connection.reapproval_needed'
+    /**
+     * The agent↔agency contract handshake, from the agency's side. Distinct
+     * from `connection.*` above, which is the vendor↔agency one: the two
+     * relationships have different counterparties and different copy, and the
+     * agency is on the receiving end of both.
+     */
+    | 'agent_contract.request_received'
+    | 'agent_contract.approved'
+    | 'agent_contract.rejected'
     | 'shipment.assigned'
     /** An agent accepted the shipment offer — it's now theirs. */
     | 'shipment.offer.accepted'
     /** No agent accepted (declined / timed out / pool exhausted) — assign manually. */
     | 'shipment.assignment.unfilled'
+    /**
+     * The agency's AGENT advanced a shipment from the agent app. One situation
+     * per outcome rather than one parameterised by status — the render context
+     * is built before the agency's language is resolved, so a status label would
+     * leak English into a localized body. `in_transit` is deliberately absent:
+     * it is a routine progress ping, not something to push at an agency.
+     */
+    | 'shipment.agent.picked_up'
+    | 'shipment.agent.delivered'
+    | 'shipment.agent.failed'
+    | 'shipment.agent.returned'
     | 'payout.requested'
     | 'payout.paid'
     | 'payout.rejected'
@@ -33,7 +53,15 @@ export type AgencyNotificationType =
     | 'shipment.cap.exceeded'
     /** This agency's media storage crossed a usage threshold (80/90/100%). */
     | 'storage.alert';
-export type AgencyAggregateType = 'connection' | 'shipment' | 'payout' | 'deposit' | 'plan' | 'storage';
+export type AgencyAggregateType =
+    | 'connection'
+    /** An agent↔agency contract — NOT a vendor↔agency connection. */
+    | 'contract'
+    | 'shipment'
+    | 'payout'
+    | 'deposit'
+    | 'plan'
+    | 'storage';
 
 /**
  * Deep-link action for a notification, localized in the agency's language.
@@ -81,6 +109,10 @@ const AgencyNotificationSchema = new Schema<IAgencyNotification>(
                 'shipment.assigned',
                 'shipment.offer.accepted',
                 'shipment.assignment.unfilled',
+                'shipment.agent.picked_up',
+                'shipment.agent.delivered',
+                'shipment.agent.failed',
+                'shipment.agent.returned',
                 'payout.requested',
                 'payout.paid',
                 'payout.rejected',

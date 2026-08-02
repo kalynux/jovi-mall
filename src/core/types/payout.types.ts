@@ -95,6 +95,69 @@ export type IPayoutDetails = IPayoutMethod[];
  */
 export type IPayoutDetailsSingle = IPayoutMethod;
 
+// ─── Read-side masking ───────────────────────────────────────────────────────
+
+/**
+ * A payout method as it is safe to READ BACK: enough to recognise the
+ * destination, never enough to reconstruct the account.
+ *
+ * Payout details are write-mostly by design — the owner types them in and the
+ * admin paying out resolves the real values server-side. Echoing a full account
+ * number to any client that can read a profile would turn a session hijack into
+ * a banking-detail leak for no product benefit.
+ */
+export interface PayoutMethodMasked {
+    method: 'mobile_money' | 'bank';
+    /** The first entry of the ordered list is the one payouts actually use. */
+    is_preferred: boolean;
+    mobile_money: { provider: string; phone_number_masked: string; account_name: string } | null;
+    bank: {
+        bank_name: string;
+        account_number_masked: string;
+        account_name: string;
+        country: string;
+    } | null;
+}
+
+/** Keep the last 4 digits; everything before becomes bullets. */
+function maskTail(value: string): string {
+    if (value.length <= 4) return '••••';
+    return '•'.repeat(value.length - 4) + value.slice(-4);
+}
+
+/**
+ * Mask an ordered payout list for reading back. Position is meaningful — index 0
+ * is the preferred method — so order is preserved.
+ *
+ * Vendor and agency each grew their own copy of this before it lived here; they
+ * are left alone deliberately (their response shapes are already public API).
+ * New callers should use this one.
+ */
+export function maskPayoutMethods(
+    methods: IPayoutMethod[] | null | undefined
+): PayoutMethodMasked[] {
+    if (!methods) return []; // legacy documents predating the array form
+    return methods.map((m, index) => ({
+        method: m.method,
+        is_preferred: index === 0,
+        mobile_money: m.mobile_money
+            ? {
+                provider: m.mobile_money.provider,
+                phone_number_masked: maskTail(m.mobile_money.phone_number),
+                account_name: m.mobile_money.account_name,
+            }
+            : null,
+        bank: m.bank
+            ? {
+                bank_name: m.bank.bank_name,
+                account_number_masked: maskTail(m.bank.account_number),
+                account_name: m.bank.account_name,
+                country: m.bank.country,
+            }
+            : null,
+    }));
+}
+
 // ─── Zod Validators ─────────────────────────────────────────────────────────
 
 const MobileMoneyZodSchema = z.object({

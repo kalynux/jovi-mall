@@ -257,6 +257,24 @@ left to pay), `400 PAYMENT_CART_MIXED_CURRENCY`, `400 PAYMENT_REFERENCE_REQUIRED
 orderId supplied), `422 PAYMENT_ORDER_IS_COD` (the checkout is cash-on-delivery — no online payment
 exists for it).
 
+### Watching the payment land
+
+`initiate` returns a `transactionId` and usually `status: "PENDING"`. Two ways to follow it:
+
+| Call | Auth | Use |
+|---|---|---|
+| `GET /api/payments/:transactionId` | **required** | Read the transaction's current state |
+| `POST /api/payments/verify` | none | Force a gateway re-check now |
+
+> **⚠️ Breaking change (2026-07-29):** `GET /api/payments/:transactionId` now **requires
+> authentication** and returns only the **authenticated customer's own** transaction — it previously
+> accepted no credentials, so any payment was readable by id. Send the session cookie
+> (`credentials: 'include'`) or a Bearer token when polling. Someone else's transaction, or a
+> malformed id, returns `404 PAYMENT_TRANSACTION_NOT_FOUND`.
+
+Webhooks settle the payment regardless of whether the client polls — polling only makes the answer
+arrive sooner. Full contract: [../payments/README.md](../payments/README.md).
+
 ---
 
 <a name="cod"></a>
@@ -373,7 +391,7 @@ automatically** — no separate call to `PATCH /:id/confirm-delivery` is needed.
     "agencyId": "507f1f77bcf86cd799439bbb",
     "agentId": "507f1f77bcf86cd799439ccc",
     "status": "delivered",
-    "trackingNumber": "TRK123456",
+    "trackingNumber": "FDO-260730-142309-K7Q2M",
     "orderFulfillmentStatus": "partially_delivered"
   }
 }

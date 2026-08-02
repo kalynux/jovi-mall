@@ -21,10 +21,22 @@ export function initializeAgencyNotificationEventConsumers(): void {
     eventBus.subscribe('connection.approved', handler.handleConnectionApproved.bind(handler));
     eventBus.subscribe('connection.rejected', handler.handleConnectionRejected.bind(handler));
     eventBus.subscribe('connection.reapproval_needed', handler.handleConnectionReapprovalNeeded.bind(handler));
+
+    // The AGENT contract handshake — a different relationship from the
+    // connection.* events above, shared with the agent consumer on the same
+    // recipientRole discriminator.
+    eventBus.subscribe('agent_contract.request_received', handler.handleAgentContractRequestReceived.bind(handler));
+    eventBus.subscribe('agent_contract.approved', handler.handleAgentContractApproved.bind(handler));
+    eventBus.subscribe('agent_contract.rejected', handler.handleAgentContractRejected.bind(handler));
+
     eventBus.subscribe('shipment.assigned', handler.handleShipmentAssigned.bind(handler));
     // Agent-acceptance workflow: an agent accepted, or nobody did (assign manually).
     eventBus.subscribe('shipment.offer_accepted', handler.handleOfferAccepted.bind(handler));
     eventBus.subscribe('shipment.no_agent_available', handler.handleAssignmentUnfilled.bind(handler));
+    // The agency's agent advanced a shipment from the agent app. Emitted only
+    // for picked_up / agent_delivered / failed / returned — see
+    // AGENT_TRANSITIONS_NOTIFYING_AGENCY in shipment.service.ts.
+    eventBus.subscribe('shipment.agent_status_changed', handler.handleAgentStatusChanged.bind(handler));
     eventBus.subscribe('payout.requested', handler.handlePayoutRequested.bind(handler));
     eventBus.subscribe('payout.paid', handler.handlePayoutPaid.bind(handler));
     eventBus.subscribe('payout.rejected', handler.handlePayoutRejected.bind(handler));

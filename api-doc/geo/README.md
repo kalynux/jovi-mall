@@ -124,7 +124,7 @@ legacy loose fields (`address_line1`, `city`, `location`, …) are **kept** for 
 |---|---|---|
 | Customer saved address | `POST /api/customer/addresses` | `geo` |
 | Vendor business address | `PATCH /api/vendor/profile` (and onboarding step 3) | `business_addresses[].geo` |
-| Agency HQ address | agency onboarding step 1 / `PATCH` profile | `headquarters_addresses[].geo` (`location` stays required) |
+| Agency HQ address | agency onboarding step 1 / `PATCH /api/agency/magazin` | `headquarters_addresses[].geo` (`location`, `region` and `city` are all **derived** from it) |
 | Pickup location | derived from the vendor business address; **snapshotted** onto the order at checkout | `items[].delivery.pickup_location.address_snapshot.geo` |
 | Drop-off | `POST /api/customer/orders/checkout` | `deliveryAddress` **or** `deliveryAddressId` → snapshotted to `order.delivery_address` |
 

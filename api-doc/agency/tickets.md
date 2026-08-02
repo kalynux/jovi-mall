@@ -108,7 +108,7 @@ Body:
       "user_id": "string",
       "role": "agency",
       "name": "FastTrack Logistics",
-      "avatar": { "id": "507f1f77bcf86cd799439030", "key": "products/2026/07/fasttrack-logo.png", "url": "https://cdn.example.com/fasttrack-logo.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" }
+      "avatar": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/fasttrack-logo.png", "url": "https://cdn.example.com/fasttrack-logo.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" }
     },
     "assigned_to_role": null,
     "assigned_to": null,
@@ -120,7 +120,7 @@ Body:
         "user_id": "string",
         "role": "agency",
         "name": "FastTrack Logistics",
-        "avatar": { "id": "507f1f77bcf86cd799439030", "key": "products/2026/07/fasttrack-logo.png", "url": "https://cdn.example.com/fasttrack-logo.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" }
+        "avatar": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/fasttrack-logo.png", "url": "https://cdn.example.com/fasttrack-logo.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" }
       }
     ],
     "createdAt": "2026-07-05T19:00:00.000Z",

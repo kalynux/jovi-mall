@@ -148,17 +148,27 @@ export interface IAgentLastKnownTrackingState {
   source: string | null;
 }
 
-/** Agent-chosen preferences. */
+/**
+ * Agent-chosen preferences — client-consumed only.
+ *
+ * Nothing on the server branches on these; the app reads them back from
+ * GET /api/agent/profile. Notification delivery is NOT configured here: that is
+ * `AgentNotificationPreference`, and the two `notify_*` flags that used to sit
+ * here gated nothing while looking exactly as if they did.
+ */
 export interface IAgentPreferences {
-  notify_on_assignment: boolean;
-  notify_on_shipment_update: boolean;
-  /** Preferred navigation app deep-link target. */
+  /** Preferred navigation app deep-link target. Read by the agent app, not the server. */
   navigation_app: 'google_maps' | 'waze' | 'apple_maps' | 'none';
 }
 
 /** Operational configuration that affects dispatch. */
 export interface IAgentSettings {
-  /** Reserved for future auto-dispatch; assignment is agency-driven today. */
+  /**
+   * Accept assignment offers without prompting the agent. Read on both offer
+   * paths in ShipmentAssignmentService (broadcast + manual): the offer row is
+   * still written first, then immediately accepted, so this is not a bypass of
+   * the offer record.
+   */
   auto_accept_assignments: boolean;
 }
 
@@ -494,8 +504,6 @@ const LastKnownTrackingStateSchema = new Schema(
 
 const PreferencesSchema = new Schema(
   {
-    notify_on_assignment: { type: Boolean, default: true, required: true },
-    notify_on_shipment_update: { type: Boolean, default: true, required: true },
     navigation_app: {
       type: String,
       enum: ['google_maps', 'waze', 'apple_maps', 'none'],
@@ -542,8 +550,6 @@ export const agentDefaults = {
     source: null,
   }),
   preferences: (): IAgentPreferences => ({
-    notify_on_assignment: true,
-    notify_on_shipment_update: true,
     navigation_app: 'google_maps',
   }),
   settings: (): IAgentSettings => ({
@@ -682,7 +688,22 @@ DeliveryAgentSchema.index({ 'last_known_tracking_state.last_position': '2dsphere
 // The dispatch query: "which of these agents can take work right now?"
 DeliveryAgentSchema.index({ status: 1, 'availability.state': 1, 'tracking.allowed': 1 });
 
-// Roster/eligibility lookups by email (invites match on email).
+// The agent's DECLARED operating area — distinct from the position mirror
+// above, which is where they physically were. Backs the `near` filter on the
+// agency-facing directory (AgentRepository.findAvailableForAgencies). Sparse:
+// home base is optional and many agents never set one.
+DeliveryAgentSchema.index({ 'home_base.location': '2dsphere' }, { sparse: true });
+
+// The directory query: the four gates every browsable agent must clear, with
+// the default sort key trailing so it is served from the index.
+DeliveryAgentSchema.index({
+  status: 1,
+  'kyc.status': 1,
+  'platform_ban.banned': 1,
+  'cod.trust_score': -1,
+});
+
+// Lookups by email — auth/account resolution (AgentRepository.findByEmail).
 DeliveryAgentSchema.index({ email: 1 }, { sparse: true });
 
 export const DeliveryAgentModel = mongoose.model<IDeliveryAgent>(

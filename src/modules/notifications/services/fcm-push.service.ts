@@ -1,6 +1,40 @@
 import mongoose from 'mongoose';
+import type { messaging } from 'firebase-admin';
 import { getFcmMessaging } from '../providers/fcm.client';
 import { DeviceTokenRepository } from '../repositories/device-token.repository';
+
+/**
+ * Android notification channels this backend addresses.
+ *
+ * These ids are a **client contract**: a native client (the Flutter agent app)
+ * must create a channel with the matching id, or Android silently falls back to
+ * the manifest default channel and the importance we ask for here is lost. Adding
+ * an id here without shipping the matching client channel is a no-op, not an
+ * error — so they are documented in `api-doc/agent/notifications.md`.
+ *
+ * Web push ignores channels entirely (the vendor dashboard is unaffected).
+ */
+export const ANDROID_CHANNELS = {
+    /** Everything that is not time-critical. */
+    DEFAULT: 'jovi_default',
+    /**
+     * Delivery offers. Separate channel so an agent can keep offers loud while
+     * muting the rest — muting the one channel that costs them work should be an
+     * explicit choice, not collateral damage from silencing the app.
+     */
+    AGENT_OFFERS: 'jovi_agent_offers'
+} as const;
+
+/**
+ * How hard the OS should work to wake the device for this message.
+ *
+ * `high` maps to FCM high priority + APNs priority 10, which bypasses Android
+ * Doze batching. It is the default because every situation in all three
+ * notification stacks is a user-visible alert about the recipient's money or
+ * work — none of them are background syncs. Use `normal` only for something a
+ * user would not mind seeing an hour late.
+ */
+export type PushUrgency = 'high' | 'normal';
 
 /**
  * Push payload rendered from the in-app notification.
@@ -11,6 +45,10 @@ import { DeviceTokenRepository } from '../repositories/device-token.repository';
 export interface PushPayload {
     title: string;
     body: string;
+    /** Android channel id; defaults to `ANDROID_CHANNELS.DEFAULT`. */
+    channelId?: string;
+    /** Wake-the-device urgency; defaults to `'high'`. */
+    urgency?: PushUrgency;
     data: {
         type: string;
         aggregateType: string;
@@ -79,7 +117,9 @@ export class FcmPushService {
                 title: payload.title,
                 body: payload.body
             },
-            data
+            data,
+            android: this.androidConfig(payload),
+            apns: this.apnsConfig(payload)
         });
 
         // Prune tokens FCM rejected as permanently invalid (self-healing).
@@ -98,5 +138,49 @@ export class FcmPushService {
         }
 
         return tokens.length;
+    }
+
+    /**
+     * Android delivery options.
+     *
+     * `priority: 'high'` is the load-bearing part: without it FCM sends at normal
+     * priority and Doze may hold the message until the next maintenance window —
+     * minutes on an idle phone, which is fatal for a delivery offer that is being
+     * broadcast to other agents in parallel.
+     *
+     * Note there is deliberately **no `ttl`**. An auto-assignment offer stays
+     * acceptable until the shipment binds to someone (only manual offers expire),
+     * so expiring the push would cost an agent work their offer was still open for.
+     */
+    private androidConfig(payload: PushPayload): messaging.AndroidConfig {
+        const high = (payload.urgency ?? 'high') === 'high';
+
+        return {
+            priority: high ? 'high' : 'normal',
+            notification: {
+                channelId: payload.channelId ?? ANDROID_CHANNELS.DEFAULT,
+                priority: high ? 'max' : 'default',
+                defaultSound: true
+            }
+        };
+    }
+
+    /**
+     * APNs delivery options. Priority 10 = deliver immediately (legal here because
+     * we always send an alert payload); 5 = power-considerate batching.
+     */
+    private apnsConfig(payload: PushPayload): messaging.ApnsConfig {
+        const high = (payload.urgency ?? 'high') === 'high';
+
+        return {
+            headers: {
+                'apns-priority': high ? '10' : '5'
+            },
+            payload: {
+                aps: {
+                    sound: 'default'
+                }
+            }
+        };
     }
 }

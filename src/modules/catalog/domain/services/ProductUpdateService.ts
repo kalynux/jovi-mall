@@ -9,6 +9,7 @@ import { ConnectionRepository } from '../../../agency-connections/connection.rep
 import { VendorRepository } from '../../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repository';
 import { PickupLocationValidationService } from './PickupLocationValidationService';
+import { mergeDeliveryConfig } from './delivery-config.merge';
 
 // Per-variant asset/limits live on ProductVariant.digitalConfig now.
 // Only the product-wide `isActive` kill switch is updatable here.
@@ -130,62 +131,43 @@ export class ProductUpdateService {
 
       // Each sub-field is independently optional, so merge against the existing
       // persisted value instead of replacing — otherwise setting one field would
-      // silently wipe the other. Persistence uses snake_case — see product.model.ts schema.
-      const existingDelivery = product.delivery;
-      const resolvedAgencyId = command.delivery.agencyId !== undefined
-        ? command.delivery.agencyId
-        : (existingDelivery?.agencyId ?? null);
+      // silently wipe the other. mergeDeliveryConfig owns that merge (and the
+      // camelCase → snake_case mapping) and is shared with the simple-product path.
+      const merged = mergeDeliveryConfig(product.delivery, command.delivery);
 
-      let pickupLocationUpdate: { source: string; vendor_address_id: string | null } | null | undefined = undefined;
-      if (command.delivery.pickupLocation !== undefined) {
-        if (command.delivery.pickupLocation === null) {
-          pickupLocationUpdate = null;
-        } else {
-          const { source, vendorAddressId } = command.delivery.pickupLocation;
-
-          // Resolve whichever agency actually ends up handling delivery — the
-          // product's own override (possibly just set above) if any, otherwise
-          // the vendor's default — same resolution used at activation time and
-          // at order-creation time.
-          const vendor = await this.vendorRepository.findById(vendorId);
-          const effectiveAgencyId = resolvedAgencyId ?? vendor?.default_delivery_agency_id?.toString();
-          if (!vendor || !effectiveAgencyId) {
-            throw createAppError(
-              ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
-              422,
-              'Set a delivery agency (default or product override) before choosing a pickup location.',
-            );
-          }
-
-          const agency = await this.deliveryAgencyRepository.findById(effectiveAgencyId);
-          if (!agency) {
-            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY, 422, 'The resolved delivery agency was not found.');
-          }
-
-          this.pickupLocationValidationService.assertValid(
-            { source, vendorAddressId: vendorAddressId ?? null },
-            agency,
-            vendor,
+      // Validate a newly-supplied pickup location against whichever agency will
+      // actually handle delivery — the product's own override (possibly just set
+      // above) if any, otherwise the vendor's default. Same resolution used at
+      // activation time and at order-creation time. Only a NEW location is
+      // checked; one carried over from the existing config was validated when it
+      // was set, and the activation gate re-checks it anyway.
+      if (command.delivery.pickupLocation) {
+        const vendor = await this.vendorRepository.findById(vendorId);
+        const effectiveAgencyId = merged.agency_id ?? vendor?.default_delivery_agency_id?.toString();
+        if (!vendor || !effectiveAgencyId) {
+          throw createAppError(
+            ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY,
+            422,
+            'Set a delivery agency (default or product override) before choosing a pickup location.',
           );
-
-          pickupLocationUpdate = {
-            source,
-            vendor_address_id: source === 'agency_storage' ? null : (vendorAddressId ?? null),
-          };
         }
+
+        const agency = await this.deliveryAgencyRepository.findById(effectiveAgencyId);
+        if (!agency) {
+          throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY, 422, 'The resolved delivery agency was not found.');
+        }
+
+        this.pickupLocationValidationService.assertValid(
+          {
+            source: command.delivery.pickupLocation.source,
+            vendorAddressId: command.delivery.pickupLocation.vendorAddressId ?? null,
+          },
+          agency,
+          vendor,
+        );
       }
 
-      (updates as any).delivery = {
-        agency_id: resolvedAgencyId,
-        free_delivery: command.delivery.freeDelivery !== undefined
-          ? command.delivery.freeDelivery
-          : (existingDelivery?.freeDelivery ?? false),
-        pickup_location: pickupLocationUpdate !== undefined
-          ? pickupLocationUpdate
-          : (existingDelivery?.pickupLocation
-            ? { source: existingDelivery.pickupLocation.source, vendor_address_id: existingDelivery.pickupLocation.vendorAddressId }
-            : null),
-      };
+      (updates as any).delivery = merged;
     }
 
     // Keep file references in sync with the replaced media array. Runs before the

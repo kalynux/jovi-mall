@@ -501,7 +501,7 @@ export class PaymentOrchestratorService {
     // Best-effort: a failure must not fail the (already-completed) refund.
     if (fullyRefunded) {
       try {
-        await earningsRefundService.onRefund('order', orderId);
+        await earningsRefundService.onOrderRefund(orderId);
       } catch (error) {
         console.error('[PaymentOrchestrator] Failed to reverse earnings on refund:', error);
       }

@@ -35,6 +35,11 @@ immediately:
   agency's delivery fee for its shipment(s) on that order (see
   [agency/earnings.md](../agency/earnings.md) for how that fee is computed); digital orders and
   bookings have no delivery agency, so only commission is subtracted.
+  > The delivery fee is **charged to you at payment** but only **paid out to the agency and its
+  > agent when the shipment is delivered**. This does not change your net. It does mean that if a
+  > shipment comes back (`returned`), the part of the fee the run did not earn — the difference
+  > between the quoted fee and the agency's `rto_fee` — is **credited back to you** as a separate
+  > entry against that shipment.
 - **COD collections**: same formula, but per **verified cash collection** (one per COD shipment),
   and additionally subtracts the fulfilling agency's `cod_handling_fee` for that collection. See
   [orders.md — Cash-on-delivery orders](./orders.md).
@@ -55,9 +60,11 @@ automatically clawed back** — that reversal is a manual/admin operation.
 
 ### Hold timing (COD collections)
 
-The verified delivery code **is** the completion event, so there's no separate customer
-confirmation step — the 7-day hold window starts immediately at collection. However, release is
-**additionally gated on cash settlement**: your net only becomes `available` once the agency has
+The verified delivery code **is** that shipment's customer confirmation, so there's no separate
+confirmation step. The 7-day hold window still starts when the **order** completes, not at
+collection — on a multi-shipment order, one collected shipment does not mature ahead of its
+siblings. Release is also **additionally gated on cash settlement**: your net only becomes
+`available` once the agency has
 remitted and the platform has confirmed the physical cash for that collection (remittances settle
 oldest-first). A slow remittance chain delays your `available` balance the same way it delays the
 agency's.

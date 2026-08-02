@@ -47,6 +47,9 @@ export class ProductDraftService {
     const productData: Omit<Product, 'id' | 'createdAt' | 'updatedAt'> = {
       vendorId: input.vendorId,
       type: input.type,
+      // The multi-step flow is the advanced editor by definition — the simple
+      // one-shot editor has its own service (see domain/services/simple/).
+      mode: 'advanced',
       status: 'draft',
       title: trimmedTitle,
       description: input.description ?? '',

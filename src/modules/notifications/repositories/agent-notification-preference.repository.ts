@@ -11,6 +11,7 @@ export interface UpdateAgentPreferencesPayload {
     preferences?: {
         codDepositUpdates?: boolean;
         assignmentOffers?: boolean;
+        contractUpdated?: boolean;
         planUpdates?: boolean;
         storageAlert?: boolean;
     };
@@ -44,6 +45,7 @@ export class AgentNotificationPreferenceRepository {
                 preferences: {
                     codDepositUpdates: true,
                     assignmentOffers: true,
+                    contractUpdated: true,
                     planUpdates: true,
                     storageAlert: true
                 }
@@ -106,6 +108,8 @@ export class AgentNotificationPreferenceRepository {
                 updates.preferences.codDepositUpdates ?? current.preferences.codDepositUpdates;
             updatePayload['preferences.assignmentOffers'] =
                 updates.preferences.assignmentOffers ?? current.preferences.assignmentOffers ?? true;
+            updatePayload['preferences.contractUpdated'] =
+                updates.preferences.contractUpdated ?? current.preferences.contractUpdated ?? true;
             updatePayload['preferences.planUpdates'] =
                 updates.preferences.planUpdates ?? current.preferences.planUpdates ?? true;
             updatePayload['preferences.storageAlert'] =

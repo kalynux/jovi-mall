@@ -10,7 +10,7 @@ import { getWhatsAppMessagingService } from '../../whatsapp/services/whatsapp-me
 import { WaServiceMessage } from '../../whatsapp/builders/service-message.builder';
 import { WhatsappService } from '../../whatsapp/whatsapp.service';
 import { TemplateComponent } from '../../whatsapp/types/whatsapp-message.types';
-import { FcmPushService } from './fcm-push.service';
+import { FcmPushService, ANDROID_CHANNELS } from './fcm-push.service';
 import {
     AgentDeliveryChannel,
     IAgentNotification,
@@ -33,6 +33,18 @@ import { RenderContext } from '../catalog/message-renderer';
 import { DomainEvent } from '../../../core/events/event-bus';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+
+/**
+ * Situations that ride the dedicated offers channel (see ANDROID_CHANNELS).
+ *
+ * Only the two that are still actionable when they land. `shipment.offer.expired`
+ * is deliberately absent — it reports a lost job, so waking the phone for it
+ * would train agents to ignore the channel that matters.
+ */
+const OFFER_CHANNEL_SITUATIONS: ReadonlySet<AgentNotificationType> = new Set([
+    'shipment.offer.received',
+    'shipment.offer.reminder'
+]);
 
 interface DispatchParams {
     situation: AgentNotificationType;
@@ -198,6 +210,82 @@ export class AgentNotificationEventHandler {
             });
         } catch (error) {
             console.error('[AgentNotificationHandler] Failed to handle shipment.offer_created:', error);
+        }
+    }
+
+    // ─── Contract handshake ──────────────────────────────────────────────────
+    //
+    // All three `agent_contract.*` events are published by AgentContractService
+    // and consumed by BOTH this handler and the agency one; `recipientRole`
+    // says which payloads are ours. Same discriminator pattern the `connection.*`
+    // events use across the vendor and agency stacks.
+
+    /** An agency asked THIS agent to contract — the request is now pending their answer. */
+    async handleContractRequestReceived(event: DomainEvent): Promise<void> {
+        try {
+            const { contractId, recipientRole, agentId, agencyName } = event.payload;
+            if (recipientRole !== 'agent') return;
+
+            const prefs = await this.preferenceRepo.getByAgent(agentId);
+            if (!prefs.preferences.contractUpdated) return;
+
+            await this.dispatch({
+                situation: 'agent_contract.request_received',
+                prefs,
+                agentId,
+                aggregateType: 'contract',
+                aggregateId: contractId,
+                idempotencyKey: `agent_contract.request_received:${contractId}:agent`,
+                context: { contractId, agencyName }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle agent_contract.request_received:', error);
+        }
+    }
+
+    /** An agency approved this agent's application. */
+    async handleContractApproved(event: DomainEvent): Promise<void> {
+        try {
+            const { contractId, recipientRole, agentId, agencyName } = event.payload;
+            if (recipientRole !== 'agent') return;
+
+            const prefs = await this.preferenceRepo.getByAgent(agentId);
+            if (!prefs.preferences.contractUpdated) return;
+
+            await this.dispatch({
+                situation: 'agent_contract.approved',
+                prefs,
+                agentId,
+                aggregateType: 'contract',
+                aggregateId: contractId,
+                idempotencyKey: `agent_contract.approved:${contractId}:agent:${event.occurredAt.toISOString()}`,
+                context: { contractId, agencyName }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle agent_contract.approved:', error);
+        }
+    }
+
+    /** An agency declined this agent's application. */
+    async handleContractRejected(event: DomainEvent): Promise<void> {
+        try {
+            const { contractId, recipientRole, agentId, agencyName } = event.payload;
+            if (recipientRole !== 'agent') return;
+
+            const prefs = await this.preferenceRepo.getByAgent(agentId);
+            if (!prefs.preferences.contractUpdated) return;
+
+            await this.dispatch({
+                situation: 'agent_contract.rejected',
+                prefs,
+                agentId,
+                aggregateType: 'contract',
+                aggregateId: contractId,
+                idempotencyKey: `agent_contract.rejected:${contractId}:agent:${event.occurredAt.toISOString()}`,
+                context: { contractId, agencyName }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle agent_contract.rejected:', error);
         }
     }
 
@@ -437,6 +525,9 @@ export class AgentNotificationEventHandler {
             const targeted = await this.fcmPushService.sendToUser(agent.user_id.toString(), {
                 title: inApp.title,
                 body: inApp.message,
+                channelId: OFFER_CHANNEL_SITUATIONS.has(situation)
+                    ? ANDROID_CHANNELS.AGENT_OFFERS
+                    : ANDROID_CHANNELS.DEFAULT,
                 data: {
                     type: situation,
                     aggregateType: notification.aggregateType,

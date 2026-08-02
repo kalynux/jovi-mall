@@ -52,6 +52,16 @@ because they hold N shipments, not because someone said so.
 }
 ```
 
+> **`workingState.active_shipment_count` is a derived label input, not the load figure to display.**
+> It is recomputed periodically and can lag the counter the platform actually admits new offers
+> against. For "how many can I still take?", read the **`capacity`** block on
+> `GET /api/agent/profile` or `GET /api/agent/dispatch-settings` — it carries `maxActiveShipments`,
+> the authoritative `activeShipmentCount`, and `remaining`. See
+> [profile.md](./profile.md#capacity-is-read-only).
+>
+> `workingState.state` itself (`idle` / `working` / `at_capacity`) is reliable — it is derived from
+> the ceiling, so `at_capacity` does mean no more work will be offered.
+
 ---
 
 ### PUT /api/agent/availability

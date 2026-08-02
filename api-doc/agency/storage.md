@@ -31,6 +31,7 @@ The limit caps the **total bytes of media the agency owns**:
 
 - the agency's **avatar** and its **magazin (business) logo**
 - any **images / documents** uploaded through `POST /api/files/upload`
+- any **videos** uploaded through `POST /api/files/upload/video`
 - **agent delivery proofs** — an agent's optional proof-of-delivery photo is
   uploaded on the **agency's** storage (see [Agent → Delivery proof](../agent/delivery-proof.md)),
   so it counts here, not against the agent.
@@ -53,7 +54,12 @@ limit is the `max_storage_bytes` of its currently **active** plan.
 | Upload route | Per-file cap | Notes |
 |---|---|---|
 | `POST /api/files/upload` (images/docs) | image (jpeg/png/webp) **10 MB**, gif **5 MB**, pdf **25 MB**, zip **50 MB** | per-type cap applies first |
+| `POST /api/files/upload/video` | **70 MB** per video, max **3** per request (mp4/mov/webm, field `videos`) | metered against this page's limit like any other file |
 | `POST /api/agent/shipments/:id/delivery-proof` | **10 MB**, exactly **1** image (jpeg/png/webp) | agent-only; charged to the agency (this page's limit) |
+
+A coarse per-role request ceiling of **200 MB per file** also applies to
+`POST /api/files/upload` for agencies, but the per-type caps above are stricter
+and are what you will actually hit.
 
 ---
 
@@ -98,7 +104,8 @@ so a media library screen can show usage without a second call.
 ## 3. Uploading media (and the quota gate)
 
 Media is uploaded through `POST /api/files/upload` (`multipart/form-data`, field
-**`files`**, 1–10 files). On success each returns the created `File` record
+**`files`**, 1–10 files), or `POST /api/files/upload/video` for video
+(field **`videos`**, 1–3 files). On success each returns the created `File` record
 (`id`, `key`, `url`, `mimeType`, `size`, …). See [File Management](./file-management.md).
 
 ### Quota enforcement

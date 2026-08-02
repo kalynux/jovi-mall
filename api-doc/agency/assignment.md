@@ -54,19 +54,46 @@ immediate answer.
 <a name="auto"></a>
 ## POST /api/agency/shipments/:id/auto-assign
 
-Rank eligible agents and offer the top one now, on demand (even if the agency's standing auto-assign
-toggle is off). No body. `422 SHIPMENT_NO_ELIGIBLE_AGENTS` when no agent qualifies.
+Rank eligible agents and start an auto-assignment **broadcast** now, on demand (even if the agency's
+standing auto-assign toggle is off). No body. `422 SHIPMENT_NO_ELIGIBLE_AGENTS` when no agent
+qualifies.
 
-The ranking is: eligible agents (active · active contract with this agency · online · tracking
-allowed · device location · under capacity), filtered for COD orders to those under their COD
-headroom, then scored by **distance to pickup + free capacity + trust**. The full ranked pool is
-snapshotted onto the offer so a decline/timeout walks to the next agent without recomputing.
+**How the ranking is built** (nearest-first):
+- **Eligible agents** — active · active contract with this agency · online · tracking allowed · device
+  location on · under capacity.
+- **Location gate** — an agent with no resolvable position is dropped (they can't be ranked by
+  proximity). A live/last-known position, or the agent's declared home base, counts; a deployment can
+  require a *fresh* live fix (`REQUIRE_LIVE_POSITION`).
+- **Trust floor** — below `MIN_TRUST_SCORE` (platform default `0`, so inert until raised) an agent
+  gets no auto offer.
+- **COD gate** (COD orders only) — agents over their COD headroom on this agency's contract are removed
+  entirely.
+- **Order** — survivors are capped to the nearest `MAX_AUTO_CANDIDATES` (default **20**) and ordered
+  nearest-first via the road-network distance matrix (haversine fallback when the geo provider is
+  unavailable). The weighted `score`/`breakdown` on the [candidate preview](#candidates) is for
+  explainability and tie-breaking, **not** the primary sort — proximity is.
+
+**The broadcast — the key behaviour for the UI.** The full ranking is snapshotted onto a temporary
+**assignment session** (not onto an offer). The nearest agent is offered immediately; then each
+`SHIPMENT_OFFER_TIMEOUT_SECONDS` (120s) window the next-nearest is offered **while earlier offers still
+stand**. So **multiple agents can hold a pending offer for the same shipment at once, and the first to
+accept wins** — the losers' offers become `superseded`. An agent who **rejects** is dropped and the
+next candidate is offered immediately; an agent who **ignores** keeps an acceptable offer (auto offers
+do not expire).
+
+**Two rounds, then unfilled.** Round 1 offers every candidate once; round 2 re-nudges the agents who
+ignored (never those who rejected). After the last round (`MAX_ROUNDS`, default **2**) with nobody
+accepting, the agency gets `shipment.assignment.unfilled` — assign manually. Because a fully-ignored
+pool is walked one candidate per window across two rounds, "unfilled" can take a while, so show the
+shipment as **searching** until an agent binds or you are told it is unfilled.
 
 <a name="candidates"></a>
 ## GET /api/agency/shipments/:id/assignment-candidates
 
-Preview the ranked pool without offering. Returns each candidate with a score breakdown
-(`distance_km`, `distance_score`, `free_capacity`, `capacity_score`, `trust_score`, `weighted`).
+Preview the ranked pool without offering — the same nearest-first order auto-assignment would use.
+Returns each candidate with `rank` (0 = nearest) and a score breakdown (`distance_km`,
+`distance_score`, `free_capacity`, `capacity_score`, `trust_score`, `weighted`). The `weighted` score
+is explanatory/tie-break context; the list order is proximity.
 
 ```json
 {
@@ -106,7 +133,7 @@ and offers the shipment to that replacement — in one call.
 2. The **old agent is released**: their tracking session is closed (a *release*, not a terminal — the
    shipment isn't over), their reserved capacity is returned, and — the moment `agent_id` is cleared —
    they **lose all access to the shipment**: customer personal data (delivery address, phone), live
-   tracking, and every shipment action (pickup / COD collect / tracking-number) now return
+   tracking, and every shipment action (pickup / status / COD collect) now return
    `404 SHIPMENT_NOT_FOUND` for them. They keep only their **activity history** (their accepted offer
    row, which carries no customer PII). The old agent also receives a **`shipment.reassigned_away`**
    notification telling them they are no longer responsible for it.
@@ -194,8 +221,11 @@ and `SHIPMENT_NO_ELIGIBLE_AGENTS` (422, released but no replacement available no
 ## PATCH /api/agency/assignment-settings
 
 Toggle auto-assignment. Body `{ "autoAssignEnabled": boolean }`. When **on**, a shipment handed to
-this agency (on dispatch) is automatically offered to the top-ranked agent — no manual pick needed.
-The offer timeout is a platform default and is **not** configurable per agency.
+this agency (on dispatch) automatically starts the [auto-assignment broadcast](#auto) — no manual pick
+needed. When **off**, shipments wait for a manual pick (you can still trigger auto-assignment
+per-shipment via [`POST .../auto-assign`](#auto)). The offer timeout and broadcast rounds are platform
+defaults and are **not** configurable per agency. Stored on `assignment_settings.auto_assign_enabled`
+(default **off**).
 
 ```json
 { "success": true, "message": "Assignment settings updated", "data": { "autoAssignEnabled": true } }
@@ -213,7 +243,9 @@ the shipment `status` stays `assigned` throughout. **A shipment cannot be picked
 ## Notifications
 
 - **`shipment.offer.accepted`** — an agent took the delivery.
-- **`shipment.assignment.unfilled`** — nobody accepted (declined / timed out / pool exhausted);
-  assign manually.
+- **`shipment.assignment.unfilled`** — nobody accepted across the **full broadcast** (every candidate
+  declined or ignored over both rounds, or no eligible agent existed); assign manually. For an
+  auto-assigned shipment this fires only after the last round, so treat the shipment as *searching*
+  until then.
 
 Both gated by the agency's `shipmentAssigned` notification preference.

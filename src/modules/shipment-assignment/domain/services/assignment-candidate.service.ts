@@ -1,6 +1,7 @@
 import { IShipment } from '../../../shipments/shipment.model';
 import { IOrder } from '../../../orders/order.model';
 import { IGeoPoint } from '../../../../core/types/geo.types';
+import { haversineKm } from '../../../../core/utils/geo-distance.util';
 import {
   AgentRepository,
   agentRepository,
@@ -12,6 +13,7 @@ import {
 } from '../../../agents';
 import { VendorRepository } from '../../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repository';
+import { MagazinRepository } from '../../../magazin/repositories/magazin.repository';
 import { CashCollectionService, cashCollectionService } from '../../../cod/services/cash-collection.service';
 import { CodExposureService, codExposureService } from '../../../cod/services/cod-exposure.service';
 import { ASSIGNMENT_CONFIG } from '../../config/assignment.config';
@@ -69,19 +71,12 @@ export interface ScoredCandidate {
 
 // ─── Pure scoring (no I/O — unit-tested directly) ──────────────────────────────
 
-/** Great-circle distance in km between two GeoJSON points ([lng, lat]). */
-export function haversineKm(a: IGeoPoint, b: IGeoPoint): number {
-  const [lng1, lat1] = a.coordinates;
-  const [lng2, lat2] = b.coordinates;
-  const R = 6371; // km
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const s =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
-}
+/**
+ * Great-circle distance in km. Defined in `core/utils/geo-distance.util` and
+ * re-exported here so the assignment module's long-standing public surface
+ * (`shipment-assignment/index.ts`) is unchanged.
+ */
+export { haversineKm };
 
 /**
  * Map a distance to a 0..1 score: 1 at/inside DISTANCE_FULL_SCORE_KM, 0
@@ -160,7 +155,9 @@ export class AssignmentCandidateService {
     private readonly agencies: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
     private readonly cashCollection: CashCollectionService = cashCollectionService,
     private readonly exposure: CodExposureService = codExposureService,
-    private readonly geoRouting: GeoRoutingClient = geoRoutingClient
+    private readonly geoRouting: GeoRoutingClient = geoRoutingClient,
+    // HQ addresses (the agency-storage pickup point) live on the Magazin.
+    private readonly magazins: MagazinRepository = new MagazinRepository()
   ) {}
 
   /**
@@ -328,8 +325,8 @@ export class AssignmentCandidateService {
     if (!pickup) return null;
 
     if (pickup.source === 'agency_storage') {
-      const agency = await this.agencies.findById(shipment.agency_id.toString());
-      return this.geoOf(agency?.headquarters_addresses?.[0]?.location);
+      const magazin = await this.magazins.findByAgencyIdOrNull(shipment.agency_id.toString());
+      return this.geoOf(magazin?.headquarters_addresses?.[0]?.location);
     }
 
     if (pickup.source === 'vendor_address' && pickup.vendor_address_id) {

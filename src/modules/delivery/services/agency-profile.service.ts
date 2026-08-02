@@ -13,8 +13,9 @@ import { eventBus } from '../../../core/events/event-bus';
 import { auditLogger } from '../../../core/audit/audit-logger';
 import { IDeliveryAgency, IAgencyPolicies } from '../delivery-agency.model';
 import { IPayoutMethod } from '../../../core/types/payout.types';
-import { withGeoAddress } from '../../../core/types/geo-address.types';
-import { assertGeoInCountry, geoAddressEquals } from '../../../core/validation/address-country.helper';
+import { assertHeadquartersInCountry } from '../../../core/validation/address-country.helper';
+import { normalizeCoverageAreasForCountry } from '../../../core/constants/locations.helper';
+import { toPersistableHeadquarters } from '../../magazin/dto/magazin-profile.dto';
 import { AgencyOnboardingStep, AgencyOnboardingStepValue } from '../../../core/constants/onboarding-steps';
 import { AGENCY_ONBOARDING_EVENTS } from '../events/agency-onboarding.events';
 import { ConnectionService } from '../../agency-connections/connection.service';
@@ -119,6 +120,18 @@ export class AgencyProfileService {
         });
     }
 
+    /**
+     * Coverage/HQ live on the Magazin, but the agency's onboarding-step + completion
+     * calculations depend on their presence — so load their counts from the Magazin.
+     */
+    private async magazinCounts(agencyId: string): Promise<{ coverageCount: number; hqCount: number }> {
+        const magazin = await this.magazinRepo.findByAgencyIdOrNull(agencyId);
+        return {
+            coverageCount: magazin?.coverage_areas?.length ?? 0,
+            hqCount: magazin?.headquarters_addresses?.length ?? 0,
+        };
+    }
+
     // ─── Read ─────────────────────────────────────────────────────────────────
 
     async getProfile(agencyId: string): Promise<GetAgencyProfileResponseDto> {
@@ -136,7 +149,8 @@ export class AgencyProfileService {
     async getOnboardingStatus(agencyId: string): Promise<AgencyOnboardingStatusDto> {
         const agency = await this.agencyRepo.findById(agencyId);
         if (!agency) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
-        return AgencyProfileMapper.toOnboardingStatusDto(agency);
+        const { coverageCount, hqCount } = await this.magazinCounts(agencyId);
+        return AgencyProfileMapper.toOnboardingStatusDto(agency, coverageCount, hqCount);
     }
 
     // ─── Agency Creation (Option A: sets agency_name on existing doc) ─────────
@@ -205,26 +219,8 @@ export class AgencyProfileService {
             );
         }
 
-        if (input.headquarters_addresses !== undefined) {
-            this.assertHeadquartersAddressesInCountry(
-                input.country ?? agency.country ?? null,
-                input.headquarters_addresses,
-                agency.headquarters_addresses,
-            );
-        } else if (input.country !== undefined && !agency.country) {
-            // First set on a legacy profile — existing geocoded HQ addresses must fit.
-            const mismatched = (agency.headquarters_addresses ?? [])
-                .filter((a) => a.geo?.components?.country_code && a.geo.components.country_code.toUpperCase() !== input.country!.toUpperCase())
-                .map((a) => ({ city: a.city, region: a.region, countryCode: a.geo!.components.country_code }));
-            if (mismatched.length > 0) {
-                throw createAppError(
-                    ERROR_CODES.ADDRESS_COUNTRY_MISMATCH,
-                    400,
-                    `You already have headquarters addresses located outside ${input.country.toUpperCase()}. Remove or re-pick them before setting your country.`,
-                    { mismatchedAddresses: mismatched, requiredCountry: input.country.toUpperCase() },
-                );
-            }
-        }
+        // Coverage areas + HQ addresses (and their country validation) live on the
+        // Magazin now (PATCH /api/agency/magazin), not on this profile update.
 
         // Keep the personal-avatar file reference in sync before the write, so an
         // unauthorized file reference is rejected before anything is persisted.
@@ -245,7 +241,7 @@ export class AgencyProfileService {
         const updated = await this.agencyRepo.updateProfile(agencyId, payload);
         if (!updated) throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404);
 
-        const newStep = this.recalculateOnboardingStep(updated);
+        const newStep = await this.recalculateOnboardingStep(updated);
         if (newStep !== updated.onboarding_step) {
             await this.agencyRepo.updateOnboardingStep(agencyId, newStep);
             updated.onboarding_step = newStep;
@@ -290,24 +286,18 @@ export class AgencyProfileService {
             throw createAppError(ERROR_CODES.DELIVERY_ONBOARDING_ALREADY_COMPLETED, 409);
         }
 
-        // Country may still be corrected while onboarding is in progress (it
-        // locks at completion). If it changes, every geo-bearing HQ address is
-        // re-validated against the new country (no grandfathering).
-        this.assertHeadquartersAddressesInCountry(
-            input.country,
-            input.headquarters_addresses,
-            agency.country && agency.country === input.country ? agency.headquarters_addresses : [],
-        );
+        // Coverage areas + HQ addresses live on the Magazin; persist + validate
+        // them there (against `input.country`). The country itself stays on the
+        // profile (set-once).
+        await this.persistLogisticsToMagazin(agencyId, agency.country, input);
 
         // Re-edit mode: step is already beyond step 1.
-        // Save the updated data but keep the current onboarding_step intact.
+        // Save the country but keep the current onboarding_step intact.
         if (agency.onboarding_step > AgencyOnboardingStep.LOGISTICS_SETUP) {
             const updated = await this.agencyRepo.atomicOnboardingUpdate(
                 agencyId,
                 {
                     country: input.country,
-                    coverage_areas: input.coverage_areas as string[],
-                    headquarters_addresses: input.headquarters_addresses.map(withGeoAddress) as unknown as IDeliveryAgency['headquarters_addresses'],
                     onboarding_step: agency.onboarding_step as AgencyOnboardingStepValue,
                 },
                 expectedVersion,
@@ -321,7 +311,7 @@ export class AgencyProfileService {
 
             return {
                 profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
-                completionStatus: this.buildCompletionStatus(updated),
+                completionStatus: await this.buildCompletionStatus(updated),
             };
         }
 
@@ -330,21 +320,18 @@ export class AgencyProfileService {
             throw createAppError(ERROR_CODES.DELIVERY_ONBOARDING_STEP_INVALID, 400);
         }
 
-        // First-time completion: save data + advance step
+        // First-time completion: save country + advance step
         const newStep = AgencyOnboardingStep.PAYOUT_SETUP;
         const updated = await this.agencyRepo.atomicOnboardingUpdate(
             agencyId,
             {
                 country: input.country,
-                coverage_areas: input.coverage_areas as string[],
-                headquarters_addresses: input.headquarters_addresses.map(withGeoAddress) as unknown as IDeliveryAgency['headquarters_addresses'],
                 onboarding_step: newStep,
             },
             expectedVersion,
         );
 
         if (!updated) {
-            console.log('Update failed', expectedVersion);
             throw createAppError(ERROR_CODES.DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION, 409);
         }
 
@@ -353,8 +340,32 @@ export class AgencyProfileService {
 
         return {
             profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
-            completionStatus: this.buildCompletionStatus(updated),
+            completionStatus: await this.buildCompletionStatus(updated),
         };
+    }
+
+    /**
+     * Persist onboarding-Step-1 logistics (coverage areas + headquarters addresses)
+     * to the agency's Magazin, validated against `input.country`. Coverage must be
+     * regions of that country; every new/edited HQ must carry a geocoded `geo`
+     * inside it. Unchanged HQ entries are grandfathered only when the country is
+     * unchanged.
+     */
+    private async persistLogisticsToMagazin(
+        agencyId: string,
+        agencyCurrentCountry: string | null,
+        input: AgencyOnboardingStep1Input,
+    ): Promise<void> {
+        const magazin = await this.magazinProvisioning.ensureMagazinForAgency(agencyId);
+        const existingHq =
+            agencyCurrentCountry && agencyCurrentCountry === input.country
+                ? magazin.headquarters_addresses
+                : [];
+        assertHeadquartersInCountry(input.headquarters_addresses, existingHq, input.country);
+        await this.magazinRepo.updateByAgencyId(agencyId, magazin.version, {
+            coverage_areas: normalizeCoverageAreasForCountry(input.coverage_areas, input.country),
+            headquarters_addresses: toPersistableHeadquarters(input.headquarters_addresses),
+        });
     }
 
     /**
@@ -400,7 +411,7 @@ export class AgencyProfileService {
 
             return {
                 profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
-                completionStatus: this.buildCompletionStatus(updated),
+                completionStatus: await this.buildCompletionStatus(updated),
             };
         }
 
@@ -434,7 +445,7 @@ export class AgencyProfileService {
 
         return {
             profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
-            completionStatus: this.buildCompletionStatus(updated),
+            completionStatus: await this.buildCompletionStatus(updated),
         };
     }
 
@@ -477,7 +488,7 @@ export class AgencyProfileService {
             await this.auditOnboardingStep(userId, agencyId, 'BRANDING_DATA_UPDATED', 3, agency.onboarding_step);
             return {
                 profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
-                completionStatus: this.buildCompletionStatus(updated),
+                completionStatus: await this.buildCompletionStatus(updated),
             };
         }
 
@@ -509,7 +520,7 @@ export class AgencyProfileService {
 
         return {
             profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
-            completionStatus: this.buildCompletionStatus(updated),
+            completionStatus: await this.buildCompletionStatus(updated),
         };
     }
 
@@ -537,7 +548,7 @@ export class AgencyProfileService {
             if (agency.policies && JSON.stringify(agency.policies) === JSON.stringify(input.policies)) {
                 return {
                     profile: await AgencyProfileMapper.toResponseDto(agency, this.fileRepository, this.storageProvider),
-                    completionStatus: this.buildCompletionStatus(agency),
+                    completionStatus: await this.buildCompletionStatus(agency),
                 };
             }
             throw createAppError(ERROR_CODES.DELIVERY_ONBOARDING_ALREADY_COMPLETED, 409);
@@ -581,7 +592,7 @@ export class AgencyProfileService {
             await this.auditOnboardingStep(userId, agencyId, 'POLICY_DATA_UPDATED', 4, agency.onboarding_step);
             return {
                 profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
-                completionStatus: this.buildCompletionStatus(updated),
+                completionStatus: await this.buildCompletionStatus(updated),
             };
         }
 
@@ -619,44 +630,16 @@ export class AgencyProfileService {
 
         return {
             profile: await AgencyProfileMapper.toResponseDto(updated, this.fileRepository, this.storageProvider),
-            completionStatus: this.buildCompletionStatus(updated),
+            completionStatus: await this.buildCompletionStatus(updated),
         };
     }
 
     // ─── Private Helpers ──────────────────────────────────────────────────────
 
-    /**
-     * Headquarters addresses are the agency's physical locations, so each must
-     * be geolocatable inside the agency's registered country. Every NEW or
-     * EDITED entry in this full-replace array must carry a geocoded `geo`
-     * whose country matches; entries echoed back identical to a stored one
-     * (same region/city/description, same geo) are grandfathered — legacy
-     * `location`-only entries keep working until next touched.
-     *
-     * HQ entries carry no `_id` in the input, so "unchanged" is content-based.
-     */
-    private assertHeadquartersAddressesInCountry(
-        country: string | null,
-        incoming: AgencyOnboardingStep1Input['headquarters_addresses'],
-        existing: IDeliveryAgency['headquarters_addresses'] | undefined,
-    ): void {
-        const previous = existing ?? [];
-        incoming.forEach((entry, index) => {
-            const unchanged = previous.some(
-                (p) =>
-                    entry.region === p.region &&
-                    entry.city === p.city &&
-                    entry.address_description === p.address_description &&
-                    geoAddressEquals(entry.geo, p.geo),
-            );
-            if (unchanged) return;
-
-            assertGeoInCountry(entry.geo, country, { index, label: entry.city ?? null });
-        });
-    }
-
-    private recalculateOnboardingStep(agency: IDeliveryAgency): AgencyOnboardingStepValue {
-        const step1Complete = agency.coverage_areas.length > 0 && agency.headquarters_addresses.length > 0;
+    private async recalculateOnboardingStep(agency: IDeliveryAgency): Promise<AgencyOnboardingStepValue> {
+        // Coverage + HQ (Step 1 completion signals) live on the Magazin.
+        const { coverageCount, hqCount } = await this.magazinCounts(agency._id.toString());
+        const step1Complete = coverageCount > 0 && hqCount > 0;
         if (!step1Complete) return AgencyOnboardingStep.LOGISTICS_SETUP;
 
         const step2Complete = (agency.payout_details?.length ?? 0) > 0;
@@ -669,10 +652,12 @@ export class AgencyProfileService {
         return AgencyOnboardingStep.POLICY_SETUP;
     }
 
-    private buildCompletionStatus(agency: IDeliveryAgency): AgencyCompletionStatusDto {
+    private async buildCompletionStatus(agency: IDeliveryAgency): Promise<AgencyCompletionStatusDto> {
+        // Coverage + HQ live on the Magazin.
+        const { coverageCount, hqCount } = await this.magazinCounts(agency._id.toString());
         const missing: string[] = [];
-        if (agency.coverage_areas.length === 0) missing.push('coverage_areas');
-        if (agency.headquarters_addresses.length === 0) missing.push('headquarters_addresses (min 1)');
+        if (coverageCount === 0) missing.push('coverage_areas');
+        if (hqCount === 0) missing.push('headquarters_addresses (min 1)');
         if ((agency.payout_details?.length ?? 0) === 0) missing.push('payout_details');
         if (!agency.policies) missing.push('policies');
 

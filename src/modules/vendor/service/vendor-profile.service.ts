@@ -747,7 +747,7 @@ export class VendorProfileService {
   private async toVendorAgencyDto(agency: IDeliveryAgency): Promise<VendorAgencyListItemDto> {
     const magazin = await this.magazinRepo.findByAgencyIdOrNull(agency._id.toString());
     const logo = await resolveFileDetail(magazin?.logo_file_id?.toString(), this.fileRepository, this.storageProvider);
-    return VendorAgencyMapper.toListItemDto(agency, magazin?.name ?? '', logo);
+    return VendorAgencyMapper.toListItemDto(agency, magazin, logo);
   }
 
   /**
@@ -850,7 +850,7 @@ export class VendorProfileService {
         const fileId = a.magazin?.logo_file_id?.toString();
         return VendorAgencyMapper.toListItemDto(
           a,
-          a.magazin?.name ?? '',
+          a.magazin ?? null,
           fileId ? detailByFileId.get(fileId) ?? null : null,
         );
       }),

@@ -60,14 +60,15 @@ export const MODELS = Object.freeze({
   SHIPMENT_ASSIGNMENT_SESSION: 'ShipmentAssignmentSession',
   DELIVERY_AGENCY: 'DeliveryAgency',
   DELIVERY_AGENT: 'DeliveryAgent',
-  AGENT_INVITE: 'AgentInvite',
 
   // Agent domain (agent ↔ agency contracts; an agent may serve many agencies,
   // each contract sub-allocating a slice of the agent's global COD threshold)
   AGENT_AGENCY_CONTRACT: 'AgentAgencyContract',
   AGENT_MEMBERSHIP_EVENT: 'AgentMembershipEvent',
   CONTRACT_STATUS_REQUEST: 'ContractStatusRequest',
-  CONTRACT_SETTLEMENT: 'ContractSettlement',
+  // No CONTRACT_SETTLEMENT: agent→agency cash settles through AgentDeposit +
+  // CodCashLedger, and the platform pays the agent through the earnings module.
+  // A third ledger for the same movements was removed rather than filled in.
 
   // Vendor <-> agency connections
   VENDOR_AGENCY_CONNECTION: 'VendorAgencyConnection',
@@ -182,14 +183,12 @@ export const COLLECTIONS = Object.freeze({
   SHIPMENT_ASSIGNMENT_SESSION: 'shipment_assignment_sessions',
   DELIVERY_AGENCY: 'delivery_agencies',
   DELIVERY_AGENT: 'delivery_agents',
-  AGENT_INVITE: 'agent_invites',
 
   // Agent domain (agent ↔ agency contracts; an agent may serve many agencies,
   // each contract sub-allocating a slice of the agent's global COD threshold)
   AGENT_AGENCY_CONTRACT: 'agent_agency_contracts',
   AGENT_MEMBERSHIP_EVENT: 'agent_membership_events',
   CONTRACT_STATUS_REQUEST: 'contract_status_requests',
-  CONTRACT_SETTLEMENT: 'contract_settlements',
 
   // Vendor <-> agency connections
   VENDOR_AGENCY_CONNECTION: 'vendor_agency_connections',

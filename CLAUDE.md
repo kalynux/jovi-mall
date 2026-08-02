@@ -5,16 +5,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > ## ⚠️ A refactor is in flight — compiles, but incomplete
 >
 > A large agent-contract / COD-shared-pool refactor is part-applied. As of
-> **2026-07-16** `npx tsc --noEmit` and `npm run lint` are clean and the app loads.
-> Steps 1–3g are done: the COD cash chain is complete and reachable, and the
+> **2026-07-30** `npx tsc --noEmit` and `npm run lint` are clean and the app loads.
+> Steps 1–3 are done: the COD cash chain is complete and reachable, and the
 > mechanism that **releases COD headroom now exists** — an agent→agency deposit
 > (`POST /api/agent/cod/deposits` declare → agency confirm, or the agency's
 > one-step `POST /api/agency/cod/deposits`) draws down the contract's outstanding
 > balance via `AgentDepositService` → `recordSettlement`, so a COD pool drains.
-> What is still missing: the agent's cut on **prepaid** orders, the trust
-> composite engine, several admin/agent controllers (threshold, contract terms,
-> settlements, KYC/ban, status-request inbox), the collection-rename migration,
-> and the doc refresh.
+> **Agent earnings are complete for both payment methods** (see "The earnings
+> split" below). The admin/agent controllers (threshold, contract terms,
+> settlements, KYC/ban, status-request inbox) **landed 2026-07-29** — including
+> the KYC write path, without which no agent could accept an offer outside a
+> seeded database. What is still missing: the trust composite engine, the
+> collection-rename migration, and the doc refresh.
 >
 > **Read [AGENT-CONTRACT-REFACTOR.md](./AGENT-CONTRACT-REFACTOR.md) before touching
 > `src/modules/agents/`, `src/modules/cod/`, or `src/modules/shipments/shipment.service.ts`.**
@@ -22,8 +24,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > owner, and the order to finish in.
 >
 > `npm run test:agent-domain` was stale against the new model and is **repaired**;
-> it is green at **88 assertions** as of 2026-07-16. It is DB-free, so it still
+> it is green at **115 assertions** as of 2026-07-29. It is DB-free, so it still
 > cannot cover the COD allocation race or the money movements — see the handoff doc.
+> `npm run test:agent-shipment-status` (green at **32**, added 2026-07-30) covers
+> the shared transition map, the map↔schema drift guard, and the agency
+> notification catalog's five-language completeness.
 >
 > Parts of this file below still describe the *pre-refactor* model (notably
 > per-agency `cod.max_exposure_override` and membership statuses). The handoff doc
@@ -44,6 +49,7 @@ Data/ops scripts (all `ts-node scripts/…`, and `src/scripts/**` is ESLint-igno
 npm run aggregate:analytics              # Populate vendor analytics data
 npm run backfill:last-ordered            # Backfill last-ordered-at
 npm run backfill:pickup-locations        # Backfill pickup locations
+npm run backfill:shipment-tracking-numbers  # Stamp legacy shipments (idempotent, --dry-run)
 npm run migrate:customer-payment-methods
 npm run migrate:agent-memberships        # agency_id → memberships (idempotent, --dry-run)
 npm run migrate:agent-deposits           # backfill deposit status/recipient (idempotent, --dry-run)
@@ -55,9 +61,18 @@ No test *framework* is configured. Tests are plain ts-node scripts under `script
 hand-rolled asserts — follow that convention rather than introducing a runner:
 
 ```bash
-npm run test:agent-domain                      # agent domain (47 assertions, no DB needed)
+npm run test:agent-domain                      # agent domain (145 assertions, no DB needed)
+npm run verify:live-parity                     # agent↔agency smoke test — NEEDS Mongo
 npx ts-node scripts/test/test-profile-mappers.ts
 ```
+
+`verify:live-parity` is the one script here that requires a database, and it exists because the
+DB-free suites structurally cannot cover four things: that the schema **indexes actually build**
+against real data (`autoIndex` is on, so a failed 2dsphere fails *silently* at boot), that the
+directory **aggregation pipeline runs** (Mongo validates pipelines at execution time, not compile
+time), that the contract lists page and return terminal rows, and that the **Express route table**
+resolves literals before `:id` params. It is read-only. Run it after any change to the agent
+directory query, the contract list methods, or either router's route order.
 
 Pure derivations are deliberately extracted onto services (`deriveWorkingState`, `buildPolicy`,
 `effectiveLimit`) so they can be tested without Mongo. Note that unit tests here cannot catch
@@ -124,12 +139,29 @@ In-memory, **per-process**, no persistence and no retry — a `Map<eventType, ha
 Emission convention is **post-commit and fire-and-forget** (`void eventBus.publish(...).catch(log)`), so an event is never inside the transaction that caused it. See the caveat under `tracking-integration` below.
 
 ### Agent vs agency actions (important)
-Shipment status transitions are **agency-driven, not agent-driven**: `PATCH /api/agency/shipments/:id/status` → `ShipmentService.updateStatus(agencyId, …)`, guarded by `requireRole(['agency'])`, validated against `AGENCY_TRIGGERABLE_TRANSITIONS`, and recorded in `status_history` with `changed_by_role: 'agency'`.
+Shipment status transitions are **driven by either the agency or the agent** — two doors onto one state machine. `PATCH /api/agency/shipments/:id/status` → `ShipmentService.updateStatus(agencyId, …)` and `POST /api/agent/shipments/:id/status` → `ShipmentService.updateStatusByAgent(agentId, …)`. Both are thin ownership-scoping wrappers over a shared private `_transitionStatus`; the actor is a discriminated union, and only three things differ:
 
-The agent's self-service write paths *on shipments* are: **accept/reject an assignment offer** (`POST /api/agent/offers/:id/{accept,reject}` — the agent-acceptance workflow, see below), `POST /api/agent/shipments/:id/cod/collect` (delivery-code submission — the only *API* by which a COD shipment reaches `delivered`), and `PATCH /api/agent/shipments/:id/tracking-number`. There is still **no agent endpoint for pickup / deliver / return / cancel** — those stay agency-driven.
+| | agency | agent |
+|---|---|---|
+| ownership scope | `findByIdAndAgency` | `findByIdAndAgent` (404, never 403) |
+| transition map | `TRIGGERABLE_TRANSITIONS` | **the same map** |
+| `status_history.changed_by_role` + audit `actorRole` | `'agency'` | `'agent'` |
+| optional failure `reason`/`note` | no | yes, on `failed`/`returned` |
+
+**There is ONE transition map, shared.** The agency and the agent have the same rights over the lifecycle — the agent is the person physically doing it, and the agency endpoint is the desk mirroring that. In particular `handing_over → picked_up|returned` is agent-reachable: **a reassigned shipment is not a second-class one**, and the replacement agent records their own pickup out of `handing_over` exactly as the original agent does out of `assigned` (acceptance binds `agent_id` while the status is still `handing_over` — see `bindAgentIfUnassigned` and `OFFERABLE_STATUSES`). If the two ever genuinely need to diverge, split the map and select on `actor.role` in `_transitionStatus` — don't let a role-specific exception creep into the shared one.
+
+**Both paths write through a from-guarded compare-and-set** (`ShipmentRepository.applyStatusChangeIfCurrent`, filter `{ _id, status: fromStatus }` + the actor's ownership predicate) under `runInTransactionWithRetry`, and a miss is `409 SHIPMENT_STATUS_CONFLICT`. This is load-bearing now that two actors share the document: without it both can read `in_transit`, one write `agent_delivered` and the other `failed`, and the loser's post-commit block (earnings split, capacity release, COD return handling) still fires for a status nobody is in. Every side effect reads the document the CAS returned, never a fresh `findById` — verdicts must describe the status the event was emitted *for*.
+
+The agent may attach an optional `reason` (`ShipmentFailureReason` — a **distinct** enum from `AgentCancellationReason`, see the model) + `note` on `failed`/`returned`; it is appended to the shipment's **append-only `delivery_failures`** array in the same atomic write as the transition. Append-only because `failed → in_transit → failed → returned` is an allowed cycle and each attempt's reason is the record. The agency endpoint stays reason-less by design.
+
+The agent's other self-service write paths *on shipments*: **accept/reject an assignment offer** (`POST /api/agent/offers/:id/{accept,reject}` — the agent-acceptance workflow, see below), `POST /api/agent/shipments/:id/cancel` (release + re-offer mid-delivery), and `POST /api/agent/shipments/:id/cod/collect` (delivery-code submission — the only *API* by which a COD shipment reaches `delivered`).
+
+**The tracking number is generated, not written.** `PATCH /api/{agency,agent}/shipments/:id/tracking-number` is **gone** on both roles: `ShipmentRepository.create` stamps every shipment with `ACR-YYMMDD-HHMMSS-XXXXX` (agency acronym from its Magazin name · UTC creation date · UTC time · 5 Crockford-base32 characters) via `shipments/utils/tracking-number.generator.ts`, and nothing else ever writes the field. Generating it in `create` rather than at the two call sites is the point — a third call site cannot forget. The acronym is **snapshotted**, never re-derived: an agency rename must not rewrite the reference a customer is already holding. Uniqueness is a partial unique index on `tracking_number` (partial so legacy `null`s don't block the build) with a pre-check in the generator; legacy rows are filled by `npm run backfill:shipment-tracking-numbers`. Pure parts are covered by `npm run test:tracking-number` (26 assertions, DB-free).
+
+Agent-driven `picked_up`/`agent_delivered`/`failed`/`returned` also emit `shipment.agent_status_changed`, which the agency notification stack renders (`in_transit` is excluded as a routine progress ping). **geo-tracker needed no change**: `actor_role` is a free TEXT column there and already receives `'agent'` from the COD collect path.
 
 ### Agent-acceptance workflow (`src/modules/shipment-assignment/`)
-Assignment is **offer-based, not a direct push**. `PATCH /api/agency/shipments/:id/assign-agent` (and `POST …/auto-assign`, gated by the agency's `assignment_settings.auto_assign_enabled`) create a `ShipmentAssignmentOffer` the agent must **accept** before the shipment is theirs. The shipment stays `assigned` (to the agency) with `agent_id = null` until acceptance — the moment `agent_id` is written, the shipment becomes trackable and (COD) the delivery code issues. **No new shipment status was added**, deliberately: that enum is the geo-tracker contract. State is mirrored on a `shipment.assignment` sub-doc (`unassigned | offered | accepted`), which is *not* the status. Offer timeout is a platform default (`SHIPMENT_OFFER_TIMEOUT_SECONDS`, 120s); the expiry sweep (`OfferExpiryWorker`) reaps ignored offers and, for auto offers, walks the snapshotted candidate pool to the next agent. Capacity admission control (`AgentCapacityService.tryReserve`/`release`) — previously inert — is now live: reserved on accept, released on `delivered`/`returned`/`rejected`, reconciled nightly. Full design in [SHIPMENT-ASSIGNMENT.md](./SHIPMENT-ASSIGNMENT.md); API in `api-doc/agent/offers.md` + `api-doc/agency/assignment.md`.
+Assignment is **offer-based, not a direct push**. `PATCH /api/agency/shipments/:id/assign-agent` (and `POST …/auto-assign`, gated by the agency's `assignment_settings.auto_assign_enabled`) create a `ShipmentAssignmentOffer` the agent must **accept** before the shipment is theirs. The shipment stays `assigned` (to the agency) with `agent_id = null` until acceptance — the moment `agent_id` is written, the shipment becomes trackable and (COD) the delivery code issues. **No new shipment status was added**, deliberately: that enum is the geo-tracker contract. State is mirrored on a `shipment.assignment` sub-doc (`unassigned | offered | accepted`), which is *not* the status. Auto-assignment is a **broadcast over a ranking session**, not a one-at-a-time relay: `autoAssign` ranks eligible agents nearest-first (Geo Provider road-network matrix, haversine fallback; location + trust gates on top of eligibility) and snapshots the pool onto a `ShipmentAssignmentSession`. The sweep (`AssignmentSweepWorker`, 30s) offers the next-nearest each `SHIPMENT_OFFER_TIMEOUT_SECONDS` (120s) window **while earlier offers still stand** — so several agents can hold a pending offer at once and the first to accept wins (a shipment-level bind CAS); a reject advances immediately, an ignore keeps an acceptable offer (**auto offers never expire** — only manual ones do, via `expireDueOffers`). After `MAX_ROUNDS` (2) passes — round 2 re-nudges ignored offers — the agency is told `shipment.assignment.unfilled`. An agent cancelling mid-delivery resumes the broadcast from its cursor; the session is disposed only on `delivered`/`returned`/`rejected`. Capacity admission control (`AgentCapacityService.tryReserve`/`release`) — previously inert — is now live: reserved on accept, released on `delivered`/`returned`/`rejected`, reconciled nightly. Full design in [SHIPMENT-ASSIGNMENT.md](./SHIPMENT-ASSIGNMENT.md); API in `api-doc/agent/offers.md` + `api-doc/agency/assignment.md`.
 
 **Auto-assignment** (the system-driven branch) is documented separately in [AUTO-ASSIGNMENT.md](./AUTO-ASSIGNMENT.md). It ranks up to 20 eligible agents nearest-first via geo-tracker's routing matrix (`GeoRoutingClient`, haversine fallback — geo-tracker stays off the critical path), stores the ranking as a temporary `ShipmentAssignmentSession` (cursor + round + state; deleted when the shipment finishes), and broadcasts down it one candidate per 2-min window across **two rounds**. Several agents can hold an acceptable offer at once — "first valid approval wins" is enforced by a shipment-level CAS (`ShipmentRepository.bindAgentIfUnassigned`) under `runInTransactionWithRetry`, **not** by an offer-uniqueness index (that index was removed). An agent may **cancel mid-delivery** (`POST /api/agent/shipments/:id/cancel`, reason enum + ≤200-char note) — `ShipmentService.releaseForAgentCancel` releases them and the broadcast **resumes from its cursor**. The `AssignmentSweepWorker` drives session advancement + manual-offer expiry, multi-instance-safe via guarded compare-and-set.
 
@@ -161,10 +193,91 @@ refund obligation.
 
 **COD delivery is closed to every other path, and that is deliberate.** For COD, `delivered` ⟺ cash collected — `recomputeCodPaymentStatus` derives the order's payment status from that equivalence, and `splitCodCollection` only ever runs off a collection, so a COD shipment that reaches `delivered` without one leaves an order that is delivered, completed, and that **nobody is ever paid for** (not even the vendor), with a payment status that is a lie. Consequently: the customer's `confirm-delivery` endpoint **rejects COD** (their code is their confirmation), and the shipment auto-confirm sweep does **not** confirm COD — it routes through `CashCollectionService.autoCollectWithoutCode`, which records the cash and delivers in one transaction. Any new route to `delivered` must go through a collection too.
 
+### The earnings split (`src/modules/earnings/`)
+
+One order's gross is divided across **two moments**, and that is the whole design. At **payment**
+(`splitOrder`) only the platform commission and the vendor's net are allocated. The vendor's net is
+already reduced by the delivery fee, but that fee is deliberately **not** given to anyone yet: at
+payment success the shipments exist at `pending` with `agent_id: null`, and the agent who will earn
+a share of that fee has not been dispatched. At **delivery** (`splitShipmentDelivery`, hooked
+post-commit on `agent_delivered`/`returned` in `ShipmentService.updateStatus`) the fee is divided
+between the agency and the agent who actually ran it.
+
+```
+gross = commission + vendorNet + Σ per shipment(agency + agent + vendor refund)
+```
+
+COD is the same shape with a different trigger: `splitCodCollection` pays all four parties off the
+verified cash handoff, because that is when both the cash and the agent are known. **A prepaid
+order never reaches `splitCodCollection` and a COD order never reaches `splitOrder`.**
+
+Four rules that are load-bearing:
+
+- **The agent's cut comes OUT of the agency's fee, never on top** (`fee_split` on their contract,
+  clamped to the fee). The vendor pays the same either way. The agency *owes* it; the **platform
+  pays** it, through the agent's own `EarningsAccount` — nobody is paid off-platform.
+- **`delivery_fee_snapshot` on the Shipment is the contract between the two moments.** The fee
+  derives from the agency's *mutable* `policies.pricing`; splitting at delivery would otherwise
+  divide a different number than the vendor was charged. `splitOrder` writes it, the delivery split
+  divides exactly it.
+- **`EarningsCompletionService.onOrderCompleted` must sweep EVERY source type an order produced** —
+  `order`, `cod_collection` *and* `shipment`. `markCompletedBySource` is keyed by source, and
+  `findMaturedHeld` skips a null `hold_release_at`, so a source it forgets is money held forever.
+  This has already been caught once (COD) and is the first thing to check when adding a source type.
+  It is also what makes the hold uniform: **every actor on an order matures on the same date**,
+  `HOLD_DAYS` (7) after the order completes — never at delivery, never per shipment.
+- **A `returned` shipment still splits**, at the agency's `additional_fees.rto_fee` (clamped),
+  with the unspent remainder credited back to the vendor. `failed` does not: it is not terminal
+  (`failed → in_transit | returned`), so `failed_delivery_fee` needs its own charge path.
+
+Both splits are post-commit and best-effort, so both have a recovery stage in
+`EarningsReleaseWorker` (`recoverMissedCodSplits`, `recoverMissedDeliverySplits`). The arithmetic
+itself lives in `EarningsQuoteService` so the agent's **offer-time estimate** and the
+**delivery-time actual** cannot drift apart.
+
 ### Agent domain (`src/modules/agents/`)
 The agent is a **platform identity, not an agency-owned record** — they sign up independently and may serve **several agencies at once**. `DeliveryAgent.agency_id` no longer exists; the relationship is `AgentAgencyMembership` (one row per agent↔agency), with `AgentMembershipEvent` as its append-only history.
 
 **The rule for any new agent field: if the value could differ per agency, it belongs on the membership.** Employment terms and the COD exposure cap are per-membership; identity, trust score, availability, device and tracking permission are per-agent.
+
+**The handshake is symmetric, and `origin` is what makes it work.** Both directions —
+`requestFromAgency` (an agency naming a specific agent) and `requestToJoin` (an agent applying) —
+land in `pending`; neither shortcuts to `active`. Who may answer is derived from `origin` by
+`AgentContractService.initiatorOf`: `join_request` means the agent raised it, every other origin
+(`invitation`, `transfer`, `admin`, `migration`) means the agency or the platform did. **`origin` is
+therefore an authorization input, not just audit metadata** — the counterparty `approve`/`reject`s,
+the initiator `withdraw`s, and asking for the wrong one is a 403. This is the `requester_role`
+analogue from the vendor↔agency connection; it has to live on `origin` because
+`TRANSITION_AUTHORITY` is keyed on the party alone and cannot express "whoever did not raise it".
+The DTO exposes the same verdict as `initiatedBy` so a client renders the matching buttons.
+
+**Discovery is the front door, and the email-invite subsystem is gone.** `AgentInvite` (model,
+repository, service, and all six routes) was deleted: an agency finds agents through
+`GET /api/agency/agents/browse` and requests one by id, and an agent finds agencies through
+`GET /api/agent/agencies/browse`. `AgentDirectoryService` owns both, deliberately apart from the
+contract FSM. The directory's hard filter is `assertCanHoldContract` plus completed onboarding —
+listing an agent who cannot accept would render a button whose request dead-ends. Exposure is a
+**public work profile only**: `AgentDirectoryMapper` never emits email, phone, `legal_identity`,
+`payout_details`, `emergency_contact`, device telemetry or raw capacity counters, and load is the
+`working_state` label rather than a count. `AgentRosterEntryDto` *does* carry contact details — the
+two DTOs answer different questions and must not be merged. The cost of dropping invites, accepted
+knowingly: an agency can no longer approach someone who has not signed up yet.
+
+**The whole surface is an endpoint-for-endpoint mirror of `agency-connections/`, on purpose.** Four
+verbs — `approve`, `reject`, `withdraw`, `terminate` — mean the same thing on all four routers of
+both flows, plus `browse` / a request POST / a paginated list / a single GET. Don't reintroduce a
+role-specific spelling: the HTTP verbs used to say `accept`/`decline` on one side while the FSM said
+`approve`/`reject`, and that split bought nothing. `POST /:id/terminate` is canonical on the agency
+side; `DELETE /:membershipId` is the same handler under its original name. `deactivate` is
+deliberately **not** in `RequestTransitionSchema` — `/terminate` owns it, and leaving it in the
+dispatcher would be a second way to end a contract with a different status code.
+
+**Both list endpoints return every status by default**, terminal rows included, and paginate exactly
+like `ConnectionRepository.listForVendor` (`{ data, meta: { total, page, limit, pages } }`, renamed
+to `totalPages` on the wire). The old live-only default made a relationship history impossible to
+fetch. Nothing on the dispatch path reads them — eligibility and COD go through `findActive` /
+`findLive` / `listAllocating`, which are still status-scoped. The admin agent view uses
+`listAllForAgent` and stays unpaginated: an investigation must not lose rows to a page boundary.
 
 Four state axes are kept deliberately separate — collapsing any two makes "is he offline, or just full?" unanswerable:
 
@@ -173,7 +286,17 @@ Four state axes are kept deliberately separate — collapsing any two makes "is 
 | `status` | may this account work at all? | admin |
 | `availability` | does the agent *want* work now? | the agent |
 | `working_state` | how loaded is he? (derived from shipment counts) | system |
-| `tracking.allowed` | may he be tracked? | admin/agency |
+| `tracking.allowed` | may he be tracked? | admin (`PUT /api/admin/agents/:agentId/tracking-allow`) — there is no agency or agent write path |
+
+Two more are worth knowing because nothing agent-facing writes them either: `kyc.status` (admin;
+**eligibility passes only on `verified`**, so an unverified agent is undispatchable) and
+`capacity.max_active_shipments` (the billing plan, via `AgentPlanCapacityConsumer` — never the
+agent, or a plan renewal would undo it). Both are readable on the agent's profile.
+
+Note the two active-shipment counters are **not** interchangeable: `capacity.active_shipment_count`
+is authoritative — it is what `tryReserveCapacity` compare-and-sets on accept — while
+`working_state.active_shipment_count` is a recomputed input to the label above and can lag it.
+Report the former.
 
 Consume the domain through the barrel (`src/modules/agents/index.ts`) — **except routes**, which the API layer imports directly from `routes/*`. Routers pull in `auth.middleware` → `auth.service` → the barrel; re-exporting routes from it closes a require cycle that crashes at boot with "AuthService is not a constructor".
 
@@ -185,7 +308,7 @@ Consume the domain through the barrel (`src/modules/agents/index.ts`) — **exce
 
 Because `assertEligible` requires tracking-allowed before dispatch, geo-tracker **refuses** an agent's attempt to switch Tracking Allow off while they hold an active shipment (it would strand a delivery assigned on that promise). Note what Tracking Allow is *for* on geo-tracker's side: it is the permission to read an agent's **live position at all** — including an agent with no shipment, which is exactly the read that finds the one nearest a pickup. It is not what starts a tracking session; only a shipment is.
 
-Migration for pre-existing data: `npm run migrate:agent-memberships` (idempotent; `--dry-run` supported).
+Migration for pre-existing data: `npm run migrate:agent-memberships` (idempotent; `--dry-run` supported). The dead `agent_invites` collection is left in place — nothing reads it, and dropping it is a manual call.
 
 ### Base repository (`src/core/repositories/base.repository.ts`)
 Generic `BaseRepository<TDoc, TDomain>` provides: `findOne`, `findById`, `paginate`, `create`, `softDelete`, `restore`, `hardDelete`. All queries automatically filter `deletedAt: null`. Pass a Mongoose `ClientSession` for transactional operations.
@@ -240,7 +363,8 @@ Inert when `GEO_TRACKER_BASE_URL` is unset — the outbox still fills, nothing d
 | App bootstrap & middleware stack | `src/app.ts` |
 | Route mounting | `src/api/index.ts` |
 | Agent domain public surface | `src/modules/agents/index.ts` |
-| Agent↔agency membership lifecycle | `src/modules/agents/domain/services/agent-membership.service.ts` |
+| Agent↔agency contract lifecycle + handshake | `src/modules/agents/domain/services/agent-contract.service.ts` |
+| Agent/agency discovery (both browse directions) | `src/modules/agents/domain/services/agent-directory.service.ts` |
 | Assignment eligibility rules | `src/modules/agents/domain/services/agent-eligibility.service.ts` |
 | Tracking-allow policy (geo-tracker consumes) | `src/modules/agents/domain/services/agent-tracking-policy.service.ts` |
 | geo-tracker integration seam | `src/modules/agents/ports/device-location.port.ts` |

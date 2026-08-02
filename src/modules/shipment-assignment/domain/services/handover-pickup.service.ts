@@ -158,11 +158,11 @@ export class HandoverPickupService {
   // ─── Rule 3 (and the fallbacks): the agency's business/HQ location ─────────
 
   private async fromAgencyBusiness(agencyId: string, isFallback: boolean): Promise<IShipmentHandoverPickup> {
-    const agency = await this.agencies.findById(agencyId);
-    const hq = agency?.headquarters_addresses?.[0] ?? null;
+    // Business name + HQ addresses both live on the Magazin (source of truth).
+    const magazin = await this.magazins.findByAgencyIdOrNull(agencyId);
+    const hq = magazin?.headquarters_addresses?.[0] ?? null;
     const hqGeo: IGeoAddress | null = hq?.geo ?? null;
-    // Business name lives on the Magazin (source of truth).
-    const agencyName = await this.magazins.findNameByAgencyId(agencyId);
+    const agencyName = magazin?.name ?? null;
     const label = agencyName
       ? `${agencyName}${hq?.city ? ` — ${hq.city}` : ''}`
       : hq?.city ?? 'Agency business location';

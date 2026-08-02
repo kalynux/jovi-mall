@@ -14,8 +14,8 @@ export class AgentOfferController {
   /** GET /api/agent/offers — the agent's offers, pending first. */
   static list = asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const agentId = req.auth!.role_entity._id.toString();
-    const { status, page, limit } = ListOffersQuerySchema.parse(req.query);
-    const result = await shipmentAssignmentService.listForAgent(agentId, { status }, { page, limit });
+    const { status, q, page, limit } = ListOffersQuerySchema.parse(req.query);
+    const result = await shipmentAssignmentService.listForAgent(agentId, { status, q }, { page, limit });
     res.json({ success: true, data: result.data, meta: result.meta });
   });
 

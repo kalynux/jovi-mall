@@ -63,6 +63,8 @@ const files = await uploadIntakeService.execute({
       originalName: 'product.jpg',
     },
   ],
+  // A purpose folder, restricted to vendors+admins. General media intake passes
+  // 'by-type' instead — see "Folders" below.
   folder: 'products',
 });
 ```
@@ -153,6 +155,30 @@ UPLOAD_LOG_LEVEL=info
 
 ---
 
+## 📁 Folders (`request.folder`)
+
+A request declares **one of two things**, and the distinction is the access rule:
+
+| Value | Meaning | Who may upload |
+|---|---|---|
+| a **purpose** folder — `products`, `variants`, `digital`, `system`, `shipments` | the caller knows what the file is *for* | restricted by `PermissionValidator` (`products`/`variants`/`digital` = vendor+admin and a vendor needs `vendorId`; `system` = admin) |
+| `'by-type'` | the caller does **not** know yet — general media intake | any authenticated role |
+
+`'by-type'` stores each file under the folder for its own media type (`images`, `videos`, `audio`,
+`documents`, `archives`, `other`) via `resolveTypeFolder`, resolved at storage time from the
+**sniffed, post-processing** MIME type — so a spoofed `.jpg` is filed as what it really is, and a
+png converted to webp lands in `images/`. The mapping is mechanical over `MediaCategory`, the same
+taxonomy behind `GET /api/files?category=` and the storage-usage breakdown, so a file's folder and
+its reported category can never disagree.
+
+`POST /api/files/upload` uses `'by-type'`: an avatar, a magazin logo, a product photo and a ticket
+attachment all arrive on that one route from every role, and which of those a file *becomes* is only
+decided later, when its returned id is attached. Naming a purpose folder there would assert a purpose
+the request doesn't have — and, for `products`, apply that folder's vendor-only rule to every other
+role.
+
+---
+
 ## 🔍 Pipeline Flow
 
 ```
@@ -217,7 +243,7 @@ const files = await uploadIntakeService.execute({
       originalName: 'totally-safe.jpg',
     },
   ],
-  folder: 'products',
+  folder: 'by-type',
 });
 // Throws UploadPolicyViolationError with MIME_TYPE_MISMATCH
 ```

@@ -152,6 +152,13 @@ your upload list and show the per-file reason inline. `violation.code` is one of
 [File Management API](../vendor/file-management.md#post-apifilesupload) for the full
 per-code reference.
 
+Always read `details.violations[]`, never the top-level `message` — it is
+`"Upload policy permissions violated"` only when a `PERMISSION_DENIED` rule fired,
+and `"Upload policy violations found"` for everything else. `PERMISSION_DENIED` is
+not expected from `POST /api/files/upload`, which is open to every authenticated
+role; it belongs to the purpose-scoped upload routes (digital assets, delivery
+proof, system files).
+
 ### 8. Other Contextual Domain Errors
 The backend frequently includes context variables inside the `details` object for general domain errors. For example:
 - `PAYMENT_ORDER_NOT_FOUND` may include `{"orderId": "..."}`
@@ -217,11 +224,56 @@ deposits, remittances and discrepancies. Role-specific context:
 | `COD_DISCREPANCY_ALREADY_RESOLVED` | 409 | Discrepancy already closed | — |
 | `PAYMENT_ORDER_IS_COD` | 422 | Online payment attempted for a cash-on-delivery order/checkout | `{ cartId? }` |
 
-Related delivery-roster codes (agent↔agency membership — see
-[agency/agents.md](../agency/agents.md), [agent/agency-membership.md](../agent/agency-membership.md)):
-`DELIVERY_INVITE_NOT_FOUND` (404), `DELIVERY_INVITE_ALREADY_PENDING` (409),
-`DELIVERY_AGENT_ALREADY_IN_AGENCY` (409), `DELIVERY_AGENT_NOT_IN_AGENCY` (404),
-`DELIVERY_AGENT_HAS_ACTIVE_SHIPMENTS` (422).
+### Agent ↔ agency contracts
+
+Full documentation: [agency/agent-roster.md](../agency/agent-roster.md) (canonical) and
+[agent/agency-membership.md](../agent/agency-membership.md).
+
+**The handshake** — request, approve, reject, withdraw:
+
+| Code | HTTP | Description | Details |
+|------|------|-------------|---------|
+| `AGENT_MEMBERSHIP_ALREADY_EXISTS` | 409 | A live contract between this agent and agency already exists | `{ status, contractId }` |
+| `CONTRACT_NOT_FOUND` | 404 | Unknown, **or** belongs to another party — never 403, so neither side can probe the other's roster | — |
+| `CONTRACT_TRANSITION_NOT_PERMITTED` | 403 | Wrong party for this verb: the initiator may only `withdraw`, the counterparty may only `approve`/`reject`. Also `suspend` raised by an agent | `{ transition, party, initiator, hint }` |
+| `CONTRACT_INVALID_TRANSITION` | 409 | The contract is not in a status this transition can leave | `{ transition, from, allowedFrom }` |
+| `AGENT_MEMBERSHIP_LIMIT_REACHED` | 422 | The agent is at their agency cap. Checked at **approval**, not at request | `{ current, max }` |
+| `AGENT_KYC_NOT_VERIFIED` | 422 | Re-checked at approval, not trusted from request time | `{ kycStatus, hint }` |
+| `AGENT_PLATFORM_BANNED` | 403 | A platform ban overrides every contract | `{ hint }` |
+| `AGENT_NOT_FOUND` | 404 | `agentId` does not resolve | — |
+
+**Two-party status requests** — pause, reactivate, terminate:
+
+| Code | HTTP | Description | Details |
+|------|------|-------------|---------|
+| `CONTRACT_STATUS_REQUEST_NOT_FOUND` | 404 | Unknown, or not addressed to you | — |
+| `CONTRACT_STATUS_REQUEST_NOT_PENDING` | 409 | Already resolved | `{ state }` |
+| `CONTRACT_STATUS_REQUEST_ALREADY_PENDING` | 409 | One open request per contract per transition | `{ requestId }` |
+| `CONTRACT_STATUS_REQUEST_NOT_YOURS` | 403 | You raised it; the counterparty resolves it | `{ requestedByRole, hint }` |
+| `CONTRACT_HAS_OUTSTANDING_COD` | 422 | Termination blocked — the agent still holds that agency's cash. Scoped to the one contract | `{ outstandingCod, hint }` |
+| `CONTRACT_HAS_UNPAID_EARNINGS` | 422 | Termination blocked — the agency still owes the agent | `{ outstandingPayment, hint }` |
+
+**Negotiated terms**:
+
+| Code | HTTP | Description | Details |
+|------|------|-------------|---------|
+| `CONTRACT_FEE_SPLIT_INVALID` | 422 | A `percentage` split with no share, or a `flat` one with no fee | `{ model, hint }` |
+| `CONTRACT_COD_THRESHOLD_OUT_OF_BOUNDS` | 422 | Outside the absolute per-contract bounds | `{ requested, min, max }` |
+| `CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM` | 422 | The agent's shared pool has no room — another agency's slice may be the cause | `{ requested, headroom, shortfall, hint }` |
+| `CONTRACT_COD_THRESHOLD_BELOW_OUTSTANDING` | 422 | Cannot set a threshold beneath cash already held under the contract | `{ requested, outstandingBalance, hint }` |
+| `CONTRACT_COVERAGE_OUTSIDE_AGENT_RADIUS` | 422 | An agency cannot grant coverage the agent never agreed to work | — |
+| `CONTRACT_SHIPMENT_VALUE_EXCEEDED` | 422 | The shipment is worth more than this contract's per-shipment ceiling | — |
+| `CONTRACT_SETTLEMENT_EXCEEDS_OUTSTANDING` | 422 | A settlement larger than the balance it discharges | — |
+
+Legacy roster codes, still live: `DELIVERY_AGENT_ALREADY_IN_AGENCY` (409),
+`DELIVERY_AGENT_NOT_IN_AGENCY` (404), `DELIVERY_AGENT_HAS_ACTIVE_SHIPMENTS` (422),
+`AGENT_MEMBERSHIP_NOT_FOUND` (404), `AGENT_MEMBERSHIP_NOT_APPROVED` (409 — despite the name, it
+means "not **active**"; the code predates the status rename), `AGENT_MEMBERSHIP_NOT_PENDING` (409),
+`AGENT_MEMBERSHIP_NOT_SUSPENDED` (409).
+
+> `DELIVERY_INVITE_NOT_FOUND` and `DELIVERY_INVITE_ALREADY_PENDING` were **removed** with the
+> email-invite endpoints. An agency now reaches an agent through the directory
+> (`GET /api/agency/agents/browse` → `POST /api/agency/agents/requests`).
 
 ---
 

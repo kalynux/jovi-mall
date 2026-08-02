@@ -3,10 +3,15 @@
 Full multi-channel parity with vendor and agency notifications — in-app, push, and one
 preference-gated secondary channel (email/Telegram/WhatsApp), catalog-driven and localized.
 Architecture mirrors [Agency Notifications](../agency/notifications.md) exactly; this doc follows the
-same structure. Read the vendor doc's
-[Push notifications (FCM)](../vendor/notifications.md#push-notifications-fcm) section for the full
-client-side integration guide (Firebase config, service worker, foreground/background handling),
-which applies unchanged against `/api/agent/devices`.
+same structure.
+
+> 📱 **Building the Flutter agent app? Start with
+> [Push Notifications — Flutter Integration Guide](./push-notifications.md).** It is the complete
+> client-side contract: the exact message shape the backend sends, the **Android channel ids the app
+> must create**, token lifecycle, per-app-state handling, and a verification checklist. Push is what
+> lets the agent be notified without refreshing — it is the only transport that reaches a
+> backgrounded or killed app. (The vendor doc's
+> [FCM section](../vendor/notifications.md#push-notifications-fcm) covers the *web* equivalent.)
 
 > **Why agents have notifications at all.** Every situation here is the agent's **own cash liability
 > moving** — a deposit being confirmed or rejected. For a cash-on-delivery agent that is money they
@@ -57,15 +62,31 @@ one secondary channel; a channel delivers only if enabled **and** verified; prio
 | `plan.expiring` | Your subscription plan is nearing expiry (within your notice window). | Renew/upgrade before it lapses to keep your higher delivery limit. Gated by `planUpdates`; `aggregateType: plan`, `action` → `plans`. See [Billing](./billing.md). |
 | `plan.expired` | Your plan expired — handed over to a queued plan, or **downgraded to `agent_free`**. | A downgrade **lowers your concurrent-delivery cap** (back to 20). Gated by `planUpdates`; `aggregateType: plan`, `action` → `plans`. |
 | `storage.alert` | Your **own media storage** crossed 80 / 90 / 100% of your plan cap (highest crossed band only, ≤ once per month per band). | Free space or upgrade. Gated by `storageAlert`; `aggregateType: storage`, `action` → `settings/storage`. **Delivery proofs are charged to the agency, not counted here.** See [Storage](./storage.md). |
+| `shipment.offer.received` | An agency (or auto-assignment) offered you a delivery. | Time-critical — accept before another agent does. Gated by `assignmentOffers`; `aggregateType: offer`, `action` → `offers/{id}`. Delivered on the dedicated `jovi_agent_offers` push channel. See [Offers](./offers.md). |
+| `shipment.offer.reminder` | Auto-assignment round 2: an offer you haven't answered is **still open**. | Still acceptable — auto offers don't expire on the timeout. Same gate, channel and deep-link as `.received`. |
+| `shipment.offer.expired` | A **manual** offer lapsed because you didn't answer in time. | Informational, so a missed job doesn't vanish silently. Same gate; default push channel. |
+| `shipment.reassigned_away` | The agency moved a delivery you were handling to another agent. | You are off it: customer PII and live tracking are already revoked; it stays in your activity history. Gated by `assignmentOffers`; `aggregateType: shipment`, **no `action`**. |
+| `agent_contract.request_received` | An agency asked **you** to deliver for them. | **The only signal that a request is waiting** — there is no invite inbox to poll any more. Accept or reject it from `memberships/{id}`. Gated by `contractUpdated`; `aggregateType: contract`. See [Agency membership](./agency-membership.md). |
+| `agent_contract.approved` | An agency approved an application you sent. | You can now receive their delivery offers. Same gate, `aggregateType: contract`. |
+| `agent_contract.rejected` | An agency declined an application you sent. | You may apply again later, or browse other agencies. Same gate. |
 
 The three COD-deposit rows carry an `action` deep-linking to the deposit (`cod/deposits/{id}`), and an
 `aggregateType` of `deposit` with the deposit id as `aggregateId`. The `plan.*` rows deep-link to
 `plans` with `aggregateType: plan` and the agent id as `aggregateId`.
 
+The three `agent_contract.*` rows deep-link to `memberships/{contractId}` with
+`aggregateType: contract` and the contract id as `aggregateId`. They are gated by
+`contractUpdated`, which defaults **on** — an agency's request now reaches you only through the
+platform, so silencing it means never seeing one.
+
 There is deliberately **no notification when you declare a deposit** — you did that, so it would be
-noise. The declaration notifies your *agency*, who has to answer it. (Assignment-offer situations —
-`shipment.offer.received` / `.expired` / `shipment.reassigned_away` — are gated by `assignmentOffers`;
-see [Offers](./offers.md).)
+noise. The declaration notifies your *agency*, who has to answer it. For the same reason there is
+none when you accept or reject an offer, when you withdraw your own application, or for the
+`pause` / `reactivate` / `terminate` transitions — those land in your status-request inbox
+(`GET /api/agent/memberships/status-requests`) rather than as a push.
+
+Full `type` → `aggregateType` → deep-link mapping, in a form you can code against:
+[Flutter guide → Route](./push-notifications.md#route).
 
 ---
 
@@ -84,7 +105,10 @@ see [Offers](./offers.md).)
 > input to whether you can be assigned work. Different endpoint, different meaning.
 >
 > Likewise, `/api/agent/notification-preferences` is **not** `/api/agent/preferences` — the latter is
-> your profile-level preferences in the agent domain.
+> your profile-level preferences in the agent domain ([profile.md](./profile.md)), and it now carries
+> only `navigation_app`. **Everything that decides whether you are notified is on this page.** Two
+> `notify_*` flags used to sit on `/api/agent/preferences` and gated nothing; they were removed
+> rather than left to look as if switching them off worked.
 
 ---
 
@@ -106,6 +130,7 @@ see [Offers](./offers.md).)
     "preferences": {
       "codDepositUpdates": true,
       "assignmentOffers": true,
+      "contractUpdated": true,
       "planUpdates": true,
       "storageAlert": true
     }
@@ -130,6 +155,7 @@ link, WhatsApp link) — not stored toggles, ignored on write.
   "preferences": {
     "codDepositUpdates": true,
     "assignmentOffers": true,
+    "contractUpdated": true,
     "planUpdates": true,
     "storageAlert": true
   }
@@ -191,10 +217,30 @@ Marks all this agent's notifications read. Returns `{ "count": <n> }`.
 <a name="register-device"></a>
 ### POST /api/agent/devices
 
-Register an FCM token for push. Same body and behaviour as
-[`POST /api/agency/devices`](../agency/notifications.md#register-device).
+Register (or refresh) an FCM token for push. Upserts on `token`, so repeating it is idempotent.
+
+**Request Body**:
+```json
+{ "token": "fcm-registration-token", "platform": "android", "userAgent": "Pixel 8 / Android 14" }
+```
+
+`platform` is an enum — `android` | `ios` | `web`. `token` ≤ 4096 chars, `userAgent` optional ≤ 512.
+
+**Success Response** — `200 OK`:
+```json
+{
+  "success": true,
+  "data": { "id": "665f1f77bcf86cd799439900", "platform": "android", "lastUsedAt": "2026-07-28T09:00:00.000Z" },
+  "message": "Device registered for push notifications"
+}
+```
 
 <a name="unregister-device"></a>
 ### DELETE /api/agent/devices
 
-Unregister an FCM token. Same as the agency equivalent.
+Unregister an FCM token. Body: `{ "token": "…" }`. **Call this before clearing the session on
+logout** — it needs agent auth, and a device left registered keeps receiving the previous agent's
+notifications.
+
+**When and how to call both**, plus token-refresh handling:
+[Flutter guide → Register the token](./push-notifications.md#register-the-token).

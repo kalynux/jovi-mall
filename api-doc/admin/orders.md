@@ -90,6 +90,11 @@ see held orders and manually resolve them when a gateway event is missed or the 
 - This is an **override** path — the normal resolution is automatic from the payment gateway's dispute
   webhook. Use these endpoints when the automatic event is missed or the case is settled off-platform.
 - `lost` is destructive (refund + return/cancel + escrow reversal); confirm the gateway outcome before calling.
+- **Admins can read any payment transaction.** `GET /api/payments/:transactionId` is owner-scoped for
+  everyone else — since 2026-07-29 a customer gets a `404` for a transaction that is not theirs — but
+  `admin` is exempt, precisely so disputes and refunds can be investigated from the platform side.
+  It returns the amount snapshot, gateway reference and the orders a payment settled. Contract:
+  [../payments/README.md](../payments/README.md).
 
 ## Possible error codes
 
@@ -105,3 +110,4 @@ see held orders and manually resolve them when a gateway event is missed or the 
 - [./cod.md](./cod.md) — COD oversight · [./payout-requests.md](./payout-requests.md)
 - [../customer/orders.md](../customer/orders.md) · [../vendor/orders.md](../vendor/orders.md)
 - [../vendor/stripe-payments.md](../vendor/stripe-payments.md) — payment/dispute lifecycle
+- [../payments/README.md](../payments/README.md) — the gateway payment surface and who may read a transaction

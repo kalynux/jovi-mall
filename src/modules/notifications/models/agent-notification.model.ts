@@ -27,6 +27,15 @@ export type AgentNotificationType =
     | 'cod.deposit.recorded'
     | 'cod.deposit.confirmed'
     | 'cod.deposit.rejected'
+    /**
+     * The agent↔agency contract handshake. An agency asking a specific agent to
+     * contract is the case that makes these mandatory rather than nice to have:
+     * before the directory existed the agency reached the agent by email, and
+     * now there is nothing outside the platform to carry the request at all.
+     */
+    | 'agent_contract.request_received'
+    | 'agent_contract.approved'
+    | 'agent_contract.rejected'
     /** A new shipment assignment offer to accept/reject before it times out. */
     | 'shipment.offer.received'
     /** A reminder that a still-open offer is waiting (auto-assignment round 2). */
@@ -44,7 +53,7 @@ export type AgentNotificationType =
     | 'plan.expired'
     /** This agent's own media storage crossed a usage threshold (80/90/100%). */
     | 'storage.alert';
-export type AgentAggregateType = 'deposit' | 'offer' | 'shipment' | 'plan' | 'storage';
+export type AgentAggregateType = 'deposit' | 'offer' | 'shipment' | 'contract' | 'plan' | 'storage';
 
 /**
  * Deep-link action for a notification, localized in the agent's language.

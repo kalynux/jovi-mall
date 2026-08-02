@@ -2,14 +2,22 @@
 
 This is the source-of-truth for the WhatsApp Business templates used by the
 platform — vendor notifications (§1–7), the customer-facing COD delivery
-code (§8), and the cross-role **billing / plan-lifecycle** templates (§9). Create
-each template in **WhatsApp Business Manager → Message Templates** exactly as
+code (§8), the cross-role **billing / plan-lifecycle** templates (§9), and the
+**agency** (§10) and **agent** (§11) notification templates. Create each template
+in **WhatsApp Business Manager → Message Templates** exactly as
 specified, in **all 5 languages**. Until a template is approved, out-of-24h-window
 sends for that event will fail — for role notifications the failure is recorded on
 the notification's `deliveryErrors` (never breaking the flow: in-app, push, email
 and Telegram still deliver); for the COD code it is logged and the code simply
 stays available in the customer's own order view (see
 [customer/orders.md](../customer/orders.md#cod)).
+
+Every template listed here is registered in
+[template-registry.ts](../../src/modules/whatsapp/handlers/template/template-registry.ts)
+with its name, the 5 language codes, and its expected body-param count — that
+registry is the code-side checklist for this page, not an approval status. A
+template registered here but not yet approved in Business Manager still fails on
+send; approval is a Meta-side step.
 
 > The button URL base is `VENDOR_APP_URL` for vendor templates. Agency and agent
 > templates use `AGENCY_APP_URL` / `AGENT_APP_URL` respectively as their button
@@ -187,6 +195,59 @@ Soft-cap monitoring alert (deliveries are never blocked). Header **"Shipment lim
 | ar | لديك {{1}} شحنة نشطة، عند حد باقة {{2}} البالغ {{3}} أو أعلى منه. تستمر عمليات التوصيل — قم بالترقية لمزيد من السعة. |
 
 > Until these are approved, plan/cap notifications still reach the recipient via **in-app + push + email/Telegram** — only the WhatsApp channel (outside the 24h window) waits on approval.
+
+---
+
+## 10. Agency templates
+
+Button base: **`AGENCY_APP_URL`**. Category `UTILITY`, 5 languages, single dynamic
+URL button unless stated. The **full 5-language body + button copy is the
+source-of-truth in
+[agency-notification-catalog.ts](../../src/modules/notifications/catalog/agency-notification-catalog.ts)** —
+copy it verbatim when creating each template; the English body below is the
+reference for what the params mean. Plan templates (`agency_plan_expiring`,
+`agency_plan_expired`) and `agency_shipment_cap_exceeded` are specified in §9.
+
+| Template name | Body params | Button suffix · label (en) | English body |
+|---|---|---|---|
+| `agency_connection_request_received` | `{{1}}`=vendor name | `vendor-connections/{{connectionId}}` · View connection | {{1}} wants to connect with you as their delivery partner. |
+| `agency_connection_approved` | `{{1}}`=vendor name | `vendor-connections/{{connectionId}}` · View connection | {{1}} approved your connection request. You can now deliver for them. |
+| `agency_connection_rejected` | `{{1}}`=vendor name | `vendor-connections/{{connectionId}}` · View connection | {{1}} declined your connection request. |
+| `agency_connection_reapproval_needed` | `{{1}}`=vendor name | `vendor-connections/{{connectionId}}` · View connection | {{1}} updated their policies. Reapprove your connection to keep delivering for them. |
+| `agency_shipment_assigned` | `{{1}}`=order number, `{{2}}`=item count | `shipments/{{shipmentId}}` · View shipment | Order #{{1}} was dispatched to you — {{2}} item(s) to fulfill. |
+| `agency_shipment_offer_accepted` | `{{1}}`=agent name, `{{2}}`=order number | `shipments/{{shipmentId}}` · View shipment | {{1}} accepted the delivery for order #{{2}}. They are on the way. |
+| `agency_shipment_assignment_unfilled` | `{{1}}`=order number | `shipments/{{shipmentId}}` · View shipment | No agent took the delivery for order #{{1}}. Assign an agent manually to keep it moving. |
+| `agency_payout_requested` | `{{1}}`=currency, `{{2}}`=amount | `tickets/{{ticketId}}` · View ticket | Your request to withdraw {{1}} {{2}} was created. Track its progress under Tickets. |
+| `agency_payout_paid` | `{{1}}`=currency, `{{2}}`=amount | `tickets/{{ticketId}}` · View ticket | Your payout of {{1}} {{2}} has been paid. |
+| `agency_payout_rejected` | `{{1}}`=currency, `{{2}}`=amount | `tickets/{{ticketId}}` · View ticket | Your request to withdraw {{1}} {{2}} was rejected. See Tickets for the reason. |
+| `agency_cod_deposit_declared` | `{{1}}`=agent name, `{{2}}`=currency, `{{3}}`=amount, `{{4}}`=deadline days | `cod/deposits/{{depositId}}` · Review deposit | {{1}} declared a cash deposit of {{2}} {{3}}. Confirm or reject it within {{4}} days — unanswered declarations freeze your reserve releases. |
+| `agency_cod_deposit_direct_to_platform` | `{{1}}`=agent name, `{{2}}`=currency, `{{3}}`=amount | `cod/deposits/{{depositId}}` · Review deposit | {{1}} paid {{2}} {{3}} of collected cash straight to the platform. Your liability has been reduced by the same amount and the collections it covers are settled — nothing is owed to you for it. |
+| `agency_storage_alert` | `{{1}}`=percent used, `{{2}}`=usage, `{{3}}`=limit | `settings/storage` (static) · Manage storage | *(same copy as `vendor_storage_alert`, §7)* |
+
+Headers are static `TEXT` — use the situation's `subject` from the catalog
+(e.g. *New connection request*, *Deposit awaiting your confirmation*).
+
+## 11. Agent templates
+
+Button base: **`AGENT_APP_URL`**. Same conventions as §10; source-of-truth copy in
+[agent-notification-catalog.ts](../../src/modules/notifications/catalog/agent-notification-catalog.ts).
+Plan templates (`agent_plan_expiring`, `agent_plan_expired`) are in §9.
+
+| Template name | Body params | Button suffix · label (en) | English body |
+|---|---|---|---|
+| `agent_cod_deposit_recorded` | `{{1}}`=agency name, `{{2}}`=currency, `{{3}}`=amount | `cod/deposits/{{depositId}}` · View deposit | {{1}} recorded a cash deposit of {{2}} {{3}} from you. Your balance has been reduced by that amount. If this is not what you handed over, report it now. |
+| `agent_cod_deposit_confirmed` | `{{1}}`=currency, `{{2}}`=amount, `{{3}}`=confirmed-by name | `cod/deposits/{{depositId}}` · View deposit | Your deposit of {{1}} {{2}} was confirmed by {{3}}. Your balance has been reduced and your COD limit freed up. |
+| `agent_cod_deposit_rejected` | `{{1}}`=confirmed-by name, `{{2}}`=currency, `{{3}}`=amount, `{{4}}`=rejection reason | `cod/deposits/{{depositId}}` · View deposit | {{1}} rejected your declared deposit of {{2}} {{3}}. Reason: {{4}}. The cash is still on your balance and your deposit deadline is running again — sort this out with them, or report it. |
+| `agent_shipment_offer_received` | `{{1}}`=agency name, `{{2}}`=order number | `offers/{{offerId}}` · Review offer | {{1}} is offering you a delivery for order {{2}}. Review and accept it before it expires. |
+| `agent_shipment_offer_reminder` | `{{1}}`=agency name, `{{2}}`=order number | `offers/{{offerId}}` · Review offer | Your delivery offer from {{1}} for order {{2}} is still open. Accept it now before another agent takes it. |
+| `agent_shipment_offer_expired` | `{{1}}`=agency name, `{{2}}`=order number | `offers/{{offerId}}` · Review offer | The delivery offer from {{1}} for order {{2}} expired because it wasn't accepted in time. |
+| `agent_shipment_reassigned_away` | `{{1}}`=order number, `{{2}}`=agency name | **none** | The delivery for order {{1}} has been reassigned to another agent by {{2}}. You are no longer responsible for it, and its customer and tracking details are no longer available to you. It stays in your activity history. |
+| `agent_storage_alert` | `{{1}}`=percent used, `{{2}}`=usage, `{{3}}`=limit | `settings/storage` (static) · Manage storage | *(same copy as `vendor_storage_alert`, §7)* |
+
+> **Static-header caveat:** the in-app subject for `cod.deposit.recorded` is
+> *"Deposit recorded by {{agencyName}}"*, but a template header must be static —
+> create that template's header as **"Deposit recorded"**. The agency name is
+> already the first body param, so nothing is lost.
 
 ---
 

@@ -6,13 +6,15 @@
 > A large refactor is part-applied. The domain layer is done, the COD cash chain
 > is complete and reachable over HTTP, and the mechanism that releases COD
 > headroom now exists (agent→agency deposits draw down the contract balance via
-> `AgentDepositService` → `recordSettlement`). Still incomplete: the agent's cut
-> on PREPAID orders, the trust composite engine, several admin/agent controllers,
-> the collection-rename migration, and the doc refresh.
+> `AgentDepositService` → `recordSettlement`). **Agent earnings are now complete
+> for BOTH payment methods** — a prepaid delivery pays the agent exactly as a COD
+> one does, and `/api/agent/earnings` + `/api/agent/payout-methods` make it
+> visible and withdrawable. Still incomplete: the trust composite engine, several
+> admin/agent controllers, the collection-rename migration, and the doc refresh.
 >
-> **As of 2026-07-16: `npx tsc --noEmit` and `npm run lint` are both clean,
-> `src/app.ts` loads, and `npm run test:agent-domain` is green at 88 assertions.**
-> Steps 1–3g below are finished. Steps 3(prepaid)/4–8 are not — see "Not built at
+> **As of 2026-07-29: `npx tsc --noEmit` and `npm run lint` are both clean,
+> `src/app.ts` loads, and `npm run test:agent-domain` is green at 96 assertions.**
+> Steps 1–3 below are finished. Steps 4–8 are not — see "Not built at
 > all" and "Ordering for the next session".
 >
 > Delete this file when the work below is finished.
@@ -551,35 +553,193 @@ needs Mongo (prefs + entity lookups before any branch), so it is compile+boot ve
 **WhatsApp templates** (`agent_cod_deposit_*`, `agency_cod_deposit_*`) still need creating in Meta
 Business Manager before that one channel delivers — in-app/push/email/telegram work today.
 
+## Step 4, the missing controllers/routes — DONE (2026-07-29)
+
+Prompted by an agent-app frontend review that found three planned screens unbuildable. The three
+defects it named were real and are fixed; item 3's controllers were built in the same pass because
+the KYC one blocks everything else.
+
+**The three agent-app defects.**
+
+- **`PATCH /api/agent/settings` was unreachable.** Four routers stack on `/agent`; billing mounts at
+  `api/index.ts:68` and the agent-self router at `:185`, both declared `/settings`, and Express
+  matches in mount order. Requests meant for the agent-domain handler were validated against
+  billing's schema and **400'd on a required `notifyDaysBeforeExpiry`** — so
+  `auto_accept_assignments` had never been settable, and both branches reading it in
+  `ShipmentAssignmentService` (`:383`, `:909`) were dead in production. Billing keeps `/settings`
+  (symmetric with vendor/agency and already documented); the agent-domain pair moved to
+  **`GET|PATCH /api/agent/dispatch-settings`**. A comment at the mount records why, because the
+  collision is silent and will otherwise recur.
+- **`max_concurrent_shipments` was a phantom.** Accepted by Zod, clamped in the service, then
+  dropped by the strict Mongoose cast because `SettingsSchema` never declared it — a 200 describing
+  a write that did not happen. Removed. The real cap is `capacity.max_active_shipments`, written by
+  `AgentPlanCapacityConsumer`, and it is now **exposed read-only** as `capacity` on the profile DTO
+  so the app can render "3 of 20" without inventing a control for it. An `as Partial<IDeliveryAgent>`
+  cast was what hid this from the compiler; it is gone.
+- **`preferences` wrote flags nothing read.** `notify_on_assignment` and
+  `notify_on_shipment_update` had zero readers, and were worse than inert: the real gating is
+  `AgentNotificationPreference.preferences.assignmentOffers`, so switching them off returned 200 and
+  changed nothing. Both removed from the schema and the model. `navigation_app` stays, documented as
+  client-consumed.
+
+Also corrected: the roster DTO reported `working_state.active_shipment_count` while admission
+control uses `capacity.active_shipment_count`. Two independently-maintained counters, one of them
+compare-and-set on accept — only that one is now reported.
+
+**Item 3's controllers.**
+
+| Surface | Route(s) | Note |
+|---|---|---|
+| KYC | `PUT /admin/agents/:agentId/kyc` | **The unblocker.** `kyc.status` defaults to `unverified`, eligibility passes only on `verified`, and nothing but the seed script could write it — so in any non-seeded environment no agent could accept an offer at all. |
+| Platform ban | `PUT /admin/agents/:agentId/ban` | |
+| Agent COD pool | `PUT /admin/agents/:agentId/cod-threshold`, `GET .../cod-allocation`, `GET /agent/cod/allocation` | Pool bounds (`COD_THRESHOLD_*`), not the contract bounds `SetCodLimitSchema` uses. |
+| Contract terms | `PATCH /agency/agents/:membershipId/terms` | `updateEmployment` is now a thin alias. `fee_split` coherence throws the previously-unthrown `CONTRACT_FEE_SPLIT_INVALID`; the patch is merged over the stored split first, so a partial update that changes only `model` is legitimate. |
+| Status-request inbox | `GET|POST /agency/agents/status-requests[/:requestId/resolve]`, `GET|POST /agent/memberships/status-requests[/:requestId/resolve]`, `POST /agent/memberships/:membershipId/transitions` | Closes the dead end: an agency `DELETE` raised a pending deactivation nobody could resolve. |
+| Agency pause | `POST /agency/agents/:membershipId/pause` | The matrix granted it unilaterally; no route existed. |
+
+`resolveRequestAs` is the only safe HTTP entry point for a resolution: `resolveRequest` deliberately
+does not check who is resolving (it is also the auto-approval path, where there is no counterparty),
+so the wrapper adds the scope check (404, not 403 — the caller should not learn a foreign request
+exists) and the consent check, throwing the previously-unthrown `CONTRACT_STATUS_REQUEST_NOT_YOURS`.
+
+**Deviation: settlements.** `ContractSettlement` was **deleted rather than wired up.** It was fully
+orphaned — nothing imported it, so `mongoose.model()` never ran and it was not registered at boot —
+and both its directions are already served: `cod_remittance` by `AgentDeposit` + `CodCashLedger`
+(with `AgentDepositService.confirm` already drawing the contract balance down via `recordSettlement`),
+and `agent_payment` by the locked decision that the platform pays the agent through the earnings
+module. Building it would have been a third ledger for movements already recorded twice, with the
+balance to keep in agreement. What was genuinely missing — a **per-contract** view — shipped instead
+as `GET /agency/agents/:membershipId/settlements` and `GET /agent/memberships/:membershipId/settlements`,
+projected from the deposits. `CONTRACT_SETTLEMENT_INVALID_AMOUNT` (declared, never thrown) went with
+it; `CONTRACT_SETTLEMENT_EXCEEDS_OUTSTANDING` stays, since `AgentDepositService` throws it.
+
+Verification: `npx tsc --noEmit` and `npm run lint` clean, `npm run test:agent-domain` green at
+**115** (was 96 — 19 added for fee-split coherence, counterparty consent and the gate validators),
+`scripts/test/test-profile-mappers.ts` green at 19 (it had been failing to compile since the
+file-detail refactor made those mappers async; repaired in the same pass), and `src/app.ts` loads.
+
+## Step 3h, agent-driven status transitions — DONE (2026-07-30)
+
+Product decision: **an agent drives their own shipment's status.** Until now `PATCH
+/api/agency/shipments/:id/status` was the only generic status endpoint in the codebase, so the
+person physically collecting, driving and knocking on the door had to have an operator mirror what
+they said. On a **prepaid** order that was worse than clumsy: `agent_delivered` is both the only
+route to `delivered` and the hook that pays the agent (see the earnings split above), so an agent
+could not finish a job or trigger their own earnings without the agency.
+
+`POST /api/agent/shipments/:id/status` now exists. `ShipmentService.updateStatus` and the new
+`updateStatusByAgent` are thin ownership-scoping wrappers over a shared private `_transitionStatus`
+— two wrappers rather than one method with an actor parameter, because the agent path takes a
+`failure` argument that must not be reachable from the agency call. The actor is a discriminated
+union (`{role:'agency',agencyId,userId} | {role:'agent',agentId,userId}`), which selects the scoped
+read, the `status_history.changed_by_role` value and the audit's `actorRole`. It does **not** select
+a transition map: both actors share one.
+
+- **There is ONE transition map, `TRIGGERABLE_TRANSITIONS`, shared by both actors** — the former
+  `AGENCY_TRIGGERABLE_TRANSITIONS` renamed. The first cut of this step gave the agent a near-copy
+  with `handing_over` removed; the product owner corrected that the same day: **a reassigned
+  shipment is not a second-class one**, and a replacement agent has the same rights as any other.
+  Two byte-identical maps would only have invited a reader to hunt for a difference that is not
+  there, so they were collapsed. `handing_over → picked_up` is reachable from the agent endpoint
+  because acceptance binds `agent_id` while the status is still `handing_over`
+  (`bindAgentIfUnassigned` + `OFFERABLE_STATUSES`), which also satisfies the
+  `picked_up`-requires-`agent_id` guard. If the two actors ever genuinely need to diverge, split the
+  map and select on `actor.role` in `_transitionStatus` — do not add a role-specific exception to
+  the shared one.
+- **Step 3d's reasoning carries over unchanged.** `agent_delivered` is still "I am at the door", the
+  COD guard still rejects `delivered` as a status change, and `agent_delivered → failed` is still
+  the escape hatch for a customer who will not pay — it is just that the agent can now reach all
+  three themselves.
+- **Both actors now write through a from-guarded CAS** (`ShipmentRepository.applyStatusChangeIfCurrent`)
+  under `runInTransactionWithRetry`; a miss is the new `409 SHIPMENT_STATUS_CONFLICT`. This was not
+  optional. `applyStatusChange` is an unguarded `findByIdAndUpdate` that was only ever safe because
+  the agency was the sole writer: with two actors, both can read `in_transit`, one write
+  `agent_delivered` and the other `failed`, and the loser's post-commit block — the earnings split,
+  the capacity release, `handleShipmentReturnedInSession` — still fires for a status nobody is in.
+  The unguarded method is **kept** for `CashCollectionService.collect`, whose race is already closed
+  by `claimCollected`. Every side effect now reads the document the CAS returned rather than a fresh
+  `findById`, so a burst of transitions yields one honest verdict each.
+- **`delivery_failures`** is a new append-only array on the Shipment: an optional
+  `ShipmentFailureReason` + `note` (≤200) the agent may attach to `failed`/`returned`, written in
+  the same atomic update as the transition. Append-only because `failed → in_transit → failed →
+  returned` is an allowed cycle and each attempt is the record. The enum is deliberately **distinct**
+  from `AgentCancellationReason` — half of that one (`vehicle_breakdown`, `personal_emergency`,
+  `too_far`, `safety_concern`) describes an agent who cannot continue, whose correct action is
+  cancelling; offering those as `failed` reasons invites an agent to strand a parcel on themselves.
+  The agency endpoint stays reason-less.
+- **New event `shipment.agent_status_changed`** → four agency notification situations
+  (`shipment.agent.{picked_up,delivered,failed,returned}`), gated on the existing `shipmentAssigned`
+  preference. `in_transit` is excluded as a routine progress ping. Four situations rather than one
+  parameterised by status: the render context is built before the agency's language is resolved, so
+  a status label would leak English into a localized body.
+- **geo-tracker untouched.** `actor_role` is a free TEXT column there, its handler validates only
+  action/outcome, and `TerminalStatus()` switches on outcome+action — and `AgentCodController`
+  already sent `'agent'`. A one-sided change.
+
+Two pre-existing hazards this makes *more likely* rather than creating, flagged rather than fixed:
+
+1. **`agent_delivered → failed → returned` books delivery-priced earnings for a parcel that came
+   back.** `splitShipmentDelivery` early-returns on `existsForSource('shipment', id)`, so it does not
+   double-pay — but the `returned` call no-ops and the allocations keep the `delivered` numbers
+   instead of the agency's `rto_fee` plus the vendor refund. Reachable by an agency today; it is now
+   a three-tap sequence in one app. The fix is to reverse-and-re-split when the recorded source
+   outcome disagrees with the shipment's terminal status.
+2. **A COD shipment parked at `failed` keeps its pending collection** (only `returned` runs
+   `handleShipmentReturnedInSession`), so it counts against the agent's own COD headroom and they
+   start getting refused new dispatches with no obvious cause. Documented agent-side; an
+   agency "stuck at failed" view is the natural follow-up.
+
+Verification: `npx tsc --noEmit` and `npm run lint` clean, `src/app.ts` loads with the new consumer
+registered, and `npm run test:agent-shipment-status` is green at **32** (the transition map, a guard
+that no system-only status — `delivered` above all — is directly settable, the map↔schema drift
+guard, the enum-distinctness assertions, the Zod rules, and `assertAgencyCatalogComplete()`, the
+only DB-free check that all four new situations carry copy in all five languages).
+
 ## Not built at all
 
-1. **The agent's cut on PREPAID orders — the last piece of step 3.** COD pays agents; prepaid does
-   not. Decided with the product owner: **defer the agency's delivery fee to delivery time** — at
-   payment split only commission + vendor net; when the shipment is delivered and the agent is known,
-   create the agency and agent delivery-fee rows together, mirroring COD. The blocker (orders that
-   could never complete) is fixed above, so this is now unblocked. What it needs:
-   - **Hook at `agent_delivered`**, not at customer confirmation. The product owner's requirement is
-     that the agent knows what they will earn once the shipment is completed; waiting for a customer
-     click could mean never. It is safe because the row is created `held` with no maturity and still
-     cannot release until the ORDER completes.
-   - **A new `EarningsSourceType: 'shipment'`.** The delivery fee is earned per shipment, and one
-     agency can have two shipments on one order — today they are summed into a single `(order, agency)`
-     row precisely to dodge the allocation uniqueness index, which a per-shipment allocation cannot do.
-   - **`onOrderCompleted` must then also stamp shipment-sourced rows**, the same way it already sweeps
-     up an order's `cod_collection` rows. Miss that and prepaid agent/agency money is held forever —
-     the exact failure already caught once for COD.
-   - `splitOrder` keeps computing the delivery fee (the vendor's net still nets it off); it just stops
-     creating the agency allocation.
-   See the TODO(agent) in `computeAgencyDeliveryFees`.
-3. **Trust composite engine** + nightly worker (see decisions below).
-4. **Controllers/routes** for: agent threshold, contract terms, settlements,
-   KYC/ban admin, status-request inbox. None of the new surface is reachable
-   over HTTP.
-5. **Migration** — collection rename `agent_agency_memberships` →
+1. ~~**The agent's cut on PREPAID orders.**~~ **Done 2026-07-29 — step 3 is complete.** Built as
+   decided: the agency's delivery fee is **deferred to delivery time**. `splitOrder` still computes
+   the fee (the vendor's net nets it off) and now snapshots it onto each shipment, but allocates
+   only commission + vendor net; `EarningsSplitService.splitShipmentDelivery` divides that snapshot
+   between agency and agent at `agent_delivered`, mirroring `splitCodCollection`. What landed
+   beyond the sketch above:
+   - **`EarningsSourceType: 'shipment'`** added (plus a `delivery_split` ledger reason code), so an
+     agency with two shipments on one order gets a row per run instead of the summed
+     `(order, agency)` row that existed to dodge the uniqueness index.
+   - **`onOrderCompleted` sweeps shipment-sourced rows** alongside `cod_collection` — this is what
+     makes the 7-day hold uniform, and the trap that would have held prepaid agent money forever.
+   - **`IShipment.delivery_fee_snapshot`** — new. Deferring meant computing the fee at two moments
+     from a *mutable* agency policy; without a snapshot the vendor's already-held net and the
+     agency's payout could not be made to reconcile. COD writes it too, for audit.
+   - **`returned` also splits.** Per the product owner ("check the agency policy for that"), the
+     agency earns its `additional_fees.rto_fee` (clamped to the reserved fee), the agent their
+     contracted share of that, and the remainder is credited **back to the vendor** — so an order's
+     gross reconciles whichever way the run ended. `failed_delivery_fee` stays deferred: `failed`
+     is not terminal, so it needs its own charge path rather than a slice of this one.
+   - **`EarningsRefundService.onOrderRefund`** — reverses every source an order produced
+     (`order` + `shipment` + `cod_collection`), not just its own row. Also closes a pre-existing
+     gap: nothing reversed COD collections on refund.
+   - **Recovery sweep stage 3b** (`recoverMissedDeliverySplits`) — the delivery split is
+     post-commit best-effort, so it needs the same safety net COD has.
+   - **Agent earnings surface** (was item 4 below): `GET /api/agent/earnings`,
+     `POST|GET /api/agent/earnings/payout`, and `GET|PUT /api/agent/payout-methods`. Everything
+     under it already handled `'agent'`; only the entry point was missing, so agents accrued a
+     balance they could neither see nor withdraw — and the auto-payout sweep had no method to pay.
+   - `EarningsQuoteService`'s `earningUnavailable: 'prepaid'` branch is **retired** — the quote is
+     now answerable for every physical shipment.
+2. **Trust composite engine** + nightly worker (see decisions below).
+3. ~~**Controllers/routes** for: agent threshold, contract terms, settlements,
+   KYC/ban admin, status-request inbox.~~ **DONE 2026-07-29** — see the step 4 section below for
+   what shipped and the one deliberate deviation (settlements).
+4. **Migration** — collection rename `agent_agency_memberships` →
    `agent_agency_contracts`, status remap (`approved`→`active`,
    `removed`→`deactivated`), `cod.max_exposure_override` → `cod.threshold`,
    capacity backfill from `settings.max_concurrent_shipments`. Must be
    idempotent with `--dry-run`, like `migrate:agent-memberships`.
+   **Note (2026-07-29):** `settings.max_concurrent_shipments` no longer exists in code — the
+   validator that still accepted it was removed, since the strict Mongoose cast had been silently
+   dropping it all along. The migration must therefore read the raw field straight out of Mongo,
+   not through the model.
    **Plus `cod.outstanding_balance`, which is now load-bearing** — see the ⚠️ above. Skip it and
    every `POST /api/agency/cod/deposits` 422s, because the guard added in step 2 bounds deposits by a
    balance that would still read 0. Derive per (agent, agency):
@@ -637,12 +797,12 @@ Business Manager before that one channel delivers — in-app/push/email/telegram
    **Done 2026-07-16.** The `agent_payment` half is deferred behind step 3, which it depends on.
 3. ~~Earnings `owner_type: 'agent'`.~~ **Done for COD 2026-07-16**, along with escrow maturity (3b),
    the shipment confirmation gap (3c), the COD arrival state (3d), COD auto-confirm at 7 days (3e) and
-   the agent→agency handover (3f).
-   Still open from step 3: **the agent's cut on PREPAID orders — START HERE** (§1 under "Not built at
-   all"; it is now unblocked, and the `EarningsSourceType: 'shipment'` + `onOrderCompleted` notes there
-   are the parts that are easy to get wrong).
-4. Trust engine + nightly worker; stop `CodTrustService` writing the score.
-5. Controllers + routes.
+   the agent→agency handover (3f). **Step 3 closed 2026-07-29** with the agent's cut on PREPAID
+   orders (§1 under "Not built at all") — agents are now paid on every physical delivery, cash or
+   card, and can see and withdraw it.
+4. **START HERE:** trust engine + nightly worker; stop `CodTrustService` writing the score.
+5. ~~Controllers + routes (agent threshold, contract terms, settlements, KYC/ban, status inbox).~~
+   **Done 2026-07-29** — see step 4 below.
 6. Migration (+ `--dry-run` count against live Mongo). **`migrate:agent-deposits` is written and
    dry-run clean (2 legacy rows locally) but has NOT been applied — it must run before 3f deploys.**
 7. Tests, then E2E.

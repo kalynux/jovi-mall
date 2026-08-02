@@ -55,7 +55,7 @@ admin), with per-role size limits. Uploaded files are referenced elsewhere by th
       "originalName": "product-front.jpg",
       "mimeType": "image/jpeg",
       "size": 254013,
-      "url": "http://localhost:8022/api/files/2026/07/664file....jpg",
+      "url": "http://localhost:8022/api/files/images/2026/07/664file....jpg",
       "provider": "local",
       "ownerType": "vendor",
       "createdAt": "2026-07-17T10:20:30.000Z"
@@ -66,11 +66,25 @@ admin), with per-role size limits. Uploaded files are referenced elsewhere by th
 
 > Exact metadata fields are owned by the file model — see [../vendor/file-management.md](../vendor/file-management.md).
 
+### Where a file is stored
+
+This route is **general media intake**: you are not saying what the file is *for* (that is decided
+later, when you attach the returned `id`), so each file is stored under the folder for **its own
+detected media type** — `images/`, `videos/`, `audio/`, `documents/`, `archives/`, `other/` — the same
+taxonomy as `?category=` on `GET /files`. The type is taken from the file's actual bytes, not from the
+declared `Content-Type` or the extension, and follows any conversion the pipeline applies (a `png`
+stored as `webp` still lands in `images/`).
+
+This is a storage-layout detail: always use the returned `id`/`url`, never a hand-built path.
+Purpose-scoped folders (product media, digital assets, delivery proofs, system files) belong to their
+own dedicated endpoints and carry their own role restrictions.
+
 ### Errors
 
 | Status | `error.code` | When |
 |---|---|---|
 | 400 | `VALIDATION_ERROR` | No files, or an unexpected/too-many-files field |
+| 400 | `UPLOAD_POLICY_VIOLATION` | A file failed the upload policy — `error.details.violations[]` lists each one with its own `code` (`MIME_NOT_ALLOWED`, `MIME_TYPE_MISMATCH`, `UNDETECTABLE_TYPE`, `QUOTA_EXCEEDED`, `VIRUS_DETECTED`, …) |
 | 413 | `CATALOG_FILE_TOO_LARGE` | A file exceeds the caller's role size limit |
 
 ---
