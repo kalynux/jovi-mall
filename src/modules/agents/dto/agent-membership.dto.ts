@@ -66,13 +66,43 @@ export interface AgentMembershipDto {
      * `join_request` is agent-raised; every other origin is agency- or
      * platform-raised.
      *
-     * This is what a client renders the pending-state buttons from: the
-     * initiator sees "Withdraw", the counterparty sees "Accept / Reject". It is
-     * the same rule the server enforces (AgentContractService.initiatorOf), so
-     * exposing it keeps the UI from having to re-derive it from `origin` and
-     * drift.
+     * **Audit, not the button rule.** It used to be both, back when terms could
+     * not change after creation. Now a counter moves the right to approve to the
+     * other side while `origin` stays put, so a client rendering buttons from
+     * this field would offer Approve to the party who just made the offer. Use
+     * `awaitingDecisionFrom`.
      */
     initiatedBy: 'agent' | 'agency';
+    /**
+     * Which party made the terms currently standing, or null if no party has
+     * stated any yet (a bare join request, or a legacy row whose fee split was
+     * never configured).
+     */
+    termsProposedBy: 'agent' | 'agency' | null;
+    /** Bumped on every counter and every accepted proposal. 0 = never stated. */
+    termsVersion: number;
+    /**
+     * **This is what a client renders the pending-state buttons from.**
+     *
+     * The party who must answer the standing offer: they see Approve / Reject /
+     * Counter, and the other party sees Withdraw. Null in two cases, and the
+     * difference matters to the UI:
+     *
+     *  - the contract is not `pending` — there is no offer on the table;
+     *  - `termsProposedBy` is null — nobody has proposed terms, so nobody may
+     *    approve. The agency's control here is "Propose terms", not "Approve".
+     *
+     * Derived from the same rule the server enforces
+     * (AgentContractService.proposerOf + assertTermsApprovable).
+     */
+    awaitingDecisionFrom: 'agent' | 'agency' | null;
+    /**
+     * The open terms proposal on this LIVE contract, if the caller loaded one.
+     * Null when there is none — or when the endpoint does not resolve proposals,
+     * which most do not. Never treat null as proof that none exists; the
+     * proposals endpoints are authoritative.
+     */
+    openTermsProposalId: string | null;
     isPrimary: boolean;
 
     // ── Negotiated terms ─────────────────────────────────────────────────────
@@ -143,7 +173,10 @@ export class AgentMembershipMapper {
      * removed them — leaks identity across a role boundary. The role is enough
      * to explain the action; the trail with ids stays admin-side.
      */
-    static toDto(membership: IAgentAgencyMembership): AgentMembershipDto {
+    static toDto(
+        membership: IAgentAgencyMembership,
+        openTermsProposalId: string | null = null
+    ): AgentMembershipDto {
         // Contracts written before a terms group existed can be missing its
         // sub-document entirely, so each group falls back to the same defaults
         // the schema applies on write — never to `null`, which a form would
@@ -152,13 +185,31 @@ export class AgentMembershipMapper {
         const coverage = membership.coverage ?? contractDefaults.coverage();
         const feeSplit = membership.fee_split ?? contractDefaults.feeSplit();
 
+        const initiatedBy: 'agent' | 'agency' =
+            membership.origin === 'join_request' ? 'agent' : 'agency';
+        const termsProposedBy = membership.terms_proposed_by ?? null;
+
+        // Mirrors proposerOf + assertTermsApprovable: with no terms proposed
+        // nobody may approve, so nobody is awaiting a decision — the agency owes
+        // a proposal, not an answer.
+        const awaitingDecisionFrom: 'agent' | 'agency' | null =
+            membership.status !== 'pending' || termsProposedBy === null
+                ? null
+                : termsProposedBy === 'agent'
+                  ? 'agency'
+                  : 'agent';
+
         return {
             id: membership._id.toString(),
             agentId: membership.agent_id.toString(),
             agencyId: membership.agency_id.toString(),
             status: membership.status,
             origin: membership.origin,
-            initiatedBy: membership.origin === 'join_request' ? 'agent' : 'agency',
+            initiatedBy,
+            termsProposedBy,
+            termsVersion: membership.terms_version ?? 0,
+            awaitingDecisionFrom,
+            openTermsProposalId,
             isPrimary: membership.is_primary,
             employment: {
                 employmentType: membership.employment?.employment_type ?? 'contractor',

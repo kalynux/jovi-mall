@@ -1,8 +1,12 @@
 import cron from 'node-cron';
 import { COD_CONFIG, daysAgo } from '../config/cod.config';
-import { CodCashAccountModel } from '../models/cod-cash-account.model';
 import { CashCollectionModel } from '../models/cash-collection.model';
 import { AgentDepositModel } from '../models/agent-deposit.model';
+import {
+  AgentAgencyContractModel,
+  ALLOCATING_CONTRACT_STATUSES,
+  nextRemittanceDueAt,
+} from '../../agents';
 import { CodDiscrepancyService, codDiscrepancyService } from '../services/cod-discrepancy.service';
 import { AgentDepositService, agentDepositService } from '../services/agent-deposit.service';
 
@@ -57,57 +61,92 @@ export class CodDepositDeadlineWorker {
   /** Run the sweep once. Safe to call manually (tests/ops). */
   async runSweep(now: Date = new Date()): Promise<void> {
     console.log('[CodDepositDeadlineWorker] Starting deposit-deadline sweep');
-    const agents = await this.flagLateAgents(now);
+    const contracts = await this.flagLateContracts(now);
     const agencies = await this.flagUnansweredDeclarations(now);
     console.log(
-      `[CodDepositDeadlineWorker] Sweep complete — flagged ${agents} agent(s), ${agencies} unanswered declaration(s)`
+      `[CodDepositDeadlineWorker] Sweep complete — flagged ${contracts} contract(s), ${agencies} unanswered declaration(s)`
     );
   }
 
   /**
-   * Stage 1 — agents sitting on collected cash past the deposit deadline.
+   * Stage 1 — contracts whose cash is past THAT CONTRACT's deadline.
    *
-   * Cash covered by an OPEN declaration does not count against the agent: they
-   * have said, on the record, that they handed it over, and the receiving party
-   * has not answered. Penalising them for that would punish the agent for the
-   * agency's silence — the exact failure this whole flow exists to end. Stage 2
-   * flags the other party instead.
+   * ── Why this iterates contracts, not cash accounts ──────────────────────
    *
-   * A rejected declaration stops covering anything the moment it is rejected, so
-   * an agent cannot park a false claim to stop their own clock: the agency's
-   * one-click rejection restarts it.
+   * It used to walk `CodCashAccount` rows and compare every agent against one
+   * platform-wide `DEPOSIT_DEADLINE_DAYS`. That could not survive the
+   * remittance cadence becoming enforced: the agent's cash account is GLOBAL
+   * (one pot across every agency) while `remittance_terms` is PER CONTRACT, so
+   * there is no single deadline to compare a pot against. An agent settling
+   * daily with one agency and monthly with another has two answers.
+   *
+   * `contract.cod.outstanding_balance` is the per-contract authority — it is
+   * already what `AgentDepositService` bounds a deposit by — so each contract
+   * is evaluated against its own terms and flagged in its own right.
+   *
+   * ── What is unchanged ───────────────────────────────────────────────────
+   *
+   * Cash covered by an OPEN declaration still does not count against the agent:
+   * they have said, on the record, that they handed it over and the receiving
+   * party has not answered. Penalising them for that would punish the agent for
+   * the agency's silence — the exact failure this flow exists to end; stage 2
+   * flags the other party instead. A rejected declaration stops covering
+   * anything the moment it is rejected, so a false claim cannot stop the clock.
+   *
+   * The FIFO age anchor is also unchanged in method — only in scope. It was
+   * spanning every agency, which was simply wrong once the flag became
+   * per-contract.
    */
-  private async flagLateAgents(now: Date): Promise<number> {
-    const cutoff = daysAgo(COD_CONFIG.DEPOSIT_DEADLINE_DAYS, now);
+  private async flagLateContracts(now: Date): Promise<number> {
     let flagged = 0;
 
-    const holders = await CodCashAccountModel.find({ owner_type: 'agent', balance: { $gt: 0 } })
-      .limit(COD_CONFIG.BATCH_SIZE);
+    const contracts = await AgentAgencyContractModel.find({
+      status: { $in: ALLOCATING_CONTRACT_STATUSES },
+      'cod.outstanding_balance': { $gt: 0 },
+    }).limit(COD_CONFIG.BATCH_SIZE);
 
-    for (const account of holders) {
+    for (const contract of contracts) {
       try {
-        const agentId = account.owner_id.toString();
+        const agentId = contract.agent_id.toString();
+        const agencyId = contract.agency_id.toString();
 
-        const declared = await this.deposits.sumOpenDeclarationsForAgent(agentId);
-        const uncovered = account.balance - declared;
-        if (uncovered <= 0) continue; // every franc is awaiting someone else's answer
+        const declared = await this.deposits.sumOpenDeclarationsForContract(agentId, agencyId);
+        const uncovered = (contract.cod?.outstanding_balance ?? 0) - declared;
+        if (uncovered <= 0) continue; // every franc is awaiting the agency's answer
 
         // Anchor on the UNCOVERED amount, not the whole balance: the covered
         // part is not the agent's problem, so it must not drag the age anchor
         // back to a collection they have already declared.
-        const anchor = await this.oldestHeldCashDate(agentId, uncovered);
-        if (!anchor || anchor.collectedAt > cutoff) continue; // within deadline
+        const anchor = await this.oldestHeldCashDate(agentId, agencyId, uncovered);
+        if (!anchor) continue;
+
+        const terms = contract.remittance_terms;
+        const dueAt = terms
+          ? nextRemittanceDueAt(
+              terms.cadence,
+              terms.day_of_week,
+              terms.day_of_month,
+              terms.grace_hours,
+              anchor.collectedAt
+            )
+          : // Pre-refactor rows have no remittance_terms sub-document at all.
+            // The platform default survives as their fallback, nothing more.
+            new Date(anchor.collectedAt.getTime() + COD_CONFIG.DEPOSIT_DEADLINE_DAYS * 86_400_000);
+
+        // null ⇒ 'on_demand': no schedule, so nothing is ever overdue.
+        if (dueAt === null || now <= dueAt) continue;
 
         const opened = await this.discrepancies.openLateDeposit(
           agentId,
-          anchor.agencyId,
+          agencyId,
           uncovered,
-          account.currency
+          anchor.currency,
+          dueAt
         );
         if (opened) flagged++;
       } catch (error) {
         console.error(
-          `[CodDepositDeadlineWorker] Failed to evaluate agent account ${account._id.toString()}:`,
+          `[CodDepositDeadlineWorker] Failed to evaluate contract ${contract._id.toString()}:`,
           error
         );
       }
@@ -156,24 +195,39 @@ export class CodDepositDeadlineWorker {
   }
 
   /**
-   * FIFO age anchor: walk collected collections newest-first until they cover
-   * the outstanding balance; return the oldest one in that covering set.
+   * FIFO age anchor for ONE contract: walk that contract's collected
+   * collections newest-first until they cover its outstanding balance; return
+   * the oldest one in that covering set.
+   *
+   * Deposits are assumed to pay off the OLDEST collections first, so the
+   * balance still outstanding maps to the NEWEST ones — and the oldest in that
+   * covering set is the age the deadline is measured from. That reasoning is
+   * unchanged; only the `agency_id` scope is new, and it was always the correct
+   * scope for a per-contract question.
+   *
+   * `currency` comes back from the collections themselves rather than from the
+   * agent's cash account, so a flag's currency describes the cash it is about.
    */
   private async oldestHeldCashDate(
     agentId: string,
+    agencyId: string,
     balance: number
-  ): Promise<{ collectedAt: Date; agencyId: string } | null> {
-    const collections = await CashCollectionModel.find({ agent_id: agentId, status: 'collected' })
+  ): Promise<{ collectedAt: Date; currency: string } | null> {
+    const collections = await CashCollectionModel.find({
+      agent_id: agentId,
+      agency_id: agencyId,
+      status: 'collected',
+    })
       .sort({ collected_at: -1 })
-      .select('expected_amount collected_at agency_id')
+      .select('expected_amount collected_at currency')
       .limit(500);
 
     let covered = 0;
-    let anchor: { collectedAt: Date; agencyId: string } | null = null;
+    let anchor: { collectedAt: Date; currency: string } | null = null;
     for (const c of collections) {
       if (!c.collected_at) continue;
       covered += c.expected_amount;
-      anchor = { collectedAt: c.collected_at, agencyId: c.agency_id.toString() };
+      anchor = { collectedAt: c.collected_at, currency: c.currency };
       if (covered >= balance) break;
     }
     return anchor;

@@ -173,11 +173,149 @@ export const BrowseAgenciesForAgentQuerySchema = z.object({
 });
 export type BrowseAgenciesForAgentQuery = z.infer<typeof BrowseAgenciesForAgentQuerySchema>;
 
-/** The agency asking a specific agent to contract. */
+// ─── Negotiated term groups ───────────────────────────────────────────────────
+
+/**
+ * The four groups, defined once and composed per party below.
+ *
+ * They were inline in UpdateContractTermsSchema until the terms became
+ * negotiable; now the same shapes are validated on a request body, a counter, a
+ * proposal and a patch, and four copies would drift the moment one gains a
+ * bound.
+ */
+const EmploymentTermsSchema = z.object({
+    employment_type: z.enum(['employee', 'contractor', 'freelancer']).optional(),
+    employee_ref: clearable(z.string().max(60).trim()),
+    started_at: z.coerce.date().nullable().optional(),
+    ends_at: z.coerce.date().nullable().optional(),
+});
+
+const RemittanceTermsSchema = z.object({
+    cadence: z
+        .enum(['per_delivery', 'daily', 'weekly', 'biweekly', 'monthly', 'on_demand'])
+        .optional(),
+    /** 0=Sunday … 6=Saturday, for weekly/biweekly. */
+    day_of_week: z.number().int().min(0).max(6).nullable().optional(),
+    /** 1–28 — 28 rather than 31 so no month is ambiguous. */
+    day_of_month: z.number().int().min(1).max(28).nullable().optional(),
+    grace_hours: z.number().int().min(0).max(720).optional(),
+});
+
+const CoverageTermsSchema = z.object({
+    regions: z.array(z.string().min(1).max(100).trim()).max(100).optional(),
+    area: z
+        .object({
+            type: z.literal('Polygon'),
+            coordinates: z.array(z.array(z.tuple([z.number(), z.number()]))),
+        })
+        .nullable()
+        .optional(),
+});
+
+const FeeSplitTermsSchema = z.object({
+    model: z.enum(['percentage', 'flat']).optional(),
+    agent_share_percent: z.number().min(0).max(100).nullable().optional(),
+    agent_flat_fee: z.number().int().min(0).nullable().optional(),
+    currency: z.string().length(3).trim().toUpperCase().optional(),
+});
+
+/**
+ * Everything an AGENCY may propose or counter.
+ *
+ * `employment` is absent: it is the agency's internal HR record, not a
+ * negotiated term, and keeps its own unilateral endpoint. See
+ * NEGOTIABLE_TERM_GROUPS in the contract model for the full reasoning.
+ */
+export const AgencyNegotiableTermsSchema = z
+    .object({
+        remittance_terms: RemittanceTermsSchema.optional(),
+        coverage: CoverageTermsSchema.optional(),
+        fee_split: FeeSplitTermsSchema.optional(),
+        shipment_value_ceiling: z.number().int().min(0).nullable().optional(),
+    })
+    .refine((v) => Object.keys(v).length > 0, { message: 'At least one term is required' });
+export type AgencyNegotiableTermsInput = z.infer<typeof AgencyNegotiableTermsSchema>;
+
+/**
+ * The subset an AGENT may propose or counter — what they are paid, and where
+ * they will work. The service enforces the same list (assertNegotiableBy), so a
+ * missed field here is caught rather than silently accepted.
+ */
+export const AgentNegotiableTermsSchema = z
+    .object({
+        coverage: CoverageTermsSchema.optional(),
+        fee_split: FeeSplitTermsSchema.optional(),
+    })
+    .refine((v) => Object.keys(v).length > 0, { message: 'At least one term is required' });
+export type AgentNegotiableTermsInput = z.infer<typeof AgentNegotiableTermsSchema>;
+
+// ─── Contract requests ────────────────────────────────────────────────────────
+
+/**
+ * The agency asking a specific agent to contract.
+ *
+ * `terms` is REQUIRED and must carry a fee split. An invitation with no numbers
+ * would land the agent on the schema default, whose null share pays them zero —
+ * the agent may counter what they are shown, but must be shown something.
+ */
 export const RequestAgentContractSchema = z.object({
     agentId: ObjectIdSchema,
+    terms: AgencyNegotiableTermsSchema.refine((v) => v.fee_split !== undefined, {
+        message: 'terms.fee_split is required when inviting an agent',
+        path: ['fee_split'],
+    }),
 });
 export type RequestAgentContractInput = z.infer<typeof RequestAgentContractSchema>;
+
+/**
+ * The agent applying to an agency.
+ *
+ * `terms` is OPTIONAL — the asymmetry with the agency's request is deliberate.
+ * An agent may state an asking rate, or apply bare and let the agency propose.
+ * If they do state terms, a fee split is required: coverage alone would leave
+ * their own proposal carrying a null share, which the agency could not approve.
+ */
+export const RequestToJoinSchema = z.object({
+    agencyId: ObjectIdSchema,
+    terms: AgentNegotiableTermsSchema.refine((v) => v.fee_split !== undefined, {
+        message: 'terms.fee_split is required when stating terms; omit terms entirely otherwise',
+        path: ['fee_split'],
+    }).optional(),
+});
+export type RequestToJoinInput = z.infer<typeof RequestToJoinSchema>;
+
+// ─── Counters & proposals ─────────────────────────────────────────────────────
+
+/** An agency countering the terms standing on a pending contract. */
+export const CounterTermsAsAgencySchema = AgencyNegotiableTermsSchema;
+/** An agent countering them. */
+export const CounterTermsAsAgentSchema = AgentNegotiableTermsSchema;
+
+export const ProposalIdParamSchema = z.object({ proposalId: ObjectIdSchema });
+
+/** A proposed change to a LIVE contract's terms, from either side. */
+export const ProposeTermsChangeAsAgencySchema = z.object({
+    terms: AgencyNegotiableTermsSchema,
+    note: clearable(z.string().max(300).trim()).default(null),
+});
+export type ProposeTermsChangeInput = z.infer<typeof ProposeTermsChangeAsAgencySchema>;
+
+export const ProposeTermsChangeAsAgentSchema = z.object({
+    terms: AgentNegotiableTermsSchema,
+    note: clearable(z.string().max(300).trim()).default(null),
+});
+
+export const ResolveTermsProposalSchema = z.object({
+    decision: z.enum(['approve', 'reject']),
+    note: clearable(z.string().max(300).trim()).default(null),
+});
+export type ResolveTermsProposalInput = z.infer<typeof ResolveTermsProposalSchema>;
+
+/** No `decision` — cancelling is the only outcome an author can produce. */
+export const CancelTermsProposalSchema = z.object({
+    note: clearable(z.string().max(300).trim()).default(null),
+});
+export type CancelTermsProposalInput = z.infer<typeof CancelTermsProposalSchema>;
 
 /**
  * Pulling back a request you raised, or refusing one you received. Free text
@@ -220,8 +358,14 @@ export const UpdateEmploymentSchema = z
 export type UpdateEmploymentInput = z.infer<typeof UpdateEmploymentSchema>;
 
 /**
- * Every negotiated term except the COD threshold, which is bounded by the
- * agent's shared pool and so has its own endpoint.
+ * The agency's terms patch. Every negotiated term except the COD threshold,
+ * which is bounded by the agent's shared pool and so has its own endpoint.
+ *
+ * `employment` is present HERE but absent from AgencyNegotiableTermsSchema, and
+ * that is the difference between the two: this schema also backs the agency's
+ * unilateral employment route, which writes the agency's own HR record at any
+ * status. On a pending contract the service routes the rest of this body
+ * through `counterTerms`; on a live one it refuses.
  *
  * The fee-split *shape* is checked here; its *coherence* (a 'percentage' model
  * carrying a share, a 'flat' one carrying a fee) is checked in the service,
@@ -231,46 +375,10 @@ export type UpdateEmploymentInput = z.infer<typeof UpdateEmploymentSchema>;
  */
 export const UpdateContractTermsSchema = z
     .object({
-        employment: z
-            .object({
-                employment_type: z.enum(['employee', 'contractor', 'freelancer']).optional(),
-                employee_ref: clearable(z.string().max(60).trim()),
-                started_at: z.coerce.date().nullable().optional(),
-                ends_at: z.coerce.date().nullable().optional(),
-            })
-            .optional(),
-        remittance_terms: z
-            .object({
-                cadence: z
-                    .enum(['per_delivery', 'daily', 'weekly', 'biweekly', 'monthly', 'on_demand'])
-                    .optional(),
-                /** 0=Sunday … 6=Saturday, for weekly/biweekly. */
-                day_of_week: z.number().int().min(0).max(6).nullable().optional(),
-                /** 1–28 — 28 rather than 31 so no month is ambiguous. */
-                day_of_month: z.number().int().min(1).max(28).nullable().optional(),
-                grace_hours: z.number().int().min(0).max(720).optional(),
-            })
-            .optional(),
-        coverage: z
-            .object({
-                regions: z.array(z.string().min(1).max(100).trim()).max(100).optional(),
-                area: z
-                    .object({
-                        type: z.literal('Polygon'),
-                        coordinates: z.array(z.array(z.tuple([z.number(), z.number()]))),
-                    })
-                    .nullable()
-                    .optional(),
-            })
-            .optional(),
-        fee_split: z
-            .object({
-                model: z.enum(['percentage', 'flat']).optional(),
-                agent_share_percent: z.number().min(0).max(100).nullable().optional(),
-                agent_flat_fee: z.number().int().min(0).nullable().optional(),
-                currency: z.string().length(3).trim().toUpperCase().optional(),
-            })
-            .optional(),
+        employment: EmploymentTermsSchema.optional(),
+        remittance_terms: RemittanceTermsSchema.optional(),
+        coverage: CoverageTermsSchema.optional(),
+        fee_split: FeeSplitTermsSchema.optional(),
         shipment_value_ceiling: z.number().int().min(0).nullable().optional(),
     })
     .refine((v) => Object.keys(v).length > 0, { message: 'At least one term is required' });
@@ -309,6 +417,16 @@ export const ResolveStatusRequestSchema = z.object({
 export type ResolveStatusRequestInput = z.infer<typeof ResolveStatusRequestSchema>;
 
 /**
+ * Pulling back a request you raised yourself. No `decision` — cancelling is the
+ * only outcome the author can produce, so offering one would be a field with a
+ * single legal value.
+ */
+export const CancelStatusRequestSchema = z.object({
+    note: clearable(z.string().max(300).trim()).default(null),
+});
+export type CancelStatusRequestInput = z.infer<typeof CancelStatusRequestSchema>;
+
+/**
  * A LIFECYCLE transition the agent raises on an established contract.
  *
  * Only the two that have no named endpoint. `approve`, `reject`, `withdraw` and
@@ -339,13 +457,6 @@ export const ListMembershipsQuerySchema = z.object({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
 });
-
-// ─── Membership (agent side) ──────────────────────────────────────────────────
-
-export const RequestToJoinSchema = z.object({
-    agencyId: ObjectIdSchema,
-});
-export type RequestToJoinInput = z.infer<typeof RequestToJoinSchema>;
 
 // ─── Membership (admin side) ──────────────────────────────────────────────────
 

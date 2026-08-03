@@ -36,6 +36,27 @@ export type AgentNotificationType =
     | 'agent_contract.request_received'
     | 'agent_contract.approved'
     | 'agent_contract.rejected'
+    /**
+     * A contract transition the COUNTERPARTY must answer — an agency proposing
+     * to remove this agent, most often — and the answer when it comes.
+     *
+     * Distinct from the three above: those are the handshake that FORMS a
+     * contract, these are changes to one that already exists. They were silent
+     * until now on the reasoning that the status-request inbox is their home,
+     * which left a proposed termination invisible until someone happened to open
+     * the tab. An inbox nobody is told about is not an inbox.
+     */
+    | 'agent_contract.status_request_raised'
+    | 'agent_contract.status_request_resolved'
+    /**
+     * Terms negotiation. `terms_countered` is a PENDING contract whose offer
+     * moved back to this agent; `terms_proposed` is a change to a LIVE one,
+     * which takes effect only on acceptance and whose copy must say so;
+     * `terms_resolved` is the answer to either, neutral about whose it was.
+     */
+    | 'agent_contract.terms_countered'
+    | 'agent_contract.terms_proposed'
+    | 'agent_contract.terms_resolved'
     /** A new shipment assignment offer to accept/reject before it times out. */
     | 'shipment.offer.received'
     /** A reminder that a still-open offer is waiting (auto-assignment round 2). */

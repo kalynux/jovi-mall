@@ -66,6 +66,7 @@ export const MODELS = Object.freeze({
   AGENT_AGENCY_CONTRACT: 'AgentAgencyContract',
   AGENT_MEMBERSHIP_EVENT: 'AgentMembershipEvent',
   CONTRACT_STATUS_REQUEST: 'ContractStatusRequest',
+  CONTRACT_TERMS_PROPOSAL: 'ContractTermsProposal',
   // No CONTRACT_SETTLEMENT: agent→agency cash settles through AgentDeposit +
   // CodCashLedger, and the platform pays the agent through the earnings module.
   // A third ledger for the same movements was removed rather than filled in.
@@ -189,6 +190,7 @@ export const COLLECTIONS = Object.freeze({
   AGENT_AGENCY_CONTRACT: 'agent_agency_contracts',
   AGENT_MEMBERSHIP_EVENT: 'agent_membership_events',
   CONTRACT_STATUS_REQUEST: 'contract_status_requests',
+  CONTRACT_TERMS_PROPOSAL: 'contract_terms_proposals',
 
   // Vendor <-> agency connections
   VENDOR_AGENCY_CONNECTION: 'vendor_agency_connections',

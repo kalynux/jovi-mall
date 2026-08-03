@@ -325,8 +325,14 @@ resolves the flag.
 ### GET /api/agency/cod/discrepancies
 
 **Description**: This agency's discrepancy flags — including system-raised `late_deposit` flags
-(agents holding cash past the deposit deadline, default 2 days). Query: `status?`
+(agents holding cash past **that contract's** settlement deadline). Query: `status?`
 (`open` | `resolved` | `written_off`), `agentId?`, `page?`, `limit?`.
+
+> **`late_deposit` is raised per contract, so you always see the ones that concern you.** It used to
+> be one open flag per agent platform-wide, which meant that if an agent was late to another agency
+> first, you were never told they were late to you — one row can only name one agency. Now each
+> contract is flagged in its own right. The agent's **trust penalty** is still charged once across
+> all of them; the flag tells you you are owed, it is not four punishments.
 
 **Success Response** (`200 OK`): paginated rows
 `{ id, agentId, agencyId, type, amount, currency, status, raisedBy, note, resolutionNote, openedAt, resolvedAt }`.
@@ -350,5 +356,13 @@ resolves the flag.
 - **Rolling reserve** — a percentage (default 10%) of your released COD earnings parks in a
   `reserve` balance for 30 days and only releases while you have **no open discrepancies**
   (see [earnings.md](./earnings.md)).
-- **Deposit deadline** — agents holding cash beyond the deadline (default 2 days) are flagged
-  automatically each day.
+- **Deposit deadline** — **you set it, per agent, in the contract.** `remittanceTerms.cadence` and
+  `graceHours` on each agent's contract decide when their cash falls due, and a daily sweep flags
+  anyone past it. There is no platform-wide deadline any more; the old 2-day constant survives only
+  as a fallback for contracts written before remittance terms existed.
+
+  Set it via the terms endpoints on [agent-roster.md](./agent-roster.md#terms-negotiation) — and note
+  it needs the agent's agreement on a live contract, precisely because tightening it is what triggers
+  their trust penalty. **`cadence: "on_demand"` disables the deadline entirely**: cash under that
+  contract is never late, so you lose this protection. That is your call to make, but make it
+  knowingly.

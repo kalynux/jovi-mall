@@ -64,7 +64,9 @@ export class AdminAgentController {
       success: true,
       data: {
         agent: AgentProfileMapper.toResponseDto(agent, new Date(), await agentAvatar(agent)),
-        memberships: memberships.map(AgentMembershipMapper.toDto),
+        // Arrow, not bare: `toDto`'s second parameter is the open terms-proposal
+        // id, and `map` would supply the element index for it.
+        memberships: memberships.map((m) => AgentMembershipMapper.toDto(m)),
       },
     });
   });

@@ -453,6 +453,30 @@ export class AgentDepositService {
     return result?.total ?? 0;
   }
 
+  /**
+   * The same sum, scoped to ONE contract.
+   *
+   * The late-deposit sweep needs this rather than the agent-global figure above:
+   * it now evaluates each contract against that contract's own remittance
+   * cadence, and a declaration made to agency A must not suppress a late flag
+   * for cash owed to agency B. A deposit carries no contract id — it carries the
+   * agent and the agency, which is the same thing, since a contract is exactly
+   * that pair.
+   */
+  async sumOpenDeclarationsForContract(agentId: string, agencyId: string): Promise<number> {
+    const [result] = await AgentDepositModel.aggregate([
+      {
+        $match: {
+          agent_id: new Types.ObjectId(agentId),
+          agency_id: new Types.ObjectId(agencyId),
+          status: 'declared',
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]);
+    return result?.total ?? 0;
+  }
+
   async listForAgency(
     agencyId: string,
     page: number,

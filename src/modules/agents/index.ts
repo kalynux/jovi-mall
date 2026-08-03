@@ -42,7 +42,11 @@ export type {
 
 export {
   AgentAgencyMembershipModel,
+  AgentAgencyContractModel,
   LIVE_MEMBERSHIP_STATUSES,
+  ALLOCATING_CONTRACT_STATUSES,
+  NEGOTIABLE_TERM_GROUPS,
+  AGENT_NEGOTIABLE_TERM_GROUPS,
 } from './models/agent-agency-membership.model';
 export type {
   IAgentAgencyMembership,
@@ -50,11 +54,53 @@ export type {
   MembershipOrigin,
   EmploymentType,
   IMembershipEmployment,
-
+  ContractTermsParty,
+  NegotiableTermGroup,
 } from './models/agent-agency-membership.model';
 
 export { AgentMembershipEventModel } from './models/agent-membership-event.model';
 export type { IAgentMembershipEvent, MembershipEventType } from './models/agent-membership-event.model';
+
+/**
+ * Exported for the notification catalogs, which keep a localized label per
+ * transition and per resolution. Typing those tables on these unions rather than
+ * on `string` is the point: adding a transition then fails the build in the
+ * catalogs instead of silently rendering an untranslated English enum value.
+ */
+export type {
+  ContractTransition,
+  StatusRequestState,
+  ContractParty,
+} from './models/contract-status-request.model';
+
+/**
+ * Terms negotiation. `TermsProposalState` is exported for the same reason as
+ * `StatusRequestState` above — the notification catalogs key a localized label
+ * table on it, so adding a state fails the build there rather than rendering an
+ * untranslated enum value.
+ */
+export {
+  ContractTermsProposalModel,
+} from './models/contract-terms-proposal.model';
+export type {
+  IContractTermsProposal,
+  TermsProposalState,
+  ProposedTerms,
+} from './models/contract-terms-proposal.model';
+export {
+  ContractTermsProposalRepository,
+  contractTermsProposalRepository,
+} from './repositories/contract-terms-proposal.repository';
+export {
+  ContractTermsProposalMapper,
+  diffTerms,
+} from './dto/contract-terms-proposal.dto';
+export type {
+  ContractTermsProposalDto,
+  TermsProposalAction,
+  TermsProposalViewer,
+  TermsDiffEntry,
+} from './dto/contract-terms-proposal.dto';
 
 // ─── Repositories ────────────────────────────────────────────────────────────
 export { AgentRepository, agentRepository } from './repositories/agent.repository';
@@ -103,6 +149,27 @@ export type {
   EligibilityRuleResult,
   IneligibilityReason,
 } from './domain/services/agent-eligibility.service';
+
+/**
+ * The two contract terms that constrain WHICH shipments an agent may take.
+ * Pure predicates rather than a service — they are consumed by
+ * shipment-assignment, which owns the dispatch decision; this module owns only
+ * the rule.
+ */
+export {
+  contractCoversRegion,
+  contractAllowsShipmentValue,
+} from './domain/services/contract-coverage.service';
+
+/**
+ * When cash collected under a contract falls due. Consumed by the COD
+ * late-deposit sweep — this module owns the negotiated cadence, cod/ owns the
+ * cash chain that answers to it.
+ */
+export {
+  nextRemittanceDueAt,
+  isRemittanceOverdue,
+} from './domain/services/remittance-schedule.service';
 export {
   AgentTrackingPolicyService,
   agentTrackingPolicyService,

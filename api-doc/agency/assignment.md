@@ -48,8 +48,19 @@ immediate answer.
 
 **Errors**: `SHIPMENT_NOT_OFFERABLE` (422, shipment isn't in `assigned` state),
 `SHIPMENT_ALREADY_HAS_AGENT` (409), `SHIPMENT_ALREADY_HAS_PENDING_OFFER` (409),
-`AGENT_NOT_ELIGIBLE_FOR_ASSIGNMENT` (422, `details.reasons`), COD gates
+`AGENT_NOT_ELIGIBLE_FOR_ASSIGNMENT` (422, `details.reasons`), the **contract-term gates**
+(`CONTRACT_COVERAGE_REGION_NOT_COVERED` with `details: { deliveryRegion, coveredRegions }`,
+`CONTRACT_SHIPMENT_VALUE_EXCEEDED` with `details: { shipmentValue, ceiling }`), and COD gates
 (`COD_AGENT_EXPOSURE_EXCEEDED`, `COD_AGENT_TRUST_TOO_LOW`).
+
+> **A manual assign is gated exactly like the auto pool.** The same coverage and value-ceiling
+> checks that filter auto-assignment candidates run here, on `/accept`, and on `/reassign` — gating
+> only the ranking would let a manual assign silently bypass a term the auto path enforces, which is
+> worse than not enforcing it, because the rule would appear to work.
+>
+> Both fail **open** on missing data: a contract with no declared `coverage.regions` covers
+> everywhere (that is the default on every contract ever created), an order with no delivery region
+> is never gated, and a null `shipmentValueCeiling` caps nothing.
 
 <a name="auto"></a>
 ## POST /api/agency/shipments/:id/auto-assign
@@ -214,8 +225,10 @@ show it.
 `SHIPMENT_REASSIGNMENT_NOT_ALLOWED` (422, `details.status` — status not reassignable, **or the order
 already completed**), `SHIPMENT_REASSIGN_REQUIRES_MANUAL_AGENT` (422, past-pickup with no `agentId`),
 `SHIPMENT_REASSIGN_SAME_AGENT` (422), `SHIPMENT_REASSIGNMENT_CONFLICT` (409, the shipment moved under
-a concurrent action — retry), `AGENT_NOT_ELIGIBLE_FOR_ASSIGNMENT` (422, `details.reasons`), COD gates,
-and `SHIPMENT_NO_ELIGIBLE_AGENTS` (422, released but no replacement available now).
+a concurrent action — retry), `AGENT_NOT_ELIGIBLE_FOR_ASSIGNMENT` (422, `details.reasons`), the
+contract-term gates (`CONTRACT_COVERAGE_REGION_NOT_COVERED`, `CONTRACT_SHIPMENT_VALUE_EXCEEDED` —
+only when you name an `agentId`), COD gates, and `SHIPMENT_NO_ELIGIBLE_AGENTS` (422, released but no
+replacement available now).
 
 <a name="settings"></a>
 ## PATCH /api/agency/assignment-settings

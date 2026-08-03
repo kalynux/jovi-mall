@@ -9,13 +9,19 @@ Frontends do **not** implement tracking against this API. They open a
 WebSocket to geo-tracker using the **same access token** they use here. See
 geo-tracker's own `api-doc/` for the socket protocol.
 
+> **Agencies:** the map's *data* load — which agents you may watch, and each of
+> their active shipments with pickup and drop-off pins — is
+> [`GET /api/agency/tracking/board`](../agency/live-tracking.md). That is the
+> frontend-facing endpoint; everything on this page is the service-to-service
+> seam geo-tracker calls.
+
 ## Who can see what
 
 | Role | Sees |
 |---|---|
 | **admin** | every agent, always |
 | **agent** | only himself |
-| **agency** | agents on its currently approved + active shipments (`assigned`, `picked_up`, `in_transit`, `agent_delivered`) |
+| **agency** | agents on its currently approved + active shipments (`assigned`, `handing_over`, `picked_up`, `in_transit`, `agent_delivered`) |
 | **customer** | agents on their active orders (fulfillment not yet terminal) |
 | **vendor** | nothing — rejected when opening a tracking socket |
 

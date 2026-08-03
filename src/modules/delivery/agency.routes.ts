@@ -6,6 +6,7 @@ import { AgencyNotificationController } from './controllers/agency-notification.
 import { ShipmentController } from '../shipments/shipment.controller';
 import { AgencyAssignmentController } from '../shipment-assignment/controllers/agency-assignment.controller';
 import { AgencyCodController } from '../cod/controllers/agency-cod.controller';
+import { TrackingController } from '../tracking-integration/controllers/tracking.controller';
 import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
 
 const router = Router();
@@ -166,6 +167,21 @@ router.post('/shipments/:id/reassign', AgencyAssignmentController.reassign);
 // number is generated when the shipment is created and is read-only — it is
 // returned on every shipment payload (`trackingNumber`) and never accepted on
 // one. See TrackingNumberGenerator.
+
+// ─── Live tracking ──────────────────────────────────────────────────────────
+
+/**
+ * GET /api/agency/tracking/board
+ * The live-tracking map's one load: every agent this agency may currently watch
+ * and each of their active shipments, with the pickup and drop-off pins that
+ * draw the delivery.
+ *
+ * Positions are NOT here — live movement comes from geo-tracker's WebSocket
+ * (`subscribe {agentId}` → `location_broadcast`). The agent set is exactly the
+ * one GET /api/tracking/visible-agents grants, which is what geo-tracker gates
+ * that subscription on. See api-doc/agency/live-tracking.md.
+ */
+router.get('/tracking/board', TrackingController.getAgencyBoard);
 
 // ─── COD (cash management) ────────────────────────────────────────────────────
 

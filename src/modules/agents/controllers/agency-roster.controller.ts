@@ -8,6 +8,7 @@ import { agentRepository } from '../repositories/agent.repository';
 import { agentMembershipEventRepository } from '../repositories/agent-membership-event.repository';
 import { AgentMembershipMapper } from '../dto/agent-membership.dto';
 import { ContractStatusRequestMapper } from '../dto/contract-status-request.dto';
+import { ContractTermsProposalMapper } from '../dto/contract-terms-proposal.dto';
 import { AgentProfileMapper } from '../dto/agent-profile.dto';
 import {
   MembershipIdParamSchema,
@@ -23,6 +24,12 @@ import {
   WithdrawContractSchema,
   RequestIdParamSchema,
   ResolveStatusRequestSchema,
+  CancelStatusRequestSchema,
+  CounterTermsAsAgencySchema,
+  ProposeTermsChangeAsAgencySchema,
+  ProposalIdParamSchema,
+  ResolveTermsProposalSchema,
+  CancelTermsProposalSchema,
 } from '../validators/agent.validator';
 import { codCashAccountService } from '../../cod/services/cod-cash-account.service';
 import { agentDepositService } from '../../cod/services/agent-deposit.service';
@@ -91,24 +98,165 @@ export class AgencyRosterController {
   });
 
   /**
-   * POST /api/agency/agents/requests — Body: { agentId }
+   * POST /api/agency/agents/requests — Body: { agentId, terms }
    *
-   * Asks a specific agent to contract. Lands `pending`; the AGENT approves.
-   * An agent already serving another agency is a valid target — only a live
-   * contract with THIS agency blocks it.
+   * Asks a specific agent to contract, ON STATED TERMS. Lands `pending`; the
+   * agent approves, rejects or counters. An agent already serving another
+   * agency is a valid target — only a live contract with THIS agency blocks it.
+   *
+   * `terms` is required and must carry a fee split: an invitation with no
+   * numbers would land the agent on a default that pays them zero.
    */
   static requestAgent = asyncHandler(async (req: Request, res: Response) => {
-    const { agentId } = RequestAgentContractSchema.parse(req.body);
+    const { agentId, terms } = RequestAgentContractSchema.parse(req.body);
     const contract = await agentContractService.requestFromAgency(
       agencyId(req),
       agentId,
+      terms,
       actorOf(req),
     );
 
     res.status(201).json({
       success: true,
       data: AgentMembershipMapper.toDto(contract),
-      message: 'Request sent. The agent must accept before the contract becomes active.',
+      message: 'Request sent. The agent must accept your terms before the contract becomes active.',
+    });
+  });
+
+  /**
+   * POST /api/agency/agents/:membershipId/counter — Body: the terms
+   *
+   * Counters the terms standing on a pending contract. The right to approve
+   * moves to the agent.
+   */
+  static counterTerms = asyncHandler(async (req: Request, res: Response) => {
+    const { membershipId } = MembershipIdParamSchema.parse(req.params);
+    const terms = CounterTermsAsAgencySchema.parse(req.body);
+    const contract = await agentContractService.counterTerms(
+      'agency',
+      agencyId(req),
+      membershipId,
+      terms,
+      actorOf(req),
+    );
+
+    res.json({
+      success: true,
+      data: AgentMembershipMapper.toDto(contract),
+      message: 'Terms countered. The agent must now accept them.',
+    });
+  });
+
+  // ─── Terms proposals (LIVE contracts) ───────────────────────────────────
+
+  /**
+   * POST /api/agency/agents/:membershipId/terms-proposals — Body: { terms, note? }
+   *
+   * Proposes a change to a live contract. **The contract is not modified** —
+   * work continues on the agreed terms until the agent accepts.
+   */
+  static proposeTermsChange = asyncHandler(async (req: Request, res: Response) => {
+    const { membershipId } = MembershipIdParamSchema.parse(req.params);
+    const { terms, note } = ProposeTermsChangeAsAgencySchema.parse(req.body);
+    const proposal = await agentContractService.proposeTermsChange(
+      'agency',
+      agencyId(req),
+      membershipId,
+      terms,
+      note,
+      actorOf(req),
+    );
+
+    res.status(201).json({
+      success: true,
+      data: ContractTermsProposalMapper.toDto(proposal, 'agency'),
+      message: 'Proposal sent. The current terms stay in force until the agent answers.',
+    });
+  });
+
+  /** GET /api/agency/agents/:membershipId/terms-proposals — the trail. */
+  static listContractProposals = asyncHandler(async (req: Request, res: Response) => {
+    const { membershipId } = MembershipIdParamSchema.parse(req.params);
+    const proposals = await agentContractService.listProposalsForContract(
+      'agency',
+      agencyId(req),
+      membershipId,
+    );
+
+    res.json({
+      success: true,
+      data: proposals.map((p) => ContractTermsProposalMapper.toDto(p, 'agency')),
+    });
+  });
+
+  /** GET /api/agency/agents/terms-proposals — this agency's open proposals. */
+  static listTermsProposals = asyncHandler(async (req: Request, res: Response) => {
+    const proposals = await agentContractService.listPendingProposalsForAgency(agencyId(req));
+    res.json({
+      success: true,
+      data: proposals.map((p) => ContractTermsProposalMapper.toDto(p, 'agency')),
+    });
+  });
+
+  /** POST /api/agency/agents/terms-proposals/:proposalId/resolve */
+  static resolveTermsProposal = asyncHandler(async (req: Request, res: Response) => {
+    const { proposalId } = ProposalIdParamSchema.parse(req.params);
+    const { decision, note } = ResolveTermsProposalSchema.parse(req.body);
+    const result = await agentContractService.resolveTermsProposalAs(
+      'agency',
+      agencyId(req),
+      proposalId,
+      decision,
+      actorOf(req),
+      note,
+    );
+
+    res.json({
+      success: true,
+      data: {
+        proposal: ContractTermsProposalMapper.toDto(result.proposal, 'agency'),
+        contract: result.contract ? AgentMembershipMapper.toDto(result.contract) : null,
+      },
+      message: decision === 'approve' ? 'Terms updated.' : 'Proposal rejected.',
+    });
+  });
+
+  /** POST /api/agency/agents/terms-proposals/:proposalId/cancel */
+  static cancelTermsProposal = asyncHandler(async (req: Request, res: Response) => {
+    const { proposalId } = ProposalIdParamSchema.parse(req.params);
+    const { note } = CancelTermsProposalSchema.parse(req.body);
+    const proposal = await agentContractService.cancelTermsProposalAs(
+      'agency',
+      agencyId(req),
+      proposalId,
+      actorOf(req),
+      note,
+    );
+
+    res.json({
+      success: true,
+      data: ContractTermsProposalMapper.toDto(proposal, 'agency'),
+      message: 'Proposal withdrawn.',
+    });
+  });
+
+  /** POST /api/agency/agents/terms-proposals/:proposalId/counter — Body: { terms, note? } */
+  static counterTermsProposal = asyncHandler(async (req: Request, res: Response) => {
+    const { proposalId } = ProposalIdParamSchema.parse(req.params);
+    const { terms, note } = ProposeTermsChangeAsAgencySchema.parse(req.body);
+    const proposal = await agentContractService.counterTermsProposalAs(
+      'agency',
+      agencyId(req),
+      proposalId,
+      terms,
+      note,
+      actorOf(req),
+    );
+
+    res.status(201).json({
+      success: true,
+      data: ContractTermsProposalMapper.toDto(proposal, 'agency'),
+      message: 'Counter-proposal sent. The agent must now answer it.',
     });
   });
 
@@ -300,7 +448,7 @@ export class AgencyRosterController {
     res.json({
       success: true,
       data: {
-        request: ContractStatusRequestMapper.toDto(request),
+        request: ContractStatusRequestMapper.toDto(request, 'agency'),
         membership: contract ? AgentMembershipMapper.toDto(contract) : null,
       },
       message: contract
@@ -314,13 +462,25 @@ export class AgencyRosterController {
   /**
    * GET /api/agency/agents/status-requests
    *
-   * Transitions an agent has raised that need this agency's consent. Without
-   * this, an agent's `deactivate` — which the authority matrix makes
+   * Every pending contract transition on this agency's roster — BOTH the ones
+   * an agent raised that await this agency's consent and the ones the agency
+   * raised itself that await the agent's. The query filters on the agency and
+   * on `pending`, nothing more; this list is also the only place a client can
+   * learn the id of a request it raised, which is what `/cancel` needs.
+   *
+   * Read `awaitingMyDecision` per row rather than counting rows: it is what
+   * separates "this agent wants to leave — Approve/Reject" from "you proposed
+   * removing them — Cancel", and it is the right predicate for an unread badge.
+   *
+   * Without this, an agent's `deactivate` — which the authority matrix makes
    * `requires_counterparty` from both sides — would sit pending forever.
    */
   static listStatusRequests = asyncHandler(async (req: Request, res: Response) => {
     const requests = await agentContractService.listPendingRequestsForAgency(agencyId(req));
-    res.json({ success: true, data: requests.map(ContractStatusRequestMapper.toDto) });
+    res.json({
+      success: true,
+      data: requests.map((r) => ContractStatusRequestMapper.toDto(r, 'agency')),
+    });
   });
 
   /**
@@ -346,10 +506,40 @@ export class AgencyRosterController {
     res.json({
       success: true,
       data: {
-        request: ContractStatusRequestMapper.toDto(request),
+        request: ContractStatusRequestMapper.toDto(request, 'agency'),
         membership: contract ? AgentMembershipMapper.toDto(contract) : null,
       },
       message: decision === 'approve' ? 'Request approved.' : 'Request rejected.',
+    });
+  });
+
+  /**
+   * POST /api/agency/agents/status-requests/:requestId/cancel
+   * Body: { note? }
+   *
+   * The other half of the inbox: `/resolve` answers what the agent raised, this
+   * pulls back what the agency raised and the agent has not answered yet — a
+   * termination proposal thought better of, most often. Refused (403) on a
+   * request the agent raised; that one is answered, not cancelled.
+   *
+   * `membership` is always null: cancelling a proposal moves no contract.
+   */
+  static cancelStatusRequest = asyncHandler(async (req: Request, res: Response) => {
+    const { requestId } = RequestIdParamSchema.parse(req.params);
+    const { note } = CancelStatusRequestSchema.parse(req.body ?? {});
+
+    const { request } = await agentContractService.cancelRequestAs(
+      'agency',
+      agencyId(req),
+      requestId,
+      actorOf(req),
+      note
+    );
+
+    res.json({
+      success: true,
+      data: { request: ContractStatusRequestMapper.toDto(request, 'agency'), membership: null },
+      message: 'Request cancelled.',
     });
   });
 

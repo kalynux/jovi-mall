@@ -221,7 +221,8 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 
 ### Agency
 - [Profile](./agency/profile.md) · [Profile schema](./agency/profile-schema.md) · [Onboarding](./agency/onboarding.md)
-- [Agent roster & contracts](./agency/agent-roster.md) · [Shipments](./agency/shipments.md)
+- [Agent roster & contracts](./agency/agent-roster.md) — **canonical for the agent↔agency contract**, including [terms negotiation](./agency/agent-roster.md#terms-negotiation) · [Shipments](./agency/shipments.md)
+- [Live tracking](./agency/live-tracking.md) — the map: watchable agents, their active shipments, and each shipment's pickup → drop-off pins (movement itself comes from geo-tracker's socket)
 - [Billing (plans & credit)](./agency/billing.md) · [COD cash management](./agency/cod-cash-management.md) · [Earnings](./agency/earnings.md) · [Payment methods](./agency/payment-methods.md)
 - [Vendor connections](./agency/vendor-connections.md) · [Vendors](./agency/vendors.md) · [Products](./agency/products.md)
 - [File management](./agency/file-management.md) · [Storage](./agency/storage.md)
@@ -229,7 +230,7 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 
 ### Agent
 - **▶ [Shipment discovery — frontend integration guide](./agent-shipment-discovery-integration.md)** — search, earnings, addresses and the pickup→drop-off route. **Start here if you are integrating the agent app**; it carries the two breaking changes and the migration checklist.
-- [Profile, preferences & dispatch settings](./agent/profile.md) · [Onboarding](./agent/onboarding.md) · [Availability & device](./agent/availability-and-device.md) · [Agency membership](./agent/agency-membership.md)
+- [Profile, preferences & dispatch settings](./agent/profile.md) · [Onboarding](./agent/onboarding.md) · [Availability & device](./agent/availability-and-device.md) · [Agency membership](./agent/agency-membership.md) — applying, and [negotiating your terms](./agent/agency-membership.md#terms-negotiation)
 - [Shipments](./agent/shipments.md) · [Offers](./agent/offers.md) · [Delivery proof](./agent/delivery-proof.md) · [COD cash](./agent/cod-cash.md) · [Billing (plans & credit)](./agent/billing.md) · [Payment methods](./agent/payment-methods.md)
 - [File management](./agent/file-management.md) · [Storage](./agent/storage.md)
 - [Notifications](./agent/notifications.md) · [Push notifications (Flutter)](./agent/push-notifications.md) · [Tickets](./agent/tickets.md)

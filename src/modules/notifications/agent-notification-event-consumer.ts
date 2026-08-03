@@ -33,6 +33,28 @@ export function initializeAgentNotificationEventConsumers(): void {
     eventBus.subscribe('agent_contract.request_received', handler.handleContractRequestReceived.bind(handler));
     eventBus.subscribe('agent_contract.approved', handler.handleContractApproved.bind(handler));
     eventBus.subscribe('agent_contract.rejected', handler.handleContractRejected.bind(handler));
+    eventBus.subscribe(
+        'agent_contract.status_request_raised',
+        handler.handleContractStatusRequestRaised.bind(handler)
+    );
+    eventBus.subscribe(
+        'agent_contract.status_request_resolved',
+        handler.handleContractStatusRequestResolved.bind(handler)
+    );
+
+    // Terms negotiation — the terms of the bargain rather than its status.
+    eventBus.subscribe(
+        'agent_contract.terms_countered',
+        handler.handleContractTermsCountered.bind(handler)
+    );
+    eventBus.subscribe(
+        'agent_contract.terms_proposed',
+        handler.handleContractTermsProposed.bind(handler)
+    );
+    eventBus.subscribe(
+        'agent_contract.terms_resolved',
+        handler.handleContractTermsResolved.bind(handler)
+    );
 
     // Agent-acceptance workflow: a new offer to answer, and the timeout that
     // lapsed one they didn't. The accept/reject confirmations are deliberately

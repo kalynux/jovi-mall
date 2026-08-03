@@ -113,6 +113,8 @@ router.get('/memberships/history', AgentSelfController.getHistory);
  * Creates a `pending` membership the agency must approve.
  */
 router.post('/memberships/requests', AgentSelfController.requestToJoin);
+// Body: { agencyId, terms? } — `terms` may carry the agent's asking fee split
+// and coverage. Sent bare, the agency proposes and the agent answers.
 
 /**
  * Responding to a request an AGENCY raised. There is no separate invite object
@@ -144,8 +146,11 @@ router.post('/memberships/:membershipId/withdraw', AgentSelfController.withdrawR
 router.post('/memberships/:membershipId/terminate', AgentSelfController.terminate);
 
 /**
- * GET /api/agent/memberships/status-requests — contract transitions an agency
- * has raised that need this agent's consent (a removal, most often).
+ * GET /api/agent/memberships/status-requests — every PENDING contract
+ * transition on this agent, whoever raised it. Not only the agency's: the
+ * query filters on the agent and on `pending`, so requests this agent raised
+ * and the agency has not answered appear here too. Read `requestedByRole` to
+ * tell them apart — it decides which of the two verbs below applies.
  *
  * Deliberately NOT `/memberships/requests`: that path already means "apply to
  * join an agency" above, which is the opposite direction.
@@ -155,7 +160,7 @@ router.get('/memberships/status-requests', AgentSelfController.listStatusRequest
 /**
  * POST /api/agent/memberships/status-requests/:requestId/resolve
  * Body: { decision: 'approve' | 'reject', note? }
- * Refused if this agent raised the request themselves.
+ * Answers a request the AGENCY raised. Refused if this agent raised it.
  */
 router.post(
   '/memberships/status-requests/:requestId/resolve',
@@ -163,11 +168,88 @@ router.post(
 );
 
 /**
+ * POST /api/agent/memberships/status-requests/:requestId/cancel
+ * Body: { note? }
+ * Pulls back a request THIS AGENT raised, while it is still pending. The exact
+ * inverse of `/resolve`: refused if the agency raised it. The contract does not
+ * move, so `membership` is always null.
+ */
+router.post(
+  '/memberships/status-requests/:requestId/cancel',
+  AgentSelfController.cancelStatusRequest
+);
+
+// ─── Terms proposals (LIVE contracts) ────────────────────────────────────────
+//
+// The mirror of the agency's `/agency/agents/terms-proposals` block, verb for
+// verb. What the agent may PUT IN a proposal is narrower — fee split and
+// coverage only, enforced by `assertNegotiableBy` — but the shape of the
+// negotiation is symmetric, and the routes say so.
+
+/**
+ * GET /api/agent/memberships/terms-proposals — every open terms proposal on
+ * this agent's contracts, in BOTH directions. `awaitingMyDecision` on each row
+ * separates "the agency wants your answer" from "you are waiting on theirs".
+ */
+router.get('/memberships/terms-proposals', AgentSelfController.listTermsProposals);
+
+/**
+ * POST /api/agent/memberships/terms-proposals/:proposalId/resolve
+ * Body: { decision: 'approve' | 'reject', note? }
+ *
+ * Answers a change the AGENCY proposed to a live contract. **Until this is
+ * answered the agreed terms stay in force** — a rejected proposal changes
+ * nothing, and an unanswered one changes nothing either.
+ */
+router.post(
+  '/memberships/terms-proposals/:proposalId/resolve',
+  AgentSelfController.resolveTermsProposal
+);
+
+/**
+ * POST /api/agent/memberships/terms-proposals/:proposalId/cancel — Body: { note? }
+ * Pulls back a proposal THIS AGENT raised. The inverse of `/resolve`.
+ */
+router.post(
+  '/memberships/terms-proposals/:proposalId/cancel',
+  AgentSelfController.cancelTermsProposal
+);
+
+/**
+ * POST /api/agent/memberships/terms-proposals/:proposalId/counter
+ * Body: { terms, note? }
+ * Supersedes the agency's open proposal with the agent's own.
+ */
+router.post(
+  '/memberships/terms-proposals/:proposalId/counter',
+  AgentSelfController.counterTermsProposal
+);
+
+/**
  * GET /api/agent/memberships/:membershipId — one contract, with the agency's
  * business name resolved. Declared after every literal path above, or Express
- * would match "history"/"requests"/"status-requests" as an id.
+ * would match "history"/"requests"/"status-requests"/"terms-proposals" as an id.
  */
 router.get('/memberships/:membershipId', AgentSelfController.getMembership);
+
+/**
+ * POST /api/agent/memberships/:membershipId/counter — Body: { coverage?, fee_split? }
+ *
+ * Counters the terms standing on a PENDING contract, moving the right to
+ * approve to the agency. This is the agent's lever: the two groups that
+ * describe their own side of the bargain. Anything else is 403.
+ */
+router.post('/memberships/:membershipId/counter', AgentSelfController.counterTerms);
+
+/**
+ * POST /api/agent/memberships/:membershipId/terms-proposals
+ * Body: { terms: { coverage?, fee_split? }, note? }
+ * Proposes a change to a LIVE contract. At most one open per contract.
+ */
+router.post('/memberships/:membershipId/terms-proposals', AgentSelfController.proposeTermsChange);
+
+/** GET /api/agent/memberships/:membershipId/terms-proposals — this contract's trail. */
+router.get('/memberships/:membershipId/terms-proposals', AgentSelfController.listContractProposals);
 
 /** PUT /api/agent/memberships/:membershipId/primary — set default agency. */
 router.put('/memberships/:membershipId/primary', AgentSelfController.setPrimary);

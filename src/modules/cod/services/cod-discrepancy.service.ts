@@ -27,13 +27,47 @@ export class CodDiscrepancyService {
   ) {}
 
   /** System-raised late-deposit flag (daily sweep). No-op if one is already open. */
-  async openLateDeposit(agentId: string, agencyId: string, outstanding: number, currency: string) {
+  /**
+   * Flag an agent for sitting on cash past THIS contract's deadline.
+   *
+   * ── Two different scopes, deliberately ──────────────────────────────────
+   *
+   * The FLAG is per contract: an agent can be on time with agency A and late
+   * with agency B, and each agency is a separate creditor that must be told.
+   * The uniqueness check (and its backing index) is therefore on the (agent,
+   * agency) pair.
+   *
+   * The TRUST PENALTY is per agent, applied once while any late-deposit flag is
+   * open. Trust is a platform-wide property of the agent, and one bad week
+   * should cost the same whether they serve one agency or four — charging it
+   * per contract would make a multi-agency agent's score fall four times faster
+   * for the same behaviour, which is a tax on working for more agencies.
+   *
+   * `note` names the contract's own deadline rather than the platform default,
+   * because since the cadence became enforced that default is only a fallback.
+   */
+  async openLateDeposit(
+    agentId: string,
+    agencyId: string,
+    outstanding: number,
+    currency: string,
+    dueAt?: Date | null
+  ) {
     const existing = await CodDiscrepancyModel.findOne({
+      agent_id: agentId,
+      agency_id: agencyId,
+      type: 'late_deposit',
+      status: 'open',
+    });
+    if (existing) return null; // this contract is already flagged
+
+    // Any OTHER open flag means the agent has already been charged for being
+    // late; a second agency learning of it is not a second offence.
+    const alreadyPenalized = await CodDiscrepancyModel.exists({
       agent_id: agentId,
       type: 'late_deposit',
       status: 'open',
     });
-    if (existing) return null; // already flagged — penalty was applied once
 
     const discrepancy = await CodDiscrepancyModel.create({
       agent_id: agentId,
@@ -44,16 +78,20 @@ export class CodDiscrepancyService {
       status: 'open',
       raised_by: 'system',
       raised_by_user_id: null,
-      note: `Cash held past the ${COD_CONFIG.DEPOSIT_DEADLINE_DAYS}-day deposit deadline`,
+      note: dueAt
+        ? `Cash held past this contract's settlement deadline of ${dueAt.toISOString()}`
+        : `Cash held past the ${COD_CONFIG.DEPOSIT_DEADLINE_DAYS}-day deposit deadline`,
     });
 
-    await this.trust.applyEvent({
-      agentId,
-      eventType: 'late_deposit',
-      delta: -COD_CONFIG.TRUST_PENALTY_LATE_DEPOSIT,
-      refType: 'cod_discrepancy',
-      refId: discrepancy._id.toString(),
-    });
+    if (!alreadyPenalized) {
+      await this.trust.applyEvent({
+        agentId,
+        eventType: 'late_deposit',
+        delta: -COD_CONFIG.TRUST_PENALTY_LATE_DEPOSIT,
+        refType: 'cod_discrepancy',
+        refId: discrepancy._id.toString(),
+      });
+    }
 
     await this.emitOpened(discrepancy);
     return discrepancy;

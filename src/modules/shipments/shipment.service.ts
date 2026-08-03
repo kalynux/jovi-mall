@@ -136,6 +136,23 @@ export interface AgentFailureReport {
     note: string | null;
 }
 
+/**
+ * Where a shipment is collected from, and how many distinct collection points it
+ * has. `count > 1` means `address` is only the first of several — the detail
+ * view carries the full breakdown.
+ */
+export interface PickupSummary {
+    address: AddressDetail | null;
+    mode: 'pickup_based' | 'storage_based' | 'mixed' | null;
+    count: number;
+}
+
+/** A shipment's two ends: where the parcel is collected, and where it goes. */
+export interface ShipmentEndpoints {
+    pickup: PickupSummary;
+    deliveryAddress: AddressDetail | null;
+}
+
 // Agent → agent reassignment: the status a shipment resets to when it is pulled
 // off its current agent. Pre-pickup it goes back to the agency queue as
 // `assigned` (the parcel never left); once picked up, the parcel is physically
@@ -443,6 +460,55 @@ export class ShipmentService {
     }
 
     /**
+     * The pickup → drop-off endpoints for a set of shipments, keyed by shipment
+     * id: the map-drawing subset of `buildShipmentContext`, without the item,
+     * vendor and image enrichment a map does not need.
+     *
+     * Exists so the agency live-tracking board can plot a delivery's two ends
+     * without reimplementing any of the resolution rules — `handover.pickup`
+     * winning after a reassignment, agency-HQ vs vendor snapshot per item, and
+     * the order's checkout snapshot winning over the customer's current saved
+     * address. Each of those, got wrong, draws the delivery in the wrong place.
+     *
+     * `ordersById` is supplied by the caller (it has already loaded the orders),
+     * keyed by order id string.
+     */
+    async resolveShipmentEndpoints(
+        shipments: IShipment[],
+        ordersById: Map<string, any>
+    ): Promise<Map<string, ShipmentEndpoints>> {
+        const result = new Map<string, ShipmentEndpoints>();
+        if (shipments.length === 0) return result;
+
+        const orders = [...ordersById.values()];
+        const agencyIds = [...new Set(shipments.map(s => s.agency_id.toString()))];
+
+        const [hqMap, customerAddressMap] = await Promise.all([
+            // Storage-based items are collected from the agency's own HQ, which
+            // is resolved live rather than snapshotted onto the order.
+            this.magazinRepo.findHqAddressesByAgencyIds(agencyIds),
+            // Legacy orders predate `order.delivery_address` and fall back to
+            // the customer's current default saved address.
+            this._batchResolveCustomerAddresses(
+                orders.filter((o: any) => !o.delivery_address).map((o: any) => o.customer_id.toString())
+            ),
+        ]);
+
+        for (const shipment of shipments) {
+            const order = ordersById.get(shipment.order_id.toString());
+            result.set((shipment._id as Types.ObjectId).toString(), {
+                pickup: this._resolvePickup(shipment, order, hqMap),
+                deliveryAddress: this._resolveDeliveryAddress(
+                    order,
+                    order ? customerAddressMap.get(order.customer_id.toString()) : null
+                ),
+            });
+        }
+
+        return result;
+    }
+
+    /**
      * The decision context for a set of shipments — items, vendor, pickup and
      * drop-off — keyed by shipment id.
      *
@@ -459,20 +525,17 @@ export class ShipmentService {
     async buildShipmentContext(
         shipments: IShipment[],
         ordersById: Map<string, any>
-    ): Promise<Map<string, { items: any[]; vendor: any; pickup: any; deliveryAddress: AddressDetail | null }>> {
-        const result = new Map<string, { items: any[]; vendor: any; pickup: any; deliveryAddress: AddressDetail | null }>();
+    ): Promise<Map<string, { items: any[]; vendor: any; pickup: PickupSummary; deliveryAddress: AddressDetail | null }>> {
+        const result = new Map<string, { items: any[]; vendor: any; pickup: PickupSummary; deliveryAddress: AddressDetail | null }>();
         if (shipments.length === 0) return result;
 
         const orders = [...ordersById.values()];
-        const agencyIds = [...new Set(shipments.map(s => s.agency_id.toString()))];
         const vendorIds = [...new Set(orders.map((o: any) => o.vendor_id?.toString()).filter(Boolean))];
 
-        const [hqMap, vendorMap, customerAddressMap, imageMap] = await Promise.all([
-            this.magazinRepo.findHqAddressesByAgencyIds(agencyIds),
+        const [endpointMap, vendorMap, imageMap] = await Promise.all([
+            // The pickup/drop-off rules live in ONE place — see resolveShipmentEndpoints.
+            this.resolveShipmentEndpoints(shipments, ordersById),
             this._batchResolveVendorNames(vendorIds),
-            this._batchResolveCustomerAddresses(
-                orders.filter((o: any) => !o.delivery_address).map((o: any) => o.customer_id.toString())
-            ),
             resolveProductImages(
                 shipments.flatMap(s => this._imageRefsFor(s, ordersById.get(s.order_id.toString()))),
                 this.fileRepository,
@@ -481,12 +544,14 @@ export class ShipmentService {
         ]);
 
         for (const shipment of shipments) {
+            const shipmentId = (shipment._id as Types.ObjectId).toString();
             const order = ordersById.get(shipment.order_id.toString());
+            const endpoints = endpointMap.get(shipmentId);
             const orderItemsById = new Map<string, any>(
                 (order?.items ?? []).map((i: any) => [i._id.toString(), i])
             );
 
-            result.set((shipment._id as Types.ObjectId).toString(), {
+            result.set(shipmentId, {
                 items: shipment.items.map(si => {
                     const orderItem = orderItemsById.get(si.order_item_id.toString());
                     return {
@@ -504,11 +569,8 @@ export class ShipmentService {
                     };
                 }),
                 vendor: order ? (vendorMap.get(order.vendor_id.toString()) ?? null) : null,
-                pickup: this._resolvePickup(shipment, order, hqMap),
-                deliveryAddress: this._resolveDeliveryAddress(
-                    order,
-                    order ? customerAddressMap.get(order.customer_id.toString()) : null
-                ),
+                pickup: endpoints?.pickup ?? { address: null, mode: null, count: 0 },
+                deliveryAddress: endpoints?.deliveryAddress ?? null,
             });
         }
 
@@ -533,7 +595,7 @@ export class ShipmentService {
         shipment: IShipment,
         order: any,
         hqMap: Map<string, any>
-    ): { address: AddressDetail | null; mode: 'pickup_based' | 'storage_based' | 'mixed' | null; count: number } {
+    ): PickupSummary {
         const resolved = this._resolvePickupEntries(shipment, order, hqMap);
         if (resolved.length === 0) return { address: null, mode: null, count: 0 };
         const modes = new Set(resolved.map(r => r.mode));

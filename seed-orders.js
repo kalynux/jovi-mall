@@ -67,6 +67,21 @@ const U = {
   ship7: ObjectId("1f0000000000000000000007"), // ord15: assigned (multi-item)
   ship8: ObjectId("1f0000000000000000000008"), // ord16: pending, no agent
 
+  // Order-item ids for every item that a shipment carries. A shipment item
+  // references the ORDER ITEM's `_id` (not the order's), and readers join on it
+  // to recover the item's title/sku/variant snapshot — see `_buildDetail` in
+  // shipment.service.ts. Fixing the ids here is what makes that join resolvable;
+  // items no shipment references can keep an auto-generated `_id`.
+  oi4a: ObjectId("3f0000000000000000000001"), // ord4  item 1 → ship1
+  oi5a: ObjectId("3f0000000000000000000002"), // ord5  item 1 → ship2
+  oi6a: ObjectId("3f0000000000000000000003"), // ord6  item 1 → ship3
+  oi7a: ObjectId("3f0000000000000000000004"), // ord7  item 1 → ship4
+  oi9a: ObjectId("3f0000000000000000000005"), // ord9  item 1 → ship5
+  oi10a: ObjectId("3f0000000000000000000006"), // ord10 item 1 → ship6
+  oi15a: ObjectId("3f0000000000000000000007"), // ord15 item 1 (L/Black)   → ship7
+  oi15b: ObjectId("3f0000000000000000000008"), // ord15 item 2 (M/White)   → ship7
+  oi16a: ObjectId("3f0000000000000000000009"), // ord16 item 1 → ship8
+
   // Payment transactions
   pay1: ObjectId("2e0000000000000000000001"), // ord2: PENDING (awaiting)
   pay2: ObjectId("2e0000000000000000000002"), // ord3: FAILED
@@ -325,7 +340,9 @@ db.productvariants.insertMany([
 // Helper: builds a physical order item with delivery sub-doc
 function physItem(opts) {
   return {
-    _id: new ObjectId(),
+    // `id` is required for any item a shipment carries — the shipment stores
+    // this value in `order_item_id` and the detail endpoints join on it.
+    _id: opts.id || new ObjectId(),
     variant_id: opts.variantId,
     sku: opts.sku,
     variant_title: opts.variantTitle,
@@ -435,7 +452,7 @@ db.orders.insertMany([
     vendor_id: U.vendor1,
     customer_id: U.cust1,
     items: [
-      physItem({ variantId: U.physVar2a, sku: "HDPHN-NC-BLK", variantTitle: "Black", optionSignature: "default", productId: U.physProd2, title: "Wireless Noise-Cancelling Headphones", qty: 1, price: 45000, shipmentId: U.ship1, deliveryStatus: "pending" }),
+      physItem({ id: U.oi4a, variantId: U.physVar2a, sku: "HDPHN-NC-BLK", variantTitle: "Black", optionSignature: "default", productId: U.physProd2, title: "Wireless Noise-Cancelling Headphones", qty: 1, price: 45000, shipmentId: U.ship1, deliveryStatus: "pending" }),
     ],
     currency: "XAF",
     price_breakdown: { base: 45000, tax: 0, discount: 2000, total: 43000 },
@@ -455,7 +472,7 @@ db.orders.insertMany([
     vendor_id: U.vendor1,
     customer_id: U.cust2,
     items: [
-      physItem({ variantId: U.physVar1a, sku: "TSHIRT-L-BLK", variantTitle: "Large / Black", optionSignature: "size:l|color:black", productId: U.physProd1, title: "Classic Cotton T-Shirt", qty: 3, price: 7500, shipmentId: U.ship2, deliveryStatus: "assigned" }),
+      physItem({ id: U.oi5a, variantId: U.physVar1a, sku: "TSHIRT-L-BLK", variantTitle: "Large / Black", optionSignature: "size:l|color:black", productId: U.physProd1, title: "Classic Cotton T-Shirt", qty: 3, price: 7500, shipmentId: U.ship2, deliveryStatus: "assigned" }),
     ],
     currency: "XAF",
     price_breakdown: { base: 22500, tax: 0, discount: 0, total: 22500 },
@@ -474,7 +491,7 @@ db.orders.insertMany([
     vendor_id: U.vendor1,
     customer_id: U.cust3,
     items: [
-      physItem({ variantId: U.physVar2a, sku: "HDPHN-NC-BLK", variantTitle: "Black", optionSignature: "default", productId: U.physProd2, title: "Wireless Noise-Cancelling Headphones", qty: 1, price: 45000, shipmentId: U.ship3, deliveryStatus: "in_transit" }),
+      physItem({ id: U.oi6a, variantId: U.physVar2a, sku: "HDPHN-NC-BLK", variantTitle: "Black", optionSignature: "default", productId: U.physProd2, title: "Wireless Noise-Cancelling Headphones", qty: 1, price: 45000, shipmentId: U.ship3, deliveryStatus: "in_transit" }),
     ],
     currency: "XAF",
     price_breakdown: { base: 45000, tax: 1350, discount: 0, total: 46350 },
@@ -493,7 +510,7 @@ db.orders.insertMany([
     vendor_id: U.vendor1,
     customer_id: U.cust1,
     items: [
-      physItem({ variantId: U.physVar1b, sku: "TSHIRT-M-WHT", variantTitle: "Medium / White", optionSignature: "size:m|color:white", productId: U.physProd1, title: "Classic Cotton T-Shirt", qty: 1, price: 7500, shipmentId: U.ship4, deliveryStatus: "delivered" }),
+      physItem({ id: U.oi7a, variantId: U.physVar1b, sku: "TSHIRT-M-WHT", variantTitle: "Medium / White", optionSignature: "size:m|color:white", productId: U.physProd1, title: "Classic Cotton T-Shirt", qty: 1, price: 7500, shipmentId: U.ship4, deliveryStatus: "delivered" }),
     ],
     currency: "XAF",
     price_breakdown: { base: 7500, tax: 0, discount: 500, total: 7000 },
@@ -533,7 +550,7 @@ db.orders.insertMany([
     vendor_id: U.vendor1,
     customer_id: U.cust3,
     items: [
-      physItem({ variantId: U.physVar2a, sku: "HDPHN-NC-BLK", variantTitle: "Black", optionSignature: "default", productId: U.physProd2, title: "Wireless Noise-Cancelling Headphones", qty: 2, price: 45000, shipmentId: U.ship5, deliveryStatus: "returned" }),
+      physItem({ id: U.oi9a, variantId: U.physVar2a, sku: "HDPHN-NC-BLK", variantTitle: "Black", optionSignature: "default", productId: U.physProd2, title: "Wireless Noise-Cancelling Headphones", qty: 2, price: 45000, shipmentId: U.ship5, deliveryStatus: "returned" }),
     ],
     currency: "XAF",
     price_breakdown: { base: 90000, tax: 0, discount: 5000, total: 85000 },
@@ -553,7 +570,7 @@ db.orders.insertMany([
     vendor_id: U.vendor1,
     customer_id: U.cust1,
     items: [
-      physItem({ variantId: U.physVar1a, sku: "TSHIRT-L-BLK", variantTitle: "Large / Black", optionSignature: "size:l|color:black", productId: U.physProd1, title: "Classic Cotton T-Shirt", qty: 4, price: 7500, shipmentId: U.ship6, deliveryStatus: "returned" }),
+      physItem({ id: U.oi10a, variantId: U.physVar1a, sku: "TSHIRT-L-BLK", variantTitle: "Large / Black", optionSignature: "size:l|color:black", productId: U.physProd1, title: "Classic Cotton T-Shirt", qty: 4, price: 7500, shipmentId: U.ship6, deliveryStatus: "returned" }),
     ],
     currency: "XAF",
     price_breakdown: { base: 30000, tax: 0, discount: 0, total: 30000 },
@@ -652,8 +669,8 @@ db.orders.insertMany([
     vendor_id: U.vendor1,
     customer_id: U.cust3,
     items: [
-      physItem({ variantId: U.physVar1a, sku: "TSHIRT-L-BLK", variantTitle: "Large / Black", optionSignature: "size:l|color:black", productId: U.physProd1, title: "Classic Cotton T-Shirt", qty: 2, price: 7500, shipmentId: U.ship7, deliveryStatus: "assigned" }),
-      physItem({ variantId: U.physVar1b, sku: "TSHIRT-M-WHT", variantTitle: "Medium / White", optionSignature: "size:m|color:white", productId: U.physProd1, title: "Classic Cotton T-Shirt", qty: 1, price: 7500, shipmentId: U.ship7, deliveryStatus: "assigned" }),
+      physItem({ id: U.oi15a, variantId: U.physVar1a, sku: "TSHIRT-L-BLK", variantTitle: "Large / Black", optionSignature: "size:l|color:black", productId: U.physProd1, title: "Classic Cotton T-Shirt", qty: 2, price: 7500, shipmentId: U.ship7, deliveryStatus: "assigned" }),
+      physItem({ id: U.oi15b, variantId: U.physVar1b, sku: "TSHIRT-M-WHT", variantTitle: "Medium / White", optionSignature: "size:m|color:white", productId: U.physProd1, title: "Classic Cotton T-Shirt", qty: 1, price: 7500, shipmentId: U.ship7, deliveryStatus: "assigned" }),
     ],
     currency: "XAF",
     price_breakdown: { base: 22500, tax: 0, discount: 1500, total: 21000 },
@@ -673,7 +690,7 @@ db.orders.insertMany([
     vendor_id: U.vendor1,
     customer_id: U.cust1,
     items: [
-      physItem({ variantId: U.physVar2a, sku: "HDPHN-NC-BLK", variantTitle: "Black", optionSignature: "default", productId: U.physProd2, title: "Wireless Noise-Cancelling Headphones", qty: 1, price: 45000, shipmentId: U.ship8, deliveryStatus: "pending" }),
+      physItem({ id: U.oi16a, variantId: U.physVar2a, sku: "HDPHN-NC-BLK", variantTitle: "Black", optionSignature: "default", productId: U.physProd2, title: "Wireless Noise-Cancelling Headphones", qty: 1, price: 45000, shipmentId: U.ship8, deliveryStatus: "pending" }),
     ],
     currency: "XAF",
     price_breakdown: { base: 45000, tax: 0, discount: 0, total: 45000 },
@@ -719,42 +736,42 @@ db.shipments.insertMany([
   {
     _id: U.ship1, order_id: U.ord4, agency_id: U.agency1, agent_id: null,
     status: "pending",
-    items: [{ order_item_id: U.ord4, product_id: U.physProd2, quantity: 1 }],
+    items: [{ order_item_id: U.oi4a, product_id: U.physProd2, quantity: 1 }],
     created_at: d(-5), updated_at: d(-5),
   },
   // ship2 → ord5: agency + agent1 assigned
   {
     _id: U.ship2, order_id: U.ord5, agency_id: U.agency1, agent_id: U.agent1,
     status: "assigned",
-    items: [{ order_item_id: U.ord5, product_id: U.physProd1, quantity: 3 }],
+    items: [{ order_item_id: U.oi5a, product_id: U.physProd1, quantity: 3 }],
     created_at: d(-4), updated_at: d(-4),
   },
   // ship3 → ord6: in_transit with agent2
   {
     _id: U.ship3, order_id: U.ord6, agency_id: U.agency1, agent_id: U.agent2,
     status: "in_transit",
-    items: [{ order_item_id: U.ord6, product_id: U.physProd2, quantity: 1 }],
+    items: [{ order_item_id: U.oi6a, product_id: U.physProd2, quantity: 1 }],
     created_at: d(-7), updated_at: d(-3),
   },
   // ship4 → ord7: delivered by agent1
   {
     _id: U.ship4, order_id: U.ord7, agency_id: U.agency1, agent_id: U.agent1,
     status: "delivered",
-    items: [{ order_item_id: U.ord7, product_id: U.physProd1, quantity: 1 }],
+    items: [{ order_item_id: U.oi7a, product_id: U.physProd1, quantity: 1 }],
     created_at: d(-14), updated_at: d(-2),
   },
   // ship5 → ord9: returned (order paid then cancelled)
   {
     _id: U.ship5, order_id: U.ord9, agency_id: U.agency1, agent_id: U.agent2,
     status: "returned",
-    items: [{ order_item_id: U.ord9, product_id: U.physProd2, quantity: 2 }],
+    items: [{ order_item_id: U.oi9a, product_id: U.physProd2, quantity: 2 }],
     created_at: d(-17), updated_at: d(-6),
   },
   // ship6 → ord10: returned (refunded)
   {
     _id: U.ship6, order_id: U.ord10, agency_id: U.agency1, agent_id: U.agent1,
     status: "returned",
-    items: [{ order_item_id: U.ord10, product_id: U.physProd1, quantity: 4 }],
+    items: [{ order_item_id: U.oi10a, product_id: U.physProd1, quantity: 4 }],
     created_at: d(-21), updated_at: d(-4),
   },
   // ship7 → ord15: multi-item, assigned to agent2
@@ -762,8 +779,8 @@ db.shipments.insertMany([
     _id: U.ship7, order_id: U.ord15, agency_id: U.agency1, agent_id: U.agent2,
     status: "assigned",
     items: [
-      { order_item_id: U.ord15, product_id: U.physProd1, quantity: 2 },
-      { order_item_id: U.ord15, product_id: U.physProd1, quantity: 1 },
+      { order_item_id: U.oi15a, product_id: U.physProd1, quantity: 2 },
+      { order_item_id: U.oi15b, product_id: U.physProd1, quantity: 1 },
     ],
     created_at: d(-3), updated_at: d(-3),
   },
@@ -771,7 +788,7 @@ db.shipments.insertMany([
   {
     _id: U.ship8, order_id: U.ord16, agency_id: U.agency1, agent_id: null,
     status: "pending",
-    items: [{ order_item_id: U.ord16, product_id: U.physProd2, quantity: 1 }],
+    items: [{ order_item_id: U.oi16a, product_id: U.physProd2, quantity: 1 }],
     created_at: d(-1), updated_at: d(-1),
   },
 ]);

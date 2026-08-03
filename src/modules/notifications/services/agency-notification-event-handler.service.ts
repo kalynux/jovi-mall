@@ -26,8 +26,12 @@ import {
     renderAgencyChannelText,
     renderAgencyWhatsAppTemplateParams,
     renderAgencyButton,
-    agencyWhatsAppTemplateName
+    agencyWhatsAppTemplateName,
+    AGENT_CONTRACT_TRANSITION_LABEL,
+    AGENT_CONTRACT_RESOLUTION_LABEL,
+    AGENT_TERMS_PROPOSAL_RESOLUTION_LABEL
 } from '../catalog/agency-notification-catalog';
+import type { ContractTransition, StatusRequestState, TermsProposalState } from '../../agents';
 import { ChannelText } from '../catalog/notification-catalog';
 import { Language, resolveLanguage, META_LANGUAGE_CODE } from '../catalog/notification-i18n';
 import { RenderContext } from '../catalog/message-renderer';
@@ -266,6 +270,185 @@ export class AgencyNotificationEventHandler {
             });
         } catch (error) {
             console.error('[AgencyNotificationHandler] Failed to handle agent_contract.rejected:', error);
+        }
+    }
+
+    // ─── Agent contract status requests ──────────────────────────────────────
+    //
+    // Changes to a contract that already exists, as opposed to the handshake
+    // that forms one. Same `recipientRole` discriminator and `contractUpdated`
+    // gate; the transition is a parameter here, so the copy takes a LOCALIZED
+    // label rather than the raw enum — which is why the language is resolved
+    // before dispatch rather than inside it.
+
+    /** An agent proposed a contract change — most often asking to leave. */
+    async handleAgentContractStatusRequestRaised(event: DomainEvent): Promise<void> {
+        try {
+            const { contractId, requestId, recipientRole, agencyId, agentName, transition } =
+                event.payload;
+            if (recipientRole !== 'agency') return;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.contractUpdated) return;
+
+            const lang = await this.resolveAgencyLanguage(agencyId);
+
+            await this.dispatch({
+                situation: 'agent_contract.status_request_raised',
+                prefs,
+                agencyId,
+                aggregateType: 'contract',
+                aggregateId: contractId,
+                // Keyed on the REQUEST, not the contract: one contract can be
+                // paused, reactivated and later terminated, each its own answer.
+                idempotencyKey: `agent_contract.status_request_raised:${requestId}`,
+                context: {
+                    contractId,
+                    agentName,
+                    transitionLabel:
+                        AGENT_CONTRACT_TRANSITION_LABEL[transition as ContractTransition][lang]
+                }
+            });
+        } catch (error) {
+            console.error(
+                '[AgencyNotificationHandler] Failed to handle agent_contract.status_request_raised:',
+                error
+            );
+        }
+    }
+
+    /** A request this agency raised was approved, declined, or cancelled by the agent. */
+    async handleAgentContractStatusRequestResolved(event: DomainEvent): Promise<void> {
+        try {
+            const { contractId, requestId, recipientRole, agencyId, agentName, transition, state } =
+                event.payload;
+            if (recipientRole !== 'agency') return;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.contractUpdated) return;
+
+            const lang = await this.resolveAgencyLanguage(agencyId);
+
+            await this.dispatch({
+                situation: 'agent_contract.status_request_resolved',
+                prefs,
+                agencyId,
+                aggregateType: 'contract',
+                aggregateId: contractId,
+                // A request resolves exactly once (the repository compare-and-set
+                // on `state: 'pending'`), so the request id alone suffices.
+                idempotencyKey: `agent_contract.status_request_resolved:${requestId}`,
+                context: {
+                    contractId,
+                    agentName,
+                    transitionLabel:
+                        AGENT_CONTRACT_TRANSITION_LABEL[transition as ContractTransition][lang],
+                    resolutionLabel:
+                        AGENT_CONTRACT_RESOLUTION_LABEL[state as StatusRequestState][lang]
+                }
+            });
+        } catch (error) {
+            console.error(
+                '[AgencyNotificationHandler] Failed to handle agent_contract.status_request_resolved:',
+                error
+            );
+        }
+    }
+
+    // ─── Agent contract terms negotiation ────────────────────────────────────
+    //
+    // The mirror of the agent stack's trio: same discriminator, same
+    // `contractUpdated` gate, and the same rule that `terms_proposed` must land
+    // with "the current terms stay in force until you answer".
+
+    /** The agent countered the terms on a pending contract; the agency answers. */
+    async handleAgentContractTermsCountered(event: DomainEvent): Promise<void> {
+        try {
+            const { contractId, recipientRole, agencyId, agentName } = event.payload;
+            if (recipientRole !== 'agency') return;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.contractUpdated) return;
+
+            await this.dispatch({
+                situation: 'agent_contract.terms_countered',
+                prefs,
+                agencyId,
+                aggregateType: 'contract',
+                aggregateId: contractId,
+                // Keyed on emission time: a negotiation is a sequence of counters
+                // on ONE contract, so keying on the contract alone would suppress
+                // every counter after the first.
+                idempotencyKey: `agent_contract.terms_countered:${contractId}:agency:${event.occurredAt.toISOString()}`,
+                context: { contractId, agentName }
+            });
+        } catch (error) {
+            console.error(
+                '[AgencyNotificationHandler] Failed to handle agent_contract.terms_countered:',
+                error
+            );
+        }
+    }
+
+    /** A change proposed to a LIVE contract, awaiting this agency's answer. */
+    async handleAgentContractTermsProposed(event: DomainEvent): Promise<void> {
+        try {
+            const { contractId, proposalId, recipientRole, agencyId, agentName } = event.payload;
+            if (recipientRole !== 'agency') return;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.contractUpdated) return;
+
+            await this.dispatch({
+                situation: 'agent_contract.terms_proposed',
+                prefs,
+                agencyId,
+                aggregateType: 'contract',
+                aggregateId: contractId,
+                idempotencyKey: `agent_contract.terms_proposed:${proposalId}`,
+                context: { contractId, agentName }
+            });
+        } catch (error) {
+            console.error(
+                '[AgencyNotificationHandler] Failed to handle agent_contract.terms_proposed:',
+                error
+            );
+        }
+    }
+
+    /** A proposal was accepted, declined, withdrawn or superseded. */
+    async handleAgentContractTermsResolved(event: DomainEvent): Promise<void> {
+        try {
+            const { contractId, proposalId, recipientRole, agencyId, agentName, state } =
+                event.payload;
+            if (recipientRole !== 'agency') return;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (!prefs.preferences.contractUpdated) return;
+
+            const lang = await this.resolveAgencyLanguage(agencyId);
+
+            await this.dispatch({
+                situation: 'agent_contract.terms_resolved',
+                prefs,
+                agencyId,
+                aggregateType: 'contract',
+                aggregateId: contractId,
+                // A proposal resolves exactly once (repository compare-and-set on
+                // `state: 'pending'`), so the proposal id alone suffices.
+                idempotencyKey: `agent_contract.terms_resolved:${proposalId}`,
+                context: {
+                    contractId,
+                    agentName,
+                    resolutionLabel:
+                        AGENT_TERMS_PROPOSAL_RESOLUTION_LABEL[state as TermsProposalState][lang]
+                }
+            });
+        } catch (error) {
+            console.error(
+                '[AgencyNotificationHandler] Failed to handle agent_contract.terms_resolved:',
+                error
+            );
         }
     }
 
@@ -667,6 +850,18 @@ export class AgencyNotificationEventHandler {
         } catch {
             return 'An agent';
         }
+    }
+
+    /**
+     * The agency's language, for copy a handler has to localize BEFORE handing it
+     * to `dispatch` — which resolves the language again for the template itself.
+     * The double read is deliberate: a caller-substituted label has to be in the
+     * same language the template will be rendered in, and `resolveLanguage`
+     * falling back to the default keeps the two consistent even when the agency
+     * cannot be loaded.
+     */
+    private async resolveAgencyLanguage(agencyId: string): Promise<Language> {
+        return resolveLanguage(await this.agencyRepo.findById(agencyId));
     }
 
     // ─── Dispatch + delivery ─────────────────────────────────────────────────

@@ -209,7 +209,18 @@ COD) the exposure limit are re-checked at this moment, and a capacity slot is re
 | `SHIPMENT_NOT_OFFERABLE` | 409 | The agency withdrew or reassigned the shipment. |
 | `AGENT_NOT_ELIGIBLE_FOR_ASSIGNMENT` | 422 | Failed a re-check (offline, tracking off, …). `details.reasons` lists each. |
 | `AGENT_AT_CAPACITY` | 422 | The agent is already carrying their maximum shipments. |
+| `CONTRACT_COVERAGE_REGION_NOT_COVERED` | 422 | This delivery is outside the regions your contract with that agency covers. `details: { deliveryRegion, coveredRegions }`. |
+| `CONTRACT_SHIPMENT_VALUE_EXCEEDED` | 422 | The parcel is worth more than your contract's per-shipment ceiling. `details: { shipmentValue, ceiling }`. **Not COD-specific** — the risk is the goods. |
 | `COD_AGENT_EXPOSURE_EXCEEDED` / `COD_AGENT_TRUST_TOO_LOW` | 422 | COD headroom/trust gate (COD orders only). |
+
+> **The contract-term gates are re-checked here, not only when the offer was made.** An offer can
+> sit while the agency and agent renegotiate coverage or the value ceiling, so an offer that was
+> valid when it arrived can legitimately fail on accept. Checked in the order coverage → value →
+> COD, which is why a shipment outside your regions reports that rather than a cash limit.
+>
+> Both gates **fail open on missing data**: a contract with no declared regions covers everywhere, an
+> order with no delivery region is never gated, and a null ceiling caps nothing. You will not be
+> refused a job because a field was never filled in.
 
 <a name="reject"></a>
 ## POST /api/agent/offers/:id/reject

@@ -289,6 +289,8 @@ optional here — the tray notification is drawn by the SDK either way.
 | `agent_contract.request_received` | `contract` | `memberships/{contractId}` | Contract detail — approve/reject |
 | `agent_contract.approved` | `contract` | `memberships/{contractId}` | Contract detail |
 | `agent_contract.rejected` | `contract` | `memberships/{contractId}` | Contract detail (terminal) |
+| `agent_contract.status_request_raised` | `contract` | `memberships/{contractId}` | Contract detail — approve/reject the proposed change |
+| `agent_contract.status_request_resolved` | `contract` | `memberships/{contractId}` | Contract detail |
 | `plan.expiring` | `plan` | `plans` | Plans / billing |
 | `plan.expired` | `plan` | `plans` | Plans / billing |
 | `storage.alert` | `storage` | `settings/storage` | Storage usage |

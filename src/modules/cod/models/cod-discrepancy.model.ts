@@ -81,9 +81,27 @@ const CodDiscrepancySchema = new Schema<ICodDiscrepancy>(
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );
 
-// The daily sweep opens at most ONE late-deposit flag per agent at a time.
+/**
+ * At most ONE open late-deposit flag per CONTRACT — i.e. per (agent, agency).
+ *
+ * It was per agent, globally, which stopped working once each contract got its
+ * own remittance cadence. An agent can be perfectly on time with agency A and a
+ * week late with agency B, and the two are separate creditors with separate
+ * recourse; one row can only name one `agency_id`, so a global flag silently
+ * left every agency but the first uninformed that they were owed.
+ *
+ * The TRUST PENALTY stays agent-global and applied once, in
+ * CodDiscrepancyService.openLateDeposit — see the note there. Scoping the flag
+ * per contract without scoping the penalty is the point: four agencies must
+ * each learn they are owed, and the agent must not take four penalties for one
+ * bad week.
+ *
+ * ⚠️ MIGRATION: the old `{ agent_id, type }` unique index must be DROPPED
+ * explicitly. `autoIndex` creates but never drops, and a failed build is
+ * silent at boot. See scripts/migrate-cod-late-deposit-index.ts.
+ */
 CodDiscrepancySchema.index(
-  { agent_id: 1, type: 1 },
+  { agent_id: 1, agency_id: 1, type: 1 },
   { unique: true, partialFilterExpression: { status: 'open', type: 'late_deposit' } }
 );
 // ...and at most ONE unconfirmed-declaration flag per deposit. Keyed by deposit

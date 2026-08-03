@@ -1,5 +1,6 @@
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { visibleAgentsService } from '../services/visible-agents.service';
+import { agencyTrackingBoardService } from '../services/agency-tracking-board.service';
 
 /**
  * Serves the live-tracking authorization resolution consumed by geo-tracker.
@@ -18,5 +19,24 @@ export class TrackingController {
     const result = await visibleAgentsService.resolve(role, roleEntityId);
 
     res.json({ success: true, data: result });
+  });
+
+  /**
+   * GET /api/agency/tracking/board
+   *
+   * The agency live-tracking map's one load. Unlike `getVisibleAgents` above —
+   * which is the service-to-service authorization seam geo-tracker calls — this
+   * is frontend-facing, and is mounted on the agency router (which carries the
+   * `requireRole(['agency'])` guard) rather than under `/api/tracking`.
+   *
+   * An empty board is a 200 with `agents: []`: "nothing to track right now" is
+   * an answer, not a missing resource.
+   */
+  static getAgencyBoard = asyncHandler(async (req, res) => {
+    const agencyId = req.auth!.role_entity._id.toString();
+
+    const board = await agencyTrackingBoardService.forAgency(agencyId);
+
+    res.json({ success: true, data: board });
   });
 }

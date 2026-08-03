@@ -53,6 +53,8 @@ npm run backfill:shipment-tracking-numbers  # Stamp legacy shipments (idempotent
 npm run migrate:customer-payment-methods
 npm run migrate:agent-memberships        # agency_id → memberships (idempotent, --dry-run)
 npm run migrate:agent-deposits           # backfill deposit status/recipient (idempotent, --dry-run)
+npm run migrate:contract-terms           # terms_proposed_by/terms_version (idempotent, --dry-run)
+npm run migrate:cod-late-deposit-index   # DROP the agent-scoped late_deposit index (--dry-run)
 npm run seed:tickets [-- --clean]        # also: seed:plans, seed:cod [-- --clean]
 npm run simulate:notifications
 ```
@@ -61,7 +63,7 @@ No test *framework* is configured. Tests are plain ts-node scripts under `script
 hand-rolled asserts — follow that convention rather than introducing a runner:
 
 ```bash
-npm run test:agent-domain                      # agent domain (145 assertions, no DB needed)
+npm run test:agent-domain                      # agent domain (197 assertions, no DB needed)
 npm run verify:live-parity                     # agent↔agency smoke test — NEEDS Mongo
 npx ts-node scripts/test/test-profile-mappers.ts
 ```
@@ -240,16 +242,41 @@ The agent is a **platform identity, not an agency-owned record** — they sign u
 
 **The rule for any new agent field: if the value could differ per agency, it belongs on the membership.** Employment terms and the COD exposure cap are per-membership; identity, trust score, availability, device and tracking permission are per-agent.
 
-**The handshake is symmetric, and `origin` is what makes it work.** Both directions —
-`requestFromAgency` (an agency naming a specific agent) and `requestToJoin` (an agent applying) —
-land in `pending`; neither shortcuts to `active`. Who may answer is derived from `origin` by
-`AgentContractService.initiatorOf`: `join_request` means the agent raised it, every other origin
-(`invitation`, `transfer`, `admin`, `migration`) means the agency or the platform did. **`origin` is
-therefore an authorization input, not just audit metadata** — the counterparty `approve`/`reject`s,
-the initiator `withdraw`s, and asking for the wrong one is a 403. This is the `requester_role`
-analogue from the vendor↔agency connection; it has to live on `origin` because
-`TRANSITION_AUTHORITY` is keyed on the party alone and cannot express "whoever did not raise it".
-The DTO exposes the same verdict as `initiatedBy` so a client renders the matching buttons.
+**The handshake is symmetric, and the terms are NEGOTIATED.** Both directions —
+`requestFromAgency` (an agency naming a specific agent, **terms required**) and `requestToJoin` (an
+agent applying, terms optional) — land in `pending`; neither shortcuts to `active`.
+
+Who may answer is derived from **`terms_proposed_by`**, not from `origin`, by
+`AgentContractService.proposerOf`: the counterparty of the standing proposal `approve`/`reject`s or
+**counters**, the proposer `withdraw`s, and asking for the wrong one is a 403. A counter overwrites
+the terms, flips `terms_proposed_by` and bumps `terms_version` — which is exactly what `origin`
+cannot express, being immutable. `origin` survives as audit plus the **fallback** for legacy rows
+(`proposerOf` reads it when `terms_proposed_by` is null), which reproduces the old behaviour
+exactly. The DTO exposes the verdict as **`awaitingDecisionFrom`**; `initiatedBy` is still there but
+is no longer the button rule.
+
+Scoping *all three* of approve/reject/withdraw to the proposer is load-bearing, not tidiness. Key
+`withdraw` on `origin` instead and an agency-invited contract the agent counters leaves the agency
+two exits (withdraw as initiator, reject as counterparty) and the agent **none** — trapped inside
+their own counter-offer. See `PROPOSER_SCOPED_TRANSITIONS`.
+
+**Terms nobody proposed cannot be approved** (`assertTermsApprovable` → 422
+`CONTRACT_TERMS_NOT_PROPOSED`). One guard covers three cases: a bare agent join-request, a legacy
+row whose fee split was never configured, and the `contractDefaults.feeSplit()` trap — a
+`percentage` model with a null share, which `applyFeeSplit` resolves to a cut of **zero**. Before
+this, approving such a contract bound the agent to being paid nothing and nobody was asked.
+
+**A live contract's terms change by proposal, never by edit.** `ContractTermsProposal` is a separate
+collection precisely so the agreed `fee_split` keeps applying while a change is pending —
+`EarningsQuoteService` goes on dividing by it, unaware the model exists. `PATCH …/terms` is
+status-aware: on `pending` it delegates to `counterTerms` (one code path, no drift); on a live
+contract it is **409 `CONTRACT_TERMS_LIVE_EDIT_NOT_ALLOWED`**. Formation and amendment differ
+because a pending contract *is* the offer while a live one *has* one — don't unify them.
+
+The agent's levers are **`fee_split` + `coverage` only** (`AGENT_NEGOTIABLE_TERM_GROUPS`).
+`employment` and `cod.threshold` are outside negotiation entirely and keep their own unilateral
+routes — the first is the agency's HR record, the second a pool sub-allocation that must stay
+transactional.
 
 **Discovery is the front door, and the email-invite subsystem is gone.** `AgentInvite` (model,
 repository, service, and all six routes) was deleted: an agency finds agents through
@@ -300,7 +327,13 @@ Report the former.
 
 Consume the domain through the barrel (`src/modules/agents/index.ts`) — **except routes**, which the API layer imports directly from `routes/*`. Routers pull in `auth.middleware` → `auth.service` → the barrel; re-exporting routes from it closes a require cycle that crashes at boot with "AuthService is not a constructor".
 
-**Eligibility** (`agent-eligibility.service.ts`) is the single gate on assignment: active · approved with the *dispatching* agency · online · tracking allowed · device location not disabled · under capacity. It reports **every** failed rule at once, never just the first. An agent may hold several active shipments — capacity bounds that, and counts across all agencies.
+**Eligibility** (`agent-eligibility.service.ts`) gates assignment on the agent: active · approved with the *dispatching* agency · online · tracking allowed · device location not disabled · under capacity. It reports **every** failed rule at once, never just the first. An agent may hold several active shipments — capacity bounds that, and counts across all agencies.
+
+**Contract terms gate the SHIPMENT, and live elsewhere.** `evaluate(agentId, agencyId)` takes no shipment, so a rule that needs one cannot go there. `contract-coverage.service.ts` holds the two pure predicates — `contractCoversRegion` (against `order.delivery_address.components.region`) and `contractAllowsShipmentValue` — enforced in `AssignmentCandidateService.buildRanking` (the auto pool) and in `ShipmentAssignmentService.assertContractPolicy`, which runs on **all three** command paths: `offerToAgent`, `accept` and `reassign`. Gate the ranking but miss a command path and a manual assign silently bypasses the term, which is worse than not enforcing it — the rule would appear to work.
+
+**Everything unknown here FAILS OPEN.** Empty `coverage.regions` is the schema default on every contract ever written, so treating it as "covers nowhere" would make the whole roster undispatchable at once; a missing delivery region (orders predating the snapshot) and an uncomputable shipment value do the same. These are narrowing terms, not authorization — see the header of `contract-coverage.service.ts`.
+
+**`remittance_terms` drives the COD late-deposit clock** via `nextRemittanceDueAt` (pure, UTC, `on_demand` ⇒ no deadline ever). `CodDepositDeadlineWorker` iterates **contracts, not cash accounts**: the agent's cash pot is global while the cadence is per-agency, so there is no single deadline to compare a pot against. The `late_deposit` flag is now per-contract while the trust penalty stays agent-global and applied once — four agencies must each learn they are owed, and the agent must not take four penalties for one bad week.
 
 **Device location** is the one input jovi-mall cannot observe; it resolves via `IAgentDeviceLocationProvider` (`ports/device-location.port.ts`), swapped in `agent.bootstrap.ts`. The signal is tri-state and `null` (unknown) must never be coerced to `false` — that would make every agent ineligible the instant geo-tracker went down. Policy for unknown lives in `AGENT_CONFIG`, not in the rule.
 

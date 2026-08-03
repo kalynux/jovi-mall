@@ -25,6 +25,8 @@ import {
   AgentAvailabilityService,
   agentAvailabilityService,
   IDeliveryAgent,
+  contractCoversRegion,
+  contractAllowsShipmentValue,
 } from '../../../agents';
 import { CashCollectionService, cashCollectionService } from '../../../cod/services/cash-collection.service';
 import { CodExposureService, codExposureService } from '../../../cod/services/cod-exposure.service';
@@ -154,7 +156,7 @@ export class ShipmentAssignmentService {
     await this.eligibility.assertEligible(agentId, agencyId);
     const agent = await this.requireAgent(agentId);
     const order = await this.requireOrder(shipment.order_id.toString());
-    await this.assertCodAssignable(agent, agencyId, shipment, order);
+    await this.assertContractPolicy(agent, agencyId, shipment, order);
 
     return await this.placeManualOffer(shipment, order, agent, creator, pickupLocation);
   }
@@ -459,14 +461,11 @@ export class ShipmentAssignmentService {
     const order = await this.requireOrder(offer.order_id.toString());
     const agent = await this.requireAgent(agentId);
 
-    // Hard re-check: the offer may have sat while the agent went offline / filled up.
+    // Hard re-check: the offer may have sat while the agent went offline, filled
+    // up, or had their contract terms renegotiated under it.
     await this.eligibility.assertEligible(agentId, agencyId);
+    await this.assertContractPolicy(agent, agencyId, shipment, order);
     const isCod = order.payment_method === 'cash_on_delivery';
-    if (isCod) {
-      const contract = await this.contracts.requireActive(agentId, agencyId);
-      const expectedAmount = this.cashCollection.computeExpectedAmount(order, shipment);
-      await this.exposure.assertCanTakeCodShipment(agent, expectedAmount, contract.cod?.threshold ?? 0);
-    }
 
     let boundShipment: IShipment | null = null;
     let issuedCode: { collection: ICashCollection; code: string | null } | null = null;
@@ -712,7 +711,7 @@ export class ShipmentAssignmentService {
     if (agentId) {
       await this.eligibility.assertEligible(agentId, agencyId);
       const agent = await this.requireAgent(agentId);
-      await this.assertCodAssignable(agent, agencyId, shipment, order);
+      await this.assertContractPolicy(agent, agencyId, shipment, order);
     }
 
     const pickup = await this.handoverPickup.resolve({
@@ -931,11 +930,85 @@ export class ShipmentAssignmentService {
     if (pending) throw createAppError(ERROR_CODES.SHIPMENT_ALREADY_HAS_PENDING_OFFER, 409);
   }
 
-  private async assertCodAssignable(agent: IDeliveryAgent, agencyId: string, shipment: IShipment, order: IOrder): Promise<void> {
-    if (order.payment_method !== 'cash_on_delivery') return;
+  /**
+   * Every contract-term gate on giving THIS shipment to THIS agent.
+   *
+   * Generalised from the old `assertCodAssignable`, which only ever ran for COD
+   * and so could load the contract inside its own payment-method check. Two of
+   * the three terms here apply to prepaid shipments as well, so the contract is
+   * loaded unconditionally and the COD half keeps its own guard.
+   *
+   * Called from all THREE command paths — `offerToAgent` (the agency's manual
+   * assign), `accept`, and `reassign` with a named agent. Gating only the auto
+   * ranking would let a manual assign quietly bypass the terms the auto path
+   * enforces, which is worse than not enforcing them at all: the rule would
+   * appear to work.
+   *
+   * Order is deliberate — coverage, then value, then cash. It runs cheapest and
+   * most-explanatory first, and an operator reading "outside their coverage"
+   * learns more than one reading "over their COD limit" for the same shipment.
+   */
+  private async assertContractPolicy(
+    agent: IDeliveryAgent,
+    agencyId: string,
+    shipment: IShipment,
+    order: IOrder
+  ): Promise<void> {
     const contract = await this.contracts.requireActive(agent._id.toString(), agencyId);
-    const expectedAmount = this.cashCollection.computeExpectedAmount(order, shipment);
-    await this.exposure.assertCanTakeCodShipment(agent, expectedAmount, contract.cod?.threshold ?? 0);
+
+    const deliveryRegion = order.delivery_address?.components?.region ?? null;
+    const countryCode = order.delivery_address?.components?.country_code ?? null;
+    if (!contractCoversRegion(contract.coverage, deliveryRegion, countryCode)) {
+      throw createAppError(ERROR_CODES.CONTRACT_COVERAGE_REGION_NOT_COVERED, 422, undefined, {
+        deliveryRegion,
+        coveredRegions: contract.coverage?.regions ?? [],
+        hint: 'This delivery is outside the regions this contract covers.',
+      });
+    }
+
+    const shipmentValue = this.resolveShipmentValue(order, shipment);
+    if (!contractAllowsShipmentValue(contract.shipment_value_ceiling, shipmentValue)) {
+      throw createAppError(ERROR_CODES.CONTRACT_SHIPMENT_VALUE_EXCEEDED, 422, undefined, {
+        shipmentValue,
+        ceiling: contract.shipment_value_ceiling,
+        hint: 'This shipment is worth more than this contract allows for a single delivery.',
+      });
+    }
+
+    if (order.payment_method === 'cash_on_delivery') {
+      await this.exposure.assertCanTakeCodShipment(
+        agent,
+        shipmentValue ?? 0,
+        contract.cod?.threshold ?? 0
+      );
+    }
+  }
+
+  /**
+   * A shipment's monetary value, or null when it cannot be determined.
+   *
+   * `computeExpectedAmount` THROWS `ORDER_ITEM_NOT_FOUND` (500) when a shipment
+   * references an order item that no longer exists. On the COD path that throw
+   * was always reachable and is arguably right — no cash figure, no collection.
+   * Now that every payment method consults it for the value ceiling, an
+   * unguarded call would turn a corrupt prepaid shipment into a 500 on accept
+   * and would kill an entire `buildRanking`, leaving a shipment with no
+   * candidates and no explanation.
+   *
+   * So it fails open, loudly. A bookkeeping inconsistency must not be able to
+   * block a delivery through a cap that was never about it.
+   */
+  private resolveShipmentValue(order: IOrder, shipment: IShipment): number | null {
+    try {
+      return this.cashCollection.computeExpectedAmount(order, shipment);
+    } catch (error) {
+      console.error(
+        `[ShipmentAssignmentService] Could not value shipment ${shipment._id.toString()} ` +
+          `on order ${order._id.toString()} — value-ceiling and COD checks will be skipped:`,
+        error
+      );
+      return null;
+    }
   }
 
   private async requireAgent(agentId: string): Promise<IDeliveryAgent> {

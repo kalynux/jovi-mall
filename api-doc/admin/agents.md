@@ -92,11 +92,43 @@ able to pull an agent off a rival's roster.
       "vehicle_info": { "vehicle_type": "bike", "color": "red" }
     },
     "memberships": [
-      { "_id": "664mem...", "agency_id": "664agy...", "status": "active", "cod": { "threshold": 200000 } }
+      {
+        "id": "664mem...",
+        "agencyId": "664agy...",
+        "status": "active",
+        "origin": "invitation",
+        "initiatedBy": "agency",
+        "termsProposedBy": "agency",
+        "termsVersion": 3,
+        "awaitingDecisionFrom": null,
+        "openTermsProposalId": null,
+        "feeSplit": { "model": "percentage", "agentSharePercent": 38, "agentFlatFee": null, "currency": "XAF" },
+        "remittanceTerms": { "cadence": "weekly", "dayOfWeek": 5, "dayOfMonth": null, "graceHours": 24 },
+        "coverage": { "regions": ["littoral"], "area": null },
+        "shipmentValueCeiling": 250000,
+        "codThreshold": 200000,
+        "codOutstandingBalance": 0
+      }
     ]
   }
 }
 ```
+
+Every contract is an `AgentMembershipDto` — full field reference in
+[agency/agent-roster.md](../agency/agent-roster.md#agentmembershipdto). **Unpaginated by design**: an
+investigation must not lose rows to a page boundary, unlike the agent's and agency's own list
+endpoints.
+
+> **Reading a contract's negotiation state during an investigation.** `termsProposedBy` names whose
+> terms are currently standing and `termsVersion` counts how many rounds the negotiation took;
+> `awaitingDecisionFrom` is non-null only while a `pending` contract is waiting on someone.
+> `termsVersion: 0` with `termsProposedBy: null` means terms were **never stated** — either a bare
+> agent join request, or a pre-migration row whose fee split could not pay (see
+> `npm run migrate:contract-terms`). Such a contract cannot be approved by either party until the
+> agency proposes; that is deliberate, not a stuck record.
+>
+> `openTermsProposalId` is **always `null` here** — this endpoint does not resolve proposals. The
+> parties' own `/terms-proposals` endpoints are authoritative for that.
 
 > Exact field set is defined by the agent domain (`src/modules/agents/`). Treat unknown fields as additive.
 
@@ -363,3 +395,45 @@ under capacity).
 > now mounted and documented above; contract terms, settlements and the status-request inbox landed
 > on the **agency** side ([../agency/agent-roster.md](../agency/agent-roster.md)). Still outstanding:
 > the trust-composite engine and the collection-rename migration. See `../../AGENT-CONTRACT-REFACTOR.md`.
+
+---
+
+## There is no admin write path to contract terms
+
+Deliberate, and worth stating because its absence looks like an omission.
+
+The terms of an agent↔agency contract — fee split, remittance cadence, coverage, value ceiling — are
+**negotiated between the two parties**. An admin endpoint that overwrote them would let the platform
+change what an agent is paid without either signatory agreeing, which is the exact thing the
+negotiation exists to prevent. Admin sees the terms (above) and the history, and acts through the
+levers it legitimately owns:
+
+| To affect… | Admin uses | Not |
+|---|---|---|
+| whether the agent can work at all | `PATCH /status`, `PUT /ban`, `PUT /kyc` | editing contracts |
+| the agent's total cash risk | `PUT /cod-threshold` (the **pool**) | a contract's slice |
+| which agency an agent belongs to | `POST /admin/agents/transfer` | approving contracts for them |
+
+### Transfers carry the terms across
+
+`POST /admin/agents/transfer` is the one admin action that creates a contract, and it lands the
+destination **`active`** — it does not pass through the handshake, so neither party approves it and
+the terms guard on `approve` never runs.
+
+For that reason the transfer **copies the source contract's negotiated terms verbatim**: fee split,
+remittance cadence and grace, coverage, value ceiling and employment, alongside the COD slice and
+primary standing it already carried. The destination contract reads `termsProposedBy: "agency"` and a
+non-zero `termsVersion`.
+
+> **Why this is not cosmetic.** Before it, a transferred agent arrived on
+> `contractDefaults.feeSplit()` — a `percentage` model with a **null** share, which the earnings
+> split resolves to a cut of **zero**. Because the contract is created `active`, nothing in the
+> approval path could catch it, and the agent would have worked the new agency's deliveries for
+> nothing until someone noticed the balance. Covered by `contractTermsOf` in
+> `npm run test:agent-domain`.
+
+The destination agency is not stuck with the inherited terms — they are a live contract's terms like
+any other, so the agency proposes a change and the agent answers.
+
+If a contract genuinely needs terms an admin considers wrong, the route is operational: contact the
+agency, who proposes; the agent answers. Nothing bypasses that.

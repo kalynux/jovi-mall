@@ -150,12 +150,44 @@ included here — it is that agent's contracted cut, not agency-scoped data.
       "itemCount": 2,
       "itemImages": [
         { "id": "...", "key": "products/abc.jpg", "url": "https://…/products/abc.jpg", "mimeType": "image/jpeg", "size": 84213, "originalName": "tshirt.jpg" }
-      ]
+      ],
+      "pickup": {
+        "address": {
+          "label": "Acme Warehouse",
+          "formattedAddress": "12 Rue Njo-Njo, Bonapriso, Douala, Littoral, Cameroon",
+          "addressLine1": "12 Rue Njo-Njo",
+          "addressLine2": null,
+          "city": "Douala",
+          "state": "Littoral",
+          "country": "Cameroon",
+          "coordinates": { "lat": 4.0421, "lng": 9.7085 }
+        },
+        "mode": "pickup_based",
+        "count": 1
+      },
+      "deliveryAddress": {
+        "label": "Home",
+        "formattedAddress": "Carrefour Ndokotti, Douala, Littoral, Cameroon",
+        "addressLine1": "Carrefour Ndokotti",
+        "addressLine2": null,
+        "city": "Douala",
+        "state": "Littoral",
+        "country": "Cameroon",
+        "coordinates": { "lat": 4.0611, "lng": 9.7359 }
+      }
     }
   ],
   "meta": { "total": 1, "page": 1, "limit": 20, "pages": 1 }
 }
 ```
+
+**`pickup`** and **`deliveryAddress`** are the shipment's two ends, both in the canonical address
+shape. `pickup.mode` is `pickup_based` (collected from the vendor's business address),
+`storage_based` (from this agency's own HQ), `mixed` (a shipment whose items come from both), or
+`null` when nothing resolved; `pickup.count > 1` means `address` is only the first collection point
+and the [detail](#detail) carries the rest. `coordinates` is `null` on legacy addresses that were
+never geocoded — clients must handle it. For the map-shaped read of these same two ends across every
+active shipment at once, see [live-tracking.md](./live-tracking.md).
 
 **`itemImages`** is a thumbnail preview of what is in the parcel: **one picture per item**,
 deduplicated and capped at **3** — `itemCount` remains the true number of items. Each entry is the

@@ -39,8 +39,8 @@ code**:
    the cash, marks the shipment **delivered**, and adds the amount to your cash balance
    (you now owe it to your agency).
 6. Hand the cash back — to your agency, or [straight to the platform](#declare-deposit). Either way
-   [your balance](#balance) falls once the receiving party confirms. Aim to settle within the deposit
-   deadline (default **2 days**) or a late-deposit flag lowers your trust score.
+   [your balance](#balance) falls once the receiving party confirms. Settle within **your contract's
+   remittance terms** with that agency (see below) or a late-deposit flag lowers your trust score.
 
 **There is no separate customer delivery confirmation for COD — the verified code IS the
 confirmation.** So for COD:
@@ -391,7 +391,7 @@ than you handed over**, or nothing at all. An admin reviews it.
   - ≥ 80: full exposure limit.
   - 50–79: limit halved.
   - < 50: no COD assignments (`COD_AGENT_TRUST_TOO_LOW`).
-  Penalties: holding cash past the deposit deadline (−5, once per open flag), a cash shortfall
+  Penalties: holding cash past your contract's settlement deadline (−5), a cash shortfall
   reported by your agency (−20). Admins can adjust the score (e.g. restore it after a resolved
   discrepancy).
 
@@ -399,6 +399,38 @@ than you handed over**, or nothing at all. An admin reviews it.
   > check only looks at cash you have *not* declared — if you have said you handed it over and nobody
   > has answered, that is on them, and the platform flags the agency instead. A rejected declaration
   > stops covering you the moment it is rejected.
+
+  > **The −5 is charged once, however many agencies you serve.** The late flag itself is raised **per
+  > contract** — each agency you owe learns it is owed — but the trust hit applies only while no
+  > other late flag is already open against you. One bad week costs the same whether you work for one
+  > agency or four; the alternative would make your score fall four times faster for the same
+  > behaviour, which would be a penalty for working more.
+
+### When your cash is actually due
+
+There is no single platform deadline any more. **Each contract carries its own remittance terms**,
+negotiated with that agency and visible on the contract
+(`remittanceTerms` — see [agency-membership.md](./agency-membership.md)):
+
+| `cadence` | Cash collected is due… |
+|---|---|
+| `per_delivery` | immediately — only `graceHours` protects you |
+| `daily` | at the next 00:00 UTC after collection, plus `graceHours` |
+| `weekly` / `biweekly` | on the agreed `dayOfWeek`, plus `graceHours`. Collected *on* that day? It rolls a full week/fortnight forward — you are never late the moment you collect |
+| `monthly` | on the agreed `dayOfMonth` (1–28), plus `graceHours` |
+| `on_demand` | **never.** No schedule means no deadline, and cash under that contract is never flagged late |
+
+Two things worth knowing:
+
+- **Deadlines are UTC**, not your local time. Your contract carries no timezone, and using yours
+  would make two of your contracts disagree about when "today" ended.
+- **The clock is per contract, not per pot.** Your balance is one figure across every agency, but
+  each agency's share is aged against *its own* cadence. You can be perfectly on time with one and
+  late with another on the same day.
+
+The age of what you still hold is worked out FIFO — deposits pay off your oldest collections first,
+so the balance outstanding maps to your newest ones, and the oldest in that set is what the deadline
+is measured from.
 - **Open cash-shortfall discrepancy** — blocks new COD assignments until an admin resolves it.
 - **GPS/device evidence** — captured at code submission; used in fraud investigations. An
   auto-collected shipment (7 days at `agent_delivered`, no code) carries none — it is recorded with

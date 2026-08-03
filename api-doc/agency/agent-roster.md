@@ -118,6 +118,16 @@ counterparty clears it from their inbox (`GET /status-requests`), and only then 
 move. **The party who raised a request can never resolve it themselves** — that consent is the
 point. At most one open request per contract per transition.
 
+A pending request has exactly two exits, and which one is yours depends on `requestedByRole`:
+
+| `requestedByRole` | Your verb | Effect |
+|---|---|---|
+| the *other* party | `POST /status-requests/:id/resolve` | approve → the contract moves; reject → it does not |
+| **you** | `POST /status-requests/:id/cancel` | the request is withdrawn; the contract never moves |
+
+Asking for the wrong one is a `403 CONTRACT_STATUS_REQUEST_NOT_YOURS`. Cancelling frees the
+per-(contract, transition) slot, so you may raise the same transition again afterwards.
+
 Requests carry `blockingConditions`, which is **advisory**: every condition is re-checked at
 approval time, never trusted from when the request was raised, because cash can be collected in
 between.
@@ -213,21 +223,39 @@ the vendor↔agency connection which reuses one document forever.
 
 ### POST /api/agency/agents/requests
 
-**Description**: Ask a specific agent to contract with you. Lands `pending`; **the agent** answers.
+**Description**: Ask a specific agent to contract with you **on stated terms**. Lands `pending`;
+**the agent** answers — they may accept, reject, or counter.
+
+> ⚠️ **Breaking change.** `terms` is now REQUIRED and must contain `fee_split`. An invitation with
+> no numbers in it would land the agent on the schema default, whose null `agent_share_percent`
+> pays them **zero** — so a bare `{ agentId }` body is now a `400`.
 
 **Request Body**:
 ```json
-{ "agentId": "507f1f77bcf86cd799439011" }
+{
+  "agentId": "507f1f77bcf86cd799439011",
+  "terms": {
+    "fee_split": { "model": "percentage", "agent_share_percent": 40, "currency": "XAF" },
+    "remittance_terms": { "cadence": "daily", "grace_hours": 24 },
+    "coverage": { "regions": ["littoral"] },
+    "shipment_value_ceiling": 250000
+  }
+}
 ```
 
+`terms` accepts the four **negotiable** groups only — `fee_split`, `remittance_terms`, `coverage`,
+`shipment_value_ceiling`. `employment` is not negotiated (it is your own HR record) and has its own
+endpoint; `cod.threshold` has `/cod-limit`.
+
 **Success Response** (`201 Created`): an `AgentMembershipDto`, `status: "pending"`,
-`origin: "invitation"`, `initiatedBy: "agency"`, with the message *"Request sent. The agent must
-accept before the contract becomes active."*
+`origin: "invitation"`, `termsProposedBy: "agency"`, `termsVersion: 1`,
+`awaitingDecisionFrom: "agent"`.
 
 **Error Responses**:
 
 | Status | Code | Description |
 |--------|------|-------------|
+| `400` | *(Zod)* | `terms` missing, or `terms.fee_split` missing |
 | `404` | `AGENT_NOT_FOUND` | `agentId` does not resolve to an agent |
 | `409` | `AGENT_MEMBERSHIP_ALREADY_EXISTS` | A live contract with you already exists. `details: { status, contractId }` |
 | `422` | `AGENT_KYC_NOT_VERIFIED` | `details: { kycStatus, hint }` |
@@ -501,8 +529,17 @@ Employment is **per-contract**: the same agent may be your employee and another 
 
 ### PATCH /api/agency/agents/:membershipId/terms
 
-**Description**: Update the negotiated terms. All groups optional; at least one required. Each group
+**Description**: Write the negotiated terms. All groups optional; at least one required. Each group
 merges field-by-field, so an omitted key keeps its value.
+
+> ⚠️ **Status-aware, and breaking on live contracts.**
+>
+> | Contract status | Behaviour |
+> |---|---|
+> | `pending` | Identical to `POST /:membershipId/counter`. If the agent's terms were standing, this is a **counter** and `awaitingDecisionFrom` flips to them. If yours were, it is a **revision** of your own unanswered offer — allowed, and the ball stays with the agent. Either way `termsVersion` bumps. |
+> | `active` / `paused` / `suspended` | **`409 CONTRACT_TERMS_LIVE_EDIT_NOT_ALLOWED`.** A live contract is pricing deliveries by its agreed `fee_split` right now. Use `POST /:membershipId/terms-proposals` instead — the agent answers, and the current terms stay in force until they do. |
+>
+> A `200` that sometimes meant "applied" and sometimes "proposed" would be worse than this break.
 
 **Request Body**:
 ```json
@@ -585,8 +622,26 @@ request.
 
 ### GET /api/agency/agents/status-requests
 
-**Description**: Contract changes an **agent** has raised that are waiting on your decision — a
-pause, a reactivation, or a departure. Newest first.
+**Description**: Every **pending** contract change on your roster, newest first — a pause, a
+reactivation, or a departure.
+
+**Both directions appear here, and that is required, not incidental.** The query filters on your
+agency and on `pending`, nothing else, so the list carries the requests an agent raised that await
+*your* decision **and** the ones you raised that await *theirs*. This endpoint is the **only** place
+a `requestId` is exposed, so dropping the rows you raised would leave `/cancel` uncallable.
+
+**Read `awaitingMyDecision`, don't count rows.** It is `true` only on rows that are yours to answer,
+and `availableActions` names the verbs you may call:
+
+| `requestedByRole` | `awaitingMyDecision` | `availableActions` | Render |
+|---|---|---|---|
+| `agent` | `true` | `["approve","reject"]` | "Wants to leave — Approve / Reject" |
+| `agency` | `false` | `["cancel"]` | "You proposed removing them — Cancel" |
+
+Both fields are computed server-side from the same rule the service guards enforce, so a button this
+DTO offers is one the service will accept. Use `awaitingMyDecision` for the sidebar badge —
+counting rows over-counts by every request you raised yourself, and rendering a self-raised row as
+"Approve" produces a `403 CONTRACT_STATUS_REQUEST_NOT_YOURS` on click.
 
 Declared before `/:membershipId`, so `status-requests` is never read as a contract id.
 
@@ -621,6 +676,42 @@ from their inbox — that mutual consent is the whole point.
 | `409` | `CONTRACT_STATUS_REQUEST_NOT_PENDING` | Already resolved. `details: { state }` |
 | `409` | `CONTRACT_INVALID_TRANSITION` | The contract moved since the request was raised |
 | `422` | `CONTRACT_HAS_OUTSTANDING_COD` / `CONTRACT_HAS_UNPAID_EARNINGS` | On approving a departure while either side still owes the other |
+
+---
+
+### POST /api/agency/agents/status-requests/:requestId/cancel
+
+**Description**: Pull back a still-pending request **you** raised — a termination proposal thought
+better of, most often. The exact inverse of `/resolve`: that one answers the agent's requests, this
+one withdraws your own.
+
+**The contract is untouched.** A cancelled request never moved it, so there is nothing to undo and
+nothing to settle: outstanding COD and unpaid earnings gate *ending* a contract, not abandoning a
+proposal to end one. Consequently there is no `422` here, and `membership` is always `null`.
+
+Cancelling frees the per-(contract, transition) pending slot, so you may raise the same transition
+again afterwards. It appends no membership-history event — a cancelled request moved no state, and
+the request row's own `state` / `resolvedByRole` / `resolvedAt` is the complete trail.
+
+**Request Body** (optional):
+```json
+{ "note": "Sorted it out with him directly" }
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `note` | string \| null | ❌ | ≤300 chars. Stored as `resolutionNote` |
+
+**Success Response** (`200 OK`): same shape as `/resolve` —
+`{ request: ContractStatusRequestDto, membership: null }`, with `request.state` now `cancelled`.
+
+**Error Responses**:
+
+| Status | Code | Description |
+|--------|------|-------------|
+| `403` | `CONTRACT_STATUS_REQUEST_NOT_YOURS` | The **agent** raised it — answer it with `/resolve` instead. `details: { requestedByRole, hint }` |
+| `404` | `CONTRACT_STATUS_REQUEST_NOT_FOUND` | Unknown, or not on your roster |
+| `409` | `CONTRACT_STATUS_REQUEST_NOT_PENDING` | Already resolved. `details: { state }`. This is also what a cancel racing the agent's approval returns to the loser — the write is a compare-and-set on `pending`, so exactly one of the two wins |
 
 ---
 
@@ -742,7 +833,11 @@ The whole roster's trail, newest first.
 | `agentId` / `agencyId` | string | The two parties |
 | `status` | `"pending" \| "active" \| "paused" \| "suspended" \| "rejected" \| "withdrawn" \| "deactivated"` | See the lifecycle above |
 | `origin` | `"invitation" \| "join_request" \| "transfer" \| "admin" \| "migration"` | How the contract began |
-| `initiatedBy` | `"agent" \| "agency"` | Derived from `origin`; drives which buttons apply |
+| `initiatedBy` | `"agent" \| "agency"` | Derived from `origin`. **Audit only — no longer the button rule**, see `awaitingDecisionFrom` |
+| `termsProposedBy` | `"agent" \| "agency" \| null` | Whose terms are currently standing. `null` = nobody has proposed any |
+| `termsVersion` | number | Bumps on every counter, revision and accepted proposal. `0` = terms were never stated |
+| `awaitingDecisionFrom` | `"agent" \| "agency" \| null` | **The button rule.** Who must answer the standing offer; the other party sees Withdraw. `null` when the contract is not `pending`, or when `termsProposedBy` is `null` |
+| `openTermsProposalId` | string \| null | The open proposal on a live contract, when the endpoint resolved one. **Most endpoints return `null` here regardless** — the `/terms-proposals` endpoints are authoritative |
 | `isPrimary` | boolean | The agent's default agency. Exactly one across their allocating contracts |
 | `employment` | object | `employmentType`, `employeeRef`, `startedAt`, `endsAt` |
 | `remittanceTerms` | object | `cadence`, `dayOfWeek`, `dayOfMonth`, `graceHours` |
@@ -766,6 +861,39 @@ The whole roster's trail, newest first.
 
 The agent's own views add `agencyName` to this shape (`AgentMembershipWithAgencyDto`).
 
+### `ContractTermsProposalDto`
+
+Returned by every `/terms-proposals` endpoint. Describes a proposed change to a **live** contract —
+a pending contract carries its offer on the contract itself and produces no proposal rows.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | The `:proposalId` in the resolve/cancel/counter paths |
+| `contractId` | string | The contract this would change |
+| `agentId` / `agencyId` | string | The two parties |
+| `proposedByRole` | `"agent" \| "agency"` | Who raised it — decides whether `/resolve` or `/cancel` is your verb |
+| `state` | `"pending" \| "accepted" \| "rejected" \| "withdrawn" \| "superseded"` | `superseded` means the other side countered it; the negotiation continued |
+| `awaitingMyDecision` | boolean | True when pending **and** the other party raised it. The right predicate for a badge — a raw row count over-counts by every proposal you raised |
+| `availableActions` | `Array<"approve" \| "reject" \| "counter" \| "cancel">` | Exactly the verbs the server will accept from you, in render order. Empty once resolved |
+| `termsBefore` | object | The agreed terms **as they stood when this was raised** — snapshotted, not re-derived, so the diff stays honest after the contract moves on |
+| `proposedTerms` | object | The patch being proposed. Only the groups it names are changing |
+| `diff` | `TermsDiffEntry[]` | `termsBefore` → `proposedTerms` flattened to one entry per **changed** leaf. An unchanged restatement yields `[]` |
+| `supersedesId` | string \| null | The proposal this one counters — walk it to reconstruct the chain |
+| `note` | string \| null | Free text from the proposer |
+| `resolvedByRole` | `"agent" \| "agency" \| null` | Null while pending. Set by resolve, cancel **and** counter |
+| `resolvedAt` | string \| null | ISO 8601 |
+| `resolutionNote` | string \| null | The `note` from whichever verb closed it |
+| `createdAt` / `updatedAt` | string | ISO 8601 |
+
+`TermsDiffEntry` is `{ path: string; before: unknown; after: unknown }`, where `path` is dotted
+within the term groups — `fee_split.agent_share_percent`, `coverage.regions`,
+`remittance_terms.cadence`. `shipment_value_ceiling` is a scalar group and appears at its bare name.
+
+> **`availableActions` is computed from the same guards the service enforces**, so a button this DTO
+> offers is one the server will accept. Note it is viewer-dependent: an agent reading a proposal that
+> changes only `remittance_terms` is offered `approve` and `reject` but **not** `counter`, because
+> that group is not theirs to author.
+
 ---
 
 ## TypeScript Reference
@@ -778,6 +906,34 @@ type ContractStatus =
 type ContractOrigin = 'invitation' | 'join_request' | 'transfer' | 'admin' | 'migration';
 type ContractTransition = 'approve' | 'reject' | 'withdraw' | 'pause' | 'suspend' | 'reactivate' | 'deactivate';
 type StatusRequestState = 'pending' | 'approved' | 'rejected' | 'cancelled';
+type TermsProposalState = 'pending' | 'accepted' | 'rejected' | 'withdrawn' | 'superseded';
+
+/** The four groups that are negotiated. `employment` and `codThreshold` are not. */
+type NegotiableTermGroup = 'fee_split' | 'remittance_terms' | 'coverage' | 'shipment_value_ceiling';
+/** The subset an AGENT may author. Anything else from them is 403. */
+type AgentNegotiableTermGroup = 'fee_split' | 'coverage';
+
+/** The request/counter/proposal body. Every group optional; at least one required. */
+interface NegotiableTermsInput {
+  fee_split?: {
+    model?: 'percentage' | 'flat';
+    agent_share_percent?: number | null;  // 0–100
+    agent_flat_fee?: number | null;       // minor units, integer
+    currency?: string;                    // 3 letters, upper-cased
+  };
+  coverage?: {
+    regions?: string[];                   // ≤100 entries, ≤100 chars each
+    area?: { type: 'Polygon'; coordinates: number[][][] } | null;
+  };
+  // Agency-only from here down.
+  remittance_terms?: {
+    cadence?: 'per_delivery' | 'daily' | 'weekly' | 'biweekly' | 'monthly' | 'on_demand';
+    day_of_week?: number | null;          // 0–6
+    day_of_month?: number | null;         // 1–28
+    grace_hours?: number;                 // 0–720
+  };
+  shipment_value_ceiling?: number | null;
+}
 
 interface AgentMembershipDto {
   id: string;
@@ -785,7 +941,22 @@ interface AgentMembershipDto {
   agencyId: string;
   status: ContractStatus;
   origin: ContractOrigin;
+  /** Audit only. Use `awaitingDecisionFrom` to decide which buttons to render. */
   initiatedBy: 'agent' | 'agency';
+  /** Whose terms are standing. null = nobody has proposed any yet. */
+  termsProposedBy: 'agent' | 'agency' | null;
+  /** Bumps on counter, revision and accepted proposal. 0 = never stated. */
+  termsVersion: number;
+  /**
+   * THE button rule. Who must answer the standing offer — the other party sees
+   * Withdraw. null in two distinct cases the UI must tell apart:
+   *   - status !== 'pending'      → there is no offer on the table;
+   *   - termsProposedBy === null  → nobody may approve; the agency owes a
+   *                                 proposal, so its control reads "Propose terms".
+   */
+  awaitingDecisionFrom: 'agent' | 'agency' | null;
+  /** Only populated by endpoints that resolve proposals; null elsewhere. */
+  openTermsProposalId: string | null;
   isPrimary: boolean;
   employment: {
     employmentType: 'employee' | 'contractor' | 'freelancer';
@@ -837,11 +1008,61 @@ interface ContractStatusRequestDto {
   targetStatus: ContractStatus;
   fromStatus: ContractStatus;
   state: StatusRequestState;
+  /** Who raised it — and therefore whether /resolve or /cancel is your verb. */
   requestedByRole: 'agent' | 'agency' | 'admin' | 'system';
+  /**
+   * True when this row is pending AND the other party raised it, i.e. it is
+   * yours to answer. False on rows you raised (those are yours to /cancel) and
+   * on rows already resolved. The right predicate for an unread badge.
+   */
+  awaitingMyDecision: boolean;
+  /** The verbs you may call on this row, in render order. Empty once resolved. */
+  availableActions: Array<'approve' | 'reject' | 'cancel'>;
   reason: string | null;
+  /** Null while `state` is 'pending'. Set by /resolve AND by /cancel. */
+  resolvedByRole: 'agent' | 'agency' | 'admin' | 'system' | null;
+  resolvedAt: string | null;
+  /** The `note` from whichever of /resolve or /cancel closed it. */
+  resolutionNote: string | null;
   blockingConditions: { outstandingCod: number; outstandingPayment: number; clear: boolean } | null;
   autoApproved: boolean;
   createdAt: string;
+  updatedAt: string;
+}
+
+interface TermsDiffEntry {
+  /** Dotted within the term groups, e.g. 'fee_split.agent_share_percent'. */
+  path: string;
+  before: unknown;
+  after: unknown;
+}
+
+interface ContractTermsProposalDto {
+  id: string;
+  contractId: string;
+  agentId: string;
+  agencyId: string;
+  /** Who raised it — and therefore whether /resolve or /cancel is your verb. */
+  proposedByRole: 'agent' | 'agency';
+  /** 'superseded' = the other side countered it; the negotiation continued. */
+  state: TermsProposalState;
+  /** Pending AND raised by the other party, i.e. yours to answer. Badge predicate. */
+  awaitingMyDecision: boolean;
+  /** Exactly the verbs the server accepts from THIS viewer. Empty once resolved. */
+  availableActions: Array<'approve' | 'reject' | 'counter' | 'cancel'>;
+  /** The agreed terms when this was raised — snapshotted, so the diff stays honest. */
+  termsBefore: Record<string, unknown>;
+  proposedTerms: Record<string, unknown>;
+  /** One entry per CHANGED leaf. A no-op restatement yields []. */
+  diff: TermsDiffEntry[];
+  /** The proposal this one counters. Walk it to rebuild the chain. */
+  supersedesId: string | null;
+  note: string | null;
+  resolvedByRole: 'agent' | 'agency' | null;
+  resolvedAt: string | null;
+  resolutionNote: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 /** A row from GET /browse. */
@@ -868,34 +1089,105 @@ interface AgentDirectoryItemDto {
 
 ```
 GET   /api/agency/agents/browse?search=bakari&vehicle_type=bike&sort=trust
-POST  /api/agency/agents/requests                      { "agentId": "507f..." }
+POST  /api/agency/agents/requests                      { "agentId": "507f...", "terms": { "fee_split": { "model": "percentage", "agent_share_percent": 40 } } }
 GET   /api/agency/agents?status=pending&page=1&limit=20
 GET   /api/agency/agents/665f...
 POST  /api/agency/agents/665f.../approve
 POST  /api/agency/agents/665f.../reject                { "reason": "Outside coverage" }
 POST  /api/agency/agents/665f.../withdraw              { "reason": "Route filled" }
+POST  /api/agency/agents/665f.../counter               { "fee_split": { "agent_share_percent": 35 } }
 POST  /api/agency/agents/665f.../suspend               { "reason": "Late deposits" }
 POST  /api/agency/agents/665f.../reinstate
 POST  /api/agency/agents/665f.../terminate             { "reason": "Contract ended" }
-PATCH /api/agency/agents/665f.../terms                 { "fee_split": { "model": "flat", "agent_flat_fee": 1500 } }
+PATCH /api/agency/agents/665f.../terms                 { "fee_split": { "model": "flat", "agent_flat_fee": 1500 } }   # pending only; 409 on a live contract
 PATCH /api/agency/agents/665f.../cod-limit             { "threshold": 500000 }
+GET   /api/agency/agents/status-requests
+POST  /api/agency/agents/status-requests/778a.../resolve  { "decision": "approve" }
+POST  /api/agency/agents/status-requests/778a.../cancel   { "note": "Sorted it out directly" }
+POST  /api/agency/agents/665f.../terms-proposals       { "terms": { "remittance_terms": { "cadence": "weekly", "day_of_week": 5 } }, "note": "Moving to Friday settlement" }
+GET   /api/agency/agents/665f.../terms-proposals
+GET   /api/agency/agents/terms-proposals
+POST  /api/agency/agents/terms-proposals/99ab.../resolve  { "decision": "approve" }
+POST  /api/agency/agents/terms-proposals/99ab.../counter  { "terms": { "fee_split": { "agent_share_percent": 38 } } }
+POST  /api/agency/agents/terms-proposals/99ab.../cancel   { "note": "Withdrawing for now" }
 ```
+
+### A full negotiation, end to end
+
+```
+# 1. You invite on your terms. The agent must answer.
+POST /api/agency/agents/requests
+     { "agentId": "507f...", "terms": { "fee_split": { "model": "percentage", "agent_share_percent": 30 } } }
+  → 201  termsProposedBy: "agency", termsVersion: 1, awaitingDecisionFrom: "agent"
+
+# 2. They want more. The ball comes back to you.
+     (agent calls POST /api/agent/memberships/665f.../counter)
+  → GET /api/agency/agents/665f...
+    termsProposedBy: "agent", termsVersion: 2, awaitingDecisionFrom: "agency"
+    feeSplit.agentSharePercent: 45
+
+# 3. You split the difference.
+POST /api/agency/agents/665f.../counter   { "fee_split": { "agent_share_percent": 38 } }
+  → 200  termsProposedBy: "agency", termsVersion: 3, awaitingDecisionFrom: "agent"
+
+# 4. They accept. Only now does the contract go live.
+     (agent calls POST /api/agent/memberships/665f.../approve)
+  → status: "active", awaitingDecisionFrom: null
+```
+
+At step 4, `assertTermsApprovable` re-runs: a contract can never reach `active` carrying a fee split
+that cannot pay.
 
 ---
 
 ## Notifications
 
-Three agency-facing situations, all gated on the `contractUpdated` preference
-(see [notifications.md](./notifications.md)):
+Eight agency-facing situations, all gated on the `contractUpdated` preference
+(see [notifications.md](./notifications.md)).
+
+The handshake that **forms** a contract:
 
 - `agent_contract.request_received` — an agent applied to deliver for you.
 - `agent_contract.approved` — an agent accepted a request you raised.
 - `agent_contract.rejected` — an agent refused a request you raised.
 
-Each carries `contractId` and `agentName`, and deep-links to `agents/{{contractId}}`. The same three
-event names are consumed by the **agent** stack with different copy; a `recipientRole` discriminator
-in the payload decides whose they are. See
+Changes to a contract that **already exists** — the status-request inbox above:
+
+- `agent_contract.status_request_raised` — an agent proposed a change that needs your answer, most
+  often asking to leave. Fires only for transitions that actually stay pending; a `unilateral` one
+  self-clears and never waits on anyone.
+- `agent_contract.status_request_resolved` — a pending change was approved, declined, or cancelled.
+  It covers both "the agent answered what you raised" and "the agent withdrew what you were waiting
+  on", so the copy names the change rather than whose request it was.
+
+Changes to the **terms**:
+
+- `agent_contract.terms_countered` — the agent countered the terms on a **pending** contract. The
+  right to accept is now yours; an agency that believes its own offer is still on the table will not
+  go and look.
+- `agent_contract.terms_proposed` — the agent proposed a change to a **live** contract. The copy
+  states that **the current terms stay in force until you answer** — that clause is load-bearing, not
+  reassurance: a recipient who assumes the change already happened will act on the wrong number.
+- `agent_contract.terms_resolved` — a proposal was accepted, declined, withdrawn or superseded.
+  Deliberately neutral about whose it was, for the same reason as `status_request_resolved`: it
+  covers both "the agent answered yours" and "the agent withdrew the one you were waiting on".
+
+Each carries `contractId` and `agentName`, and deep-links to `agents/{{contractId}}`; the two
+`status_request_*` events also carry `requestId`, `transition` and `state`, and are made idempotent
+on the **request** id. The `terms_proposed`/`terms_resolved` pair carries `proposalId`,
+`proposedByRole`, `state` and `changedTerms` (the group names), and is idempotent on the **proposal**
+id; `terms_countered` is idempotent on the contract id **plus the emission time**, since a
+negotiation is a sequence of counters on one contract and keying on the contract alone would suppress
+every counter after the first.
+
+All eight event names are consumed by the **agent** stack with different copy; a `recipientRole`
+discriminator in the payload decides whose they are. See
 [the agent's side](../agent/agency-membership.md#notifications).
+
+> **WhatsApp is dark for the three new situations** until `agency_agent_contract_terms_countered`,
+> `_terms_proposed` and `_terms_resolved` are created and approved in Meta Business Manager. In-app,
+> email, Telegram and push work today. Same bootstrapping step every new situation needs — see
+> [whatsapp-templates.md](../notifications/whatsapp-templates.md).
 
 > Nothing is emitted for `withdraw`, `suspend`, `pause`, `reinstate` or the status-request
 > transitions — those surface in the inbox (`GET /status-requests`) rather than as a push.
@@ -904,3 +1196,254 @@ in the payload decides whose they are. See
 
 Moving an agent between agencies is **admin-only** — an agency must not be able to pull an agent off
 a rival's roster. See [`POST /api/admin/agents/transfer`](../admin/agents.md).
+
+---
+
+## Terms negotiation
+
+The four negotiable groups — `fee_split`, `remittance_terms`, `coverage`, `shipment_value_ceiling` —
+are **agreed, not assigned**. Two mechanisms, and which one applies is decided entirely by the
+contract's status.
+
+| Status | Mechanism | Why |
+|---|---|---|
+| `pending` | Terms are written **onto the contract**; a counter flips who may approve. | Nothing has been agreed and no work has been done, so the contract document *is* the offer. |
+| `active` · `paused` · `suspended` | Terms are written to a separate **proposal**, and applied only on acceptance. | There is an agreed set that deliveries are being priced by right now, and it must keep applying until the other party agrees to replace it. |
+
+**`awaitingDecisionFrom` on `AgentMembershipDto` is the button rule** — not `initiatedBy`, which is
+now audit only. It names the party who must answer the standing offer; the *other* party sees
+Withdraw. It is `null` in two distinct cases a client must tell apart:
+
+- the contract is not `pending` — there is no offer on the table;
+- `termsProposedBy` is `null` — **nobody has proposed terms**, so nobody may approve. Your control
+  here is *Propose terms*, not *Approve*. (This is where a bare agent join request lands, and where
+  legacy contracts whose fee split was never configured were migrated to.)
+
+Approving a contract with no proposed terms is `422 CONTRACT_TERMS_NOT_PROPOSED`. Approving one
+whose split cannot pay — a `percentage` model with a null share, which resolves to a cut of **zero**
+— is `422 CONTRACT_FEE_SPLIT_INVALID`.
+
+### Who may write what
+
+| Term group | You propose | Agent may counter | On a live contract |
+|---|---|---|---|
+| `fee_split` | yes | **yes** | staged behind their answer |
+| `coverage` | yes | **yes** | staged behind their answer |
+| `remittance_terms` | yes | no | staged — they accept or refuse, cannot counter |
+| `shipment_value_ceiling` | yes | no | staged — same |
+| `employment` (incl. `employeeRef`) | yes | no | **unilateral, any status** — `PATCH …/employment` |
+| `cod.threshold` | via `/cod-limit` | no | **unilateral, any status** |
+
+The two exclusions are deliberate. `employment` is your own internal HR record about that agent —
+staging a staff number behind their consent would be theatre. `cod.threshold` is not a term at all
+but a sub-allocation of the *agent's* global COD pool, checked transactionally against their
+remaining headroom; routing it through a consent inbox would break that allocation race guard.
+
+`remittance_terms` earns their consent for a specific reason: the cadence is now the input to a
+**trust penalty** (see [cod-cash-management.md](./cod-cash-management.md)). Tightening `daily` to
+`per_delivery` unannounced would start docking an agent's score for cash that was not late under the
+terms they signed.
+
+---
+
+### POST /api/agency/agents/:membershipId/counter
+
+**Description**: Write the terms standing on a **pending** contract.
+
+Whether this is a *counter* or a *revision* depends on who is calling, and the difference is
+visible in the response:
+
+| Whose terms were standing | This is | `termsProposedBy` after | `awaitingDecisionFrom` after |
+|---|---|---|---|
+| the agent's | a **counter** | `"agency"` | `"agent"` — the ball moves |
+| yours | a **revision** of your own unanswered offer | `"agency"` (unchanged) | `"agent"` (unchanged) |
+| nobody's (`null`) | the first proposal | `"agency"` | `"agent"` |
+
+`termsVersion` bumps in all three cases. Revising is allowed on purpose: forcing a withdraw and
+re-request to correct a mistyped percentage would destroy the contract row, its history and the
+agent's notification thread, for a figure nobody had answered. `termsVersion` is what lets a client
+mid-read notice its copy went stale.
+
+**Request Body** — the negotiable groups; at least one required. Same shape as `PATCH …/terms`
+minus `employment`:
+```json
+{
+  "fee_split": { "agent_share_percent": 38 },
+  "coverage": { "regions": ["littoral", "centre"] }
+}
+```
+
+**Success Response** (`200 OK`): the updated `AgentMembershipDto`, message *"Terms countered. The
+agent must now accept them."*
+
+**Error Responses**:
+
+| Status | Code | Description |
+|--------|------|-------------|
+| `400` | *(Zod)* | Empty body — at least one term group is required |
+| `403` | `CONTRACT_TERMS_NOT_NEGOTIABLE` | Body touched `employment` or another non-negotiated group. `details: { party, offending, negotiable }` |
+| `404` | `CONTRACT_NOT_FOUND` | Unknown, or belongs to another agency |
+| `409` | `CONTRACT_INVALID_TRANSITION` | Contract is not `pending` — use `/terms-proposals`. `details: { status }` |
+| `422` | `CONTRACT_FEE_SPLIT_INVALID` | The patch, **merged over the stored split**, leaves it unable to pay. `details: { model, hint }` |
+
+> The merge is why a partial patch works: switching `model` to `flat` on a contract that already
+> carries an `agent_flat_fee` changes one key and is accepted. Switching it on one that does not is
+> `422`, because the result could not pay.
+
+---
+
+### POST /api/agency/agents/:membershipId/terms-proposals
+
+**Description**: Propose a change to a **live** contract (`active`, `paused` or `suspended`).
+
+**The contract is not modified.** It keeps pricing deliveries by its agreed terms — the earnings
+split goes on dividing by the stored `fee_split` — until the agent accepts. A rejected or unanswered
+proposal changes nothing.
+
+At most **one** proposal may be open per contract, enforced by a unique index rather than by a code
+path. To replace an open one, `counter` it (keeps the chain) or `cancel` it (ends it).
+
+**Request Body**:
+```json
+{
+  "terms": {
+    "remittance_terms": { "cadence": "weekly", "day_of_week": 5, "grace_hours": 48 }
+  },
+  "note": "Moving the roster to Friday settlement"
+}
+```
+
+`note` is optional, ≤300 characters, clearable (`""`/`null` → null).
+
+**Success Response** (`201 Created`): a `ContractTermsProposalDto`, message *"Proposal sent. The
+current terms stay in force until the agent answers."*
+
+**Error Responses**:
+
+| Status | Code | Description |
+|--------|------|-------------|
+| `403` | `CONTRACT_TERMS_NOT_NEGOTIABLE` | Non-negotiated group in `terms` |
+| `404` | `CONTRACT_NOT_FOUND` | Unknown, or belongs to another agency |
+| `409` | `CONTRACT_INVALID_TRANSITION` | Contract is `pending` — counter it instead. `details: { status, allowedFrom }` |
+| `409` | `CONTRACT_TERMS_PROPOSAL_ALREADY_PENDING` | One is already open. `details: { proposalId, proposedByRole }` |
+| `422` | `CONTRACT_FEE_SPLIT_INVALID` | Merged over the agreed split, it could not pay |
+
+---
+
+### GET /api/agency/agents/:membershipId/terms-proposals
+
+**Description**: That contract's full negotiation trail, newest first — `accepted`, `rejected`,
+`withdrawn` and `superseded` rows included, not just the open one. `supersedesId` reconstructs a
+counter chain; `termsBefore` on each row is the snapshot taken when it was raised, so an old row
+still shows what was actually on the table then.
+
+**Success Response** (`200 OK`): `{ success, data: ContractTermsProposalDto[] }`.
+
+| Status | Code | Description |
+|--------|------|-------------|
+| `404` | `CONTRACT_NOT_FOUND` | Unknown, or belongs to another agency |
+
+---
+
+### GET /api/agency/agents/terms-proposals
+
+**Description**: Every **open** proposal across your roster, in **both** directions — ones the agent
+raised that await your answer, and ones you raised that await theirs.
+
+Both directions on purpose: this list is the only place a client learns the id of a proposal it
+raised itself, which is what `/cancel` needs. Read `awaitingMyDecision` to tell them apart. **It is
+also the correct predicate for a badge count** — counting rows over-counts by every proposal you
+raised.
+
+**Success Response** (`200 OK`): `{ success, data: ContractTermsProposalDto[] }`, newest first.
+
+---
+
+### POST /api/agency/agents/terms-proposals/:proposalId/resolve
+
+**Description**: Answer a proposal the **agent** raised.
+
+On `approve` the terms are applied to the contract **inside the same transaction** that marks the
+proposal accepted — a proposal recorded as accepted whose terms never landed would leave the two
+parties believing different things about what the agent is paid. Coherence is re-checked against the
+contract's *current* agreed split, not against `termsBefore`, since the two can diverge via
+`/employment` or `/cod-limit` while a proposal sits.
+
+On `reject` the contract is untouched.
+
+**Request Body**: `{ "decision": "approve" | "reject", "note": "string | null" }`
+
+**Success Response** (`200 OK`):
+```json
+{
+  "success": true,
+  "data": {
+    "proposal": { "...": "ContractTermsProposalDto, state now 'accepted' | 'rejected'" },
+    "contract": { "...": "AgentMembershipDto — updated on approve, unchanged on reject" }
+  },
+  "message": "Terms updated."
+}
+```
+
+**Error Responses**:
+
+| Status | Code | Description |
+|--------|------|-------------|
+| `403` | `CONTRACT_TERMS_PROPOSAL_NOT_YOURS` | You raised it — `/cancel` is your verb. `details: { proposedByRole }` |
+| `404` | `CONTRACT_TERMS_PROPOSAL_NOT_FOUND` | Unknown, or another agency's. **404 not 403** — you must not learn it exists |
+| `409` | `CONTRACT_TERMS_PROPOSAL_NOT_PENDING` | Already resolved, possibly by a concurrent call. `details: { state }` |
+| `422` | `CONTRACT_FEE_SPLIT_INVALID` | The proposal no longer coheres with the contract's current split |
+
+---
+
+### POST /api/agency/agents/terms-proposals/:proposalId/cancel
+
+**Description**: Pull back a proposal **you** raised. The exact inverse of `/resolve`: that one
+refuses the author, this one refuses everyone else. The contract is untouched — a withdrawn proposal
+never applied anything. Cancelling frees the one-open-proposal slot.
+
+**Request Body**: `{ "note": "string | null" }`
+
+**Success Response** (`200 OK`): the `ContractTermsProposalDto`, `state: "withdrawn"`.
+
+| Status | Code | Description |
+|--------|------|-------------|
+| `403` | `CONTRACT_TERMS_PROPOSAL_NOT_YOURS` | The agent raised it — `/resolve` is your verb |
+| `404` | `CONTRACT_TERMS_PROPOSAL_NOT_FOUND` | Unknown, or another agency's |
+| `409` | `CONTRACT_TERMS_PROPOSAL_NOT_PENDING` | Already resolved. `details: { state }` |
+
+---
+
+### POST /api/agency/agents/terms-proposals/:proposalId/counter
+
+**Description**: Supersede the agent's open proposal with your own, in one transaction.
+
+**Distinct from `/resolve` with `"reject"`.** A rejection ends the negotiation; a counter keeps it
+alive and records the chain — the old row becomes `superseded` (not `rejected`, which would be a
+lie), and the new one carries `supersedesId` pointing back at it. That is what makes a multi-round
+negotiation reconstructible after the fact.
+
+**Request Body**: `{ "terms": { … }, "note": "string | null" }`
+
+**Success Response** (`201 Created`): the **new** `ContractTermsProposalDto`, message
+*"Counter-proposal sent. The agent must now answer it."*
+
+| Status | Code | Description |
+|--------|------|-------------|
+| `403` | `CONTRACT_TERMS_NOT_NEGOTIABLE` | Non-negotiated group in `terms` |
+| `403` | `CONTRACT_TERMS_PROPOSAL_NOT_YOURS` | You raised it — cancel it and raise another instead |
+| `404` | `CONTRACT_TERMS_PROPOSAL_NOT_FOUND` | Unknown, or another agency's |
+| `409` | `CONTRACT_TERMS_PROPOSAL_NOT_PENDING` | Already resolved. `details: { state }` |
+| `422` | `CONTRACT_FEE_SPLIT_INVALID` | Merged over the agreed split, it could not pay |
+
+---
+
+`availableActions` on every `ContractTermsProposalDto` lists exactly the verbs the server will accept
+from that viewer, in render order. Drive the UI from it and a client never renders a button that
+403s.
+
+| Status | Code | Description |
+|--------|------|-------------|
+| `403` | `CONTRACT_TERMS_PROPOSAL_NOT_YOURS` | Answering your own proposal, or cancelling someone else's |
+| `404` | `CONTRACT_TERMS_PROPOSAL_NOT_FOUND` | Unknown, or belongs to another agency (404 rather than 403 — you must not learn it exists) |
+| `409` | `CONTRACT_TERMS_PROPOSAL_NOT_PENDING` | Already resolved. `details: { state }` |

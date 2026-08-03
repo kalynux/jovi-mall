@@ -1,4 +1,5 @@
 import { AgentNotificationType } from '../models/agent-notification.model';
+import type { ContractTransition, StatusRequestState, TermsProposalState } from '../../agents';
 import { renderTemplate, RenderContext } from './message-renderer';
 import { Language, DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES } from './notification-i18n';
 import { createAppError } from '../../../core/errors';
@@ -107,6 +108,112 @@ export const PLATFORM_ACTOR_LABEL: Record<Language, string> = {
     pt: 'a plataforma',
     es: 'la plataforma',
     ar: 'المنصة'
+};
+
+/**
+ * What an agency is proposing to do to this agent's contract.
+ *
+ * Same reasoning as PLATFORM_ACTOR_LABEL: this is substituted into a localized
+ * body, so the raw `deactivate`/`pause` enum cannot go in directly without
+ * leaking English. One situation per transition was the alternative — the route
+ * `shipment.agent.*` took — but that would be seven situations × two stacks for
+ * copy that differs by one noun phrase, so the label is parameterised instead.
+ *
+ * All seven transitions are covered even though only `pause`, `reactivate` and
+ * `deactivate` can currently arrive as a pending request (the rest self-clear
+ * under TRANSITION_AUTHORITY): the authority matrix is a judgement call that may
+ * be revised, and a revision must not land here as a missing key.
+ */
+export const CONTRACT_TRANSITION_LABEL: Record<ContractTransition, Record<Language, string>> = {
+    approve: {
+        en: 'approve your contract',
+        fr: 'approuver votre contrat',
+        pt: 'aprovar o seu contrato',
+        es: 'aprobar tu contrato',
+        ar: 'الموافقة على عقدك'
+    },
+    reject: {
+        en: 'decline your contract',
+        fr: 'refuser votre contrat',
+        pt: 'recusar o seu contrato',
+        es: 'rechazar tu contrato',
+        ar: 'رفض عقدك'
+    },
+    withdraw: {
+        en: 'withdraw their request',
+        fr: 'retirer leur demande',
+        pt: 'retirar o seu pedido',
+        es: 'retirar su solicitud',
+        ar: 'سحب طلبهم'
+    },
+    pause: {
+        en: 'pause your contract',
+        fr: 'suspendre temporairement votre contrat',
+        pt: 'pausar o seu contrato',
+        es: 'pausar tu contrato',
+        ar: 'إيقاف عقدك مؤقتًا'
+    },
+    suspend: {
+        en: 'suspend your contract',
+        fr: 'suspendre votre contrat',
+        pt: 'suspender o seu contrato',
+        es: 'suspender tu contrato',
+        ar: 'تعليق عقدك'
+    },
+    reactivate: {
+        en: 'reactivate your contract',
+        fr: 'réactiver votre contrat',
+        pt: 'reativar o seu contrato',
+        es: 'reactivar tu contrato',
+        ar: 'إعادة تفعيل عقدك'
+    },
+    deactivate: {
+        en: 'end your contract',
+        fr: 'mettre fin à votre contrat',
+        pt: 'terminar o seu contrato',
+        es: 'terminar tu contrato',
+        ar: 'إنهاء عقدك'
+    }
+};
+
+/**
+ * How a pending request ended. `pending` is present only to satisfy the union —
+ * a resolution notification is never emitted for it.
+ */
+export const CONTRACT_RESOLUTION_LABEL: Record<StatusRequestState, Record<Language, string>> = {
+    pending: { en: 'pending', fr: 'en attente', pt: 'pendente', es: 'pendiente', ar: 'قيد الانتظار' },
+    approved: { en: 'approved', fr: 'approuvée', pt: 'aprovado', es: 'aprobada', ar: 'تمت الموافقة عليه' },
+    rejected: { en: 'declined', fr: 'refusée', pt: 'recusado', es: 'rechazada', ar: 'مرفوض' },
+    cancelled: { en: 'cancelled', fr: 'annulée', pt: 'cancelado', es: 'cancelada', ar: 'ملغى' }
+};
+
+/**
+ * How a terms proposal ended. A separate map from CONTRACT_RESOLUTION_LABEL
+ * because the two state unions genuinely differ: a proposal is `accepted` (not
+ * `approved`) and can be `superseded`, which a status request cannot be.
+ * Reusing the other map would force a lossy cast and mislabel a counter as a
+ * cancellation.
+ *
+ * `pending` is present only to satisfy the union — a resolution notification is
+ * never emitted for it.
+ */
+export const TERMS_PROPOSAL_RESOLUTION_LABEL: Record<
+    TermsProposalState,
+    Record<Language, string>
+> = {
+    pending: { en: 'pending', fr: 'en attente', pt: 'pendente', es: 'pendiente', ar: 'قيد الانتظار' },
+    accepted: { en: 'accepted', fr: 'acceptée', pt: 'aceite', es: 'aceptada', ar: 'مقبول' },
+    rejected: { en: 'declined', fr: 'refusée', pt: 'recusada', es: 'rechazada', ar: 'مرفوض' },
+    withdrawn: { en: 'withdrawn', fr: 'retirée', pt: 'retirada', es: 'retirada', ar: 'مسحوب' },
+    // Not "cancelled": the negotiation continued with a counter-offer, and
+    // telling the recipient it was cancelled would be the opposite of true.
+    superseded: {
+        en: 'replaced by a counter-offer',
+        fr: 'remplacée par une contre-proposition',
+        pt: 'substituída por uma contraproposta',
+        es: 'reemplazada por una contrapropuesta',
+        ar: 'استُبدل بعرض مضاد'
+    }
 };
 
 // ─── Catalog ─────────────────────────────────────────────────────────────────
@@ -448,6 +555,199 @@ export const AGENT_NOTIFICATION_CATALOG: Record<AgentNotificationType, Situation
         whatsapp: {
             text: {},
             template: { name: 'agent_contract_rejected', bodyParams: ['{{agencyName}}'] }
+        },
+        button: CONTRACT_BUTTON
+    },
+
+    'agent_contract.status_request_raised': {
+        base: {
+            en: {
+                subject: 'Contract change needs your answer',
+                body: '{{agencyName}} wants to {{transitionLabel}}. It does not take effect until you answer — open the request to approve or decline it.'
+            },
+            fr: {
+                subject: 'Un changement de contrat attend votre réponse',
+                body: '{{agencyName}} souhaite {{transitionLabel}}. Cela ne prend pas effet tant que vous n\'avez pas répondu — ouvrez la demande pour l\'approuver ou la refuser.'
+            },
+            pt: {
+                subject: 'Uma alteração ao contrato aguarda a sua resposta',
+                body: '{{agencyName}} pretende {{transitionLabel}}. Só produz efeito depois de responder — abra o pedido para o aprovar ou recusar.'
+            },
+            es: {
+                subject: 'Un cambio de contrato espera tu respuesta',
+                body: '{{agencyName}} quiere {{transitionLabel}}. No surte efecto hasta que respondas — abre la solicitud para aprobarla o rechazarla.'
+            },
+            ar: {
+                subject: 'تغيير في العقد بانتظار ردّك',
+                body: 'ترغب {{agencyName}} في {{transitionLabel}}. لن يسري ذلك حتى تردّ — افتح الطلب للموافقة عليه أو رفضه.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'agent_contract_status_request_raised',
+                bodyParams: ['{{agencyName}}', '{{transitionLabel}}']
+            }
+        },
+        button: CONTRACT_BUTTON
+    },
+
+    /**
+     * Deliberately NEUTRAL about whose request it was. This situation covers two
+     * paths with opposite ownership: the counterparty answering a request the
+     * recipient raised (`resolveRequestAs`), and the counterparty withdrawing one
+     * the recipient was waiting on (`cancelRequestAs`). "Your request was
+     * cancelled" would be a lie on the second — so the copy names the request by
+     * what it would DO, never by who owned it.
+     */
+    'agent_contract.status_request_resolved': {
+        base: {
+            en: {
+                subject: 'Contract request {{resolutionLabel}}',
+                body: 'The request to {{transitionLabel}} with {{agencyName}} was {{resolutionLabel}}.'
+            },
+            fr: {
+                subject: 'Demande de contrat {{resolutionLabel}}',
+                body: 'La demande de {{transitionLabel}} avec {{agencyName}} a été {{resolutionLabel}}.'
+            },
+            pt: {
+                subject: 'Pedido de contrato {{resolutionLabel}}',
+                body: 'O pedido para {{transitionLabel}} com {{agencyName}} foi {{resolutionLabel}}.'
+            },
+            es: {
+                subject: 'Solicitud de contrato {{resolutionLabel}}',
+                body: 'La solicitud para {{transitionLabel}} con {{agencyName}} fue {{resolutionLabel}}.'
+            },
+            ar: {
+                subject: 'طلب العقد: {{resolutionLabel}}',
+                body: 'الطلب بشأن {{transitionLabel}} مع {{agencyName}} {{resolutionLabel}}.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'agent_contract_status_request_resolved',
+                bodyParams: ['{{transitionLabel}}', '{{agencyName}}', '{{resolutionLabel}}']
+            }
+        },
+        button: CONTRACT_BUTTON
+    },
+
+    /**
+     * The agency countered the terms on a PENDING contract. The right to accept
+     * is now the agent's, which is the whole point of saying so — an agent who
+     * thinks their own offer is still standing will not go and look.
+     */
+    'agent_contract.terms_countered': {
+        base: {
+            en: {
+                subject: '{{agencyName}} proposed different terms',
+                body: '{{agencyName}} has changed the terms of your pending contract. Review what they are offering, then accept it, decline it, or counter again.'
+            },
+            fr: {
+                subject: '{{agencyName}} a proposé d\'autres conditions',
+                body: '{{agencyName}} a modifié les conditions de votre contrat en attente. Examinez leur offre, puis acceptez-la, refusez-la ou faites une nouvelle contre-proposition.'
+            },
+            pt: {
+                subject: '{{agencyName}} propôs condições diferentes',
+                body: '{{agencyName}} alterou as condições do seu contrato pendente. Reveja o que estão a oferecer e depois aceite, recuse ou volte a contrapropor.'
+            },
+            es: {
+                subject: '{{agencyName}} propuso otras condiciones',
+                body: '{{agencyName}} ha cambiado las condiciones de tu contrato pendiente. Revisa lo que ofrecen y luego acéptalo, recházalo o haz otra contrapropuesta.'
+            },
+            ar: {
+                subject: 'اقترحت {{agencyName}} شروطًا مختلفة',
+                body: 'غيّرت {{agencyName}} شروط عقدك المعلّق. راجع ما تعرضه، ثم اقبله أو ارفضه أو قدّم عرضًا مضادًا من جديد.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'agent_contract_terms_countered',
+                bodyParams: ['{{agencyName}}']
+            }
+        },
+        button: CONTRACT_BUTTON
+    },
+
+    /**
+     * A change proposed to a LIVE contract.
+     *
+     * The "until you answer" clause is not reassurance — it is the load-bearing
+     * fact. A live proposal changes nothing on its own; the agent keeps being
+     * paid the agreed rate while it sits. Without that sentence an agent reading
+     * "your pay is being changed" would reasonably assume it already happened
+     * and act on it.
+     */
+    'agent_contract.terms_proposed': {
+        base: {
+            en: {
+                subject: '{{agencyName}} wants to change your contract terms',
+                body: '{{agencyName}} has proposed a change to your contract. **Your current terms stay in force until you answer** — nothing changes unless you accept. Open it to review, accept, decline or counter.'
+            },
+            fr: {
+                subject: '{{agencyName}} souhaite modifier vos conditions',
+                body: '{{agencyName}} a proposé une modification de votre contrat. **Vos conditions actuelles restent en vigueur jusqu\'à votre réponse** — rien ne change sans votre accord. Ouvrez la proposition pour l\'examiner, l\'accepter, la refuser ou faire une contre-proposition.'
+            },
+            pt: {
+                subject: '{{agencyName}} quer alterar as condições do seu contrato',
+                body: '{{agencyName}} propôs uma alteração ao seu contrato. **As suas condições atuais mantêm-se em vigor até responder** — nada muda sem a sua aceitação. Abra a proposta para rever, aceitar, recusar ou contrapropor.'
+            },
+            es: {
+                subject: '{{agencyName}} quiere cambiar las condiciones de tu contrato',
+                body: '{{agencyName}} ha propuesto un cambio en tu contrato. **Tus condiciones actuales siguen vigentes hasta que respondas** — nada cambia sin tu aceptación. Ábrela para revisarla, aceptarla, rechazarla o contraproponer.'
+            },
+            ar: {
+                subject: 'تريد {{agencyName}} تعديل شروط عقدك',
+                body: 'اقترحت {{agencyName}} تعديلًا على عقدك. **تبقى شروطك الحالية سارية إلى أن تردّ** — لن يتغيّر شيء دون موافقتك. افتح الاقتراح لمراجعته أو قبوله أو رفضه أو تقديم عرض مضاد.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'agent_contract_terms_proposed',
+                bodyParams: ['{{agencyName}}']
+            }
+        },
+        button: CONTRACT_BUTTON
+    },
+
+    /**
+     * Deliberately NEUTRAL about whose proposal it was, for the same reason as
+     * `status_request_resolved` above: this covers the agency answering the
+     * agent's proposal AND the agency withdrawing one the agent was waiting on.
+     * "Your proposal was accepted" would be a lie on the second.
+     */
+    'agent_contract.terms_resolved': {
+        base: {
+            en: {
+                subject: 'Contract terms proposal {{resolutionLabel}}',
+                body: 'The proposed change to your contract with {{agencyName}} was {{resolutionLabel}}. Open the contract to see the terms now in force.'
+            },
+            fr: {
+                subject: 'Proposition de conditions {{resolutionLabel}}',
+                body: 'La modification proposée à votre contrat avec {{agencyName}} a été {{resolutionLabel}}. Ouvrez le contrat pour voir les conditions actuellement en vigueur.'
+            },
+            pt: {
+                subject: 'Proposta de condições {{resolutionLabel}}',
+                body: 'A alteração proposta ao seu contrato com {{agencyName}} foi {{resolutionLabel}}. Abra o contrato para ver as condições agora em vigor.'
+            },
+            es: {
+                subject: 'Propuesta de condiciones {{resolutionLabel}}',
+                body: 'El cambio propuesto a tu contrato con {{agencyName}} fue {{resolutionLabel}}. Abre el contrato para ver las condiciones vigentes ahora.'
+            },
+            ar: {
+                subject: 'اقتراح شروط العقد: {{resolutionLabel}}',
+                body: 'التعديل المقترح على عقدك مع {{agencyName}} {{resolutionLabel}}. افتح العقد للاطلاع على الشروط السارية الآن.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'agent_contract_terms_resolved',
+                bodyParams: ['{{agencyName}}', '{{resolutionLabel}}']
+            }
         },
         button: CONTRACT_BUTTON
     },

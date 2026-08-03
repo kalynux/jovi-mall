@@ -23,6 +23,24 @@ export type AgencyNotificationType =
     | 'agent_contract.request_received'
     | 'agent_contract.approved'
     | 'agent_contract.rejected'
+    /**
+     * A contract transition this agency must answer — an agent asking to leave,
+     * most often — and the answer when it comes. The handshake trio above forms
+     * a contract; these change one that already exists, and were silent until
+     * now on the reasoning that the status-request inbox is their home. That
+     * left a departure request invisible until someone opened the tab.
+     */
+    | 'agent_contract.status_request_raised'
+    | 'agent_contract.status_request_resolved'
+    /**
+     * Terms negotiation — the mirror of the agent stack's trio.
+     * `terms_countered` is a PENDING contract whose offer moved back to this
+     * agency; `terms_proposed` is a change to a LIVE one, in force only on
+     * acceptance; `terms_resolved` is the answer to either.
+     */
+    | 'agent_contract.terms_countered'
+    | 'agent_contract.terms_proposed'
+    | 'agent_contract.terms_resolved'
     | 'shipment.assigned'
     /** An agent accepted the shipment offer — it's now theirs. */
     | 'shipment.offer.accepted'

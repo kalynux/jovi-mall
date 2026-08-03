@@ -19,6 +19,37 @@
 >
 > Delete this file when the work below is finished.
 
+> ### ⚠️ 2026-08-02 — terms negotiation landed, and it took a dependency on §4
+>
+> The contract's terms became **negotiable** (see `CLAUDE.md` § Agent domain):
+> `terms_proposed_by` replaced `origin` as the approver discriminator, a
+> `ContractTermsProposal` collection stages changes to live contracts, and the
+> four previously-inert terms are now enforced. `npm run test:agent-domain` is
+> green at **197 assertions**; `tsc`, `lint`, an `src/app.ts` boot and a route-
+> order check on both routers are all clean.
+>
+> **Two of §4's pending migrations are now blockers rather than tidy-ups:**
+>
+> 1. **`cod.outstanding_balance` backfill.** `CodDepositDeadlineWorker` no longer
+>    iterates cash accounts — it iterates contracts and reads
+>    `cod.outstanding_balance` directly, because the cadence is per-contract while
+>    the agent's cash pot is global. Un-backfilled, that field reads `0`
+>    everywhere and the sweep flags **nobody**: a silent no-op that looks like a
+>    working feature. This is now the single most load-bearing item in §4.
+> 2. **The `late_deposit` index swap.** `{ agent_id, type }` → `{ agent_id,
+>    agency_id, type }`. `autoIndex` creates the new one but never drops the old,
+>    and the stale one would keep enforcing one-open-flag-per-agent globally —
+>    duplicate-key errors swallowed by the worker's per-contract try/catch, so the
+>    run reports success having flagged nothing. Run
+>    `npm run migrate:cod-late-deposit-index` (idempotent, `--dry-run`).
+>
+> New migration for this work: `npm run migrate:contract-terms` (idempotent,
+> `--dry-run`). Note its conditional — a pending contract whose stored fee split
+> is incoherent is deliberately left at `terms_proposed_by: null` rather than
+> stamped from `origin`, because stamping it would assert that an agency proposed
+> terms paying the agent zero. It reports how many rows land there; that count is
+> how many agencies will be asked to propose terms on next login.
+
 ## What this refactor is
 
 Replaces the per-agency COD cap with a **shared-pool allocation model**, and
@@ -594,13 +625,26 @@ compare-and-set on accept — only that one is now reported.
 | Platform ban | `PUT /admin/agents/:agentId/ban` | |
 | Agent COD pool | `PUT /admin/agents/:agentId/cod-threshold`, `GET .../cod-allocation`, `GET /agent/cod/allocation` | Pool bounds (`COD_THRESHOLD_*`), not the contract bounds `SetCodLimitSchema` uses. |
 | Contract terms | `PATCH /agency/agents/:membershipId/terms` | `updateEmployment` is now a thin alias. `fee_split` coherence throws the previously-unthrown `CONTRACT_FEE_SPLIT_INVALID`; the patch is merged over the stored split first, so a partial update that changes only `model` is legitimate. |
-| Status-request inbox | `GET|POST /agency/agents/status-requests[/:requestId/resolve]`, `GET|POST /agent/memberships/status-requests[/:requestId/resolve]`, `POST /agent/memberships/:membershipId/transitions` | Closes the dead end: an agency `DELETE` raised a pending deactivation nobody could resolve. |
+| Status-request inbox | `GET|POST /agency/agents/status-requests[/:requestId/{resolve,cancel}]`, `GET|POST /agent/memberships/status-requests[/:requestId/{resolve,cancel}]`, `POST /agent/memberships/:membershipId/transitions` | Closes the dead end: an agency `DELETE` raised a pending deactivation nobody could resolve. |
 | Agency pause | `POST /agency/agents/:membershipId/pause` | The matrix granted it unilaterally; no route existed. |
 
 `resolveRequestAs` is the only safe HTTP entry point for a resolution: `resolveRequest` deliberately
 does not check who is resolving (it is also the auto-approval path, where there is no counterparty),
 so the wrapper adds the scope check (404, not 403 — the caller should not learn a foreign request
 exists) and the consent check, throwing the previously-unthrown `CONTRACT_STATUS_REQUEST_NOT_YOURS`.
+
+**A pending request has two exits, one per party.** `cancelRequestAs` is `resolveRequestAs` with
+both guards inverted: same 404 scope rule, but it refuses everyone *except* the author (same
+`CONTRACT_STATUS_REQUEST_NOT_YOURS`, opposite condition), and writes `state: 'cancelled'` through the
+same `state: 'pending'` compare-and-set — so a cancel racing the counterparty's approval yields one
+winner and a clean 409 for the loser. Without it, a termination proposal could only be retracted by
+asking the other party to reject it. It touches **no** contract, appends **no**
+`AgentMembershipEvent` (the enum has no fitting value, and a cancelled request never moved the state
+machine — the request row's own `state`/`resolved_by_role`/`resolved_at` is the trail), runs **no**
+`evaluateDeactivationBlockers` (cancelling moves nothing, so outstanding COD is irrelevant), and
+sends **no** notification (consistent with lifecycle transitions — only the handshake pair notifies).
+Both inbox listers return pending rows in *both* directions, so `requestedByRole` is what tells a
+client which verb to render.
 
 **Deviation: settlements.** `ContractSettlement` was **deleted rather than wired up.** It was fully
 orphaned — nothing imported it, so `mongoose.model()` never ran and it was not registered at boot —

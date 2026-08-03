@@ -19,6 +19,10 @@ import {
   contractStatusRequestRepository,
 } from '../../repositories/contract-status-request.repository';
 import {
+  ContractTermsProposalRepository,
+  contractTermsProposalRepository,
+} from '../../repositories/contract-terms-proposal.repository';
+import {
   IAgentAgencyContract,
   ContractStatus,
   ALLOCATING_CONTRACT_STATUSES,
@@ -26,7 +30,15 @@ import {
   IContractRemittanceTerms,
   IContractCoverage,
   IMembershipEmployment,
+  ContractTermsParty,
+  NEGOTIABLE_TERM_GROUPS,
+  AGENT_NEGOTIABLE_TERM_GROUPS,
+  contractDefaults,
 } from '../../models/agent-agency-membership.model';
+import {
+  IContractTermsProposal,
+  ProposedTerms,
+} from '../../models/contract-terms-proposal.model';
 import { MembershipEventType } from '../../models/agent-membership-event.model';
 import {
   ContractTransition,
@@ -87,11 +99,11 @@ type Authority = 'unilateral' | 'requires_counterparty' | 'forbidden';
  *               Pulling back your own unanswered request needs nobody's
  *               agreement; it is `reject` seen from the other end.
  *
- * NOTE the authority matrix cannot express "whoever did not initiate", because
- * it is keyed on the party alone and the initiator is a property of the
+ * NOTE the authority matrix cannot express "whoever did not propose", because
+ * it is keyed on the party alone and the proposer is a property of the
  * CONTRACT. `approve`/`reject`/`withdraw` therefore read `unilateral` for both
- * parties here and are constrained separately by the initiator guard in
- * `requestTransition` — see `initiatorOf`. Both checks are required: the matrix
+ * parties here and are constrained separately by the proposer guard in
+ * `requestTransition` — see `proposerOf`. Both checks are required: the matrix
  * decides whether the action self-clears, the guard decides who may take it.
  */
 const TRANSITION_AUTHORITY: Record<ContractTransition, Record<'agent' | 'agency', Authority>> = {
@@ -127,14 +139,67 @@ const TRANSITION_FROM: Record<ContractTransition, ContractStatus[]> = {
 };
 
 /**
- * Transitions whose permitted party depends on who raised the contract rather
- * than on the authority matrix. `true` = only the initiator may take it.
+ * Transitions whose permitted party depends on who made the STANDING PROPOSAL
+ * rather than on the authority matrix. `true` = only the proposer may take it.
+ *
+ * All three are keyed on the proposer, not on who raised the contract, and
+ * `withdraw` being here is the load-bearing part. Suppose it were keyed on
+ * `origin` instead, and an agency invites an agent who counters:
+ *
+ *   - the agency is the origin-initiator (may `withdraw`) AND the counterparty
+ *     of the proposer (may `reject`) — two ways out;
+ *   - the agent is the proposer, so may not `approve`/`reject` their own
+ *     proposal, and is not the initiator, so may not `withdraw` — NO way out.
+ *
+ * The agent would be trapped inside their own counter-offer. Scoping all three
+ * to the proposer makes the algebra total and symmetric at every step of a
+ * negotiation, however long: the proposer withdraws, the counterparty answers.
  */
-const INITIATOR_SCOPED_TRANSITIONS: Partial<Record<ContractTransition, boolean>> = {
+const PROPOSER_SCOPED_TRANSITIONS: Partial<Record<ContractTransition, boolean>> = {
   approve: false,
   reject: false,
   withdraw: true,
 };
+
+/**
+ * A Mongoose sub-document as inert data.
+ *
+ * The term-group interfaces are plain TS types and do not declare `toObject`,
+ * but at runtime these are Mongoose sub-documents that do have it. Copying one
+ * by reference would hand out a live object that follows the parent as it
+ * changes — wrong for a snapshot, and wrong for terms being carried onto a
+ * different contract.
+ */
+function plainOf<T>(value: T | null | undefined): T | undefined {
+  if (value === null || value === undefined) return undefined;
+  const maybeDoc = value as unknown as { toObject?: () => T };
+  return typeof maybeDoc.toObject === 'function' ? maybeDoc.toObject() : value;
+}
+
+/**
+ * Every negotiated term on a contract, as an inert patch.
+ *
+ * Exported and pure so the DB-free harness can cover it: its one caller
+ * (`transfer`) runs inside a transaction and is therefore unreachable without
+ * Mongo, but the thing that actually matters — that no group is silently
+ * dropped — is checkable here.
+ *
+ * Dropping one is not a neutral default. A transfer lands the destination
+ * contract `active`, so it never passes through `approve` and
+ * `assertTermsApprovable` cannot catch a split that pays nothing; an agent
+ * whose `fee_split` failed to carry would arrive on
+ * `contractDefaults.feeSplit()` — a null share, i.e. a cut of ZERO — and work
+ * for free until somebody noticed.
+ */
+export function contractTermsOf(contract: IAgentAgencyContract): ContractTermsUpdate {
+  return {
+    employment: plainOf(contract.employment),
+    remittance_terms: plainOf(contract.remittance_terms),
+    coverage: plainOf(contract.coverage),
+    fee_split: plainOf(contract.fee_split),
+    shipment_value_ceiling: contract.shipment_value_ceiling,
+  };
+}
 
 export interface DeactivationBlockers {
   outstandingCod: number;
@@ -168,6 +233,7 @@ export class AgentContractService {
     private readonly contracts: AgentContractRepository = agentContractRepository,
     private readonly events: AgentMembershipEventRepository = agentMembershipEventRepository,
     private readonly requests: ContractStatusRequestRepository = contractStatusRequestRepository,
+    private readonly proposals: ContractTermsProposalRepository = contractTermsProposalRepository,
     private readonly thresholds: AgentCodThresholdService = agentCodThresholdService,
     private readonly gates: AgentGateService = agentGateService,
     private readonly magazins: MagazinRepository = new MagazinRepository()
@@ -188,7 +254,11 @@ export class AgentContractService {
    * the request, so an unnotified request is one nobody ever sees.
    */
   private notifyHandshake(
-    situation: 'agent_contract.request_received' | 'agent_contract.approved' | 'agent_contract.rejected',
+    situation:
+      | 'agent_contract.request_received'
+      | 'agent_contract.approved'
+      | 'agent_contract.rejected'
+      | 'agent_contract.terms_countered',
     contract: IAgentAgencyContract,
     recipientRole: 'agent' | 'agency'
   ): void {
@@ -220,6 +290,121 @@ export class AgentContractService {
     })().catch((err) => console.error(`[AgentContractService] ${situation} emit failed:`, err));
   }
 
+  /**
+   * Tell the other party about a pending contract CHANGE, or about its answer.
+   *
+   * Separate from `notifyHandshake` above because the two describe different
+   * things: that one is the handshake that forms a contract, this one is a
+   * transition on a contract that already exists. They were silent until now on
+   * the reasoning that such transitions have their own status-request inbox —
+   * but an inbox nobody is told about is one that gets read when someone
+   * happens to open the tab, which for a proposed termination is too late to be
+   * useful.
+   *
+   * Emitted only for transitions that actually stay pending. A `unilateral`
+   * transition self-clears inside `requestTransition` and never waits on anyone,
+   * so announcing it as "needs your answer" would be a lie; that is also why the
+   * resolution half is emitted from `resolveRequestAs`/`cancelRequestAs` — the
+   * two HTTP entry points — rather than from `resolveRequest`, which is shared
+   * with the auto-approval path.
+   *
+   * Post-commit and fire-and-forget, per the module convention.
+   */
+  private notifyStatusRequest(
+    situation:
+      | 'agent_contract.status_request_raised'
+      | 'agent_contract.status_request_resolved',
+    request: IContractStatusRequest,
+    recipientRole: 'agent' | 'agency'
+  ): void {
+    const contractId = request.contract_id.toString();
+    const agentId = request.agent_id.toString();
+    const agencyId = request.agency_id.toString();
+
+    void (async () => {
+      // Only the name the RECIPIENT needs, same as notifyHandshake.
+      const [agent, agencyName] =
+        recipientRole === 'agent'
+          ? [null, await this.magazins.findNameByAgencyId(agencyId)]
+          : [await this.agents.findById(agentId), null];
+
+      await eventBus.publish(situation, {
+        eventType: situation,
+        aggregateId: contractId,
+        occurredAt: new Date(),
+        payload: {
+          contractId,
+          requestId: request._id.toString(),
+          recipientRole,
+          agentId,
+          agencyId,
+          agentName: agent?.name ?? '',
+          agencyName: agencyName ?? '',
+          transition: request.transition,
+          // 'approved' | 'rejected' | 'cancelled' on a resolution; 'pending' on
+          // a raise, where the handler ignores it.
+          state: request.state,
+          requestedByRole: request.requested_by_role,
+        },
+      });
+    })().catch((err) => console.error(`[AgentContractService] ${situation} emit failed:`, err));
+  }
+
+  /**
+   * Tell the other party about a terms proposal on a LIVE contract, or about
+   * its answer.
+   *
+   * A third notifier rather than a branch in the other two, because this one
+   * carries what the recipient actually needs to decide: which groups are being
+   * changed, and — for `terms_proposed` — the fact that their current terms
+   * remain in force until they answer. A recipient who reads "your pay is being
+   * changed" and cannot tell whether it has already happened will act on the
+   * wrong assumption.
+   *
+   * Post-commit and fire-and-forget, per the module convention.
+   */
+  private notifyTermsProposal(
+    situation: 'agent_contract.terms_proposed' | 'agent_contract.terms_resolved',
+    proposal: IContractTermsProposal,
+    recipientRole: 'agent' | 'agency'
+  ): void {
+    const agentId = proposal.agent_id.toString();
+    const agencyId = proposal.agency_id.toString();
+
+    void (async () => {
+      // Only the name the RECIPIENT needs, same as notifyHandshake.
+      const [agent, agencyName] =
+        recipientRole === 'agent'
+          ? [null, await this.magazins.findNameByAgencyId(agencyId)]
+          : [await this.agents.findById(agentId), null];
+
+      await eventBus.publish(situation, {
+        eventType: situation,
+        aggregateId: proposal.contract_id.toString(),
+        occurredAt: new Date(),
+        payload: {
+          contractId: proposal.contract_id.toString(),
+          proposalId: proposal._id.toString(),
+          recipientRole,
+          agentId,
+          agencyId,
+          agentName: agent?.name ?? '',
+          agencyName: agencyName ?? '',
+          proposedByRole: proposal.proposed_by_role,
+          // 'accepted' | 'rejected' | 'withdrawn' | 'superseded' on a
+          // resolution; 'pending' on a raise, where the handler ignores it.
+          state: proposal.state,
+          changedTerms: Object.keys(proposal.proposed_terms ?? {}),
+        },
+      });
+    })().catch((err) => console.error(`[AgentContractService] ${situation} emit failed:`, err));
+  }
+
+  /** The party on the other side of a two-party transition. */
+  private counterpartyOf(party: 'agent' | 'agency'): 'agent' | 'agency' {
+    return party === 'agent' ? 'agency' : 'agent';
+  }
+
   // ─── Creation ─────────────────────────────────────────────────────────────
 
   /**
@@ -234,10 +419,25 @@ export class AgentContractService {
    *
    * **Deliberately not blocked by threshold or relationship capacity**, for the
    * same reason as `requestToJoin` below — approval is what those bind.
+   *
+   * `terms` is REQUIRED here, unlike on the agent's side. An agency naming a
+   * specific agent is making an offer, and an offer with no numbers in it is
+   * not one — it would land the agent on `contractDefaults.feeSplit()`, which
+   * pays zero. The agent may counter what they are shown; they may not be
+   * shown nothing.
    */
-  async requestFromAgency(agencyId: string, agentId: string, actor: Actor): Promise<IAgentAgencyContract> {
+  async requestFromAgency(
+    agencyId: string,
+    agentId: string,
+    terms: ContractTermsUpdate,
+    actor: Actor
+  ): Promise<IAgentAgencyContract> {
     await this.gates.assertCanHoldContract(agentId);
     await this.assertNoLiveContract(agentId, agencyId);
+
+    this.assertNegotiableBy('agency', terms);
+    // Checked against the schema defaults, since there is no stored split yet.
+    this.assertFeeSplitCoherent(terms.fee_split ?? {}, contractDefaults.feeSplit());
 
     const contract = await transactionManager.runInTransaction(async (session) => {
       const contract = await this.contracts.create(
@@ -246,6 +446,8 @@ export class AgentContractService {
           agencyId,
           status: 'pending',
           origin: 'invitation',
+          terms,
+          termsProposedBy: 'agency',
           invitedAt: new Date(),
           invitedByUserId: actor.userId,
         },
@@ -281,14 +483,51 @@ export class AgentContractService {
    * allocated; it is APPROVAL that is blocked. Refusing the request would hide
    * the queue from the agency and give the agent nothing to point at when they
    * raise their threshold.
+   *
+   * `terms` is OPTIONAL here, and the asymmetry with `requestFromAgency` is
+   * intended. An agent may state their asking rate and coverage up front — the
+   * agency can then approve, reject or counter it — or apply bare, in which
+   * case `terms_proposed_by` stays null and the agency must propose before
+   * anyone can approve. Both land in the same place through one rule
+   * (`assertTermsApprovable`) rather than two special cases.
    */
-  async requestToJoin(agentId: string, agencyId: string, actor: Actor): Promise<IAgentAgencyContract> {
+  async requestToJoin(
+    agentId: string,
+    agencyId: string,
+    terms: ContractTermsUpdate | null,
+    actor: Actor
+  ): Promise<IAgentAgencyContract> {
     await this.gates.assertCanHoldContract(agentId);
     await this.assertNoLiveContract(agentId, agencyId);
 
+    const stated = terms && Object.keys(terms).length > 0 ? terms : null;
+    if (stated) {
+      this.assertNegotiableBy('agent', stated);
+      // Stating terms means stating what you expect to be paid. Coverage alone
+      // would leave the agent's own proposal carrying a null share — i.e. zero —
+      // which the agency then could not approve. Applying bare is the supported
+      // way to say "your terms, whatever they are".
+      if (!stated.fee_split) {
+        throw createAppError(ERROR_CODES.CONTRACT_TERMS_REQUIRED, 422, undefined, {
+          hint:
+            'A join request that states terms must include a fee split. Omit terms entirely to ' +
+            'let the agency propose them.',
+        });
+      }
+      this.assertFeeSplitCoherent(stated.fee_split, contractDefaults.feeSplit());
+    }
+
     const contract = await transactionManager.runInTransaction(async (session) => {
       const created = await this.contracts.create(
-        { agentId, agencyId, status: 'pending', origin: 'join_request', requestedAt: new Date() },
+        {
+          agentId,
+          agencyId,
+          status: 'pending',
+          origin: 'join_request',
+          terms: stated ?? undefined,
+          termsProposedBy: stated ? 'agent' : null,
+          requestedAt: new Date(),
+        },
         session
       );
 
@@ -329,7 +568,8 @@ export class AgentContractService {
     const contract = await this.contracts.findById(contractId);
     if (!contract) throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
 
-    this.assertInitiatorRule(contract, transition, party);
+    this.assertProposerRule(contract, transition, party);
+    if (transition === 'approve') this.assertTermsApprovable(contract);
 
     const authority = TRANSITION_AUTHORITY[transition][party];
     if (authority === 'forbidden') {
@@ -382,21 +622,35 @@ export class AgentContractService {
         { autoApproved: true, codThreshold: options.codThreshold }
       );
 
-      // Tell the party who RAISED the contract how it was answered. Only the
-      // handshake pair — the lifecycle transitions (pause/suspend/deactivate)
-      // have their own status-request inbox and are not notified here. Emitted
-      // from this one place because both HTTP paths, agency and agent, funnel
-      // through it.
+      // Tell the party whose TERMS WERE STANDING how they were answered. Only
+      // the handshake pair — the lifecycle transitions (pause/suspend/
+      // deactivate) have their own status-request inbox and are not notified
+      // here. Emitted from this one place because both HTTP paths, agency and
+      // agent, funnel through it.
+      //
+      // Computed from `contract` (as read BEFORE the transition), not from
+      // `applied.contract`: after a counter the proposer is not the party that
+      // opened the contract, and re-deriving it from the updated row would send
+      // the answer to whoever the approval left standing.
       if ((transition === 'approve' || transition === 'reject') && applied.contract) {
         this.notifyHandshake(
           transition === 'approve' ? 'agent_contract.approved' : 'agent_contract.rejected',
           applied.contract,
-          this.initiatorOf(contract)
+          this.proposerOf(contract)
         );
       }
 
       return { request: applied.request, contract: applied.contract };
     }
+
+    // Still pending: the counterparty is the one who has to act, so they are the
+    // one told. Until now nothing was emitted here at all and the request simply
+    // waited in an inbox nobody was pointed at.
+    this.notifyStatusRequest(
+      'agent_contract.status_request_raised',
+      request,
+      this.counterpartyOf(party)
+    );
 
     return { request, contract: null };
   }
@@ -450,7 +704,11 @@ export class AgentContractService {
 
       // ── Transition-specific guards ──────────────────────────────────────
       if (transition === 'approve') {
-        // Platform gates first: KYC and bans outrank everything else. An
+        // Terms first: a contract with nothing agreed to pay the agent has no
+        // business reaching a KYC check. Failing here names the actual problem.
+        this.assertTermsApprovable(contract);
+
+        // Platform gates next: KYC and bans outrank everything else. An
         // unverified agent must not be approvable regardless of headroom.
         await this.gates.assertCanHoldContract(agentId, session);
         await this.assertRelationshipCapacity(agentId, session);
@@ -592,7 +850,99 @@ export class AgentContractService {
       });
     }
 
-    return await this.resolveRequest(requestId, decision, actor, { note });
+    const result = await this.resolveRequest(requestId, decision, actor, { note });
+
+    // Tell the party who RAISED it how it was answered. Emitted here rather than
+    // in `resolveRequest` because that method is also the auto-approval path for
+    // unilateral transitions, where the "requester" and the "resolver" are the
+    // same person and there is nobody to inform.
+    this.notifyStatusRequest(
+      'agent_contract.status_request_resolved',
+      result.request,
+      this.counterpartyOf(party)
+    );
+
+    return result;
+  }
+
+  /**
+   * Cancel a pending request as the party who RAISED it.
+   *
+   * The mirror of `resolveRequestAs`, and its two guards invert exactly: that
+   * one refuses the requester, this one refuses everyone else. A pending
+   * request is either answered by the counterparty or pulled back by its
+   * author, and neither side may do the other's half.
+   *
+   * Only `requires_counterparty` transitions can ever be pending — everything
+   * unilateral self-clears inside `requestTransition` — so in practice this
+   * cancels an agent's `pause`/`reactivate` or either side's `deactivate`.
+   * Cancelling frees the (contract, transition) pending slot, so the same
+   * transition can be raised again afterwards.
+   *
+   * The contract is deliberately untouched. A cancelled request moved nothing,
+   * so there is no transition to undo and no `evaluateDeactivationBlockers`
+   * call to make — outstanding COD gates *ending* a contract, and abandoning a
+   * proposal to end one is not that. `contract` is therefore always null,
+   * matching the shape `resolveRequestAs` returns for a still-pending request
+   * so one client decoder serves both.
+   *
+   * Deliberately NOT an AgentMembershipEvent either: that log records the
+   * contract's state machine, and this never moved it. The request row's own
+   * `state` / `resolved_by_role` / `resolved_at` is already the complete trail.
+   */
+  async cancelRequestAs(
+    party: 'agent' | 'agency',
+    ownerId: string,
+    requestId: string,
+    actor: Actor,
+    note: string | null = null
+  ): Promise<{ request: IContractStatusRequest; contract: null }> {
+    const request = await this.requests.findById(requestId);
+    if (!request) throw createAppError(ERROR_CODES.CONTRACT_STATUS_REQUEST_NOT_FOUND, 404);
+
+    // Scope first, and a foreign request 404s rather than 403s — same
+    // "don't leak existence" rule as `resolveRequestAs`.
+    const owner = party === 'agent' ? request.agent_id.toString() : request.agency_id.toString();
+    if (owner !== ownerId) {
+      throw createAppError(ERROR_CODES.CONTRACT_STATUS_REQUEST_NOT_FOUND, 404);
+    }
+
+    // Authorship: the inverse of the consent guard above.
+    if (request.requested_by_role !== party) {
+      throw createAppError(ERROR_CODES.CONTRACT_STATUS_REQUEST_NOT_YOURS, 403, undefined, {
+        requestedByRole: request.requested_by_role,
+        hint: 'You may only cancel a request you raised yourself. Use /resolve to answer the other party.',
+      });
+    }
+
+    if (request.state !== 'pending') {
+      throw createAppError(ERROR_CODES.CONTRACT_STATUS_REQUEST_NOT_PENDING, 409, undefined, {
+        state: request.state,
+      });
+    }
+
+    // The repository's compare-and-set filters on `state: 'pending'`, so a
+    // cancel racing the counterparty's approval yields exactly one winner. A
+    // null means we lost — re-read so the 409 names the state that actually won
+    // rather than the stale `pending` we read above.
+    const cancelled = await this.requests.resolve(requestId, 'cancelled', actor, note);
+    if (!cancelled) {
+      const current = await this.requests.findById(requestId);
+      throw createAppError(ERROR_CODES.CONTRACT_STATUS_REQUEST_NOT_PENDING, 409, undefined, {
+        state: current?.state ?? 'resolved',
+      });
+    }
+
+    // The counterparty was the one holding this in their inbox, so they are the
+    // one told it is gone — otherwise a withdrawn proposal stays on their list
+    // until they open it and find it already resolved.
+    this.notifyStatusRequest(
+      'agent_contract.status_request_resolved',
+      cancelled,
+      this.counterpartyOf(party)
+    );
+
+    return { request: cancelled, contract: null };
   }
 
   /**
@@ -812,14 +1162,19 @@ export class AgentContractService {
   }
 
   /**
-   * Update the negotiated terms of a contract — everything except the COD
-   * threshold, which is bounded by the agent's pool and so has its own path
-   * through AgentCodThresholdService.
+   * The agency's terms endpoint. **Status-aware, and that is the whole point.**
    *
-   * `fee_split` is the load-bearing one: `EarningsQuoteService` divides by it at
-   * both the offer estimate and the delivery split, so an incoherent split (a
-   * percentage model carrying a flat fee, say) would not fail here but silently
-   * mispay an agent at delivery. It is validated up front instead.
+   * On a `pending` contract this IS the agency's counter — it delegates to
+   * `counterTerms` rather than duplicating it, because two code paths that both
+   * write pending terms are two code paths that drift.
+   *
+   * On a live contract it REFUSES. The contract is pricing deliveries right now
+   * by its agreed `fee_split`, and rewriting that under the agent is the thing
+   * the negotiation exists to prevent. Live changes go through
+   * `proposeTermsChange`, which stages them until the agent answers.
+   *
+   * `employment` keeps its own unilateral route and never reaches here — see
+   * NEGOTIABLE_TERM_GROUPS for why.
    */
   async updateTerms(
     agencyId: string,
@@ -830,8 +1185,19 @@ export class AgentContractService {
   ): Promise<IAgentAgencyContract> {
     const contract = await this.loadForAgency(contractId, agencyId);
 
-    if (terms.fee_split) {
-      this.assertFeeSplitCoherent(terms.fee_split, contract.fee_split);
+    if (contract.status === 'pending') {
+      return await this.counterTerms('agency', agencyId, contractId, terms, actor);
+    }
+
+    // `employment_updated` is the one caller that legitimately writes live: it
+    // is the agency's own HR record, not a negotiated term.
+    if (eventType !== 'employment_updated') {
+      throw createAppError(ERROR_CODES.CONTRACT_TERMS_LIVE_EDIT_NOT_ALLOWED, 409, undefined, {
+        status: contract.status,
+        hint:
+          'The terms of a live contract change by proposal, not by edit. POST to ' +
+          '/api/agency/agents/:membershipId/terms-proposals and the agent will answer it.',
+      });
     }
 
     const updated = await this.contracts.updateTerms(contractId, terms);
@@ -847,6 +1213,420 @@ export class AgentContractService {
       metadata: terms as Record<string, unknown>,
     });
     return updated;
+  }
+
+  // ─── Negotiation: PENDING contracts ───────────────────────────────────────
+
+  /**
+   * Write the terms standing on a PENDING contract — a counter, or a revision.
+   *
+   * No proposal row is involved: a pending contract has no agreed terms to
+   * protect, so its own document IS the offer (see ContractTermsProposal's
+   * header for why a live contract is different).
+   *
+   * ── Counter vs revision, and why both are allowed ───────────────────────
+   *
+   * Which one this is depends entirely on who is writing:
+   *
+   *  - **The counterparty** writing is a COUNTER. `terms_proposed_by` flips to
+   *    them, which is what moves the right to approve to the other side.
+   *  - **The proposer** writing is a REVISION of their own unanswered offer.
+   *    The version bumps but the ball does NOT move — nobody has answered, so
+   *    handing them the right to approve their own revised terms would be the
+   *    consent bypass the whole handshake exists to prevent.
+   *
+   * Refusing the revision outright was the first design, on the reasoning that
+   * it is "not a counter". But an agency that mistypes a percentage on an
+   * invitation would then have to withdraw and re-request — destroying the
+   * contract row, its history and the agent's notification thread — to fix a
+   * digit nobody had looked at. There is no safety argument for that: the terms
+   * are unanswered either way, and `terms_version` is what lets a client that
+   * is mid-read notice it is now stale.
+   *
+   * A contract with `terms_proposed_by: null` has no proposer at all, so the
+   * first write is a plain proposal by whoever makes it.
+   */
+  async counterTerms(
+    party: ContractTermsParty,
+    ownerId: string,
+    contractId: string,
+    terms: ContractTermsUpdate,
+    actor: Actor
+  ): Promise<IAgentAgencyContract> {
+    const contract = await this.loadForParty(party, contractId, ownerId);
+
+    if (contract.status !== 'pending') {
+      throw createAppError(ERROR_CODES.CONTRACT_INVALID_TRANSITION, 409, undefined, {
+        status: contract.status,
+        hint: 'Only a pending contract is countered. A live one takes a terms proposal.',
+      });
+    }
+
+    this.assertNegotiableBy(party, terms);
+    if (terms.fee_split) this.assertFeeSplitCoherent(terms.fee_split, contract.fee_split);
+
+    const isRevision = contract.terms_proposed_by !== null && this.proposerOf(contract) === party;
+
+    const updated = await this.contracts.updateTerms(contractId, terms, undefined, {
+      termsProposedBy: party,
+      bumpVersion: true,
+    });
+    if (!updated) throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
+
+    await this.events.append({
+      membershipId: contractId,
+      agentId: contract.agent_id.toString(),
+      agencyId: contract.agency_id.toString(),
+      type: isRevision ? 'terms_updated' : 'terms_countered',
+      actorUserId: actor.userId,
+      actorRole: actor.role,
+      metadata: {
+        from: contract.terms_proposed_by,
+        to: party,
+        version: updated.terms_version,
+        revision: isRevision,
+        terms: terms as Record<string, unknown>,
+      },
+    });
+
+    // Both are worth telling the other party about — a revised offer they have
+    // not yet answered is still a changed offer — but only a counter hands them
+    // the decision, so only a counter is announced as one.
+    this.notifyHandshake('agent_contract.terms_countered', updated, this.counterpartyOf(party));
+    return updated;
+  }
+
+  // ─── Negotiation: LIVE contracts ──────────────────────────────────────────
+
+  /**
+   * Propose a change to a live contract's terms.
+   *
+   * Writes a ContractTermsProposal and **does not touch the contract**. Work
+   * continues under the agreed terms — EarningsQuoteService keeps dividing by
+   * the stored `fee_split` — until the counterparty accepts. That is the
+   * difference between negotiating and repricing someone's work mid-delivery.
+   */
+  async proposeTermsChange(
+    party: ContractTermsParty,
+    ownerId: string,
+    contractId: string,
+    terms: ContractTermsUpdate,
+    note: string | null,
+    actor: Actor
+  ): Promise<IContractTermsProposal> {
+    const contract = await this.loadForParty(party, contractId, ownerId);
+
+    if (!ALLOCATING_CONTRACT_STATUSES.includes(contract.status)) {
+      throw createAppError(ERROR_CODES.CONTRACT_INVALID_TRANSITION, 409, undefined, {
+        status: contract.status,
+        allowedFrom: ALLOCATING_CONTRACT_STATUSES,
+        hint: 'Only a live contract takes a terms proposal. A pending one is countered.',
+      });
+    }
+
+    this.assertNegotiableBy(party, terms);
+    if (terms.fee_split) this.assertFeeSplitCoherent(terms.fee_split, contract.fee_split);
+
+    const open = await this.proposals.findPendingForContract(contractId);
+    if (open) {
+      throw createAppError(ERROR_CODES.CONTRACT_TERMS_PROPOSAL_ALREADY_PENDING, 409, undefined, {
+        proposalId: open._id.toString(),
+        proposedByRole: open.proposed_by_role,
+        hint: 'Resolve or counter the open proposal before raising another.',
+      });
+    }
+
+    const proposal = await this.proposals.create({
+      contractId,
+      agentId: contract.agent_id.toString(),
+      agencyId: contract.agency_id.toString(),
+      proposedByRole: party,
+      proposedByUserId: actor.userId,
+      termsBefore: this.snapshotTermsBefore(contract, terms),
+      proposedTerms: terms as ProposedTerms,
+      note,
+    });
+
+    await this.events.append({
+      membershipId: contractId,
+      agentId: contract.agent_id.toString(),
+      agencyId: contract.agency_id.toString(),
+      type: 'terms_proposed',
+      actorUserId: actor.userId,
+      actorRole: actor.role,
+      reason: note,
+      metadata: { proposalId: proposal._id.toString(), terms: terms as Record<string, unknown> },
+    });
+
+    this.notifyTermsProposal(
+      'agent_contract.terms_proposed',
+      proposal,
+      this.counterpartyOf(party)
+    );
+    return proposal;
+  }
+
+  /**
+   * Answer a proposal raised by the other party.
+   *
+   * On accept, the terms are applied inside the same transaction that resolves
+   * the proposal — a proposal marked accepted whose terms never landed would
+   * leave both parties believing different things about what the agent is paid.
+   */
+  async resolveTermsProposalAs(
+    party: ContractTermsParty,
+    ownerId: string,
+    proposalId: string,
+    decision: 'approve' | 'reject',
+    actor: Actor,
+    note: string | null = null
+  ): Promise<{ proposal: IContractTermsProposal; contract: IAgentAgencyContract | null }> {
+    const proposal = await this.loadProposalForParty(party, proposalId, ownerId);
+
+    // Consent: the counterparty answers, never the author.
+    if (proposal.proposed_by_role === party) {
+      throw createAppError(ERROR_CODES.CONTRACT_TERMS_PROPOSAL_NOT_YOURS, 403, undefined, {
+        proposedByRole: proposal.proposed_by_role,
+        hint: 'The other party must answer a proposal you raised. You may cancel it instead.',
+      });
+    }
+
+    const result = await transactionManager.runInTransaction(async (session) => {
+      const contract = await this.contracts.findById(proposal.contract_id.toString(), session);
+      if (!contract) throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
+
+      if (decision === 'reject') {
+        const rejected = await this.proposals.resolve(
+          proposalId,
+          'rejected',
+          { role: party, userId: actor.userId },
+          note,
+          session
+        );
+        if (!rejected) {
+          throw createAppError(ERROR_CODES.CONTRACT_TERMS_PROPOSAL_NOT_PENDING, 409);
+        }
+        return { proposal: rejected, contract };
+      }
+
+      const terms = proposal.proposed_terms as ContractTermsUpdate;
+
+      // Re-checked against the contract's CURRENT split, not the snapshot: the
+      // agreed terms may have moved since (a `/cod-limit` or `/employment`
+      // write, or simply time), and coherence is a property of what will be
+      // stored, not of what the proposer was looking at.
+      if (terms.fee_split) this.assertFeeSplitCoherent(terms.fee_split, contract.fee_split);
+
+      const updated = await this.contracts.applyAgreedTerms(
+        proposal.contract_id.toString(),
+        terms,
+        proposal.proposed_by_role,
+        session
+      );
+      if (!updated) throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
+
+      const accepted = await this.proposals.resolve(
+        proposalId,
+        'accepted',
+        { role: party, userId: actor.userId },
+        note,
+        session
+      );
+      if (!accepted) {
+        throw createAppError(ERROR_CODES.CONTRACT_TERMS_PROPOSAL_NOT_PENDING, 409);
+      }
+
+      await this.events.append(
+        {
+          membershipId: proposal.contract_id.toString(),
+          agentId: proposal.agent_id.toString(),
+          agencyId: proposal.agency_id.toString(),
+          type: 'terms_proposal_accepted',
+          actorUserId: actor.userId,
+          actorRole: actor.role,
+          reason: note,
+          metadata: {
+            proposalId,
+            version: updated.terms_version,
+            terms: terms as Record<string, unknown>,
+          },
+        },
+        session
+      );
+
+      return { proposal: accepted, contract: updated };
+    });
+
+    if (decision === 'reject') {
+      await this.events.append({
+        membershipId: proposal.contract_id.toString(),
+        agentId: proposal.agent_id.toString(),
+        agencyId: proposal.agency_id.toString(),
+        type: 'terms_proposal_rejected',
+        actorUserId: actor.userId,
+        actorRole: actor.role,
+        reason: note,
+        metadata: { proposalId },
+      });
+    }
+
+    this.notifyTermsProposal(
+      'agent_contract.terms_resolved',
+      result.proposal,
+      this.counterpartyOf(party)
+    );
+    return result;
+  }
+
+  /**
+   * Pull back a proposal you raised yourself.
+   *
+   * The mirror of `resolveTermsProposalAs`, guards inverted: that one refuses
+   * the author, this one refuses everyone else. The contract is untouched — a
+   * withdrawn proposal never applied anything.
+   */
+  async cancelTermsProposalAs(
+    party: ContractTermsParty,
+    ownerId: string,
+    proposalId: string,
+    actor: Actor,
+    note: string | null = null
+  ): Promise<IContractTermsProposal> {
+    const proposal = await this.loadProposalForParty(party, proposalId, ownerId);
+
+    if (proposal.proposed_by_role !== party) {
+      throw createAppError(ERROR_CODES.CONTRACT_TERMS_PROPOSAL_NOT_YOURS, 403, undefined, {
+        proposedByRole: proposal.proposed_by_role,
+        hint: 'Only the party that raised a proposal may cancel it. You may reject it instead.',
+      });
+    }
+
+    const cancelled = await this.proposals.resolve(
+      proposalId,
+      'withdrawn',
+      { role: party, userId: actor.userId },
+      note
+    );
+    if (!cancelled) throw createAppError(ERROR_CODES.CONTRACT_TERMS_PROPOSAL_NOT_PENDING, 409);
+
+    await this.events.append({
+      membershipId: proposal.contract_id.toString(),
+      agentId: proposal.agent_id.toString(),
+      agencyId: proposal.agency_id.toString(),
+      type: 'terms_proposal_withdrawn',
+      actorUserId: actor.userId,
+      actorRole: actor.role,
+      reason: note,
+      metadata: { proposalId },
+    });
+
+    this.notifyTermsProposal(
+      'agent_contract.terms_resolved',
+      cancelled,
+      this.counterpartyOf(party)
+    );
+    return cancelled;
+  }
+
+  /**
+   * Counter an open proposal: supersede theirs, raise yours, in one transaction.
+   *
+   * `superseded` exists as a state precisely for this. A counter is not a
+   * rejection — collapsing the two would lose the chain that shows how the
+   * parties converged, and `supersedes_id` is what reconstructs it.
+   */
+  async counterTermsProposalAs(
+    party: ContractTermsParty,
+    ownerId: string,
+    proposalId: string,
+    terms: ContractTermsUpdate,
+    note: string | null,
+    actor: Actor
+  ): Promise<IContractTermsProposal> {
+    const open = await this.loadProposalForParty(party, proposalId, ownerId);
+
+    if (open.proposed_by_role === party) {
+      throw createAppError(ERROR_CODES.CONTRACT_TERMS_PROPOSAL_NOT_YOURS, 403, undefined, {
+        proposedByRole: open.proposed_by_role,
+        hint: 'You cannot counter your own proposal. Cancel it and raise another.',
+      });
+    }
+
+    this.assertNegotiableBy(party, terms);
+
+    const contract = await this.contracts.findById(open.contract_id.toString());
+    if (!contract) throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
+    if (terms.fee_split) this.assertFeeSplitCoherent(terms.fee_split, contract.fee_split);
+
+    const counter = await transactionManager.runInTransaction(async (session) => {
+      const superseded = await this.proposals.resolve(
+        proposalId,
+        'superseded',
+        { role: party, userId: actor.userId },
+        note,
+        session
+      );
+      if (!superseded) {
+        throw createAppError(ERROR_CODES.CONTRACT_TERMS_PROPOSAL_NOT_PENDING, 409);
+      }
+
+      return await this.proposals.create(
+        {
+          contractId: open.contract_id.toString(),
+          agentId: open.agent_id.toString(),
+          agencyId: open.agency_id.toString(),
+          proposedByRole: party,
+          proposedByUserId: actor.userId,
+          termsBefore: this.snapshotTermsBefore(contract, terms),
+          proposedTerms: terms as ProposedTerms,
+          note,
+          supersedesId: proposalId,
+        },
+        session
+      );
+    });
+
+    await this.events.append({
+      membershipId: open.contract_id.toString(),
+      agentId: open.agent_id.toString(),
+      agencyId: open.agency_id.toString(),
+      type: 'terms_proposal_superseded',
+      actorUserId: actor.userId,
+      actorRole: actor.role,
+      reason: note,
+      metadata: {
+        supersededProposalId: proposalId,
+        proposalId: counter._id.toString(),
+        terms: terms as Record<string, unknown>,
+      },
+    });
+
+    this.notifyTermsProposal(
+      'agent_contract.terms_proposed',
+      counter,
+      this.counterpartyOf(party)
+    );
+    return counter;
+  }
+
+  // ─── Terms-proposal inbox ─────────────────────────────────────────────────
+
+  async listPendingProposalsForAgent(agentId: string): Promise<IContractTermsProposal[]> {
+    return await this.proposals.listPendingForAgent(agentId);
+  }
+
+  async listPendingProposalsForAgency(agencyId: string): Promise<IContractTermsProposal[]> {
+    return await this.proposals.listPendingForAgency(agencyId);
+  }
+
+  /** One contract's negotiation trail. Scoped so a foreign contract 404s. */
+  async listProposalsForContract(
+    party: ContractTermsParty,
+    ownerId: string,
+    contractId: string
+  ): Promise<IContractTermsProposal[]> {
+    await this.loadForParty(party, contractId, ownerId);
+    return await this.proposals.listForContract(contractId);
   }
 
   /**
@@ -947,6 +1727,14 @@ export class AgentContractService {
       const fromStatus = source.status;
       const now = new Date();
 
+      // Carry the negotiated terms across, for exactly the reason the primary
+      // standing is carried: losing them silently is not a neutral default.
+      // See `contractTermsOf` for what goes wrong without this.
+      //
+      // The destination agency is not bound to them — they may propose a change
+      // like any other live-contract term, and the agent answers.
+      const carriedTerms = contractTermsOf(source);
+
       const from = await this.contracts.transition(
         source._id.toString(),
         TRANSITION_FROM.deactivate,
@@ -980,6 +1768,11 @@ export class AgentContractService {
           // silently would leave the agent with no primary at all.
           isPrimary: wasPrimary,
           codThreshold: threshold,
+          terms: carriedTerms,
+          // The terms came from a contract both parties had agreed, so they are
+          // not an open offer awaiting anyone. Attributed to the destination
+          // agency because they are the party who now stands behind them.
+          termsProposedBy: 'agency',
           approvedAt: now,
           approvedByUserId: actor.userId,
         },
@@ -1025,46 +1818,139 @@ export class AgentContractService {
   // ─── Guards ───────────────────────────────────────────────────────────────
 
   /**
-   * Which party raised this contract.
+   * Which party raised this contract. **Legacy fallback only** — use
+   * `proposerOf` for any authority decision.
    *
-   * `origin` is the discriminator — the agent↔agency equivalent of
-   * `requester_role` on the vendor↔agency connection. Only `join_request` is
-   * agent-raised; `invitation` (an agency requesting a specific agent),
-   * `transfer`, `admin` and `migration` are all agency- or platform-raised, and
-   * in each of those the agent is the party who consents.
+   * `origin` is the agent↔agency equivalent of `requester_role` on the
+   * vendor↔agency connection. Only `join_request` is agent-raised; `invitation`
+   * (an agency requesting a specific agent), `transfer`, `admin` and
+   * `migration` are all agency- or platform-raised.
+   *
+   * It used to BE the approver discriminator, which worked only because nothing
+   * could change the terms after creation. It cannot express a counter-proposal
+   * — `origin` is immutable, and a counter is precisely the ball changing hands.
    */
   private initiatorOf(contract: IAgentAgencyContract): 'agent' | 'agency' {
     return contract.origin === 'join_request' ? 'agent' : 'agency';
   }
 
   /**
+   * Which party's terms are currently standing — THE authority discriminator.
+   *
+   * The counterparty of this party answers (approve/reject/counter); this party
+   * withdraws. A counter flips `terms_proposed_by`, so the answer changes as the
+   * negotiation moves.
+   *
+   * Falls back to `origin` when `terms_proposed_by` is null. That covers two
+   * cases and treats them identically, correctly: a contract written before
+   * this field existed (whose behaviour was defined by `origin`, so it is
+   * preserved exactly), and a bare agent join-request carrying no terms. The
+   * second is only reachable for `withdraw` — `approve` is refused outright by
+   * `assertTermsApprovable`, because terms nobody stated cannot be consented to.
+   */
+  private proposerOf(contract: IAgentAgencyContract): 'agent' | 'agency' {
+    return contract.terms_proposed_by ?? this.initiatorOf(contract);
+  }
+
+  /**
    * Enforce "the other side answers, your side withdraws" for the three
-   * transitions whose permitted party depends on who raised the contract.
+   * transitions whose permitted party depends on who proposed the terms.
    *
    * Without this, `TRANSITION_AUTHORITY.approve` being `unilateral` for both
-   * parties would let whoever raised a pending contract approve it themselves —
-   * which is exactly the consent the handshake exists to obtain. It went
-   * unnoticed until now only because the agent had no route to `approve`.
+   * parties would let whoever's terms are standing approve them themselves —
+   * which is exactly the consent the handshake exists to obtain.
    */
-  private assertInitiatorRule(
+  private assertProposerRule(
     contract: IAgentAgencyContract,
     transition: ContractTransition,
     party: 'agent' | 'agency'
   ): void {
-    const initiatorOnly = INITIATOR_SCOPED_TRANSITIONS[transition];
-    if (initiatorOnly === undefined) return;
+    const proposerOnly = PROPOSER_SCOPED_TRANSITIONS[transition];
+    if (proposerOnly === undefined) return;
 
-    const initiator = this.initiatorOf(contract);
-    if (initiatorOnly === (party === initiator)) return;
+    const proposer = this.proposerOf(contract);
+    if (proposerOnly === (party === proposer)) return;
 
     throw createAppError(ERROR_CODES.CONTRACT_TRANSITION_NOT_PERMITTED, 403, undefined, {
       transition,
       party,
-      initiator,
-      hint: initiatorOnly
-        ? 'Only the party that raised this request may withdraw it.'
-        : 'The other party must respond to a request you raised.',
+      proposer,
+      hint: proposerOnly
+        ? 'Only the party whose terms are standing may withdraw them.'
+        : 'The other party must respond to the terms you proposed.',
     });
+  }
+
+  /**
+   * A pending contract may only be approved if there are terms to approve.
+   *
+   * Two failures, one guard. `terms_proposed_by: null` means no party has
+   * stated terms — the state a bare agent join-request lands in, and the state
+   * every legacy row was migrated into unless its stored split was already
+   * coherent. Approving there would bind the agent to
+   * `contractDefaults.feeSplit()`, whose `agent_share_percent` is null, which
+   * `applyFeeSplit` resolves to a cut of ZERO. The agent would be consenting to
+   * a number nobody chose and nobody showed them.
+   *
+   * The coherence half catches the same outcome arriving by a different route:
+   * terms that were stated but leave the model without the field it pays from.
+   */
+  private assertTermsApprovable(contract: IAgentAgencyContract): void {
+    if (contract.terms_proposed_by === null) {
+      throw createAppError(ERROR_CODES.CONTRACT_TERMS_NOT_PROPOSED, 422, undefined, {
+        contractId: contract._id.toString(),
+        hint:
+          'No party has proposed terms on this contract yet. The agency must propose terms ' +
+          'before it can be approved.',
+      });
+    }
+    // Merging an empty patch over the stored split checks the stored split itself.
+    this.assertFeeSplitCoherent({}, contract.fee_split);
+  }
+
+  /**
+   * Restrict which term groups a party may write.
+   *
+   * The agency may propose anything negotiable; the agent may propose only what
+   * describes their own side of the bargain — what they are paid and where they
+   * will work. Everything else is the agency's risk control: the agent answers
+   * it, but does not author it.
+   */
+  private assertNegotiableBy(party: ContractTermsParty, terms: ContractTermsUpdate): void {
+    const allowed: readonly string[] =
+      party === 'agent' ? AGENT_NEGOTIABLE_TERM_GROUPS : NEGOTIABLE_TERM_GROUPS;
+
+    const offending = Object.entries(terms)
+      .filter(([group, value]) => value !== undefined && !allowed.includes(group))
+      .map(([group]) => group);
+
+    if (offending.length > 0) {
+      throw createAppError(ERROR_CODES.CONTRACT_TERMS_NOT_NEGOTIABLE, 403, undefined, {
+        party,
+        offending,
+        negotiable: allowed,
+        hint:
+          party === 'agent'
+            ? 'An agent may only propose the fee split and coverage.'
+            : 'Employment and the COD threshold have their own endpoints and are not negotiated.',
+      });
+    }
+  }
+
+  /** The agreed value of each group a patch touches — the proposal's `before`. */
+  private snapshotTermsBefore(
+    contract: IAgentAgencyContract,
+    terms: ContractTermsUpdate
+  ): ProposedTerms {
+    const before: ProposedTerms = {};
+    for (const group of Object.keys(terms) as Array<keyof ContractTermsUpdate>) {
+      if (terms[group] === undefined) continue;
+      const current = (contract as unknown as Record<string, unknown>)[group];
+      // Inert data, not a live reference that would follow the contract as it
+      // changes — see plainOf.
+      before[group] = plainOf(current) ?? null;
+    }
+    return before;
   }
 
   private async loadForAgency(contractId: string, agencyId: string): Promise<IAgentAgencyContract> {
@@ -1075,6 +1961,50 @@ export class AgentContractService {
       throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
     }
     return contract;
+  }
+
+  /** `loadForAgency` generalised to either party. Same 404-not-403 rule. */
+  private async loadForParty(
+    party: ContractTermsParty,
+    contractId: string,
+    ownerId: string
+  ): Promise<IAgentAgencyContract> {
+    const contract = await this.contracts.findById(contractId);
+    if (!contract) throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
+
+    const owner =
+      party === 'agent' ? contract.agent_id.toString() : contract.agency_id.toString();
+    if (owner !== ownerId) throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
+
+    return contract;
+  }
+
+  /**
+   * Load a proposal addressed to this party, and assert it is still open.
+   *
+   * Scope first, then state: a foreign proposal must 404 rather than leak that
+   * it exists by reporting it already resolved.
+   */
+  private async loadProposalForParty(
+    party: ContractTermsParty,
+    proposalId: string,
+    ownerId: string
+  ): Promise<IContractTermsProposal> {
+    const proposal = await this.proposals.findById(proposalId);
+    if (!proposal) throw createAppError(ERROR_CODES.CONTRACT_TERMS_PROPOSAL_NOT_FOUND, 404);
+
+    const owner =
+      party === 'agent' ? proposal.agent_id.toString() : proposal.agency_id.toString();
+    if (owner !== ownerId) {
+      throw createAppError(ERROR_CODES.CONTRACT_TERMS_PROPOSAL_NOT_FOUND, 404);
+    }
+
+    if (proposal.state !== 'pending') {
+      throw createAppError(ERROR_CODES.CONTRACT_TERMS_PROPOSAL_NOT_PENDING, 409, undefined, {
+        state: proposal.state,
+      });
+    }
+    return proposal;
   }
 
   private async assertNoLiveContract(agentId: string, agencyId: string): Promise<void> {

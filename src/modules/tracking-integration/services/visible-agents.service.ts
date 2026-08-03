@@ -1,4 +1,5 @@
-import { ShipmentModel, ShipmentStatus } from '../../shipments/shipment.model';
+import { FilterQuery } from 'mongoose';
+import { IShipment, ShipmentModel, ShipmentStatus } from '../../shipments/shipment.model';
 import { OrderModel } from '../../orders/order.model';
 
 /**
@@ -21,13 +22,34 @@ import { OrderModel } from '../../orders/order.model';
 // is trackable too: a picked-up parcel being reassigned is tracked again the
 // moment its replacement agent accepts (the interval before that carries no
 // agent, so nobody is tracked).
-const TRACKABLE_SHIPMENT_STATUSES: ShipmentStatus[] = [
+export const TRACKABLE_SHIPMENT_STATUSES: ShipmentStatus[] = [
   'assigned',
   'handing_over',
   'picked_up',
   'in_transit',
   'agent_delivered',
 ];
+
+/**
+ * The agency's currently-trackable shipments — the ONE predicate both the
+ * visibility policy below and the agency live-tracking board select on.
+ *
+ * It exists so the two cannot drift: geo-tracker gates a viewer's WebSocket
+ * subscription on `forAgency()` below, so a board assembled from a wider filter
+ * would render an agent whose subscribe geo-tracker then refuses, and a narrower
+ * one would hide an agent the agency is entitled to watch.
+ *
+ * `agent_id: { $ne: null }` is part of the rule, not an optimisation: a shipment
+ * offered but not yet accepted is trackable in status only — there is no agent
+ * bound to it, so there is nobody to track.
+ */
+export function trackableShipmentsForAgency(agencyId: string): FilterQuery<IShipment> {
+  return {
+    agency_id: agencyId,
+    status: { $in: TRACKABLE_SHIPMENT_STATUSES },
+    agent_id: { $ne: null },
+  };
+}
 
 /**
  * How a shipment's terminal status maps to the outcome geo-tracker stamps on the
@@ -138,11 +160,7 @@ export class VisibleAgentsService {
   }
 
   private async forAgency(agencyId: string): Promise<string[]> {
-    const agentIds = await ShipmentModel.distinct('agent_id', {
-      agency_id: agencyId,
-      status: { $in: TRACKABLE_SHIPMENT_STATUSES },
-      agent_id: { $ne: null },
-    }).exec();
+    const agentIds = await ShipmentModel.distinct('agent_id', trackableShipmentsForAgency(agencyId)).exec();
     return agentIds.map((id) => id.toString());
   }
 

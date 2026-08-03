@@ -41,13 +41,24 @@ import { AGENT_CONFIG } from '../config/agent.config';
  *
  * ── Who may respond to a pending contract ────────────────────────────────────
  *
- * `origin` is the approver discriminator, not merely audit metadata: the party
- * that did NOT raise the contract responds to it, and the party that DID raise
- * it may withdraw it. `join_request` means the agent asked; every other origin
- * (`invitation`, `transfer`, `admin`, `migration`) is agency- or
- * platform-initiated and the agent is the one who consents. See
- * AgentContractService.initiatorOf — this mirrors `requester_role` on the
- * vendor↔agency connection (modules/agency-connections/connection.model.ts).
+ * `terms_proposed_by` is the approver discriminator: the party that did NOT
+ * make the standing proposal responds to it (approve / reject / counter), and
+ * the party that DID make it may withdraw it. A counter overwrites the terms,
+ * flips this field and bumps `terms_version` — which is the whole reason it
+ * exists. `origin` records how the RELATIONSHIP began and is immutable, so it
+ * structurally cannot express "the ball moved to the other side".
+ *
+ * `origin` therefore survives as audit metadata plus a fallback: for legacy
+ * rows written before this field, AgentContractService.proposerOf derives the
+ * proposer from `origin` (`join_request` ⇒ agent, every other origin ⇒ agency),
+ * which is exactly the behaviour those rows were created under. It mirrors
+ * `requester_role` on the vendor↔agency connection
+ * (modules/agency-connections/connection.model.ts).
+ *
+ * `terms_proposed_by: null` means NOBODY has proposed terms yet — the state a
+ * bare agent join-request lands in. It is not approvable: approving terms that
+ * no party has stated would bind an agent to `contractDefaults.feeSplit()`,
+ * which pays them zero. See AgentContractService.assertTermsApprovable.
  */
 
 export type ContractStatus =
@@ -102,6 +113,43 @@ export type MembershipStatus = ContractStatus;
 export const LIVE_MEMBERSHIP_STATUSES = LIVE_CONTRACT_STATUSES;
 
 export type EmploymentType = 'employee' | 'contractor' | 'freelancer';
+
+/** The two parties that can hold a terms proposal. Never 'admin' or 'system'. */
+export type ContractTermsParty = 'agent' | 'agency';
+
+/**
+ * The term groups that are NEGOTIATED — proposed by one party and answered by
+ * the other.
+ *
+ * Two groups are deliberately absent, and both exclusions are load-bearing:
+ *
+ *  - `employment` — including `employee_ref`, the agency's internal staff
+ *    number. It is the agency's own HR record about this agent; staging a badge
+ *    number behind the agent's consent would be theatre. Keeps its own
+ *    unilateral route (`PATCH …/employment`).
+ *  - `cod.threshold` — not a term at all but a SUB-ALLOCATION of the agent's
+ *    own `cod.max_threshold` pool, which must be checked transactionally
+ *    against the agent's remaining headroom. Routing it through a consent
+ *    inbox would break that allocation race guard. Keeps `PATCH …/cod-limit`.
+ */
+export const NEGOTIABLE_TERM_GROUPS = [
+  'remittance_terms',
+  'coverage',
+  'fee_split',
+  'shipment_value_ceiling',
+] as const;
+
+/**
+ * The subset an AGENT may propose or counter.
+ *
+ * These two describe the agent's own side of the bargain — what they are paid
+ * and where they will work. The remainder (remittance cadence, the value
+ * ceiling) are the agency's risk controls: the agent answers them, but does not
+ * write them. Enforced by AgentContractService.assertNegotiableBy.
+ */
+export const AGENT_NEGOTIABLE_TERM_GROUPS = ['coverage', 'fee_split'] as const;
+
+export type NegotiableTermGroup = (typeof NEGOTIABLE_TERM_GROUPS)[number];
 
 /** How the contract began — kept for audit and analytics. */
 export type ContractOrigin = 'invitation' | 'join_request' | 'transfer' | 'admin' | 'migration';
@@ -217,6 +265,24 @@ export interface IAgentAgencyContract extends Document {
    * this agent. null = no per-shipment cap.
    */
   shipment_value_ceiling: number | null;
+
+  // ── Negotiation state ───────────────────────────────────────────────────────
+  /**
+   * Which party made the terms currently standing on this contract — the
+   * approver discriminator (see the header). `null` means no party has proposed
+   * terms yet, which is NOT approvable.
+   *
+   * On an `active` contract this records who last had a proposal accepted; it
+   * is audit there, not authority, because a live contract's terms change
+   * through ContractTermsProposal rather than through this field.
+   */
+  terms_proposed_by: ContractTermsParty | null;
+  /**
+   * Bumped on every accepted proposal and every counter. 0 = terms were never
+   * stated (schema defaults). Lets a client detect that the offer it is
+   * rendering has been superseded under it.
+   */
+  terms_version: number;
 
   // ── Lifecycle stamps ────────────────────────────────────────────────────────
   invited_by_user_id: mongoose.Types.ObjectId | null;
@@ -383,6 +449,9 @@ const AgentAgencyContractSchema = new Schema<IAgentAgencyContract>(
     coverage: { type: CoverageSchema, default: contractDefaults.coverage },
     fee_split: { type: FeeSplitSchema, default: contractDefaults.feeSplit },
     shipment_value_ceiling: { type: Number, default: null, min: 0 },
+
+    terms_proposed_by: { type: String, enum: ['agent', 'agency', null], default: null },
+    terms_version: { type: Number, default: 0, min: 0, required: true },
 
     invited_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
     invited_at: { type: Date, default: null },

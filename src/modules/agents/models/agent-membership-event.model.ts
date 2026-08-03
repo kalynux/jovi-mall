@@ -42,7 +42,18 @@ export type MembershipEventType =
   | 'employment_updated'
   /** Any negotiated term other than employment or the COD threshold. */
   | 'terms_updated'
-  | 'cod_limit_changed';
+  | 'cod_limit_changed'
+  // ── Negotiation (see AgentContractService) ─────────────────────────────────
+  /** A party countered the terms standing on a PENDING contract. */
+  | 'terms_countered'
+  /** A party proposed a change to a LIVE contract's terms. */
+  | 'terms_proposed'
+  | 'terms_proposal_accepted'
+  | 'terms_proposal_rejected'
+  /** The proposer pulled their own open proposal back. */
+  | 'terms_proposal_withdrawn'
+  /** An open proposal was replaced by the counterparty's counter-proposal. */
+  | 'terms_proposal_superseded';
 
 export interface IAgentMembershipEvent extends Document {
   membership_id: mongoose.Types.ObjectId | null;
@@ -93,6 +104,15 @@ const AgentMembershipEventSchema = new Schema<IAgentMembershipEvent>(
         'employment_updated',
         'terms_updated',
         'cod_limit_changed',
+        // Keep in step with MembershipEventType above — the union and this enum
+        // are two definitions of one list, and a value missing HERE is rejected
+        // by Mongoose inside an otherwise-successful transaction.
+        'terms_countered',
+        'terms_proposed',
+        'terms_proposal_accepted',
+        'terms_proposal_rejected',
+        'terms_proposal_withdrawn',
+        'terms_proposal_superseded',
       ],
     },
     from_status: { type: String, default: null },

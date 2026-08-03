@@ -28,6 +28,28 @@ export function initializeAgencyNotificationEventConsumers(): void {
     eventBus.subscribe('agent_contract.request_received', handler.handleAgentContractRequestReceived.bind(handler));
     eventBus.subscribe('agent_contract.approved', handler.handleAgentContractApproved.bind(handler));
     eventBus.subscribe('agent_contract.rejected', handler.handleAgentContractRejected.bind(handler));
+    eventBus.subscribe(
+        'agent_contract.status_request_raised',
+        handler.handleAgentContractStatusRequestRaised.bind(handler)
+    );
+    eventBus.subscribe(
+        'agent_contract.status_request_resolved',
+        handler.handleAgentContractStatusRequestResolved.bind(handler)
+    );
+
+    // Terms negotiation — the terms of the bargain rather than its status.
+    eventBus.subscribe(
+        'agent_contract.terms_countered',
+        handler.handleAgentContractTermsCountered.bind(handler)
+    );
+    eventBus.subscribe(
+        'agent_contract.terms_proposed',
+        handler.handleAgentContractTermsProposed.bind(handler)
+    );
+    eventBus.subscribe(
+        'agent_contract.terms_resolved',
+        handler.handleAgentContractTermsResolved.bind(handler)
+    );
 
     eventBus.subscribe('shipment.assigned', handler.handleShipmentAssigned.bind(handler));
     // Agent-acceptance workflow: an agent accepted, or nobody did (assign manually).

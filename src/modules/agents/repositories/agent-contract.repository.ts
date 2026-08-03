@@ -12,7 +12,17 @@ import {
   IContractRemittanceTerms,
   IContractCoverage,
   IContractFeeSplit,
+  ContractTermsParty,
 } from '../models/agent-agency-membership.model';
+
+/** The negotiated groups a caller may write. Mirrors ContractTermsUpdate. */
+export interface ContractTermsPatch {
+  employment?: Partial<IMembershipEmployment>;
+  remittance_terms?: Partial<IContractRemittanceTerms>;
+  coverage?: Partial<IContractCoverage>;
+  fee_split?: Partial<IContractFeeSplit>;
+  shipment_value_ceiling?: number | null;
+}
 
 export interface CreateContractInput {
   agentId: string;
@@ -21,6 +31,10 @@ export interface CreateContractInput {
   origin: ContractOrigin;
   isPrimary?: boolean;
   codThreshold?: number;
+  /** Terms stated by the requesting party, written in the same insert. */
+  terms?: ContractTermsPatch;
+  /** Which party stated them. null = none stated, which is not approvable. */
+  termsProposedBy?: ContractTermsParty | null;
   invitedByUserId?: string | null;
   invitedAt?: Date | null;
   requestedAt?: Date | null;
@@ -38,6 +52,14 @@ export interface CreateContractInput {
  */
 export class AgentContractRepository {
   async create(input: CreateContractInput, session?: ClientSession): Promise<IAgentAgencyContract> {
+    // Only the groups the caller actually stated are spread in, so the rest fall
+    // to the schema defaults rather than being written as explicit undefined.
+    const terms = input.terms ?? {};
+    const statedGroups: Record<string, unknown> = {};
+    for (const [group, value] of Object.entries(terms)) {
+      if (value !== undefined) statedGroups[group] = value;
+    }
+
     const [contract] = await AgentAgencyContractModel.create(
       [
         {
@@ -52,6 +74,9 @@ export class AgentContractRepository {
             lifetime_settled: 0,
             last_settled_at: null,
           },
+          ...statedGroups,
+          terms_proposed_by: input.termsProposedBy ?? null,
+          terms_version: input.termsProposedBy ? 1 : 0,
           invited_by_user_id: input.invitedByUserId ?? null,
           invited_at: input.invitedAt ?? null,
           requested_at: input.requestedAt ?? null,
@@ -341,16 +366,25 @@ export class AgentContractRepository {
 
   // ─── Terms ────────────────────────────────────────────────────────────────
 
+  /**
+   * Patch the negotiated terms.
+   *
+   * Each group is dot-flattened into `$set` so an untouched key inside a group
+   * keeps its stored value — a caller changing only `fee_split.model` must not
+   * blank `agent_flat_fee`.
+   *
+   * `meta` carries the negotiation state. Supplying it makes this a PROPOSAL
+   * (the terms now stand in the named party's name and the version advances);
+   * omitting it makes it a silent correction. The service supplies it on every
+   * counter and on every accepted proposal, and omits it nowhere — it is
+   * optional only so that `applyAgreedTerms` can express "keep the proposer,
+   * bump the version".
+   */
   async updateTerms(
     contractId: string,
-    terms: {
-      employment?: Partial<IMembershipEmployment>;
-      remittance_terms?: Partial<IContractRemittanceTerms>;
-      coverage?: Partial<IContractCoverage>;
-      fee_split?: Partial<IContractFeeSplit>;
-      shipment_value_ceiling?: number | null;
-    },
-    session?: ClientSession
+    terms: ContractTermsPatch,
+    session?: ClientSession,
+    meta?: { termsProposedBy?: ContractTermsParty | null; bumpVersion?: boolean }
   ): Promise<IAgentAgencyContract | null> {
     const set: Record<string, unknown> = {};
     for (const [group, value] of Object.entries(terms)) {
@@ -363,9 +397,54 @@ export class AgentContractRepository {
         if (inner !== undefined) set[`${group}.${key}`] = inner;
       }
     }
-    if (Object.keys(set).length === 0) return await this.findById(contractId, session);
 
-    return await AgentAgencyContractModel.findByIdAndUpdate(contractId, { $set: set }, { new: true, session });
+    if (meta && meta.termsProposedBy !== undefined) set.terms_proposed_by = meta.termsProposedBy;
+    const update: Record<string, unknown> = {};
+    if (Object.keys(set).length > 0) update.$set = set;
+    if (meta?.bumpVersion) update.$inc = { terms_version: 1 };
+
+    if (Object.keys(update).length === 0) return await this.findById(contractId, session);
+
+    return await AgentAgencyContractModel.findByIdAndUpdate(contractId, update, { new: true, session });
+  }
+
+  /**
+   * Apply an accepted proposal's terms to the contract.
+   *
+   * Distinct from `updateTerms` only in intent, and named so the accept path
+   * reads as what it is. `terms_proposed_by` becomes the party whose proposal
+   * won, because they are the party whose terms now stand.
+   */
+  async applyAgreedTerms(
+    contractId: string,
+    terms: ContractTermsPatch,
+    acceptedFrom: ContractTermsParty,
+    session?: ClientSession
+  ): Promise<IAgentAgencyContract | null> {
+    return await this.updateTerms(contractId, terms, session, {
+      termsProposedBy: acceptedFrom,
+      bumpVersion: true,
+    });
+  }
+
+  /**
+   * Active contracts for a set of agents at one agency, in ONE query.
+   *
+   * The dispatch path needs each candidate's contract to read its coverage,
+   * value ceiling and COD threshold. Fetching them per agent is an N+1 across
+   * the whole eligible pool on every auto-assignment; this is the batched form
+   * every caller there should use.
+   */
+  async listActiveForAgencyAndAgents(
+    agencyId: string,
+    agentIds: string[]
+  ): Promise<IAgentAgencyContract[]> {
+    if (agentIds.length === 0) return [];
+    return await AgentAgencyContractModel.find({
+      agency_id: agencyId,
+      agent_id: { $in: agentIds.map((id) => new Types.ObjectId(id)) },
+      status: 'active',
+    });
   }
 
   // ─── Primary agency ───────────────────────────────────────────────────────

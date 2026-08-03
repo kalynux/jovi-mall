@@ -33,6 +33,16 @@ export const TRACKING_INTEGRATION_CONFIG = Object.freeze({
 
   /** Per-request timeout (ms) for the webhook POST. */
   REQUEST_TIMEOUT_MS: parseInt(process.env.GEO_TRACKER_REQUEST_TIMEOUT_MS || '5000'),
+
+  /**
+   * Most shipments the agency live-tracking board returns in one snapshot.
+   *
+   * The board is a live map load, not a paginated list — an agency's trackable
+   * set is naturally bounded by roster size × per-agent capacity, so this is a
+   * ceiling against a pathological account rather than a page size. When it
+   * bites, the response reports `meta.truncated`.
+   */
+  TRACKING_BOARD_MAX_SHIPMENTS: parseInt(process.env.TRACKING_BOARD_MAX_SHIPMENTS || '200'),
 });
 
 /** True when a geo-tracker endpoint is configured to receive events. */

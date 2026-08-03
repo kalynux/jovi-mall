@@ -69,15 +69,32 @@ one secondary channel; a channel delivers only if enabled **and** verified; prio
 | `agent_contract.request_received` | An agency asked **you** to deliver for them. | **The only signal that a request is waiting** — there is no invite inbox to poll any more. Accept or reject it from `memberships/{id}`. Gated by `contractUpdated`; `aggregateType: contract`. See [Agency membership](./agency-membership.md). |
 | `agent_contract.approved` | An agency approved an application you sent. | You can now receive their delivery offers. Same gate, `aggregateType: contract`. |
 | `agent_contract.rejected` | An agency declined an application you sent. | You may apply again later, or browse other agencies. Same gate. |
+| `agent_contract.status_request_raised` | An agency proposed a change to a contract you already hold — a pause, a reactivation, or **ending it**. | It does not take effect until you answer. Answer from your [status-request inbox](./agency-membership.md#get-apiagentmembershipsstatus-requests). Same gate, `aggregateType: contract`. |
+| `agent_contract.status_request_resolved` | A pending contract change was approved, declined, or cancelled. | Covers both "the agency answered what you raised" and "the agency withdrew what you were waiting on" — the copy names the change, not whose it was. Same gate. |
+| `agent_contract.terms_countered` | An agency changed the terms of a **pending** contract — your cut, your coverage, the settlement cadence. | **The right to accept is now yours.** Without this an agent who thinks their own offer is still standing never goes back to look. Same gate, `aggregateType: contract`. Idempotent on the contract id **plus emission time**, so each round of a negotiation notifies. |
+| `agent_contract.terms_proposed` | An agency wants to change a **live** contract's terms. | The copy states that **your current terms stay in force until you answer** — that is a fact, not reassurance: you keep being paid the agreed rate while it sits. Same gate; idempotent on the **proposal** id. |
+| `agent_contract.terms_resolved` | A terms proposal was accepted, declined, withdrawn or superseded. | Neutral about whose it was — it covers both "the agency answered yours" and "the agency withdrew the one you were waiting on". Same gate; idempotent on the proposal id. |
 
 The three COD-deposit rows carry an `action` deep-linking to the deposit (`cod/deposits/{id}`), and an
 `aggregateType` of `deposit` with the deposit id as `aggregateId`. The `plan.*` rows deep-link to
 `plans` with `aggregateType: plan` and the agent id as `aggregateId`.
 
-The three `agent_contract.*` rows deep-link to `memberships/{contractId}` with
+All eight `agent_contract.*` rows deep-link to `memberships/{contractId}` with
 `aggregateType: contract` and the contract id as `aggregateId`. They are gated by
 `contractUpdated`, which defaults **on** — an agency's request now reaches you only through the
-platform, so silencing it means never seeing one.
+platform, so silencing it means never seeing one. That is doubly true of the three `terms_*` rows:
+they are how you learn what you are being asked to work for.
+
+> **WhatsApp is dark for the three `terms_*` situations** until `agent_contract_terms_countered`,
+> `agent_contract_terms_proposed` and `agent_contract_terms_resolved` are created and approved in
+> Meta Business Manager. In-app, email, Telegram and push deliver today. See
+> [whatsapp-templates.md](../notifications/whatsapp-templates.md).
+
+The first three are the handshake that **forms** a contract; the two `status_request_*` rows are
+changes to one that already exists. The latter used to be silent on the reasoning that they have
+their own inbox, which meant a proposed termination went unseen until someone happened to open the
+tab. Note the idempotency key is the **request** id, not the contract id: one contract can be
+paused, reactivated and later terminated, and each proposal is its own thing to answer.
 
 There is deliberately **no notification when you declare a deposit** — you did that, so it would be
 noise. The declaration notifies your *agency*, who has to answer it. For the same reason there is

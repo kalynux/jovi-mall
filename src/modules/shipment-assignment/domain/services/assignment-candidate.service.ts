@@ -10,6 +10,8 @@ import {
   AgentContractRepository,
   agentContractRepository,
   IDeliveryAgent,
+  contractCoversRegion,
+  contractAllowsShipmentValue,
 } from '../../../agents';
 import { VendorRepository } from '../../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repository';
@@ -172,28 +174,58 @@ export class AssignmentCandidateService {
     if (eligibleIds.length === 0) return { candidates: [], source: 'haversine' };
 
     const isCod = order.payment_method === 'cash_on_delivery';
-    const expectedAmount = isCod ? this.cashCollection.computeExpectedAmount(order, shipment) : 0;
+    // Computed for EVERY payment method now: the value ceiling is about the
+    // goods, not the cash. Fails open to null — see resolveShipmentValue.
+    const shipmentValue = this.resolveShipmentValue(order, shipment);
 
-    const [agents, pickup] = await Promise.all([
+    // ONE query for every candidate's contract, not one per candidate. The COD
+    // gate below used to call `findActive` inside a `Promise.all`, which is a
+    // concurrent N+1 rather than a fixed one — and the coverage and value gates
+    // need the same document, so batching it here serves all three.
+    const [agents, pickup, contracts] = await Promise.all([
       this.agents.findManyByIds(eligibleIds),
       this.resolvePickupLocation(shipment, order),
+      this.contracts.listActiveForAgencyAndAgents(agencyId, eligibleIds),
     ]);
+    const contractByAgent = new Map(contracts.map((c) => [c.agent_id.toString(), c]));
 
-    // Steps 2 + 3 — location-available and trust-floor gates (pure, no I/O).
+    const deliveryRegion = order.delivery_address?.components?.region ?? null;
+    const countryCode = order.delivery_address?.components?.country_code ?? null;
+
+    // Steps 2–4 — every pure gate in one pass, no I/O.
     const located = agents
       .map((agent) => ({ agent, position: this.resolvePosition(agent) }))
       .filter((c): c is { agent: IDeliveryAgent; position: ResolvedPosition } => {
         if (!c.position) return false; // no current location → cannot rank by proximity
         if (ASSIGNMENT_CONFIG.REQUIRE_LIVE_POSITION && !c.position.fresh) return false;
         if ((c.agent.cod?.trust_score ?? 0) < ASSIGNMENT_CONFIG.MIN_TRUST_SCORE) return false;
+
+        // Contract-term gates. A missing contract cannot happen for an eligible
+        // agent (eligibility requires an active one), but if it somehow does,
+        // fall through rather than throw — the COD gate below will refuse them
+        // for a reason an operator can act on.
+        const contract = contractByAgent.get(c.agent._id.toString());
+        if (contract) {
+          if (!contractCoversRegion(contract.coverage, deliveryRegion, countryCode)) return false;
+          if (!contractAllowsShipmentValue(contract.shipment_value_ceiling, shipmentValue)) {
+            return false;
+          }
+        }
         return true;
       });
 
-    // Step 4 — COD headroom gate, evaluated in PARALLEL (was a sequential N+1).
+    // Step 5 — COD headroom gate. Still last: it is the only one that reads the
+    // agent's live exposure, so it is the most expensive to be wrong about.
     let survivors = located;
     if (isCod) {
       const codOk = await Promise.all(
-        located.map((c) => this.canTakeCod(c.agent, agencyId, expectedAmount))
+        located.map((c) =>
+          this.canTakeCod(
+            c.agent,
+            contractByAgent.get(c.agent._id.toString())?.cod?.threshold ?? 0,
+            shipmentValue ?? 0
+          )
+        )
       );
       survivors = located.filter((_, i) => codOk[i]);
     }
@@ -278,14 +310,44 @@ export class AssignmentCandidateService {
     return agA._id.toString().localeCompare(agB._id.toString());
   }
 
-  /** Non-throwing COD headroom check (the throwing form is for command paths). */
-  private async canTakeCod(agent: IDeliveryAgent, agencyId: string, expectedAmount: number): Promise<boolean> {
+  /**
+   * Non-throwing COD headroom check (the throwing form is for command paths).
+   *
+   * Takes the threshold rather than looking the contract up: the caller already
+   * holds every candidate's contract from one batched query.
+   */
+  private async canTakeCod(
+    agent: IDeliveryAgent,
+    codThreshold: number,
+    expectedAmount: number
+  ): Promise<boolean> {
     try {
-      const contract = await this.contracts.findActive(agent._id.toString(), agencyId);
-      await this.exposure.assertCanTakeCodShipment(agent, expectedAmount, contract?.cod?.threshold ?? 0);
+      await this.exposure.assertCanTakeCodShipment(agent, expectedAmount, codThreshold);
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * A shipment's value, or null when it cannot be computed.
+   *
+   * The twin of `ShipmentAssignmentService.resolveShipmentValue`, and it exists
+   * for the sharper version of the same reason: `computeExpectedAmount` throws
+   * on a shipment referencing a missing order item, and an unguarded throw here
+   * would abort the whole ranking — leaving the shipment with zero candidates
+   * and the agency with no explanation for why nobody was offered it.
+   */
+  private resolveShipmentValue(order: IOrder, shipment: IShipment): number | null {
+    try {
+      return this.cashCollection.computeExpectedAmount(order, shipment);
+    } catch (error) {
+      console.error(
+        `[AssignmentCandidateService] Could not value shipment ${shipment._id.toString()} — ` +
+          'value-ceiling and COD gates will be skipped for this ranking:',
+        error
+      );
+      return null;
     }
   }
 
