@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PaymentChannelSchema } from '../../payments/validators/payment.validators';
 
 const PlanRoleSchema = z.enum(['vendor', 'agency', 'agent']);
 
@@ -38,28 +39,27 @@ export const AssignPlanSchema = z.object({
   paymentRef: z.string().trim().min(1).optional(),
 });
 
-/** Shared payment channel shape (mobile money / card). */
-const PaymentChannelSchema = z
-  .object({
-    phoneNumber: z.string().trim().optional(),
-    phoneOperator: z.enum(['MTN', 'ORANGE', 'MOOV']).optional(),
-    cardToken: z.string().trim().optional(),
-    customerEmail: z.string().email().optional(),
-    customerName: z.string().trim().optional(),
-  })
-  .default({});
+/**
+ * Shared payment channel shape (mobile money / card).
+ *
+ * The shape itself now lives with the payment module (the gateways that consume
+ * it), so a credit top-up, a plan purchase, a checkout and a booking payment all
+ * validate the buyer's number and email identically. Only the "may be omitted"
+ * part is billing's own: these two bodies have always defaulted it to `{}`.
+ */
+const BillingPaymentChannelSchema = PaymentChannelSchema.default({});
 
 /** Vendor: start a credit top-up purchase. */
 export const InitiateTopupSchema = z.object({
   packCode: z.string().trim().min(1),
   gateway: z.enum(['NOTCHPAY', 'MYCOOLPAY', 'STRIPE']),
-  channel: PaymentChannelSchema,
+  channel: BillingPaymentChannelSchema,
 });
 
 /** Vendor: start a self-serve plan purchase (planId comes from the URL). */
 export const InitiatePlanPurchaseSchema = z.object({
   gateway: z.enum(['NOTCHPAY', 'MYCOOLPAY', 'STRIPE']),
-  channel: PaymentChannelSchema,
+  channel: BillingPaymentChannelSchema,
 });
 
 /** Pagination query for ledger / top-up history. */

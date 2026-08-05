@@ -5,7 +5,7 @@ import { transactionManager } from '../../../core/database/transaction.manager';
 import { eventBus } from '../../../core/events/event-bus';
 import { COD_CONFIG } from '../config/cod.config';
 import { CashCollectionRepository } from '../repositories/cash-collection.repository';
-import { CashCollectionModel, ICashCollection } from '../models/cash-collection.model';
+import { CashCollectionModel, CashCollectionStatus, ICashCollection } from '../models/cash-collection.model';
 import { DeliveryCodeService, deliveryCodeService } from './delivery-code.service';
 import { CodCashAccountService, codCashAccountService } from './cod-cash-account.service';
 import {
@@ -32,6 +32,21 @@ export interface CollectInput {
   location?: { lat: number; lng: number } | null;
   deviceInfo?: string | null;
   ip?: string | null;
+}
+
+/**
+ * One shipment's COD block as the agency and agent views show it — never the
+ * delivery code, which is the customer's alone.
+ *
+ * `status: null` is the projected case: no `CashCollection` row exists yet
+ * because no agent has accepted, so `expectedAmount` is computed rather than
+ * snapshotted. See `getProjectedCodSummaryForShipment`.
+ */
+export interface CodShipmentSummary {
+  expectedAmount: number;
+  currency: string;
+  status: CashCollectionStatus | null;
+  collectedAt: Date | null;
 }
 
 /**
@@ -725,6 +740,90 @@ export class CashCollectionService {
       status: collection.status,
       collectedAt: collection.collected_at,
     };
+  }
+
+  /**
+   * COD summary that answers BEFORE an agent has accepted.
+   *
+   * A `CashCollection` row only exists once an agent is bound
+   * (`ensureForShipmentInSession`), so `getCodSummaryForShipment` returns null
+   * for every shipment still out on offer — which is exactly when an agency is
+   * deciding who to send and needs to know how much cash is involved. This falls
+   * back to the projected amount, computed from the same
+   * Σ(item price × qty) the collection will snapshot.
+   *
+   * `status: null` means precisely "no collection row yet". Deliberately NOT a
+   * fourth `CashCollectionStatus`: that enum describes the state of a row, and
+   * here there isn't one.
+   */
+  async getProjectedCodSummaryForShipment(order: IOrder, shipment: IShipment): Promise<CodShipmentSummary> {
+    const existing = await this.getCodSummaryForShipment((shipment._id as any).toString());
+    if (existing) return existing;
+    return {
+      expectedAmount: this.computeExpectedAmount(order, shipment),
+      currency: order.currency,
+      status: null,
+      collectedAt: null,
+    };
+  }
+
+  /**
+   * Batch variant of `getProjectedCodSummaryForShipment`, keyed by shipment id —
+   * one query for the whole page, then a pure computation for the shipments that
+   * have no collection row yet.
+   *
+   * Shipments whose order is missing from `ordersById`, or whose order is not
+   * COD, are simply absent from the result — as is one whose items cannot be
+   * priced. `computeExpectedAmount` throws on a shipment item with no matching
+   * order item, which is the right answer for a single detail view but must not
+   * cost an agency their whole list page over one unpriceable row.
+   */
+  async getProjectedCodSummariesForShipments(
+    shipments: IShipment[],
+    ordersById: Map<string, IOrder>
+  ): Promise<Map<string, CodShipmentSummary>> {
+    const summaries = new Map<string, CodShipmentSummary>();
+    if (shipments.length === 0) return summaries;
+
+    const shipmentIds = shipments.map((s) => (s._id as any).toString());
+    const collections = await CashCollectionModel.find({ shipment_id: { $in: shipmentIds } })
+      .lean()
+      .exec();
+    const byShipment = new Map(collections.map((c: any) => [c.shipment_id.toString(), c]));
+
+    for (const shipment of shipments) {
+      const shipmentId = (shipment._id as any).toString();
+      const order = ordersById.get(shipment.order_id.toString());
+      if (!order || order.payment_method !== 'cash_on_delivery') continue;
+
+      const collection = byShipment.get(shipmentId);
+      if (collection) {
+        summaries.set(shipmentId, {
+          expectedAmount: collection.expected_amount,
+          currency: collection.currency,
+          status: collection.status,
+          collectedAt: collection.collected_at,
+        });
+        continue;
+      }
+
+      try {
+        summaries.set(shipmentId, {
+          expectedAmount: this.computeExpectedAmount(order, shipment),
+          currency: order.currency,
+          status: null,
+          collectedAt: null,
+        });
+      } catch (err) {
+        console.error(
+          `[CashCollectionService] Cannot project the COD amount for shipment ${shipmentId} ` +
+            `(order ${order._id.toString()}) — omitting it from the page rather than failing it.`,
+          err
+        );
+      }
+    }
+
+    return summaries;
   }
 
   // ─── Internals ──────────────────────────────────────────────────────────────

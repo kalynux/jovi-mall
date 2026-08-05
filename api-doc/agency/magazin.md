@@ -111,9 +111,11 @@ Update the authenticated agency's magazin.
 - `name` (string, 2–100 chars): Business/display name — **not clearable** (required in the model).
 - `logoFileId` (string, MongoDB ObjectId, *clearable*): Id of a logo file uploaded via `POST /api/files/upload`. The response returns the resolved `logo` file object. Registers a `file_references` row so the file is not garbage-collected while set.
 - `description` (string, max 1000 chars, *clearable*).
-- `supportEmail` (string, valid email, *clearable*).
-- `supportPhone` (string, 8–20 chars, *clearable*).
-- `supportWhatsapp` (string, 8–20 chars, *clearable*).
+- `supportEmail` (string, valid email, lowercased, *clearable*).
+- `supportPhone` (string, **E.164** e.g. `+237612345678`, *clearable*).
+- `supportWhatsapp` (string, **E.164**, *clearable*).
+
+> Phone and email formats are platform-wide — see [Contact formats](../README.md#contact-formats-phone--email).
 - `coverage_areas` (`string[]`, min 1): **Full replace.** Region keys of the agency's `country` (from `locations.json`). Entries that aren't regions of that country → `400 AGENCY_COVERAGE_AREA_INVALID`.
 - `headquarters_addresses` (`object[]`, min 1): **Full replace**; index 0 = primary. Each entry is `{ label, address_description, support_contact:{ phone, email? }, geo }`. Every **new or edited** entry must carry a geocoded `geo` (a selected `/api/geo/search` result) resolving inside the agency's `country` — else `400 ADDRESS_GEO_REQUIRED` / `400 ADDRESS_COUNTRY_MISMATCH`. `location`, `region` and `city` are all derived from `geo` on write. Same flow as a vendor `business_addresses` entry.
   - `label` (string, 1–50 chars) is **required on every entry you write** — the agency's own name for the location, the one field the map result can't supply.

@@ -59,6 +59,12 @@ transaction rather than charging twice.
 
 `channel.phoneNumber` is **required** unless `gateway` is `STRIPE`.
 
+`channel.phoneNumber` must be **E.164** (leading `+` and country code, e.g. `+237670000001`) and
+`channel.customerEmail` must be a valid email — both are forwarded to the gateway, so a malformed
+value would otherwise surface as an opaque gateway failure or a receipt nobody receives. Both stay
+**optional**; the rule applies only when the field is sent. See
+[Contact formats](../README.md#contact-formats-phone--email).
+
 Exactly one of `cartId` / `orderId` must be sent — send both and the request is rejected.
 
 ### Example request

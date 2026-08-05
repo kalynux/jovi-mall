@@ -300,7 +300,7 @@ Initiate online payment for a booking the customer owns. Delegates to the paymen
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `gateway` | string | **Yes** | One of `NOTCHPAY`, `MYCOOLPAY`, `STRIPE` |
-| `channel` | object | **Yes** | Gateway-specific payer details. For mobile-money gateways supply `phoneNumber` / `phoneOperator`; fields vary per gateway. |
+| `channel` | object | **Yes** | Gateway-specific payer details. For mobile-money gateways supply `phoneNumber` (**E.164**, e.g. `+237650000000`) / `phoneOperator`; fields vary per gateway. An optional `customerEmail` must be a valid address. See [Contact formats](../README.md#contact-formats-phone--email). |
 
 **Response:** `200 OK`
 

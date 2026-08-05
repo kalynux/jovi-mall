@@ -37,19 +37,27 @@ export class CodSummaryService {
    * has suspended while they still sit on its cash must stay visible here — the
    * `liability` and `unsettledCollections` totals already count that cash, and a
    * per-agent breakdown that dropped them would understate who is holding what.
+   *
+   * **`cashHeld` is the CONTRACT's `cod.outstanding_balance`, never the agent's
+   * `CodCashAccount` balance.** The cash account is one pot for the person across
+   * every agency they serve; reading it here showed an agency money its agent
+   * was holding for a rival, which is both a privacy leak and a number the
+   * agency can act on wrongly — `AgentDepositService.assertDepositable` bounds a
+   * deposit by the per-contract figure, so a desk chasing the pot figure gets a
+   * 422 for cash that was never theirs. The two are equal only for an agent who
+   * serves exactly one agency.
    */
   async agencySummary(agencyId: string) {
-    const agentIds = await this.memberships.listAllocatingAgentIds(agencyId);
+    const contracts = await this.memberships.listAllocatingForAgency(agencyId);
 
     const [liability, agents, unsettled] = await Promise.all([
       this.cashAccounts.getBalance('agency', agencyId),
-      this.agentRepo.findManyByIds(agentIds),
+      this.agentRepo.findManyByIds(contracts.map((c) => c.agent_id.toString())),
       this.unsettledCollections({ agency_id: new Types.ObjectId(agencyId) }),
     ]);
 
-    const balances = await this.cashAccounts.getBalances(
-      'agent',
-      agents.map((a: IDeliveryAgent) => a._id.toString())
+    const nameByAgentId = new Map(
+      agents.map((a: IDeliveryAgent) => [a._id.toString(), a.name])
     );
 
     return {
@@ -58,11 +66,15 @@ export class CodSummaryService {
         balance: liability.balance,
         currency: liability.currency,
       },
-      agents: agents.map((agent: IDeliveryAgent) => ({
-        id: agent._id.toString(),
-        name: agent.name,
-        cashHeld: balances.get(agent._id.toString()) ?? 0,
-      })),
+      agents: contracts.map((contract) => {
+        const agentId = contract.agent_id.toString();
+        return {
+          id: agentId,
+          name: nameByAgentId.get(agentId) ?? null,
+          // Cash this agent holds that is attributable to THIS agency.
+          cashHeld: contract.cod?.outstanding_balance ?? 0,
+        };
+      }),
       // Collected cash not yet covered by a confirmed remittance.
       unsettledCollections: unsettled,
     };

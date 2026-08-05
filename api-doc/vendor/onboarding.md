@@ -170,7 +170,7 @@ Captures the vendor's country, timezone, and payout method.
 | Field | Type | Required? | Validation |
 |-------|------|-----------|------------|
 | `provider` | `string` | Yes | Min 1 char. E.g. `"MTN Mobile Money"`, `"Orange Money"` |
-| `phone_number` | `string` | Yes | Valid phone format |
+| `phone_number` | `string` | Yes | **E.164** — leading `+` and country code required (e.g. `+237670000000`). [Contact formats](../README.md#contact-formats-phone--email) |
 | `account_name` | `string` | Yes | Min 1 char |
 
 **`bank` sub-fields:**
@@ -452,7 +452,7 @@ Captures the vendor's return, cancellation, and support policies. All three sub-
 |-------|------|-----------|------------|-------|
 | `channels` | `object[]` | No | Max 4 entries | Support contact channels offered. |
 | `channels[].type` | `string` | Yes | `"email"` \| `"phone"` \| `"whatsapp"` \| `"telegram"` | Channel type. |
-| `channels[].contact` | `string` | Yes | Min `1`, Max `200` chars | Email address, phone number, or username. |
+| `channels[].contact` | `string` | Yes | Min `1`, Max `200` chars, **and valid for `type`**: `email` → a valid email address; `phone` / `whatsapp` → **E.164** (leading `+` and country code); `telegram` → free text (a @handle or invite link). [Contact formats](../README.md#contact-formats-phone--email) | Email address, phone number, or username. |
 | `eligibility_notes` | `string \| null` | No | Max `500` chars | Free-text describing who can contact support. |
 | `required_info` | `string[]` | No | See enum below | Information customers must provide when contacting support. |
 | `availability` | `string \| null` | No | `"24_7"` \| `"business_hours"` \| `"limited"` | Support hours. |

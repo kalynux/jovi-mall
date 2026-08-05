@@ -4,7 +4,7 @@ import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { PaymentOrchestratorService } from '../../payments/services/payment-orchestrator.service';
-import { PaymentGatewayType } from '../../payments/models/payment-transaction.model';
+import { InitiateBookingPaymentSchema } from '../../payments/validators/payment.validators';
 import { Booking } from '../models/booking.model';
 import { PaymentTransactionModel } from '../../payments/models/payment-transaction.model';
 import { Types } from 'mongoose';
@@ -24,15 +24,10 @@ const paymentOrchestrator = new PaymentOrchestratorService();
  */
 router.post('/:id/pay', requireAuth, requireRole(['customer']), asyncHandler(async (req: Request, res: Response) => {
   const { id: bookingId } = req.params;
-  const { gateway, channel } = req.body;
-  const customerId = req.auth!.role_entity._id.toString();
-
-  if (!gateway || !channel)
-    throw createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'Missing required fields: gateway and channel');
-
-  const validGateways: PaymentGatewayType[] = ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'];
-  if (!validGateways.includes(gateway))
-    throw createAppError(ERROR_CODES.VALIDATION_ERROR, 400, `Invalid gateway. Must be one of: ${validGateways.join(', ')}`);
+  // Same shared channel schema as /payments/initiate — a booking payment goes to
+  // the same gateways, so the mobile-money number and receipt email are held to
+  // the same rules rather than being forwarded as typed.
+  const { gateway, channel } = InitiateBookingPaymentSchema.parse(req.body);
 
   const booking = await Booking.findById(bookingId);
   if (!booking)

@@ -208,8 +208,8 @@ export class AgentContractRepository {
   }
 
   /**
-   * Agent ids whose contract with this agency can still be holding its cash —
-   * the ALLOCATING set (active | paused | suspended), not merely `active`.
+   * This agency's contracts that can still be holding its cash — the ALLOCATING
+   * set (active | paused | suspended), not merely `active`.
    *
    * Cash legitimately lands on and stays under a paused/suspended contract: a
    * collection attributes via `findLive` and a deposit is accepted via
@@ -217,13 +217,18 @@ export class AgentContractRepository {
    * must therefore draw its per-agent breakdown from here, or a suspended agent
    * still sitting on the agency's cash would vanish from the list while the
    * agency's liability total still counted it.
+   *
+   * Returns the contract documents rather than bare agent ids, deliberately:
+   * the only thing an agency may be shown about an agent's cash is
+   * `cod.outstanding_balance` — the slice attributable to THIS contract. Handing
+   * back ids invites the caller to look the agent up in `CodCashAccount`, which
+   * is the person's pot across every agency and is not this agency's business.
    */
-  async listAllocatingAgentIds(agencyId: string): Promise<string[]> {
-    const rows = await AgentAgencyContractModel.find(
-      { agency_id: agencyId, status: { $in: ALLOCATING_CONTRACT_STATUSES } },
-      { agent_id: 1 }
-    );
-    return rows.map((r) => r.agent_id.toString());
+  async listAllocatingForAgency(agencyId: string): Promise<IAgentAgencyContract[]> {
+    return await AgentAgencyContractModel.find({
+      agency_id: agencyId,
+      status: { $in: ALLOCATING_CONTRACT_STATUSES },
+    });
   }
 
   // ─── Directory annotation ─────────────────────────────────────────────────

@@ -771,6 +771,29 @@ only DB-free check that all four new situations carry copy in all five languages
      balance they could neither see nor withdraw — and the auto-payout sweep had no method to pay.
    - `EarningsQuoteService`'s `earningUnavailable: 'prepaid'` branch is **retired** — the quote is
      now answerable for every physical shipment.
+
+   **Follow-up, 2026-08-05 — the agency can now see its own side of the same fee.** The split
+   arithmetic was half-named: `applyFeeSplit` gave the agent's cut a home, while the agency's
+   remainder existed only as two inline expressions inside `EarningsSplitService`
+   (`earnedFee - agentCut`, `deliveryFee - agentCut + codFee`) — so there was nothing an agency
+   could be quoted from without writing the formula a third time. Now:
+   - **`resolveEarnedFee` moved** from `EarningsSplitService` into `EarningsQuoteService` (the split
+     imports it back — the only direction that does not close a cycle, since the split already
+     delegates `computeAgentCut` there), joined by new pure `computeCodHandlingFee` and
+     `computeAgencyCut`. Both split paths call them; **no behaviour changed**, the arithmetic is
+     simply defined once. `npm run test:earnings-quote` (29, DB-free) re-derives what each split
+     allocates from those helpers, so the two can no longer drift silently.
+   - **`quoteAgencyForShipment(s)`** feeds `agencyEarning` on the agency's shipment list and detail:
+     `earnedFee − agentCut + codHandlingFee`, itemised. It withholds (`agencyEarningUnavailable:
+     'no_agent'`) until an agent accepts, since before that there is no `fee_split` to subtract. A
+     missing *contract* is **not** withheld — that is a cut of 0 and the agency keeps the fee, which
+     is what the split does.
+   - Unrelated to the split but shipped alongside it: `paymentMethod` on shipment **list** rows
+     (previously detail-only, though the query already loaded it), and
+     `CashCollectionService.getProjectedCodSummary…`, which answers the COD amount **before** an
+     agent accepts. The collection row is created at acceptance, so the old read returned `null`
+     exactly when an agency was deciding who to send; the projection reports `status: null` to mark
+     itself as such rather than inventing a fourth `CashCollectionStatus`.
 2. **Trust composite engine** + nightly worker (see decisions below).
 3. ~~**Controllers/routes** for: agent threshold, contract terms, settlements,
    KYC/ban admin, status-request inbox.~~ **DONE 2026-07-29** — see the step 4 section below for

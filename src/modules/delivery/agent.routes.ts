@@ -62,7 +62,10 @@ router.post('/offers/:id/reject', AgentOfferController.reject);
 
 /**
  * GET /api/agent/shipments
- * Shipments assigned to this agent, newest first. Query: status?, q?, page?, limit?
+ * Shipments assigned to this agent, newest first. Query: status?, scope?, q?, page?, limit?
+ * `scope=active|past` splits the queue into what is still theirs to finish
+ * (ACTIVE_SHIPMENT_STATUSES, `failed` included — the parcel is still in the van)
+ * and what is over. `status` alongside it wins, being the more specific filter.
  * An agent may hold several at once — this list is routinely plural.
  * `q` searches the customer's name/phone, the product titles, the order number
  * and the tracking number (min 2 chars). Each row carries the pickup and

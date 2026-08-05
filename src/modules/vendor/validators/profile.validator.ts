@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { VendorConfig } from '../config/vendor.config';
+import { OptionalEmailAddressSchema } from '../../../core/validation/email';
+import { OptionalPhoneNumberSchema } from '../../../core/validation/phone';
 
 /**
  * Password Strength Validator
@@ -27,8 +29,8 @@ export const PasswordStrengthSchema = z
  */
 export const UpdateProfileSchema = z.object({
   displayName: z.string().min(2).max(100).optional(),
-  email: z.string().email().optional(),
-  phone: z.string().min(8).max(20).optional(),
+  email: OptionalEmailAddressSchema,
+  phone: OptionalPhoneNumberSchema,
   notificationPreferences: z
     .object({
       email: z.boolean().optional(),

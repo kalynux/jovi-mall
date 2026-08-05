@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { clearable } from '../../../core/validation/zod.helpers';
+import { ClearableEmailAddressSchema } from '../../../core/validation/email';
+import { ClearablePhoneNumberSchema } from '../../../core/validation/phone';
 
 /**
  * Update Store Profile Schema
@@ -24,9 +26,11 @@ export const UpdateStoreProfileSchema = z.object({
   logoFileId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'logoFileId must be a valid file id')),
   bannerFileId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'bannerFileId must be a valid file id')),
   description: clearable(z.string().max(1000, 'Description too long')),
-  supportEmail: clearable(z.string().email('Invalid email format')),
-  supportPhone: clearable(z.string().min(8).max(20)),
-  supportWhatsapp: clearable(z.string().min(8).max(20)),
+  supportEmail: ClearableEmailAddressSchema,
+  // WhatsApp is addressed by phone number, so it is held to the same E.164 rule
+  // as any other number — the provider will not accept anything else.
+  supportPhone: ClearablePhoneNumberSchema,
+  supportWhatsapp: ClearablePhoneNumberSchema,
   version: z.number().int().min(0, 'Version must be non-negative'), // REQUIRED
 });
 

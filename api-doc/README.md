@@ -250,6 +250,8 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 
 - **IDs** are MongoDB ObjectIds (24-hex strings).
 - **Timestamps** are ISO-8601 UTC strings (`2026-07-17T10:20:30.000Z`).
+- **Phone numbers** are **E.164, everywhere** — see [Contact formats](#contact-formats-phone--email).
+- **Email addresses** are validated and lowercased — see [Contact formats](#contact-formats-phone--email).
 - **Clearing optional fields** (added 2026-07-22): optional string fields in PATCH/POST bodies are
   *clearable* unless a doc says otherwise. Three states: **omit** the key → stored value unchanged;
   send **`null` or `""`** (whitespace-only counts as `""`) → field **cleared**, stored and returned
@@ -261,3 +263,86 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
   currency (default `XAF`); check each endpoint. COD amounts are whole-currency numbers.
 - **Soft delete**: most resources are soft-deleted; list endpoints never return deleted records.
 - **`Content-Type: application/json`** on every non-multipart POST/PATCH/PUT.
+
+---
+
+## Contact formats (phone & email)
+
+**One rule, every endpoint.** Wherever the API accepts a phone number or an email address — auth,
+profiles, store/magazin support contacts, payout destinations, payment channels, agent emergency
+contacts, vendor support channels — the same validation applies. There is no endpoint with a looser
+rule, and no field where "it's optional" means "it's unchecked".
+
+### Phone numbers — E.164 only
+
+```
++237670000000        ✅
++237 670 00 00 00    ✅  formatting is stripped for you; stored as +237670000000
++1 (555) 010-9999    ✅
+670000000            ❌  no country code — VALIDATION_ERROR
+00237670000000       ❌  00-prefixed dialling is not E.164 — send the +
++0237670000          ❌  a country code cannot start with 0
++237                 ❌  incomplete
+```
+
+- A leading **`+` and country calling code are required**. The server will not guess a country: the
+  platform serves several, so a national number has no single correct expansion.
+- 7–15 digits total (the E.164 ceiling is 15).
+- **Spaces, dashes, dots and parentheses are accepted and stripped.** What is stored and echoed back
+  is the canonical form, so send the number however your input mask produces it.
+- This validates *format*, not reachability — a well-formed number may still be unassigned.
+
+### Email addresses
+
+```
+name@example.com          ✅
+  Name@Example.COM        ✅  trimmed and lowercased; stored as name@example.com
+o'brien+tag@my-shop.io    ✅
+name@example              ❌  no TLD
+root@localhost            ❌  bare host
+"john doe"@example.com     ❌  legal in the RFC, undeliverable in practice
+na..me@example.com        ❌
+```
+
+- RFC 5322 dot-atom local part, a real dotted domain with an alphabetic TLD, and the RFC 5321 length
+  limits (64 for the local part, 254 for the whole address).
+- **Addresses are trimmed and lowercased** before storage and comparison, so `Ada@Example.com` and
+  `ada@example.com` are the same account. Log in with either.
+
+### Optional stays optional
+
+Optionality did not change anywhere. A field that was optional is still optional, and a *clearable*
+field can still be cleared with `null`/`""` (see **Clearing optional fields** above). The rule is
+only ever applied to a value that is actually supplied.
+
+### Errors
+
+Failures use the standard envelope with `error.code = "VALIDATION_ERROR"` (HTTP 400) and name the
+offending field in `error.details.fields[]`:
+
+```json
+{
+  "success": false,
+  "requestId": "req_abc123",
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Validation failed",
+    "statusCode": 400,
+    "details": {
+      "fields": [
+        {
+          "path": "phone",
+          "message": "Phone number must be in international E.164 format, including the country code (e.g. +237670000000)",
+          "code": "custom"
+        }
+      ]
+    }
+  }
+}
+```
+
+> **⚠️ Breaking change:** endpoints that previously accepted a national number (they only checked
+> length — `min(6)`/`min(8)`) now require the country code. `POST /api/auth/login` validates its
+> `identifier` the same way, so **an account whose stored `login_phone` predates this rule must have
+> that number migrated to E.164 before its owner can log in by phone.** Logging in by email is
+> unaffected.

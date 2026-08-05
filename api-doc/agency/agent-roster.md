@@ -340,9 +340,11 @@ is working today. Filter by `status`, or use `GET /eligible`, for the live view.
 }
 ```
 
-`cashHeld` is the agent's balance across **all** their agencies (the person's pot), while
-`membership.codOutstandingBalance` is the slice attributable to **your** contract. They differ, and
-the per-contract one is what gates termination.
+`cashHeld` mirrors `membership.codOutstandingBalance`: cash this agent holds that is attributable to
+**your** contract, and the figure that gates termination. It is deliberately **not** the agent's pot
+across all their agencies — an agent may be carrying another agency's cash, and that is not yours to
+see or to chase. It is also the ceiling on what you can record as a deposit: `POST /api/agency/cod/deposits`
+rejects an amount above it with `CONTRACT_SETTLEMENT_EXCEEDS_OUTSTANDING`.
 
 ---
 
@@ -559,15 +561,18 @@ merges field-by-field, so an omitted key keeps its value.
 | `fee_split` | `model` (`percentage`\|`flat`), `agent_share_percent` (0–100), `agent_flat_fee` (minor units), `currency` (3 letters) |
 | `shipment_value_ceiling` | integer minor units, or `null` for no per-shipment cap |
 
-> **`fee_split` is what pays the agent.** The earnings split divides by it twice — once for the
-> agent's offer-time estimate, once for the actual at delivery — so it is validated for coherence
-> up front rather than mispaying weeks later: a `percentage` model must end up with an
+> **`fee_split` is what pays the agent.** The earnings split divides by it three times — the agent's
+> offer-time estimate, **your own estimate** (`agencyEarning.agentCut` on
+> [your shipment views](./shipments.md#money)), and the actual at delivery — so it is validated for
+> coherence up front rather than mispaying weeks later: a `percentage` model must end up with an
 > `agent_share_percent`, a `flat` model with an `agent_flat_fee`. The patch is merged over the
 > stored split before checking, so switching only `model` on a contract that already carries the
 > other value is fine.
 >
 > **The agent's cut comes OUT of your delivery fee, never on top.** The vendor pays the same either
-> way. You owe it; the platform pays it, through the agent's own earnings account.
+> way. You owe it; the platform pays it, through the agent's own earnings account. Changing this
+> split changes what every un-delivered shipment will pay you — the estimates on your shipment list
+> move with it, because they are read from the live contract, not snapshotted at assignment.
 
 > **`cod.threshold` is not settable here** — it is bounded by the agent's shared pool and has its
 > own endpoint below.

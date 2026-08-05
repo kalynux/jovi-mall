@@ -6,6 +6,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { requireAuth } from '../../../api/middlewares/auth.middleware';
+import { InitiatePaymentSchema, VerifyPaymentSchema } from '../validators/payment.validators';
 
 const router = Router();
 const paymentOrchestrator = new PaymentOrchestratorService();
@@ -44,23 +45,15 @@ const paymentOrchestrator = new PaymentOrchestratorService();
  * }
  */
 router.post('/initiate', asyncHandler(async (req: Request, res: Response) => {
-  const { cartId, orderId, gateway, channel } = req.body;
-
-  if (!cartId && !orderId) {
-    throw createAppError(ERROR_CODES.PAYMENT_REFERENCE_REQUIRED, 400, 'Either cartId or orderId is required');
-  }
-  if (!gateway) throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, 'gateway is required');
-  if (!['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'].includes(gateway)) {
-    throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, 'Invalid gateway. Must be NOTCHPAY, MYCOOLPAY, or STRIPE');
-  }
-  if (!channel) throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, 'channel is required');
-  if (gateway !== 'STRIPE' && !channel.phoneNumber) {
-    throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, 'phoneNumber is required for mobile money payments');
-  }
+  // The body used to be hand-checked key by key, which left `channel.phoneNumber`
+  // and `channel.customerEmail` to reach the gateway exactly as typed. One schema
+  // now covers the same rules plus the contact formats, and reports them in the
+  // platform's standard validation-error shape.
+  const { cartId, orderId, gateway, channel } = InitiatePaymentSchema.parse(req.body);
 
   const result = cartId
     ? await paymentOrchestrator.initiatePaymentForCart(cartId, gateway as PaymentGatewayType, channel)
-    : await paymentOrchestrator.initiatePayment(orderId, gateway as PaymentGatewayType, channel);
+    : await paymentOrchestrator.initiatePayment(orderId!, gateway as PaymentGatewayType, channel);
 
   res.status(200).json({ success: result.status !== 'FAILED', ...result });
 }));
@@ -86,9 +79,7 @@ router.post('/initiate', asyncHandler(async (req: Request, res: Response) => {
  * }
  */
 router.post('/verify', asyncHandler(async (req: Request, res: Response) => {
-  const { transactionId } = req.body;
-
-  if (!transactionId) throw createAppError(ERROR_CODES.PAYMENT_TRANSACTION_NOT_FOUND, 400, 'transactionId is required');
+  const { transactionId } = VerifyPaymentSchema.parse(req.body);
 
   const result = await paymentOrchestrator.verifyPayment(transactionId);
 

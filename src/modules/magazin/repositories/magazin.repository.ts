@@ -2,6 +2,17 @@ import { ClientSession } from 'mongoose';
 import { AgencyMagazinModel, IAgencyMagazin } from '../models/magazin.model';
 
 /**
+ * The magazin fields that make up an agency's public identity block — its
+ * business name, logo and support contacts. Kept in the persisted (snake_case)
+ * spelling so `toAgencyIdentity` accepts a hydrated magazin document and a lean
+ * batch row interchangeably.
+ */
+export type AgencyIdentityFields = Pick<
+  IAgencyMagazin,
+  'name' | 'logo_file_id' | 'support_phone' | 'support_email' | 'support_whatsapp'
+>;
+
+/**
  * Magazin Repository
  *
  * Agencies access their magazin by agencyId ONLY (identity flow:
@@ -54,6 +65,35 @@ export class MagazinRepository {
       rows.map((r) => [
         r.agency_id.toString(),
         { name: r.name, logoFileId: r.logo_file_id ? r.logo_file_id.toString() : null },
+      ]),
+    );
+  }
+
+  /**
+   * Batch-resolve agency ids → their public identity fields (name, logo file id
+   * and support contacts), keyed by agency id string. Agencies without a magazin
+   * are absent from the map.
+   *
+   * Wider projection than `findNamesByAgencyIds`, which stays as-is for the
+   * name-only paths (timelines, notifications) that shouldn't pay for the rest.
+   */
+  async findIdentitiesByAgencyIds(agencyIds: Array<string>): Promise<Map<string, AgencyIdentityFields>> {
+    const ids = [...new Set(agencyIds.filter((id): id is string => !!id))];
+    if (ids.length === 0) return new Map();
+    const rows = await AgencyMagazinModel.find({ agency_id: { $in: ids } })
+      .select('agency_id name logo_file_id support_phone support_email support_whatsapp')
+      .lean()
+      .exec();
+    return new Map(
+      rows.map((r) => [
+        r.agency_id.toString(),
+        {
+          name: r.name,
+          logo_file_id: r.logo_file_id ?? null,
+          support_phone: r.support_phone ?? null,
+          support_email: r.support_email ?? null,
+          support_whatsapp: r.support_whatsapp ?? null,
+        },
       ]),
     );
   }

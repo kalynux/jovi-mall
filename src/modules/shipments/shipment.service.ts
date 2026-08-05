@@ -1,5 +1,6 @@
 import { Types } from 'mongoose';
 import { ShipmentRepository } from './shipment.repository';
+import { AgentShipmentScope } from './shipment.validator';
 import { IShipment, ShipmentStatus, ShipmentRejectionReason, IShipmentHandover, IShipmentHandoverPickup, AgentCancellationReason, IShipmentAgentCancellation, IShipmentDeliveryFailure, ShipmentFailureReason } from './shipment.model';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
@@ -14,6 +15,7 @@ import { VendorRepository } from '../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../delivery/delivery-agency.repository';
 import { StoreRepository } from '../store/repositories/store.repository';
 import { MagazinRepository } from '../magazin/repositories/magazin.repository';
+import { AgencyIdentity, resolveAgencyIdentities, resolveAgencyIdentity } from '../magazin/read-models/agency-identity.resolver';
 import {
     AgentRepository,
     agentCapacityService,
@@ -32,9 +34,14 @@ import {
     fromHqAddress,
     fromHandoverPickup,
 } from '../../core/read-models/address-detail.resolver';
-import { EarningsQuoteService, earningsQuoteService, AgentEarningQuoteResult } from '../earnings/services/earnings-quote.service';
+import {
+    EarningsQuoteService,
+    earningsQuoteService,
+    AgentEarningQuoteResult,
+    AgencyEarningQuoteResult,
+} from '../earnings/services/earnings-quote.service';
 import { earningsSplitService } from '../earnings/services/earnings-split.service';
-import { cashCollectionService } from '../cod/services/cash-collection.service';
+import { cashCollectionService, CodShipmentSummary } from '../cod/services/cash-collection.service';
 import { eventBus } from '../../core/events/event-bus';
 import { agentActionAuditService } from '../tracking-integration/services/agent-action-audit.service';
 import { shipmentAssignmentOfferRepository } from '../shipment-assignment/repositories/shipment-assignment-offer.repository';
@@ -127,6 +134,22 @@ type ShipmentStatusActor =
     | { role: 'agent'; agentId: string; userId: string };
 
 /**
+ * Who is READING a shipment. The list and detail payloads are shared between the
+ * agency and the agent, but each sees money the other must not: the agent gets
+ * their own cut (`earning`), the agency gets what is left after that cut
+ * (`agencyEarning`) — the two are complementary halves of one delivery fee and
+ * neither role should be handed the other's.
+ *
+ * A discriminated union rather than an optional `agentId`, for the same reason
+ * as `ShipmentStatusActor`: an absent agent id used to mean BOTH "this is the
+ * agency's view" and "no agent is bound", which are different facts — a shipment
+ * on the agency's list has no agent id either way.
+ */
+type ShipmentViewer =
+    | { role: 'agency'; agencyId: string }
+    | { role: 'agent'; agentId: string };
+
+/**
  * A non-delivery outcome an AGENT reported alongside `failed`/`returned`. Never
  * set on the agency path — the agency status endpoint is deliberately
  * reason-less.
@@ -149,6 +172,18 @@ export interface PickupSummary {
 
 /** A shipment's two ends: where the parcel is collected, and where it goes. */
 export interface ShipmentEndpoints {
+    pickup: PickupSummary;
+    deliveryAddress: AddressDetail | null;
+}
+
+/**
+ * Everything the assignment module needs to render a shipment an agent cannot
+ * yet read — see `buildShipmentContext`. `agency` is who is dispatching it.
+ */
+export interface ShipmentContext {
+    items: any[];
+    vendor: any;
+    agency: AgencyIdentity | null;
     pickup: PickupSummary;
     deliveryAddress: AddressDetail | null;
 }
@@ -232,7 +267,7 @@ export class ShipmentService {
         pagination: PaginationOptions = { page: 1, limit: 20 }
     ): Promise<Page<any>> {
         const page = await this.shipmentRepo.findByAgencyPaginated(agencyId, filters, pagination);
-        return this._enrichShipmentPage(page);
+        return this._enrichShipmentPage(page, { role: 'agency', agencyId });
     }
 
     /**
@@ -240,14 +275,17 @@ export class ShipmentService {
      * the same vendor/customer enrichment as the agency list, plus the two
      * things only an agent needs: where to collect and drop off, and what the
      * delivery pays them.
+     *
+     * `filters.scope` splits the queue into what is still theirs to finish and
+     * what is over — see findByAgentPaginated for why that is not a `status`.
      */
     async listForAgent(
         agentId: string,
-        filters: { status?: ShipmentStatus; q?: string } = {},
+        filters: { status?: ShipmentStatus; q?: string; scope?: AgentShipmentScope } = {},
         pagination: PaginationOptions = { page: 1, limit: 20 }
     ): Promise<Page<any>> {
         const page = await this.shipmentRepo.findByAgentPaginated(agentId, filters, pagination);
-        return this._enrichShipmentPage(page, agentId);
+        return this._enrichShipmentPage(page, { role: 'agent', agentId });
     }
 
     /**
@@ -255,14 +293,21 @@ export class ShipmentService {
      * shipment, plus the pickup/drop-off addresses that make a row actionable
      * (an agent navigates from the list, not the detail).
      *
-     * When `agentId` is given (the agent's own queue) each row also carries the
-     * agent's estimated earning — see EarningsQuoteService for why that is
-     * COD-only today.
+     * `paymentMethod` is on every row for both roles — it decides whether the
+     * person at the door has to take money, which is the first thing either one
+     * needs to know about a shipment and was previously only on the detail.
+     *
+     * The money each role sees is theirs alone. The AGENT's queue carries
+     * `earning` (their own cut); the AGENCY's carries `agencyEarning` (what is
+     * left of the fee once that cut is paid) and the `cod` block — the cash to
+     * collect, which the agency needs while choosing who to send, i.e. before any
+     * collection row exists. See EarningsQuoteService and
+     * `getProjectedCodSummariesForShipments`.
      *
      * Rows also carry `itemImages`: a capped preview of what is in the parcel,
      * so a queue is scannable by sight rather than by reading titles.
      */
-    private async _enrichShipmentPage(page: Page<IShipment>, agentId?: string): Promise<Page<any>> {
+    private async _enrichShipmentPage(page: Page<IShipment>, viewer: ShipmentViewer): Promise<Page<any>> {
         if (page.data.length === 0) return { data: [], meta: page.meta };
 
         const orderIds = [...new Set(page.data.map(s => s.order_id.toString()))];
@@ -278,16 +323,30 @@ export class ShipmentService {
         const customerIds = [...new Set(orders.map((o: any) => o.customer_id.toString()))];
         const agencyIds = [...new Set(page.data.map(s => s.agency_id.toString()))];
 
-        const [vendorMap, customerMap, hqMap, earningMap] = await Promise.all([
+        const [vendorMap, customerMap, hqMap, earningMap, codMap] = await Promise.all([
             this._batchResolveVendorNames(vendorIds),
             this._batchResolveCustomerNames(customerIds),
             // Storage-based items are collected from the agency's own HQ, which
             // is resolved live rather than snapshotted onto the order.
             this.magazinRepo.findHqAddressesByAgencyIds(agencyIds),
-            agentId
-                ? this.earningsQuotes.quoteForShipments(page.data, orderMap as any, agentId)
+            viewer.role === 'agent'
+                ? this.earningsQuotes.quoteForShipments(page.data, orderMap as any, viewer.agentId)
                 : Promise.resolve(new Map<string, AgentEarningQuoteResult>()),
+            viewer.role === 'agency'
+                ? cashCollectionService.getProjectedCodSummariesForShipments(page.data, orderMap as any)
+                : Promise.resolve(new Map<string, CodShipmentSummary>()),
         ]);
+
+        // Sequential on `codMap`, not parallel with it: a percentage
+        // `cod_handling_fee` is a share of the cash being collected, so the
+        // agency's earning cannot be quoted until that figure is known.
+        const agencyEarningMap = viewer.role === 'agency'
+            ? await this.earningsQuotes.quoteAgencyForShipments(
+                  page.data,
+                  orderMap as any,
+                  new Map([...codMap].map(([shipmentId, cod]) => [shipmentId, cod.expectedAmount]))
+              )
+            : new Map<string, AgencyEarningQuoteResult>();
 
         // Legacy orders predate `order.delivery_address`; those rows fall back
         // to the customer's current default saved address, so the saved list has
@@ -310,32 +369,38 @@ export class ShipmentService {
         );
 
         const data = page.data.map(shipment => {
+            const shipmentId = (shipment._id as Types.ObjectId).toString();
             const order = orderMap.get(shipment.order_id.toString());
             const vendor = order ? vendorMap.get(order.vendor_id.toString()) : null;
             const customer = order ? customerMap.get(order.customer_id.toString()) : null;
-            const earning = earningMap.get((shipment._id as Types.ObjectId).toString());
+            const earning = earningMap.get(shipmentId);
+            const agencyEarning = agencyEarningMap.get(shipmentId);
 
             return {
                 ...this.toSummary(shipment),
                 orderNumber: order?.order_number ?? null,
+                // Whether the agent has to take money at the door.
+                paymentMethod: order?.payment_method ?? 'online',
                 vendor: vendor ?? null,
                 customer: customer ?? null,
                 itemCount: shipment.items.length,
-                itemImages: this._previewImages(
-                    refsByShipment.get((shipment._id as Types.ObjectId).toString()) ?? [],
-                    imageMap
-                ),
+                itemImages: this._previewImages(refsByShipment.get(shipmentId) ?? [], imageMap),
                 pickup: this._resolvePickup(shipment, order, hqMap),
                 deliveryAddress: this._resolveDeliveryAddress(
                     order,
                     order ? customerAddressMap.get(order.customer_id.toString()) : null
                 ),
-                ...(agentId
+                ...(viewer.role === 'agent'
                     ? {
                           earning: earning?.earning ?? null,
                           earningUnavailable: earning?.earningUnavailable ?? null,
                       }
-                    : {}),
+                    : {
+                          // Null on a prepaid shipment — there is no cash to collect.
+                          cod: codMap.get(shipmentId) ?? null,
+                          agencyEarning: agencyEarning?.agencyEarning ?? null,
+                          agencyEarningUnavailable: agencyEarning?.agencyEarningUnavailable ?? null,
+                      }),
             };
         });
 
@@ -525,17 +590,21 @@ export class ShipmentService {
     async buildShipmentContext(
         shipments: IShipment[],
         ordersById: Map<string, any>
-    ): Promise<Map<string, { items: any[]; vendor: any; pickup: PickupSummary; deliveryAddress: AddressDetail | null }>> {
-        const result = new Map<string, { items: any[]; vendor: any; pickup: PickupSummary; deliveryAddress: AddressDetail | null }>();
+    ): Promise<Map<string, ShipmentContext>> {
+        const result = new Map<string, ShipmentContext>();
         if (shipments.length === 0) return result;
 
         const orders = [...ordersById.values()];
         const vendorIds = [...new Set(orders.map((o: any) => o.vendor_id?.toString()).filter(Boolean))];
+        const agencyIds = [...new Set(shipments.map(s => s.agency_id.toString()))];
 
-        const [endpointMap, vendorMap, imageMap] = await Promise.all([
+        const [endpointMap, vendorMap, agencyMap, imageMap] = await Promise.all([
             // The pickup/drop-off rules live in ONE place — see resolveShipmentEndpoints.
             this.resolveShipmentEndpoints(shipments, ordersById),
             this._batchResolveVendorNames(vendorIds),
+            // An agent serves several agencies at once, so a page of offers can
+            // span several — resolve them all in one pass, not per row.
+            resolveAgencyIdentities(agencyIds, this.magazinRepo, this.fileRepository, this.storageProvider),
             resolveProductImages(
                 shipments.flatMap(s => this._imageRefsFor(s, ordersById.get(s.order_id.toString()))),
                 this.fileRepository,
@@ -569,6 +638,9 @@ export class ShipmentService {
                     };
                 }),
                 vendor: order ? (vendorMap.get(order.vendor_id.toString()) ?? null) : null,
+                // Which agency is offering this job — an agent decides partly on
+                // who they'd be working for, so it has to be on the offer itself.
+                agency: agencyMap.get(shipment.agency_id.toString()) ?? null,
                 pickup: endpoints?.pickup ?? { address: null, mode: null, count: 0 },
                 deliveryAddress: endpoints?.deliveryAddress ?? null,
             });
@@ -693,7 +765,7 @@ export class ShipmentService {
         if (!shipment || shipment.status === 'pending') {
             throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
         }
-        return this._buildDetail(shipment);
+        return this._buildDetail(shipment, { role: 'agency', agencyId });
     }
 
     /**
@@ -706,14 +778,15 @@ export class ShipmentService {
         if (!shipment) {
             throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
         }
-        return this._buildDetail(shipment, agentId);
+        return this._buildDetail(shipment, { role: 'agent', agentId });
     }
 
     /**
-     * Shared detail assembly for the agency and agent views. `agentId` is set
-     * only on the agent's own view and adds their estimated earning.
+     * Shared detail assembly for the agency and agent views. The `viewer` decides
+     * only which side of the delivery fee is reported — the agent their own cut,
+     * the agency what is left after it. Everything else is identical.
      */
-    private async _buildDetail(shipment: IShipment, agentId?: string): Promise<any> {
+    private async _buildDetail(shipment: IShipment, viewer: ShipmentViewer): Promise<any> {
         const agencyId = shipment.agency_id.toString();
 
         const order = await OrderModel.findById(shipment.order_id).lean().exec();
@@ -792,6 +865,12 @@ export class ShipmentService {
         // Resolve the agent's avatar File reference into a FileDetail object.
         const agentAvatar = await resolveFileDetail(agent?.avatar_file_id?.toString(), this.fileRepository, this.storageProvider);
 
+        // Who dispatched this shipment. The agent works for several agencies at
+        // once, so "which one sent me this?" is not answerable from the token —
+        // and `agencyId` alone is not an answer a human can act on. The magazin
+        // is already loaded above for the HQ address, so only the logo is fetched.
+        const agencyIdentity = await resolveAgencyIdentity(agencyId, agencyMagazin, this.fileRepository, this.storageProvider);
+
         // Resolve the (optional, agency-owned) delivery-proof image.
         const deliveryProof = await resolveFileDetail(shipment.delivery_proof_file_id?.toString(), this.fileRepository, this.storageProvider);
 
@@ -800,15 +879,21 @@ export class ShipmentService {
         const timeline = await this._mergeShipmentTimelines(siblingShipments);
 
         // COD: the cash this shipment's agent must collect + collection state.
-        // Never includes the delivery code — that is customer-only.
+        // Never includes the delivery code — that is customer-only. Projected
+        // rather than merely read, so an agency still deciding who to send gets
+        // the amount before any agent has accepted (`status: null` says so).
         const cod = (order as any).payment_method === 'cash_on_delivery'
-            ? await cashCollectionService.getCodSummaryForShipment((shipment._id as Types.ObjectId).toString())
+            ? await cashCollectionService.getProjectedCodSummaryForShipment(order as any, shipment)
             : null;
 
-        // What this delivery pays the agent. COD-only today — see
-        // EarningsQuoteService. Absent entirely from the agency's view.
-        const earning = agentId
-            ? await this.earningsQuotes.quoteForShipment(shipment, order as any, agentId)
+        // Each role sees its own half of the delivery fee: the agent their cut,
+        // the agency what is left once that cut is paid (plus the COD handling
+        // fee, which is never shared). See EarningsQuoteService.
+        const earning = viewer.role === 'agent'
+            ? await this.earningsQuotes.quoteForShipment(shipment, order as any, viewer.agentId)
+            : null;
+        const agencyEarning = viewer.role === 'agency'
+            ? await this.earningsQuotes.quoteAgencyForShipment(shipment, order as any, cod?.expectedAmount ?? 0)
             : null;
 
         return {
@@ -824,10 +909,16 @@ export class ShipmentService {
                 total: (order as any).total_amount ?? null,
                 currency: (order as any).currency ?? null,
             },
-            ...(agentId
+            ...(viewer.role === 'agent'
                 ? { earning: earning?.earning ?? null, earningUnavailable: earning?.earningUnavailable ?? null }
-                : {}),
+                : {
+                      agencyEarning: agencyEarning?.agencyEarning ?? null,
+                      agencyEarningUnavailable: agencyEarning?.agencyEarningUnavailable ?? null,
+                  }),
             items,
+            // The dispatching agency's identity: name, logo and support contacts.
+            // Null only when the agency has no magazin yet (provisioning gap).
+            agency: agencyIdentity,
             vendor: vendor ? { id: vendor._id.toString(), businessName: vendorBusinessName ?? '', phone: vendor.phone ?? null, email: vendor.email ?? null } : null,
             customer: customer ? {
                 id: customer._id.toString(),

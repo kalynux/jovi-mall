@@ -20,6 +20,14 @@ import {
  * inside ONE caller-owned transaction, so balance and history can never
  * diverge. Mirrors EarningsAccountService, but for cash liabilities rather
  * than escrowed earnings.
+ *
+ * **An `agent` balance here is the PERSON's pot across every agency they serve,
+ * so it is never an agency-facing figure.** The agency's view of what its agent
+ * is holding is `contract.cod.outstanding_balance` — the per-contract slice this
+ * pot is attributed into on collection and drawn down from on deposit. A batch
+ * `getBalances` helper used to exist for exactly the agency views that must not
+ * use it, and was removed with them; agent-scoped (`GET /api/agent/cod/summary`)
+ * and admin-scoped reads are the only legitimate consumers of the pot.
  */
 export class CodCashAccountService {
   /** Raise a liability (cash collected). */
@@ -100,15 +108,6 @@ export class CodCashAccountService {
       })),
       meta: { total, page, limit, pages: Math.ceil(total / limit) },
     };
-  }
-
-  /** Balances for many owners at once (agency roster / admin views). */
-  async getBalances(ownerType: CodCashOwnerType, ownerIds: string[]): Promise<Map<string, number>> {
-    const accounts = await CodCashAccountModel.find({
-      owner_type: ownerType,
-      owner_id: { $in: ownerIds.map((id) => new Types.ObjectId(id)) },
-    });
-    return new Map(accounts.map((a) => [a.owner_id.toString(), a.balance]));
   }
 
   private async getOrCreate(

@@ -21,34 +21,22 @@ import {
   agentContractRepository,
 } from '../../agents/repositories/agent-contract.repository';
 import { ICashCollection } from '../../cod/models/cash-collection.model';
-import { EarningsQuoteService, earningsQuoteService } from './earnings-quote.service';
+import {
+  EarningsQuoteService,
+  earningsQuoteService,
+  computeAgencyCut,
+  computeCodHandlingFee,
+  resolveEarnedFee,
+  ShipmentDeliveryOutcome,
+} from './earnings-quote.service';
 
-/** How a shipment's delivery run ended, for the purposes of dividing its fee. */
-export type ShipmentDeliveryOutcome = 'delivered' | 'returned';
-
-/**
- * What a shipment's delivery run actually earned, out of the fee reserved for it
- * at payment.
- *
- * A completed delivery earns the whole reserved fee. A shipment that came back
- * earns the agency's own return-to-origin rate instead — real work was done, but
- * not the work that was quoted — clamped to the reserved fee, because the split
- * can only divide money that was actually charged. Whatever is left over is
- * returned to the vendor by the caller, so an order's gross always adds back up.
- *
- * Pure and exported so it can be tested without a database (the convention used
- * by `deriveWorkingState` / `effectiveLimit` in the agent domain).
- */
-export function resolveEarnedFee(
-  outcome: ShipmentDeliveryOutcome,
-  reservedFee: number,
-  policies: IAgencyPolicies | null
-): number {
-  if (reservedFee <= 0) return 0;
-  if (outcome === 'delivered') return reservedFee;
-  const rtoFee = policies?.pricing?.additional_fees?.rto_fee ?? 0;
-  return Math.max(0, Math.min(rtoFee, reservedFee));
-}
+// The pure fee arithmetic lives in `EarningsQuoteService` — see its header. Both
+// halves of every division are defined there (`applyFeeSplit` for the agent,
+// `computeAgencyCut` for the agency, `computeCodHandlingFee`, `resolveEarnedFee`),
+// so what an agent or agency is QUOTED and what this service ALLOCATES cannot
+// drift. Re-exported here because this is where callers historically found them.
+export { resolveEarnedFee };
+export type { ShipmentDeliveryOutcome };
 
 /**
  * EarningsSplitService - splits a paid order/booking into per-beneficiary
@@ -338,12 +326,10 @@ export class EarningsSplitService {
       new Map([[(shipment._id as any).toString(), deliveryFee]])
     );
 
-    const codFeeConfig = agency?.policies?.pricing?.additional_fees?.cod_handling_fee ?? null;
-    const codFee = !codFeeConfig
-      ? 0
-      : codFeeConfig.type === 'percentage'
-        ? Math.floor((gross * codFeeConfig.value) / 100)
-        : codFeeConfig.value;
+    const codFee = computeCodHandlingFee(
+      agency?.policies?.pricing?.additional_fees?.cod_handling_fee,
+      gross
+    );
 
     // The agent's cut comes OUT of the delivery fee, not on top of it: the
     // vendor pays the same either way, and the agency shares the fee with the
@@ -395,7 +381,7 @@ export class EarningsSplitService {
         ...codDefaults,
         beneficiary_type: 'agency',
         beneficiary_id: agencyId,
-        amount: deliveryFee - agentCut + codFee,
+        amount: computeAgencyCut(deliveryFee, agentCut, codFee),
       },
       // The agent is paid by the PLATFORM, like any other beneficiary — hold →
       // release → available → payout. `requires_cash_settlement` is inherited
@@ -536,7 +522,8 @@ export class EarningsSplitService {
         ...shipmentDefaults,
         beneficiary_type: 'agency',
         beneficiary_id: agencyId,
-        amount: earnedFee - agentCut,
+        // No COD handling fee on a prepaid delivery — there was no cash to handle.
+        amount: computeAgencyCut(earnedFee, agentCut),
       },
       // Paid by the PLATFORM like any other beneficiary — hold → release →
       // available → payout — even though it is the AGENCY that owes it under the

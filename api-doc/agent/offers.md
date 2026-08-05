@@ -100,6 +100,14 @@ and what it pays — because the shipment itself is not readable until you accep
           "image": { "id": "...", "key": "products/abc.jpg", "url": "https://…/products/abc.jpg", "mimeType": "image/jpeg", "size": 84213, "originalName": "headphones.jpg" }
         }
       ],
+      "agency": {
+        "id": "6640...",
+        "name": "Douala Express Logistics",
+        "logo": { "id": "...", "key": "images/2026/07/logo.png", "url": "https://…/logo.png", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
+        "supportPhone": "+2376...",
+        "supportEmail": "support@douala-express.cm",
+        "supportWhatsapp": "+2376..."
+      },
       "vendor": { "id": "...", "businessName": "TechHub Douala", "phone": "+2376..." },
       "customer": { "name": "Marie", "phone": null, "redacted": true },
       "pickup": {
@@ -125,6 +133,11 @@ and what it pays — because the shipment itself is not readable until you accep
 Addresses use the [`AddressDetail` shape](./shipments.md#address); `earning` is documented
 [here](./shipments.md#earning).
 
+**`agency`** is who is offering the job — the same block the [shipment detail](./shipments.md#detail)
+carries. You hold contracts with several agencies at once and their terms differ, so *who is asking*
+is part of the decision, not an after-the-fact detail. It is **not** redacted before acceptance: the
+agency is your own contracted counterparty, not a third party whose privacy the offer protects.
+
 **`items[].image`** is what the thing looks like — the **thumbnail only**, `{ id, key, url, mimeType,
 size, originalName }` or `null` when the item has no picture. You cannot open the shipment until you
 accept, so this is part of what makes the decision an informed one: an offer is judged on whether the
@@ -147,7 +160,7 @@ offer shows only what a delivery decision needs:
 | `customer.phone` | `null` | full number |
 | `customer.redacted` | `true` | `false` |
 | `deliveryAddress` | city, region, country + **coordinates** — enough to judge the distance | full street address |
-| `pickup`, `items` (images included), `orderValue`, `earning` | full | full |
+| `pickup`, `items` (images included), `orderValue`, `earning`, `agency` | full | full |
 
 Accepting reveals the rest immediately, and the shipment detail endpoints open up at the same moment.
 (Deployments that prefer full visibility on pending offers can set

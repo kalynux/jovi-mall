@@ -317,8 +317,12 @@ const VendorSchema = new Schema<IVendor>(
     user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true, unique: true },
     display_name: { type: String },
     country: { type: String, default: null, trim: true, uppercase: true },
-    email: { type: String, required: true, unique: true },
-    phone: { type: String, required: true },
+    // `unique: true` on a raw-cased email is a trap: `A@x.com` and `a@x.com`
+    // would be two vendors. Normalised here as well as in the Zod schema, to
+    // match every other role's model (customer/agency/agent/admin) and to hold
+    // for the paths that write outside a validated request (scripts, seeds).
+    email: { type: String, required: true, unique: true, trim: true, lowercase: true },
+    phone: { type: String, required: true, trim: true },
     email_verified: { type: Boolean, default: false },
     phone_verified: { type: Boolean, default: false },
     avatar_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },

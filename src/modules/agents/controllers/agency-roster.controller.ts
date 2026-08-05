@@ -31,7 +31,6 @@ import {
   ResolveTermsProposalSchema,
   CancelTermsProposalSchema,
 } from '../validators/agent.validator';
-import { codCashAccountService } from '../../cod/services/cod-cash-account.service';
 import { agentDepositService } from '../../cod/services/agent-deposit.service';
 import { CodPaginationQuerySchema } from '../../cod/validators/cod.validators';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
@@ -292,6 +291,12 @@ export class AgencyRosterController {
    * status by default, terminal rows included — this is the agency's
    * relationship history, not only who is working today. Filter by `status` (or
    * use `/eligible`) for the live view.
+   *
+   * `cashHeld` is the contract's own `cod.outstanding_balance` — the cash this
+   * agent holds for THIS agency. It used to be the agent's `CodCashAccount`
+   * balance, which is the person's pot across every agency they serve: that
+   * showed an agency money held for a rival, and contradicted
+   * `membership.codOutstandingBalance` sitting right beside it in the same row.
    */
   static listAgents = asyncHandler(async (req: Request, res: Response) => {
     const { status, page, limit } = ListMembershipsQuerySchema.parse(req.query);
@@ -300,7 +305,6 @@ export class AgencyRosterController {
     const agentIds = result.data.map((m) => m.agent_id.toString());
     const agents = await agentRepository.findManyByIds(agentIds);
     const agentById = new Map(agents.map((a) => [a._id.toString(), a]));
-    const cashBalances = await codCashAccountService.getBalances('agent', agentIds);
     const avatarByAgent = await resolveAgentAvatars(agents);
 
     const data = result.data.map((membership) => {
@@ -308,7 +312,7 @@ export class AgencyRosterController {
       return {
         membership: AgentMembershipMapper.toDto(membership),
         agent: agent ? AgentProfileMapper.toRosterEntryDto(agent, avatarByAgent.get(agent._id.toString()) ?? null) : null,
-        cashHeld: cashBalances.get(membership.agent_id.toString()) ?? 0,
+        cashHeld: membership.cod?.outstanding_balance ?? 0,
       };
     });
 

@@ -139,13 +139,18 @@ const MagazinSchema = new Schema<IAgencyMagazin>(
     },
     support_email: {
       type: String,
+      trim: true,
       lowercase: true,
     },
+    // Stored in E.164 (see core/validation/phone) — trimmed here so a write that
+    // bypasses the Zod schema still cannot store a padded variant.
     support_phone: {
       type: String,
+      trim: true,
     },
     support_whatsapp: {
       type: String,
+      trim: true,
     },
     coverage_areas: {
       type: [String],

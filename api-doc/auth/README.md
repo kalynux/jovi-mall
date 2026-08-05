@@ -110,7 +110,7 @@ Creates a new user and a role profile in one step. Sets both auth cookies on suc
 
 ```json
 {
-  "phone": "08012345678",
+  "phone": "+2348012345678",
   "password": "secret123",
   "name": "John Doe",
   "role": "vendor",
@@ -122,11 +122,11 @@ Creates a new user and a role profile in one step. Sets both auth cookies on suc
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| `phone` | string | ✅ | Min 10 digits. Used as login identifier. |
+| `phone` | string | ✅ | **E.164, with the `+` and country code** (`+2348012345678`). Used as login identifier. Must be unique. Stored canonicalised — formatting you send (spaces, dashes, parentheses) is stripped. See [Contact formats](../README.md#contact-formats-phone--email). |
 | `password` | string | ✅ | Min 6 characters. |
 | `name` | string | ✅ | Min 2 characters. Used for all roles. |
 | `role` | string | ✅ | One of: `customer`, `vendor`, `agency`, `agent`. Defaults to `vendor`. |
-| `email` | string | ❌ | Required for `vendor`. Must be unique. |
+| `email` | string | ❌ | Required for `vendor`. Must be unique. Validated and **lowercased** — see [Contact formats](../README.md#contact-formats-phone--email). |
 | `business_name` | string | ❌ | For `vendor` role. Falls back to `name`. |
 | `agency_name` | string | ❌ | For `agency` role. Falls back to `name`. |
 
@@ -142,7 +142,7 @@ Sets cookies `access_token` and `refresh_token`.
   "data": {
     "user": {
       "_id": "664abc...",
-      "login_phone": "08012345678",
+      "login_phone": "+2348012345678",
       "login_email": "john@example.com",
       "roles": ["vendor"],
       "status": "active"
@@ -153,7 +153,7 @@ Sets cookies `access_token` and `refresh_token`.
       "user_id": "664abc...",
       "business_name": "John's Shop",
       "email": "john@example.com",
-      "phone": "08012345678",
+      "phone": "+2348012345678",
       "email_verified": false,
       "phone_verified": false,
       "onboarding_step": 1,
@@ -187,7 +187,7 @@ Authenticates and sets role-scoped JWT cookies.
 
 ```json
 {
-  "identifier": "08012345678",
+  "identifier": "+2348012345678",
   "password": "secret123",
   "role": "vendor"
 }
@@ -195,11 +195,15 @@ Authenticates and sets role-scoped JWT cookies.
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| `identifier` | string | ✅ | Phone number or email address |
+| `identifier` | string | ✅ | Phone number **in E.164** (`+2348012345678`) or email address. Whichever it is, it must be valid — see [Contact formats](../README.md#contact-formats-phone--email). |
 | `password` | string | ✅ | Account password |
 | `role` | string | ❌ | Required if the user has multiple roles. |
 
 > If the user only has one role, `role` can be omitted — it will be resolved automatically.
+
+> **Note:** the identifier is normalised before lookup (emails lowercased, phone formatting
+> stripped), so `Ada@Example.COM` and `+234 801 234 5678` both resolve. A phone identifier that is
+> not E.164 is rejected with `VALIDATION_ERROR` rather than failing as bad credentials.
 
 ### Response `200`
 
@@ -211,7 +215,7 @@ Sets cookies `access_token` and `refresh_token`.
   "data": {
     "user": {
       "_id": "664abc...",
-      "login_phone": "08012345678",
+      "login_phone": "+2348012345678",
       "roles": ["vendor", "customer"],
       "status": "active"
     },
@@ -311,7 +315,7 @@ Returns the current user with the active role and its role entity.
   "data": {
     "user": {
       "_id": "664abc...",
-      "login_phone": "08012345678",
+      "login_phone": "+2348012345678",
       "roles": ["vendor"],
       "status": "active"
     },
@@ -694,7 +698,7 @@ Below are the key fields returned in `role_entity` for each role. Some fields ar
   "user_id": "...",
   "name": "Jane Doe",
   "email": "jane@example.com",
-  "phone": "08098765432",
+  "phone": "+2348098765432",
   "email_verified": false,
   "phone_verified": false,
   "avatar": null,
@@ -723,7 +727,7 @@ Below are the key fields returned in `role_entity` for each role. Some fields ar
   "display_name": null,
   "business_description": null,
   "email": "john@example.com",
-  "phone": "08012345678",
+  "phone": "+2348012345678",
   "email_verified": false,
   "phone_verified": false,
   "country": null,

@@ -88,11 +88,12 @@ and on the vendor's `GET /api/vendor/orders/:id` (`deliveryTimeline`).
 Each status change also recomputes the parent order's `fulfillment_status` — see
 [vendor/orders.md#fulfillment-lifecycle](../vendor/orders.md#fulfillment-lifecycle).
 
+<a name="cod"></a>
 ### Cash-on-delivery (COD) shipments — different rules
 
-For shipments belonging to a `cash_on_delivery` order (`paymentMethod` on the
-[detail](#detail) response; see [cod-cash-management.md](./cod-cash-management.md) for the whole
-cash chain), three rules change:
+For shipments belonging to a `cash_on_delivery` order (`paymentMethod` on both the
+[list](#list) and the [detail](#detail); see [cod-cash-management.md](./cod-cash-management.md) for
+the whole cash chain), three rules change:
 
 1. **Visible before payment.** COD orders are unpaid until handoff by design, so the vendor
    dispatches them (or auto-redirect fires) at checkout — the shipment reaches your dashboard
@@ -107,9 +108,15 @@ cash chain), three rules change:
    the customer's code (`POST /api/agent/shipments/:id/cod/collect`), which atomically records the
    cash and marks the shipment `delivered`. There is no customer app confirmation step for COD.
 
-The [detail](#detail) response carries a `cod` block for these shipments:
-`{ expectedAmount, currency, status: "pending" | "collected" | "cancelled", collectedAt }`
-(present once picked up; never contains the customer's code).
+Both the [list](#list) and the [detail](#detail) carry a `cod` block for these shipments:
+`{ expectedAmount, currency, status: "pending" | "collected" | "cancelled" | null, collectedAt }`
+(never contains the customer's code). It is `null` on a prepaid shipment.
+
+**`status` is `null` before an agent accepts**, and `expectedAmount` is then a **projection** rather
+than a snapshot. The cash-collection record is only created at acceptance, so a shipment still out on
+offer has no row to report — but that is exactly when you are choosing who to send, and how much cash
+a delivery involves is part of that decision. The projected figure is Σ (item price × quantity), the
+same arithmetic the collection will snapshot; treat a `null` status as "no agent has taken this yet".
 
 ---
 
@@ -127,8 +134,9 @@ The [detail](#detail) response carries a `cod` block for these shipments:
 - `limit` (integer, optional, default 20, max 100)
 
 Each row also carries `pickup` (where the parcel is collected, with coordinates) and
-`deliveryAddress` (the drop-off geocoded at checkout). The agent-facing `earning` field is **not**
-included here — it is that agent's contracted cut, not agency-scoped data.
+`deliveryAddress` (the drop-off geocoded at checkout), plus the three money fields below. The
+agent-facing `earning` field is **not** included here — it is that agent's contracted cut, not
+agency-scoped data; `agencyEarning.agentCut` is the agency's view of the same number.
 
 **Success Response** (`200 OK`):
 ```json
@@ -145,6 +153,15 @@ included here — it is that agent's contracted cut, not agency-scoped data.
       "createdAt": "2026-07-05T09:00:00.000Z",
       "updatedAt": "2026-07-05T09:00:00.000Z",
       "orderNumber": "ORD-2026-000123",
+      "paymentMethod": "cash_on_delivery",
+      "cod": {
+        "expectedAmount": 12500,
+        "currency": "XAF",
+        "status": null,
+        "collectedAt": null
+      },
+      "agencyEarning": null,
+      "agencyEarningUnavailable": "no_agent",
       "vendor": { "id": "507f1f77bcf86cd799439aaa", "businessName": "Acme Store", "phone": "+237670000001" },
       "customer": { "id": "507f1f77bcf86cd799439ccc", "name": "Jane Doe", "phone": "+237670000002" },
       "itemCount": 2,
@@ -189,6 +206,40 @@ and the [detail](#detail) carries the rest. `coordinates` is `null` on legacy ad
 never geocoded — clients must handle it. For the map-shaped read of these same two ends across every
 active shipment at once, see [live-tracking.md](./live-tracking.md).
 
+<a name="money"></a>
+**`paymentMethod`** is `"online"` or `"cash_on_delivery"` — whether the agent has to take money at
+the door. **`cod`** is the cash to collect (see [COD shipments](#cod) above), `null` when prepaid.
+
+**`agencyEarning`** is what this delivery is expected to pay **you**, with the agent's cut already
+taken out. Present on the list and the [detail](#detail); itemised because each part moves
+independently:
+
+| Field | Meaning |
+|---|---|
+| `amount` | what you keep: `earnedFee − agentCut + codHandlingFee` |
+| `deliveryFee` | the gross fee, before anything is carved out |
+| `earnedFee` | what this run earns out of it — the same figure unless the shipment already **returned**, when it is your `rto_fee` instead |
+| `agentCut` | the bound agent's share under their contract's `fee_split`. Legitimately `0` |
+| `codHandlingFee` | your COD handling fee, kept whole and never shared. `0` on a prepaid shipment |
+| `currency` | the contract's currency, else the order's |
+| `estimated` | always `true` |
+| `basis` | `contract_percentage` or `contract_flat` |
+
+⚠️ **An estimate, not a promise.** The contract's `fee_split` is read live again when the money is
+actually split, so renegotiating it between now and the delivery changes what is paid. A prepaid
+shipment's `deliveryFee` is firm (it was snapshotted when the order was paid); a COD shipment's is
+recomputed from your live `policies.pricing` at collection.
+
+When it cannot be quoted, `agencyEarning` is `null` and **`agencyEarningUnavailable`** says why:
+
+| Reason | Meaning |
+|---|---|
+| `no_agent` | no agent has accepted yet, so there is no `fee_split` to subtract. Quoting the gross fee here would show a number that drops the moment somebody accepts |
+| `no_agency_policy` | your `policies.pricing` is not configured, so there is no delivery fee to divide |
+
+Note that a **missing contract is not** a reason: `agentCut` is then `0` and you keep the whole fee,
+which is a real answer and exactly what the split will do.
+
 **`itemImages`** is a thumbnail preview of what is in the parcel: **one picture per item**,
 deduplicated and capped at **3** — `itemCount` remains the true number of items. Each entry is the
 standard file shape `{ id, key, url, mimeType, size, originalName }`; always an array, `[]` when
@@ -206,6 +257,16 @@ the [detail](#detail).
 pickup location, #3), vendor (#4), customer + delivery address (#5), assigned agent, status
 history, and the parent order's merged multi-agency timeline.
 
+`paymentMethod`, `cod`, `agencyEarning` and `agencyEarningUnavailable` mean exactly what they do on
+the [list](#money). One field is detail-only: **`orderValue`** is the value of the **whole order**,
+which is not the same as `cod.expectedAmount` — an order can split into several shipments across
+several agencies, and `cod.expectedAmount` is only this shipment's share of the cash. Do not conflate
+them.
+
+The `vendor` block is present on **every** shipment, including one whose items were already sitting
+in your own magazin (`pickup.mode: "storage_based"`) — `businessName` is the vendor's store name, and
+who supplied the goods does not depend on where you collect them.
+
 **Success Response** (`200 OK`):
 ```json
 {
@@ -218,6 +279,25 @@ history, and the parent order's merged multi-agency timeline.
     "agentId": "507f1f77bcf86cd799439077",
     "status": "picked_up",
     "trackingNumber": "FDO-260705-090000-K7Q2M",
+    "paymentMethod": "cash_on_delivery",
+    "cod": {
+      "expectedAmount": 12500,
+      "currency": "XAF",
+      "status": "pending",
+      "collectedAt": null
+    },
+    "orderValue": { "total": 12500, "currency": "XAF" },
+    "agencyEarning": {
+      "amount": 1300,
+      "currency": "XAF",
+      "estimated": true,
+      "deliveryFee": 1500,
+      "earnedFee": 1500,
+      "agentCut": 450,
+      "codHandlingFee": 250,
+      "basis": "contract_percentage"
+    },
+    "agencyEarningUnavailable": null,
     "items": [
       {
         "orderItemId": "507f1f77bcf86cd799439055",
@@ -251,6 +331,14 @@ history, and the parent order's merged multi-agency timeline.
         }
       }
     ],
+    "agency": {
+      "id": "507f1f77bcf86cd799439099",
+      "name": "Douala Express Logistics",
+      "logo": { "id": "...", "key": "images/2026/07/logo.png", "url": "https://…/logo.png", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
+      "supportPhone": "+237670000009",
+      "supportEmail": "support@douala-express.cm",
+      "supportWhatsapp": null
+    },
     "vendor": { "id": "507f1f77bcf86cd799439aaa", "businessName": "Acme Store", "phone": "+237670000001", "email": "acme@example.com" },
     "customer": {
       "id": "507f1f77bcf86cd799439ccc",
@@ -281,6 +369,10 @@ history, and the parent order's merged multi-agency timeline.
   }
 }
 ```
+
+**`agency`** is the shipment's own agency — your business name, logo and support contacts, from your
+magazin. It is here because the agency and agent detail views are one payload, and the agent (who
+serves several agencies) needs it; on your own view it simply echoes you.
 
 **`items[].images`** is **every** picture of that item, thumbnail first — enough to identify a parcel
 by sight rather than by reading labels. `images[0]` is exactly the picture the list shows in

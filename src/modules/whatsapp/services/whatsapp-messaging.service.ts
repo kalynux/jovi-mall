@@ -8,6 +8,7 @@ import { HandlerRegistry } from '../handlers/handler-registry';
 import { WhatsAppMessageHandler, BuildContext } from '../handlers/handler.interface';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import { PHONE_FORMAT_MESSAGE, toE164 } from '../../../core/validation/phone';
 import { WhatsAppPolicyValidator } from '../validation/policy-validator';
 import { WhatsAppProvider } from '../providers/provider.interface';
 import { MetaWhatsAppCloudProvider } from '../providers/meta-cloud.provider';
@@ -85,8 +86,10 @@ export class WhatsAppMessagingService {
         try {
             console.log(`[WhatsAppMessagingService] [${traceId}] Sending ${payload.type} message to ${payload.to}`);
 
-            // Step 1: Validate base payload
-            this.validateBasePayload(payload);
+            // Step 1: Validate base payload, and adopt the canonical E.164 form
+            // of the recipient for everything that follows (window lookup,
+            // provider call) — one number, one spelling.
+            payload.to = this.validateBasePayload(payload);
 
             // Step 2: Check idempotency requirement
             const isIdempotencyRequired = this.policyValidator.isIdempotencyRequired(payload.type);
@@ -271,9 +274,17 @@ export class WhatsAppMessagingService {
     }
 
     /**
-     * Validate base payload structure
+     * Validate base payload structure.
+     *
+     * Returns the recipient in canonical E.164 — the caller assigns it back onto
+     * the payload, so the number used for the 24h-window lookup, the idempotency
+     * key and the provider call is the same one that was validated. Recipients
+     * reach this service from stored profile fields as often as from a request
+     * body, so it re-applies the platform rule (`core/validation/phone`) rather
+     * than trusting the number to already be clean; the old check here was a
+     * hand-rolled `startsWith('+') && length >= 10`, which passed `+123456789`.
      */
-    private validateBasePayload(payload: WhatsAppSendPayload): void {
+    private validateBasePayload(payload: WhatsAppSendPayload): string {
         if (!payload.to || typeof payload.to !== 'string') {
             throw createAppError(
                 ERROR_CODES.WHATSAPP_VALIDATION_ERROR,
@@ -283,12 +294,13 @@ export class WhatsAppMessagingService {
             );
         }
 
-        if (!payload.to.startsWith('+') || payload.to.length < 10) {
+        const recipient = toE164(payload.to);
+        if (!recipient) {
             throw createAppError(
                 ERROR_CODES.WHATSAPP_VALIDATION_ERROR,
                 400,
-                'Validation failed for field \'to\': Phone number must be in E.164 format (e.g., +1234567890)',
-                { field: 'to', reason: 'Phone number must be in E.164 format (e.g., +1234567890)' }
+                `Validation failed for field 'to': ${PHONE_FORMAT_MESSAGE}`,
+                { field: 'to', reason: PHONE_FORMAT_MESSAGE }
             );
         }
 
@@ -318,6 +330,8 @@ export class WhatsAppMessagingService {
                 { field: 'message.type', reason: 'Message type mismatch' }
             );
         }
+
+        return recipient;
     }
 
     /**

@@ -24,11 +24,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > owner, and the order to finish in.
 >
 > `npm run test:agent-domain` was stale against the new model and is **repaired**;
-> it is green at **115 assertions** as of 2026-07-29. It is DB-free, so it still
+> it is green at **201 assertions** as of 2026-08-05. It is DB-free, so it still
 > cannot cover the COD allocation race or the money movements — see the handoff doc.
 > `npm run test:agent-shipment-status` (green at **32**, added 2026-07-30) covers
 > the shared transition map, the map↔schema drift guard, and the agency
 > notification catalog's five-language completeness.
+> `npm run test:earnings-quote` (green at **29**, added 2026-08-05) covers the fee
+> arithmetic itself — it re-derives what both splits allocate from the same pure
+> helpers they call, so the estimate and the actual cannot drift apart unnoticed.
 >
 > Parts of this file below still describe the *pre-refactor* model (notably
 > per-agency `cod.max_exposure_override` and membership statuses). The handoff doc
@@ -56,6 +59,9 @@ npm run migrate:agent-deposits           # backfill deposit status/recipient (id
 npm run migrate:contract-terms           # terms_proposed_by/terms_version (idempotent, --dry-run)
 npm run migrate:cod-late-deposit-index   # DROP the agent-scoped late_deposit index (--dry-run)
 npm run seed:tickets [-- --clean]        # also: seed:plans, seed:cod [-- --clean]
+npm run seed:cod-shipments [-- --clean]  # 7 COD shipments across the lifecycle, on the
+                                         # EXISTING agency b0…05 + agent b0…06, with real
+                                         # geocoded Douala pickup/drop-off addresses
 npm run simulate:notifications
 ```
 
@@ -63,7 +69,8 @@ No test *framework* is configured. Tests are plain ts-node scripts under `script
 hand-rolled asserts — follow that convention rather than introducing a runner:
 
 ```bash
-npm run test:agent-domain                      # agent domain (197 assertions, no DB needed)
+npm run test:agent-domain                      # agent domain (201 assertions, no DB needed)
+npm run test:earnings-quote                    # the delivery-fee arithmetic (29, no DB needed)
 npm run verify:live-parity                     # agent↔agency smoke test — NEEDS Mongo
 npx ts-node scripts/test/test-profile-mappers.ts
 ```
@@ -233,9 +240,30 @@ Four rules that are load-bearing:
   (`failed → in_transit | returned`), so `failed_delivery_fee` needs its own charge path.
 
 Both splits are post-commit and best-effort, so both have a recovery stage in
-`EarningsReleaseWorker` (`recoverMissedCodSplits`, `recoverMissedDeliverySplits`). The arithmetic
-itself lives in `EarningsQuoteService` so the agent's **offer-time estimate** and the
-**delivery-time actual** cannot drift apart.
+`EarningsReleaseWorker` (`recoverMissedCodSplits`, `recoverMissedDeliverySplits`).
+
+**All of the fee arithmetic lives in `EarningsQuoteService`, and `EarningsSplitService` calls it** —
+that is what stops what somebody is *quoted* drifting from what they are *paid*. Four pure,
+DB-free functions divide every delivery, and **both sides of the fee are named**:
+
+| Function | Answers |
+|---|---|
+| `resolveEarnedFee(outcome, reservedFee, policies)` | what the run earned out of the reserved fee — the whole fee `delivered`, the clamped `rto_fee` `returned` |
+| `applyFeeSplit(fee_split, earnedFee)` | the **agent's** cut, clamped to `[0, fee]` |
+| `computeCodHandlingFee(config, collected)` | the COD charge, percentage-of-cash or fixed |
+| `computeAgencyCut(earnedFee, agentCut, codFee)` | the **agency's** share — the complement of `applyFeeSplit` |
+
+`agentCut + computeAgencyCut(...) === earnedFee` always. Covered DB-free by
+`npm run test:earnings-quote` (29 assertions), which re-derives both split paths from these helpers,
+so changing either side breaks the test. Add a fee component here, not at a call site.
+
+Both roles are quoted from them before the money moves: `quoteForShipment(s)` is the **agent's**
+offer-time estimate, `quoteAgencyForShipment(s)` the **agency's** (`earnedFee − agentCut +
+codHandlingFee`, itemised) on their shipment list and detail. The agency's quote reports
+`agencyEarningUnavailable: 'no_agent'` rather than a figure while a shipment is still out on offer —
+there is no `fee_split` to subtract yet, and quoting the gross fee would show a number that drops the
+instant somebody accepts. A missing *contract* is not unavailable: the cut is 0 and the agency keeps
+the whole fee, which is exactly what the split does.
 
 ### Agent domain (`src/modules/agents/`)
 The agent is a **platform identity, not an agency-owned record** — they sign up independently and may serve **several agencies at once**. `DeliveryAgent.agency_id` no longer exists; the relationship is `AgentAgencyMembership` (one row per agent↔agency), with `AgentMembershipEvent` as its append-only history.

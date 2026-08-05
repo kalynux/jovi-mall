@@ -1,7 +1,7 @@
 import { EARNINGS_CONFIG } from '../config/earnings.config';
 import { IOrder, IOrderItem } from '../../orders/order.model';
 import { IShipment } from '../../shipments/shipment.model';
-import { IAgencyPolicies } from '../../delivery/delivery-agency.model';
+import { IAgencyPolicies, ICodHandlingFee } from '../../delivery/delivery-agency.model';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
 import {
   AgentContractRepository,
@@ -85,6 +85,132 @@ export function applyFeeSplit(
 /** The wire-level name for a contract's split model. */
 function basisOf(split: IContractFeeSplit | null | undefined): AgentEarningQuote['basis'] {
   return split?.model === 'flat' ? 'contract_flat' : 'contract_percentage';
+}
+
+/** How a shipment's delivery run ended, for the purposes of dividing its fee. */
+export type ShipmentDeliveryOutcome = 'delivered' | 'returned';
+
+/**
+ * What a shipment's delivery run actually earned, out of the fee reserved for it
+ * at payment.
+ *
+ * A completed delivery earns the whole reserved fee. A shipment that came back
+ * earns the agency's own return-to-origin rate instead — real work was done, but
+ * not the work that was quoted — clamped to the reserved fee, because the split
+ * can only divide money that was actually charged. Whatever is left over is
+ * returned to the vendor by the caller, so an order's gross always adds back up.
+ *
+ * Lives HERE rather than in `EarningsSplitService` (where it was defined) so the
+ * quote can reach it: a shipment already sitting at `returned` must be quoted at
+ * the RTO rate, not the full fee. The import can only run this way round —
+ * `EarningsSplitService` already delegates its agent-cut to this service, so
+ * importing back out of it would close a cycle.
+ */
+export function resolveEarnedFee(
+  outcome: ShipmentDeliveryOutcome,
+  reservedFee: number,
+  policies: IAgencyPolicies | null
+): number {
+  if (reservedFee <= 0) return 0;
+  if (outcome === 'delivered') return reservedFee;
+  const rtoFee = policies?.pricing?.additional_fees?.rto_fee ?? 0;
+  return Math.max(0, Math.min(rtoFee, reservedFee));
+}
+
+/**
+ * The agency's COD handling fee on one collection — a percentage of the cash
+ * collected, or a flat charge per collection.
+ *
+ * Charged to the VENDOR alongside the delivery fee (see `splitCodCollection`),
+ * and unlike the delivery fee it is never shared with the agent.
+ *
+ * Pure and DB-free so the agency's estimate and the actual split share one
+ * definition — same reason `applyFeeSplit` is extracted.
+ */
+export function computeCodHandlingFee(
+  config: ICodHandlingFee | null | undefined,
+  collectedAmount: number
+): number {
+  if (!config || collectedAmount <= 0) return 0;
+  return config.type === 'percentage'
+    ? Math.floor((collectedAmount * config.value) / 100)
+    : config.value;
+}
+
+/**
+ * The AGENCY's share of one delivery: what is left of the earned fee after the
+ * agent's cut, plus the whole COD handling fee.
+ *
+ * The handling fee stays whole with the agency deliberately — `fee_split` is
+ * defined as a share "of the delivery fee", and the agency is the party carrying
+ * the cash-accountability. `codHandlingFee` is 0 on a prepaid delivery.
+ *
+ * The counterpart to `applyFeeSplit`: between them they name both sides of the
+ * fee, so the agency's offer-time estimate and the delivery-time allocation
+ * cannot drift.
+ */
+export function computeAgencyCut(
+  earnedFee: number,
+  agentCut: number,
+  codHandlingFee = 0
+): number {
+  return earnedFee - agentCut + codHandlingFee;
+}
+
+/**
+ * Why an AGENCY's earning is unavailable, when it is.
+ *
+ * Deliberately shorter than the agent's list: a missing live contract is NOT a
+ * reason here. `applyFeeSplit` resolves an absent contract to a cut of 0, which
+ * means the agency keeps the entire fee — a real answer, and exactly what the
+ * split will do.
+ *
+ * `'no_agent'` has no agent-side equivalent: an agent asking "what does this
+ * pay?" is always the agent in question, whereas an agency's shipment routinely
+ * has no agent bound yet (the offer is still out). Quoting one then would show a
+ * number that shrinks the moment somebody accepts.
+ */
+export type AgencyEarningUnavailableReason = 'no_agent' | 'no_agency_policy';
+
+/**
+ * What an AGENCY can expect to keep from one shipment, once the agent they are
+ * paying has been taken out.
+ *
+ * ⚠️ An ESTIMATE, on the same terms as `AgentEarningQuote` — the contract's
+ * `fee_split` is read live again at split time, and a COD shipment's delivery fee
+ * is recomputed from live `policies.pricing` at collection.
+ *
+ * Itemised rather than a bare total because every component moves independently:
+ * the agency renegotiates `fee_split` with the agent, edits `policies.pricing`
+ * itself, and only sees `codHandlingFee` at all on cash deliveries.
+ */
+export interface AgencyEarningQuote {
+  /** What the agency keeps: `earnedFee - agentCut + codHandlingFee`. */
+  amount: number;
+  currency: string;
+  estimated: true;
+  /** The gross delivery fee, before anything is carved out of it. */
+  deliveryFee: number;
+  /**
+   * What this run earns out of `deliveryFee` — the same figure unless the
+   * shipment has already come back, in which case it is the agency's `rto_fee`.
+   */
+  earnedFee: number;
+  /** The bound agent's share. Legitimately 0 — an unconfigured or absent contract pays nothing. */
+  agentCut: number;
+  /** The COD handling fee, kept whole by the agency. 0 on a prepaid shipment. */
+  codHandlingFee: number;
+  basis: 'contract_percentage' | 'contract_flat';
+}
+
+export interface AgencyEarningQuoteResult {
+  agencyEarning: AgencyEarningQuote | null;
+  agencyEarningUnavailable: AgencyEarningUnavailableReason | null;
+}
+
+/** Absence helper — the agency-side counterpart of `unavailable`. */
+function agencyUnavailable(reason: AgencyEarningUnavailableReason): AgencyEarningQuoteResult {
+  return { agencyEarning: null, agencyEarningUnavailable: reason };
 }
 
 /**
@@ -350,6 +476,157 @@ export class EarningsQuoteService {
         },
         earningUnavailable: null,
       });
+    }
+
+    return results;
+  }
+
+  // ─── Agency side ────────────────────────────────────────────────────────────
+
+  /**
+   * The arithmetic behind an agency quote, with every lookup already done —
+   * shared by the single and batch paths so they cannot diverge (the same reason
+   * `applyFeeSplit` exists).
+   *
+   * `contract` may be null: `applyFeeSplit` then yields a cut of 0 and the agency
+   * keeps the whole fee, which is precisely what `computeAgentCut` does at split
+   * time. That is a real answer, not an error — see `AgencyEarningUnavailableReason`.
+   */
+  private buildAgencyQuote(
+    shipment: IShipment,
+    order: Pick<IOrder, 'items' | 'payment_method' | 'currency'> & { _id: unknown },
+    policies: IAgencyPolicies,
+    contract: { fee_split: IContractFeeSplit } | null,
+    codGross: number
+  ): AgencyEarningQuoteResult {
+    const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
+    const deliveryFee = this.resolveDeliveryFee(shipment, policies, orderItemsById, String(order._id));
+
+    // A shipment that has already come back earns the RTO rate, not the full
+    // fee — mirrors the outcome `ShipmentService` passes to
+    // `splitShipmentDelivery`. Everything else is quoted as if it will succeed,
+    // which is the question the agency is asking.
+    const outcome: ShipmentDeliveryOutcome = shipment.status === 'returned' ? 'returned' : 'delivered';
+    const earnedFee = resolveEarnedFee(outcome, deliveryFee, policies);
+
+    const agentCut = applyFeeSplit(contract?.fee_split, earnedFee);
+    const codHandlingFee =
+      order.payment_method === 'cash_on_delivery'
+        ? computeCodHandlingFee(policies.pricing?.additional_fees?.cod_handling_fee, codGross)
+        : 0;
+
+    return {
+      agencyEarning: {
+        amount: computeAgencyCut(earnedFee, agentCut, codHandlingFee),
+        currency: contract?.fee_split?.currency ?? order.currency ?? EARNINGS_CONFIG.DEFAULT_CURRENCY,
+        estimated: true,
+        deliveryFee,
+        earnedFee,
+        agentCut,
+        codHandlingFee,
+        basis: basisOf(contract?.fee_split),
+      },
+      agencyEarningUnavailable: null,
+    };
+  }
+
+  /**
+   * Quote what the AGENCY keeps for `shipment`, after the agent's cut is taken
+   * out — the agency's counterpart to `quoteForShipment`.
+   *
+   * Requires a bound agent (`shipment.agent_id`): without one there is no
+   * `fee_split` to subtract, and quoting the gross fee would show a number that
+   * drops the moment somebody accepts the offer.
+   *
+   * `codGross` is the cash this shipment collects, needed only for a percentage
+   * `cod_handling_fee`. It is passed IN rather than computed here on purpose:
+   * `CashCollectionService.computeExpectedAmount` owns that arithmetic, and the
+   * cod module already calls `EarningsSplitService` — importing it back would
+   * close a cycle.
+   */
+  async quoteAgencyForShipment(
+    shipment: IShipment,
+    order: Pick<IOrder, 'items' | 'payment_method' | 'currency'> & { _id: unknown },
+    codGross = 0
+  ): Promise<AgencyEarningQuoteResult> {
+    const agentId = shipment.agent_id?.toString();
+    if (!agentId) return agencyUnavailable('no_agent');
+
+    const agencyId = shipment.agency_id.toString();
+    const agency = await this.agencyRepo.findById(agencyId);
+    const policies = agency?.policies ?? null;
+    if (!policies) return agencyUnavailable('no_agency_policy');
+
+    const contract = await this.contracts.findLive(agentId, agencyId);
+    return this.buildAgencyQuote(shipment, order, policies, contract, codGross);
+  }
+
+  /**
+   * Batch variant for the agency's shipment list, keyed by shipment id.
+   *
+   * The mirror image of `quoteForShipments`: that one is one agent across N
+   * agencies, so it resolves a contract per agency; a page of an agency's
+   * shipments is one agency across N agents, so it resolves the policy once and
+   * a contract per distinct bound agent.
+   */
+  async quoteAgencyForShipments(
+    shipments: IShipment[],
+    ordersById: Map<string, Pick<IOrder, 'items' | 'payment_method' | 'currency'> & { _id: unknown }>,
+    codGrossByShipment: Map<string, number> = new Map()
+  ): Promise<Map<string, AgencyEarningQuoteResult>> {
+    const results = new Map<string, AgencyEarningQuoteResult>();
+    if (shipments.length === 0) return results;
+
+    const agencyIds = [...new Set(shipments.map((s) => s.agency_id.toString()))];
+    const agencies = await this.agencyRepo.findByIds(agencyIds);
+    const policyByAgency = new Map(agencies.map((a) => [(a._id as any).toString(), a.policies]));
+
+    // One contract per (bound agent, agency) pair actually present on the page.
+    const pairs = [
+      ...new Set(
+        shipments
+          .filter((s) => s.agent_id)
+          .map((s) => `${s.agent_id!.toString()}:${s.agency_id.toString()}`)
+      ),
+    ];
+    const contractByPair = new Map(
+      await Promise.all(
+        pairs.map(async (pair) => {
+          const [agentId, agencyId] = pair.split(':');
+          return [pair, await this.contracts.findLive(agentId, agencyId)] as const;
+        })
+      )
+    );
+
+    for (const shipment of shipments) {
+      const shipmentId = (shipment._id as any).toString();
+      const agentId = shipment.agent_id?.toString();
+      if (!agentId) {
+        results.set(shipmentId, agencyUnavailable('no_agent'));
+        continue;
+      }
+
+      const order = ordersById.get(shipment.order_id.toString());
+      const agencyId = shipment.agency_id.toString();
+      const policies = policyByAgency.get(agencyId) ?? null;
+
+      // No order resolved → nothing to quote against. Reported as a missing
+      // policy rather than guessed at; a quote must never be invented.
+      if (!order || !policies) {
+        results.set(shipmentId, agencyUnavailable('no_agency_policy'));
+        continue;
+      }
+
+      results.set(
+        shipmentId,
+        this.buildAgencyQuote(
+          shipment,
+          order,
+          policies,
+          contractByPair.get(`${agentId}:${agencyId}`) ?? null,
+          codGrossByShipment.get(shipmentId) ?? 0
+        )
+      );
     }
 
     return results;

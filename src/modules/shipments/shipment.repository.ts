@@ -6,6 +6,10 @@ import { CustomerModel } from '../customers/customer.model';
 import { OrderModel } from '../orders/order.model';
 import { ProductModel } from '../catalog/models/product.model';
 import { TrackingNumberGenerator } from './utils/tracking-number.generator';
+// Imported from the config module directly rather than through the `../agents`
+// barrel: that barrel pulls in the agent services, which import this file.
+import { ACTIVE_SHIPMENT_STATUSES } from '../agents/config/agent.config';
+import { AgentShipmentScope } from './shipment.validator';
 
 /**
  * Ceiling on each id set pre-resolved during a shipment text search.
@@ -244,15 +248,36 @@ export class ShipmentRepository {
    * List shipments assigned to an agent, newest first, paginated. Mirrors
    * findByAgencyPaginated — 'pending' shipments have no agent yet, so the
    * exclusion is implicit, but kept explicit for symmetry.
+   *
+   * `filters.scope` is the coarse "still mine to finish" / "over and done with"
+   * divide the agent app's work queue is split on, and it is deliberately
+   * server-side: it spans five statuses, and this list is paginated, so a client
+   * narrowing a page locally would under-report everything past it.
+   *
+   * The two filters compose, `status` being the more specific: on the "active"
+   * tab under an "in transit" chip the chip is what the agent asked for, and
+   * because every filterable status belongs to exactly one scope, a chip can
+   * never widen the tab it was picked inside. `scope` is a fallback rather than
+   * an intersection for that reason.
    */
   async findByAgentPaginated(
     agentId: string,
-    filters: { status?: ShipmentStatus; q?: string } = {},
+    filters: { status?: ShipmentStatus; q?: string; scope?: AgentShipmentScope } = {},
     pagination: PaginationOptions = { page: 1, limit: 20 }
   ): Promise<Page<IShipment>> {
     const { page, limit } = pagination;
     const scope: FilterQuery<IShipment> = { agent_id: agentId, status: { $ne: 'pending' } };
-    if (filters.status && filters.status !== 'pending') scope.status = filters.status;
+    if (filters.status && filters.status !== 'pending') {
+      scope.status = filters.status;
+    } else if (filters.scope === 'active') {
+      scope.status = { $in: [...ACTIVE_SHIPMENT_STATUSES] };
+    } else if (filters.scope === 'past') {
+      // 'pending' rides along in the exclusion: 'past' is expressed as a
+      // complement, and the base filter's `$ne: 'pending'` is being replaced
+      // rather than merged, so dropping it here would re-admit exactly the
+      // shipments the agency itself is not allowed to see.
+      scope.status = { $nin: [...ACTIVE_SHIPMENT_STATUSES, 'pending'] };
+    }
     const filter = await this.applySearch(scope, filters.q);
 
     const [total, docs] = await Promise.all([

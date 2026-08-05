@@ -1,5 +1,6 @@
 import { Schema } from 'mongoose';
 import { z } from 'zod';
+import { PhoneNumberSchema } from '../validation/phone';
 
 // ─── Mongoose Sub-Schemas ────────────────────────────────────────────────────
 
@@ -162,7 +163,9 @@ export function maskPayoutMethods(
 
 const MobileMoneyZodSchema = z.object({
     provider: z.string().min(1, 'Provider is required').trim(),
-    phone_number: z.string().min(6).max(20).trim(),
+    // Full E.164. This is where the platform sends money: a national number
+    // here is not merely untidy, it is a payout instruction nobody can execute.
+    phone_number: PhoneNumberSchema,
     account_name: z.string().min(1, 'Account name is required').trim(),
 });
 

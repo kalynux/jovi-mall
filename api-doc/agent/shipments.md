@@ -39,9 +39,18 @@
 drop-off addresses (with coordinates) and this agent's estimated earning, so the list view alone is
 enough to navigate by and to judge a job.
 
+"Newest first" is the shipment's **own** `createdAt` descending — when the order was dispatched, not
+when it was assigned to you. There is no assigned-at timestamp on a shipment, so a job you accepted
+this morning off a three-day-old order sorts below one accepted yesterday off an order created today.
+
 **Query Parameters**:
 - `status` (string, optional) — one of `assigned`, `handing_over`, `picked_up`, `in_transit`, `agent_delivered`, `delivered`, `failed`, `returned`, `rejected`, `pending_agency_reassignment`.
+- `scope` (string, optional) — `active` or `past`, the coarse "still mine to finish" / "over and done with" divide. **`active` is `assigned`, `handing_over`, `picked_up`, `in_transit`, `agent_delivered` and `failed`** — the same set that counts against your `capacity`, and `failed` is in it because the parcel is still in your van and `failed → in_transit|returned` is a legal move, so the job is not over. `past` is everything else (`delivered`, `returned`, `rejected`, `pending_agency_reassignment`). It exists because this divide cannot be expressed with `status`, which takes exactly one value — and since the list is paginated, narrowing a page client-side would under-report everything past it.
 - `q` (string, optional, **min 2 chars**, max 100) — free-text search. See below.
+
+Sending `scope` and `status` together is allowed, and **`status` wins** — it is the more specific of
+the two. Because every status belongs to exactly one scope, a status filter can never widen the scope
+it was chosen inside, so there is nothing to intersect.
 - `page` (number, optional, default 1), `limit` (number, optional, default 20, max 100).
 
 **What `q` searches** — one term against all of:
@@ -75,6 +84,7 @@ customers or products is capped at the first 500 of each.
       "status": "picked_up",
       "trackingNumber": "FDO-260705-090000-K7Q2M",
       "orderNumber": "ORD-2026-000123",
+      "paymentMethod": "cash_on_delivery",
       "vendor": { "id": "...", "businessName": "TechHub Douala", "phone": "+2376..." },
       "customer": { "id": "...", "name": "Jane D.", "phone": "+2376..." },
       "itemCount": 2,
@@ -207,6 +217,14 @@ multi-agency timeline — and, for cash-on-delivery orders, the **cash to collec
       }
     ],
     "pickup": { "address": { "...": "as in the list" }, "mode": "pickup_based", "count": 1 },
+    "agency": {
+      "id": "507f1f77bcf86cd799439099",
+      "name": "Douala Express Logistics",
+      "logo": { "id": "...", "key": "images/2026/07/logo.png", "url": "https://…/logo.png", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
+      "supportPhone": "+2376...",
+      "supportEmail": "support@douala-express.cm",
+      "supportWhatsapp": "+2376..."
+    },
     "vendor": { "id": "...", "businessName": "TechHub Douala", "phone": "+2376...", "email": "..." },
     "customer": {
       "id": "...",
@@ -224,6 +242,11 @@ multi-agency timeline — and, for cash-on-delivery orders, the **cash to collec
 }
 ```
 
+**`agency`** is the agency that dispatched this shipment — its business name, logo and support
+contacts, resolved from that agency's magazin. You serve several agencies at once, so `agencyId`
+alone does not tell you who to call; this is the block that does. `logo` is a `FileDetail` (never a
+bare URL), and the whole object is `null` only for an agency whose magazin has not been provisioned.
+
 **`items[].images`** is **every** picture of that item, thumbnail first — this is the screen you are
 on while matching a parcel on a counter to the job, and one angle is often not enough to tell two
 boxes apart. `images[0]` is exactly the picture the list and the [offer](./offers.md) show for the
@@ -232,8 +255,8 @@ has no picture. Same selection and freshness rules as [`itemImages`](#itemimages
 
 | Money field | Description |
 |---|---|
-| `paymentMethod` | `"online"` or `"cash_on_delivery"`. |
-| `cod` | `null` for online orders, or before pickup. Once the shipment is `picked_up`: `expectedAmount` (the exact cash to collect **for this shipment**), `status` (`pending` → `collected`/`cancelled`), `collectedAt`. **Never** contains the customer's delivery code. |
+| `paymentMethod` | `"online"` or `"cash_on_delivery"` — whether you have to take money at the door. Also on every **list** row. |
+| `cod` | `null` for online orders. Otherwise `expectedAmount` (the exact cash to collect **for this shipment**), `status`, `collectedAt`. **Never** contains the customer's delivery code. `status` runs `pending` → `collected`/`cancelled`, and is **`null`** in the window before any agent has accepted — there is no collection record yet, so `expectedAmount` is a projection of the same Σ (item price × quantity) the record will snapshot. On your own shipment you have accepted, so you will not normally see `null`. |
 | `orderValue` | The value of the **whole order**. ⚠️ Not the same number as `cod.expectedAmount`: an order can split into several shipments across different agencies, and you only carry cash for yours. |
 | `earning` / `earningUnavailable` | Your estimated cut — see [the earning table above](#earning). |
 

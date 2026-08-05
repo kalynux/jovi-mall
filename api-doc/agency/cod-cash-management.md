@@ -73,6 +73,14 @@ Opting into COD, and the fee you charge per collection, are configured in your p
 Delivery rules specific to COD shipments (agent required before pickup, delivered-by-code only)
 are in [shipments.md](./shipments.md).
 
+**Seeing the cash before you dispatch.** The balances on this page are all *post*-collection. To
+plan a dispatch you need the amount a shipment will collect *before* anyone has taken it, and the
+[shipment list and detail](./shipments.md#cod) give you that: the `cod` block is present on every
+COD shipment, including one still out on offer. In that window `cod.status` is **`null`** and
+`expectedAmount` is a projection — Σ (item price × quantity), the same arithmetic the collection
+record snapshots at acceptance — because the record itself does not exist yet. Nothing on this page
+counts a projected amount; it is a planning figure, not a liability.
+
 ---
 
 <a name="summary"></a>
@@ -98,8 +106,20 @@ are in [shipments.md](./shipments.md).
 | Field | Description |
 |---|---|
 | `liability.balance` | What your agency still owes the platform (falls on confirmed remittances). |
-| `agents[].cashHeld` | Cash each agent holds and hasn't deposited with you yet. |
+| `agents[].cashHeld` | Cash this agent holds **for you** and hasn't deposited yet — their contract's outstanding balance. |
 | `unsettledCollections` | Collected cash not yet covered by a confirmed remittance (what's blocking your COD earnings from releasing). |
+
+`agents[].cashHeld` is per-contract, not the agent's total. An agent serving several agencies has one
+physical pot of cash but a separate outstanding balance per contract, and you only ever see yours —
+cash they collected on another agency's delivery is neither visible here nor collectible by you. The
+same figure appears as `membership.codOutstandingBalance` on
+[GET /api/agency/agents](./agent-roster.md), and it is the ceiling on
+[POST /api/agency/cod/deposits](#record-deposit): recording more than it is rejected with
+`CONTRACT_SETTLEMENT_EXCEEDS_OUTSTANDING`.
+
+The list is your **allocating** contracts (`active`, `paused`, `suspended`), not just the active ones
+— pausing or suspending an agent does not hand their cash back, so they stay visible until the
+balance reaches zero.
 
 ---
 

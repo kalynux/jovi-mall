@@ -836,6 +836,10 @@ export class ShipmentAssignmentService {
         shipmentStatus: shipment?.status ?? null,
         itemCount: shipment?.items.length ?? 0,
         items: context?.items ?? [],
+        // The agency behind the offer — name, logo, support contacts. NOT gated
+        // on acceptance: it is the agent's own contracted counterparty, not the
+        // customer's identity, and "who is asking?" is half the decision.
+        agency: context?.agency ?? null,
         vendor: context?.vendor ?? null,
         customer: customer
           ? {

@@ -4,6 +4,7 @@ import { ShipmentService } from './shipment.service';
 import { ShipmentStatus } from './shipment.model';
 import {
     ListShipmentsQuerySchema,
+    AgentListShipmentsQuerySchema,
     UpdateShipmentStatusSchema,
     AgentUpdateShipmentStatusSchema,
     RejectShipmentSchema,
@@ -63,13 +64,15 @@ export class ShipmentController {
      *
      * Shipments assigned to the authenticated agent (their work queue).
      * Supports `?q=` free-text search over the customer's name/phone, the
-     * product titles, the order number and the tracking number.
+     * product titles, the order number and the tracking number, and
+     * `?scope=active|past` — the coarse "still mine to finish" split the app's
+     * queue is tabbed on. A `status` alongside it wins, being more specific.
      */
     static listForAgent = asyncHandler(async (req: Request, res: Response): Promise<void> => {
         const agentId = req.auth!.role_entity._id.toString();
-        const { status, q, page, limit } = ListShipmentsQuerySchema.parse(req.query);
+        const { status, q, scope, page, limit } = AgentListShipmentsQuerySchema.parse(req.query);
 
-        const result = await shipmentService.listForAgent(agentId, { status, q }, { page, limit });
+        const result = await shipmentService.listForAgent(agentId, { status, q, scope }, { page, limit });
 
         res.json({ success: true, data: result.data, meta: result.meta });
     });

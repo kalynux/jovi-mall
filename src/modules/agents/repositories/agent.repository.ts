@@ -11,6 +11,7 @@ import {
 } from '../models/agent.model';
 import { IGeoPoint } from '../../../core/types/geo.types';
 import { AgentOnboardingStep } from '../../../core/constants/onboarding-steps';
+import { normalizeEmailAddress } from '../../../core/validation/email';
 
 /** Mean Earth radius in km — converts a radius to radians for $centerSphere. */
 const EARTH_RADIUS_KM = 6378.1;
@@ -52,8 +53,9 @@ export class AgentRepository {
     return await DeliveryAgentModel.findOne({ user_id: userId });
   }
 
+  /** `email` is stored normalised (trimmed + lowercased), so the key is too. */
   async findByEmail(email: string): Promise<IDeliveryAgent | null> {
-    return await DeliveryAgentModel.findOne({ email: email.toLowerCase() });
+    return await DeliveryAgentModel.findOne({ email: normalizeEmailAddress(email) });
   }
 
   async findManyByIds(agentIds: string[]): Promise<IDeliveryAgent[]> {

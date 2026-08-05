@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { clearable } from '../../../core/validation/zod.helpers';
+import { ClearableEmailAddressSchema } from '../../../core/validation/email';
+import { ClearablePhoneNumberSchema, PhoneNumberSchema } from '../../../core/validation/phone';
 import { GeoPointZodSchema } from '../../../core/types/geo.types';
 import { GeoAddressZodSchema } from '../../../core/types/geo-address.types';
 
@@ -14,8 +16,11 @@ import { GeoAddressZodSchema } from '../../../core/types/geo-address.types';
 // registered country).
 
 const SupportContactSchema = z.object({
-  phone: z.string().min(6).max(20).trim().regex(/^\+?[0-9\s\-()]+$/, 'Invalid phone number format'),
-  email: clearable(z.string().email('Invalid email format')),
+  // Was a `\+?[0-9\s\-()]+` regex, which made the `+` and therefore the country
+  // code optional. A depot's support line is printed on a customer's tracking
+  // page, so it has to be dialable from anywhere.
+  phone: PhoneNumberSchema,
+  email: ClearableEmailAddressSchema,
 });
 
 export const MagazinHeadquartersAddressSchema = z.object({
@@ -52,9 +57,11 @@ export const UpdateMagazinProfileSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters').max(100).optional(),
   logoFileId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'logoFileId must be a valid file id')),
   description: clearable(z.string().max(1000, 'Description too long')),
-  supportEmail: clearable(z.string().email('Invalid email format')),
-  supportPhone: clearable(z.string().min(8).max(20)),
-  supportWhatsapp: clearable(z.string().min(8).max(20)),
+  supportEmail: ClearableEmailAddressSchema,
+  // WhatsApp is addressed by phone number, so it is held to the same E.164 rule
+  // as any other number — the provider will not accept anything else.
+  supportPhone: ClearablePhoneNumberSchema,
+  supportWhatsapp: ClearablePhoneNumberSchema,
   // Regions the agency serves — validated against the registered country in the service.
   coverage_areas: z.array(z.string().min(1).trim()).min(1, 'At least one coverage area (region) is required').optional(),
   // Physical / pickup locations. Full replace; index 0 = primary. Geo enforced in the service.

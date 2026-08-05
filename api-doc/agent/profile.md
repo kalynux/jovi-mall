@@ -143,7 +143,7 @@ document. An agent can only ever act on their own record.
 | `preferred_language` | string | ❌ | one of `en`, `fr`, `pt`, `es`, `ar` |
 | `vehicle_info` | object | ❌ | `{ vehicle_type: 'bike'\|'car'\|'van'\|'truck', color, plate_number? }` — `vehicle_type` and `color` required when the object is sent |
 | `legal_identity` | object | ❌ | `{ drivers_license_number?, national_id_number? }` — write-only, never echoed |
-| `emergency_contact` | object \| null | ❌ | `{ name, phone }`, both required when the object is sent; `null` clears it |
+| `emergency_contact` | object \| null | ❌ | `{ name, phone }`, both required when the object is sent; `null` clears it. `phone` must be **E.164** (e.g. `+237670000002`) — see [Contact formats](../README.md#contact-formats-phone--email) |
 
 > **Clearable fields**: send `null` **or `""`** to clear (stored and returned as `null`); omit the
 > key to leave the value unchanged. See [Conventions](../README.md#conventions).

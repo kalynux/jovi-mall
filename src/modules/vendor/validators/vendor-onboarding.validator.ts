@@ -4,6 +4,18 @@ import { GeoAddressZodSchema } from '../../../core/types/geo-address.types';
 import { PayoutDetailsZodSchema } from '../../../core/types/payout.types';
 import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 import { clearable } from '../../../core/validation/zod.helpers';
+import {
+    EMAIL_FORMAT_MESSAGE,
+    isEmailAddress,
+    normalizeEmailAddress,
+    OptionalEmailAddressSchema,
+} from '../../../core/validation/email';
+import {
+    isE164,
+    normalizePhoneNumber,
+    OptionalPhoneNumberSchema,
+    PHONE_FORMAT_MESSAGE,
+} from '../../../core/validation/phone';
 
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
 
@@ -151,10 +163,47 @@ const CancellationPolicySchema = z.object({
     { message: 'late_cancellation_refund_value is required when refund type is "fixed" or "percentage"', path: ['late_cancellation_refund_value'] },
 );
 
-const SupportChannelSchema = z.object({
-    type: z.enum(['email', 'phone', 'whatsapp', 'telegram']),
-    contact: z.string().min(1).max(200).trim(),
-});
+/**
+ * A support channel is a `type` + the address to reach it on, so `contact` is
+ * validated AGAINST that type rather than as free text: an `email` channel
+ * carrying `677123456` renders a mailto link no customer can use, and the
+ * mistake is invisible until one of them tries.
+ *
+ * `telegram` stays free text deliberately — it is a @handle or an invite link,
+ * neither of which has a format this module owns.
+ */
+const SupportChannelSchema = z
+    .object({
+        type: z.enum(['email', 'phone', 'whatsapp', 'telegram']),
+        contact: z.string().min(1).max(200).trim(),
+    })
+    .superRefine((channel, ctx) => {
+        if (channel.type === 'email' && !isEmailAddress(normalizeEmailAddress(channel.contact))) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['contact'],
+                message: EMAIL_FORMAT_MESSAGE,
+            });
+        }
+        // WhatsApp is addressed by phone number, so it shares the phone rule.
+        if (
+            (channel.type === 'phone' || channel.type === 'whatsapp') &&
+            !isE164(normalizePhoneNumber(channel.contact))
+        ) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['contact'],
+                message: PHONE_FORMAT_MESSAGE,
+            });
+        }
+    })
+    .transform((channel) => {
+        if (channel.type === 'email') {
+            return { ...channel, contact: normalizeEmailAddress(channel.contact) };
+        }
+        if (channel.type === 'telegram') return channel;
+        return { ...channel, contact: normalizePhoneNumber(channel.contact) };
+    });
 
 const SupportPolicySchema = z.object({
     channels: z.array(SupportChannelSchema).max(4).optional(),
@@ -184,8 +233,8 @@ export const UpdateVendorProfileSchema = z.object({
     displayName: z.string().min(2).max(100).trim().optional(),
     // NOTE: the business name/description/logo/banner are edited on the Store
     // (PATCH /api/vendor/store), not here — the Store is their source of truth.
-    email: z.string().email().optional(),
-    phone: z.string().min(8).max(20).optional(),
+    email: OptionalEmailAddressSchema,
+    phone: OptionalPhoneNumberSchema,
     timezone: z.string().min(1).trim().optional(),
     preferred_language: z.enum(SUPPORTED_LANGUAGES).optional(),
     country: z.string().length(2).toUpperCase().optional(),

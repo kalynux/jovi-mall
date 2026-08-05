@@ -155,9 +155,11 @@ Content-Type: application/json
 - `logoFileId` (string, MongoDB ObjectId, *clearable*): Id of a logo file previously uploaded via `POST /api/files/upload`. The response returns the resolved `logo` file object (`{ id, key, url, mimeType, size, originalName }` | null). Registers a `file_references` row so the file is not garbage-collected while set.
 - `bannerFileId` (string, MongoDB ObjectId, *clearable*): Id of a banner/hero file uploaded via `POST /api/files/upload`. The response returns the resolved `banner` file object (same shape as `logo`).
 - `description` (string, max 1000 chars, *clearable*): Store description
-- `supportEmail` (string, valid email, *clearable*): Support contact email
-- `supportPhone` (string, 8-20 chars, *clearable*): Support contact phone
-- `supportWhatsapp` (string, 8-20 chars, *clearable*): WhatsApp support number
+- `supportEmail` (string, valid email, lowercased, *clearable*): Support contact email
+- `supportPhone` (string, **E.164** e.g. `+237612345678`, *clearable*): Support contact phone
+- `supportWhatsapp` (string, **E.164**, *clearable*): WhatsApp support number
+
+> Phone and email formats are platform-wide — see [Contact formats](../README.md#contact-formats-phone--email).
 - `version` (**required**, number): Current store version for optimistic locking
 
 > **No `address` / `city` / `country` here.** Physical store locations are the

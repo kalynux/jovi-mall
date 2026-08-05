@@ -56,6 +56,15 @@ takes their contracted cut of it (`fee_split` on their contract with this agency
 agency's entry is **the fee minus the agent's cut**, and the agent's own entry is the remainder.
 The vendor pays the same total either way.
 
+**You can see the figure before it lands.** Every row on
+[`GET /api/agency/shipments`](./shipments.md#money) and the shipment detail carries an
+`agencyEarning` block — `amount` already net of the agent's cut, itemised into `deliveryFee`,
+`earnedFee`, `agentCut` and `codHandlingFee`. It is computed by the *same functions* that write the
+entry described here, so it is a projection of this arithmetic rather than a parallel one. It is
+still an **estimate**: `fee_split` is read live again at split time, so renegotiating it in between
+changes what is actually paid. It reads `agencyEarningUnavailable: "no_agent"` until an agent
+accepts — there is no cut to subtract before then.
+
 **If the shipment comes back** (`returned`), the run happened but the delivery did not: the agency
 earns its `policies.pricing.additional_fees.rto_fee` instead of the full delivery fee (capped at
 that fee), the agent takes their contracted share of *that*, and the unused remainder is returned
@@ -75,7 +84,9 @@ customer's delivery code:
 
 The agent's cut is carved out of the delivery fee here too, exactly as on a prepaid order. The
 `cod_handling_fee` is **not** shared — it stays whole with the agency, which is the party carrying
-the cash accountability.
+the cash accountability. It is therefore included in the `agencyEarning.amount` estimate on the
+[shipment list](./shipments.md#money), broken out as `codHandlingFee`; on a prepaid shipment that
+field is `0`.
 
 COD earnings differ from prepaid earnings in two ways:
 

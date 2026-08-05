@@ -6,6 +6,7 @@ import { SmtpMailProvider } from './providers/smtp.provider';
 import { IMailProvider, SendEmailOptions, EmailType } from './mail.interface';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
+import { EMAIL_FORMAT_MESSAGE, toEmailAddress } from '../../core/validation/email';
 
 export class MailService {
   private provider: IMailProvider;
@@ -21,11 +22,27 @@ export class MailService {
   }
 
   async send(options: SendEmailOptions): Promise<void> {
+    // The last gate before an address leaves the platform. Recipients reach this
+    // service from stored profile fields, not from a request body, so the
+    // request-time schema is not on this path — a legacy or hand-edited row with
+    // a malformed address would otherwise be handed to the SMTP provider, which
+    // fails opaquely (or, worse, silently drops it). Same rule as every inbound
+    // endpoint: `core/validation/email`.
+    const recipient = toEmailAddress(options.to);
+    if (!recipient) {
+      throw createAppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        400,
+        `Cannot send mail: recipient address is not valid. ${EMAIL_FORMAT_MESSAGE}`,
+        { field: 'to' }
+      );
+    }
+
     const html = await this.renderTemplate(options.template, options.variables);
     const from = this.getSender(options.type, options.from);
 
     await this.provider.sendEmail({
-      to: options.to,
+      to: recipient,
       from,
       subject: options.subject,
       html,

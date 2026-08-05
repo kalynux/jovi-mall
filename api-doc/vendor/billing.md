@@ -171,7 +171,7 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
 }
 ```
 - `gateway` (string, **required**) — one of `NOTCHPAY`, `MYCOOLPAY`, `STRIPE`.
-- `channel` (object, optional, defaults `{}`) — same shape as the top-up channel: `phoneNumber` + `phoneOperator` (`MTN`|`ORANGE`|`MOOV`) for mobile money; for **Stripe** send only optional `customerEmail`/`customerName` (do **not** send `cardToken` — cards are collected client-side with the returned `clientSecret`). See [stripe-payments.md](./stripe-payments.md).
+- `channel` (object, optional, defaults `{}`) — same shape as the top-up channel: `phoneNumber` (**E.164**) + `phoneOperator` (`MTN`|`ORANGE`|`MOOV`) for mobile money; for **Stripe** send only optional `customerEmail`/`customerName` (do **not** send `cardToken` — cards are collected client-side with the returned `clientSecret`). See [stripe-payments.md](./stripe-payments.md) and [Contact formats](../README.md#contact-formats-phone--email).
 
 **Success Response** — `201 Created`:
 ```json
@@ -312,9 +312,10 @@ Field rules:
 - `packCode` (string, **required**) — must match a `code` from `GET /credits/packs`.
 - `gateway` (string, **required**) — one of `NOTCHPAY`, `MYCOOLPAY`, `STRIPE`.
 - `channel` (object, optional, defaults `{}`) — payment channel details:
-  - `phoneNumber` (string) and `phoneOperator` (`MTN` | `ORANGE` | `MOOV`) — for mobile money (NotchPay/MyCoolPay).
+  - `phoneNumber` (string, **E.164** — leading `+` and country code) and `phoneOperator` (`MTN` | `ORANGE` | `MOOV`) — for mobile money (NotchPay/MyCoolPay).
   - For **Stripe**, do **not** send `cardToken` — the card is collected client-side via the returned `clientSecret`. See [stripe-payments.md](./stripe-payments.md).
-  - `customerEmail` (string, email), `customerName` (string) — optional, passed to the gateway.
+  - `customerEmail` (string, valid email), `customerName` (string) — optional, passed to the gateway.
+  - Still optional; the format rule applies only when the field is sent. See [Contact formats](../README.md#contact-formats-phone--email).
 
 **Success Response** — `201 Created`:
 ```json

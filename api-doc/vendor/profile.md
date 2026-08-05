@@ -197,8 +197,8 @@ All fields are **optional except `version`**. Every field below maps to a profil
 | Field | Type | Validation | Onboarding step it maps to | Notes |
 |-------|------|------------|----------------------------|-------|
 | `displayName` | `string` | 2–100 chars | — (general) | The vendor's **personal/display** name. The **business** name is on the [Store](./store.md), not here. |
-| `email` | `string` | Valid email | — (general) | **Feature-gated** — rejected with `403` when `ALLOW_EMAIL_CHANGE=false`. |
-| `phone` | `string` | 8–20 chars | — (general) | Contact phone. |
+| `email` | `string` | Valid email, lowercased ([Contact formats](../README.md#contact-formats-phone--email)) | — (general) | **Feature-gated** — rejected with `403` when `ALLOW_EMAIL_CHANGE=false`. |
+| `phone` | `string` | **E.164**, e.g. `+237670000000` ([Contact formats](../README.md#contact-formats-phone--email)) | — (general) | Contact phone. |
 | `country` | `string` | Exactly 2 chars, ISO-2 (auto-uppercased) | Step 1 (Basic Setup) | **SET-ONCE / IMMUTABLE.** Chosen during onboarding Step 1 and locked afterwards — sending a *different* value is rejected with `403 PROFILE_COUNTRY_IMMUTABLE`. Echoing the current value back is accepted (idempotent no-op). It anchors the business-address policy below. |
 | `timezone` | `string` | Min 1 char, IANA tz | Step 1 (Basic Setup) | E.g. `"Africa/Douala"`. Freely editable — this (plus `preferred_language`) is the profile's localization surface. |
 | `preferred_language` | `string` | One of `en`, `fr`, `pt`, `es`, `ar` | — (general) | The vendor's language, stored on this profile and used for **all notifications** (in-app, email, WhatsApp templates). There is no separate "notification language" — this is it. Defaults to `en`. |

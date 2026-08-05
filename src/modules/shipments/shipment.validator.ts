@@ -32,6 +32,32 @@ export const ListShipmentsQuerySchema = z.object({
 
 export type ListShipmentsQuery = z.infer<typeof ListShipmentsQuerySchema>;
 
+/**
+ * The agent's own list query. Adds `scope` — the coarse "still mine to finish"
+ * / "over and done with" divide the mobile app's work queue is split on.
+ *
+ * It cannot be expressed with `status`, which takes exactly one value: "still
+ * mine" is five statuses (ACTIVE_SHIPMENT_STATUSES), and the list is paginated,
+ * so a client narrowing page 1 locally would under-report every shipment past
+ * it. Hence a server-side scope rather than a repeated `status` param.
+ *
+ * Agent-only, deliberately: `ListShipmentsQuerySchema` is shared with the
+ * agency list, and an agency's board has no use for one agent's plate. Adding it
+ * to the shared schema would have the agency endpoint silently accept a
+ * parameter it ignores.
+ *
+ * `scope` and `status` compose: `status` is the more specific of the two and
+ * wins outright (see ShipmentRepository.findByAgentPaginated).
+ */
+export const AgentListShipmentsQuerySchema = ListShipmentsQuerySchema.extend({
+    scope: z.enum(['active', 'past']).optional(),
+});
+
+export type AgentListShipmentsQuery = z.infer<typeof AgentListShipmentsQuerySchema>;
+
+/** The coarse work-queue divide. See AgentListShipmentsQuerySchema. */
+export type AgentShipmentScope = AgentListShipmentsQuery['scope'];
+
 // Agency-triggered status transition. Only the subset that may be set directly
 // — see TRIGGERABLE_TRANSITIONS in shipment.service.ts.
 export const UpdateShipmentStatusSchema = z.object({

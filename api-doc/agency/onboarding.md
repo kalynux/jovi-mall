@@ -200,8 +200,8 @@ Captures the agency's operating country, the geographic regions served, and at l
 | `headquarters_addresses[].region` | `string \| null` | No | Max 100 chars | **Derived from `geo.components.region`** — don't send it. A value you do send is used only when the geocode resolves no region. Reads back `null` when neither source has one. |
 | `headquarters_addresses[].city` | `string \| null` | No | Max 100 chars | **Derived from `geo.components.city`** — don't send it. Same fallback rule as `region`; Nominatim omits the city for many rural/landmark results, and `null` is the honest answer there. |
 | `headquarters_addresses[].address_description` | `string` | Yes | Min 1, Max 200 chars | Full street address / landmark. |
-| `headquarters_addresses[].support_contact.phone` | `string` | Yes | Min 6, Max 20 chars. Regex `/^\+?[0-9\s\-()]+$/` | Phone number for this location. |
-| `headquarters_addresses[].support_contact.email` | `string \| null` | No | Valid email format | Contact email for this location. |
+| `headquarters_addresses[].support_contact.phone` | `string` | Yes | **E.164** — leading `+` and country code required (e.g. `+237670000000`). [Contact formats](../README.md#contact-formats-phone--email) | Phone number for this location. |
+| `headquarters_addresses[].support_contact.email` | `string \| null` | No | Valid email, lowercased. [Contact formats](../README.md#contact-formats-phone--email) | Contact email for this location. |
 | `headquarters_addresses[].location` | `object` | No | GeoJSON Point `{ type: "Point", coordinates: [lng, lat] }`; lng ∈ [-180,180], lat ∈ [-90,90] | Legacy bare coordinate, **derived from `geo.coordinates`** on write. Accepted only as a fallback for entries with no `geo`. |
 | `headquarters_addresses[].geo` | `object \| null` | **Yes on new/edited entries** | A selected address-search result (`GeoAddress`) — see [Geospatial addresses](../geo/README.md) | The canonical geospatial address (formatted address + coordinates + admin components). **Required on every new or edited entry, and must resolve inside the agency's `country`** — else `400 ADDRESS_GEO_REQUIRED` / `400 ADDRESS_COUNTRY_MISMATCH`. "Unchanged" means same `address_description` and same geocoded place, so legacy `location`-only entries keep working until next touched — and renaming an entry's `label` alone is never treated as a move. |
 | `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard. |
@@ -276,7 +276,7 @@ Captures the agency's payout methods. The **first entry in the array is always t
 | Field | Type | Required? | Validation |
 |-------|------|-----------|------------|
 | `provider` | `string` | Yes | Min 1 char. E.g. `"MTN Mobile Money"`, `"Orange Money"` |
-| `phone_number` | `string` | Yes | Valid local phone format |
+| `phone_number` | `string` | Yes | **E.164** — leading `+` and country code required (e.g. `+237670000000`). [Contact formats](../README.md#contact-formats-phone--email) |
 | `account_name` | `string` | Yes | Min 1 char |
 
 **`bank` sub-fields:**

@@ -163,7 +163,7 @@ Your latest payout request, or `data: null` if you have never made one. Includes
       "method": "mobile_money",
       "mobile_money": {
         "provider": "MTN",
-        "phone_number": "237670000000",
+        "phone_number": "+237670000000",
         "account_name": "Jean Doe"
       }
     },
@@ -185,6 +185,9 @@ Your latest payout request, or `data: null` if you have never made one. Includes
 - 1–3 entries. Each is either `mobile_money` or `bank`; the unused branch is ignored.
 - **Replaced wholesale**, not merged — because the list is ordered, a field-by-field merge would
   have no meaning.
+- `mobile_money.phone_number` must be **E.164** (leading `+` and country code) — this is where the
+  platform sends money, so a national number is rejected. See
+  [Contact formats](../README.md#contact-formats-phone--email).
 
 **Success Response** (`200 OK`): the saved list, **masked** (see below).
 

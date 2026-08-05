@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 import { AGENT_CONFIG } from '../config/agent.config';
 import { clearable } from '../../../core/validation/zod.helpers';
+import { PhoneNumberSchema } from '../../../core/validation/phone';
 import { PayoutDetailsZodSchema } from '../../../core/types/payout.types';
 
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
@@ -19,7 +20,9 @@ const LegalIdentitySchema = z.object({
 
 const EmergencyContactSchema = z.object({
     name: z.string().min(1).max(100).trim(),
-    phone: z.string().min(6).max(20).trim(),
+    // The one number that gets dialled in the situation where nobody has time
+    // to work out a missing country code.
+    phone: PhoneNumberSchema,
 });
 
 const ObjectIdSchema = z.string().regex(/^[a-f\d]{24}$/i, 'Must be a valid id');
