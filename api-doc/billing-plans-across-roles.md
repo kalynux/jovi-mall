@@ -42,6 +42,17 @@ server job). Activating a plan grants its `credit_allowance` once into the role'
 > inactive. Build the upgrade UI to render whatever active plans the catalog returns
 > — don't hardcode tiers — and it lights up when the paid tiers are switched on.
 
+## The catalog is also readable without a session
+
+`GET /api/public/plans` and `GET /api/public/credit-packs` serve the same catalog to a **logged-out**
+caller, for the marketing site — which prints real prices and previously had to hand-copy them out of
+`seed-pricing-plans.ts` and `credit.config.ts`. Same numbers, a trimmed projection (`id` instead of
+`_id`, no internal timestamps), plus `?role=` / `?includeInactive=true` and a 5-minute
+`Cache-Control`. Contract: [public/README.md](./public/README.md).
+
+**Dashboards should keep using the authenticated `GET /api/{role}/plans`** — it is scoped to the
+caller's role and needs no filtering. The public route exists for pages that have no session at all.
+
 ## Shared endpoints (same shape for vendor / agency / agent)
 
 Swap `{role}` for `vendor`, `agency`, or `agent`:

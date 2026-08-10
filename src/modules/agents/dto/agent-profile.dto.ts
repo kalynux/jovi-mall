@@ -14,8 +14,31 @@ import { IGeoPoint } from '../../../core/types/geo.types';
 import { UpdateAgentProfileInput } from '../validators/agent.validator';
 import { AGENT_CONFIG } from '../config/agent.config';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
+import { mergeVehicleInfo } from '../domain/vehicle-info';
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
+
+/**
+ * Vehicle facts as they go on the wire. Keys stay snake_case (the stored shape
+ * the app already reads), and `photo_file_id` is NEVER emitted — it is resolved
+ * into `photo`, the same `FileDetail` object the avatar and product media use.
+ */
+export interface AgentVehicleInfoDto {
+    vehicle_type: IAgentVehicleInfo['vehicle_type'];
+    plate_number: string | null;
+    /** Lowercase token from `VEHICLE_COLORS`, or free text. Localize on the client. */
+    color: string;
+    photo: FileDetail | null;
+}
+
+/**
+ * The vehicle without its photo — what compact list surfaces (the agency
+ * roster) return. Separate from {@link AgentVehicleInfoDto} rather than
+ * `photo: null` on the same shape: a list that never resolves the file would
+ * otherwise report "this agent has no vehicle photo", which is a different
+ * claim from "this view does not carry it".
+ */
+export type AgentVehicleSummaryDto = Omit<AgentVehicleInfoDto, 'photo'>;
 
 export interface AgentTrackingDto {
     /** The business flag. geo-tracker enforces this; it does not decide it. */
@@ -51,7 +74,7 @@ export interface GetAgentProfileResponseDto {
     phoneVerified: boolean;
     /** Profile avatar as a resolved file object (same shape as product media), or null. */
     avatar: FileDetail | null;
-    vehicleInfo: IAgentVehicleInfo | null;
+    vehicleInfo: AgentVehicleInfoDto | null;
     /**
      * SECURITY: legal_identity (drivers_license_number, national_id_number)
      * is NEVER included in this response. Admin-only access via admin endpoints.
@@ -95,7 +118,7 @@ export interface AgentRosterEntryDto {
     phone: string | null;
     avatar: FileDetail | null;
     status: string;
-    vehicleInfo: IAgentVehicleInfo | null;
+    vehicleInfo: AgentVehicleSummaryDto | null;
     availability: IAgentAvailability['state'];
     workingState: IAgentWorkingState['state'];
     activeShipmentCount: number;
@@ -117,6 +140,7 @@ export class AgentProfileMapper {
         agent: IDeliveryAgent,
         now: Date = new Date(),
         avatar: FileDetail | null = null,
+        vehiclePhoto: FileDetail | null = null,
     ): GetAgentProfileResponseDto {
         return {
             id: agent._id.toString(),
@@ -127,7 +151,7 @@ export class AgentProfileMapper {
             phoneVerified: agent.phone_verified,
             // Resolved by the caller (the agent has an id-only reference on the doc).
             avatar,
-            vehicleInfo: agent.vehicle_info,
+            vehicleInfo: AgentProfileMapper.toVehicleInfoDto(agent.vehicle_info, vehiclePhoto),
             emergencyContact: agent.emergency_contact,
             availability: agent.availability,
             workingState: agent.working_state,
@@ -150,6 +174,28 @@ export class AgentProfileMapper {
             onboardingStep: agent.onboarding_step,
             createdAt: agent.created_at,
             updatedAt: agent.updated_at,
+        };
+    }
+
+    /**
+     * The vehicle with its photo resolved. Built field-by-field rather than
+     * spread, so `photo_file_id` cannot leak onto the wire when the stored
+     * sub-document grows a field.
+     */
+    static toVehicleInfoDto(
+        vehicle: IAgentVehicleInfo | null,
+        photo: FileDetail | null = null,
+    ): AgentVehicleInfoDto | null {
+        if (!vehicle) return null;
+        return { ...AgentProfileMapper.toVehicleSummaryDto(vehicle)!, photo };
+    }
+
+    static toVehicleSummaryDto(vehicle: IAgentVehicleInfo | null): AgentVehicleSummaryDto | null {
+        if (!vehicle) return null;
+        return {
+            vehicle_type: vehicle.vehicle_type,
+            plate_number: vehicle.plate_number ?? null,
+            color: vehicle.color,
         };
     }
 
@@ -200,7 +246,7 @@ export class AgentProfileMapper {
             phone: agent.phone ?? null,
             avatar,
             status: agent.status,
-            vehicleInfo: agent.vehicle_info,
+            vehicleInfo: AgentProfileMapper.toVehicleSummaryDto(agent.vehicle_info),
             availability: agent.availability?.state ?? 'offline',
             workingState: agent.working_state?.state ?? 'idle',
             activeShipmentCount: agent.capacity?.active_shipment_count ?? 0,
@@ -209,7 +255,17 @@ export class AgentProfileMapper {
         };
     }
 
-    static toUpdatePayload(input: UpdateAgentProfileInput): Partial<IDeliveryAgent> {
+    /**
+     * `currentVehicleInfo` is required for the merge, not the replace, that
+     * `vehicle_info` needs: `plate_number` and `photo_file_id` are `clearable()`,
+     * which promises *omit = unchanged*. Replacing the sub-document wholesale —
+     * as this used to — breaks that promise, and a client fixing a plate number
+     * silently drops the photo with a 200 back.
+     */
+    static toUpdatePayload(
+        input: UpdateAgentProfileInput,
+        currentVehicleInfo: IAgentVehicleInfo | null = null,
+    ): Partial<IDeliveryAgent> {
         const payload: Partial<IDeliveryAgent> = {};
 
         if (input.name !== undefined) payload.name = input.name;
@@ -219,7 +275,9 @@ export class AgentProfileMapper {
         if (input.avatar_url !== undefined) payload.avatar_url = input.avatar_url as string | null;
         if (input.timezone !== undefined) payload.timezone = input.timezone;
         if (input.preferred_language !== undefined) payload.preferred_language = input.preferred_language;
-        if (input.vehicle_info !== undefined) payload.vehicle_info = input.vehicle_info as IAgentVehicleInfo;
+        if (input.vehicle_info !== undefined) {
+            payload.vehicle_info = mergeVehicleInfo(currentVehicleInfo, input.vehicle_info);
+        }
         if (input.legal_identity !== undefined) {
             payload.legal_identity = {
                 drivers_license_number: input.legal_identity.drivers_license_number ?? null,

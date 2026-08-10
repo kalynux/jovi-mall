@@ -229,12 +229,25 @@ export interface IContractFeeSplit {
 }
 
 /**
- * The agent's operating zone FOR THIS CONTRACT — a constraint layered on top of
- * the agent's own home base / service radius, and validated as a subset of it.
- * An agency cannot grant coverage the agent never agreed to work.
+ * The agent's operating zone FOR THIS CONTRACT — where, of everywhere the agency
+ * works, this agent will take deliveries.
+ *
+ * `regions` are canonical region KEYS of the agency's registered country, the
+ * same vocabulary and the same `locations.json` catalogue the agency's own
+ * `coverage_areas` use on its location tab. Both parties PICK from that list;
+ * every write path canonicalises what it is sent and refuses anything that is
+ * not a region of that country (`normalizeContractRegions`). Rows written before
+ * that check may still hold free text, which the read path tolerates.
+ *
+ * The catalogue is the country's, deliberately NOT the agency's own declared
+ * coverage areas: an agency expanding into a region contracts agents for it
+ * before it declares it. Clients are given the agency's areas alongside so they
+ * can mark them, as a hint.
+ *
+ * An empty list means NO restriction — see contract-coverage.service.ts.
  */
 export interface IContractCoverage {
-  /** Named regions/cities this contract covers. */
+  /** Canonical region keys of the agency's country. Empty = no restriction. */
   regions: string[];
   /** Optional explicit polygon, if the agency draws a zone. */
   area: IPolygon | null;

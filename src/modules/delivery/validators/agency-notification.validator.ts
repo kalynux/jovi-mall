@@ -32,7 +32,8 @@ export const UpdateAgencyNotificationPreferencesSchema = z.object({
         payoutUpdates: z.boolean().optional(),
         codDepositUpdates: z.boolean().optional(),
         planUpdates: z.boolean().optional(),
-        storageAlert: z.boolean().optional()
+        storageAlert: z.boolean().optional(),
+        stockRequestUpdates: z.boolean().optional()
     }).optional()
 });
 

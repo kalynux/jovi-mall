@@ -831,6 +831,62 @@ export class AgencyNotificationEventHandler {
         }
     }
 
+    // ─── Stock adjustment on a warehoused SKU ────────────────────────────────
+
+    /**
+     * The three stock-request situations, from the agency's side.
+     *
+     * One implementation for all three: only the situation string differs, and the
+     * `handle*` wrappers exist because the event bus subscribes per event name.
+     *
+     * Gated on `stockRequestUpdates`, NOT `storageAlert` — the latter is the
+     * media-file quota and shares only the word "storage". Note that opting out
+     * silences the push, not the obligation: a vendor's request still sits in the
+     * inbox awaiting an answer.
+     *
+     * `idempotencyKey` needs no timestamp: a request resolves exactly once, enforced
+     * by the repository's compare-and-set on `status: 'pending'`.
+     */
+    private async handleStockRequestSituation(
+        situation: 'storage.stock_request.received' | 'storage.stock_request.approved' | 'storage.stock_request.rejected',
+        event: DomainEvent,
+    ): Promise<void> {
+        try {
+            const {
+                requestId, recipientRole, agencyId, vendorName,
+                productTitle, sku, quantityBefore, requestedQuantity,
+            } = event.payload;
+            if (recipientRole !== 'agency') return;
+
+            const prefs = await this.preferenceRepo.getByAgency(agencyId);
+            if (prefs.preferences.stockRequestUpdates === false) return;
+
+            await this.dispatch({
+                situation,
+                prefs,
+                agencyId,
+                aggregateType: 'stock_request',
+                aggregateId: requestId,
+                idempotencyKey: `${situation}:${requestId}:agency`,
+                context: { requestId, vendorName, productTitle, sku, quantityBefore, requestedQuantity }
+            });
+        } catch (error) {
+            console.error(`[AgencyNotificationHandler] Failed to handle ${situation}:`, error);
+        }
+    }
+
+    async handleStockRequestReceived(event: DomainEvent): Promise<void> {
+        await this.handleStockRequestSituation('storage.stock_request.received', event);
+    }
+
+    async handleStockRequestApproved(event: DomainEvent): Promise<void> {
+        await this.handleStockRequestSituation('storage.stock_request.approved', event);
+    }
+
+    async handleStockRequestRejected(event: DomainEvent): Promise<void> {
+        await this.handleStockRequestSituation('storage.stock_request.rejected', event);
+    }
+
     /** Human-readable byte size (B/KB/MB/GB). */
     private formatBytes(bytes: number): string {
         if (bytes < 1024) return `${bytes} B`;

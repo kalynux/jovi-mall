@@ -6,6 +6,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product.repository.mongo';
 import { AvailabilityRule } from '../models/availability-rule.model';
+import { validateTimezone } from '../../vendors/utils/timezone.util';
 
 const productRepository = new ProductRepositoryMongo();
 
@@ -14,7 +15,14 @@ const CreateAvailabilityRuleSchema = z.object({
     dayOfWeek: z.number().int().min(0).max(6, 'Day of week must be 0-6 (Sun-Sat)'),
     startTime: z.string().regex(/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/, 'Invalid time format (HH:mm)'),
     endTime: z.string().regex(/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/, 'Invalid time format (HH:mm)'),
-    timezone: z.string().default('UTC'),
+    // Optional: omitted means "use the vendor's timezone", which is the source of
+    // truth. Previously this defaulted to the literal 'UTC' and was never validated
+    // OR read — so a rule could claim any string and the hours were silently
+    // resolved against the server's clock instead.
+    timezone: z
+        .string()
+        .refine(validateTimezone, 'Not a recognised IANA timezone (e.g. Africa/Douala)')
+        .optional(),
     isActive: z.boolean().default(false), // Draft by default
 });
 

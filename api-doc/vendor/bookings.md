@@ -41,7 +41,7 @@ List all bookings for the authenticated vendor with filtering and pagination.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `status` | string | No | Filter by booking status: `pending`, `confirmed`, `completed`, `no-show`, `cancelled` |
-| `paymentStatus` | string | No | Filter by payment state: `unpaid`, `pending`, `paid`, `disputed`, `failed`, `refunded` |
+| `paymentStatus` | string | No | Filter by payment state: `unpaid`, `pending`, `paid`, `disputed`, `failed`, `refund_pending`, `refunded` |
 | `productId` | string | No | Filter by product (service) ID |
 | `startDate` | ISO datetime | No | Bookings starting at or after this date |
 | `endDate` | ISO datetime | No | Bookings starting at or before this date |
@@ -208,6 +208,8 @@ Omitting all three settles at the originally booked duration.
     "priceSnapshot": 5000,
     "finalPrice": 12500,
     "additionalAmountDue": 7500,
+    "additionalAmountCharged": false,
+    "additionalAmountNote": "Recorded only — not charged. Collect this from the customer directly.",
     "breakdown": { "basePrice": 12500, "peakHoursSurcharge": 0 }
   },
   "message": "Booking completed"
@@ -217,9 +219,66 @@ Omitting all three settles at the originally booked duration.
 - `priceSnapshot` — the originally booked estimate.
 - `finalPrice` — the recomputed (or flat) price; also recorded under `booking.metadata.completion`.
 - `additionalAmountDue` — `max(0, finalPrice − priceSnapshot)`.
+- `amountPaid` — what the customer has actually paid so far (`0` unless the booking is `paid`).
+- `additionalAmountDue` — `max(0, finalPrice − amountPaid)`. **Compared against what was PAID, not what was quoted** — an unpaid booking owes the whole final price, not just the overrun.
+- `creditDue` — `max(0, amountPaid − finalPrice)`. Recorded, **not** auto-refunded.
+- `additionalAmountCharged` — always `false`: the balance is requested, never charged automatically.
 
-> [!WARNING]
-> **The additional-payment request is currently STUBBED.** When `additionalAmountDue > 0`, the shortfall is recorded on the booking and returned, but **no payment charge or customer notification is created yet**. Treat `additionalAmountDue` as informational until this is implemented.
+The settled figures are persisted on `booking.settlement` (`finalPrice`, `balanceDue`, `balancePaid`, `creditDue`, `pricingMode`, `settledAt`), so an outstanding balance is queryable rather than buried in `metadata`.
+
+**What happens next.** When `additionalAmountDue > 0` the customer receives a `booking.balance.due` notification explaining why more is owed, with a link to pay it. The platform does **not** charge them automatically — they agreed to the quoted price, not to whatever is settled afterwards. Settle it one of two ways:
+
+- The customer pays online: `POST /api/customer/bookings/:id/pay-balance`.
+- You take it in cash and record it: `POST /api/vendor/bookings/:id/settle-balance` (below).
+
+> `creditDue` (settling *below* what the customer paid) is surfaced but **not refunded automatically** — that is usually a goodwill discount you intend to hand back yourself. Use the refund flow if you want the platform to return it.
+
+---
+
+## Settle Balance in Cash
+
+```http
+POST /api/vendor/bookings/:id/settle-balance
+```
+
+Record that the outstanding completion balance was collected in cash, on the day. A service business usually takes an overrun at the counter rather than chasing an online payment; without this the balance sits open forever on a booking you consider finished.
+
+**Request Body** (optional):
+
+```json
+{ "amount": 3000 }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `amount` | number | No | Partial settlement. Omit to settle the whole outstanding balance. Over-declaring is clamped to what is owed. |
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "bookingId": "507f1f77bcf86cd799439011",
+    "balanceDue": 7500,
+    "balancePaid": 7500,
+    "outstanding": 0,
+    "balancePaymentMethod": "cash"
+  },
+  "message": "Balance settled in cash"
+}
+```
+
+The extra is split into platform commission + your net exactly as the original payment is, and matures immediately (the appointment is already complete).
+
+**Error Responses:**
+
+- `404 BOOKING_NOT_FOUND`
+- `409 BOOKING_NOT_COMPLETED`: the booking has not been settled yet
+- `400 BOOKING_NO_BALANCE_DUE`
+- `409 BOOKING_BALANCE_ALREADY_SETTLED`
+
+> Distinct from `PATCH /:id/payment-status`, which settles the **original** price of an unpaid cash booking. This one settles the **completion balance** on a booking that was already paid.
 
 **Error Responses:**
 
@@ -308,6 +367,10 @@ POST /api/vendor/bookings/:id/cancel
 ```
 
 Cancel a booking with an optional reason. Deletes the calendar event and emits a cancellation event.
+
+> **Cancelling a PAID booking refunds the customer.** Where the gateway supports it the money is returned automatically and `paymentStatus` becomes `refunded`. Otherwise — cash, and mobile money, whose gateway refund APIs are not implemented yet — `paymentStatus` becomes `refund_pending` and a HIGH-importance support ticket is raised for manual payout. Your escrowed earnings for the booking are reversed in **both** cases: you are not paid for a service that was cancelled.
+>
+> A refund problem never blocks the cancellation — the appointment is released regardless.
 
 **Request Body:**
 

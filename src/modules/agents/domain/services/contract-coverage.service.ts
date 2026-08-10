@@ -1,5 +1,10 @@
 import { IContractCoverage } from '../../models/agent-agency-membership.model';
-import { resolveRegionKey } from '../../../../core/constants/locations.helper';
+import {
+  getRegionKeysForCountry,
+  resolveRegionKey,
+} from '../../../../core/constants/locations.helper';
+import { createAppError } from '../../../../core/errors';
+import { ERROR_CODES } from '../../../../core/error-codes';
 
 /**
  * The two contract terms that constrain WHICH shipments an agent may be given,
@@ -26,7 +31,19 @@ import { resolveRegionKey } from '../../../../core/constants/locations.helper';
  *  - `shipment_value_ceiling` defaults to null, and a shipment's value can fail
  *    to compute (see `resolveShipmentValue`). Neither is grounds to refuse.
  *
- * Both functions are pure and DB-free so the ts-node harness covers them.
+ * ── Writing coverage is the strict half ─────────────────────────────────────
+ *
+ * `normalizeContractRegions` is the one exception to the paragraph above, and
+ * the asymmetry is deliberate: reading an unrecognised region must never take a
+ * delivery away, but WRITING one is a typo nobody will ever notice. A contract
+ * naming "Douala" (a city) or "Litoral" (misspelt) reads as covering nowhere
+ * real — the predicate above then quietly refuses every shipment in Littoral,
+ * and the agency sees only that their agent is never offered work. So the write
+ * paths validate against the country's region catalogue, exactly as the
+ * agency's own `coverage_areas` are validated on its location tab, while the
+ * read path keeps failing open for the free-text rows written before this.
+ *
+ * All three functions are pure and DB-free so the ts-node harness covers them.
  */
 
 /**
@@ -74,4 +91,73 @@ export function contractAllowsShipmentValue(
   if (shipmentValue === null || shipmentValue === undefined) return true;
   // `<=`, not `<`: a shipment worth exactly the ceiling is within it.
   return shipmentValue <= ceiling;
+}
+
+/**
+ * Canonicalise a PROPOSED `coverage.regions` list against the agency's country.
+ *
+ * The counterpart of `normalizeCoverageAreasForCountry`, which does the same job
+ * for the agency's own `coverage_areas` on its location tab. Both sides of a
+ * contract negotiation now pick from that same catalogue instead of typing, so
+ * what lands in `coverage.regions` is what `contractCoversRegion` compares
+ * against — region KEYS of one known country, not three vocabularies meeting by
+ * luck.
+ *
+ * Lenient in, canonical out. An entry is accepted if it RESOLVES to a region of
+ * the country, so `"Littoral"`, `"littoral"` and the French `"Extrême-Nord"`
+ * all pass and are stored as `littoral` / `far_north`. A city (`"Douala"`) or a
+ * misspelling resolves to nothing in the catalogue and is rejected — that is the
+ * whole point of the check. Duplicates that collapse onto one key are deduped.
+ *
+ * Two things deliberately do NOT throw:
+ *
+ *  - an **empty list**, which is the schema default on every contract and means
+ *    "no restriction" (see the header). Clearing coverage is legitimate.
+ *  - an **unknown or unset country** — legacy agencies predate the field, and
+ *    there is no catalogue to validate against. The inputs pass through
+ *    untouched, exactly as `normalizeCoverageAreasForCountry` does.
+ *
+ * The picker is scoped to the country, not to the agency's own coverage areas:
+ * an agency may legitimately contract an agent for a region it is expanding into
+ * before it declares it. The agency's declared areas are exposed alongside so a
+ * client can mark them, but they are a hint, never a bound.
+ *
+ * @throws `CONTRACT_COVERAGE_REGION_INVALID` (400) listing every unresolvable
+ *   entry plus the country's full region list, so a client can repair its picker
+ *   without a second round-trip.
+ */
+export function normalizeContractRegions(
+  regions: string[],
+  countryCode: string | null | undefined
+): string[] {
+  const trimmed = regions.map((r) => r.trim()).filter((r) => r.length > 0);
+  if (trimmed.length === 0) return [];
+
+  const allowed = getRegionKeysForCountry(countryCode);
+  if (allowed.length === 0) return [...new Set(trimmed)];
+
+  const allowedKeys = new Set(allowed);
+  const invalid: string[] = [];
+  const resolved: string[] = [];
+
+  for (const raw of trimmed) {
+    const key = resolveRegionKey(raw, countryCode);
+    if (!allowedKeys.has(key)) {
+      invalid.push(raw);
+      continue;
+    }
+    if (!resolved.includes(key)) resolved.push(key);
+  }
+
+  if (invalid.length > 0) {
+    const country = (countryCode as string).toUpperCase();
+    throw createAppError(
+      ERROR_CODES.CONTRACT_COVERAGE_REGION_INVALID,
+      400,
+      `Coverage regions must be regions of the agency's country (${country}).`,
+      { invalid, requiredCountry: country, allowedRegions: allowed }
+    );
+  }
+
+  return resolved;
 }

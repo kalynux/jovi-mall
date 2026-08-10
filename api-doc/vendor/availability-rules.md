@@ -51,7 +51,7 @@ Each rule has the following shape:
   "dayOfWeek": "number (required, integer, 0-6) - 0=Sunday, 6=Saturday",
   "startTime": "string (required, format: HH:mm) - Start time in 24-hour format",
   "endTime": "string (required, format: HH:mm) - End time in 24-hour format",
-  "timezone": "string (optional, default: UTC) - IANA timezone identifier",
+  "timezone": "string (optional) - IANA zone; omit to inherit your vendor profile's timezone",
   "isActive": "boolean (optional, default: false) - Whether rule is active"
 }
 ```
@@ -384,9 +384,14 @@ All time fields must use 24-hour format with leading zeros:
 
 ### Timezone Expectations
 
-- Default timezone is `UTC`
-- Use IANA timezone identifiers (e.g., `America/New_York`, `Europe/Paris`)
-- Invalid timezone values will cause validation errors
+`startTime` and `endTime` are **wall-clock** times — "09:00" means nine o'clock *somewhere*, and `timezone` is what says where.
+
+- **`timezone` is optional. Omit it and the rule uses your vendor profile's `timezone`** (set during onboarding, e.g. `Africa/Douala`). That is the normal case — set it only to give one rule a different zone from the rest of your schedule.
+- Use IANA identifiers (`Africa/Douala`, `America/New_York`, `Europe/Paris`). Abbreviations like `WAT` or `EST` are not accepted.
+- An unrecognised zone is rejected with `400 VALIDATION_ERROR`.
+- Daylight-saving transitions are handled for you: a rule reading `09:00` stays at nine o'clock local across the change.
+
+> **Changed:** `timezone` used to default to the literal `'UTC'`, was never validated, and — more importantly — **was never read**. Rule hours were resolved against the *server's* clock, so a vendor's working day shifted whenever the server moved. Rules are now resolved in the zone above. Existing rows carrying the old `'UTC'` default are cleared to "inherit the vendor's timezone" by `npm run migrate:booking-rule-timezones` (run it with `--dry-run` first — it reports every rule whose effective hours move).
 
 ### Day of Week Values
 

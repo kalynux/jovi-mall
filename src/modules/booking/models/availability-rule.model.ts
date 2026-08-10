@@ -5,10 +5,16 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 export interface IAvailabilityRule extends IBaseDocument {
   productId: Types.ObjectId;
   vendorId: Types.ObjectId;
-  dayOfWeek: number; // 0 (Sunday) - 6 (Saturday)
-  startTime: string; // HH:mm format
-  endTime: string; // HH:mm format
-  timezone: string; // IANA timezone (e.g., 'America/New_York')
+  dayOfWeek: number; // 0 (Sunday) - 6 (Saturday), in `timezone`
+  startTime: string; // HH:mm wall-clock, in `timezone`
+  endTime: string; // HH:mm wall-clock, in `timezone`
+  /**
+   * IANA timezone the wall-clock times are expressed in (e.g. 'Africa/Douala').
+   *
+   * Optional: unset means "use the vendor's `timezone`", which is the platform's
+   * source of truth. Set it only to override a single rule.
+   */
+  timezone?: string | null;
   isActive: boolean;
 }
 
@@ -42,10 +48,13 @@ const AvailabilityRuleSchema = new Schema<IAvailabilityRule>(
       required: true,
       match: /^([0-1][0-9]|2[0-3]):[0-5][0-9]$/,
     },
+    // No default: an absent value means "inherit the vendor's timezone" and is a
+    // real steady state, not missing data. The old `default: 'UTC'` stamped a zone
+    // nobody chose onto every rule — and nothing read it, so the hours were
+    // resolved against the server's clock regardless.
     timezone: {
       type: String,
-      required: true,
-      default: 'UTC',
+      required: false,
     },
     isActive: {
       type: Boolean,

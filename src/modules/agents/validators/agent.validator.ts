@@ -7,10 +7,21 @@ import { PayoutDetailsZodSchema } from '../../../core/types/payout.types';
 
 // ─── Re-usable sub-schemas ────────────────────────────────────────────────────
 
+const ObjectIdSchema = z.string().regex(/^[a-f\d]{24}$/i, 'Must be a valid id');
+
 const VehicleInfoSchema = z.object({
     vehicle_type: z.enum(['bike', 'car', 'van', 'truck']),
     plate_number: clearable(z.string().trim()),
+    /**
+     * Deliberately NOT a `z.enum` of the colour palette. The app writes a token
+     * from `VEHICLE_COLORS`, but a hard enum would fail validation for every
+     * agent onboarded before the palette and for the app's own "another colour"
+     * escape hatch. `mergeVehicleInfo` normalizes on write instead; see
+     * `domain/vehicle-info.ts`.
+     */
     color: z.string().min(1).max(50).trim(),
+    /** Photo of the vehicle: id of a file uploaded via POST /api/files/upload ('' / null clears it). */
+    photo_file_id: clearable(ObjectIdSchema),
 });
 
 const LegalIdentitySchema = z.object({
@@ -24,8 +35,6 @@ const EmergencyContactSchema = z.object({
     // to work out a missing country code.
     phone: PhoneNumberSchema,
 });
-
-const ObjectIdSchema = z.string().regex(/^[a-f\d]{24}$/i, 'Must be a valid id');
 
 // ─── Onboarding (unchanged contract — the mobile app already ships this) ─────
 
@@ -204,6 +213,18 @@ const RemittanceTermsSchema = z.object({
     grace_hours: z.number().int().min(0).max(720).optional(),
 });
 
+/**
+ * `regions` is SHAPE-checked here and VALUE-checked in the service
+ * (`normalizeContractRegions`, via `AgentContractService.normalizeCoverageTerms`
+ * on every write path): each entry must resolve to a region of the agency's
+ * registered country, and is stored as that country's canonical region key.
+ *
+ * The country is not in the request body — it comes off the agency document —
+ * so the check cannot live in Zod. Send keys from the same catalogue the
+ * agency's location tab picks from (`locations.json`); an accented or localized
+ * name is accepted and canonicalised, a city or a typo is `400
+ * CONTRACT_COVERAGE_REGION_INVALID`. `[]` clears the restriction and is valid.
+ */
 const CoverageTermsSchema = z.object({
     regions: z.array(z.string().min(1).max(100).trim()).max(100).optional(),
     area: z

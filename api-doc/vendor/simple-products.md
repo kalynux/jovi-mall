@@ -84,7 +84,7 @@ Creates the product, its single variant and its delivery config in **one transac
 | `weight` | number | | grams |
 | `length` / `width` / `height` | number | | cm |
 | `freeDelivery` | boolean | | default `false` |
-| `pickupLocation` | object | | `{ source, vendorAddressId? }`. **Omit to auto-derive** — see below. |
+| `pickupLocation` | object | | `{ source, vendorAddressId?, agencyAddressId? }`. **Omit to auto-derive** — see below. |
 | `publish` | boolean | | default `true`. `false` saves a draft outright. |
 
 **Not accepted** (400 if sent): `type` (simple is physical-only), `mode`, `status`, `deliveryAgencyId`, `optionValueIds`, `digitalConfig`, `serviceConfig`. Each belongs to a capability this editor does not expose; accepting them silently would make `mode: "simple"` a lie.
@@ -192,7 +192,7 @@ Omit `pickupLocation` and the backend works it out from the vendor's profile and
 | `pickupReason` | Outcome | What the UI should do |
 |---|---|---|
 | `derived_single_address` | Vendor's one business address | nothing |
-| `derived_agency_storage` | Agency warehouses the stock | nothing |
+| `derived_agency_storage` | Agency warehouses the stock, at its **primary** depot | nothing (see note below) |
 | `explicit` | Caller supplied it | nothing |
 | **`multiple_addresses`** | **Nothing persisted — draft** | **Show an address picker.** The vendor has several business addresses and none is flagged default; guessing could send a courier to the wrong city, so the backend declines. Re-send with an explicit `pickupLocation`. |
 | `no_agency` | Nothing persisted — draft | Send them to delivery settings |
@@ -202,6 +202,20 @@ Omit `pickupLocation` and the backend works it out from the vendor's profile and
 | `resolution_failed` | Nothing persisted — draft | Transient; retry the publish |
 
 **A `pickupLocation` you send explicitly is validated and can 422** (`CATALOG_PRODUCT_INVALID_PICKUP_LOCATION`) — you asked for something specific and got it wrong. Auto-derivation never fails the call; it just declines.
+
+> [!NOTE]
+> **Auto-derivation never picks a depot.** `derived_agency_storage` persists
+> `agencyAddressId: null`, which means "the agency's primary depot" and keeps tracking it if the
+> agency reorders its locations. Note the asymmetry with `derived_single_address`: a vendor address
+> *is* recorded, because there null is not a valid steady state and there was exactly one
+> unambiguous candidate. For a depot, null already is the answer, so stamping an id would freeze a
+> guess the vendor was never asked to make.
+>
+> There is deliberately no `multiple_agency_addresses` reason. An agency with several depots is not
+> a blocker the way several vendor addresses are — the product simply defaults to the primary and
+> stays publishable. If you want the vendor to choose, offer the picker
+> ([locations endpoint](./delivery-agencies.md#list-an-agencys-pickup-locations)) and send
+> `pickupLocation` explicitly.
 
 ---
 
@@ -231,6 +245,34 @@ PATCH /api/vendor/products/507f1f77bcf86cd799439011/simple
 ```
 
 Response shape is identical to create (`data` + `meta.activation`), status `200`.
+
+> [!WARNING]
+> **`stock` is not written for an agency-warehoused product.** If this product's pickup
+> is `agency_storage`, an agency physically holds the goods and the quantity needs its
+> countersignature — see [Stock requests](./stock-requests.md). `stock` and
+> `isInfiniteStock` are dropped from the write and become a pending request; every other
+> field in the body applies as normal.
+>
+> Still `200`. `data` shows the **old** quantity, and `meta` gains a second key beside
+> `activation`:
+>
+> ```json
+> "meta": {
+>   "activation": { "attempted": false, "published": true, "blockers": [] },
+>   "stockAdjustment": {
+>     "status": "pending_agency_approval",
+>     "request": { "id": "665a…", "requestedQuantity": 90, "availableActions": ["withdraw"] }
+>   }
+> }
+> ```
+>
+> The gate runs **after** the product half of the update, so a body that switches pickup
+> *to* `agency_storage` and sets a quantity in one call is judged against the arrangement
+> it just created. A body switching storage *off* writes the quantity directly.
+>
+> `isInfiniteStock: true` on a warehoused product is refused outright with
+> `422 CATALOG_PRODUCT_AGENCY_STORAGE_INFINITE_STOCK`, and it is an activation blocker
+> too — see [products.md → Activation Requirements](./products.md#activation-requirements).
 
 ### `publish` semantics on edit
 

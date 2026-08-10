@@ -26,6 +26,23 @@ export const ANDROID_CHANNELS = {
 } as const;
 
 /**
+ * APNs notification categories this backend addresses.
+ *
+ * The iOS counterpart of ANDROID_CHANNELS, and a client contract in exactly the
+ * same way: the id names a `UNNotificationCategory` the app registers at
+ * startup, and iOS draws that category's action buttons on the system
+ * notification. An id with no matching client registration is a silent no-op.
+ *
+ * iOS gets its buttons from the category alone — it has no equivalent of the
+ * Android "hand the message to the app and let it draw" path, which is why the
+ * APNs alert payload is sent even for a `dataOnly` push.
+ */
+export const APNS_CATEGORIES = {
+    /** Accept / Decline on a still-answerable delivery offer. */
+    AGENT_OFFER: 'jovi_agent_offer'
+} as const;
+
+/**
  * How hard the OS should work to wake the device for this message.
  *
  * `high` maps to FCM high priority + APNs priority 10, which bypasses Android
@@ -49,6 +66,29 @@ export interface PushPayload {
     channelId?: string;
     /** Wake-the-device urgency; defaults to `'high'`. */
     urgency?: PushUrgency;
+    /**
+     * Deliver as a data-only message, so the client draws the notification itself
+     * and can hang action buttons off it.
+     *
+     * **Android only in effect.** A message carrying a `notification` block is
+     * drawn by the OS: when the app is backgrounded or killed the FCM SDK renders
+     * the tray notification and never calls into the app, so the app never gets
+     * the chance to attach buttons. Omitting the block hands the message to the
+     * app's background handler instead.
+     *
+     * iOS keeps its alert payload either way — it has no background-draw path and
+     * would show nothing at all — and takes its buttons from `category`.
+     *
+     * The Android channel is not lost when this is set: the client maps
+     * `data.type` to the channel id itself (documented in
+     * `api-doc/agent/push-notifications.md`).
+     */
+    dataOnly?: boolean;
+    /**
+     * APNs category naming the `UNNotificationCategory` whose buttons iOS should
+     * draw. See APNS_CATEGORIES.
+     */
+    category?: string;
     data: {
         type: string;
         aggregateType: string;
@@ -111,12 +151,26 @@ export class FcmPushService {
         if (payload.data.path) data.path = payload.data.path;
         if (payload.data.url) data.url = payload.data.url;
 
+        // A data-only message has nowhere else to put the copy: the client draws
+        // the notification, so it needs the words.
+        if (payload.dataOnly) {
+            data.title = payload.title;
+            data.body = payload.body;
+        }
+
         const response = await messaging.sendEachForMulticast({
             tokens,
-            notification: {
-                title: payload.title,
-                body: payload.body
-            },
+            // Omitted ENTIRELY for a data-only push — an empty object still counts
+            // as a notification block. Present, and it is the OS rather than the
+            // app that draws the Android notification, and the buttons are lost.
+            ...(payload.dataOnly
+                ? {}
+                : {
+                    notification: {
+                        title: payload.title,
+                        body: payload.body
+                    }
+                }),
             data,
             android: this.androidConfig(payload),
             apns: this.apnsConfig(payload)
@@ -151,23 +205,37 @@ export class FcmPushService {
      * Note there is deliberately **no `ttl`**. An auto-assignment offer stays
      * acceptable until the shipment binds to someone (only manual offers expire),
      * so expiring the push would cost an agent work their offer was still open for.
+     *
+     * It is doubly load-bearing for a `dataOnly` push: a data-only message at
+     * normal priority will not start the app's background handler under Doze, so
+     * nothing would be drawn at all.
      */
     private androidConfig(payload: PushPayload): messaging.AndroidConfig {
         const high = (payload.urgency ?? 'high') === 'high';
 
         return {
             priority: high ? 'high' : 'normal',
-            notification: {
-                channelId: payload.channelId ?? ANDROID_CHANNELS.DEFAULT,
-                priority: high ? 'max' : 'default',
-                defaultSound: true
-            }
+            // Dropped for a data-only push: this sub-block only configures the
+            // notification the OS would draw, and there isn't one. The client
+            // recreates the channel from `data.type`.
+            ...(payload.dataOnly
+                ? {}
+                : {
+                    notification: {
+                        channelId: payload.channelId ?? ANDROID_CHANNELS.DEFAULT,
+                        priority: high ? 'max' : 'default',
+                        defaultSound: true
+                    }
+                })
         };
     }
 
     /**
      * APNs delivery options. Priority 10 = deliver immediately (legal here because
      * we always send an alert payload); 5 = power-considerate batching.
+     *
+     * The alert payload is sent even when `dataOnly` is set — `dataOnly` is an
+     * Android-only lever. Stripping it here would leave iOS showing nothing.
      */
     private apnsConfig(payload: PushPayload): messaging.ApnsConfig {
         const high = (payload.urgency ?? 'high') === 'high';
@@ -178,7 +246,8 @@ export class FcmPushService {
             },
             payload: {
                 aps: {
-                    sound: 'default'
+                    sound: 'default',
+                    ...(payload.category ? { category: payload.category } : {})
                 }
             }
         };

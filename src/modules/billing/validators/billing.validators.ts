@@ -33,6 +33,24 @@ export const ListPlansQuerySchema = z.object({
   role: PlanRoleSchema.optional(),
 });
 
+/**
+ * Public: filter the plan catalog by role, and opt in to the tiers that are
+ * defined but not purchasable.
+ *
+ * `includeInactive` is opt-in rather than the default because `is_active: false`
+ * is ambiguous on a public page — it means both "seeded ahead of launch" and
+ * "withdrawn from sale", and only the caller knows which story it wants to tell.
+ * Flag parsing follows the `trueFlag` convention in `connection.validator.ts`:
+ * the literal string `'true'`, anything else (including absent) is false.
+ */
+export const PublicListPlansQuerySchema = z.object({
+  role: PlanRoleSchema.optional(),
+  includeInactive: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
+});
+
 /** Admin: assign a plan to a vendor. */
 export const AssignPlanSchema = z.object({
   planId: z.string().trim().min(1),

@@ -10,7 +10,7 @@ import { getWhatsAppMessagingService } from '../../whatsapp/services/whatsapp-me
 import { WaServiceMessage } from '../../whatsapp/builders/service-message.builder';
 import { WhatsappService } from '../../whatsapp/whatsapp.service';
 import { TemplateComponent } from '../../whatsapp/types/whatsapp-message.types';
-import { FcmPushService, ANDROID_CHANNELS } from './fcm-push.service';
+import { FcmPushService, ANDROID_CHANNELS, APNS_CATEGORIES } from './fcm-push.service';
 import {
     AgentDeliveryChannel,
     IAgentNotification,
@@ -39,13 +39,19 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
 /**
- * Situations that ride the dedicated offers channel (see ANDROID_CHANNELS).
+ * Situations that ride the dedicated offers channel (see ANDROID_CHANNELS) **and**
+ * carry Accept / Decline buttons on the push.
  *
  * Only the two that are still actionable when they land. `shipment.offer.expired`
  * is deliberately absent — it reports a lost job, so waking the phone for it
- * would train agents to ignore the channel that matters.
+ * would train agents to ignore the channel that matters, and there is nothing
+ * left to accept.
+ *
+ * One set drives both because the predicate is the same one: *this offer can
+ * still be answered*. Splitting it would let a situation get the loud channel
+ * without the buttons, or the buttons without the channel.
  */
-const OFFER_CHANNEL_SITUATIONS: ReadonlySet<AgentNotificationType> = new Set([
+const ACTIONABLE_OFFER_SITUATIONS: ReadonlySet<AgentNotificationType> = new Set([
     'shipment.offer.received',
     'shipment.offer.reminder'
 ]);
@@ -717,13 +723,30 @@ export class AgentNotificationEventHandler {
         action: AgentNotificationAction | null,
         agent: IDeliveryAgent
     ): Promise<void> {
+        // An offer the agent can still answer gets Accept / Decline on the push
+        // itself. That costs a data-only message on Android (the app has to draw
+        // the notification to own the buttons) and an APNs category on iOS. Every
+        // other situation — including `shipment.offer.expired` — keeps the plain
+        // OS-drawn notification, which survives a killed app more reliably.
+        //
+        // The buttons wake the app rather than answering in the background:
+        // accepting fails often and for reasons the agent has to read
+        // (SHIPMENT_ALREADY_HAS_AGENT, AGENT_AT_CAPACITY,
+        // CONTRACT_SHIPMENT_VALUE_EXCEEDED), and a silent POST has nowhere to
+        // report them. No endpoint changes — the app calls the ordinary
+        // POST /api/agent/offers/:id/{accept,reject} with the agent's own token,
+        // parsing the offer id out of `data.path` (`offers/{offerId}`).
+        const actionable = ACTIONABLE_OFFER_SITUATIONS.has(situation);
+
         try {
             const targeted = await this.fcmPushService.sendToUser(agent.user_id.toString(), {
                 title: inApp.title,
                 body: inApp.message,
-                channelId: OFFER_CHANNEL_SITUATIONS.has(situation)
+                channelId: actionable
                     ? ANDROID_CHANNELS.AGENT_OFFERS
                     : ANDROID_CHANNELS.DEFAULT,
+                dataOnly: actionable,
+                category: actionable ? APNS_CATEGORIES.AGENT_OFFER : undefined,
                 data: {
                     type: situation,
                     aggregateType: notification.aggregateType,

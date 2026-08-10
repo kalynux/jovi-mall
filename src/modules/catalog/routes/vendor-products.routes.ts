@@ -477,8 +477,19 @@ router.delete('/:id/shipping', requireProductEditable, VendorShippingController.
 import { VendorAvailabilityController } from '../../booking/controllers/vendor-availability.controller';
 
 /**
+ * AVAILABILITY RULES — a service product's weekly working hours.
+ *
+ * NOTE ON THE PATHS BELOW: this router is mounted at `/api/vendor/products`, so
+ * every address here includes that prefix. The comments used to omit it and
+ * advertise `/api/vendor/availability-rules/:ruleId`, which 404s — a frontend
+ * built from them could not reach these endpoints at all.
+ *
+ * Times are wall-clock in the rule's `timezone`, defaulting to the vendor's.
+ */
+
+/**
  * POST /api/vendor/products/:id/availability-rules
- * Create availability rule (starts as draft)
+ * Create one rule or a whole week (starts as draft — toggle it on to publish)
  */
 router.post('/:id/availability-rules', requireProductEditable, VendorAvailabilityController.createRule);
 
@@ -489,21 +500,21 @@ router.post('/:id/availability-rules', requireProductEditable, VendorAvailabilit
 router.get('/:id/availability-rules', VendorAvailabilityController.listRules);
 
 /**
- * PATCH /api/vendor/availability-rules/:ruleId
- * Update availability rule
+ * PATCH /api/vendor/products/availability-rules/:ruleId
+ * Update availability rule (day/times/timezone; use /toggle for the active flag)
  */
 router.patch('/availability-rules/:ruleId', VendorAvailabilityController.updateRule);
 
 /**
- * PATCH /api/vendor/availability-rules/:ruleId/toggle
+ * PATCH /api/vendor/products/availability-rules/:ruleId/toggle
  * Set availability rule active state (body: { isActive: boolean })
  */
 router.patch('/availability-rules/:ruleId/toggle', VendorAvailabilityController.toggleRule);
 
 
 /**
- * DELETE /api/vendor/availability-rules/:ruleId
- * Delete availability rule
+ * DELETE /api/vendor/products/availability-rules/:ruleId
+ * Delete availability rule (soft delete)
  */
 router.delete('/availability-rules/:ruleId', VendorAvailabilityController.deleteRule);
 

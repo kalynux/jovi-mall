@@ -483,6 +483,42 @@ Update a variant. All fields are optional — only provided fields are changed.
 | `deliveryAgencyId` | string | No | Valid 24-char ObjectId | Physical only |
 | `digitalConfig` | object | No | `{ maxDownloads?, expiresAfterDays? }` — partial; only sent fields change. `assetId` is not accepted | Digital only |
 
+> [!WARNING]
+> ## `stock` and `isInfiniteStock` are NOT written for an agency-warehoused product
+>
+> If this variant's product has `delivery.pickupLocation.source === "agency_storage"`,
+> an agency physically holds the goods and the quantity needs its countersignature.
+> Those two fields are **stripped from this write** and become a pending
+> [stock request](./stock-requests.md) instead. **Every other field in the same PATCH
+> applies normally** — edit a price and a quantity in one call and the price lands
+> immediately while the quantity queues.
+>
+> The response is still **`200`** (not `202`), `data.stock` still shows the **old**
+> quantity, and a new `meta.stockAdjustment` block says what is pending:
+>
+> ```json
+> {
+>   "success": true,
+>   "data": { "…": "…", "stock": 120 },
+>   "meta": {
+>     "stockAdjustment": {
+>       "status": "pending_agency_approval",
+>       "request": { "id": "665a…", "requestedQuantity": 90, "availableActions": ["withdraw"] }
+>     }
+>   },
+>   "message": "Variant updated. The stock change is awaiting the storage agency's approval."
+> }
+> ```
+>
+> One status code, deliberately — you have to read the body either way, so branching on
+> 200-vs-202 would buy nothing. **If your UI optimistically renders what was typed, it
+> will now be wrong**: render `data` as returned, and show a "120 → 90 pending" badge
+> when `meta.stockAdjustment` is present.
+>
+> `isInfiniteStock: true` on such a product is **refused outright**
+> (`422 CATALOG_PRODUCT_AGENCY_STORAGE_INFINITE_STOCK`) — a warehouse cannot hold an
+> unbounded quantity, and it is an activation blocker on the product too.
+
 > [!IMPORTANT]
 > **`fileIds` is a full array replacement** — send the complete desired array. To add an image, fetch the current `fileIds`, append the new id, and send the merged array. IDs must be **unique**, and the total must not exceed the per-type cap (physical **3**, digital **1**) → otherwise `400 CATALOG_IMAGE_LIMIT_EXCEEDED`.
 >

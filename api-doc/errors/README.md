@@ -267,6 +267,7 @@ Full documentation: [agency/agent-roster.md](../agency/agent-roster.md) (canonic
 | `CONTRACT_COD_THRESHOLD_BELOW_OUTSTANDING` | 422 | Cannot set a threshold beneath cash already held under the contract | `{ requested, outstandingBalance, hint }` |
 | `CONTRACT_COVERAGE_OUTSIDE_AGENT_RADIUS` | 422 | An agency cannot grant coverage the agent never agreed to work | — |
 | `CONTRACT_COVERAGE_REGION_NOT_COVERED` | 422 | **Assignment gate.** The delivery region is outside the regions this contract covers | `{ deliveryRegion, coveredRegions, hint }` |
+| `CONTRACT_COVERAGE_REGION_INVALID` | 400 | **Terms-write gate.** A proposed `coverage.regions` entry is not a region of the agency's country — a city, or a typo. Region keys come from `locations.json`, the same catalogue the agency's own coverage areas use; a localized name (`"Extrême-Nord"`) is accepted and canonicalised. `allowedRegions` is the full catalogue, so a picker can be repaired from the error | `{ invalid, requiredCountry, allowedRegions }` |
 | `CONTRACT_SHIPMENT_VALUE_EXCEEDED` | 422 | **Assignment gate.** The shipment is worth more than this contract's per-shipment ceiling | `{ shipmentValue, ceiling, hint }` |
 | `CONTRACT_SETTLEMENT_EXCEEDS_OUTSTANDING` | 422 | A settlement larger than the balance it discharges | — |
 
@@ -292,6 +293,82 @@ means "not **active**"; the code predates the status rename), `AGENT_MEMBERSHIP_
 > `DELIVERY_INVITE_NOT_FOUND` and `DELIVERY_INVITE_ALREADY_PENDING` were **removed** with the
 > email-invite endpoints. An agency now reaches an agent through the directory
 > (`GET /api/agency/agents/browse` → `POST /api/agency/agents/requests`).
+
+---
+
+## Agency storage: warehoused products and their stock
+
+The agency-facing product actions
+([Agency → Inventory](../agency/inventory.md)) and the two-sided stock flow
+([Agency](../agency/stock-requests.md) · [Vendor](../vendor/stock-requests.md)).
+
+| Code | HTTP | Meaning | `details` |
+|---|---|---|---|
+| `INVENTORY_STOCK_LEVEL_NOT_FOUND` | 404 | No such stock row for this agency — another agency's row 404s, never 403s | — |
+| `INVENTORY_LOCATION_UNKNOWN` | 422 | The depot named is not one of the caller's own | `{ locationId }` |
+| `INVENTORY_PRODUCT_NOT_STORED_HERE` | 404 | The caller does not warehouse this product. Same 404-not-403 rule | — |
+| `INVENTORY_PRODUCT_NOT_SUSPENDABLE` | 422 | Only an `active` product can be storage-suspended. A draft or archived one is not on sale, so suspending it would achieve nothing but block editing | — |
+| `INVENTORY_PRODUCT_NOT_AGENCY_SUSPENDED` | 422 | Unsuspend target is not suspended, or was suspended **by someone else / for another reason** — a system delivery-agency suspension is not an agency's to lift | `{ status, reason }` |
+| `INVENTORY_PRODUCT_UNSUSPEND_BLOCKED` | 422 | The product cannot go back on sale: the activation gate still fails | `{ blockers: [{ code, message, details }] }` |
+
+> **`INVENTORY_PRODUCT_UNSUSPEND_BLOCKED` carries a checklist, not a single cause.**
+> Render `details.blockers` as a list — each `message` is written to be shown, and it is
+> what tells the agency what to raise with the vendor. The product stays suspended.
+
+| Code | HTTP | Meaning | `details` |
+|---|---|---|---|
+| `STOCK_REQUEST_NOT_FOUND` | 404 | Unknown, **or** not a request the caller is party to — never 403 | — |
+| `STOCK_REQUEST_ALREADY_PENDING` | 409 | One open request per SKU. Withdraw yours, or answer theirs | `{ requestId, requestedByRole, hint }` |
+| `STOCK_REQUEST_NOT_PENDING` | 409 | Already approved, rejected or withdrawn — possibly by the other party a moment ago | `{ status }` |
+| `STOCK_REQUEST_NOT_YOURS` | 403 | Wrong verb for your side: `approve`/`reject` belong to the counterparty, `withdraw` to the author | `{ availableActions }` |
+| `STOCK_REQUEST_STALE` | 409 | The product stopped being warehoused by that agency while the request stood | — |
+| `STOCK_REQUEST_NO_CHANGE` | 422 | The requested quantity is already the recorded one | `{ quantity }` |
+| `CATALOG_PRODUCT_AGENCY_STORAGE_INFINITE_STOCK` | 422 | A warehoused product cannot have unlimited stock. Fires as an activation blocker, on a `PATCH /products/:id` moving pickup to `agency_storage`, and on a request asking to go unlimited | `{ variant }` or `{ variant, variants }` |
+
+> **`STOCK_REQUEST_NOT_PENDING` means reload, not retry.** It is a compare-and-set miss:
+> the row exists and somebody resolved it first. Re-sending would apply an intent formed
+> against a state that no longer holds. Refetch the request and show its outcome.
+
+> **Never re-implement the authority table behind `STOCK_REQUEST_NOT_YOURS`.** Every
+> request DTO carries `availableActions` — the server's verdict for the current viewer —
+> and rendering buttons from anything else is how a client offers a verb the API refuses.
+
+---
+
+## Blog / editorial
+
+The public reader ([public/articles.md](../public/articles.md)) and the editor
+([admin/articles.md](../admin/articles.md)).
+
+The first three are reachable by a **logged-out visitor**, so their `message` is written to be shown.
+
+| Code | HTTP | Meaning | `details` |
+|---|---|---|---|
+| `BLOG_ARTICLE_NOT_FOUND` | 404 | No published article at this `(locale, slug)` — including when the article exists but not in that language. **No fallback to another locale, ever** | `{ locale, slug }` |
+| `BLOG_ARTICLE_MOVED` | 404 | The slug is a **retired** one. The article is at `details.slug` | `{ locale, slug, previousSlug, id }` |
+| `BLOG_ARTICLE_GONE` | 410 | Archived on purpose. Send the reader to the category hub | `{ locale, slug, categoryKey }` |
+| `BLOG_SLUG_RESERVED` | 400 | Slug is `category`, `page` or `index` — each collides with a route | `{ locale, slug, reserved }` |
+| `BLOG_AUTHOR_NOT_FOUND` | 404 | `authorId` does not exist | `{ id }` or `{ authorId }` |
+| `BLOG_ARTICLE_KEY_TAKEN` | 409 | Article `id` already used | `{ id }` |
+| `BLOG_SLUG_TAKEN` | 409 | Another article holds this `(locale, slug)` — **including as a retired slug** | `{ locale, slug }` |
+| `BLOG_ARTICLE_ALREADY_PUBLISHED` | 409 | Publishing an already-published article | `{ id }` |
+| `BLOG_ARTICLE_DELETE_NOT_ALLOWED` | 409 | The article has been live; its URL may have inbound links. **Archive it instead** | `{ id, publishedAt }` |
+| `BLOG_AUTHOR_KEY_TAKEN` | 409 | Author `id` already used | `{ id }` |
+| `BLOG_AUTHOR_IN_USE` | 409 | The byline is credited on articles. Re-point them first | `{ id, articleCount }` |
+| `BLOG_ARTICLE_NOT_PUBLISHABLE` | 422 | Publish checklist failed | `{ id, blockers: string[] }` |
+
+> **`BLOG_ARTICLE_MOVED` is a 404 the frontend turns into a 301.** The API can only redirect its own
+> URL; the address that needs the permanent redirect is the *page*. Read `details.slug` and call
+> `permanentRedirect(...)` — a `fetch` that followed an HTTP redirect would render the article at the
+> stale URL, which is the duplicate-content problem the redirect exists to prevent.
+
+> **`BLOG_ARTICLE_NOT_PUBLISHABLE` carries a checklist, not a single cause** — the same convention as
+> `INVENTORY_PRODUCT_UNSUSPEND_BLOCKED`. Render every `details.blockers[]` entry.
+
+> **Malformed article bodies are `VALIDATION_ERROR`, not a blog-specific code.** A locale-prefixed
+> `href`, a duplicate heading id, an image without dimensions, an unknown block type and an unknown
+> key on a known block all fail the Zod schema — `details.fields[]` gives the path
+> (`translations.0.body.3.href`).
 
 ---
 

@@ -30,7 +30,15 @@ const BOOKING_STATUSES = [
     BookingStatus.CANCELLED,
 ] as const;
 
-const PAYMENT_STATUSES = ['unpaid', 'pending', 'paid', 'failed', 'refunded'] as const;
+const PAYMENT_STATUSES = [
+    'unpaid',
+    'pending',
+    'paid',
+    'disputed',
+    'failed',
+    'refund_pending',
+    'refunded',
+] as const;
 
 const ListBookingsSchema = z
     .object({
@@ -57,6 +65,12 @@ const RescheduleBookingSchema = z.object({
 
 const CancelBookingSchema = z.object({
     reason: z.string().max(500).optional(),
+});
+
+// Omitted amount means "the whole outstanding balance", which is the common case.
+// A partial is allowed for a customer who paid some of it now and some later.
+const SettleBalanceSchema = z.object({
+    amount: z.number().positive().optional(),
 });
 
 // Completion settlement input. At most one pricing mode: a flat fixedPrice, OR a
@@ -163,11 +177,18 @@ export class VendorBookingController {
         const vendorId = req.auth!.role_entity._id.toString();
         const { id } = req.params;
 
+        // NOTE: this used to populate 'productId customerId'. There is no
+        // `customerId` on the booking — the customer is `userId` — and Mongoose 8
+        // rejects unknown populate paths (`strictPopulate` defaults to true), so
+        // this endpoint threw a 500 on every call. Do NOT "fix" that by disabling
+        // strictPopulate: it is what surfaced the typo.
         const booking = await Booking.findOne({
             _id: id,
             vendorId: new Types.ObjectId(vendorId),
             deletedAt: null,
-        }).populate('productId customerId');
+        })
+            .populate('productId', 'title type')
+            .populate('userId', 'login_email login_phone');
 
         if (!booking) {
             throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
@@ -227,6 +248,16 @@ export class VendorBookingController {
                 priceSnapshot: result.priceSnapshot,
                 finalPrice: result.finalPrice,
                 additionalAmountDue: result.additionalAmountDue,
+                // Say plainly that the shortfall is only RECORDED. A client that saw
+                // `additionalAmountDue: 3000` and nothing else would reasonably render
+                // "3000 charged" — nothing charges it. Collecting it needs a second
+                // payment intent against an already-paid booking, which is a separate
+                // build (see CompletionPricingService's TODO).
+                additionalAmountCharged: false,
+                additionalAmountNote:
+                    result.additionalAmountDue > 0
+                        ? 'Recorded only — not charged. Collect this from the customer directly.'
+                        : null,
                 breakdown: result.recalculated?.breakdown,
             },
             message: 'Booking completed',
@@ -258,6 +289,38 @@ export class VendorBookingController {
     });
 
     /**
+     * POST /api/vendor/bookings/:id/settle-balance
+     *
+     * Record that the outstanding balance was paid in cash, on the day.
+     * Body (optional): { amount?: number } — defaults to the whole balance.
+     *
+     * A service business usually collects an overrun at the counter rather than
+     * chasing an online payment; without this the balance sits open forever on a
+     * booking the vendor considers finished.
+     */
+    static settleBalanceByCash = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const vendorId = req.auth!.role_entity._id.toString();
+        const { amount } = SettleBalanceSchema.parse(req.body ?? {});
+
+        const booking = await bookingService.settleBalanceByCash(req.params.id, vendorId, amount);
+
+        res.json({
+            success: true,
+            data: {
+                bookingId: booking._id,
+                balanceDue: booking.settlement?.balanceDue ?? 0,
+                balancePaid: booking.settlement?.balancePaid ?? 0,
+                outstanding: Math.max(
+                    0,
+                    (booking.settlement?.balanceDue ?? 0) - (booking.settlement?.balancePaid ?? 0)
+                ),
+                balancePaymentMethod: booking.settlement?.balancePaymentMethod ?? null,
+            },
+            message: 'Balance settled in cash',
+        });
+    });
+
+    /**
      * PATCH /api/vendor/bookings/:id/reschedule
      *
      * Reschedule a booking to a new slot. Uses existing slot-lock mechanism.
@@ -270,28 +333,15 @@ export class VendorBookingController {
 
         const { newSlotId } = RescheduleBookingSchema.parse(req.body);
 
-        // Guard: only pending/confirmed can be rescheduled
-        const booking = await Booking.findOne({
-            _id: id,
-            vendorId: new Types.ObjectId(vendorId),
-            deletedAt: null,
-        });
-
-        if (!booking) {
-            throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
-        }
-
-        const reschedulableStatuses: string[] = [BookingStatus.PENDING, BookingStatus.CONFIRMED];
-        if (!reschedulableStatuses.includes(booking.status)) {
-            throw createAppError(
-                ERROR_CODES.BOOKING_NOT_RESCHEDULABLE,
-                409,
-                `Cannot reschedule a booking with status '${booking.status}'. Only pending or confirmed bookings can be rescheduled.`,
-            );
-        }
-
-        // The service uses vendorId as the lockOwnerId — vendors lock slots on their behalf
-        const updatedBooking = await bookingService.rescheduleBooking(id, newSlotId, vendorId);
+        // Ownership scoping and the pending/confirmed eligibility check both live in
+        // the service now, so the vendor and customer paths cannot drift apart.
+        // The service uses vendorId as the lockOwnerId — vendors lock slots on their behalf.
+        const updatedBooking = await bookingService.rescheduleBooking(
+            id,
+            newSlotId,
+            vendorId,
+            { role: 'vendor', id: vendorId },
+        );
 
         res.json({
             success: true,

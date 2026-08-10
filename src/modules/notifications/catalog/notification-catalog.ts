@@ -114,6 +114,39 @@ const VIEW_TICKET_LABEL: Record<Language, string> = {
     ar: 'عرض التذكرة'
 };
 
+const REVIEW_STOCK_CHANGE_LABEL: Record<Language, string> = {
+    en: 'Review stock change',
+    fr: 'Examiner la modification de stock',
+    pt: 'Revisar alteração de stock',
+    es: 'Revisar cambio de stock',
+    ar: 'مراجعة تغيير المخزون'
+};
+
+/**
+ * The stock-request inbox — NOT `settings/storage`, which is the media-file quota
+ * screen. Two unrelated things called "storage" is why the aggregate types are
+ * separate too (`stock_request` / `product` vs `storage`).
+ */
+const STOCK_REQUEST_BUTTON: ButtonDef = {
+    type: 'url',
+    label: REVIEW_STOCK_CHANGE_LABEL,
+    urlSuffix: 'stock-requests/{{requestId}}'
+};
+
+const VIEW_PRODUCT_LABEL: Record<Language, string> = {
+    en: 'View product',
+    fr: 'Voir le produit',
+    pt: 'Ver produto',
+    es: 'Ver producto',
+    ar: 'عرض المنتج'
+};
+
+const PRODUCT_BUTTON: ButtonDef = {
+    type: 'url',
+    label: VIEW_PRODUCT_LABEL,
+    urlSuffix: 'products/{{productId}}'
+};
+
 // ─── Catalog ─────────────────────────────────────────────────────────────────
 
 export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> = {
@@ -377,6 +410,126 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> =
             template: { name: 'vendor_shipment_rejected', bodyParams: ['{{agencyName}}', '{{orderNumber}}'] }
         },
         button: { type: 'url', label: VIEW_ORDER_LABEL, urlSuffix: 'orders/{{orderId}}' }
+    },
+
+    // ─── Agency-warehoused stock ─────────────────────────────────────────────
+    // On a SKU an agency warehouses, `variant.stock` moves only with both
+    // signatures. Every body names both the old and the new quantity: the decision
+    // is "is 90 right, or is 120?", and copy carrying only the new figure makes the
+    // vendor go and look up the old one before it can answer.
+    'storage.stock_request.received': {
+        base: {
+            en: { subject: 'Stock change to approve', body: '{{agencyName}} counted {{requestedQuantity}} of {{productTitle}} ({{sku}}) in their warehouse, against the {{quantityBefore}} on record. Approve or reject the change.' },
+            fr: { subject: 'Modification de stock à approuver', body: '{{agencyName}} a compté {{requestedQuantity}} unités de {{productTitle}} ({{sku}}) dans son entrepôt, contre {{quantityBefore}} enregistrées. Approuvez ou refusez la modification.' },
+            pt: { subject: 'Alteração de stock para aprovar', body: '{{agencyName}} contou {{requestedQuantity}} de {{productTitle}} ({{sku}}) no armazém, contra as {{quantityBefore}} registadas. Aprove ou recuse a alteração.' },
+            es: { subject: 'Cambio de stock para aprobar', body: '{{agencyName}} contó {{requestedQuantity}} de {{productTitle}} ({{sku}}) en su almacén, frente a las {{quantityBefore}} registradas. Aprueba o rechaza el cambio.' },
+            ar: { subject: 'تغيير في المخزون بحاجة إلى موافقة', body: 'أحصى {{agencyName}} عدد {{requestedQuantity}} من {{productTitle}} ({{sku}}) في المستودع، مقابل {{quantityBefore}} المسجّلة. وافق على التغيير أو ارفضه.' }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'vendor_storage_stock_request_received',
+                bodyParams: ['{{agencyName}}', '{{requestedQuantity}}', '{{productTitle}}', '{{sku}}', '{{quantityBefore}}']
+            }
+        },
+        button: STOCK_REQUEST_BUTTON
+    },
+
+    'storage.stock_request.approved': {
+        base: {
+            en: { subject: 'Stock change approved', body: '{{agencyName}} approved your stock change for {{productTitle}} ({{sku}}). It now reads {{requestedQuantity}}.' },
+            fr: { subject: 'Modification de stock approuvée', body: '{{agencyName}} a approuvé votre modification de stock pour {{productTitle}} ({{sku}}). Le stock est maintenant de {{requestedQuantity}}.' },
+            pt: { subject: 'Alteração de stock aprovada', body: '{{agencyName}} aprovou a sua alteração de stock para {{productTitle}} ({{sku}}). Passou a ser {{requestedQuantity}}.' },
+            es: { subject: 'Cambio de stock aprobado', body: '{{agencyName}} aprobó tu cambio de stock para {{productTitle}} ({{sku}}). Ahora es {{requestedQuantity}}.' },
+            ar: { subject: 'تمت الموافقة على تغيير المخزون', body: 'وافق {{agencyName}} على تغيير المخزون الذي طلبته لـ {{productTitle}} ({{sku}}). أصبح الآن {{requestedQuantity}}.' }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'vendor_storage_stock_request_approved',
+                bodyParams: ['{{agencyName}}', '{{productTitle}}', '{{sku}}', '{{requestedQuantity}}']
+            }
+        },
+        button: STOCK_REQUEST_BUTTON
+    },
+
+    'storage.stock_request.rejected': {
+        base: {
+            en: { subject: 'Stock change rejected', body: '{{agencyName}} rejected your stock change for {{productTitle}} ({{sku}}). It stays at {{quantityBefore}}.' },
+            fr: { subject: 'Modification de stock refusée', body: '{{agencyName}} a refusé votre modification de stock pour {{productTitle}} ({{sku}}). Le stock reste à {{quantityBefore}}.' },
+            pt: { subject: 'Alteração de stock recusada', body: '{{agencyName}} recusou a sua alteração de stock para {{productTitle}} ({{sku}}). Mantém-se em {{quantityBefore}}.' },
+            es: { subject: 'Cambio de stock rechazado', body: '{{agencyName}} rechazó tu cambio de stock para {{productTitle}} ({{sku}}). Se mantiene en {{quantityBefore}}.' },
+            ar: { subject: 'تم رفض تغيير المخزون', body: 'رفض {{agencyName}} تغيير المخزون الذي طلبته لـ {{productTitle}} ({{sku}}). سيبقى عند {{quantityBefore}}.' }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'vendor_storage_stock_request_rejected',
+                bodyParams: ['{{agencyName}}', '{{productTitle}}', '{{sku}}', '{{quantityBefore}}']
+            }
+        },
+        button: STOCK_REQUEST_BUTTON
+    },
+
+    // The next three are the agency acting alone on a product it warehouses. There
+    // is nothing for the vendor to approve — where the goods sit and whether the rent
+    // was paid are the agency's own business — but the vendor must not learn about a
+    // suspension by noticing the product missing from their storefront.
+    'storage.depot_changed': {
+        base: {
+            en: { subject: 'Pickup location changed', body: '{{agencyName}} moved {{productTitle}} to a different warehouse{{locationSuffix}}. Collection now happens from there.' },
+            fr: { subject: 'Lieu de retrait modifié', body: '{{agencyName}} a déplacé {{productTitle}} vers un autre entrepôt{{locationSuffix}}. Le retrait s\'y fait désormais.' },
+            pt: { subject: 'Local de recolha alterado', body: '{{agencyName}} moveu {{productTitle}} para outro armazém{{locationSuffix}}. A recolha passa a ser feita aí.' },
+            es: { subject: 'Lugar de recogida cambiado', body: '{{agencyName}} movió {{productTitle}} a otro almacén{{locationSuffix}}. La recogida se hace ahora desde allí.' },
+            ar: { subject: 'تم تغيير مكان الاستلام', body: 'نقل {{agencyName}} المنتج {{productTitle}} إلى مستودع آخر{{locationSuffix}}. سيتم الاستلام من هناك الآن.' }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'vendor_storage_depot_changed',
+                bodyParams: ['{{agencyName}}', '{{productTitle}}', '{{locationSuffix}}']
+            }
+        },
+        button: PRODUCT_BUTTON
+    },
+
+    // Says WHY (the agency's note) rather than leaving the vendor to guess, and says
+    // plainly that customers can no longer buy it — that is the consequence they will
+    // otherwise discover from their sales figures.
+    'storage.product_suspended': {
+        base: {
+            en: { subject: 'Product suspended by your storage agency', body: '{{agencyName}} suspended {{productTitle}}, so customers can no longer buy it.{{noteSuffix}} Contact them to resolve it.' },
+            fr: { subject: 'Produit suspendu par votre agence de stockage', body: '{{agencyName}} a suspendu {{productTitle}} ; les clients ne peuvent plus l\'acheter.{{noteSuffix}} Contactez l\'agence pour régler la situation.' },
+            pt: { subject: 'Produto suspenso pela sua agência de armazenamento', body: '{{agencyName}} suspendeu {{productTitle}}, pelo que os clientes já não o podem comprar.{{noteSuffix}} Contacte a agência para resolver.' },
+            es: { subject: 'Producto suspendido por tu agencia de almacenamiento', body: '{{agencyName}} suspendió {{productTitle}}, por lo que los clientes ya no pueden comprarlo.{{noteSuffix}} Contáctala para resolverlo.' },
+            ar: { subject: 'تم تعليق المنتج من قبل وكالة التخزين', body: 'علّق {{agencyName}} المنتج {{productTitle}}، لذا لم يعد بإمكان العملاء شراؤه.{{noteSuffix}} تواصل معهم لحل المسألة.' }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'vendor_storage_product_suspended',
+                bodyParams: ['{{agencyName}}', '{{productTitle}}', '{{noteSuffix}}']
+            }
+        },
+        button: PRODUCT_BUTTON
+    },
+
+    'storage.product_unsuspended': {
+        base: {
+            en: { subject: 'Product back on sale', body: '{{agencyName}} lifted the suspension on {{productTitle}}. It is available to customers again.' },
+            fr: { subject: 'Produit de nouveau en vente', body: '{{agencyName}} a levé la suspension de {{productTitle}}. Il est de nouveau disponible pour les clients.' },
+            pt: { subject: 'Produto de novo à venda', body: '{{agencyName}} levantou a suspensão de {{productTitle}}. Está de novo disponível para os clientes.' },
+            es: { subject: 'Producto de nuevo en venta', body: '{{agencyName}} levantó la suspensión de {{productTitle}}. Vuelve a estar disponible para los clientes.' },
+            ar: { subject: 'المنتج معروض للبيع مرة أخرى', body: 'رفع {{agencyName}} التعليق عن {{productTitle}}. أصبح متاحًا للعملاء مرة أخرى.' }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'vendor_storage_product_unsuspended',
+                bodyParams: ['{{agencyName}}', '{{productTitle}}']
+            }
+        },
+        button: PRODUCT_BUTTON
     }
 };
 

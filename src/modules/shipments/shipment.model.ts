@@ -159,6 +159,20 @@ export interface IShipmentDeliveryFailure {
 export interface IShipmentItem {
   order_item_id: mongoose.Types.ObjectId;
   product_id: mongoose.Types.ObjectId;
+  /**
+   * The variant that actually shipped — the SELLABLE unit, and the thing stock
+   * hangs off (`ProductVariant.stock`). Without it a delivered shipment cannot
+   * say which variant left the shelf, which is what blocked decrementing stock
+   * on delivery.
+   *
+   * **Nullable, and it stays that way.** Shipments written before this field
+   * existed have none, and `ShipmentRepository.addItem` appends via a raw
+   * `$push` that no schema default reaches — a `required: true` would reject
+   * writes to historical shipments. Readers must treat null as "legacy" and fall
+   * back to joining `order_item_id` against the order's items, which is what
+   * every reader here already does for title/sku/variantTitle anyway.
+   */
+  variant_id: mongoose.Types.ObjectId | null;
   quantity: number;
 }
 
@@ -515,6 +529,8 @@ const ShipmentSchema = new Schema<IShipment>({
   items: [{
     order_item_id: { type: Schema.Types.ObjectId, required: true },
     product_id: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT, required: true },
+    // Nullable by design — see IShipmentItem. Legacy rows carry none.
+    variant_id: { type: Schema.Types.ObjectId, ref: MODELS.PRODUCT_VARIANT, default: null },
     quantity: { type: Number, required: true }
   }]
 }, {

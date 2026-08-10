@@ -39,6 +39,7 @@ const VehicleInfoSchema = new Schema(
     },
     plate_number: { type: String, default: null, trim: true },
     color: { type: String, required: true, trim: true },
+    photo_file_id: { type: Schema.Types.ObjectId, ref: MODELS.FILE, default: null },
   },
   { _id: false }
 );
@@ -75,7 +76,18 @@ export type AgentTrackingStateStatus = 'unknown' | 'streaming' | 'stale' | 'disc
 export interface IAgentVehicleInfo {
   vehicle_type: 'bike' | 'car' | 'van' | 'truck';
   plate_number: string | null;
+  /**
+   * Lowercase English token from `VEHICLE_COLORS` (see `domain/vehicle-info.ts`),
+   * or whatever the agent typed when it is not one — the field is a documented
+   * vocabulary, not an enum. Never localized on the wire.
+   */
   color: string;
+  /**
+   * Photo of the vehicle. A File reference, modelled on `avatar_file_id`:
+   * reference-counted under `entityType: 'agent', field: 'vehicle_photo'`, and
+   * surfaced as a resolved `FileDetail` (`vehicle_info.photo`), never a bare id.
+   */
+  photo_file_id: mongoose.Types.ObjectId | null;
 }
 
 export interface IAgentLegalIdentity {

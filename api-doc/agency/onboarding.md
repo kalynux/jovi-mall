@@ -234,7 +234,7 @@ Captures the agency's payout methods. The **first entry in the array is always t
 }
 ```
 
-#### Request Body — Mobile Money (preferred) + Bank (fallback)
+#### Request Body — a preferred number + a fallback
 
 ```json
 {
@@ -249,27 +249,31 @@ Captures the agency's payout methods. The **first entry in the array is always t
       "bank": null
     },
     {
-      "method": "bank",
-      "mobile_money": null,
-      "bank": {
-        "bank_name": "UBA Cameroon",
-        "account_number": "10033000000000001",
-        "account_name": "FastTrack Logistics Sarl",
-        "country": "CM"
-      }
+      "method": "mobile_money",
+      "mobile_money": {
+        "provider": "Orange Money",
+        "phone_number": "+237690000000",
+        "account_name": "FastTrack Logistics Sarl"
+      },
+      "bank": null
     }
   ]
 }
 ```
 
+> 🚧 A `bank` or `card` fallback is what this example *will* look like once those kinds are switched
+> back on — today they are refused. See
+> [Payout methods](./payout-methods.md#availability).
+
 #### Field Reference
 
 | Field | Type | Required? | Validation | Notes |
 |-------|------|-----------|------------|-------|
-| `payout_details` | `object[]` | Yes | Min 1 entry, Max 2 entries. No duplicate `method` types. | Ordered array — index 0 is the preferred method. |
-| `payout_details[].method` | `string` | Yes | Enum: `"mobile_money"` or `"bank"` | Determines which sub-object is required. |
+| `payout_details` | `object[]` | Yes | **Min 1 entry, Max 3 entries.** Duplicates of the same `method` are allowed. | Ordered array — index 0 is the preferred method. Full reference, including masking and what happens at payout time: **[Payout methods](./payout-methods.md)**. |
+| `payout_details[].method` | `string` | Yes | **Today: `"mobile_money"` only** — `"bank"` and `"card"` are 🚧 [switched off](./payout-methods.md#availability) | Determines which sub-object is required. |
 | `payout_details[].mobile_money` | `object \| null` | Conditional | Required if `method === "mobile_money"`, otherwise `null`. | See sub-fields below. |
-| `payout_details[].bank` | `object \| null` | Conditional | Required if `method === "bank"`, otherwise `null`. | See sub-fields below. |
+| `payout_details[].bank` | `object \| null` | Conditional | Required if `method === "bank"`, otherwise `null`. | 🚧 Switched off. See sub-fields below. |
+| `payout_details[].card` | `object \| null` | Conditional | Required if `method === "card"`, otherwise `null`. | 🚧 Switched off. See sub-fields below. |
 
 **`mobile_money` sub-fields:**
 
@@ -279,7 +283,8 @@ Captures the agency's payout methods. The **first entry in the array is always t
 | `phone_number` | `string` | Yes | **E.164** — leading `+` and country code required (e.g. `+237670000000`). [Contact formats](../README.md#contact-formats-phone--email) |
 | `account_name` | `string` | Yes | Min 1 char |
 
-**`bank` sub-fields:**
+**`bank` sub-fields** — 🚧 **switched off, not configurable right now**
+([why](./payout-methods.md#availability)):
 
 | Field | Type | Required? | Validation |
 |-------|------|-----------|------------|
@@ -288,7 +293,47 @@ Captures the agency's payout methods. The **first entry in the array is always t
 | `account_name` | `string` | Yes | Min 1 char |
 | `country` | `string` | Yes | Min 1 char. ISO country code recommended (e.g. `"CM"`) |
 
-> **Security note:** The API response masks sensitive payout data. `phone_number` is returned as `phone_number_masked` (e.g. `••••0000`) and `account_number` as `account_number_masked`. The raw values are never returned.
+**`card` sub-fields** (Visa / Mastercard / …) — 🚧 **switched off, not configurable right now**
+([why](./payout-methods.md#availability)):
+
+> **The API never accepts a card number or CVV** — send them and the request is **rejected**, not
+> silently ignored. Full rationale and the refused field names:
+> [Payout methods → card](./payout-methods.md#card).
+
+| Field | Type | Required? | Validation |
+|-------|------|-----------|------------|
+| `brand` | `string` | Yes | Enum: `visa` · `mastercard` · `amex` · `discover` · `unionpay` · `jcb` · `diners` · `verve` · `other`. Case-insensitive |
+| `last4` | `string` | Yes | Exactly 4 digits |
+| `card_holder_name` | `string` | Yes | Min 1 char |
+| `expiry_month` | `number` | Yes | Integer 1–12 |
+| `expiry_year` | `number` | Yes | 4-digit year. The card must not already be expired |
+| `country` | `string` | Yes | Issuing country. ISO-2 recommended |
+| `issuing_bank` | `string \| null` | No | Max 100 chars |
+| `gateway_provider` / `gateway_token` | `string \| null` | No | The gateway's handle for this card, if your client tokenized it |
+
+```jsonc
+// 🚧 Refused today with 400 on payout_details.0.method — this is the shape for
+// when `card` is switched back on.
+{
+  "payout_details": [
+    {
+      "method": "card",
+      "mobile_money": null,
+      "bank": null,
+      "card": {
+        "brand": "mastercard",
+        "last4": "1881",
+        "card_holder_name": "FASTTRACK LOGISTICS",
+        "expiry_month": 11,
+        "expiry_year": 2028,
+        "country": "CM"
+      }
+    }
+  ]
+}
+```
+
+> **Security note:** The API response masks sensitive payout data. `phone_number` is returned as `phone_number_masked` (e.g. `••••0000`) and `account_number` as `account_number_masked`. The raw values are never returned. A `card` block is returned unredacted because nothing sensitive is stored for it — only `last4`, never the number.
 
 ---
 

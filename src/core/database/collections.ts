@@ -41,6 +41,12 @@ export const MODELS = Object.freeze({
   SERVICE_AVAILABILITY: 'ServiceAvailability',
   STOCK_RESERVATION: 'StockReservation',
   STOCK_AUDIT_LOG: 'StockAuditLog',
+  // What an agency stores, per depot. Distinct from STOCK_RESERVATION (which is
+  // vendor-global and has no location) — see modules/inventory.
+  AGENCY_STOCK_LEVEL: 'AgencyStockLevel',
+  // A proposed change to `ProductVariant.stock` on an agency-warehoused SKU,
+  // awaiting the other party's approval — see modules/stock-requests.
+  STOCK_ADJUSTMENT_REQUEST: 'StockAdjustmentRequest',
   FILE: 'File',
   FILE_REFERENCE: 'FileReference',
   FILE_CLEANUP_AUDIT: 'FileCleanupAudit',
@@ -110,6 +116,8 @@ export const MODELS = Object.freeze({
   AGENCY_NOTIFICATION_PREFERENCE: 'AgencyNotificationPreference',
   AGENT_NOTIFICATION: 'AgentNotification',
   AGENT_NOTIFICATION_PREFERENCE: 'AgentNotificationPreference',
+  CUSTOMER_NOTIFICATION: 'CustomerNotification',
+  CUSTOMER_NOTIFICATION_PREFERENCE: 'CustomerNotificationPreference',
   DEVICE_TOKEN: 'DeviceToken',
 
   // Integrations
@@ -131,6 +139,10 @@ export const MODELS = Object.freeze({
   EARNINGS_LEDGER: 'EarningsLedger',
   EARNINGS_RESERVE_HOLD: 'EarningsReserveHold',
   PAYOUT_REQUEST: 'PayoutRequest',
+
+  // Blog / editorial (the marketing site's article pages)
+  ARTICLE: 'Article',
+  ARTICLE_AUTHOR: 'ArticleAuthor',
 
   // COD (cash on delivery: collections, cash liabilities, reconciliation)
   CASH_COLLECTION: 'CashCollection',
@@ -165,6 +177,8 @@ export const COLLECTIONS = Object.freeze({
   SERVICE_AVAILABILITY: 'service_availabilities',
   STOCK_RESERVATION: 'stock_reservations',
   STOCK_AUDIT_LOG: 'stock_audit_logs',
+  AGENCY_STOCK_LEVEL: 'agency_stock_levels',
+  STOCK_ADJUSTMENT_REQUEST: 'stock_adjustment_requests',
   FILE: 'files',
   FILE_REFERENCE: 'file_references',
   FILE_CLEANUP_AUDIT: 'file_cleanup_audit',
@@ -231,6 +245,8 @@ export const COLLECTIONS = Object.freeze({
   AGENCY_NOTIFICATION_PREFERENCE: 'agency_notification_preferences',
   AGENT_NOTIFICATION: 'agent_notifications',
   AGENT_NOTIFICATION_PREFERENCE: 'agent_notification_preferences',
+  CUSTOMER_NOTIFICATION: 'customer_notifications',
+  CUSTOMER_NOTIFICATION_PREFERENCE: 'customer_notification_preferences',
   DEVICE_TOKEN: 'device_tokens',
 
   // Integrations
@@ -252,6 +268,10 @@ export const COLLECTIONS = Object.freeze({
   EARNINGS_LEDGER: 'earnings_ledgers',
   EARNINGS_RESERVE_HOLD: 'earnings_reserve_holds',
   PAYOUT_REQUEST: 'payout_requests',
+
+  // Blog / editorial (the marketing site's article pages)
+  ARTICLE: 'articles',
+  ARTICLE_AUTHOR: 'article_authors',
 
   // COD (cash on delivery: collections, cash liabilities, reconciliation)
   CASH_COLLECTION: 'cash_collections',

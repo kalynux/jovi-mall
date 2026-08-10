@@ -1,6 +1,9 @@
-import { Types } from 'mongoose';
-import { Booking, IBooking } from '../models/booking.model';
-import { CreateBookingInput, BookingStatus, CalendarDayBooking, TimeWindow } from '../types/booking.types';
+import { ClientSession, Types } from 'mongoose';
+import { Booking, IBooking, BookingPaymentStatus } from '../models/booking.model';
+import { CreateBookingInput, BookingStatus, CalendarDayBooking } from '../types/booking.types';
+import { BookedWindow } from '../utils/availability-windows.util';
+import { transactionManager } from '../../../core/database/transaction.manager';
+import { isCalendarNotConnected } from '../utils/calendar-error.util';
 import { SlotLockService } from './slot-lock.service';
 import { SlotGeneratorService } from './slot-generator.service';
 import { CalendarClientFactory } from '../../integrations/calendar/calendar-client.factory';
@@ -13,6 +16,8 @@ import { BookingCalendarSyncService } from './booking-calendar-sync.service';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { earningsCompletionService } from '../../earnings/services/earnings-completion.service';
+import { earningsSplitService } from '../../earnings/services/earnings-split.service';
+import { bookingRefundService } from './booking-refund.service';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { assertCancellationAllowed } from '../../vendors/utils/cancellation-policy.util';
 import { format } from 'date-fns';
@@ -55,28 +60,68 @@ export class BookingService {
 
     // Determine payment status for calendar title and color
     const needsPayment = requiresPayment !== false; // Default to true
-    const paymentPrefix = needsPayment ? '[UNPAID]' : '[FREE]';
     const paymentStatus = needsPayment ? 'unpaid' : 'paid';
-    const colorId = getCalendarColorIdByStatus(paymentStatus);
 
-    // Manual-mode bookings land as PENDING with no calendar event; the vendor confirms them
-    // later (PATCH /bookings/:id/status → confirmed), which creates the calendar event.
-    // 'calendar' (and the not-yet-implemented 'capacity') confirm immediately.
+    // Manual-mode bookings land as PENDING; the vendor confirms them later
+    // (PATCH /bookings/:id/status → confirmed). 'calendar' confirms immediately.
+    // Either way the booking row itself blocks the slot from the moment it exists —
+    // it no longer depends on a calendar event being written.
     const isManual = bookingMode === 'manual';
 
-    let externalCalendarEventId: string | undefined;
+    // Step 3: Re-check occupancy and create, in ONE transaction.
+    //
+    // The Redis hold is the first line of defence, but it is released the moment
+    // this method returns and it evaporates entirely if Redis restarts. This
+    // compare-then-create closes that window: a concurrent commit for the same
+    // interval loses here rather than overselling the slot.
+    const booking = await transactionManager.runInTransaction(async (session) => {
+      const overlapping = await this.countOverlappingBookings(productId, start, end, session);
+      if (overlapping > 0) {
+        throw createAppError(
+          ERROR_CODES.BOOKING_SLOT_UNAVAILABLE,
+          409,
+          'That time was just taken. Please choose another slot.',
+          { slotId }
+        );
+      }
 
+      const [created] = await Booking.create(
+        [
+          {
+            productId,
+            userId,
+            vendorId,
+            startAt: start,
+            endAt: end,
+            status: isManual ? BookingStatus.PENDING : BookingStatus.CONFIRMED,
+            metadata,
+            priceSnapshot,
+            currency: currency || 'XAF',
+            requiresPayment: needsPayment,
+          },
+        ],
+        { session }
+      );
+      return created;
+    });
+
+    // Step 4: Release the slot hold — the booking row now holds the interval.
+    await this.slotLockService.release(slotId, lockOwnerId);
+
+    // Step 5: Mirror onto the vendor's calendar. Best-effort and AFTER the commit:
+    // external I/O must never sit inside a transaction, and a Google outage must
+    // not lose a confirmed sale. Manual bookings get their event on confirmation.
+    //
+    // Safe to be best-effort only because availability now derives this product's
+    // occupancy from the booking rows above, not from the calendar.
     if (!isManual) {
-      // Step 3: Get calendar client for vendor (not customer)
-      const calendarClient = await CalendarClientFactory.forVendor(vendorId);
-
-      // Step 4: Create calendar event
+      const paymentPrefix = needsPayment ? '[UNPAID]' : '[FREE]';
       const eventInput: CalendarEventInput = {
-        title: `${paymentPrefix} ${product.title} `,
-        description: `Booked by ${user.login_email} \nPrice: ${priceSnapshot} ${currency} \nNotes: ${metadata?.notes}`,
+        title: `${paymentPrefix} ${product.title}`,
+        description: `Booked by ${user.login_email}\nPrice: ${priceSnapshot} ${currency || 'XAF'}\nBooking #${booking._id}${metadata?.notes ? `\nNotes: ${metadata.notes}` : ''}`,
         start,
         end,
-        colorId, // Apply color based on payment status
+        colorId: getCalendarColorIdByStatus(paymentStatus),
         metadata: {
           ...metadata,
           bookingUserId: userId,
@@ -84,31 +129,25 @@ export class BookingService {
         },
       };
 
-      const calendarEvent = await calendarClient.createEvent(eventInput, {
-        idempotencyKey: slotId, // Use slotId for idempotency
-      });
-      externalCalendarEventId = calendarEvent.externalId;
+      try {
+        const calendarClient = await CalendarClientFactory.forVendor(vendorId);
+        const calendarEvent = await calendarClient.createEvent(eventInput, {
+          idempotencyKey: slotId, // Use slotId for idempotency
+        });
+        booking.externalCalendarEventId = calendarEvent.externalId;
+        await booking.save();
+      } catch (calendarError) {
+        if (isCalendarNotConnected(calendarError)) {
+          console.warn(
+            `[BookingService] Booking ${booking._id} created without a calendar event — vendor ${vendorId} has no calendar connected.`
+          );
+        } else {
+          console.error('[BookingService] Failed to create calendar event for booking:', calendarError);
+        }
+      }
     }
 
-    // Step 5: Create booking record
-    const booking = await Booking.create({
-      productId,
-      userId,
-      vendorId,
-      startAt: start,
-      endAt: end,
-      status: isManual ? BookingStatus.PENDING : BookingStatus.CONFIRMED,
-      externalCalendarEventId,
-      metadata,
-      priceSnapshot,
-      currency: currency || 'XAF',
-      requiresPayment: needsPayment,
-    });
-
-    // Step 6: Release slot lock
-    await this.slotLockService.release(slotId, lockOwnerId);
-
-    // Step 7: Emit booking.created event
+    // Step 6: Emit booking.created event
     await this.emitBookingCreatedEvent(booking, product.title);
 
     return booking;
@@ -213,22 +252,30 @@ export class BookingService {
   }
 
   /**
-   * Counts active bookings (pending|confirmed) grouped by their exact slot window for a
-   * product within [fromDate, toDate]. Lets capacity availability be computed in one query.
-   * @returns Map keyed by `${startMs}-${endMs}` → booking count.
+   * Every window a product has active (pending|confirmed) bookings in that OVERLAPS
+   * [fromDate, toDate], with how many bookings occupy each.
+   *
+   * Matching is by **overlap**, not by `startAt` falling inside the range. An
+   * exact-boundary match misses a booking that straddles the range edge — and
+   * missing an occupied window means offering it for sale again.
+   *
+   * This is the authority on a product's own occupancy: availability subtracts the
+   * windows this reports as full, rather than trusting Google Calendar to know.
    */
-  async getActiveBookingCountsForWindows(
+  async findActiveBookingWindows(
     productId: string,
     fromDate: Date,
     toDate: Date
-  ): Promise<Map<string, number>> {
+  ): Promise<BookedWindow[]> {
     const rows = await Booking.aggregate<{ _id: { start: Date; end: Date }; count: number }>([
       {
         $match: {
           productId: new Types.ObjectId(productId),
           status: { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
           deletedAt: null,
-          startAt: { $gte: fromDate, $lte: toDate },
+          // Half-open overlap: starts before the range ends, ends after it begins.
+          startAt: { $lt: toDate },
+          endAt: { $gt: fromDate },
         },
       },
       {
@@ -239,26 +286,33 @@ export class BookingService {
       },
     ]);
 
-    const map = new Map<string, number>();
-    for (const row of rows) {
-      const key = `${new Date(row._id.start).getTime()}-${new Date(row._id.end).getTime()}`;
-      map.set(key, row.count);
-    }
-    return map;
+    return rows.map((row) => ({
+      start: new Date(row._id.start),
+      end: new Date(row._id.end),
+      count: row.count,
+    }));
   }
 
   /**
-   * Builds the set of time windows a product already has active bookings in. Used by the
-   * availability service to exclude a capacity product's own shared calendar events from
-   * busy-time subtraction (so a booked-but-not-full slot stays bookable).
+   * Whether an active booking already overlaps [start, end) for this product.
+   *
+   * `seats` is the occupancy the window may reach before it is full — 1 for
+   * single-occupancy services. Runs inside the creating transaction, so it is the
+   * guard that actually prevents a double-book if the Redis hold was lost.
    */
-  windowsFromCountMap(counts: Map<string, number>): TimeWindow[] {
-    const windows: TimeWindow[] = [];
-    for (const key of counts.keys()) {
-      const [startMs, endMs] = key.split('-').map(Number);
-      windows.push({ start: new Date(startMs), end: new Date(endMs) });
-    }
-    return windows;
+  private async countOverlappingBookings(
+    productId: string,
+    start: Date,
+    end: Date,
+    session?: ClientSession
+  ): Promise<number> {
+    return Booking.countDocuments({
+      productId: new Types.ObjectId(productId),
+      status: { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
+      deletedAt: null,
+      startAt: { $lt: end },
+      endAt: { $gt: start },
+    }).session(session ?? null);
   }
 
   /** Tries to acquire the per-slot capacity mutex, retrying briefly under contention. */
@@ -300,6 +354,21 @@ export class BookingService {
       throw createAppError(ERROR_CODES.BOOKING_ALREADY_CANCELLED, 409, 'Booking is already cancelled');
     }
 
+    // A finished appointment is not cancellable — the service was delivered, or the
+    // customer did not turn up. Only the vendor can adjust those, and only via a
+    // refund. Without this guard the state machine's terminal states were bypassed
+    // entirely on the customer path, which set `cancelled` on a `completed` booking.
+    if (
+      booking.status === BookingStatus.COMPLETED ||
+      booking.status === BookingStatus.NO_SHOW
+    ) {
+      throw createAppError(
+        ERROR_CODES.BOOKING_NOT_CANCELLABLE,
+        409,
+        `Cannot cancel a booking that is already '${booking.status}'`
+      );
+    }
+
     // Enforce the vendor's cancellation policy (customer-initiated cancellation).
     const vendor = await this.vendorRepo.findById(booking.vendorId.toString());
     assertCancellationAllowed(vendor?.policies?.cancellation_policy ?? null, {
@@ -327,30 +396,86 @@ export class BookingService {
     booking.cancelledReason = reason;
     await booking.save();
 
+    // Return the money. Post-commit and best-effort: the slot is already released,
+    // and a refund that cannot be issued electronically becomes `refund_pending`
+    // plus a support ticket rather than blocking the cancellation.
+    //
+    // Runs BEFORE the event so the notification reports the real payment outcome.
+    await this.refundIfPaid(booking, userId, 'customer', reason);
+
     // Emit booking.cancelled event
-    await this.emitBookingCancelledEvent(booking);
+    await this.emitBookingCancelledEvent(booking, 'customer');
 
     return booking;
   }
 
   /**
+   * Refunds a just-cancelled booking, if any money was taken.
+   *
+   * Both cancellation paths call this. Previously NEITHER refunded anything: a
+   * customer cancelling inside the vendor's own cancellation window, and a vendor
+   * cancelling on a customer, both simply kept the money.
+   */
+  private async refundIfPaid(
+    booking: IBooking,
+    initiatedBy: string,
+    initiatedByRole: 'customer' | 'vendor' | 'admin',
+    reason?: string
+  ): Promise<void> {
+    try {
+      const outcome = await bookingRefundService.refundCancelledBooking(
+        booking,
+        initiatedBy,
+        initiatedByRole,
+        reason
+      );
+      if (outcome.status !== 'not_applicable') {
+        console.log(
+          `[BookingService] Booking ${booking._id} cancellation refund → ${outcome.status}`
+        );
+      }
+    } catch (error) {
+      console.error('[BookingService] Refund on cancellation failed:', error);
+    }
+  }
+
+  /**
    * Reschedules a booking to a new slot.
+   *
+   * Ownership is scoped in the QUERY via `actor`, so the vendor and the customer
+   * reach the same code path and neither can move the other's booking. A miss is a
+   * 404 rather than a 403 — the same rule the shipment endpoints follow.
+   *
    * @param bookingId Existing booking ID
    * @param newSlotId New slot ID
-   * @param lockOwnerId Owner of the new slot lock
+   * @param lockOwnerId Owner of the hold on the new slot (the caller)
+   * @param actor Which side is asking, and their id
    */
   async rescheduleBooking(
     bookingId: string,
     newSlotId: string,
-    lockOwnerId: string
+    lockOwnerId: string,
+    actor?: { role: 'vendor' | 'customer'; id: string }
   ): Promise<IBooking> {
-    const booking = await Booking.findById(bookingId);
+    const scope: Record<string, unknown> = { _id: bookingId, deletedAt: null };
+    if (actor?.role === 'vendor') scope.vendorId = new Types.ObjectId(actor.id);
+    if (actor?.role === 'customer') scope.userId = new Types.ObjectId(actor.id);
+
+    const booking = await Booking.findOne(scope);
     if (!booking) {
       throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
     }
 
-    if (booking.status === BookingStatus.CANCELLED) {
-      throw createAppError(ERROR_CODES.BOOKING_ALREADY_CANCELLED, 409, 'Cannot reschedule a cancelled booking');
+    // Only a live booking can move. `cancelled`, `completed` and `no-show` are all
+    // terminal — previously only `cancelled` was checked here, so a completed
+    // appointment could be silently dragged to a new time.
+    const reschedulable: BookingStatus[] = [BookingStatus.PENDING, BookingStatus.CONFIRMED];
+    if (!reschedulable.includes(booking.status)) {
+      throw createAppError(
+        ERROR_CODES.BOOKING_NOT_RESCHEDULABLE,
+        409,
+        `Cannot reschedule a booking with status '${booking.status}'. Only pending or confirmed bookings can be rescheduled.`
+      );
     }
 
     // Step 1: Assert new slot is locked
@@ -359,17 +484,40 @@ export class BookingService {
     // Step 2: Parse new slot
     const { start, end } = this.slotGenerator.parseSlotId(newSlotId);
 
-    // Step 3: Get calendar client for vendor
-    const calendarClient = await CalendarClientFactory.forVendor(
-      booking.vendorId.toString()
+    // Step 3: The target must actually be free. The hold guards concurrent movers;
+    // this guards against moving onto an interval that is already sold.
+    const overlapping = await this.countOverlappingBookings(
+      booking.productId.toString(),
+      start,
+      end
     );
+    const selfOverlaps =
+      booking.startAt.getTime() < end.getTime() && booking.endAt.getTime() > start.getTime();
+    if (overlapping > (selfOverlaps ? 1 : 0)) {
+      throw createAppError(
+        ERROR_CODES.BOOKING_SLOT_UNAVAILABLE,
+        409,
+        'That time is no longer free. Please choose another slot.',
+        { slotId: newSlotId }
+      );
+    }
 
-    // Step 4: Update calendar event
+    // Step 4: Move the booking. This is the authoritative record of the new time,
+    // so it is written FIRST — a calendar outage must not be able to reject a
+    // reschedule the customer and vendor have already agreed.
+    const previousStartAt = booking.startAt;
+    booking.startAt = start;
+    booking.endAt = end;
+    await booking.save();
+
+    // Step 5: Mirror onto the calendar, best-effort.
+    //
+    // Previously this ran before the save and threw BOOKING_CALENDAR_SYNC_FAILED,
+    // so a Google hiccup left the booking at its OLD time while the customer had
+    // been told it moved. It also resolved a calendar client unconditionally, which
+    // failed outright for a vendor who has none — even with no event to update.
     if (booking.externalCalendarEventId) {
       try {
-        // Preserve payment status color when rescheduling
-        const colorId = getCalendarColorIdByStatus(booking.paymentStatus);
-
         // Rebuild the event title/description to match createBooking's formatting,
         // so a reschedule doesn't degrade '[UNPAID] Haircut' into raw ObjectIds.
         const [product, user] = await Promise.all([
@@ -378,43 +526,108 @@ export class BookingService {
         ]);
         const paymentPrefix = booking.requiresPayment ? '[UNPAID]' : '[FREE]';
         const title = product
-          ? `${paymentPrefix} ${product.title} `
+          ? `${paymentPrefix} ${product.title}`
           : `${paymentPrefix} Booking`;
 
+        const calendarClient = await CalendarClientFactory.forVendor(
+          booking.vendorId.toString()
+        );
         await calendarClient.updateEvent(booking.externalCalendarEventId, {
           title,
           description: `Rescheduled booking by ${user?.login_email || 'Unknown'}\nBooking #${booking._id}`,
           start,
           end,
-          colorId, // Preserve payment status color
+          colorId: getCalendarColorIdByStatus(booking.paymentStatus), // Preserve payment status color
           metadata: booking.metadata as Record<string, string>,
         });
       } catch (error) {
-        console.error('Failed to update calendar event:', error);
-        throw createAppError(ERROR_CODES.BOOKING_CALENDAR_SYNC_FAILED, 500, 'Failed to reschedule in calendar');
+        console.error('[BookingService] Failed to update calendar event on reschedule:', error);
       }
     }
 
-    // Step 5: Update booking
-    booking.startAt = start;
-    booking.endAt = end;
-    await booking.save();
-
     // Step 6: Release slot lock
     await this.slotLockService.release(newSlotId, lockOwnerId);
+
+    // Step 7: Tell the customer, with BOTH times — a message carrying only the
+    // new one is indistinguishable from a duplicate of the original booking.
+    await this.emitBookingRescheduledEvent(booking, previousStartAt);
 
     return booking;
   }
 
   /**
-   * Gets bookings for a user.
+   * A customer's own bookings, filtered and paged.
+   *
+   * Paging is not optional politeness: a long-standing customer's booking history
+   * is unbounded, and the previous unpaged version returned every row at once.
+   * The `{ data, meta }` envelope matches every other list endpoint on the platform.
    */
-  async getUserBookings(userId: string, status?: BookingStatus): Promise<IBooking[]> {
-    const query: any = { userId };
-    if (status) {
-      query.status = status;
+  async getUserBookings(
+    userId: string,
+    filters: {
+      status?: BookingStatus;
+      paymentStatus?: BookingPaymentStatus;
+      startDate?: Date;
+      endDate?: Date;
+      page?: number;
+      limit?: number;
+    } = {}
+  ): Promise<{ data: IBooking[]; total: number; page: number; limit: number }> {
+    const page = Math.max(1, filters.page ?? 1);
+    const limit = Math.min(100, Math.max(1, filters.limit ?? 20));
+
+    const query: Record<string, unknown> = {
+      userId: new Types.ObjectId(userId),
+      deletedAt: null,
+    };
+    if (filters.status) query.status = filters.status;
+    if (filters.paymentStatus) query.paymentStatus = filters.paymentStatus;
+    if (filters.startDate || filters.endDate) {
+      const range: Record<string, Date> = {};
+      if (filters.startDate) range.$gte = filters.startDate;
+      if (filters.endDate) range.$lte = filters.endDate;
+      query.startAt = range;
     }
-    return Booking.find(query).sort({ startAt: -1 });
+
+    const [total, data] = await Promise.all([
+      Booking.countDocuments(query),
+      Booking.find(query)
+        .sort({ startAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate('productId', 'title type')
+        // The vendor's *business* name lives on their Store, not the profile —
+        // `display_name` is what the profile legitimately carries.
+        .populate('vendorId', 'display_name'),
+    ]);
+
+    return { data, total, page, limit };
+  }
+
+  /**
+   * A single booking belonging to this customer.
+   *
+   * Scoped by `userId` in the query rather than fetched-then-compared, so another
+   * customer's id is a 404 and never a 403 — a 403 would confirm the booking
+   * exists, which is itself a disclosure.
+   */
+  async getUserBooking(bookingId: string, userId: string): Promise<IBooking> {
+    if (!Types.ObjectId.isValid(bookingId)) {
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
+    }
+
+    const booking = await Booking.findOne({
+      _id: bookingId,
+      userId: new Types.ObjectId(userId),
+      deletedAt: null,
+    })
+      .populate('productId', 'title type')
+      .populate('vendorId', 'display_name');
+
+    if (!booking) {
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
+    }
+    return booking;
   }
 
   /**
@@ -525,6 +738,19 @@ export class BookingService {
       }
     }
 
+    // Tell the customer. `pending → confirmed` had NO event at all, so someone
+    // told "the provider still needs to accept it" was never told when they did.
+    //
+    // `completed` is emitted by CompletionPricingService instead — it is the only
+    // caller that knows the settled final price and any balance, and a second
+    // event from here would either duplicate it or carry the wrong numbers.
+    if (currentStatus === BookingStatus.PENDING && newStatus === BookingStatus.CONFIRMED) {
+      await this.emitBookingConfirmedEvent(booking);
+    }
+    if (newStatus === BookingStatus.CANCELLED) {
+      await this.emitBookingCancelledEvent(booking, 'vendor');
+    }
+
     return booking;
   }
 
@@ -599,6 +825,82 @@ export class BookingService {
   }
 
   /**
+   * Records that the outstanding balance on a completed booking was settled in
+   * cash, on the day, by the vendor.
+   *
+   * A service business collects an overrun at the counter far more often than it
+   * chases an online payment, and without this the balance would sit open forever
+   * on a booking the vendor considers finished.
+   *
+   * Unlike the online path this moves NO money through a gateway — it records a
+   * hand-to-hand payment the vendor is asserting happened, which is why it is
+   * vendor-only and why the earnings split runs off the amount they declare.
+   *
+   * @param amount Optional partial settlement; defaults to the whole outstanding balance.
+   */
+  async settleBalanceByCash(
+    bookingId: string,
+    vendorId: string,
+    amount?: number
+  ): Promise<IBooking> {
+    const booking = await Booking.findOne({
+      _id: bookingId,
+      vendorId: new Types.ObjectId(vendorId),
+      deletedAt: null,
+    });
+
+    if (!booking) {
+      throw createAppError(ERROR_CODES.BOOKING_NOT_FOUND, 404, 'Booking not found');
+    }
+
+    if (booking.status !== BookingStatus.COMPLETED) {
+      throw createAppError(
+        ERROR_CODES.BOOKING_NOT_COMPLETED,
+        409,
+        'A balance can only be settled once the booking is completed'
+      );
+    }
+
+    const settlement = booking.settlement;
+    if (!settlement || settlement.balanceDue <= 0) {
+      throw createAppError(ERROR_CODES.BOOKING_NO_BALANCE_DUE, 400, 'No balance is due on this booking');
+    }
+
+    const outstanding = settlement.balanceDue - (settlement.balancePaid ?? 0);
+    if (outstanding <= 0) {
+      throw createAppError(
+        ERROR_CODES.BOOKING_BALANCE_ALREADY_SETTLED,
+        409,
+        'This balance has already been settled'
+      );
+    }
+
+    // Never credit more than is owed: an over-declared cash amount would inflate
+    // the vendor's earnings against money the customer never paid.
+    const collected = Math.min(outstanding, Math.round(amount ?? outstanding));
+    if (collected <= 0) {
+      throw createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'Amount must be greater than zero');
+    }
+
+    settlement.balancePaid = (settlement.balancePaid ?? 0) + collected;
+    settlement.balancePaidAt = new Date();
+    settlement.balancePaymentMethod = 'cash';
+    booking.settlement = settlement;
+    await booking.save();
+
+    // Split the extra exactly as an online balance payment does. Best-effort:
+    // the cash is already in the vendor's hand, so a split failure must not
+    // reject a settlement that physically happened.
+    try {
+      await earningsSplitService.splitBookingBalance(booking, collected);
+    } catch (error) {
+      console.error('[BookingService] Failed to split cash balance earnings:', error);
+    }
+
+    return booking;
+  }
+
+  /**
    * Cancels a booking on behalf of a vendor, with optional reason.
    *
    * Differences from the customer-facing cancelBooking:
@@ -613,7 +915,8 @@ export class BookingService {
   async cancelVendorBooking(
     bookingId: string,
     vendorId: string,
-    reason?: string
+    reason?: string,
+    actorRole: 'vendor' | 'system' = 'vendor'
   ): Promise<IBooking> {
     const booking = await Booking.findOne({
       _id: bookingId,
@@ -652,7 +955,14 @@ export class BookingService {
     booking.cancelledReason = reason;
     await booking.save();
 
-    await this.emitBookingCancelledEvent(booking);
+    // A vendor cancelling on a paid customer owes the money back just as surely as
+    // a customer cancelling does — arguably more so, since the customer did nothing
+    // wrong. Same path, different actor on the audit trail.
+    await this.refundIfPaid(booking, vendorId, 'vendor', reason);
+
+    // `system` when the unpaid-booking sweep drove it — a customer told "the
+    // provider cancelled" when nobody did would reasonably blame the vendor.
+    await this.emitBookingCancelledEvent(booking, actorRole);
 
     return booking;
   }
@@ -719,9 +1029,15 @@ export class BookingService {
 
   /**
    * Emit booking.created event
-   * 
-   * Called after booking is successfully created to notify vendors.
-   * 
+   *
+   * Consumed by BOTH the vendor stack (they have work) and the customer stack
+   * (they are told what they booked and whether it still needs accepting) — one
+   * event, two audiences, two entirely different messages.
+   *
+   * `status` is on the payload because the customer's copy depends on it: a
+   * `manual` booking lands `pending` and the customer must be told they are
+   * waiting on the vendor, rather than assuming it is settled.
+   *
    * @param booking - Created booking
    * @param productTitle - Product title for notification message
    */
@@ -737,8 +1053,10 @@ export class BookingService {
           userId: booking.userId.toString(),
           productId: booking.productId.toString(),
           productTitle,
+          vendorName: await this.resolveVendorName(booking.vendorId.toString()),
           startAt: booking.startAt,
           endAt: booking.endAt,
+          status: booking.status,
           priceSnapshot: booking.priceSnapshot,
           currency: booking.currency,
           requiresPayment: booking.requiresPayment,
@@ -755,12 +1073,19 @@ export class BookingService {
 
   /**
    * Emit booking.cancelled event
-   * 
-   * Called after booking is successfully cancelled to notify vendors.
-   * 
+   *
+   * `cancelledByRole` and `paymentStatus` are on the payload for the customer's
+   * copy: it has to name who called it off and say where the money went in the
+   * SAME message. A separate refund notification arriving minutes later (or not
+   * at all, if the refund path fails) is how a cancellation reads as theft.
+   *
    * @param booking - Cancelled booking
+   * @param cancelledByRole - Which side ended it
    */
-  private async emitBookingCancelledEvent(booking: IBooking): Promise<void> {
+  private async emitBookingCancelledEvent(
+    booking: IBooking,
+    cancelledByRole: 'customer' | 'vendor' | 'system' = 'vendor'
+  ): Promise<void> {
     try {
       await eventBus.publish('booking.cancelled', {
         eventType: 'booking.cancelled',
@@ -771,10 +1096,17 @@ export class BookingService {
           vendorId: booking.vendorId.toString(),
           userId: booking.userId.toString(),
           productId: booking.productId.toString(),
+          productTitle: await this.resolveProductTitle(booking.productId.toString()),
           startAt: booking.startAt,
           endAt: booking.endAt,
           cancelledAt: booking.cancelledAt!,
-          cancelledReason: booking.cancelledReason
+          cancelledReason: booking.cancelledReason,
+          cancelledByRole,
+          // Read AFTER the refund attempt, so it reports where the money actually
+          // ended up rather than where it was before.
+          paymentStatus: booking.paymentStatus,
+          priceSnapshot: booking.priceSnapshot,
+          currency: booking.currency
         }
       });
 
@@ -782,6 +1114,116 @@ export class BookingService {
     } catch (error: any) {
       console.error('[BookingService] Failed to emit booking.cancelled event:', error);
       // Don't throw - this is a secondary operation
+    }
+  }
+
+  /**
+   * Emit booking.confirmed — a `manual` booking the vendor has accepted.
+   *
+   * There was no event for this at all, so the customer who was told "the
+   * provider still needs to accept it" was never told when they did.
+   */
+  private async emitBookingConfirmedEvent(booking: IBooking): Promise<void> {
+    try {
+      await eventBus.publish('booking.confirmed', {
+        eventType: 'booking.confirmed',
+        aggregateId: booking._id.toString(),
+        occurredAt: new Date(),
+        payload: {
+          bookingId: booking._id.toString(),
+          vendorId: booking.vendorId.toString(),
+          userId: booking.userId.toString(),
+          productId: booking.productId.toString(),
+          productTitle: await this.resolveProductTitle(booking.productId.toString()),
+          vendorName: await this.resolveVendorName(booking.vendorId.toString()),
+          startAt: booking.startAt,
+          endAt: booking.endAt
+        }
+      });
+    } catch (error: any) {
+      console.error('[BookingService] Failed to emit booking.confirmed event:', error);
+    }
+  }
+
+  /** Emit booking.rescheduled — carries BOTH times so the move is verifiable. */
+  private async emitBookingRescheduledEvent(
+    booking: IBooking,
+    previousStartAt: Date
+  ): Promise<void> {
+    try {
+      await eventBus.publish('booking.rescheduled', {
+        eventType: 'booking.rescheduled',
+        aggregateId: booking._id.toString(),
+        occurredAt: new Date(),
+        payload: {
+          bookingId: booking._id.toString(),
+          vendorId: booking.vendorId.toString(),
+          userId: booking.userId.toString(),
+          productId: booking.productId.toString(),
+          productTitle: await this.resolveProductTitle(booking.productId.toString()),
+          startAt: booking.startAt,
+          endAt: booking.endAt,
+          previousStartAt
+        }
+      });
+    } catch (error: any) {
+      console.error('[BookingService] Failed to emit booking.rescheduled event:', error);
+    }
+  }
+
+  /**
+   * Emit booking.completed — the appointment happened and was settled.
+   *
+   * `finalPrice` and `balanceDue` come from the completion settlement rather than
+   * the booking's frozen `priceSnapshot`, which is only the original quote.
+   */
+  async emitBookingCompletedEvent(
+    booking: IBooking,
+    finalPrice: number,
+    balanceDue: number
+  ): Promise<void> {
+    try {
+      await eventBus.publish('booking.completed', {
+        eventType: 'booking.completed',
+        aggregateId: booking._id.toString(),
+        occurredAt: new Date(),
+        payload: {
+          bookingId: booking._id.toString(),
+          vendorId: booking.vendorId.toString(),
+          userId: booking.userId.toString(),
+          productId: booking.productId.toString(),
+          productTitle: await this.resolveProductTitle(booking.productId.toString()),
+          vendorName: await this.resolveVendorName(booking.vendorId.toString()),
+          finalPrice,
+          balanceDue,
+          currency: booking.currency
+        }
+      });
+    } catch (error: any) {
+      console.error('[BookingService] Failed to emit booking.completed event:', error);
+    }
+  }
+
+  /**
+   * A product's title, or null. Never throws: a missing product must not cost the
+   * notification — the catalog falls back to a generic "your service".
+   */
+  private async resolveProductTitle(productId: string): Promise<string | null> {
+    try {
+      const product = await ProductModel.findById(productId).select('title').lean();
+      return product?.title ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The vendor's display name, or null. Same never-throws rule as above. */
+  private async resolveVendorName(vendorId: string): Promise<string | null> {
+    try {
+      const vendor = await this.vendorRepo.findById(vendorId);
+      return vendor?.display_name ?? null;
+    } catch {
+      return null;
     }
   }
 }

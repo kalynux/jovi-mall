@@ -70,7 +70,20 @@ export type AgencyNotificationType =
     /** This agency crossed its plan's (soft) unterminated-shipment cap. */
     | 'shipment.cap.exceeded'
     /** This agency's media storage crossed a usage threshold (80/90/100%). */
-    | 'storage.alert';
+    | 'storage.alert'
+    /**
+     * Stock adjustment on a SKU this agency warehouses. Neither party moves
+     * `variant.stock` alone on such a SKU, so all three of these are the agency
+     * being told about the other half of a negotiation it is party to:
+     * `received` — the vendor proposed a quantity, and it is this agency's to answer;
+     * `approved` / `rejected` — the vendor answered a proposal this agency made.
+     *
+     * There is no `withdrawn` situation, matching `connection.*`: retracting a
+     * request nobody acted on is not news worth pushing.
+     */
+    | 'storage.stock_request.received'
+    | 'storage.stock_request.approved'
+    | 'storage.stock_request.rejected';
 export type AgencyAggregateType =
     | 'connection'
     /** An agent↔agency contract — NOT a vendor↔agency connection. */
@@ -79,7 +92,14 @@ export type AgencyAggregateType =
     | 'payout'
     | 'deposit'
     | 'plan'
-    | 'storage';
+    /** MEDIA storage quota (`storage.alert`) — not product warehousing. */
+    | 'storage'
+    /**
+     * A `StockAdjustmentRequest`. Deliberately NOT folded into `storage` above:
+     * that one means the media-file quota, and one aggregate type meaning two
+     * unrelated things is how a deep-link ends up on the wrong screen.
+     */
+    | 'stock_request';
 
 /**
  * Deep-link action for a notification, localized in the agency's language.
@@ -117,6 +137,11 @@ const AgencyNotificationSchema = new Schema<IAgencyNotification>(
             required: true,
             index: true
         },
+        // Must list every member of AgencyNotificationType above. The eight
+        // `agent_contract.*` values and the `contract` aggregate were missing here
+        // and only went unnoticed because `createIfNotExists` upserts through
+        // `findOneAndUpdate` WITHOUT `runValidators` — they are restored below rather
+        // than left for the first caller that reaches for `.save()`.
         type: {
             type: String,
             enum: [
@@ -124,6 +149,14 @@ const AgencyNotificationSchema = new Schema<IAgencyNotification>(
                 'connection.approved',
                 'connection.rejected',
                 'connection.reapproval_needed',
+                'agent_contract.request_received',
+                'agent_contract.approved',
+                'agent_contract.rejected',
+                'agent_contract.status_request_raised',
+                'agent_contract.status_request_resolved',
+                'agent_contract.terms_countered',
+                'agent_contract.terms_proposed',
+                'agent_contract.terms_resolved',
                 'shipment.assigned',
                 'shipment.offer.accepted',
                 'shipment.assignment.unfilled',
@@ -139,13 +172,20 @@ const AgencyNotificationSchema = new Schema<IAgencyNotification>(
                 'plan.expiring',
                 'plan.expired',
                 'shipment.cap.exceeded',
-                'storage.alert'
+                'storage.alert',
+                'storage.stock_request.received',
+                'storage.stock_request.approved',
+                'storage.stock_request.rejected'
             ],
             required: true
         },
         title: { type: String, required: true, trim: true, maxlength: 200 },
         message: { type: String, required: true, trim: true, maxlength: 1000 },
-        aggregateType: { type: String, enum: ['connection', 'shipment', 'payout', 'deposit', 'plan', 'storage'], required: true },
+        aggregateType: {
+            type: String,
+            enum: ['connection', 'contract', 'shipment', 'payout', 'deposit', 'plan', 'storage', 'stock_request'],
+            required: true
+        },
         aggregateId: { type: Schema.Types.ObjectId, required: true },
         action: {
             type: new Schema(

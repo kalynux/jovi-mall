@@ -65,21 +65,29 @@ Root-level fields on the agency profile response object.
 
 ## 3. Payout Details
 
-`payoutDetails` is an **ordered array** of payout method objects.
+`payoutDetails` is an **ordered array** of payout method objects. It is the same schema vendors and
+agents use. **[Payout methods](./payout-methods.md)** carries the full reference — endpoints,
+masking, card policy, and what happens at payout time.
+
+> 🚧 **Only `mobile_money` can be configured right now** — `bank` and `card` are switched off at
+> the write path (`400 VALIDATION_ERROR` on `method`). Stored entries of either kind still read
+> back and are still paid. See
+> [Payout methods](./payout-methods.md#availability).
 
 - **Minimum**: 1 entry required to complete onboarding.
-- **Maximum**: 2 entries (one `mobile_money` and one `bank` — no duplicates of the same type).
+- **Maximum**: 3 entries. Duplicates of the same `method` are allowed (e.g. two mobile-money numbers).
 - **Index 0** is always the **preferred / default** payout method.
-- Sensitive values (`phone_number`, `account_number`) are **masked in all API responses**. The raw values are never returned.
+- Sensitive values (`phone_number`, `account_number`) are **masked in all API responses**. The raw values are never returned. A `card` carries nothing sensitive to mask — see below.
 
 ### `PayoutMethod` Object
 
 | Field | Type | In Response? | Sendable? | Validation | Description |
 |-------|------|-------------|-----------|------------|-------------|
-| `method` | `string` | Yes | Yes | Enum: `"mobile_money"` or `"bank"` | Determines which sub-object is active. |
+| `method` | `string` | Yes | Yes | Readable: `"mobile_money"` · `"bank"` · `"card"`. **Sendable today: `"mobile_money"` only** (🚧 the other two are switched off) | Determines which sub-object is active. |
 | `is_preferred` | `boolean` | Yes | No (read-only) | — | `true` only for index 0. Set by the backend. Do not send this field. |
 | `mobile_money` | `object \| null` | Yes | Yes | Required if `method === "mobile_money"`, else `null` | Mobile money details. |
 | `bank` | `object \| null` | Yes | Yes | Required if `method === "bank"`, else `null` | Bank account details. |
+| `card` | `object \| null` | Yes | Yes | Required if `method === "card"`, else `null` | Card details. **No card number, no CVV — ever.** |
 
 ### `mobile_money` Object
 
@@ -89,7 +97,10 @@ Root-level fields on the agency profile response object.
 | `phone_number` | `string` | Yes | **E.164** — leading `+` and country code required ([Contact formats](../README.md#contact-formats-phone--email)) | Momo phone number. **Masked in responses** as `phone_number_masked`. |
 | `account_name` | `string` | Yes | Min 1 char | Name registered on the Momo account. |
 
-### `bank` Object
+### `bank` Object 🚧 switched off
+
+> **Not sendable right now** — see the notice at the top of this section. Readable if one was stored
+> before the switch.
 
 | Field | Type | Required? | Validation | Description |
 |-------|------|-----------|------------|-------------|
@@ -97,6 +108,29 @@ Root-level fields on the agency profile response object.
 | `account_number` | `string` | Yes | Min 1 char | Full bank account number. **Masked in responses** as `account_number_masked`. |
 | `account_name` | `string` | Yes | Min 1 char | Name on the bank account. |
 | `country` | `string` | Yes | Min 1 char | Country where the bank operates. ISO code recommended (e.g. `"CM"`). |
+
+### `card` Object 🚧 switched off
+
+> **Not sendable right now** — see the notice at the top of this section. Readable if one was stored
+> before the switch.
+
+> **Card numbers and CVVs are never accepted.** Sending `number`, `card_number`, `pan`,
+> `account_number`, `cvv`, `cvc`, `cvn` or `security_code` inside `card` is a `400` — refused
+> outright rather than silently dropped, so a success response can never be read as "the number is
+> stored". See [Payout methods → card](./payout-methods.md#card).
+
+| Field | Type | Required? | Validation | Description |
+|-------|------|-----------|------------|-------------|
+| `brand` | `string` | Yes | Enum: `visa` · `mastercard` · `amex` · `discover` · `unionpay` · `jcb` · `diners` · `verve` · `other` | Card network. Case-insensitive on write, lowercase in responses. |
+| `last4` | `string` | Yes | Exactly 4 digits | Last 4 of the card number — the only part that exists here. |
+| `card_holder_name` | `string` | Yes | Min 1 char | Name as embossed on the card. |
+| `expiry_month` | `number` | Yes | Integer 1–12 | |
+| `expiry_year` | `number` | Yes | 4-digit year; must not already be past | A card is valid *through* the last day of its expiry month. |
+| `country` | `string` | Yes | Min 1 char | Issuing country. ISO-2 recommended. |
+| `issuing_bank` | `string \| null` | No | Max 100 chars | |
+| `gateway_provider` | `string \| null` | No | Max 50 chars. **Write-only** | E.g. `"stripe"`. Never returned. |
+| `gateway_token` | `string \| null` | No | Max 255 chars. **Write-only** | The gateway's handle for this card. Never returned. |
+| `number_masked` | `string` | — | Read-only | Rendered from `last4` (`"•••• •••• •••• 4242"`) so one client code path can print every method kind. |
 
 ---
 
@@ -268,12 +302,39 @@ export interface BankPayout {
   country: string;
 }
 
+export type CardBrand =
+  | 'visa' | 'mastercard' | 'amex' | 'discover'
+  | 'unionpay' | 'jcb' | 'diners' | 'verve' | 'other';
+
+/**
+ * A card payout destination. There is no `number` and no `cvv` — not optional,
+ * ABSENT. Sending either is a 400; the full number lives at the payment gateway,
+ * never here.
+ */
+export interface CardPayout {
+  brand: CardBrand;
+  /** Last 4 digits — the only part of the number that exists. */
+  last4: string;
+  /** Rendered from last4 — only present in API responses. */
+  number_masked?: string;
+  card_holder_name: string;
+  expiry_month: number;
+  expiry_year: number;
+  country: string;
+  issuing_bank: string | null;
+  /** Only present in request payloads — never returned. */
+  gateway_provider?: string | null;
+  /** Only present in request payloads — never returned. */
+  gateway_token?: string | null;
+}
+
 export interface PayoutMethod {
-  method: 'mobile_money' | 'bank';
+  method: 'mobile_money' | 'bank' | 'card';
   /** Set by the backend for index 0. Do not send in request payloads. */
   is_preferred?: boolean;
   mobile_money: MobileMoneyPayout | null;
   bank: BankPayout | null;
+  card: CardPayout | null;
 }
 
 /** Ordered array — index 0 is always the preferred method. */

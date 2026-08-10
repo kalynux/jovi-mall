@@ -329,7 +329,7 @@ const VendorSchema = new Schema<IVendor>(
     business_addresses: { type: [BusinessAddressSchema], default: [] },
     operating_hours: { type: [OperatingHoursSchema], default: [] },
     // Ordered array of payout methods (max 3). The FIRST entry is the preferred one.
-    // A vendor may have multiple mobile_money and/or bank entries.
+    // A vendor may mix mobile_money, bank and card entries freely.
     payout_details: { type: [PayoutMethodSchema], default: [] },
     kyc_details: {
       type: VendorKycDetailsSchema,

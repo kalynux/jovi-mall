@@ -15,9 +15,20 @@ export const productFileIdsSchema = z.array(
 // Where the delivery agency should collect this product from — one of the
 // vendor's own business addresses, or the agency's own storage. `vendorAddressId`
 // is required when `source` is 'vendor_address' (ignored/omitted otherwise).
+//
+// `agencyAddressId` names WHICH of the agency's depots warehouses the product
+// (`GET /api/vendor/delivery-agencies/:agencyId/locations` lists them). It is
+// deliberately OPTIONAL where `vendorAddressId` is required: omitting it means
+// the agency's primary depot, which is what every product written before the
+// picker existed resolves to and what the auto-derived path still writes. Making
+// it required would make those products unpublishable overnight — and the
+// auto-derive path (PickupLocationResolver) never throws and never sees this
+// schema, so it could not comply. Validity of a SUPPLIED id is checked against
+// the effective agency's magazin in PickupLocationValidationService.
 export const pickupLocationSchema = z.object({
     source: z.enum(['vendor_address', 'agency_storage']),
     vendorAddressId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId')),
+    agencyAddressId: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId')),
 }).strict().refine(
     (p) => p.source !== 'vendor_address' || !!p.vendorAddressId,
     { message: 'vendorAddressId is required when source is vendor_address' }

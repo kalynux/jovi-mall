@@ -1,7 +1,12 @@
 import mongoose from 'mongoose';
 import { IVendor, IVendorBusinessAddress, IVendorOperatingHours, IVendorKycDetails, IVendorSocialLinks, IVendorPolicies } from '../../vendors/vendor.model';
 import { withGeoAddress } from '../../../core/types/geo-address.types';
-import { IPayoutDetails } from '../../../core/types/payout.types';
+import {
+  CardBrand,
+  formatMaskedCardNumber,
+  IPayoutDetails,
+  PayoutMethodKind,
+} from '../../../core/types/payout.types';
 import { UpdateVendorProfileInput } from '../validators/vendor-onboarding.validator';
 import { VendorOnboardingStep } from '../../../core/constants/onboarding-steps';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
@@ -11,7 +16,7 @@ import { IStorageProvider } from '../../../core/storage';
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
 export interface VendorPayoutDetailsSanitized {
-  method: 'mobile_money' | 'bank';
+  method: PayoutMethodKind;
   mobile_money: {
     provider: string;
     phone_number_masked: string; // e.g. "+237 •••• •• 34"
@@ -21,6 +26,21 @@ export interface VendorPayoutDetailsSanitized {
     bank_name: string;
     account_number_masked: string; // e.g. "•••• •••• 1234"
     account_name: string;
+    country: string;
+  } | null;
+  /**
+   * Nothing is redacted here — only `last4` was ever stored (no PAN, no CVV).
+   * `number_masked` is rendered from it so a client can print all three method
+   * kinds through one code path.
+   */
+  card: {
+    brand: CardBrand;
+    last4: string;
+    number_masked: string; // e.g. "•••• •••• •••• 4242"
+    card_holder_name: string;
+    expiry_month: number;
+    expiry_year: number;
+    issuing_bank: string | null;
     country: string;
   } | null;
 }
@@ -110,6 +130,18 @@ function sanitizePayoutDetails(payout: IPayoutDetails | null): VendorPayoutDetai
         account_number_masked: maskAccountNumber(preferred.bank.account_number),
         account_name: preferred.bank.account_name,
         country: preferred.bank.country,
+      }
+      : null,
+    card: preferred.card
+      ? {
+        brand: preferred.card.brand,
+        last4: preferred.card.last4,
+        number_masked: formatMaskedCardNumber(preferred.card.last4),
+        card_holder_name: preferred.card.card_holder_name,
+        expiry_month: preferred.card.expiry_month,
+        expiry_year: preferred.card.expiry_year,
+        issuing_bank: preferred.card.issuing_bank ?? null,
+        country: preferred.card.country,
       }
       : null,
   };

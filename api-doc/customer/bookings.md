@@ -21,6 +21,73 @@ Complete API reference for the **customer-facing** booking flow on service produ
 
 A slot **must be locked by the same user** before it can be booked. Locks auto-expire after 15 minutes. Booking creation releases the lock automatically. If the customer abandons the flow, call the `unlock` endpoint (or just let the lock expire).
 
+After booking, the customer manages the appointment through **[Managing your bookings](#managing-your-bookings)** below.
+
+---
+
+## Managing your bookings
+
+Everything after the purchase lives under `/api/customer/bookings` (beside `/api/customer/orders`). All four require the **customer** role and are scoped to the caller — another customer's booking id returns `404`, never `403`.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/api/customer/bookings` | List your bookings. Query: `status`, `paymentStatus`, `startDate`, `endDate`, `page`, `limit`. Returns `{ data, meta: { total, page, limit, totalPages } }`. |
+| `GET` | `/api/customer/bookings/:id` | One booking, with product and vendor populated. |
+| `POST` | `/api/customer/bookings/:id/cancel` | Cancel. Body: `{ reason? }`. Subject to the vendor's cancellation policy. |
+| `PATCH` | `/api/customer/bookings/:id/reschedule` | Move to another slot. Body: `{ newSlotId }`. **Lock the new slot first** (step 2 above). `pending`/`confirmed` only. |
+| `GET` | `/api/customer/bookings/:id/balance` | What is still owed after completion (and what was overpaid). |
+| `POST` | `/api/customer/bookings/:id/pay-balance` | Pay that balance. Body: `{ gateway, channel }` — same shape as step 4. |
+
+---
+
+## Paying a balance
+
+A service can run longer, or cost more, than the slot you booked. When the provider settles the appointment above what you have paid, the difference becomes a **balance** — and it is **never charged automatically**. You agreed to the quoted price, not to whatever is settled afterwards, so paying it is your action.
+
+You will get a `booking.balance.due` notification explaining why more is owed. Then either:
+
+- **Pay online** — `POST /api/customer/bookings/:id/pay-balance` with the same `{ gateway, channel }` body as the original payment. This creates a **second** payment against the booking.
+- **Pay the provider directly** — they record it with `POST /api/vendor/bookings/:id/settle-balance` and the balance closes.
+
+Check what is outstanding at any time:
+
+```http
+GET /api/customer/bookings/:id/balance
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "bookingId": "507f1f77bcf86cd799439011",
+    "currency": "XAF",
+    "quotedPrice": 5000,
+    "finalPrice": 12500,
+    "balanceDue": 7500,
+    "balancePaid": 0,
+    "outstanding": 7500,
+    "balancePaymentMethod": null,
+    "creditDue": 0,
+    "settledAt": "2026-08-10T16:30:00.000Z"
+  }
+}
+```
+
+**Errors:** `409 BOOKING_NOT_COMPLETED` (the appointment has not been settled yet) · `400 BOOKING_NO_BALANCE_DUE` · `409 BOOKING_BALANCE_ALREADY_SETTLED`.
+
+> **`creditDue` is recorded, not refunded.** If the provider settles *below* what you already paid, the difference appears here and is visible on the booking, but no automatic refund is issued — that is usually a goodwill discount the provider intends to hand back themselves. Contact them, or open a support ticket.
+
+**Cancelling and your money.** If the booking was paid, cancelling refunds it:
+
+- Where the payment gateway supports refunds, the money is returned automatically and `paymentStatus` becomes `refunded`.
+- Otherwise — **cash bookings, and mobile money, whose gateway refund APIs are not implemented yet** — `paymentStatus` becomes `refund_pending` and a support ticket is raised for manual payout. The cancellation still succeeds either way; a refund problem never keeps the appointment on the books.
+
+**Cancellation can be refused.** The vendor sets the policy, and `422 CANCELLATION_NOT_ALLOWED` means their window has passed (its `details` carry `cancellable` and `deadline`). A `completed` or `no-show` booking returns `409 BOOKING_NOT_CANCELLABLE`.
+
+**Unpaid bookings expire.** A `confirmed` booking left unpaid is auto-cancelled after a grace period (24h by default) and its slot released. `pending` bookings awaiting vendor approval are never swept — the wait is not the customer's fault.
+
+**You will be told.** Bookings now drive customer notifications — placed, confirmed, moved, cancelled, completed, paid, refunded, plus a reminder ~24 hours before the appointment. See [notifications.md](./notifications.md) for the inbox, the channels, and what can be switched off (money and cancellations cannot).
+
 ---
 
 ## Authentication
@@ -33,6 +100,7 @@ A slot **must be locked by the same user** before it can be booked. Locks auto-e
 | `POST .../book` | Bearer token (any authenticated user) |
 | `POST /api/bookings/:id/pay` | Bearer token, **customer** role |
 | `GET /api/bookings/:id/payment-status` | Bearer token, **customer** (owner) or **vendor** (owner) |
+| `GET|POST|PATCH /api/customer/bookings/...` | Bearer token, **customer** role (owner) |
 
 ```
 Authorization: Bearer <access_token>
@@ -373,14 +441,31 @@ Read the current payment state of a booking. Accessible by the customer who owns
 Bookings created through this flow start `unpaid`, and `confirmed` (calendar and capacity modes) or `pending` (manual mode — awaiting vendor acceptance). The full enums (shared with the vendor API):
 
 **`status`:** `pending` · `confirmed` · `completed` · `no-show` · `cancelled`
-**`paymentStatus`:** `unpaid` · `pending` · `paid` · `failed` · `refunded`
+**`paymentStatus`:** `unpaid` · `pending` · `paid` · `disputed` · `failed` · `refund_pending` · `refunded`
+
+`refund_pending` means money is owed back but the gateway could not return it automatically — a human completes the payout from a support ticket. It is **not** `refunded`: the customer does not have their money yet.
 
 See [vendor/bookings.md](../vendor/bookings.md#booking-status-state-machine) for the status state machine and the vendor-side transitions (confirm, complete, no-show, cancel, reschedule).
 
-> **Cancellation policy.** A customer-initiated booking cancellation is now gated by the
+> **Cancellation policy.** A customer-initiated booking cancellation is gated by the
 > vendor's `cancellation_policy` (the `cancellable` flag and `cancellation_deadline`,
 > evaluated against the booking's `startAt`). When the policy disallows it, the cancel
 > request returns `422 CANCELLATION_NOT_ALLOWED` with a `details` object describing the rule.
+> Cancel via `POST /api/customer/bookings/:id/cancel`.
+
+### Times and timezones
+
+Availability is computed in the **vendor's** timezone (`Vendor.timezone`, e.g. `Africa/Douala`), or a per-rule override when the vendor set one. A rule reading "Monday 09:00–17:00" means those hours *where the vendor is*, not where the server runs. All timestamps on the wire are ISO-8601 UTC — convert for display.
+
+### What blocks a slot
+
+A slot is unavailable when **any** of these holds:
+
+1. The product already has enough active (`pending` or `confirmed`) bookings covering it — one for a normal service, `maxBookings` for a capacity service. **A `manual` booking blocks its slot immediately**, before the vendor accepts it.
+2. The vendor's external calendar shows them busy then (plus any configured before/after buffer).
+3. No active availability rule covers it.
+
+Point 1 is decided from the platform's own booking records, so availability stays correct even when the vendor has no calendar connected.
 
 ---
 
@@ -404,8 +489,13 @@ See [vendor/bookings.md](../vendor/bookings.md#booking-status-state-machine) for
 | `BOOKING_SLOT_LOCKED` | 409 | Lock — slot held by another user |
 | `BOOKING_SLOT_NOT_LOCKED` | 409 | Book — slot not locked / lock expired |
 | `BOOKING_SLOT_FULL` | 409 | Book — capacity slot is full (`maxBookings` reached) |
+| `BOOKING_SLOT_UNAVAILABLE` | 409 | Book/reschedule — someone took that interval first |
+| `BOOKING_NOT_RESCHEDULABLE` | 409 | Reschedule — booking is not `pending`/`confirmed` |
+| `BOOKING_NOT_CANCELLABLE` | 409 | Cancel — booking is `completed` or `no-show` |
+| `BOOKING_ALREADY_CANCELLED` | 409 | Cancel — already cancelled |
+| `CANCELLATION_NOT_ALLOWED` | 422 | Cancel — the vendor's policy window has passed |
 | `BOOKING_UNAUTHORIZED` | 403 | Slot/booking owned by another user |
-| `BOOKING_NOT_FOUND` | 404 | Pay / payment-status — booking missing |
+| `BOOKING_NOT_FOUND` | 404 | Booking missing, or not yours |
 | `CATALOG_BOOKING_PRODUCT_NOT_FOUND` | 404 | Product missing |
 | `CATALOG_BOOKING_INVALID_PRODUCT_TYPE` | 422 | Product is not a service |
 | `CATALOG_BOOKING_PRODUCT_NOT_ACTIVE` | 422 | Product not `active` |

@@ -5,6 +5,7 @@ import {
   GetMagazinProfileResponseDto,
   UpdateMagazinProfileInputDto,
   toPersistableHeadquarters,
+  findUnknownHeadquartersIds,
 } from '../dto/magazin-profile.dto';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -18,6 +19,10 @@ import { getStorageProvider, IStorageProvider } from '../../../core/storage';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
 import { normalizeCoverageAreasForCountry } from '../../../core/constants/locations.helper';
 import { assertHeadquartersInCountry } from '../../../core/validation/address-country.helper';
+import {
+  findRemovedDepotIds,
+  assertRemovedDepotsAreEmpty,
+} from '../../inventory/domain/services/depot-removal.guard';
 
 /**
  * Magazin Profile Service
@@ -101,8 +106,39 @@ export class MagazinProfileService {
         updatePayload.coverage_areas = normalizeCoverageAreasForCountry(input.coverage_areas, country);
       }
       if (input.headquarters_addresses !== undefined) {
+        // An id the caller's own magazin doesn't have means their view of the list
+        // is stale (or fabricated) — the same situation the version CAS below
+        // reports, and with the same remedy: refetch. Checked before the write so
+        // a bad reference never lands.
+        const unknownIds = findUnknownHeadquartersIds(
+          input.headquarters_addresses,
+          currentMagazin.headquarters_addresses,
+        );
+        if (unknownIds.length > 0) {
+          throw createAppError(
+            ERROR_CODES.MAGAZIN_CONFLICT,
+            409,
+            'One or more headquarters addresses reference an id that no longer exists. Please refresh and try again.',
+            { unknownIds },
+          );
+        }
+
         assertHeadquartersInCountry(input.headquarters_addresses, currentMagazin.headquarters_addresses, country);
-        updatePayload.headquarters_addresses = toPersistableHeadquarters(input.headquarters_addresses);
+        const persistable = toPersistableHeadquarters(
+          input.headquarters_addresses,
+          currentMagazin.headquarters_addresses,
+        );
+
+        // A depot still holding stored products cannot just vanish from the
+        // array. Diffed against `persistable` rather than the request, because an
+        // entry that omitted its `id` may still have kept one by content match.
+        await assertRemovedDepotsAreEmpty(
+          agencyId,
+          findRemovedDepotIds(currentMagazin.headquarters_addresses, persistable),
+          currentMagazin.headquarters_addresses,
+        );
+
+        updatePayload.headquarters_addresses = persistable;
       }
     }
 

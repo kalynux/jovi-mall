@@ -1,6 +1,11 @@
 import mongoose from 'mongoose';
 import { IDeliveryAgency, IAgencyKycDetails, IAgencyPolicies } from '../delivery-agency.model';
-import { IPayoutMethod } from '../../../core/types/payout.types';
+import {
+    CardBrand,
+    formatMaskedCardNumber,
+    IPayoutMethod,
+    PayoutMethodKind,
+} from '../../../core/types/payout.types';
 import { UpdateAgencyProfileInput } from '../validators/agency-onboarding.validator';
 import { AgencyOnboardingStep, AgencyOnboardingStepValue } from '../../../core/constants/onboarding-steps';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
@@ -11,7 +16,7 @@ import { resolveFileDetail } from '../../catalog/read-models/file-detail.resolve
 // ─── Response DTOs ────────────────────────────────────────────────────────────
 
 export interface AgencyPayoutMethodSanitized {
-    method: 'mobile_money' | 'bank';
+    method: PayoutMethodKind;
     /** True for the first item in the array (index 0) — the preferred method. */
     is_preferred: boolean;
     mobile_money: {
@@ -23,6 +28,21 @@ export interface AgencyPayoutMethodSanitized {
         bank_name: string;
         account_number_masked: string;
         account_name: string;
+        country: string;
+    } | null;
+    /**
+     * Nothing is redacted here — only `last4` was ever stored (no PAN, no CVV).
+     * `number_masked` is rendered from it so a client can print all three method
+     * kinds through one code path.
+     */
+    card: {
+        brand: CardBrand;
+        last4: string;
+        number_masked: string;
+        card_holder_name: string;
+        expiry_month: number;
+        expiry_year: number;
+        issuing_bank: string | null;
         country: string;
     } | null;
 }
@@ -140,6 +160,18 @@ function sanitizePayoutMethod(payout: IPayoutMethod, isPreferred: boolean): Agen
                 account_number_masked: maskAccount(payout.bank.account_number),
                 account_name: payout.bank.account_name,
                 country: payout.bank.country,
+            }
+            : null,
+        card: payout.card
+            ? {
+                brand: payout.card.brand,
+                last4: payout.card.last4,
+                number_masked: formatMaskedCardNumber(payout.card.last4),
+                card_holder_name: payout.card.card_holder_name,
+                expiry_month: payout.card.expiry_month,
+                expiry_year: payout.card.expiry_year,
+                issuing_bank: payout.card.issuing_bank ?? null,
+                country: payout.card.country,
             }
             : null,
     };

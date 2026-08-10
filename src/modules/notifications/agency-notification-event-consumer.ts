@@ -73,6 +73,12 @@ export function initializeAgencyNotificationEventConsumers(): void {
     eventBus.subscribe('agency.shipment_cap.exceeded', handler.handleShipmentCapExceeded.bind(handler));
     // Media storage threshold alerts (80/90/100%), from the file-cleanup sweep.
     eventBus.subscribe('agency.storage.alert', handler.handleStorageAlert.bind(handler));
+    // Stock adjustment on a warehoused SKU. Shared with the vendor consumer and
+    // discriminated on `recipientRole` — the same pattern `connection.*` uses.
+    // Nothing to do with `agency.storage.alert` above, which is the media quota.
+    eventBus.subscribe('storage.stock_request.received', handler.handleStockRequestReceived.bind(handler));
+    eventBus.subscribe('storage.stock_request.approved', handler.handleStockRequestApproved.bind(handler));
+    eventBus.subscribe('storage.stock_request.rejected', handler.handleStockRequestRejected.bind(handler));
 
     console.log(
         `[AgencyNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`

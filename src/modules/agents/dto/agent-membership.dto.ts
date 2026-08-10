@@ -34,7 +34,17 @@ export interface MembershipRemittanceTermsDto {
     graceHours: number;
 }
 
-/** This contract's operating zone — a subset of the agent's own service area. */
+/**
+ * This contract's operating zone.
+ *
+ * `regions` are canonical region KEYS of the agency's country (`littoral`,
+ * `far_north`), the same vocabulary as the agency's own `coverage_areas` on its
+ * location tab — every write path canonicalises them, so a client renders a
+ * picker over that country's catalogue rather than a free-text field. Legacy
+ * rows may still hold free text; render what you get, and send keys back.
+ *
+ * An empty list means NO restriction (covers everywhere), not "covers nowhere".
+ */
 export interface MembershipCoverageDto {
     regions: string[];
     /** GeoJSON, as stored — the same shape `PATCH …/terms` accepts. */
@@ -145,9 +155,39 @@ export interface AgentMembershipDto {
     updatedAt: Date;
 }
 
-/** Membership plus the agency's display name, for the agent's portfolio view. */
+/**
+ * Membership plus the counterparty agency's business surface, for the agent's
+ * portfolio view.
+ *
+ * The three agency fields are what an agent's TERMS EDITOR needs and cannot get
+ * anywhere else: an agency's magazin is not readable by an agent, so without
+ * them a coverage picker on this screen would have no options to offer and no
+ * way to say which of them the agency actually serves.
+ */
 export interface AgentMembershipWithAgencyDto extends AgentMembershipDto {
     agencyName: string | null;
+    /**
+     * ISO-2 country of the agency — the catalogue `coverage.regions` is
+     * validated against. Null on legacy agencies with no country on file, where
+     * the server skips the check entirely.
+     */
+    agencyCountry: string | null;
+    /**
+     * The regions the agency itself declares it serves (its location tab).
+     *
+     * A HINT, not a bound: mark these in the picker so both parties can see
+     * where the agency operates, but a contract may name any region of
+     * `agencyCountry` — an agency expanding into a region contracts agents for
+     * it before it declares it.
+     */
+    agencyCoverageAreas: string[];
+}
+
+/** The counterparty fields `toDtoWithAgency` resolves. */
+export interface ContractAgencyContext {
+    name: string | null;
+    country: string | null;
+    coverageAreas: string[];
 }
 
 export interface MembershipEventDto {
@@ -255,9 +295,14 @@ export class AgentMembershipMapper {
 
     static toDtoWithAgency(
         membership: IAgentAgencyMembership,
-        agencyName: string | null
+        agency: ContractAgencyContext
     ): AgentMembershipWithAgencyDto {
-        return { ...AgentMembershipMapper.toDto(membership), agencyName };
+        return {
+            ...AgentMembershipMapper.toDto(membership),
+            agencyName: agency.name,
+            agencyCountry: agency.country,
+            agencyCoverageAreas: agency.coverageAreas,
+        };
     }
 
     static toEventDto(event: IAgentMembershipEvent): MembershipEventDto {

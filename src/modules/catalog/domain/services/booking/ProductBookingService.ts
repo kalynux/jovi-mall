@@ -8,6 +8,7 @@ import { SlotGeneratorService } from '../../../../booking/services/slot-generato
 import { BookingService } from '../../../../booking/services/booking.service';
 import { IBooking } from '../../../../booking/models/booking.model';
 import { Slot } from '../../../../booking/types/booking.types';
+import { BookedWindow, fullWindows, spotsRemainingFor } from '../../../../booking/utils/availability-windows.util';
 import { BookingPriceResolver, ResolvedPrice } from './BookingPriceResolver';
 import { SlotLockFacade } from './SlotLockFacade';
 import { createAppError } from '../../../../../core/errors';
@@ -78,17 +79,24 @@ export class ProductBookingService {
     const serviceVariant = await this.getServiceVariant(productId);
     const serviceConfig = serviceVariant.serviceConfig!;
     const isCapacity = serviceConfig.bookingMode === 'capacity';
-    const maxBookings = serviceConfig.maxBookings ?? 1;
+    const seats = isCapacity ? (serviceConfig.maxBookings ?? 1) : 1;
 
-    // For capacity products, the slot's own shared calendar event must NOT subtract it
-    // from availability (it should stay bookable until full). Gather the windows the
-    // product already has active bookings in, and exclude them from busy-time subtraction.
-    const bookingCounts = isCapacity
-      ? await this.bookingService.getActiveBookingCountsForWindows(productId, fromDate, toDate)
-      : new Map<string, number>();
-    const excludeWindows = isCapacity
-      ? this.bookingService.windowsFromCountMap(bookingCounts)
-      : [];
+    // The product's OWN bookings decide its occupancy — for every mode, not just
+    // capacity. Reading occupancy from Google Calendar alone meant a `manual`
+    // booking (which writes no calendar event until the vendor approves it) never
+    // blocked its own slot, so the same hour could be sold without limit.
+    const bookedWindows = await this.bookingService.findActiveBookingWindows(
+      productId,
+      fromDate,
+      toDate
+    );
+
+    // Two different jobs, hence two lists:
+    // - ownBookedWindows: drop this product's own calendar events from busy time so
+    //   a partially-filled capacity slot is not subtracted out of existence.
+    // - fullBookedWindows: the windows that are genuinely full, subtracted as busy.
+    const ownBookedWindows = bookedWindows.map((w) => ({ start: w.start, end: w.end }));
+    const fullBookedWindows = fullWindows(bookedWindows, seats);
 
     // Step 2: Get availability windows
     const availableWindows = await this.availabilityService.getAvailability(
@@ -96,9 +104,12 @@ export class ProductBookingService {
       product.vendorId,
       fromDate,
       toDate,
-      excludeWindows,
-      serviceConfig.bufferBeforeMinutes,
-      serviceConfig.bufferAfterMinutes
+      {
+        ownBookedWindows,
+        fullBookedWindows,
+        bufferBeforeMinutes: serviceConfig.bufferBeforeMinutes,
+        bufferAfterMinutes: serviceConfig.bufferAfterMinutes,
+      }
     );
 
     // Step 3: Generate bookable slots
@@ -111,14 +122,13 @@ export class ProductBookingService {
       return slots;
     }
 
-    // Step 4 (capacity): annotate each slot with seats and gate availability on the count.
+    // Step 4 (capacity): annotate each slot with its seat count. Full windows were
+    // already subtracted above, so anything still here has at least one seat.
     return slots.map((slot) => {
-      const key = `${slot.start.getTime()}-${slot.end.getTime()}`;
-      const booked = bookingCounts.get(key) ?? 0;
-      const spotsRemaining = Math.max(0, maxBookings - booked);
+      const spotsRemaining = spotsRemainingFor(slot, bookedWindows, seats);
       return {
         ...slot,
-        maxBookings,
+        maxBookings: seats,
         spotsRemaining,
         available: spotsRemaining > 0,
       };
@@ -242,20 +252,21 @@ export class ProductBookingService {
   }
 
   /**
-   * Gets bookings for a specific product.
-   * 
+   * The windows this product is booked in, and how many bookings occupy each.
+   *
+   * Was a `501 NOT_IMPLEMENTED` stub. It is now the same query availability uses
+   * to decide occupancy, so there is exactly one definition of "is this product
+   * booked at time T".
+   *
    * @param productId - The product ID
-   * @param fromDate - Optional start date filter
-   * @param toDate - Optional end date filter
-   * @returns Array of bookings
+   * @param fromDate - Start of the range (defaults to now)
+   * @param toDate - End of the range (defaults to 30 days out)
    */
   async getProductBookings(
     productId: string,
-    fromDate?: Date,
-    toDate?: Date
-  ): Promise<IBooking[]> {
-    // This would require adding a method to BookingService
-    // For now, we'll throw a not implemented error
-    throw createAppError(ERROR_CODES.CATALOG_BOOKING_NOT_IMPLEMENTED, 501, 'getProductBookings is not yet implemented');
+    fromDate: Date = new Date(),
+    toDate: Date = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+  ): Promise<BookedWindow[]> {
+    return this.bookingService.findActiveBookingWindows(productId, fromDate, toDate);
   }
 }

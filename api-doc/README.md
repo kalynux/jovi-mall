@@ -125,6 +125,9 @@ Every route tree is guarded by role. `✅` = full access to that area's endpoint
 | Auth (register/login/refresh/logout) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Current user / role switch | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Catalog browse / product booking availability | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Published price list (`/public/plans`, `/public/credit-packs`) | ✅⁵ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Published blog (`/public/articles`) | ✅⁵ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Blog editor (`/admin/articles`, `/admin/article-authors`) | — | — | — | — | — | ✅ |
 | Cart & checkout | — | ✅ | — | — | — | — |
 | Customer orders / confirm delivery | — | ✅ (self) | — | — | — | — |
 | Gateway payments (`/payments`) | initiate/verify only³ | ✅ (self) | —⁴ | — | — | ✅ (all) |
@@ -161,6 +164,11 @@ change, 2026-07-29 — it used to be open). See [payments/README.md](./payments/
 ⁴ Vendors read a *booking's* payment state via `GET /api/bookings/:id/payment-status` for bookings
 they own. Vendor/agency/agent **plan and credit purchases are a different surface** and create no
 `PaymentTransaction` — see [billing-plans-across-roles.md](./billing-plans-across-roles.md).
+⁵ The **only** unauthenticated route tree besides auth, catalog browse and the payment
+initiate/verify pair. It reads the plan catalog, the credit packs and the published blog — the same
+prices and prose the marketing site publishes — and nothing else. Read-only, no identity, no
+owner-scoped data; see [public/README.md](./public/README.md) and
+[public/articles.md](./public/articles.md).
 
 ---
 
@@ -197,10 +205,13 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 ### Cross-cutting
 - [Auth & sessions](./auth/README.md) · [Onboarding](./auth/onboarding.md)
 - [Change password (`/me/password`, all roles)](./me/password.md)
+- [**Public API (no auth)**](./public/README.md) — the published price list: plan catalog + credit packs, for the marketing site
+- [**Public blog (no auth)**](./public/articles.md) — articles, typed blocks, hreflang & slug redirects. Editor: [admin/articles.md](./admin/articles.md)
 - [**Billing, plans & credit — cross-dashboard guide**](./billing-plans-across-roles.md) (vendor · agency · agent · admin)
 - [Error catalog](./errors/README.md)
 - [Geospatial addresses & address search](./geo/README.md)
 - [Gateway payments (role-neutral)](./payments/README.md) — initiate · verify · read a transaction
+- **Payout methods** — where you get paid *to* (mobile money · bank · **card**), one schema documented per role: [vendor](./vendor/payout-methods.md) · [agency](./agency/payout-methods.md) · [agent](./agent/payout-methods.md). Distinct from *payment* methods, which are what you pay *with*
 - [Uploads (role-neutral)](./uploads/README.md)
 - [System uptime / status](./system-uptime-status.md)
 - [WhatsApp](./whatsapp/README.md) · [WhatsApp notification templates](./notifications/whatsapp-templates.md)
@@ -215,7 +226,7 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Products](./vendor/products.md) · [Product update](./vendor/product-update.md) · [Upload flow](./vendor/product-upload-flow.md) · [Variants](./vendor/variants.md) · [Options & variants](./vendor/option-variant-management.md) · [Digital products](./vendor/digital-products.md)
 - [Inventory](./vendor/inventory.md) · [Orders](./vendor/orders.md) · [Shipping](./vendor/shipping.md) · [Delivery agencies](./vendor/delivery-agencies.md) · [Agency connections](./vendor/agency-connections.md)
 - [Bookings](./vendor/bookings.md) · [Booking guide](./booking-implementation-guide.md) · [Calendar](./vendor/calendar.md) · [Availability rules](./vendor/availability-rules.md)
-- [Billing](./vendor/billing.md) · [Billing overview](./vendor/billing-overview.md) · [Earnings](./vendor/earnings.md) · [Transactions](./vendor/transactions.md) · [Stripe payments](./vendor/stripe-payments.md) · [Payment methods](./vendor/payment-methods.md)
+- [Billing](./vendor/billing.md) · [Billing overview](./vendor/billing-overview.md) · [Earnings](./vendor/earnings.md) · [Transactions](./vendor/transactions.md) · [Stripe payments](./vendor/stripe-payments.md) · [Payment methods](./vendor/payment-methods.md) (pay *with*) · [**Payout methods**](./vendor/payout-methods.md) (get paid *to* — mobile money only right now; 🚧 bank + card switched off)
 - [Analytics](./vendor/analytics.md) · [Customer management](./vendor/customer-management.md) · [Storage](./vendor/storage.md) · [File management](./vendor/file-management.md)
 - [Notifications](./vendor/notifications.md) · [Notification channels](./vendor/notification-channels.md) · [Tickets](./vendor/tickets.md)
 
@@ -223,7 +234,7 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Profile](./agency/profile.md) · [Profile schema](./agency/profile-schema.md) · [Onboarding](./agency/onboarding.md)
 - [Agent roster & contracts](./agency/agent-roster.md) — **canonical for the agent↔agency contract**, including [terms negotiation](./agency/agent-roster.md#terms-negotiation) · [Shipments](./agency/shipments.md)
 - [Live tracking](./agency/live-tracking.md) — the map: watchable agents, their active shipments, and each shipment's pickup → drop-off pins (movement itself comes from geo-tracker's socket)
-- [Billing (plans & credit)](./agency/billing.md) · [COD cash management](./agency/cod-cash-management.md) · [Earnings](./agency/earnings.md) · [Payment methods](./agency/payment-methods.md)
+- [Billing (plans & credit)](./agency/billing.md) · [COD cash management](./agency/cod-cash-management.md) · [Earnings](./agency/earnings.md) · [Payment methods](./agency/payment-methods.md) (pay *with*) · [**Payout methods**](./agency/payout-methods.md) (get paid *to* — mobile money only right now; 🚧 bank + card switched off)
 - [Vendor connections](./agency/vendor-connections.md) · [Vendors](./agency/vendors.md) · [Products](./agency/products.md)
 - [File management](./agency/file-management.md) · [Storage](./agency/storage.md)
 - [Notifications](./agency/notifications.md) · [Tickets](./agency/tickets.md)
@@ -231,7 +242,7 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 ### Agent
 - **▶ [Shipment discovery — frontend integration guide](./agent-shipment-discovery-integration.md)** — search, earnings, addresses and the pickup→drop-off route. **Start here if you are integrating the agent app**; it carries the two breaking changes and the migration checklist.
 - [Profile, preferences & dispatch settings](./agent/profile.md) · [Onboarding](./agent/onboarding.md) · [Availability & device](./agent/availability-and-device.md) · [Agency membership](./agent/agency-membership.md) — applying, and [negotiating your terms](./agent/agency-membership.md#terms-negotiation)
-- [Shipments](./agent/shipments.md) · [Offers](./agent/offers.md) · [Delivery proof](./agent/delivery-proof.md) · [COD cash](./agent/cod-cash.md) · [Billing (plans & credit)](./agent/billing.md) · [Payment methods](./agent/payment-methods.md)
+- [Shipments](./agent/shipments.md) · [Offers](./agent/offers.md) · [Delivery proof](./agent/delivery-proof.md) · [COD cash](./agent/cod-cash.md) · [Earnings](./agent/earnings.md) · [Billing (plans & credit)](./agent/billing.md) · [Payment methods](./agent/payment-methods.md) (pay *with*) · [**Payout methods**](./agent/payout-methods.md) (get paid *to* — mobile money only right now; 🚧 bank + card switched off)
 - [File management](./agent/file-management.md) · [Storage](./agent/storage.md)
 - [Notifications](./agent/notifications.md) · [Push notifications (Flutter)](./agent/push-notifications.md) · [Tickets](./agent/tickets.md)
 
@@ -240,6 +251,7 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Delivery agencies](./admin/delivery-agencies.md) · [COD oversight](./admin/cod.md) · [Platform earnings](./admin/earnings.md) · [Payout requests](./admin/payout-requests.md)
 - [Billing](./admin/billing.md) · [Billing overview](./admin/billing-overview.md) · [Catalogue vectorisation](./admin/catalogue-vectorisation.md)
 - [Payment methods](./admin/payment-methods.md) · [Tickets](./admin/tickets.md)
+- [**Blog editor**](./admin/articles.md) — articles + bylines; the write side of [public/articles.md](./public/articles.md)
 
 ### Tracking (authorization; streaming is in geo-tracker)
 - [Live tracking](./tracking/live-tracking.md) · [Agent tracking policy](./tracking/agent-tracking-policy.md)

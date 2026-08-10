@@ -999,6 +999,7 @@ export class VendorOrderService {
             await this.shipmentRepo.addItem(destShipment._id!.toString(), {
                 order_item_id: item._id,
                 product_id: item.product_id,
+                variant_id: item.variant_id,
                 quantity: item.quantity
             });
         } else {
@@ -1009,6 +1010,7 @@ export class VendorOrderService {
                 items: [{
                     order_item_id: item._id,
                     product_id: item.product_id,
+                    variant_id: item.variant_id,
                     quantity: item.quantity
                 }]
             });

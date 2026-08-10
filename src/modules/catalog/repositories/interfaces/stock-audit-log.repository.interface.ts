@@ -1,4 +1,8 @@
 import { StockAuditLog } from '../mappers/stock-audit-log.mapper';
+// Imported rather than re-spelled: the two unions used to be duplicated here as
+// literals, which is exactly how `actorType: 'agency'` would have been added to
+// the model and silently rejected at this boundary.
+import { StockOperation, ActorType } from '../../models/stock-audit-log.model';
 
 export interface CreateStockAuditLogDto {
     variantId: string;
@@ -7,14 +11,15 @@ export interface CreateStockAuditLogDto {
     previousQuantity: number;
     newQuantity: number;
     delta: number;
-    operation: 'manual' | 'bulk' | 'reservation' | 'release' | 'order' | 'adjustment';
-    actorType: 'vendor' | 'system' | 'admin';
+    operation: StockOperation;
+    actorType: ActorType;
     actorId?: string;
     metadata?: {
         orderId?: string;
         reservationId?: string;
         batchId?: string;
         reason?: string;
+        requestId?: string;
     };
     timestamp?: Date;
     deletedAt: null;

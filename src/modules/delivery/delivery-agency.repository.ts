@@ -329,6 +329,9 @@ export class DeliveryAgencyRepository {
               'kyc_details.legit_verified': 1,
               policies: 1,
               status: 1,
+              // Scopes `magazin.coverage_areas` — and the coverage-region picker
+              // an agent gets when requesting a contract off this row.
+              country: 1,
               'magazin.name': 1,
               'magazin.logo_file_id': 1,
               'magazin.coverage_areas': 1,

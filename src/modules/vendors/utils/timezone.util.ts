@@ -35,13 +35,21 @@ export function getDateBoundaries(date: Date, timezone: string): { start: Date; 
 }
 
 /**
- * Validate timezone string (IANA timezone)
- * 
- * Returns true if timezone is valid, false otherwise
+ * Validate an IANA timezone name (e.g. 'Africa/Douala').
+ *
+ * Uses `Intl.DateTimeFormat`, which throws a RangeError on an unknown zone — the
+ * only reliable check available without shipping a zone database.
+ *
+ * NOTE: this previously probed `fromZonedTime`, which does **not** throw on a bad
+ * zone; it returns an Invalid Date. The try/catch therefore never fired and the
+ * function returned `true` for literally any string, including ''. Callers
+ * (the analytics validators, and now the availability-rule validator) were
+ * validating nothing.
  */
 export function validateTimezone(timezone: string): boolean {
+    if (!timezone) return false;
     try {
-        fromZonedTime(new Date(), timezone);
+        new Intl.DateTimeFormat('en-US', { timeZone: timezone });
         return true;
     } catch {
         return false;

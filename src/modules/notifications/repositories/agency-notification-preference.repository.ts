@@ -16,6 +16,7 @@ export interface UpdateAgencyPreferencesPayload {
         codDepositUpdates?: boolean;
         planUpdates?: boolean;
         storageAlert?: boolean;
+        stockRequestUpdates?: boolean;
     };
 }
 
@@ -51,7 +52,8 @@ export class AgencyNotificationPreferenceRepository {
                     payoutUpdates: true,
                     codDepositUpdates: true,
                     planUpdates: true,
-                    storageAlert: true
+                    storageAlert: true,
+                    stockRequestUpdates: true
                 }
             });
         }
@@ -122,6 +124,10 @@ export class AgencyNotificationPreferenceRepository {
                 updates.preferences.planUpdates ?? current.preferences.planUpdates;
             updatePayload['preferences.storageAlert'] =
                 updates.preferences.storageAlert ?? current.preferences.storageAlert;
+            // `?? true` rather than `?? current…`: rows written before this flag existed
+            // have no value for it, and coalescing to `undefined` would blank the key.
+            updatePayload['preferences.stockRequestUpdates'] =
+                updates.preferences.stockRequestUpdates ?? current.preferences.stockRequestUpdates ?? true;
         }
 
         const result = await AgencyNotificationPreferenceModel.findOneAndUpdate(

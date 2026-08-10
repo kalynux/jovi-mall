@@ -43,6 +43,18 @@ export interface IVendorNotificationPreference extends Document {
         shipmentRejected: boolean;
         /** Subscription plan lifecycle (plan.expiring / plan.expired). */
         planUpdates: boolean;
+        /**
+         * Everything about a product an agency warehouses for this vendor: the
+         * two-sided stock-adjustment requests (`storage.stock_request.*`) and the
+         * agency's own unilateral actions (`storage.depot_changed`,
+         * `storage.product_suspended`, `storage.product_unsuspended`).
+         *
+         * One flag rather than two, unlike the agency side, because from here they are
+         * one relationship — "what is happening to my goods in someone else's
+         * warehouse". Distinct from `storageAlert`, which is the media-file quota and
+         * shares only the word.
+         */
+        agencyStorageUpdates: boolean;
     };
 
     updatedAt: Date;
@@ -128,6 +140,10 @@ const VendorNotificationPreferenceSchema = new Schema<IVendorNotificationPrefere
                 default: true
             },
             planUpdates: {
+                type: Boolean,
+                default: true
+            },
+            agencyStorageUpdates: {
                 type: Boolean,
                 default: true
             }

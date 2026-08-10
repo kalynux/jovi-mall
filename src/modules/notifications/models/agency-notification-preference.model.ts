@@ -64,6 +64,16 @@ export interface IAgencyNotificationPreference extends Document {
         planUpdates: boolean;
         /** Media storage threshold alerts (storage.alert, 80/90/100%). */
         storageAlert: boolean;
+        /**
+         * Stock-adjustment requests on SKUs this agency warehouses
+         * (`storage.stock_request.*`).
+         *
+         * A separate flag from `storageAlert`, which is the media-file quota — the two
+         * share a word and nothing else. Note switching this off silences the *push*,
+         * not the obligation: a vendor's request still sits in the inbox waiting for an
+         * answer, exactly as `codDepositUpdates` does not stop the deposit clock.
+         */
+        stockRequestUpdates: boolean;
     };
 
     updatedAt: Date;
@@ -133,6 +143,10 @@ const AgencyNotificationPreferenceSchema = new Schema<IAgencyNotificationPrefere
                 default: true
             },
             storageAlert: {
+                type: Boolean,
+                default: true
+            },
+            stockRequestUpdates: {
                 type: Boolean,
                 default: true
             }

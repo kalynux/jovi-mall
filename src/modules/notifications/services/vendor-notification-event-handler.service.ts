@@ -534,6 +534,150 @@ export class VendorNotificationEventHandler {
         }
     }
 
+    // ─── Agency-warehoused stock ─────────────────────────────────────────────
+
+    /**
+     * The three stock-request situations, from the vendor's side.
+     *
+     * One handler for all three because only the situation string differs — the
+     * discriminator, the pref gate, the aggregate and the context are identical. The
+     * three `handle*` wrappers below exist so the consumer can subscribe per event
+     * name, which is what the event bus keys on.
+     *
+     * `idempotencyKey` needs no timestamp suffix: a request is resolved exactly once
+     * (the repository's compare-and-set on `status: 'pending'` guarantees it), so
+     * situation + requestId is already unique.
+     */
+    private async handleStockRequestSituation(
+        situation: 'storage.stock_request.received' | 'storage.stock_request.approved' | 'storage.stock_request.rejected',
+        event: DomainEvent,
+    ): Promise<void> {
+        try {
+            const {
+                requestId, recipientRole, vendorId, agencyName,
+                productTitle, sku, quantityBefore, requestedQuantity,
+            } = event.payload;
+            if (recipientRole !== 'vendor') return;
+
+            const prefs = await this.preferenceRepo.getByVendor(vendorId);
+            if (prefs.preferences.agencyStorageUpdates === false) return;
+
+            await this.dispatch({
+                situation,
+                prefs,
+                vendorId,
+                aggregateType: 'stock_request',
+                aggregateId: requestId,
+                idempotencyKey: `${situation}:${requestId}`,
+                context: { requestId, agencyName, productTitle, sku, quantityBefore, requestedQuantity }
+            });
+        } catch (error) {
+            console.error(`[NotificationHandler] Failed to handle ${situation}:`, error);
+        }
+    }
+
+    async handleStockRequestReceived(event: DomainEvent): Promise<void> {
+        await this.handleStockRequestSituation('storage.stock_request.received', event);
+    }
+
+    async handleStockRequestApproved(event: DomainEvent): Promise<void> {
+        await this.handleStockRequestSituation('storage.stock_request.approved', event);
+    }
+
+    async handleStockRequestRejected(event: DomainEvent): Promise<void> {
+        await this.handleStockRequestSituation('storage.stock_request.rejected', event);
+    }
+
+    /**
+     * The agency moved a warehoused product to a different depot.
+     *
+     * `locationSuffix` is pre-composed rather than passed as a bare label, because
+     * the copy has to read naturally whether or not the depot has a name: an unnamed
+     * depot would otherwise render "…to a different warehouse ." The suffix carries
+     * its own leading separator.
+     */
+    async handleStorageDepotChanged(event: DomainEvent): Promise<void> {
+        try {
+            const { productId, recipientRole, vendorId, agencyName, locationLabel } = event.payload;
+            if (recipientRole !== 'vendor') return;
+
+            const prefs = await this.preferenceRepo.getByVendor(vendorId);
+            if (prefs.preferences.agencyStorageUpdates === false) return;
+
+            await this.dispatch({
+                situation: 'storage.depot_changed',
+                prefs,
+                vendorId,
+                aggregateType: 'product',
+                aggregateId: productId,
+                // Timestamped: a depot can be changed repeatedly for one product, and
+                // each move is its own piece of news.
+                idempotencyKey: `storage.depot_changed:${productId}:${event.occurredAt.toISOString()}`,
+                context: {
+                    productId,
+                    agencyName,
+                    locationSuffix: locationLabel ? ` (${locationLabel})` : '',
+                }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle storage.depot_changed:', error);
+        }
+    }
+
+    /**
+     * The agency suspended a warehoused product — usually over unpaid storage rent,
+     * which the platform does not track and cannot state, so the agency's own note is
+     * the only explanation there is. Pre-composed for the same reason as
+     * `locationSuffix` above: a missing note must not leave dangling punctuation.
+     */
+    async handleStorageProductSuspended(event: DomainEvent): Promise<void> {
+        try {
+            const { productId, recipientRole, vendorId, agencyName, note } = event.payload;
+            if (recipientRole !== 'vendor') return;
+
+            const prefs = await this.preferenceRepo.getByVendor(vendorId);
+            if (prefs.preferences.agencyStorageUpdates === false) return;
+
+            await this.dispatch({
+                situation: 'storage.product_suspended',
+                prefs,
+                vendorId,
+                aggregateType: 'product',
+                aggregateId: productId,
+                idempotencyKey: `storage.product_suspended:${productId}:${event.occurredAt.toISOString()}`,
+                context: {
+                    productId,
+                    agencyName,
+                    noteSuffix: note ? ` Their note: “${note}”.` : '',
+                }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle storage.product_suspended:', error);
+        }
+    }
+
+    async handleStorageProductUnsuspended(event: DomainEvent): Promise<void> {
+        try {
+            const { productId, recipientRole, vendorId, agencyName } = event.payload;
+            if (recipientRole !== 'vendor') return;
+
+            const prefs = await this.preferenceRepo.getByVendor(vendorId);
+            if (prefs.preferences.agencyStorageUpdates === false) return;
+
+            await this.dispatch({
+                situation: 'storage.product_unsuspended',
+                prefs,
+                vendorId,
+                aggregateType: 'product',
+                aggregateId: productId,
+                idempotencyKey: `storage.product_unsuspended:${productId}:${event.occurredAt.toISOString()}`,
+                context: { productId, agencyName }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle storage.product_unsuspended:', error);
+        }
+    }
+
     // ─── Dispatch + delivery ─────────────────────────────────────────────────
 
     /**

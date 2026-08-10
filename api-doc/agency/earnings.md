@@ -153,8 +153,9 @@ ticket.
   (`EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT`); below it you'll get `409 EARNINGS_PAYOUT_BELOW_MINIMUM`.
 - **One request at a time** — you can't open a second request while one is still `pending`
   (`409 EARNINGS_PAYOUT_ALREADY_PENDING`).
-- **A payout method must be configured first** — set one via
-  `PUT /api/agency/onboarding/payout` (`payout_details`, see [profile-schema.md](./profile-schema.md))
+- **A payout method must be configured first** — mobile money, bank or card; set one via
+  `PUT /api/agency/onboarding/payout` or `PATCH /api/agency/profile` (`payout_details`, see
+  [Payout methods](./payout-methods.md) for the full field reference)
   or you'll get `409 EARNINGS_PAYOUT_METHOD_MISSING`. The **first** payout method on file is the one
   used, and a snapshot of it is frozen onto the request at creation time — editing your payout
   details later never changes where an already-pending request is headed.

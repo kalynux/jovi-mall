@@ -61,6 +61,12 @@ immediate answer.
 > Both fail **open** on missing data: a contract with no declared `coverage.regions` covers
 > everywhere (that is the default on every contract ever created), an order with no delivery region
 > is never gated, and a null `shipmentValueCeiling` caps nothing.
+>
+> `coverage.regions` are region **keys** of the agency's country — both parties pick them from the
+> `locations.json` catalogue when negotiating, see
+> [Coverage regions are picked, not typed](./agent-roster.md#coverage-regions-are-picked-not-typed).
+> Matching here still resolves loosely (case, accents, localized names, legacy free text), so this
+> gate behaves the same on contracts written before that.
 
 <a name="auto"></a>
 ## POST /api/agency/shipments/:id/auto-assign

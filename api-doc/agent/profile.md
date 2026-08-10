@@ -71,7 +71,19 @@ document. An agent can only ever act on their own record.
       "size": 84213,
       "originalName": "me.jpg"
     },
-    "vehicleInfo": { "vehicle_type": "bike", "plate_number": "CE-1234", "color": "Red" },
+    "vehicleInfo": {
+      "vehicle_type": "bike",
+      "plate_number": "CE-1234",
+      "color": "red",
+      "photo": {
+        "id": "665f1c2a9b1e4a0012a3b4ee",
+        "key": "agents/664agt.../vehicle.jpg",
+        "url": "http://localhost:8022/api/files/agents/664agt.../vehicle.jpg",
+        "mimeType": "image/jpeg",
+        "size": 284119,
+        "originalName": "van.jpg"
+      }
+    },
     "emergencyContact": { "name": "Ada", "phone": "+237670000002" },
     "availability": { "state": "online", "changed_at": "2026-07-29T08:00:00.000Z", "reason": null },
     "workingState": { "state": "working", "active_shipment_count": 3, "computed_at": "2026-07-29T09:12:00.000Z" },
@@ -141,7 +153,7 @@ document. An agent can only ever act on their own record.
 | `avatar_url` | string \| null | ❌ | *Deprecated* — accepted for backward compatibility. Prefer `avatar_file_id`. |
 | `timezone` | string | ❌ | non-empty (IANA timezone) |
 | `preferred_language` | string | ❌ | one of `en`, `fr`, `pt`, `es`, `ar` |
-| `vehicle_info` | object | ❌ | `{ vehicle_type: 'bike'\|'car'\|'van'\|'truck', color, plate_number? }` — `vehicle_type` and `color` required when the object is sent |
+| `vehicle_info` | object | ❌ | `{ vehicle_type: 'bike'\|'car'\|'van'\|'truck', color, plate_number?, photo_file_id? }` — `vehicle_type` and `color` required when the object is sent; the other two are *clearable* and **merged**, so omitting one leaves it unchanged |
 | `legal_identity` | object | ❌ | `{ drivers_license_number?, national_id_number? }` — write-only, never echoed |
 | `emergency_contact` | object \| null | ❌ | `{ name, phone }`, both required when the object is sent; `null` clears it. `phone` must be **E.164** (e.g. `+237670000002`) — see [Contact formats](../README.md#contact-formats-phone--email) |
 
@@ -153,6 +165,24 @@ document. An agent can only ever act on their own record.
 > `{ id, key, url, mimeType, size, originalName }` shape product images use — or `null` when unset; never
 > a bare URL string.
 
+> **`vehicle_info` is merged, not replaced.** `vehicle_type` and `color` are required whenever the
+> object is sent, but `plate_number` and `photo_file_id` follow the clearable rule: omit either key
+> and its stored value is kept. Fixing a plate number therefore does not drop the vehicle photo.
+
+> **The vehicle photo is a file reference**, exactly like the avatar. Upload via
+> `POST /api/files/upload`, send the returned `id` as `vehicle_info.photo_file_id`, and reads return
+> `vehicle_info.photo` as a resolved `{ id, key, url, mimeType, size, originalName }` object or
+> `null` — never a bare id or URL. The file must be an **image**; anything else is rejected with
+> `400 CATALOG_FILE_TYPE_INVALID` at attach time. Attaching reference-counts the file (it cannot be
+> deleted while in use) and releases the photo it replaced.
+
+> **`color` is a vocabulary, not an enum.** The palette is
+> `white silver grey black red orange yellow green blue purple brown beige gold` — lowercase,
+> English, **never localized on the wire**; render your own translated label and swatch. Any other
+> string is still accepted (the "another colour" escape hatch) and stored as typed. Values are
+> normalized on write: trimmed, lowercased, whitespace-collapsed, and `gray` → `grey`. So `"Red"`
+> comes back as `"red"`.
+
 > Updating `vehicle_info` may advance or complete onboarding — the step is recalculated on every
 > profile write. See [onboarding.md](./onboarding.md).
 
@@ -161,7 +191,12 @@ document. An agent can only ever act on their own record.
 ```json
 {
   "name": "Bob Driver",
-  "vehicle_info": { "vehicle_type": "bike", "color": "Red", "plate_number": "CE-1234" },
+  "vehicle_info": {
+    "vehicle_type": "bike",
+    "color": "red",
+    "plate_number": "CE-1234",
+    "photo_file_id": "665f1c2a9b1e4a0012a3b4ee"
+  },
   "emergency_contact": { "name": "Ada", "phone": "+237670000002" },
   "preferred_language": "fr"
 }
@@ -323,6 +358,11 @@ state, not as controls:
 Availability, device capabilities and payout methods **are** agent-settable, but live on their own
 endpoints — see [availability-and-device.md](./availability-and-device.md) and
 [earnings.md](./earnings.md).
+
+**Payout details are never returned here.** They sit alongside `legal_identity` as a sensitive field
+with its own door: `GET`/`PUT /api/agent/payout-methods`, documented in
+[payout-methods.md](./payout-methods.md) (mobile money · bank · card — and a card destination never
+carries a card number or CVV).
 
 ## Possible error codes
 

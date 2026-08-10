@@ -25,14 +25,48 @@ export type NotificationType =
     | 'shipment.rejected'
     // Subscription plan lifecycle (billing).
     | 'plan.expiring'
-    | 'plan.expired';
+    | 'plan.expired'
+    /**
+     * Stock adjustment on a SKU an agency warehouses for this vendor. On such a SKU
+     * `variant.stock` moves only with both signatures, so:
+     * `received` — the agency proposed a quantity, and it is the vendor's to answer;
+     * `approved` / `rejected` — the agency answered a proposal the vendor made.
+     *
+     * No `withdrawn`, matching `connection.*`.
+     */
+    | 'storage.stock_request.received'
+    | 'storage.stock_request.approved'
+    | 'storage.stock_request.rejected'
+    /**
+     * Things the storage agency did unilaterally to one of this vendor's products.
+     * These have no vendor-side decision to make — the agency's warehouse layout and
+     * its rent are its own — but the vendor must not discover them by noticing a
+     * product missing from the storefront.
+     */
+    | 'storage.depot_changed'
+    | 'storage.product_suspended'
+    | 'storage.product_unsuspended';
 
 /**
  * Aggregate Types
  *
  * The domain entity that triggered this notification.
+ *
+ * `storage` is MEDIA quota (`storage.alert`). Product warehousing gets its own two:
+ * `stock_request` (a StockAdjustmentRequest) and `product` (the agency's unilateral
+ * depot/suspension actions, which are keyed on the product). Reusing `storage` for
+ * all of it would send three unrelated deep-links to one screen.
  */
-export type AggregateType = 'order' | 'booking' | 'payment' | 'storage' | 'connection' | 'payout' | 'plan';
+export type AggregateType =
+    | 'order'
+    | 'booking'
+    | 'payment'
+    | 'storage'
+    | 'connection'
+    | 'payout'
+    | 'plan'
+    | 'stock_request'
+    | 'product';
 
 /**
  * Delivery Channels
@@ -107,7 +141,13 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
                 'payout.rejected',
                 'shipment.rejected',
                 'plan.expiring',
-                'plan.expired'
+                'plan.expired',
+                'storage.stock_request.received',
+                'storage.stock_request.approved',
+                'storage.stock_request.rejected',
+                'storage.depot_changed',
+                'storage.product_suspended',
+                'storage.product_unsuspended'
             ],
             required: true
         },
@@ -125,7 +165,7 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
         },
         aggregateType: {
             type: String,
-            enum: ['order', 'booking', 'payment', 'storage', 'connection', 'payout', 'plan'],
+            enum: ['order', 'booking', 'payment', 'storage', 'connection', 'payout', 'plan', 'stock_request', 'product'],
             required: true
         },
         aggregateId: {

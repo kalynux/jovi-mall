@@ -14,6 +14,8 @@ import { assertVariantImageLimit } from '../domain/services/media/image-limits';
 import { assertNotSimpleMode } from '../domain/services/simple/mode-guard';
 import { DEFAULT_VARIANT_SIGNATURE } from '../domain/services/variants/constants';
 import { Variant } from '../repositories/mappers/variant.mapper';
+// Concrete file, not the module barrel: stock-requests imports catalog repositories.
+import { stockChangeGate } from '../../stock-requests/services/stock-change-gate';
 import {
     ChangeVariantStatusSchema,
     CreateVariantSchema,
@@ -352,11 +354,33 @@ export class VendorVariantController {
             });
         }
 
+        // ── The stock gate ────────────────────────────────────────────────────
+        // On a SKU an agency warehouses, `stock` / `isInfiniteStock` are not the
+        // vendor's to set alone: the change becomes a request the agency must
+        // approve. The two fields are stripped from THIS write and everything else
+        // in the PATCH applies as normal, so a vendor editing a price and a quantity
+        // in one call gets the price immediately and the quantity queued.
+        //
+        // Intercepting here rather than adding a separate "propose" endpoint is the
+        // point: leave this path writing directly and the rule is advisory.
+        const stockIntent = await stockChangeGate.intercept({
+            productId,
+            variantId,
+            vendorId,
+            userId: req.auth!.user._id.toString(),
+            quantity: input.stock,
+            isInfiniteStock: input.isInfiniteStock,
+        });
+
         // Build the persistence payload. serviceConfig is merged over the existing config so
         // a partial PATCH doesn't drop untouched fields (the repository $set replaces the whole
         // sub-document). A null peakHours clears the surcharge.
         const { serviceConfig: scInput, ...restInput } = input;
         const updates: Partial<Variant> = { ...restInput };
+        if (stockIntent) {
+            delete updates.stock;
+            delete updates.isInfiniteStock;
+        }
         if (scInput) {
             const existing = existingVariant.serviceConfig;
             updates.serviceConfig = {
@@ -380,7 +404,20 @@ export class VendorVariantController {
         await productStatusValidationService.revalidateActiveStatus(productId, vendorId);
 
         const detail = await enrichVariant(updatedVariant, fileRepository, storageProvider, product.title);
-        res.json({ success: true, data: detail, message: 'Variant updated successfully' });
+        // One status code — 200 — whether or not the stock change was queued. A 202
+        // here would make a client branch on the code for a response whose body it
+        // has to read either way; `data.stock` still shows the UNCHANGED quantity and
+        // `meta.stockAdjustment` says what is pending on it.
+        res.json({
+            success: true,
+            data: detail,
+            ...(stockIntent
+                ? { meta: { stockAdjustment: { status: 'pending_agency_approval', request: stockIntent } } }
+                : {}),
+            message: stockIntent
+                ? 'Variant updated. The stock change is awaiting the storage agency’s approval.'
+                : 'Variant updated successfully',
+        });
     });
 
     /**

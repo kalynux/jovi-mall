@@ -1,7 +1,8 @@
 import { FilterQuery, Types } from 'mongoose';
 import { BaseRepository, Page, PaginationOptions, RepositoryOptions } from '../../../../core/repositories/base.repository';
 import { IProduct, ProductModel } from '../../models';
-import { IProductRepository } from '../interfaces/product.repository.interface';
+import { IProductRepository, AgencyStoredVariant } from '../interfaces/product.repository.interface';
+import { COLLECTIONS } from '../../../../core/database/collections';
 import { Product, ProductMapper } from '../mappers/product.mapper';
 import { ProductListProjection } from '../../read-models/product-detail.read-model';
 import { ProductStatus, ProductSuspensionReason } from '../../models/product.model';
@@ -382,9 +383,24 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
     vendorId: string,
     reason: ProductSuspensionReason,
     options?: RepositoryOptions,
+    actor?: { agencyId: string; note?: string | null },
   ): Promise<boolean> {
     if (!Types.ObjectId.isValid(productId)) return false;
     const sessionOpt = options?.session ? { session: options.session } : {};
+
+    const suspension: Record<string, unknown> = {
+      reason,
+      previousStatus: '$status',
+      suspendedAt: '$$NOW',
+    };
+    if (actor) {
+      suspension.suspendedByAgencyId = new Types.ObjectId(actor.agencyId);
+      // `$literal` because this is an aggregation-pipeline update, where a plain
+      // string beginning with `$` is read as a FIELD PATH. A note like
+      // "$40 000 storage unpaid" would otherwise resolve to a missing field and
+      // silently store nothing.
+      suspension.note = { $literal: actor.note ?? null };
+    }
 
     const result = await this.model.updateOne(
       {
@@ -398,7 +414,7 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
       [
         {
           $set: {
-            suspension: { reason, previousStatus: '$status', suspendedAt: '$$NOW' },
+            suspension,
             status: 'suspended',
             updatedAt: '$$NOW',
           },
@@ -484,6 +500,102 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
     const result: Record<string, number> = {};
     for (const row of rows) result[row._id.toString()] = row.count;
     return result;
+  }
+
+  /** See IProductRepository.findAgencyStoredVariants. */
+  async findAgencyStoredVariants(
+    agencyId: string,
+    options?: RepositoryOptions,
+  ): Promise<AgencyStoredVariant[]> {
+    if (!Types.ObjectId.isValid(agencyId)) return [];
+    const agencyOid = new Types.ObjectId(agencyId);
+
+    const aggregation = this.model.aggregate<{
+      vendorId: Types.ObjectId;
+      productId: Types.ObjectId;
+      variantId: Types.ObjectId;
+      agencyAddressId: Types.ObjectId | null;
+    }>([
+      // Narrow on the product's own fields first — this is the indexed part.
+      //
+      // `agency_storage_suspended` products stay in the roster on purpose: that
+      // suspension is the AGENCY's own act, and sweeping its rows would delete the
+      // row the unsuspend button lives on. Every other suspension reason means the
+      // product stopped being warehoused here, so those are excluded and swept.
+      {
+        $match: {
+          type: 'physical',
+          deletedAt: null,
+          'delivery.pickup_location.source': 'agency_storage',
+          $or: [
+            { status: 'active' },
+            { status: 'suspended', 'suspension.reason': 'agency_storage_suspended' },
+          ],
+        },
+      },
+      // The vendor is needed ONLY for the default-agency fallback below.
+      {
+        $lookup: {
+          from: COLLECTIONS.VENDOR,
+          localField: 'vendorId',
+          foreignField: '_id',
+          as: 'vendor',
+        },
+      },
+      { $unwind: { path: '$vendor', preserveNullAndEmptyArrays: false } },
+      // "Which agency actually fulfils this?" — the product's own override wins,
+      // else the vendor's default. Same order as ProductStatusValidationService's
+      // activation gate and order.service.ts's checkout resolution. Expressed
+      // here rather than in JS so the whole roster is one round trip; note
+      // `{ 'delivery.agency_id': null }` matches an ABSENT field too, which is
+      // what a product with no override actually has.
+      {
+        $match: {
+          $or: [
+            { 'delivery.agency_id': agencyOid },
+            { 'delivery.agency_id': null, 'vendor.default_delivery_agency_id': agencyOid },
+          ],
+        },
+      },
+      // Stock lives on the variant, so the roster is per variant, not per product.
+      {
+        $lookup: {
+          from: COLLECTIONS.PRODUCT_VARIANT,
+          let: { pid: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ['$productId', '$$pid'] },
+                status: 'active',
+                deletedAt: null,
+              },
+            },
+            { $project: { _id: 1 } },
+          ],
+          as: 'variants',
+        },
+      },
+      { $unwind: { path: '$variants', preserveNullAndEmptyArrays: false } },
+      {
+        $project: {
+          _id: 0,
+          vendorId: '$vendorId',
+          productId: '$_id',
+          variantId: '$variants._id',
+          // Passed through RAW — resolving a dangling id is the caller's call.
+          agencyAddressId: { $ifNull: ['$delivery.pickup_location.agency_address_id', null] },
+        },
+      },
+    ]);
+    if (options?.session) aggregation.session(options.session);
+    const rows = await aggregation.exec();
+
+    return rows.map(r => ({
+      vendorId: r.vendorId.toString(),
+      productId: r.productId.toString(),
+      variantId: r.variantId.toString(),
+      agencyAddressId: r.agencyAddressId ? r.agencyAddressId.toString() : null,
+    }));
   }
 
   /**

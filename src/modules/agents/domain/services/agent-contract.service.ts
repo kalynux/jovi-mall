@@ -5,6 +5,7 @@ import { transactionManager } from '../../../../core/database/transaction.manage
 import { eventBus } from '../../../../core/events/event-bus';
 import { PaginationOptions, Page } from '../../../../core/repositories/base.repository';
 import { MagazinRepository } from '../../../magazin/repositories/magazin.repository';
+import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repository';
 import { AgentRepository, agentRepository } from '../../repositories/agent.repository';
 import {
   AgentContractRepository,
@@ -48,6 +49,7 @@ import {
 import { AGENT_CONFIG } from '../../config/agent.config';
 import { AgentCodThresholdService, agentCodThresholdService } from './agent-cod-threshold.service';
 import { AgentGateService, agentGateService } from './agent-gate.service';
+import { normalizeContractRegions } from './contract-coverage.service';
 
 export interface Actor {
   userId: string | null;
@@ -236,7 +238,11 @@ export class AgentContractService {
     private readonly proposals: ContractTermsProposalRepository = contractTermsProposalRepository,
     private readonly thresholds: AgentCodThresholdService = agentCodThresholdService,
     private readonly gates: AgentGateService = agentGateService,
-    private readonly magazins: MagazinRepository = new MagazinRepository()
+    private readonly magazins: MagazinRepository = new MagazinRepository(),
+    // Only for the agency's `country`, which anchors the coverage-region
+    // catalogue both parties pick from. The business surface (name, coverage
+    // areas) is the magazin's — see `normalizeCoverageTerms`.
+    private readonly agencies: DeliveryAgencyRepository = new DeliveryAgencyRepository()
   ) {}
 
   // ─── Handshake notifications ──────────────────────────────────────────────
@@ -429,13 +435,14 @@ export class AgentContractService {
   async requestFromAgency(
     agencyId: string,
     agentId: string,
-    terms: ContractTermsUpdate,
+    proposed: ContractTermsUpdate,
     actor: Actor
   ): Promise<IAgentAgencyContract> {
     await this.gates.assertCanHoldContract(agentId);
     await this.assertNoLiveContract(agentId, agencyId);
 
-    this.assertNegotiableBy('agency', terms);
+    this.assertNegotiableBy('agency', proposed);
+    const terms = await this.normalizeCoverageTerms(agencyId, proposed);
     // Checked against the schema defaults, since there is no stored split yet.
     this.assertFeeSplitCoherent(terms.fee_split ?? {}, contractDefaults.feeSplit());
 
@@ -500,9 +507,10 @@ export class AgentContractService {
     await this.gates.assertCanHoldContract(agentId);
     await this.assertNoLiveContract(agentId, agencyId);
 
-    const stated = terms && Object.keys(terms).length > 0 ? terms : null;
+    const raw = terms && Object.keys(terms).length > 0 ? terms : null;
+    if (raw) this.assertNegotiableBy('agent', raw);
+    const stated = raw ? await this.normalizeCoverageTerms(agencyId, raw) : null;
     if (stated) {
-      this.assertNegotiableBy('agent', stated);
       // Stating terms means stating what you expect to be paid. Coverage alone
       // would leave the agent's own proposal carrying a null share — i.e. zero —
       // which the agency then could not approve. Applying bare is the supported
@@ -1250,7 +1258,7 @@ export class AgentContractService {
     party: ContractTermsParty,
     ownerId: string,
     contractId: string,
-    terms: ContractTermsUpdate,
+    proposed: ContractTermsUpdate,
     actor: Actor
   ): Promise<IAgentAgencyContract> {
     const contract = await this.loadForParty(party, contractId, ownerId);
@@ -1262,7 +1270,10 @@ export class AgentContractService {
       });
     }
 
-    this.assertNegotiableBy(party, terms);
+    this.assertNegotiableBy(party, proposed);
+    // The agency's country, whoever is countering: coverage is one catalogue per
+    // contract, not one per party.
+    const terms = await this.normalizeCoverageTerms(contract.agency_id.toString(), proposed);
     if (terms.fee_split) this.assertFeeSplitCoherent(terms.fee_split, contract.fee_split);
 
     const isRevision = contract.terms_proposed_by !== null && this.proposerOf(contract) === party;
@@ -1310,7 +1321,7 @@ export class AgentContractService {
     party: ContractTermsParty,
     ownerId: string,
     contractId: string,
-    terms: ContractTermsUpdate,
+    proposed: ContractTermsUpdate,
     note: string | null,
     actor: Actor
   ): Promise<IContractTermsProposal> {
@@ -1324,7 +1335,11 @@ export class AgentContractService {
       });
     }
 
-    this.assertNegotiableBy(party, terms);
+    this.assertNegotiableBy(party, proposed);
+    // Canonicalised BEFORE the proposal row is written, not when it is accepted:
+    // the row is what both parties read while deciding, so it must show the
+    // regions that would actually be stored.
+    const terms = await this.normalizeCoverageTerms(contract.agency_id.toString(), proposed);
     if (terms.fee_split) this.assertFeeSplitCoherent(terms.fee_split, contract.fee_split);
 
     const open = await this.proposals.findPendingForContract(contractId);
@@ -1539,7 +1554,7 @@ export class AgentContractService {
     party: ContractTermsParty,
     ownerId: string,
     proposalId: string,
-    terms: ContractTermsUpdate,
+    proposed: ContractTermsUpdate,
     note: string | null,
     actor: Actor
   ): Promise<IContractTermsProposal> {
@@ -1552,7 +1567,8 @@ export class AgentContractService {
       });
     }
 
-    this.assertNegotiableBy(party, terms);
+    this.assertNegotiableBy(party, proposed);
+    const terms = await this.normalizeCoverageTerms(open.agency_id.toString(), proposed);
 
     const contract = await this.contracts.findById(open.contract_id.toString());
     if (!contract) throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
@@ -1935,6 +1951,42 @@ export class AgentContractService {
             : 'Employment and the COD threshold have their own endpoints and are not negotiated.',
       });
     }
+  }
+
+  /**
+   * Canonicalise `coverage.regions` on a terms patch, against the AGENCY's
+   * registered country.
+   *
+   * Every path that writes terms — both request paths, the agency's patch, a
+   * counter on either side, a proposal on a live contract, and a counter to one
+   * — runs through here, because a term is only as good as its weakest write
+   * path: validate the picker's endpoint but miss the counter, and the value the
+   * two parties actually settle on is the unvalidated one.
+   *
+   * A no-op unless the patch touches `coverage.regions`, so the employment and
+   * fee-split routes pay nothing for it. The agency lookup costs one read on a
+   * negotiation write, which happens a handful of times per contract in its
+   * lifetime.
+   *
+   * Returns a NEW patch rather than mutating: these objects are handed straight
+   * to the repository and stored on proposals, and a caller's request body is
+   * not ours to rewrite.
+   */
+  private async normalizeCoverageTerms<T extends ContractTermsUpdate>(
+    agencyId: string,
+    terms: T
+  ): Promise<T> {
+    const regions = terms.coverage?.regions;
+    if (regions === undefined) return terms;
+
+    const agency = await this.agencies.findById(agencyId);
+    return {
+      ...terms,
+      coverage: {
+        ...terms.coverage,
+        regions: normalizeContractRegions(regions, agency?.country ?? null),
+      },
+    };
   }
 
   /** The agreed value of each group a patch touches — the proposal's `before`. */

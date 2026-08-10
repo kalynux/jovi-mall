@@ -12,9 +12,13 @@ import { registerAgentPlanCapacityConsumer } from './modules/agents/events/agent
 import { initializeVendorNotificationEventConsumers } from './modules/notifications/vendor-notification-event-consumer';
 import { initializeAgencyNotificationEventConsumers } from './modules/notifications/agency-notification-event-consumer';
 import { initializeAgentNotificationEventConsumers } from './modules/notifications/agent-notification-event-consumer';
+import { initializeCustomerNotificationEventConsumers } from './modules/notifications/customer-notification-event-consumer';
 import { fileCleanupWorker } from './modules/file-cleanup/workers/file-cleanup.worker';
 import { earningsReleaseWorker } from './modules/earnings/workers/earnings-release.worker';
 import { unpaidOrderCancelWorker } from './modules/orders/workers/unpaid-order-cancel.worker';
+import { unpaidBookingCancelWorker } from './modules/booking/workers/unpaid-booking-cancel.worker';
+import { bookingReminderWorker } from './modules/booking/workers/booking-reminder.worker';
+import { InboundCalendarSyncWorker } from './modules/booking/workers/inbound-calendar-sync.worker';
 import { codDepositDeadlineWorker } from './modules/cod/workers/cod-deposit-deadline.worker';
 import { registerTrackingEventSubscriber } from './modules/tracking-integration/services/tracking-event-subscriber';
 import { trackingDispatchWorker } from './modules/tracking-integration/workers/tracking-dispatch.worker';
@@ -58,6 +62,11 @@ async function startServer() {
     // Agent notifications: in-app + multi-channel dispatch (COD cash hand-overs)
     initializeAgentNotificationEventConsumers();
 
+    // Customer notifications: in-app + multi-channel dispatch (bookings + orders).
+    // The customer was the only party the platform never told anything — see
+    // customer-notification.model.ts.
+    initializeCustomerNotificationEventConsumers();
+
     // Storage lifecycle: daily file-cleanup sweep (detach → delete → alert)
     fileCleanupWorker.start();
 
@@ -66,6 +75,20 @@ async function startServer() {
 
     // Orders: daily auto-cancel of orders left unpaid past each vendor's window
     unpaidOrderCancelWorker.start();
+
+    // Bookings: release slots held by confirmed-but-unpaid bookings. Without this a
+    // customer can reserve a vendor's whole week for free and never pay.
+    unpaidBookingCancelWorker.start();
+
+    // Bookings: remind customers ~24h before their appointment. The platform
+    // records `no-show` against them, so it owes them the reminder first.
+    bookingReminderWorker.start();
+
+    // Bookings: cache each vendor's EXTERNAL calendar commitments so availability
+    // does not hit Google on every request. Availability unions these cached blocks
+    // with a live query, so a stale block can only ever over-block briefly (the
+    // sync soft-deletes removed events, which self-heals) and never under-block.
+    new InboundCalendarSyncWorker().start();
 
     // COD: daily flagging of agents holding cash past the deposit deadline
     codDepositDeadlineWorker.start();

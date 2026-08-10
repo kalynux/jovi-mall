@@ -62,6 +62,14 @@ router.post('/:id/complete', VendorBookingController.completeBooking);
 router.patch('/:id/payment-status', VendorBookingController.markAsPaid);
 
 /**
+ * POST /api/vendor/bookings/:id/settle-balance
+ * Record the completion balance as collected in cash.
+ * Body (optional): { amount?: number } — defaults to the whole outstanding balance.
+ * Distinct from /payment-status, which settles the ORIGINAL price.
+ */
+router.post('/:id/settle-balance', VendorBookingController.settleBalanceByCash);
+
+/**
  * PATCH /api/vendor/bookings/:id/reschedule
  * Reschedule to a new slot. The vendor must have locked the slot first.
  * Body: { newSlotId: string }

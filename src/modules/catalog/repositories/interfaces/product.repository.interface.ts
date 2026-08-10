@@ -93,12 +93,18 @@ export interface IProductRepository {
   /**
    * Suspend a single physical product (no-op unless currently 'active'), capturing
    * its current status so it can be restored later. Returns whether it was suspended.
+   *
+   * `actor` is set only by the agency's manual storage suspension: the agency id is
+   * what authorises the way back out (only the agency that suspended may unsuspend)
+   * and the note is what the vendor is shown. The three delivery-agency cascades
+   * have no actor and pass nothing.
    */
   suspendProduct(
     productId: string,
     vendorId: string,
     reason: ProductSuspensionReason,
     options?: RepositoryOptions,
+    actor?: { agencyId: string; note?: string | null },
   ): Promise<boolean>;
 
   /**
@@ -165,4 +171,41 @@ export interface IProductRepository {
     addressIds: string[],
     options?: RepositoryOptions,
   ): Promise<Record<string, number>>;
+
+  /**
+   * Every active variant a given agency is configured to WAREHOUSE — the source
+   * the agency-inventory roster is derived from.
+   *
+   * A product qualifies when it is physical, its pickup location is
+   * `agency_storage`, and the agency that would actually fulfil it is this one:
+   * the product's own `delivery.agency_id` override if set, else the vendor's
+   * `default_delivery_agency_id`. That is the same resolution order used at
+   * activation and at order creation.
+   *
+   * Status must be `active` **or** `suspended` with reason
+   * `agency_storage_suspended`. That second case is load-bearing: the agency's own
+   * suspension must not delete the rows it acts on, or suspending a product would
+   * make it vanish from the very screen the unsuspend button lives on. Every other
+   * suspension reason means the product genuinely stopped being warehoused here,
+   * and its rows are swept as usual.
+   *
+   * `agencyAddressId` is the depot the product names, passed through RAW —
+   * null when none was named, and possibly pointing at a depot the agency has
+   * since deleted. Resolving it is the caller's job (see
+   * `resolveStockLocationId`), because inventory and routing resolve a dangling
+   * id differently and this repository must not pick one.
+   */
+  findAgencyStoredVariants(
+    agencyId: string,
+    options?: RepositoryOptions,
+  ): Promise<AgencyStoredVariant[]>;
+}
+
+/** One (vendor, product, variant) the agency stores, plus the depot the product names. */
+export interface AgencyStoredVariant {
+  vendorId: string;
+  productId: string;
+  variantId: string;
+  /** Raw, unresolved. Null = the product named no depot. */
+  agencyAddressId: string | null;
 }

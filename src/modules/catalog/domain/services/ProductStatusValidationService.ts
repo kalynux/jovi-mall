@@ -6,10 +6,12 @@ import { IProductRepository } from '../../repositories/interfaces/product.reposi
 import { IVariantRepository } from '../../repositories/interfaces/variant.repository.interface';
 import { VendorRepository } from '../../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repository';
+import { MagazinRepository } from '../../../magazin/repositories/magazin.repository';
 import { IDeliveryAgency } from '../../../delivery/delivery-agency.model';
 import { ConnectionRepository } from '../../../agency-connections/connection.repository';
 import { AvailabilityRule } from '../../../booking/models/availability-rule.model';
 import { PickupLocationValidationService } from './PickupLocationValidationService';
+import { infiniteStockVariantLabels, requiresCountableStock } from './agency-storage-stock.rule';
 import { RepositoryOptions } from '../../repositories/types';
 import { ProductStatus } from '../../models/product.model';
 import { ActivationBlocker } from '../../read-models/product-detail.read-model';
@@ -62,6 +64,10 @@ export const VENDOR_STATUS_TRANSITIONS: Readonly<Record<ProductStatus, readonly 
  * Activation gate for `service` products: the default variant's serviceConfig must carry a
  * duration (and a seat count for capacity mode), and the product must have at least one active
  * availability rule — without one, the booking availability window is always empty.
+ *
+ * Additional gate for `agency_storage` pickup: no active variant may have unlimited
+ * stock. See `agency-storage-stock.rule.ts` — a warehouse cannot shelve an
+ * uncountable quantity, and two write paths enforce the same rule by refusing.
  */
 export class ProductStatusValidationService {
     constructor(
@@ -71,6 +77,8 @@ export class ProductStatusValidationService {
         private readonly deliveryAgencyRepository: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
         private readonly connectionRepository: ConnectionRepository = new ConnectionRepository(),
         private readonly pickupLocationValidationService: PickupLocationValidationService = new PickupLocationValidationService(),
+        // The agency's depot list lives on the Magazin, not the DeliveryAgency.
+        private readonly magazinRepository: MagazinRepository = new MagazinRepository(),
     ) { }
 
     /**
@@ -244,11 +252,47 @@ export class ProductStatusValidationService {
                 // Skipped when no agency resolved: "is this pickup location compatible
                 // with your agency" is unanswerable without one, and reporting it would
                 // just restate the agency blocker in more confusing words.
+                //
+                // The depot list is loaded only when the product actually names a
+                // depot. A product on the primary (the default, and everything
+                // predating the picker) resolves with no extra query and can never
+                // be blocked here — activation must not start failing because an
+                // agency reorganised its depots.
+                const agencyDepotIds = product.delivery.pickupLocation.agencyAddressId
+                    ? await this.magazinRepository.findHqAddressIdsByAgencyId(effectiveAgency._id.toString())
+                    : null;
                 try {
-                    this.pickupLocationValidationService.assertValid(product.delivery.pickupLocation, effectiveAgency, vendor);
+                    this.pickupLocationValidationService.assertValid(
+                        product.delivery.pickupLocation,
+                        effectiveAgency,
+                        vendor,
+                        agencyDepotIds,
+                    );
                 } catch (err) {
                     if (!(err instanceof AppError)) throw err;
                     add(err);
+                }
+            }
+
+            // A warehouse holds a countable number of things — see
+            // agency-storage-stock.rule.ts for why, and for the two write paths that
+            // enforce the same rule by throwing instead of blocking. Checked
+            // independently of the pickup-location validity above (which knows ids,
+            // not variants) and whether or not an agency resolved: the rule is about
+            // the product's own configuration, not about who ends up handling it.
+            //
+            // Deliberately NOT a `stock > 0` rule. `revalidateActiveStatus` runs on
+            // variant update, variant archive, digital-asset removal and product
+            // update, so requiring a positive quantity would silently demote a
+            // product to `draft` the moment it sold out.
+            if (requiresCountableStock(product.delivery?.pickupLocation?.source)) {
+                for (const label of infiniteStockVariantLabels(variants)) {
+                    add(createAppError(
+                        ERROR_CODES.CATALOG_PRODUCT_AGENCY_STORAGE_INFINITE_STOCK,
+                        422,
+                        undefined,
+                        { variant: label },
+                    ));
                 }
             }
         }

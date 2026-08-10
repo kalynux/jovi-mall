@@ -16,6 +16,7 @@ import {
 import { VendorRepository } from '../../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repository';
 import { MagazinRepository } from '../../../magazin/repositories/magazin.repository';
+import { resolveHqAddress } from '../../../magazin/domain/hq-address.resolver';
 import { CashCollectionService, cashCollectionService } from '../../../cod/services/cash-collection.service';
 import { CodExposureService, codExposureService } from '../../../cod/services/cod-exposure.service';
 import { ASSIGNMENT_CONFIG } from '../../config/assignment.config';
@@ -373,8 +374,9 @@ export class AssignmentCandidateService {
 
   /**
    * Pickup coordinates for a shipment, resolved LIVE. `agency_storage` ⇒ the
-   * agency's primary HQ location; `vendor_address` ⇒ the referenced vendor
-   * business address's location. Returns null when no location is on file.
+   * chosen agency depot's location (the primary when none was chosen);
+   * `vendor_address` ⇒ the referenced vendor business address's location.
+   * Returns null when no location is on file.
    */
   private async resolvePickupLocation(shipment: IShipment, order: IOrder): Promise<IGeoPoint | null> {
     const firstItem = shipment.items[0];
@@ -388,7 +390,8 @@ export class AssignmentCandidateService {
 
     if (pickup.source === 'agency_storage') {
       const magazin = await this.magazins.findByAgencyIdOrNull(shipment.agency_id.toString());
-      return this.geoOf(magazin?.headquarters_addresses?.[0]?.location);
+      const depot = resolveHqAddress(magazin?.headquarters_addresses, pickup.agency_address_id);
+      return this.geoOf(depot?.location);
     }
 
     if (pickup.source === 'vendor_address' && pickup.vendor_address_id) {

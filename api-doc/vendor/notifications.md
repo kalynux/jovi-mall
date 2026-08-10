@@ -469,6 +469,17 @@ The subscribable events (`preferences.*` key → notification `type`):
 | `payoutUpdates` | `payout.requested`, `payout.paid`, `payout.rejected` | `payout` | Your own payout request is created, paid, or rejected. `aggregateId` is the `PayoutRequest` id; `action.path` deep-links to `tickets/{ticketId}` — the request is tracked as a ticket, see [Earnings — Requesting a payout](./earnings.md#requesting-a-payout). |
 | `shipmentRejected` | `shipment.rejected` | `order` | A delivery agency declined a shipment; its items move to `pending_agency_reassignment` and you must route them to another agency. `aggregateId` is the order id; `action.path` deep-links to `orders/{orderId}`. The specific reason + note are shown on the order's per-item delivery detail (see [Orders](./orders.md)), not in the notification text. |
 | `planUpdates` | `plan.expiring`, `plan.expired` | `plan` | **Billing.** Your subscription plan is nearing expiry, or has expired (handed over to a queued plan, or downgraded to the free `starter` tier). `aggregateId` is the vendor id; `action.path` deep-links to `plans`. See [Billing](./billing.md). |
+| `agencyStorageUpdates` | `storage.stock_request.received`, `storage.stock_request.approved`, `storage.stock_request.rejected` | `stock_request` | A **stock adjustment** on a SKU an agency warehouses for you: the agency proposed a quantity (yours to answer), or answered one you proposed. `aggregateId` is the `StockAdjustmentRequest` id; `action.path` deep-links to `stock-requests/{requestId}`. See [Stock requests](./stock-requests.md). Nothing fires for `withdrawn`. |
+| `agencyStorageUpdates` | `storage.depot_changed`, `storage.product_suspended`, `storage.product_unsuspended` | `product` | Things your **storage agency did alone** to a product it warehouses: moved it to a different depot, or suspended / unsuspended it. There is nothing for you to approve — its warehouse layout and its rent are its own business — but a suspension takes the product **off the storefront**, and the agency's note is the only explanation you get. `aggregateId` is the product id; `action.path` deep-links to `products/{productId}`. See [Agency → Inventory](../agency/inventory.md). |
+
+> [!IMPORTANT]
+> **`storageAlert` and `agencyStorageUpdates` are unrelated despite sharing a word.** The
+> first is your **media-file quota** (product images). The second is **product
+> warehousing** — physical goods sitting in an agency's building. Label the two toggles
+> distinctly.
+>
+> `storage.product_suspended` is the one to surface prominently: the product has stopped
+> selling, and nothing else on the platform will tell you why.
 
 ### Delivery channels
 

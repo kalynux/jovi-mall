@@ -8,10 +8,33 @@
 export type RenderContext = Record<string, unknown>;
 
 const PLACEHOLDER = /\{\{\s*(\w+)\s*\}\}/g;
+/** Runs of spaces/tabs. Deliberately NOT `\s`, which would eat newlines. */
+const REPEATED_SPACES = /[ \t]{2,}/g;
+/** A space or tab sitting immediately before sentence punctuation. */
+const SPACE_BEFORE_PUNCTUATION = /[ \t]+([.,;:!?])/g;
 
+/**
+ * Render a template, then tidy the whitespace an empty placeholder leaves behind.
+ *
+ * WHY THE TIDY: several situations end with an optional sentence — `{{codLine}}`
+ * on out-for-delivery, `{{reasonLine}}` on a balance request. When that value is
+ * legitimately empty the surrounding spaces survive, giving either a trailing
+ * space ("…can receive it. ") or a double space mid-sentence ("…today.  We will
+ * try again"). Both reach push notifications and emails un-trimmed; only the
+ * in-app copy is saved through a `trim: true` Mongoose path.
+ *
+ * Runs of spaces are collapsed rather than newlines preserved-by-accident: no
+ * catalog template currently contains a newline, but one added later (a
+ * multi-paragraph email body) must not be flattened into a single line.
+ */
 export function renderTemplate(template: string, ctx: RenderContext): string {
-    return template.replace(PLACEHOLDER, (_match, key: string) => {
+    const filled = template.replace(PLACEHOLDER, (_match, key: string) => {
         const value = ctx[key];
         return value === undefined || value === null ? '' : String(value);
     });
+
+    return filled
+        .replace(SPACE_BEFORE_PUNCTUATION, '$1')
+        .replace(REPEATED_SPACES, ' ')
+        .trim();
 }

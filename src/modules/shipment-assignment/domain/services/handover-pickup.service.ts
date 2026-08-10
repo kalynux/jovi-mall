@@ -9,6 +9,7 @@ import { IOrder } from '../../../orders/order.model';
 import { AgentRepository, agentRepository } from '../../../agents';
 import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repository';
 import { MagazinRepository } from '../../../magazin/repositories/magazin.repository';
+import { resolveHqAddress } from '../../../magazin/domain/hq-address.resolver';
 
 /**
  * The agency's manual override of the automatic pickup location (Part 3). Any
@@ -122,10 +123,12 @@ export class HandoverPickupService {
     );
     const pickup = orderItem?.delivery?.pickup_location ?? null;
 
-    // Storage-based pickup resolves to the agency's own HQ (not snapshotted, since
-    // it isn't vendor/product specific) — same rule as the shipment detail view.
+    // Storage-based pickup resolves to the agency's own depot — the one the order
+    // item names, or the primary when it names none. The address is resolved live
+    // rather than snapshotted (only the CHOICE is snapshotted), same rule as the
+    // shipment detail view.
     if (!pickup || pickup.source === 'agency_storage') {
-      const agencyPickup = await this.fromAgencyBusiness(agencyId, false);
+      const agencyPickup = await this.fromAgencyBusiness(agencyId, false, pickup?.agency_address_id);
       agencyPickup.source = 'original_pickup';
       agencyPickup.label = agencyPickup.label ? `${agencyPickup.label} (original pickup — warehouse)` : 'Agency warehouse (original pickup)';
       return agencyPickup;
@@ -157,10 +160,20 @@ export class HandoverPickupService {
 
   // ─── Rule 3 (and the fallbacks): the agency's business/HQ location ─────────
 
-  private async fromAgencyBusiness(agencyId: string, isFallback: boolean): Promise<IShipmentHandoverPickup> {
+  /**
+   * `agencyAddressId` names which depot, when the caller knows one (the original
+   * pickup of a storage-based item). The rule-3 `failed` case and every fallback
+   * pass nothing and get the primary — the agency's front desk is where a failed
+   * parcel is handed back, regardless of which depot it originally left.
+   */
+  private async fromAgencyBusiness(
+    agencyId: string,
+    isFallback: boolean,
+    agencyAddressId?: string | { toString(): string } | null
+  ): Promise<IShipmentHandoverPickup> {
     // Business name + HQ addresses both live on the Magazin (source of truth).
     const magazin = await this.magazins.findByAgencyIdOrNull(agencyId);
-    const hq = magazin?.headquarters_addresses?.[0] ?? null;
+    const hq = resolveHqAddress(magazin?.headquarters_addresses, agencyAddressId);
     const hqGeo: IGeoAddress | null = hq?.geo ?? null;
     const agencyName = magazin?.name ?? null;
     const label = agencyName

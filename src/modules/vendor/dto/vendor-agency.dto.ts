@@ -57,6 +57,14 @@ export interface VendorAgencyListItemDto {
      * Null if the agency has no address on file (should not happen for completed agencies).
      */
     headquartersAddress: VendorAgencyHQAddressDto | null;
+    /**
+     * ISO-2 country the agency operates in, or null on legacy rows that predate
+     * the field. It is what scopes `coverageAreas` — and, for an agent looking at
+     * this row before requesting a contract, the region catalogue their coverage
+     * picker must offer. Null means "no catalogue to scope to"; the server skips
+     * the region check for those agencies rather than refusing every value.
+     */
+    country: string | null;
     /** Coverage regions this agency can serve. Values are region keys from locations.json. */
     coverageAreas: string[];
     /**
@@ -72,6 +80,31 @@ export interface VendorAgencyListItemDto {
     policies: VendorAgencyPolicySummaryDto | null;
 }
 
+/**
+ * One of an agency's physical locations, as a vendor sees it when choosing where
+ * their agency-warehoused stock is held (`pickupLocation.agencyAddressId`).
+ *
+ * This is the ONE place a vendor sees past the primary HQ. Everything else about
+ * an agency stays summarised at index 0 — see `toListItemDto`'s SECURITY note —
+ * and the narrow exception is justified by the vendor needing to name a specific
+ * depot. Per-location `support_contact` is still withheld: picking a warehouse
+ * does not require its phone number, and it is customer-facing data.
+ */
+export interface VendorAgencyLocationDto {
+    /** The depot's stable id — what a product's `agencyAddressId` stores. */
+    id: string;
+    /** The agency's own name for it ("Main depot"). Null on legacy entries. */
+    label: string | null;
+    region: string | null;
+    city: string | null;
+    addressDescription: string;
+    /**
+     * Whether this is the agency's primary depot (index 0). A product that names
+     * no depot resolves here, so the picker should mark it as the default.
+     */
+    isPrimary: boolean;
+}
+
 export interface AgencyListMeta {
     total: number;
     page: number;
@@ -85,11 +118,17 @@ export class VendorAgencyMapper {
     /**
      * Map a delivery agency document to the vendor-facing list item DTO.
      *
-     * SECURITY:
+     * SECURITY (this DTO — the agency BROWSE/LIST surface):
      * - KYC registration_number and transport_license_id are NEVER returned
      * - Payout details are NEVER returned
      * - Per-location support contacts are NEVER returned
      * - Only the primary HQ address (index 0) is exposed — no branch addresses
+     *
+     * The branch-address rule is scoped to this listing. `toLocationDto` below
+     * deliberately exposes every location, on one connection-gated endpoint, so a
+     * vendor can name which depot warehouses their stock — a choice they cannot
+     * make from a single summarised address. Support contacts stay withheld on
+     * both.
      */
     static toListItemDto(
         agency: IDeliveryAgency,
@@ -111,6 +150,7 @@ export class VendorAgencyMapper {
                       address_description: primaryHQ.address_description,
                   }
                 : null,
+            country: agency.country ?? null,
             coverageAreas: magazin?.coverage_areas ?? [],
             // TODO: populate from ratings system when implemented
             rating: null,
@@ -133,6 +173,22 @@ export class VendorAgencyMapper {
                       },
                   }
                 : null,
+        };
+    }
+
+    /**
+     * Map one of an agency's headquarters entries to the vendor-facing depot DTO.
+     * `index` decides `isPrimary` — primary-ness is positional here (index 0),
+     * there is no `is_primary` flag on the stored entry.
+     */
+    static toLocationDto(hq: IAgencyHeadquartersAddress, index: number): VendorAgencyLocationDto {
+        return {
+            id: hq._id.toString(),
+            label: hq.label ?? null,
+            region: hq.region ?? null,
+            city: hq.city ?? null,
+            addressDescription: hq.address_description,
+            isPrimary: index === 0,
         };
     }
 }

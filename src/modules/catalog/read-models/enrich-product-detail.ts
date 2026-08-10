@@ -4,6 +4,7 @@ import { FileRepositoryMongo } from '../repositories/mongo/file.repository.mongo
 import { DigitalAssetModel } from '../../digital-delivery/models/digital-asset.model';
 import { IStorageProvider } from '../../../core/storage/storage-provider.interface';
 import { FileDetail, AssetDetail } from './product-detail.read-model';
+import { PickupLocationDetail, PickupLocationDetailResolver } from './pickup-location-detail.resolver';
 
 /**
  * Fetch File documents for an array of IDs and compute their public URLs.
@@ -47,24 +48,38 @@ function mimeSubtype(mime: string): string {
 }
 
 /**
- * Enriched product response — replaces bare fileIds with populated details.
+ * Enriched product response — replaces bare id references with populated details.
  *
  * - `files` replaces `fileIds` (gallery/cover images with URLs)
+ * - `pickup` populates `delivery.pickupLocation`'s address (the raw ids stay on
+ *   `delivery` for a client that round-trips the object back on a PATCH)
  * - `digitalConfig` retains only the product-wide `isActive` toggle.
  *   Per-variant asset/limits are surfaced via EnrichedVariant.digital.
  */
 export type EnrichedProduct = Omit<Product, 'fileIds'> & {
   files: FileDetail[];
+  /** Null for products with no pickup location (digital, service, unconfigured). */
+  pickup: PickupLocationDetail | null;
 };
 
+/**
+ * `pickupResolver` is required, not optional. Every call site wants it, and an
+ * optional parameter is how one of them ends up returning a product without
+ * `pickup` while the rest return one with it — a wire-shape difference no
+ * consumer can see coming. Required makes a new call site a compile error.
+ */
 export async function enrichProduct(
   product: Product,
   fileRepo: FileRepositoryMongo,
   storage: IStorageProvider,
+  pickupResolver: PickupLocationDetailResolver,
 ): Promise<EnrichedProduct> {
-  const files = await buildFileDetails(product.fileIds, fileRepo, storage);
+  const [files, pickup] = await Promise.all([
+    buildFileDetails(product.fileIds, fileRepo, storage),
+    pickupResolver.resolve(product),
+  ]);
   const { fileIds: _dropped, ...rest } = product;
-  return { ...rest, files };
+  return { ...rest, files, pickup };
 }
 
 /**

@@ -11,6 +11,7 @@ import { FileReferenceRepositoryMongo } from '../repositories/mongo/file-referen
 import { Product } from '../repositories/mappers/product.mapper';
 import { Variant } from '../repositories/mappers/variant.mapper';
 import { enrichProduct, enrichVariant } from '../read-models/enrich-product-detail';
+import { pickupLocationDetailResolver } from '../read-models/pickup-location-detail.resolver';
 import { ActivationBlocker } from '../read-models/product-detail.read-model';
 import { SlugService } from '../domain/services/SlugService';
 import { FileReferenceService } from '../domain/services/media/FileReferenceService';
@@ -96,7 +97,7 @@ async function attemptPublish(product: Product, vendorId: string): Promise<{ pro
 
 async function buildDetail(product: Product, variant: Variant): Promise<Record<string, unknown>> {
     const [enrichedProduct, enrichedVariant] = await Promise.all([
-        enrichProduct(product, fileRepository, storageProvider),
+        enrichProduct(product, fileRepository, storageProvider, pickupLocationDetailResolver),
         enrichVariant(variant, fileRepository, storageProvider, product.title),
     ]);
     return { ...enrichedProduct, defaultVariant: enrichedVariant };
@@ -165,7 +166,12 @@ export class VendorSimpleProductController {
         const { id } = req.params;
         const input = UpdateSimpleProductSchema.parse(req.body);
 
-        const updated = await simpleProductUpdateService.execute(id, vendorId, input);
+        const updated = await simpleProductUpdateService.execute(
+            id,
+            vendorId,
+            input,
+            req.auth!.user._id.toString(),
+        );
 
         let product = updated.product;
         let outcome: ActivationOutcome;
@@ -197,8 +203,20 @@ export class VendorSimpleProductController {
         res.json({
             success: true,
             data,
-            meta: { activation: outcome },
-            message: 'Product updated successfully',
+            meta: {
+                activation: outcome,
+                // Present only when this product is agency-warehoused and the body
+                // touched the quantity: it was NOT written, `data` still shows the old
+                // number, and the agency has to approve the change. One status code —
+                // 200 — so a client never branches on 200-vs-202 for a body it must
+                // read either way.
+                ...(updated.stockAdjustment
+                    ? { stockAdjustment: { status: 'pending_agency_approval', request: updated.stockAdjustment } }
+                    : {}),
+            },
+            message: updated.stockAdjustment
+                ? 'Product updated. The stock change is awaiting the storage agency’s approval.'
+                : 'Product updated successfully',
         });
 
         void vectorisationService.vectoriseSingle(product.id);
@@ -227,7 +245,7 @@ export class VendorSimpleProductController {
             // Idempotent, like the same-status no-op in changeStatus.
             res.json({
                 success: true,
-                data: await enrichProduct(product, fileRepository, storageProvider),
+                data: await enrichProduct(product, fileRepository, storageProvider, pickupLocationDetailResolver),
                 message: 'Product already uses the advanced editor',
             });
             return;
@@ -238,7 +256,7 @@ export class VendorSimpleProductController {
 
         res.json({
             success: true,
-            data: await enrichProduct(updated, fileRepository, storageProvider),
+            data: await enrichProduct(updated, fileRepository, storageProvider, pickupLocationDetailResolver),
             message: 'Product converted to the advanced editor',
         });
     });

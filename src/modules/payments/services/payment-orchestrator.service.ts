@@ -15,6 +15,18 @@ import { OrderService } from '../../orders/order.service';
 import { OrderModel } from '../../orders/order.model';
 import { Booking, IBooking } from '../../booking/models/booking.model';
 import { BookingCalendarSyncService } from '../../booking/services/booking-calendar-sync.service';
+
+/**
+ * What a refund is being issued against.
+ *
+ * Orders and bookings are the platform's two payable things, and they share one
+ * refund pipeline (`PaymentOrchestratorService.refundPayment`) precisely so the
+ * money invariants — refundable balance, gateway support, escrow reversal —
+ * cannot be implemented twice and diverge.
+ */
+export type RefundSource =
+  | { kind: 'order'; orderId: string }
+  | { kind: 'booking'; bookingId: string };
 import { RefundTransactionModel } from '../models/refund-transaction.model';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -378,26 +390,33 @@ export class PaymentOrchestratorService {
   }
 
   /**
-   * Refund a paid order (full or partial).
+   * Refund a paid ORDER or BOOKING (full or partial).
    *
-   * Eligibility against the vendor's return policy is the CALLER's responsibility
-   * (see VendorRefundService); this method enforces the money invariants and
+   * Eligibility (the vendor's return policy, a booking's cancellation policy) is
+   * the CALLER's responsibility — see `VendorRefundService` and
+   * `BookingRefundService`. This method enforces the money invariants and
    * orchestrates the gateway call + persistence:
    *
-   * 1. Resolve the SUCCEEDED PaymentTransaction for the order.
+   * 1. Resolve the SUCCEEDED PaymentTransaction for the source.
    * 2. Validate the requested amount against the remaining refundable balance.
    * 3. Create a pending RefundTransaction.
    * 4. Call the gateway's refund API (outside any DB transaction).
    * 5. On success: atomically finalize the refund, bump totalRefunded /
-   *    hasPartialRefund, flip the payment + order status to refunded when fully
+   *    hasPartialRefund, flip the payment + source status to refunded when fully
    *    refunded. On failure: mark the refund failed and throw.
+   *
+   * The two sources differ in exactly four places — the payment lookup, the
+   * RefundTransaction's foreign key, the source-status write, and which earnings
+   * reversal runs. Everything else is shared, deliberately: forking this into a
+   * parallel booking implementation is how the two would drift on the money rules.
    *
    * @returns A summary of the refund outcome.
    */
   async refundPayment(params: {
-    orderId: string;
+    source: RefundSource;
     vendorId: string;
-    initiatedBy: string;   // vendor user id
+    initiatedBy: string;   // the acting user's id
+    initiatedByRole?: 'vendor' | 'admin' | 'customer';
     amount: number;        // amount to refund (already resolved by caller)
     reason?: string;
   }): Promise<{
@@ -408,11 +427,16 @@ export class PaymentOrchestratorService {
     totalRefunded: number;
     fullyRefunded: boolean;
   }> {
-    const { orderId, vendorId, initiatedBy, amount, reason } = params;
+    const { source, vendorId, initiatedBy, amount, reason } = params;
+    const initiatedByRole = params.initiatedByRole ?? 'vendor';
+    const isBooking = source.kind === 'booking';
+    const sourceId = isBooking ? source.bookingId : source.orderId;
 
-    // 1. Resolve the successful payment for this order.
+    // 1. Resolve the successful payment for this source.
     const paymentTx = await PaymentTransactionModel.findOne({
-      orderId: new Types.ObjectId(orderId),
+      ...(isBooking
+        ? { bookingId: new Types.ObjectId(sourceId) }
+        : { orderId: new Types.ObjectId(sourceId) }),
       status: 'SUCCEEDED'
     });
     if (!paymentTx) {
@@ -442,7 +466,9 @@ export class PaymentOrchestratorService {
     // 4. Create the refund record in 'pending' state (audit trail before gateway call).
     const refund = await RefundTransactionModel.create({
       paymentTransactionId: paymentTx._id,
-      orderId: new Types.ObjectId(orderId),
+      ...(isBooking
+        ? { bookingId: new Types.ObjectId(sourceId) }
+        : { orderId: new Types.ObjectId(sourceId) }),
       vendorId: new Types.ObjectId(vendorId),
       userId: paymentTx.userId,
       refundAmount: amount,
@@ -451,7 +477,7 @@ export class PaymentOrchestratorService {
       status: 'pending',
       gateway: paymentTx.gateway,
       initiatedBy: new Types.ObjectId(initiatedBy),
-      initiatedByRole: 'vendor'
+      initiatedByRole
     });
 
     // 5. Call the gateway (external; kept outside the DB transaction).
@@ -459,7 +485,11 @@ export class PaymentOrchestratorService {
       gatewayRef: paymentTx.gatewayRef,
       amount,
       reason,
-      metadata: { orderId, vendorId, refundId: refund._id.toString() }
+      metadata: {
+        [isBooking ? 'bookingId' : 'orderId']: sourceId,
+        vendorId,
+        refundId: refund._id.toString()
+      }
     });
 
     if (!gatewayResult.success) {
@@ -487,21 +517,34 @@ export class PaymentOrchestratorService {
       }
       await paymentTx.save({ session });
 
-      // Order payment_status only flips to 'refunded' on a full refund.
+      // The source's payment status only flips to 'refunded' on a FULL refund —
+      // a partial refund leaves it paid, with the balance tracked on the payment.
       if (fullyRefunded) {
-        await OrderModel.updateOne(
-          { _id: new Types.ObjectId(orderId) },
-          { $set: { payment_status: 'refunded', updated_at: new Date() } },
-          { session }
-        );
+        if (isBooking) {
+          await Booking.updateOne(
+            { _id: new Types.ObjectId(sourceId) },
+            { $set: { paymentStatus: 'refunded' } },
+            { session }
+          );
+        } else {
+          await OrderModel.updateOne(
+            { _id: new Types.ObjectId(sourceId) },
+            { $set: { payment_status: 'refunded', updated_at: new Date() } },
+            { session }
+          );
+        }
       }
     });
 
-    // On a full refund, reverse this order's still-held earnings out of escrow.
+    // On a full refund, reverse the source's still-held earnings out of escrow.
     // Best-effort: a failure must not fail the (already-completed) refund.
     if (fullyRefunded) {
       try {
-        await earningsRefundService.onOrderRefund(orderId);
+        if (isBooking) {
+          await earningsRefundService.onRefund('booking', sourceId);
+        } else {
+          await earningsRefundService.onOrderRefund(sourceId);
+        }
       } catch (error) {
         console.error('[PaymentOrchestrator] Failed to reverse earnings on refund:', error);
       }
@@ -510,9 +553,10 @@ export class PaymentOrchestratorService {
     // 7. Emit a domain event (fire-and-forget).
     eventBus.publish('payment.refunded', {
       eventType: 'payment.refunded',
-      aggregateId: orderId,
+      aggregateId: sourceId,
       payload: {
-        orderId,
+        ...(isBooking ? { bookingId: sourceId } : { orderId: sourceId }),
+        sourceKind: source.kind,
         vendorId,
         refundId: refund._id.toString(),
         amount,
@@ -720,12 +764,165 @@ export class PaymentOrchestratorService {
     }
   }
 
+  /**
+   * Initiate payment for a booking's OUTSTANDING BALANCE.
+   *
+   * A booking can be paid twice — once for the quoted price, and again for what a
+   * longer-than-booked service actually cost. This is the second payment.
+   *
+   * It is deliberately a separate method from `initiateBookingPayment` rather than
+   * a flag on it, because almost every guard inverts: that one refuses a `paid`
+   * booking, this one REQUIRES it; that one charges `priceSnapshot`, this one
+   * charges `settlement.balanceDue`. Folding them together would produce a method
+   * where half the checks apply.
+   *
+   * The resulting transaction carries `purpose: 'booking_balance'`, which is what
+   * lets the webhook credit the balance instead of no-oping on an already-paid
+   * booking.
+   */
+  async initiateBookingBalancePayment(
+    bookingId: string,
+    gateway: PaymentGatewayType,
+    channel: PaymentChannelInfo
+  ): Promise<{
+    transactionId: string;
+    status: PaymentStatus;
+    amount: number;
+    currency: string;
+    instructions?: any;
+    message: string;
+  }> {
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      throw createAppError(ERROR_CODES.PAYMENT_BOOKING_NOT_FOUND, 404);
+    }
+
+    // A balance only exists once the vendor has settled the appointment.
+    if (booking.status !== 'completed') {
+      throw createAppError(ERROR_CODES.BOOKING_NOT_COMPLETED, 409, undefined, {
+        status: booking.status
+      });
+    }
+
+    const settlement = booking.settlement;
+    if (!settlement || settlement.balanceDue <= 0) {
+      throw createAppError(ERROR_CODES.BOOKING_NO_BALANCE_DUE, 400);
+    }
+
+    const outstanding = settlement.balanceDue - (settlement.balancePaid ?? 0);
+    if (outstanding <= 0) {
+      throw createAppError(ERROR_CODES.BOOKING_BALANCE_ALREADY_SETTLED, 409);
+    }
+
+    const userId = booking.userId.toString();
+
+    // Scoped by purpose so it can never collide with the ORIGINAL booking payment,
+    // whose key is hash(bookingId, userId, priceSnapshot).
+    const idempotencyKey = this.generateIdempotencyKey(
+      `${bookingId}:balance`,
+      userId,
+      outstanding
+    );
+
+    const existingTx = await PaymentTransactionModel.findOne({ idempotencyKey });
+    if (existingTx) {
+      if (existingTx.status === 'SUCCEEDED') {
+        return {
+          transactionId: existingTx._id.toString(),
+          status: existingTx.status,
+          amount: outstanding,
+          currency: booking.currency,
+          message: 'Balance already paid'
+        };
+      }
+      if (existingTx.status === 'INITIATED' || existingTx.status === 'PENDING') {
+        const lastPayload = existingTx.rawGatewayPayloads[existingTx.rawGatewayPayloads.length - 1];
+        return {
+          transactionId: existingTx._id.toString(),
+          status: existingTx.status,
+          amount: outstanding,
+          currency: booking.currency,
+          instructions: lastPayload?.instructions,
+          message: 'Balance payment already initiated. Complete the pending payment.'
+        };
+      }
+      // Failed/cancelled — fall through and retry with a new transaction.
+    }
+
+    const gatewayInstance = this.gateways.get(gateway);
+    if (!gatewayInstance) {
+      throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, undefined, { gateway });
+    }
+
+    const transaction = await PaymentTransactionModel.create({
+      bookingId: new Types.ObjectId(bookingId),
+      purpose: 'booking_balance',
+      userId: new Types.ObjectId(userId),
+      gateway,
+      method: gateway === 'STRIPE' ? 'CARD' : 'MOBILE',
+      status: 'INITIATED',
+      gatewayRef: '',
+      amountSnapshot: outstanding,
+      currencySnapshot: booking.currency,
+      idempotencyKey,
+      rawGatewayPayloads: []
+    });
+
+    try {
+      const gatewayResult = await gatewayInstance.initiatePayment({
+        orderId: bookingId,
+        userId,
+        amount: outstanding,
+        currency: booking.currency,
+        channel,
+        metadata: { idempotencyKey, bookingId, purpose: 'booking_balance' }
+      });
+
+      transaction.gatewayRef = gatewayResult.gatewayRef;
+      transaction.status = gatewayResult.status as PaymentStatus;
+      transaction.rawGatewayPayloads.push({
+        timestamp: new Date(),
+        type: 'initiate',
+        ...gatewayResult.rawResponse
+      });
+      transaction.gatewayPayloadHash = this.hashPayload(gatewayResult.rawResponse);
+      await transaction.save();
+
+      // NOTE: `booking.paymentStatus` is deliberately NOT touched. It describes the
+      // ORIGINAL payment and is already `paid`; moving it to `pending` here would
+      // make a fully-paid booking look unpaid, and the unpaid-booking sweep could
+      // then cancel a completed appointment.
+
+      return {
+        transactionId: transaction._id.toString(),
+        status: transaction.status,
+        amount: outstanding,
+        currency: booking.currency,
+        instructions: gatewayResult.instructions,
+        message: gatewayResult.success
+          ? 'Balance payment initiated successfully'
+          : gatewayResult.error || 'Balance payment initiation failed'
+      };
+    } catch (error: any) {
+      transaction.status = 'FAILED';
+      transaction.rawGatewayPayloads.push({
+        timestamp: new Date(),
+        type: 'error',
+        error: error.message
+      });
+      await transaction.save();
+
+      throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, {
+        cause: error.message
+      });
+    }
+  }
 
   /**
    * Verify payment status
-   * 
+   *
    * IDEMPOTENT: Can be called multiple times
-   * 
+   *
    * @param transactionId - Payment transaction ID
    * @returns Updated transaction status
    */
@@ -977,6 +1174,14 @@ export class PaymentOrchestratorService {
       return;
     }
 
+    // A balance payment settles the completion shortfall, NOT the original price.
+    // It must branch before the already-paid check below, which would otherwise
+    // swallow it — the booking is `paid` by definition when a balance exists.
+    if (transaction.purpose === 'booking_balance') {
+      await this.handleBookingBalanceSuccess(booking, transaction);
+      return;
+    }
+
     // IDEMPOTENCY CHECK
     if (booking.paymentStatus === 'paid') {
       console.log(`[PaymentOrchestrator] Booking ${booking._id} already paid. Skipping duplicate payment processing.`);
@@ -1006,6 +1211,51 @@ export class PaymentOrchestratorService {
     }
 
     console.log(`[PaymentOrchestrator] Booking ${booking._id} marked as paid and calendar updated`);
+  }
+
+  /**
+   * Credit a successful BALANCE payment against a completed booking.
+   *
+   * Splits the extra into platform commission + vendor net exactly as the original
+   * payment does, and matures it immediately: the appointment is already
+   * `completed`, so the escrow clock that `splitBooking` alone would leave waiting
+   * on a completion that has already happened would never start.
+   */
+  private async handleBookingBalanceSuccess(
+    booking: IBooking,
+    transaction: IPaymentTransaction
+  ): Promise<void> {
+    const settlement = booking.settlement;
+    if (!settlement) {
+      console.error(`[PaymentOrchestrator] Booking ${booking._id} balance paid but no settlement recorded`);
+      return;
+    }
+
+    // IDEMPOTENCY: the same transaction arriving twice must not double-credit.
+    if (settlement.balanceTransactionId?.toString() === transaction._id?.toString()) {
+      console.log(`[PaymentOrchestrator] Balance for booking ${booking._id} already credited.`);
+      return;
+    }
+
+    settlement.balancePaid = Math.min(
+      settlement.balanceDue,
+      (settlement.balancePaid ?? 0) + transaction.amountSnapshot
+    );
+    settlement.balancePaidAt = new Date();
+    settlement.balancePaymentMethod = 'online';
+    settlement.balanceTransactionId = transaction._id as Types.ObjectId;
+    booking.settlement = settlement;
+    await booking.save();
+
+    try {
+      await earningsSplitService.splitBookingBalance(booking, transaction.amountSnapshot);
+    } catch (error) {
+      console.error('[PaymentOrchestrator] Failed to split booking balance earnings:', error);
+    }
+
+    console.log(
+      `[PaymentOrchestrator] Booking ${booking._id} balance of ${transaction.amountSnapshot} credited`
+    );
   }
 
   /**

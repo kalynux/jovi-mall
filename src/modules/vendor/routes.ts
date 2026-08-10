@@ -73,6 +73,23 @@ router.patch('/profile/password', UserController.updatePassword);
 router.get('/delivery-agencies', VendorProfileController.listDeliveryAgencies);
 
 /**
+ * GET /api/vendor/delivery-agencies/:agencyId/locations
+ *
+ * The agency's physical locations (depots/warehouses), so the product editor can
+ * ask WHICH one holds an agency-warehoused product — the value that goes into
+ * `delivery.pickupLocation.agencyAddressId`. Index 0 is flagged `isPrimary` and
+ * is what a product resolves to when it names no depot.
+ *
+ * Requires an ACTIVE connection with the agency (422 CONNECTION_NOT_ACTIVE):
+ * pointing a product at an agency already requires one, so an unconnected
+ * vendor could not act on any option here. Unpaginated.
+ *
+ * This is the one vendor-facing endpoint that goes past the primary HQ — the
+ * listing endpoint above deliberately still shows only index 0.
+ */
+router.get('/delivery-agencies/:agencyId/locations', VendorProfileController.listAgencyLocations);
+
+/**
  * GET /api/vendor/profile/default-delivery-agency
  *
  * Returns the vendor's currently-configured default delivery agency (or null).

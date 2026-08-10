@@ -102,6 +102,14 @@ export class TemplateRegistry {
             ['vendor_payment_partial', 2, true, 'Vendor: partial payment received'],
             ['vendor_payment_full', 2, true, 'Vendor: full payment received'],
             ['vendor_storage_alert', 3, true, 'Vendor: media storage threshold alert'],
+            // Agency-warehoused stock. `storage` here means a WAREHOUSE, unlike
+            // `vendor_storage_alert` above, which is the media-file quota.
+            ['vendor_storage_stock_request_received', 5, true, 'Vendor: agency proposed a stock change to approve'],
+            ['vendor_storage_stock_request_approved', 4, true, 'Vendor: agency approved the vendor\'s stock change'],
+            ['vendor_storage_stock_request_rejected', 4, true, 'Vendor: agency rejected the vendor\'s stock change'],
+            ['vendor_storage_depot_changed', 3, true, 'Vendor: storage agency moved the product to another depot'],
+            ['vendor_storage_product_suspended', 3, true, 'Vendor: storage agency suspended the product'],
+            ['vendor_storage_product_unsuspended', 2, true, 'Vendor: storage agency lifted the suspension'],
 
             // ── Agency (button base: AGENCY_APP_URL) ─────────────────────────
             ['agency_connection_request_received', 1, true, 'Agency: vendor requested a connection'],
@@ -120,6 +128,10 @@ export class TemplateRegistry {
             ['agency_plan_expired', 2, true, 'Agency: plan expired, downgraded'],
             ['agency_shipment_cap_exceeded', 3, true, 'Agency: active-shipment soft cap reached'],
             ['agency_storage_alert', 3, true, 'Agency: media storage threshold alert'],
+            // Warehoused stock, not the media quota above.
+            ['agency_storage_stock_request_received', 5, true, 'Agency: vendor proposed a stock change to approve'],
+            ['agency_storage_stock_request_approved', 4, true, 'Agency: vendor approved the agency\'s stock change'],
+            ['agency_storage_stock_request_rejected', 4, true, 'Agency: vendor rejected the agency\'s stock change'],
 
             // ── Agent (button base: AGENT_APP_URL) ───────────────────────────
             ['agent_cod_deposit_recorded', 3, true, 'Agent: agency recorded a cash deposit from them'],
@@ -137,7 +149,31 @@ export class TemplateRegistry {
             // Customer-facing COD delivery code — fallback for when the customer is
             // outside Meta's 24h free-form window (see DeliveryCodeService).
             // Body params: order number, delivery code, amount, currency.
-            ['cod_delivery_code', 4, false, 'Customer: cash-on-delivery delivery code']
+            ['cod_delivery_code', 4, false, 'Customer: cash-on-delivery delivery code'],
+
+            // ── Customer (button base: STOREFRONT_URL) ───────────────────────
+            // The fourth notification stack. Param counts MUST match the
+            // `bodyParams` arrays in customer-notification-catalog.ts — Meta
+            // rejects a send whose parameter count differs from the approved
+            // template, and the failure surfaces only at delivery time.
+            ['customer_booking_created', 3, true, 'Customer: booking requested'],
+            ['customer_booking_confirmed', 3, true, 'Customer: vendor accepted the booking'],
+            ['customer_booking_rescheduled', 3, true, 'Customer: booking moved to a new time'],
+            ['customer_booking_cancelled', 3, true, 'Customer: booking cancelled'],
+            ['customer_booking_completed', 3, true, 'Customer: appointment completed and settled'],
+            ['customer_booking_reminder', 3, true, 'Customer: appointment reminder'],
+            ['customer_booking_payment_received', 3, true, 'Customer: booking payment received'],
+            ['customer_booking_balance_due', 4, true, 'Customer: balance owed after completion'],
+            ['customer_booking_refunded', 3, true, 'Customer: booking refunded'],
+            ['customer_booking_refund_pending', 3, true, 'Customer: refund being sent manually'],
+            ['customer_order_created', 4, true, 'Customer: order placed'],
+            ['customer_order_payment_received', 3, true, 'Customer: order payment received'],
+            ['customer_order_shipped', 3, true, 'Customer: order on its way'],
+            ['customer_order_out_for_delivery', 1, true, 'Customer: order out for delivery today'],
+            ['customer_order_delivered', 1, true, 'Customer: order delivered'],
+            ['customer_order_delivery_failed', 1, true, 'Customer: delivery attempt failed'],
+            ['customer_order_cancelled', 1, true, 'Customer: order cancelled'],
+            ['customer_order_refunded', 3, true, 'Customer: order refunded']
         ];
 
         for (const [name, body, hasButton, description] of notificationTemplates) {

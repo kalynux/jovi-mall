@@ -1,0 +1,164 @@
+import mongoose from 'mongoose';
+import {
+    CustomerNotificationRepository,
+    PaginationOptions,
+    ListFilters
+} from '../repositories/customer-notification.repository';
+import {
+    CustomerNotificationPreferenceRepository,
+    UpdateCustomerPreferencesPayload
+} from '../repositories/customer-notification-preference.repository';
+import { ICustomerNotificationPreference } from '../models/customer-notification-preference.model';
+import { CustomerModel } from '../../customers/customer.model';
+import { TelegramRepository } from '../../telegram/telegram.repository';
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
+
+/**
+ * Live verification status for a customer's secondary channels. The source of
+ * truth is the customer document and the telegram link, not the stored
+ * preference flags — mirrors AgentNotificationService's ChannelVerification.
+ */
+interface CustomerChannelVerification {
+    emailVerified: boolean;
+    telegramVerified: boolean;
+    whatsappVerified: boolean;
+}
+
+/**
+ * CustomerNotificationService — list / read / preferences.
+ *
+ * Fourth counterpart to the vendor, agency and agent notification services. See
+ * CustomerNotificationEventHandler for the dispatch side.
+ */
+export class CustomerNotificationService {
+    private telegramRepo: TelegramRepository;
+
+    constructor(
+        private readonly repo: CustomerNotificationRepository = new CustomerNotificationRepository(),
+        private readonly preferenceRepo: CustomerNotificationPreferenceRepository = new CustomerNotificationPreferenceRepository()
+    ) {
+        this.telegramRepo = new TelegramRepository();
+    }
+
+    async listNotifications(
+        customerId: string | mongoose.Types.ObjectId,
+        pagination: PaginationOptions,
+        filters: ListFilters = {}
+    ) {
+        const { data, total } = await this.repo.findByCustomer(customerId, pagination, filters);
+        const unreadCount = await this.repo.countUnread(customerId);
+        return {
+            notifications: data,
+            unreadCount,
+            meta: {
+                total,
+                page: pagination.page,
+                limit: pagination.limit,
+                pages: Math.max(1, Math.ceil(total / pagination.limit))
+            }
+        };
+    }
+
+    /** Unread count alone — for a badge, without paying for a page of rows. */
+    async countUnread(customerId: string | mongoose.Types.ObjectId): Promise<number> {
+        return this.repo.countUnread(customerId);
+    }
+
+    async markAsRead(notificationId: string, customerId: string | mongoose.Types.ObjectId) {
+        const notification = await this.repo.markAsRead(notificationId, customerId);
+        if (!notification) {
+            throw createAppError(
+                ERROR_CODES.CUSTOMER_NOTIFICATION_NOT_FOUND,
+                404,
+                'Notification not found'
+            );
+        }
+        return notification;
+    }
+
+    async markAllAsRead(customerId: string | mongoose.Types.ObjectId): Promise<number> {
+        return this.repo.markAllAsRead(customerId);
+    }
+
+    /**
+     * Preferences, creating defaults on first read. Verification status is
+     * computed live and overlaid — the stored `*Verified` flags are a cache and
+     * are not authoritative.
+     */
+    async getPreferences(
+        customerId: string | mongoose.Types.ObjectId
+    ): Promise<ICustomerNotificationPreference> {
+        const [prefs, verification] = await Promise.all([
+            this.preferenceRepo.getByCustomer(customerId),
+            this.computeVerification(customerId)
+        ]);
+
+        prefs.emailVerified = verification.emailVerified;
+        prefs.telegramVerified = verification.telegramVerified;
+        prefs.whatsappVerified = verification.whatsappVerified;
+        return prefs;
+    }
+
+    /**
+     * Update preferences.
+     *
+     * A secondary channel may only be enabled once it is verified — otherwise the
+     * customer switches on a channel that silently delivers nothing, which reads
+     * as the platform being broken rather than as a setup step they missed.
+     */
+    async updatePreferences(
+        customerId: string | mongoose.Types.ObjectId,
+        updates: UpdateCustomerPreferencesPayload
+    ): Promise<ICustomerNotificationPreference> {
+        const verification = await this.computeVerification(customerId);
+
+        if (updates.emailEnabled === true && !verification.emailVerified) {
+            throw createAppError(
+                ERROR_CODES.CUSTOMER_NOTIFICATION_CHANNEL_NOT_VERIFIED,
+                400,
+                'Verify your email address before enabling email notifications'
+            );
+        }
+        if (updates.telegramEnabled === true && !verification.telegramVerified) {
+            throw createAppError(
+                ERROR_CODES.CUSTOMER_NOTIFICATION_CHANNEL_NOT_VERIFIED,
+                400,
+                'Link your Telegram account before enabling Telegram notifications'
+            );
+        }
+        if (updates.whatsappEnabled === true && !verification.whatsappVerified) {
+            throw createAppError(
+                ERROR_CODES.CUSTOMER_NOTIFICATION_CHANNEL_NOT_VERIFIED,
+                400,
+                'Verify your WhatsApp number before enabling WhatsApp notifications'
+            );
+        }
+
+        const prefs = await this.preferenceRepo.upsertPreferences(customerId, updates);
+
+        prefs.emailVerified = verification.emailVerified;
+        prefs.telegramVerified = verification.telegramVerified;
+        prefs.whatsappVerified = verification.whatsappVerified;
+        return prefs;
+    }
+
+    private async computeVerification(
+        customerId: string | mongoose.Types.ObjectId
+    ): Promise<CustomerChannelVerification> {
+        const customer = await CustomerModel.findById(customerId).select(
+            'user_id email email_verified wa'
+        );
+        if (!customer) {
+            return { emailVerified: false, telegramVerified: false, whatsappVerified: false };
+        }
+
+        const telegramLink = await this.telegramRepo.findByUserId(customer.user_id.toString());
+
+        return {
+            emailVerified: !!customer.email_verified && !!customer.email,
+            telegramVerified: !!telegramLink?.isActive,
+            whatsappVerified: !!customer.wa?.verified
+        };
+    }
+}

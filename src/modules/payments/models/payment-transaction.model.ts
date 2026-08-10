@@ -36,12 +36,27 @@ export type PaymentGatewayType =
   | 'MYCOOLPAY'     // Fallback mobile money gateway
   | 'STRIPE';       // Card payment gateway
 
+/**
+ * What a payment is FOR, when the source id alone is ambiguous.
+ *
+ * A booking can be paid twice: once for the quoted price, and again for a balance
+ * raised when the service ran over. Both rows carry the same `bookingId`, so
+ * without this the webhook cannot tell them apart — and the success handler,
+ * which returns early on an already-paid booking, would silently swallow the
+ * balance payment and never credit it.
+ *
+ * `primary` is the default and covers every pre-existing row.
+ */
+export type PaymentPurpose = 'primary' | 'booking_balance';
+
 export interface IPaymentTransaction extends Document {
   // Source linkage (exactly one of orderId | bookingId | cartId must be set)
   orderId?: Types.ObjectId;         // Source order (single-order product payments)
   bookingId?: Types.ObjectId;       // Source booking (for service payments)
   cartId?: Types.ObjectId;          // Checkout group (multi-vendor cart → N orders, one payment)
   orderIds?: Types.ObjectId[];      // The group's orders (required when cartId is set)
+  /** What this payment settles. See PaymentPurpose. */
+  purpose: PaymentPurpose;
   /**
    * Who paid — but NOT one kind of id, despite the `ref` below.
    *
@@ -110,6 +125,13 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
     type: [Schema.Types.ObjectId],
     ref: MODELS.ORDER,
     default: undefined  // The group's orders; set only for cart-group payments
+  },
+  // Defaults to 'primary' so every existing row reads correctly with no migration.
+  purpose: {
+    type: String,
+    enum: ['primary', 'booking_balance'],
+    required: true,
+    default: 'primary'
   },
   userId: {
     type: Schema.Types.ObjectId,

@@ -568,7 +568,17 @@ export class OrderService {
         const pickupLocation = product.delivery?.pickupLocation;
         let pickupLocationSnapshot: any = null;
         if (pickupLocation?.source === 'agency_storage') {
-          pickupLocationSnapshot = { source: 'agency_storage', vendor_address_id: null, address_snapshot: null };
+          // Only the CHOICE is snapshotted (which depot), never the address: the
+          // depot's address is the agency's live record and an agent must be sent
+          // where it is now. Null carries through as "the primary depot".
+          pickupLocationSnapshot = {
+            source: 'agency_storage',
+            vendor_address_id: null,
+            agency_address_id: pickupLocation.agencyAddressId
+              ? new mongoose.Types.ObjectId(pickupLocation.agencyAddressId)
+              : null,
+            address_snapshot: null,
+          };
         } else if (pickupLocation?.source === 'vendor_address' && pickupLocation.vendorAddressId) {
           const address = vendor.business_addresses?.find(
             (a: any) => a._id.toString() === pickupLocation.vendorAddressId,
@@ -577,6 +587,7 @@ export class OrderService {
             pickupLocationSnapshot = {
               source: 'vendor_address',
               vendor_address_id: new mongoose.Types.ObjectId(pickupLocation.vendorAddressId),
+              agency_address_id: null,
               address_snapshot: {
                 label: address.label,
                 address_line1: address.address_line1,
@@ -641,6 +652,9 @@ export class OrderService {
           return {
             order_item_id: savedItem._id,
             product_id: savedItem.product_id,
+            // The sellable unit, denormalised so a delivered shipment can say
+            // which variant left the shelf without joining back to the order.
+            variant_id: savedItem.variant_id,
             quantity: savedItem.quantity
           };
         });

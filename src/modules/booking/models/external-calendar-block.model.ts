@@ -3,17 +3,25 @@ import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../cor
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 /**
- * ExternalCalendarBlock - Persisted busy times from external calendars
- * 
+ * ExternalCalendarBlock — cached busy times from a vendor's EXTERNAL calendar.
+ *
  * PURPOSE:
- * - Stores busy time ranges fetched from vendor Google Calendars
- * - Enables availability blocking without real-time API calls
- * - Provides audit trail via soft-delete
- * 
+ * - Caches the vendor's *other* commitments (personal appointments, etc.) so
+ *   availability need not call Google on every request.
+ * - Provides an audit trail via soft-delete.
+ *
  * IMPORTANT:
- * - This is DERIVED DATA, not user-editable
- * - Synced by InboundCalendarSyncWorker
- * - Soft-deleted (isActive: false) when external event removed
+ * - DERIVED DATA, not user-editable. Synced by `InboundCalendarSyncWorker`
+ *   (registered in server.ts), and soft-deleted (`isActive: false`) when the
+ *   external event disappears.
+ * - It is NOT the record of this platform's own bookings. Availability derives a
+ *   product's own occupancy from the `bookings` collection; these rows only ever
+ *   ADD busy time on top.
+ * - `AvailabilityService` UNIONS these cached rows with a live calendar query
+ *   rather than choosing between them. Because subtracting the same interval
+ *   twice is idempotent, a stale row can only over-block (until the next sync
+ *   retires it) and never under-block — and a failed live call degrades to this
+ *   cache instead of reporting the vendor wide open.
  */
 export interface IExternalCalendarBlock extends IBaseDocument {
     vendorId: Types.ObjectId;

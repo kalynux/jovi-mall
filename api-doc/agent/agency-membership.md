@@ -63,6 +63,46 @@ here, on the agency's router, and in the vendor↔agency flow.
   COD cash or are still owed wages under that contract — see [cod-cash.md](./cod-cash.md). Both are
   scoped to the one contract: cash you owe agency A never blocks leaving agency B.
 
+### Coverage regions are PICKED, not typed
+
+> 🆕 **Changed 2026-08-06 — UI change required.** `coverage.regions` used to be a free-text list.
+> It is now a **region picker**, over the same catalogue an agency uses for its own coverage areas,
+> and a value that is not a region of the agency's country is rejected. Replace the text input on
+> your terms form with a multi-select. No endpoint, path or field name changed.
+
+Coverage is one of your **two levers** (with `fee_split`), so this affects every terms body you
+send: `POST /memberships/requests`, `POST /memberships/:id/counter`,
+`POST /memberships/:id/terms-proposals` and `…/terms-proposals/:proposalId/counter`.
+
+**The catalogue is the AGENCY's country**, not yours — you are agreeing where you will work *for
+them*. Two fields tell you what to render, and both are on the contract payloads
+(`GET /api/agent/memberships`, `GET /api/agent/memberships/:id`) as well as on the directory row
+(`GET /api/agent/agencies/browse`, as `country` + `coverageAreas`):
+
+| Field | Use |
+|---|---|
+| `agencyCountry` | ISO-2 (`"CM"`). **Scopes the picker** — offer that country's regions from `locations.json`. `null` on a legacy agency: no catalogue, so fall back to free text (the server skips the check too) |
+| `agencyCoverageAreas` | The regions the agency itself declares it serves. **A hint, not a bound** — mark them ("agency covers this"), but let the picker offer the rest of the country too |
+
+You may agree a region the agency has not declared: agencies contract agents for regions they are
+expanding into before they declare them.
+
+| Sent | Stored | Why |
+|---|---|---|
+| `"littoral"` | `littoral` | already a key |
+| `"Littoral"` / `" LITTORAL "` | `littoral` | case and padding are forgiving |
+| `"Extrême-Nord"` / `"Far North"` | `far_north` | localized names resolve to their key |
+| `"Douala"` | — **`400`** | a city is not a region |
+| `"Litoral"` | — **`400`** | a typo resolves to nothing |
+
+`400 CONTRACT_COVERAGE_REGION_INVALID` carries
+`details: { invalid: string[], requiredCountry: "CM", allowedRegions: string[] }` — `allowedRegions`
+is the whole catalogue, so you can repair a stale picker from the error itself.
+
+**`regions: []` means you work everywhere the agency does — not nowhere.** It is the default on
+every contract; label the empty state "All regions". Contracts written before this change may still
+hold free text; render what you receive, and send keys back on the next save.
+
 ### What you may drive
 
 | Change | You may | The agency may |
@@ -108,6 +148,7 @@ contract state, so the UI can render Apply / Pending / Connected.
       "logo": { "id": "665f...", "key": "images/2026/07/logo.png", "url": "https://cdn.example.com/logo.png", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
       "kycVerified": true,
       "headquartersAddress": { "region": "Littoral", "city": "Douala", "address_description": "Akwa, Rue Joss" },
+      "country": "CM",
       "coverageAreas": ["littoral", "centre"],
       "rating": null,
       "policies": { "pricing": { "storage_based_enabled": true, "pickup_based_enabled": true, "notes": null }, "returns": { "payer": "vendor", "return_window_days": 7, "notes": null }, "damage": { "claim_deadline_days": 5, "max_refund_per_item": 50000, "notes": null } },
@@ -121,6 +162,11 @@ contract state, so the UI can render Apply / Pending / Connected.
 `contract` is `null` when you have no history with the agency, otherwise
 `{ id, status, initiatedBy, isPrimary }` — your **live** contract if there is one, else the most
 recent terminal one.
+
+`country` (ISO-2, `null` on legacy agencies) and `coverageAreas` are what a **coverage picker** on
+the apply form needs: the first scopes the region catalogue, the second marks which of those regions
+the agency actually serves. See
+[Coverage regions are picked, not typed](#coverage-regions-are-picked-not-typed).
 
 > **Your commission is not here.** `fee_split` is negotiated per contract, so there is nothing to
 > show until one exists. The `policies` block is the agency's *vendor-facing* terms (pricing model,
@@ -171,6 +217,7 @@ entirely to say "your terms, whatever they are".
 
 | Status | Code | Description |
 |--------|------|-------------|
+| `400` | `CONTRACT_COVERAGE_REGION_INVALID` | A `coverage.regions` entry is not a region of the agency's country. `details: { invalid, requiredCountry, allowedRegions }` |
 | `404` | `DELIVERY_AGENCY_NOT_FOUND` | `agencyId` does not resolve to an agency |
 | `409` | `AGENT_MEMBERSHIP_ALREADY_EXISTS` | You already have a live contract with them. `details: { status, contractId }` |
 | `422` | `AGENT_KYC_NOT_VERIFIED` | `details: { kycStatus, hint }` |
@@ -195,8 +242,8 @@ is your relationship history, not only where you work today.
 | `page` | integer | `1` | |
 | `limit` | integer | `20` | Max 100 |
 
-**Success Response** (`200 OK`): an array of `AgentMembershipDto` each carrying an extra
-`agencyName`, plus `meta`.
+**Success Response** (`200 OK`): an array of `AgentMembershipDto` each carrying three extra
+counterparty fields — `agencyName`, `agencyCountry`, `agencyCoverageAreas` — plus `meta`.
 
 ```json
 {
@@ -207,13 +254,15 @@ is your relationship history, not only where you work today.
       "agentId": "507f1f77bcf86cd799439011",
       "agencyId": "507f1f77bcf86cd799439099",
       "agencyName": "Douala Express Logistics",
+      "agencyCountry": "CM",
+      "agencyCoverageAreas": ["littoral", "centre"],
       "status": "active",
       "origin": "join_request",
       "initiatedBy": "agent",
       "isPrimary": true,
       "employment": { "employmentType": "contractor", "employeeRef": null, "startedAt": null, "endsAt": null },
       "remittanceTerms": { "cadence": "daily", "dayOfWeek": null, "dayOfMonth": null, "graceHours": 24 },
-      "coverage": { "regions": ["Douala"], "area": null },
+      "coverage": { "regions": ["littoral"], "area": null },
       "feeSplit": { "model": "percentage", "agentSharePercent": 70, "agentFlatFee": null, "currency": "XAF" },
       "shipmentValueCeiling": null,
       "codThreshold": 200000,
@@ -258,10 +307,11 @@ Field meanings are in the
 
 ### GET /api/agent/memberships/:membershipId
 
-**Description**: One contract, with the agency's business name resolved.
+**Description**: One contract, with the agency's business surface resolved.
 
-**Success Response** (`200 OK`): a single `AgentMembershipDto` + `agencyName`, same shape as a row
-above.
+**Success Response** (`200 OK`): a single `AgentMembershipDto` + `agencyName`, `agencyCountry` and
+`agencyCoverageAreas`, same shape as a row above. **This is the payload a terms editor renders
+from** — the last two are what its coverage picker needs.
 
 **Error Responses**: `404 CONTRACT_NOT_FOUND` — unknown, or not yours.
 
@@ -562,12 +612,23 @@ wrong:
 > but after a counter the right to approve moves and `initiatedBy` does not — driving buttons from it
 > shows Accept to whoever just made the offer.
 
-Your views add one field:
+Your views add three counterparty fields:
 
 ```typescript
 interface AgentMembershipWithAgencyDto extends AgentMembershipDto {
   /** The agency's business name, resolved from their Magazin. null if unset. */
   agencyName: string | null;
+  /**
+   * ISO-2 country of the agency — the catalogue `coverage.regions` is validated
+   * against, and what a coverage picker must be scoped to. null on a legacy
+   * agency with no country on file, where the server skips the check.
+   */
+  agencyCountry: string | null;
+  /**
+   * The regions the agency declares it serves. A HINT for the picker (mark
+   * them), never a bound — a contract may name any region of `agencyCountry`.
+   */
+  agencyCoverageAreas: string[];
 }
 ```
 
@@ -700,7 +761,7 @@ been proposed at all.
 | Term group | You may propose | Meaning |
 |---|---|---|
 | `fee_split` | **yes** | Your cut per delivery — percentage of the delivery fee, or a flat amount |
-| `coverage` | **yes** | The regions you will work under this contract |
+| `coverage` | **yes** | The regions you will work under this contract — **picked** from the agency's country, see [above](#coverage-regions-are-picked-not-typed) |
 | `remittance_terms` | no | How often you settle their COD cash, and the grace period. You accept or refuse |
 | `shipment_value_ceiling` | no | The most they will trust you with in one parcel. You accept or refuse |
 | `employment` | no | Their internal HR record about you |
@@ -740,6 +801,7 @@ version bumps, and the decision stays with the agency. Nothing was answered, so 
 | Status | Code | Description |
 |--------|------|-------------|
 | `400` | *(Zod)* | Empty body — at least one of `fee_split` / `coverage` |
+| `400` | `CONTRACT_COVERAGE_REGION_INVALID` | A `coverage.regions` entry is not a region of the agency's country. `details: { invalid, requiredCountry, allowedRegions }` |
 | `403` | `CONTRACT_TERMS_NOT_NEGOTIABLE` | You touched a group that is not yours to write |
 | `404` | `CONTRACT_NOT_FOUND` | Unknown, or not yours |
 | `409` | `CONTRACT_INVALID_TRANSITION` | Contract is not `pending` — use `/terms-proposals`. `details: { status }` |
@@ -770,6 +832,7 @@ current terms stay in force until the agency answers."*
 
 | Status | Code | Description |
 |--------|------|-------------|
+| `400` | `CONTRACT_COVERAGE_REGION_INVALID` | A `coverage.regions` entry is not a region of the agency's country. `details: { invalid, requiredCountry, allowedRegions }` |
 | `403` | `CONTRACT_TERMS_NOT_NEGOTIABLE` | A group outside your two levers |
 | `404` | `CONTRACT_NOT_FOUND` | Unknown, or not yours |
 | `409` | `CONTRACT_INVALID_TRANSITION` | Contract is `pending` — counter it instead. `details: { status, allowedFrom }` |
@@ -860,6 +923,7 @@ becomes `superseded` and yours carries `supersedesId` pointing back at it.
 
 | Status | Code | Description |
 |--------|------|-------------|
+| `400` | `CONTRACT_COVERAGE_REGION_INVALID` | A `coverage.regions` entry is not a region of the agency's country. `details: { invalid, requiredCountry, allowedRegions }` |
 | `403` | `CONTRACT_TERMS_NOT_NEGOTIABLE` | A group outside your two levers |
 | `403` | `CONTRACT_TERMS_PROPOSAL_NOT_YOURS` | You raised it — cancel it and raise another |
 | `404` | `CONTRACT_TERMS_PROPOSAL_NOT_FOUND` | Unknown, or not yours |

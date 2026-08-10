@@ -3,8 +3,9 @@ import { PayoutDetailsZodSchema } from '../../../core/types/payout.types';
 import { SUPPORTED_LANGUAGES } from '../../../core/constants/languages';
 import { clearable } from '../../../core/validation/zod.helpers';
 // Coverage areas + HQ addresses live on the Magazin — reuse its geocoded HQ shape
-// (client sends a `/api/geo/search` result as `geo`; `location` is derived on write).
-import { MagazinHeadquartersAddressSchema } from '../../magazin/validators/magazin.validator';
+// (client sends a `/api/geo/search` result as `geo`; `location` is derived on write)
+// and its array schema, which carries the duplicate-id guard both paths need.
+import { MagazinHeadquartersAddressArraySchema } from '../../magazin/validators/magazin.validator';
 
 // ─── Agency Creation ──────────────────────────────────────────────────────────
 
@@ -13,8 +14,6 @@ export const CreateAgencySchema = z.object({
 });
 
 export type CreateAgencyInput = z.infer<typeof CreateAgencySchema>;
-
-const HeadquartersAddressSchema = MagazinHeadquartersAddressSchema;
 
 const KycDetailsSchema = z.object({
     registration_number: clearable(z.string().min(1).trim()),
@@ -31,9 +30,7 @@ export const AgencyOnboardingStep1Schema = z.object({
     coverage_areas: z
         .array(z.string().min(1).trim())
         .min(1, 'At least one coverage area (region) is required'),
-    headquarters_addresses: z
-        .array(HeadquartersAddressSchema)
-        .min(1, 'At least one headquarters address is required. The first entry is the primary.'),
+    headquarters_addresses: MagazinHeadquartersAddressArraySchema,
 });
 
 export type AgencyOnboardingStep1Input = z.infer<typeof AgencyOnboardingStep1Schema>;

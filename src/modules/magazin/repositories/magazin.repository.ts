@@ -98,6 +98,26 @@ export class MagazinRepository {
     );
   }
 
+  /**
+   * Batch-resolve agency ids → the regions each agency declares it serves,
+   * keyed by agency id string. Agencies without a magazin are absent.
+   *
+   * Its own method rather than a wider projection on `findNamesByAgencyIds`,
+   * which every timeline and notification path calls and should not start
+   * paying for an array it never reads. This one has a single audience: the
+   * agent's contract views, where the coverage picker marks which of the
+   * country's regions the agency actually operates in.
+   */
+  async findCoverageAreasByAgencyIds(agencyIds: Array<string>): Promise<Map<string, string[]>> {
+    const ids = [...new Set(agencyIds.filter((id): id is string => !!id))];
+    if (ids.length === 0) return new Map();
+    const rows = await AgencyMagazinModel.find({ agency_id: { $in: ids } })
+      .select('agency_id coverage_areas')
+      .lean()
+      .exec();
+    return new Map(rows.map((r) => [r.agency_id.toString(), r.coverage_areas ?? []]));
+  }
+
   /** Convenience single-id name lookup. Returns null when no magazin exists yet. */
   async findNameByAgencyId(agencyId: string): Promise<string | null> {
     const row = await AgencyMagazinModel.findOne({ agency_id: agencyId }).select('name').lean().exec();
@@ -105,27 +125,54 @@ export class MagazinRepository {
   }
 
   /**
-   * Batch-resolve agency ids → their PRIMARY headquarters address
-   * (`headquarters_addresses[0]`), keyed by agency id string. Agencies with no
-   * magazin, or a magazin with no HQ address recorded, are absent from the map.
+   * Batch-resolve agency ids → ALL their headquarters addresses, in stored order
+   * (index 0 is the primary), keyed by agency id string. Agencies with no magazin
+   * are absent from the map.
    *
-   * Shipment list views need this: an `agency_storage` item is collected from
-   * the agency's own HQ, which is resolved live rather than snapshotted onto the
+   * Shipment list views need this: an `agency_storage` item is collected from one
+   * of the agency's own depots, resolved live rather than snapshotted onto the
    * order. Resolving it per row via `findByAgencyIdOrNull` would be an N+1.
+   *
+   * Returns the whole list, not the primary, because the order item names WHICH
+   * depot (`pickup_location.agency_address_id`). Pair it with `resolveHqAddress`
+   * / `resolveHqAddressFor` (magazin/domain/hq-address.resolver.ts) — never index
+   * into it directly, or the null-means-primary fallback ends up reimplemented
+   * per call site. The projection is unchanged: this method always fetched the
+   * full array and threw away entries 1..n, so returning them costs nothing.
    */
-  async findHqAddressesByAgencyIds(
+  /**
+   * The ids of one agency's depots, in stored order. `null` when the agency has
+   * no magazin at all — distinct from `[]` (a magazin with no depot on file), so
+   * a caller can tell "unknown" from "none" even though both currently mean the
+   * same thing to `PickupLocationValidationService`.
+   *
+   * Ids only: the catalog validates that a chosen depot BELONGS to the agency and
+   * has no use for the addresses themselves, so this keeps the payload minimal
+   * and keeps `IAgencyMagazin` out of the catalog module.
+   */
+  async findHqAddressIdsByAgencyId(agencyId: string): Promise<string[] | null> {
+    const row = await AgencyMagazinModel.findOne({ agency_id: agencyId })
+      .select('headquarters_addresses._id')
+      .lean()
+      .exec();
+    if (!row) return null;
+    return (row.headquarters_addresses ?? [])
+      .map((hq) => hq._id?.toString())
+      .filter((id): id is string => !!id);
+  }
+
+  async findHqAddressListsByAgencyIds(
     agencyIds: Array<string>,
-  ): Promise<Map<string, IAgencyMagazin['headquarters_addresses'][number]>> {
+  ): Promise<Map<string, IAgencyMagazin['headquarters_addresses']>> {
     const ids = [...new Set(agencyIds.filter((id): id is string => !!id))];
     if (ids.length === 0) return new Map();
     const rows = await AgencyMagazinModel.find({ agency_id: { $in: ids } })
       .select('agency_id headquarters_addresses')
       .lean()
       .exec();
-    const map = new Map<string, IAgencyMagazin['headquarters_addresses'][number]>();
+    const map = new Map<string, IAgencyMagazin['headquarters_addresses']>();
     for (const row of rows) {
-      const hq = row.headquarters_addresses?.[0];
-      if (hq) map.set(row.agency_id.toString(), hq);
+      map.set(row.agency_id.toString(), row.headquarters_addresses ?? []);
     }
     return map;
   }

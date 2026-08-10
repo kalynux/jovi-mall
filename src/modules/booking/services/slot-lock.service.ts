@@ -121,12 +121,23 @@ export class SlotLockService {
   }
 
   /**
-   * Extends the TTL of an existing lock.
-   * Returns true if extended, false if not owned.
+   * Extends the TTL of an existing hold.
+   *
+   * `scopeToOwner` must match what `lock()` was called with, or this addresses a
+   * different key entirely — it previously always used the unscoped key, so it
+   * could never extend a capacity-mode (owner-scoped) hold and silently returned
+   * false. Same asymmetry `release`/`assertLocked` already guard against.
+   *
+   * @returns true if extended, false if not held by this owner.
    */
-  async extend(slotId: string, ownerId: string, ttlSeconds: number): Promise<boolean> {
+  async extend(
+    slotId: string,
+    ownerId: string,
+    ttlSeconds: number,
+    scopeToOwner = false
+  ): Promise<boolean> {
     const redis = await getRedisClient(SLOT_LOCK_DB);
-    const key = this.getKey(slotId);
+    const key = this.getKey(slotId, scopeToOwner ? ownerId : undefined);
 
     const value = await redis.get(key);
     if (!value) {

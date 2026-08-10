@@ -31,10 +31,14 @@ export interface CreateBookingInput {
   /**
    * Booking mode from the service variant's serviceConfig. Drives how the booking is
    * created:
-   * - 'calendar' (default): booking is CONFIRMED immediately and a calendar event is created.
-   * - 'manual': booking is created PENDING with no calendar event; the vendor must confirm
-   *   it (PATCH /bookings/:id/status → confirmed), which then creates the calendar event.
-   * - 'capacity': not yet implemented; treated as 'calendar'.
+   * - 'calendar' (default): booking is CONFIRMED immediately, single occupancy. A
+   *   calendar event is mirrored best-effort after the commit.
+   * - 'manual': booking is created PENDING; the vendor must confirm it
+   *   (PATCH /bookings/:id/status → confirmed), which then creates the calendar event.
+   *   The booking row blocks the slot from creation regardless — it does not wait
+   *   for the calendar event.
+   * - 'capacity': CONFIRMED immediately, up to `serviceConfig.maxBookings` seats per
+   *   slot sharing one calendar event, via `createCapacityBooking`.
    */
   bookingMode?: 'calendar' | 'manual' | 'capacity';
 }

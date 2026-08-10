@@ -334,6 +334,13 @@ export class PayoutRequestService {
     if (method.method === 'bank' && method.bank) {
       return `bank transfer (${method.bank.bank_name}, account ${method.bank.account_number})`;
     }
+    if (method.method === 'card' && method.card) {
+      // Only last4 exists — there is no PAN to leak into a ticket note, which is
+      // exactly why the card branch stores none. Expiry is included because it
+      // is what an admin checks before pushing funds.
+      const expiry = `${String(method.card.expiry_month).padStart(2, '0')}/${method.card.expiry_year}`;
+      return `card (${method.card.brand.toUpperCase()} •••• ${method.card.last4}, expires ${expiry}, ${method.card.card_holder_name})`;
+    }
     return 'the configured payout method';
   }
 

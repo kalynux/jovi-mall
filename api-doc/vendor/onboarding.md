@@ -159,10 +159,11 @@ Captures the vendor's country, timezone, and payout method.
 |-------|------|-----------|------------|-------|
 | `country` | `string` | Yes | Exactly 2 chars, ISO-2 country code | Auto-uppercased (e.g. `"CM"`, `"NG"`). **Locks at onboarding completion** — it can still be corrected on step re-edits while onboarding is in progress, but never afterwards (`403 PROFILE_COUNTRY_IMMUTABLE` on the profile PATCH). Correcting it is rejected (`400 ADDRESS_COUNTRY_MISMATCH`) if geocoded business addresses added in Step 3 already resolve in the old country. All business addresses must be located within it. |
 | `timezone` | `string` | Yes | Min 1 char, IANA timezone string | E.g. `"Africa/Douala"`, `"Africa/Lagos"`. |
-| `payout_details` | `object[]` | Yes | Min 1 entry, Max 3 entries | Ordered array — index 0 is the preferred method. Same schema as agency payout. |
-| `payout_details[].method` | `string` | Yes | Enum: `"mobile_money"` or `"bank"` | Determines which sub-object is required. |
+| `payout_details` | `object[]` | Yes | Min 1 entry, Max 3 entries | Ordered array — index 0 is the preferred method. Full reference, including masking and what happens at payout time: **[Payout methods](./payout-methods.md)**. |
+| `payout_details[].method` | `string` | Yes | **Today: `"mobile_money"` only** — `"bank"` and `"card"` are 🚧 [switched off](./payout-methods.md#availability) | Determines which sub-object is required. |
 | `payout_details[].mobile_money` | `object \| null` | Conditional | Required if `method === "mobile_money"` | See sub-fields below. |
-| `payout_details[].bank` | `object \| null` | Conditional | Required if `method === "bank"` | See sub-fields below. |
+| `payout_details[].bank` | `object \| null` | Conditional | Required if `method === "bank"` | 🚧 Switched off. See sub-fields below. |
+| `payout_details[].card` | `object \| null` | Conditional | Required if `method === "card"` | 🚧 Switched off. See sub-fields below. |
 | `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard. |
 
 **`mobile_money` sub-fields:**
@@ -173,7 +174,8 @@ Captures the vendor's country, timezone, and payout method.
 | `phone_number` | `string` | Yes | **E.164** — leading `+` and country code required (e.g. `+237670000000`). [Contact formats](../README.md#contact-formats-phone--email) |
 | `account_name` | `string` | Yes | Min 1 char |
 
-**`bank` sub-fields:**
+**`bank` sub-fields** — 🚧 **switched off, not configurable right now**
+([why](./payout-methods.md#availability)):
 
 | Field | Type | Required? | Validation |
 |-------|------|-----------|------------|
@@ -181,6 +183,43 @@ Captures the vendor's country, timezone, and payout method.
 | `account_number` | `string` | Yes | Min 1 char |
 | `account_name` | `string` | Yes | Min 1 char |
 | `country` | `string` | Yes | Min 1 char. ISO country code recommended (e.g. `"CM"`) |
+
+**`card` sub-fields** (Visa / Mastercard / …) — 🚧 **switched off, not configurable right now**
+([why](./payout-methods.md#availability)):
+
+> **The API never accepts a card number or CVV** — send them and the request is **rejected**, not
+> silently ignored. A card destination is identified by brand + last 4 + holder + expiry. Full
+> rationale and the exact refused field names: [Payout methods → card](./payout-methods.md#card).
+
+| Field | Type | Required? | Validation |
+|-------|------|-----------|------------|
+| `brand` | `string` | Yes | Enum: `visa` · `mastercard` · `amex` · `discover` · `unionpay` · `jcb` · `diners` · `verve` · `other`. Case-insensitive |
+| `last4` | `string` | Yes | Exactly 4 digits — the last 4 of the card number |
+| `card_holder_name` | `string` | Yes | Min 1 char |
+| `expiry_month` | `number` | Yes | Integer 1–12 |
+| `expiry_year` | `number` | Yes | 4-digit year. The card must not already be expired |
+| `country` | `string` | Yes | Issuing country. ISO-2 recommended (e.g. `"CM"`) |
+| `issuing_bank` | `string \| null` | No | Max 100 chars |
+| `gateway_provider` | `string \| null` | No | E.g. `"stripe"` — the gateway that issued the token below |
+| `gateway_token` | `string \| null` | No | The gateway's handle for this card, if your client tokenized it |
+
+```jsonc
+// 🚧 Refused today with 400 on payout_details.n.method — this is the shape for
+// when `card` is switched back on.
+{
+  "method": "card",
+  "card": {
+    "brand": "visa",
+    "last4": "4242",
+    "card_holder_name": "JEAN DUPONT",
+    "expiry_month": 8,
+    "expiry_year": 2029,
+    "country": "CM"
+  },
+  "mobile_money": null,
+  "bank": null
+}
+```
 
 #### Success Response (`200 OK`)
 

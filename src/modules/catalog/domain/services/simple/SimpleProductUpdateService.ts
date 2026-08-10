@@ -7,6 +7,10 @@ import { Variant } from '../../../repositories/mappers/variant.mapper';
 import { ProductUpdateService } from '../ProductUpdateService';
 import { assertSimpleMode } from './mode-guard';
 import { PickupLocationSource } from '../../../models/product.model';
+// Concrete files, not the stock-requests barrel: that module imports catalog
+// repositories, so a barrel import here risks a require cycle.
+import { StockChangeGate, stockChangeGate } from '../../../../stock-requests/services/stock-change-gate';
+import { StockRequestDto } from '../../../../stock-requests/dto/stock-adjustment-request.dto';
 
 export interface UpdateSimpleProductInput {
     title?: string;
@@ -30,12 +34,23 @@ export interface UpdateSimpleProductInput {
     height?: number;
 
     freeDelivery?: boolean;
-    pickupLocation?: { source: PickupLocationSource; vendorAddressId?: string | null } | null;
+    pickupLocation?: {
+        source: PickupLocationSource;
+        vendorAddressId?: string | null;
+        /** Which agency depot, for `agency_storage`. Omitted/null = the primary. */
+        agencyAddressId?: string | null;
+    } | null;
 }
 
 export interface UpdateSimpleProductResult {
     product: Product;
     variant: Variant;
+    /**
+     * Set when the product is agency-warehoused and the body touched `stock` /
+     * `isInfiniteStock`: the quantity was NOT written, and this is the request the
+     * agency has to approve. `variant` reflects the unchanged quantity.
+     */
+    stockAdjustment?: StockRequestDto | null;
 }
 
 /**
@@ -61,9 +76,20 @@ export class SimpleProductUpdateService {
         private readonly productRepository: IProductRepository,
         private readonly variantRepository: IVariantRepository,
         private readonly productUpdateService: ProductUpdateService,
+        private readonly stockGate: StockChangeGate = stockChangeGate,
     ) { }
 
-    async execute(productId: string, vendorId: string, input: UpdateSimpleProductInput): Promise<UpdateSimpleProductResult> {
+    /**
+     * @param actorUserId who is editing — recorded on the stock-adjustment request
+     *   when the quantity has to be countersigned. Optional so the one existing
+     *   call site needn't be threaded if it has no user to hand.
+     */
+    async execute(
+        productId: string,
+        vendorId: string,
+        input: UpdateSimpleProductInput,
+        actorUserId?: string | null,
+    ): Promise<UpdateSimpleProductResult> {
         const product = await this.productRepository.findById(productId, vendorId);
         if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
 
@@ -107,11 +133,28 @@ export class SimpleProductUpdateService {
             }),
         });
 
+        // The stock gate, AFTER the product write: a body that switches pickup to
+        // `agency_storage` and sets a quantity in one call must be judged against the
+        // arrangement it just created, not the one it replaced. Same reasoning in
+        // reverse for a body switching storage off — that quantity applies directly.
+        const stockAdjustment = await this.stockGate.intercept({
+            productId,
+            variantId: variant.id,
+            vendorId,
+            userId: actorUserId ?? null,
+            quantity: input.stock,
+            isInfiniteStock: input.isInfiniteStock,
+        });
+
         const variantUpdates: Partial<Variant> = {};
         if (input.price !== undefined) variantUpdates.price = input.price;
         if (input.compareAtPrice !== undefined) variantUpdates.compareAtPrice = input.compareAtPrice;
-        if (input.stock !== undefined) variantUpdates.stock = input.stock;
-        if (input.isInfiniteStock !== undefined) variantUpdates.isInfiniteStock = input.isInfiniteStock;
+        // Skipped entirely when the gate queued a request — the quantity is the
+        // agency's to confirm, and writing it here would defeat the whole flow.
+        if (!stockAdjustment) {
+            if (input.stock !== undefined) variantUpdates.stock = input.stock;
+            if (input.isInfiniteStock !== undefined) variantUpdates.isInfiniteStock = input.isInfiniteStock;
+        }
         if (input.lowStockThreshold !== undefined) variantUpdates.lowStockThreshold = input.lowStockThreshold;
         if (input.allowOversell !== undefined) variantUpdates.allowOversell = input.allowOversell;
         if (input.weight !== undefined) variantUpdates.weight = input.weight;
@@ -131,7 +174,7 @@ export class SimpleProductUpdateService {
             ? (await this.variantRepository.update(variant.id, variantUpdates)) ?? variant
             : variant;
 
-        return { product: updatedProduct, variant: updatedVariant };
+        return { product: updatedProduct, variant: updatedVariant, stockAdjustment };
     }
 
     /**

@@ -38,7 +38,7 @@ router.get('/profile/completion-status', AgentSelfController.getCompletionStatus
 /**
  * PATCH /api/agent/onboarding/step
  * Body: { step: 1 | 2, ...stepFields }
- *   Step 1: { vehicle_info: { vehicle_type, color, plate_number? } }
+ *   Step 1: { vehicle_info: { vehicle_type, color, plate_number?, photo_file_id? } }
  *   Step 2: { skip?: boolean, avatar_url?, timezone? }
  */
 router.patch('/onboarding/step', AgentSelfController.completeOnboardingStep);
@@ -93,7 +93,7 @@ router.get('/payout-methods', AgentSelfController.getPayoutMethods);
 
 /**
  * PUT /api/agent/payout-methods
- * Body: { payout_details: [{ method: 'mobile_money' | 'bank', ... }] }
+ * Body: { payout_details: [{ method: 'mobile_money' | 'bank' | 'card', ... }] }
  * Ordered, 1–3 entries; the FIRST is the one payouts use. Replaced wholesale.
  * Required before POST /api/agent/earnings/payout will succeed.
  */

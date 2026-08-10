@@ -92,6 +92,7 @@ export interface VendorNotificationPreferencesDTO {
             connectionUpdated: boolean;
             payoutUpdates: boolean;
             shipmentRejected: boolean;
+            agencyStorageUpdates: boolean;
         };
     };
 }

@@ -8,6 +8,8 @@ import {
   CreateAllocationInput,
 } from '../repositories/earnings-allocation.repository';
 import { EarningsAccountService, earningsAccountService } from './earnings-account.service';
+// Safe to import directly: earnings-completion imports nothing from this file.
+import { earningsCompletionService } from './earnings-completion.service';
 import { EARNINGS_CONFIG, daysFromNow } from '../config/earnings.config';
 import { EarningsSourceType } from '../models/earnings-allocation.model';
 import { IOrder, IOrderItem } from '../../orders/order.model';
@@ -633,6 +635,80 @@ export class EarningsSplitService {
     await this.persist(allocations);
 
     await this.emitSplit('booking', sourceId, vendorId, { gross, commission, vendorNet });
+  }
+
+  /**
+   * Split a booking's BALANCE payment — the extra collected when a service ran
+   * longer or cost more than quoted.
+   *
+   * Same commission split as `splitBooking`, with two differences that matter:
+   *
+   * 1. **It matures immediately.** `splitBooking` allocations are held until the
+   *    booking completes, but a balance only exists *because* it already has.
+   *    Leaving these `held` with no completion left to trigger them is money
+   *    held forever — the same failure mode `onOrderCompleted` guards against by
+   *    sweeping every source type.
+   * 2. **Idempotency is keyed on the payment, not the booking.** The unique index
+   *    is (source_type, source_id, beneficiary), and `splitBooking` already owns
+   *    `('booking', bookingId)` — so a balance split must carry its own source id
+   *    or it would collide with the original and silently no-op.
+   */
+  async splitBookingBalance(booking: IBooking, amount: number): Promise<void> {
+    if (amount <= 0) return;
+
+    const bookingId = booking._id.toString();
+    // Distinct source id, for the reason in the docstring above.
+    const sourceId = booking.settlement?.balanceTransactionId?.toString() ?? bookingId;
+    if (await this.allocationRepo.existsForSource('booking', sourceId)) return; // idempotent
+
+    const vendorId = booking.vendorId.toString();
+    const currency = booking.currency;
+
+    const { commissionPercent } = await this.entitlements.getEntitlements(vendorId);
+    const commission = Math.floor((amount * commissionPercent) / 100);
+    const vendorNet = amount - commission;
+    if (vendorNet < 0) {
+      throw createAppError(ERROR_CODES.EARNINGS_INVALID_SPLIT, 422, undefined, {
+        gross: amount,
+        commission,
+      });
+    }
+
+    await this.persist([
+      {
+        source_type: 'booking',
+        source_id: sourceId,
+        beneficiary_type: 'vendor',
+        beneficiary_id: vendorId,
+        gross_snapshot: amount,
+        commission_percent_snapshot: commissionPercent,
+        amount: vendorNet,
+        currency,
+      },
+      {
+        source_type: 'booking',
+        source_id: sourceId,
+        beneficiary_type: 'platform',
+        beneficiary_id: null,
+        gross_snapshot: amount,
+        commission_percent_snapshot: commissionPercent,
+        amount: commission,
+        currency,
+      },
+    ]);
+
+    // Start the hold clock now — see (1) above.
+    try {
+      await earningsCompletionService.onSourceCompleted('booking', sourceId);
+    } catch (error) {
+      console.error('[EarningsSplitService] Failed to mature booking balance allocations:', error);
+    }
+
+    await this.emitSplit('booking', sourceId, vendorId, {
+      gross: amount,
+      commission,
+      vendorNet,
+    });
   }
 
   /** Create allocations and hold each share — all in ONE transaction. */

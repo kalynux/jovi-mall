@@ -223,6 +223,25 @@ const STORAGE_BUTTON: ButtonDef = {
     urlSuffix: 'settings/storage'
 };
 
+const REVIEW_STOCK_CHANGE_LABEL: Record<Language, string> = {
+    en: 'Review stock change',
+    fr: 'Examiner la modification de stock',
+    pt: 'Revisar alteração de stock',
+    es: 'Revisar cambio de stock',
+    ar: 'مراجعة تغيير المخزون'
+};
+
+/**
+ * Points at the stock-request inbox, NOT at `settings/storage` — that one is the
+ * media-file quota screen. Two unrelated things called "storage" is exactly why the
+ * aggregate types are separate too (`stock_request` vs `storage`).
+ */
+const STOCK_REQUEST_BUTTON: ButtonDef = {
+    type: 'url',
+    label: REVIEW_STOCK_CHANGE_LABEL,
+    urlSuffix: 'stock-requests/{{requestId}}'
+};
+
 // ─── Catalog ─────────────────────────────────────────────────────────────────
 
 // NOTE: the WhatsApp template names below (agency_*) still need to be created
@@ -717,6 +736,109 @@ export const AGENCY_NOTIFICATION_CATALOG: Record<AgencyNotificationType, Situati
             template: { name: 'agency_storage_alert', bodyParams: ['{{percentUsed}}', '{{usageFormatted}}', '{{limitFormatted}}'] }
         },
         button: STORAGE_BUTTON
+    },
+
+    // ─── Stock adjustment on a warehoused SKU ────────────────────────────────
+    // The vendor proposed; it is this agency's to answer. The copy names both
+    // numbers, because the decision is "is 90 right, or is 120?" and a body that
+    // only carries the new figure makes the agency go and look up the old one.
+    'storage.stock_request.received': {
+        base: {
+            en: {
+                subject: 'Stock change to approve',
+                body: '{{vendorName}} wants to change the stock you hold for {{productTitle}} ({{sku}}) from {{quantityBefore}} to {{requestedQuantity}}. It only takes effect once you approve it.'
+            },
+            fr: {
+                subject: 'Modification de stock à approuver',
+                body: '{{vendorName}} souhaite modifier le stock que vous détenez pour {{productTitle}} ({{sku}}) de {{quantityBefore}} à {{requestedQuantity}}. La modification ne prend effet qu\'après votre approbation.'
+            },
+            pt: {
+                subject: 'Alteração de stock para aprovar',
+                body: '{{vendorName}} quer alterar o stock que guarda de {{productTitle}} ({{sku}}) de {{quantityBefore}} para {{requestedQuantity}}. Só entra em vigor depois de aprovar.'
+            },
+            es: {
+                subject: 'Cambio de stock para aprobar',
+                body: '{{vendorName}} quiere cambiar el stock que almacenas de {{productTitle}} ({{sku}}) de {{quantityBefore}} a {{requestedQuantity}}. Solo se aplica cuando lo apruebes.'
+            },
+            ar: {
+                subject: 'تغيير في المخزون بحاجة إلى موافقة',
+                body: 'يريد {{vendorName}} تغيير المخزون الذي تحتفظ به من {{productTitle}} ({{sku}}) من {{quantityBefore}} إلى {{requestedQuantity}}. لن يسري التغيير إلا بعد موافقتك.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'agency_storage_stock_request_received',
+                bodyParams: ['{{vendorName}}', '{{productTitle}}', '{{sku}}', '{{quantityBefore}}', '{{requestedQuantity}}']
+            }
+        },
+        button: STOCK_REQUEST_BUTTON
+    },
+
+    'storage.stock_request.approved': {
+        base: {
+            en: {
+                subject: 'Stock change approved',
+                body: '{{vendorName}} approved your stock change for {{productTitle}} ({{sku}}). It now reads {{requestedQuantity}}.'
+            },
+            fr: {
+                subject: 'Modification de stock approuvée',
+                body: '{{vendorName}} a approuvé votre modification de stock pour {{productTitle}} ({{sku}}). Le stock est maintenant de {{requestedQuantity}}.'
+            },
+            pt: {
+                subject: 'Alteração de stock aprovada',
+                body: '{{vendorName}} aprovou a sua alteração de stock para {{productTitle}} ({{sku}}). Passou a ser {{requestedQuantity}}.'
+            },
+            es: {
+                subject: 'Cambio de stock aprobado',
+                body: '{{vendorName}} aprobó tu cambio de stock para {{productTitle}} ({{sku}}). Ahora es {{requestedQuantity}}.'
+            },
+            ar: {
+                subject: 'تمت الموافقة على تغيير المخزون',
+                body: 'وافق {{vendorName}} على تغيير المخزون الذي طلبته لـ {{productTitle}} ({{sku}}). أصبح الآن {{requestedQuantity}}.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'agency_storage_stock_request_approved',
+                bodyParams: ['{{vendorName}}', '{{productTitle}}', '{{sku}}', '{{requestedQuantity}}']
+            }
+        },
+        button: STOCK_REQUEST_BUTTON
+    },
+
+    'storage.stock_request.rejected': {
+        base: {
+            en: {
+                subject: 'Stock change rejected',
+                body: '{{vendorName}} rejected your stock change for {{productTitle}} ({{sku}}). It stays at {{quantityBefore}}.'
+            },
+            fr: {
+                subject: 'Modification de stock refusée',
+                body: '{{vendorName}} a refusé votre modification de stock pour {{productTitle}} ({{sku}}). Le stock reste à {{quantityBefore}}.'
+            },
+            pt: {
+                subject: 'Alteração de stock recusada',
+                body: '{{vendorName}} recusou a sua alteração de stock para {{productTitle}} ({{sku}}). Mantém-se em {{quantityBefore}}.'
+            },
+            es: {
+                subject: 'Cambio de stock rechazado',
+                body: '{{vendorName}} rechazó tu cambio de stock para {{productTitle}} ({{sku}}). Se mantiene en {{quantityBefore}}.'
+            },
+            ar: {
+                subject: 'تم رفض تغيير المخزون',
+                body: 'رفض {{vendorName}} تغيير المخزون الذي طلبته لـ {{productTitle}} ({{sku}}). سيبقى عند {{quantityBefore}}.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'agency_storage_stock_request_rejected',
+                bodyParams: ['{{vendorName}}', '{{productTitle}}', '{{sku}}', '{{quantityBefore}}']
+            }
+        },
+        button: STOCK_REQUEST_BUTTON
     }
 };
 

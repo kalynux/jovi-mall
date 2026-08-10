@@ -67,9 +67,11 @@ export function normalizeCoverageAreasForCountry(
 // Three vocabularies meet whenever a contract's coverage is compared to an
 // order's delivery region, and none of them agrees with the others:
 //
-//   1. `AgentAgencyContract.coverage.regions` — FREE TEXT. The validator bounds
-//      its length and nothing else, so an agency may type "Littoral",
-//      "littoral", or "Douala — Littoral".
+//   1. `AgentAgencyContract.coverage.regions` — canonical region KEYS since the
+//      contract terms gained a picker (`normalizeContractRegions` canonicalises
+//      every write against the agency's country). It WAS free text, and rows
+//      written before that check still are — "Littoral", "Douala — Littoral" —
+//      which is why the read path still goes through the resolver below.
 //   2. `AgencyMagazin.coverage_areas` — canonical lowercase region KEYS from
 //      locations.json, enforced by normalizeCoverageAreasForCountry above.
 //   3. `order.delivery_address.components.region` — whatever the geocoding

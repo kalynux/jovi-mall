@@ -35,6 +35,11 @@ async function agentAvatar(agent: IDeliveryAgent) {
   return resolveFileDetail(agent.avatar_file_id?.toString(), fileRepository, storageProvider);
 }
 
+/** Same, for the vehicle photo — the full profile DTO carries both. */
+async function agentVehiclePhoto(agent: IDeliveryAgent) {
+  return resolveFileDetail(agent.vehicle_info?.photo_file_id?.toString(), fileRepository, storageProvider);
+}
+
 function actorOf(req: Request) {
   return { userId: req.auth!.user.id, role: req.auth!.role };
 }
@@ -63,7 +68,12 @@ export class AdminAgentController {
     res.json({
       success: true,
       data: {
-        agent: AgentProfileMapper.toResponseDto(agent, new Date(), await agentAvatar(agent)),
+        agent: AgentProfileMapper.toResponseDto(
+          agent,
+          new Date(),
+          await agentAvatar(agent),
+          await agentVehiclePhoto(agent),
+        ),
         // Arrow, not bare: `toDto`'s second parameter is the open terms-proposal
         // id, and `map` would supply the element index for it.
         memberships: memberships.map((m) => AgentMembershipMapper.toDto(m)),

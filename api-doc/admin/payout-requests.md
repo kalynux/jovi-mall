@@ -69,7 +69,8 @@ Authorization: Bearer <access_token>
       "payout_method_snapshot": {
         "method": "mobile_money",
         "mobile_money": { "provider": "MTN", "phone_number": "+237...", "account_name": "..." },
-        "bank": null
+        "bank": null,
+        "card": null
       },
       "ticket_id": "66f0a2...",
       "requested_by_user_id": "6601...",
@@ -88,6 +89,26 @@ Authorization: Bearer <access_token>
 `ownerName` is resolved from the vendor/agency profile for display; everything else is the raw
 `PayoutRequest` record. `payout_method_snapshot` is frozen at request time — it reflects where the
 money should go even if the profile's payout details changed since.
+
+`payout_method_snapshot.method` is `mobile_money`, `bank` or **`card`**, and exactly one of the
+three sub-objects is non-null. **Owners can only configure `mobile_money` right now** — `bank` and
+`card` are switched off at the write path — but a snapshot of either still reaches this queue if it
+was configured before the switch, and it is still yours to pay. Switching a kind off closes the door
+on new configuration, never on money already addressed. Unlike the owner-facing reads, **this snapshot is unmasked** — you
+are the one sending the money, so `phone_number` and `account_number` come through in full. A
+**card** is the exception, and not for redaction reasons: no card number was ever collected. You get
+`brand`, `last4`, `card_holder_name`, `expiry_month`/`expiry_year`, `issuing_bank`, `country`, and a
+`gateway_token` **only if** the owner's client tokenized the card through a payment gateway.
+
+- **With a token** the transfer is automatable through that gateway.
+- **Without one**, settle it the same way you settle a bank transfer: confirm the destination from
+  brand + last4 + holder + expiry, send out of band, and record the external reference on
+  `mark-paid`.
+
+Full contract for what the owner could have entered, including why no PAN exists:
+**[Vendor](../vendor/payout-methods.md)** · **[Agency](../agency/payout-methods.md)** ·
+**[Agent](../agent/payout-methods.md)** payout methods — the three are the same schema, documented
+per role.
 
 ### GET /api/admin/payout-requests/:id
 

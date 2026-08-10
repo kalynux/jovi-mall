@@ -10,6 +10,7 @@ import { productBookingRouter } from '../modules/catalog/routes/product-booking.
 import { paymentRouter, paymentWebhookRouter } from '../modules/payments';
 import { bookingPaymentRouter } from '../modules/booking/routes/booking-payment.routes';
 import vendorBookingRoutes from '../modules/booking/routes/vendor-booking.routes';
+import customerBookingRoutes from '../modules/booking/routes/customer-booking.routes';
 
 const router = express.Router();
 
@@ -33,6 +34,14 @@ router.use('/payments', paymentRouter);  // Payment API endpoints
 // Booking payment routes (customer-facing: initiate payment, check status)
 router.use('/bookings', bookingPaymentRouter);
 
+// Customer booking self-service (list, detail, cancel, reschedule).
+// Mounted beside /customer/orders — the equivalent surface for physical goods.
+router.use('/customer/bookings', customerBookingRoutes);
+
+// Customer notification inbox + channel preferences (the fourth stack).
+import customerNotificationRoutes from '../modules/notifications/routes/customer-notification.routes';
+router.use('/customer/notifications', customerNotificationRoutes);
+
 // Vendor routes
 import vendorRoutes from '../modules/vendor/routes';
 router.use('/vendor', vendorRoutes);
@@ -48,6 +57,10 @@ router.use('/vendor/store', storeRoutes);
 import magazinRoutes from '../modules/magazin/routes';
 router.use('/agency/magazin', magazinRoutes);
 
+// Agency inventory — which SKUs this agency warehouses, at which depot
+import agencyInventoryRoutes from '../modules/inventory/routes';
+router.use('/agency/inventory', agencyInventoryRoutes);
+
 // Vendor product management routes
 import vendorProductsRoutes from '../modules/catalog/routes/vendor-products.routes';
 router.use('/vendor/products', vendorProductsRoutes);
@@ -55,6 +68,13 @@ router.use('/vendor/products', vendorProductsRoutes);
 // Vendor inventory management routes
 import vendorInventoryRoutes from '../modules/catalog/routes/vendor-inventory.routes';
 router.use('/vendor/inventory', vendorInventoryRoutes);
+
+// Stock-adjustment requests — the two-sided gate on `variant.stock` for SKUs an
+// agency warehouses. Two mirrored routers; the verbs mean the same on both sides.
+import vendorStockRequestRoutes from '../modules/stock-requests/routes/vendor-stock-request.routes';
+import agencyStockRequestRoutes from '../modules/stock-requests/routes/agency-stock-request.routes';
+router.use('/vendor/stock-requests', vendorStockRequestRoutes);
+router.use('/agency/stock-requests', agencyStockRequestRoutes);
 
 // Billing: pricing plans & credit wallet — same engine for vendor, agency & agent.
 // Mounted at the role roots so endpoints read as /vendor/plans, /agency/plans,
@@ -67,6 +87,25 @@ router.use('/vendor', vendorBillingRoutes);
 router.use('/agency', agencyBillingRoutes);
 router.use('/agent', agentBillingRoutes);
 router.use('/admin', adminBillingRoutes);
+
+// ─── Public (unauthenticated) ────────────────────────────────────────────────
+// The published price list, for the marketing site — which prints real prices and
+// until now had to hand-copy them out of the seed script because every plan
+// endpoint sat behind requireAuth. Read-only, no identity, nothing owner-scoped.
+//
+// ⚠️ `/public` is the ONE mount with no auth guard anywhere above or below it.
+// Anything added under this prefix is world-readable with no further review, so a
+// router mounted here must contain only reads of already-published data. See the
+// header of public-billing.routes.ts.
+import publicBillingRoutes from '../modules/billing/routes/public-billing.routes';
+router.use('/public', publicBillingRoutes);
+
+// The blog, for the marketing site's article pages. Same prefix, same rules — published
+// prose only, five-minute cache, no identity. Two routers on one prefix is fine: their
+// paths do not overlap, and Express falls through the first when nothing matches.
+// The editor's side is /api/admin/articles, mounted below behind requireRole(['admin']).
+import publicBlogRoutes from '../modules/blog/routes/public-blog.routes';
+router.use('/public', publicBlogRoutes);
 
 // Earnings: commission/escrow ledger. Vendor sees held vs withdrawable balances;
 // agency sees its own held vs withdrawable delivery-fee balance; agent sees their
@@ -207,6 +246,13 @@ router.use('/admin', adminAgencyRoutes);
 // Admin COD oversight (cash chain: remittance confirmation, liabilities, discrepancies)
 import adminCodRoutes from '../modules/cod/admin-cod.routes';
 router.use('/admin/cod', adminCodRoutes);
+
+// Blog editor — the admin half of /api/public/articles. Mounted at its own specific
+// prefixes rather than on the shared `/admin` root, so it cannot be shadowed by (or
+// shadow) the four routers already stacked there.
+import { adminArticleRoutes, adminArticleAuthorRoutes } from '../modules/blog/routes/admin-blog.routes';
+router.use('/admin/articles', adminArticleRoutes);
+router.use('/admin/article-authors', adminArticleAuthorRoutes);
 
 // Admin profile routes
 import adminRoutes from '../modules/admins/routes';

@@ -158,6 +158,40 @@ export function fromPickupSnapshot(
 }
 
 /**
+ * A vendor's business address (`vendor.business_addresses[]`) — the source a
+ * product's `pickup_location.vendor_address_id` points at. Field-for-field the
+ * same shape as a customer's saved address, but kept as its own adapter because
+ * the two are separate stored shapes that are free to diverge, and a call site
+ * naming the wrong one would still compile.
+ */
+export function fromVendorBusinessAddress(
+  addr:
+    | {
+        label?: string | null;
+        address_line1?: string | null;
+        address_line2?: string | null;
+        city?: string | null;
+        state?: string | null;
+        country?: string | null;
+        location?: IGeoPoint | null;
+        geo?: IGeoAddress | null;
+      }
+    | null
+    | undefined,
+): AddressDetail | null {
+  if (!addr) return null;
+  return toAddressDetail(addr.geo, {
+    label: addr.label,
+    addressLine1: addr.address_line1,
+    addressLine2: addr.address_line2,
+    city: addr.city,
+    state: addr.state,
+    country: addr.country,
+    fallbackPoint: addr.location,
+  });
+}
+
+/**
  * An agency's headquarters address (`magazin.headquarters_addresses[]`). Its
  * street line is `address_description` and its state is `region`.
  */

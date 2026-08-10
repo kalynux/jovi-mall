@@ -298,6 +298,72 @@ The agent's half — the mirror of §10a with the agency named instead. Button s
 
 ---
 
+## 12. Agency-warehoused stock templates
+
+> **"Storage" here means a WAREHOUSE**, not the media-file quota. `vendor_storage_alert`
+> (§7) and `agency_storage_alert` (§10) are the quota ones. These nine are about physical
+> goods on an agency's shelves. Do not merge the two families.
+
+All nine carry a URL button. Base URL is `VENDOR_APP_URL` for the `vendor_*` templates
+and `AGENCY_APP_URL` for the `agency_*` ones.
+
+### 12a. Stock adjustment requests (both sides)
+
+Neither the vendor nor the agency may change `variant.stock` on a warehoused SKU alone;
+one proposes and the other approves. Each side gets the same three situations from its own
+point of view.
+
+| Template | Body params | Button suffix |
+|---|---|---|
+| `agency_storage_stock_request_received` | `vendorName`, `productTitle`, `sku`, `quantityBefore`, `requestedQuantity` | `stock-requests/{{requestId}}` |
+| `agency_storage_stock_request_approved` | `vendorName`, `productTitle`, `sku`, `requestedQuantity` | `stock-requests/{{requestId}}` |
+| `agency_storage_stock_request_rejected` | `vendorName`, `productTitle`, `sku`, `quantityBefore` | `stock-requests/{{requestId}}` |
+| `vendor_storage_stock_request_received` | `agencyName`, `requestedQuantity`, `productTitle`, `sku`, `quantityBefore` | `stock-requests/{{requestId}}` |
+| `vendor_storage_stock_request_approved` | `agencyName`, `productTitle`, `sku`, `requestedQuantity` | `stock-requests/{{requestId}}` |
+| `vendor_storage_stock_request_rejected` | `agencyName`, `productTitle`, `sku`, `quantityBefore` | `stock-requests/{{requestId}}` |
+
+> **Every `received` body carries BOTH quantities, and the order differs between the two
+> sides.** Note `vendor_storage_stock_request_received` puts `requestedQuantity` second
+> (the agency *counted* n) while the agency's puts `quantityBefore` fourth (the vendor
+> wants to go *from* n *to* m). Copy the param order from the table, not from the other
+> side's template.
+>
+> Both numbers are **load-bearing copy**: the decision the recipient has to make is "is 90
+> right, or is 120?", and a body naming only the new figure forces them to go and look up
+> the old one before they can answer.
+
+### 12b. Things the agency did alone (vendor only)
+
+No vendor decision to make — where the goods sit and whether the rent was paid are the
+agency's own business — but a suspension takes the product off the storefront, and the
+vendor must not discover that from their sales figures.
+
+| Template | Body params | Button suffix |
+|---|---|---|
+| `vendor_storage_depot_changed` | `agencyName`, `productTitle`, `locationSuffix` | `products/{{productId}}` |
+| `vendor_storage_product_suspended` | `agencyName`, `productTitle`, `noteSuffix` | `products/{{productId}}` |
+| `vendor_storage_product_unsuspended` | `agencyName`, `productTitle` | `products/{{productId}}` |
+
+> **`locationSuffix` and `noteSuffix` are pre-composed, including their own leading
+> separator.** The backend sends `" (Bonabéri branch)"` or `""`, and
+> `" Their note: “Storage unpaid since June”."` or `""`. That is deliberate: an unnamed
+> depot or an absent note would otherwise render dangling punctuation ("…to a different
+> warehouse ."). When creating these templates, place the placeholder **immediately
+> after** the preceding word with no space or bracket of your own.
+
+### Copy, all five languages
+
+`en` / `fr` / `pt_PT` / `es` / `ar`, as with every other family here. Take the exact
+strings from `NOTIFICATION_CATALOG` (`notification-catalog.ts`) and
+`AGENCY_NOTIFICATION_CATALOG` (`agency-notification-catalog.ts`) — those are the source
+of truth, and the in-app bodies and the template bodies must read the same.
+
+> **Suspension copy must state the consequence plainly.** `storage.product_suspended`
+> says "so customers can no longer buy it" in every language. A vendor who reads it as an
+> administrative note will not act, and the product stays unsellable.
+
+---
+
 ## Required env
 
 | Var | Purpose |

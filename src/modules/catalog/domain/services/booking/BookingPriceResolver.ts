@@ -1,6 +1,9 @@
 import { Product } from '../../../repositories/mappers/product.mapper';
 import { IVariantRepository } from '../../../repositories/interfaces/variant.repository.interface';
 import { DEFAULT_VARIANT_SIGNATURE } from '../../services/variants/constants';
+import { VendorModel } from '../../../../vendors/vendor.model';
+import { BOOKING_CONFIG } from '../../../../booking/config/booking.config';
+import { peakOverlapMinutes } from '../../../../booking/utils/availability-timezone.util';
 import { createAppError } from '../../../../../core/errors';
 import { ERROR_CODES } from '../../../../../core/error-codes';
 
@@ -31,6 +34,10 @@ export interface ResolvedPrice {
  * The same method serves both booking-time estimation (the booked slot) and
  * completion-time recalculation (the actual elapsed interval) — callers pass the
  * relevant { start, end }.
+ *
+ * Peak windows are wall-clock times, so they are evaluated in the VENDOR's
+ * timezone. Reading the server's clock instead (as this did) meant the surcharge
+ * applied at the wrong hours for every vendor not colocated with the server.
  */
 export class BookingPriceResolver {
   constructor(private readonly variantRepository: IVariantRepository) { }
@@ -94,7 +101,8 @@ export class BookingPriceResolver {
     let surcharge = 0;
     const peak = serviceConfig.peakHours;
     if (peak) {
-      const peakMinutes = this.peakOverlapMinutes(slot.start, slot.end, peak);
+      const timezone = await this.resolveVendorTimezone(product.vendorId);
+      const peakMinutes = peakOverlapMinutes(slot.start, slot.end, peak, timezone);
       if (peakMinutes > 0) {
         surcharge = peak.priceType === 'percentage'
           ? (pricePerMinute * peakMinutes) * (peak.value / 100)
@@ -117,36 +125,12 @@ export class BookingPriceResolver {
   }
 
   /**
-   * Counts how many minutes of [start, end) fall inside the configured peak window
-   * (time-of-day [startTime, endTime) on the selected daysOfWeek; empty daysOfWeek
-   * means every day). Walks the interval minute-by-minute so multi-day bookings and
-   * day boundaries are handled correctly.
-   *
-   * NOTE: time-of-day is evaluated in the server's local timezone. A per-service
-   * timezone is not yet modelled — TODO when availability timezones are unified.
+   * The vendor's wall-clock zone — the same source of truth availability uses, so a
+   * peak window and the slots it prices can never disagree about what "18:00" means.
    * @private
    */
-  private peakOverlapMinutes(
-    start: Date,
-    end: Date,
-    peak: { daysOfWeek: number[]; startTime: string; endTime: string },
-  ): number {
-    const toMinutes = (hhmm: string): number => {
-      const [h, m] = hhmm.split(':').map(Number);
-      return h * 60 + m;
-    };
-    const windowStart = toMinutes(peak.startTime);
-    const windowEnd = toMinutes(peak.endTime);
-    const days = new Set(peak.daysOfWeek);
-    const everyDay = days.size === 0;
-
-    let count = 0;
-    for (let t = start.getTime(); t < end.getTime(); t += 60_000) {
-      const d = new Date(t);
-      if (!everyDay && !days.has(d.getDay())) continue;
-      const minuteOfDay = d.getHours() * 60 + d.getMinutes();
-      if (minuteOfDay >= windowStart && minuteOfDay < windowEnd) count++;
-    }
-    return count;
+  private async resolveVendorTimezone(vendorId: string): Promise<string> {
+    const vendor = await VendorModel.findById(vendorId).select('timezone').lean();
+    return vendor?.timezone || BOOKING_CONFIG.defaultTimezone;
   }
 }

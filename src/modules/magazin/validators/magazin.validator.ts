@@ -24,6 +24,13 @@ const SupportContactSchema = z.object({
 });
 
 export const MagazinHeadquartersAddressSchema = z.object({
+  // The `_id` of an entry that ALREADY exists on this magazin, echoed back from a
+  // prior GET. The write is a whole-array replace, so without this Mongoose mints
+  // a fresh `_id` for every entry on every save — which silently breaks anything
+  // holding a durable reference to a depot (a product's
+  // `delivery.pickup_location.agency_address_id`). Omit it for a genuinely new
+  // location; an unknown id is rejected in the service layer.
+  id: clearable(z.string().regex(/^[0-9a-fA-F]{24}$/, 'id must be a valid address id')),
   // The agency's own name for this location ("Main depot", "Bonabéri branch").
   // Required on every entry written through this schema; pre-existing rows have
   // none and read back as null.
@@ -42,6 +49,32 @@ export const MagazinHeadquartersAddressSchema = z.object({
 });
 
 export type MagazinHeadquartersAddressInput = z.infer<typeof MagazinHeadquartersAddressSchema>;
+
+/**
+ * The HQ array as both write paths accept it (this endpoint and agency onboarding
+ * Step 1). Shared rather than duplicated so the duplicate-id guard cannot exist on
+ * one path and not the other — two entries carrying the same `id` would make
+ * "which depot is this?" unanswerable for every product pointing at it.
+ */
+export const MagazinHeadquartersAddressArraySchema = z
+  .array(MagazinHeadquartersAddressSchema)
+  .min(1, 'At least one headquarters address is required. The first entry is the primary.')
+  .superRefine((entries, ctx) => {
+    const seen = new Map<string, number>();
+    entries.forEach((entry, index) => {
+      if (!entry.id) return;
+      const first = seen.get(entry.id);
+      if (first !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, 'id'],
+          message: `Duplicate address id — the same id is already used at index ${first}.`,
+        });
+        return;
+      }
+      seen.set(entry.id, index);
+    });
+  });
 
 /**
  * Update Magazin Profile Schema
@@ -64,8 +97,10 @@ export const UpdateMagazinProfileSchema = z.object({
   supportWhatsapp: ClearablePhoneNumberSchema,
   // Regions the agency serves — validated against the registered country in the service.
   coverage_areas: z.array(z.string().min(1).trim()).min(1, 'At least one coverage area (region) is required').optional(),
-  // Physical / pickup locations. Full replace; index 0 = primary. Geo enforced in the service.
-  headquarters_addresses: z.array(MagazinHeadquartersAddressSchema).min(1, 'At least one headquarters address is required. The first entry is the primary.').optional(),
+  // Physical / pickup locations. Full replace; index 0 = primary. Geo enforced in
+  // the service. Echo each existing entry's `id` back or its `_id` is re-minted —
+  // see MagazinHeadquartersAddressSchema.
+  headquarters_addresses: MagazinHeadquartersAddressArraySchema.optional(),
   version: z.number().int().min(0, 'Version must be non-negative'), // REQUIRED
 });
 

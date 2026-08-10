@@ -10,7 +10,7 @@ import { agentRepository } from '../repositories/agent.repository';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
 import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
 import { AgentProfileMapper } from '../dto/agent-profile.dto';
-import { AgentMembershipMapper } from '../dto/agent-membership.dto';
+import { AgentMembershipMapper, ContractAgencyContext } from '../dto/agent-membership.dto';
 import { ContractStatusRequestMapper } from '../dto/contract-status-request.dto';
 import { ContractTermsProposalMapper } from '../dto/contract-terms-proposal.dto';
 import {
@@ -233,12 +233,15 @@ export class AgentSelfController {
     const { status, page, limit } = ListMembershipsQuerySchema.parse(req.query);
     const result = await agentContractService.listForAgent(selfId(req), { status }, { page, limit });
 
-    // Resolve agency names for the portfolio view.
-    const names = await resolveAgencyNames(result.data.map((m) => m.agency_id.toString()));
+    // Resolve the counterparty agencies for the portfolio view.
+    const agencies = await resolveAgencyContexts(result.data.map((m) => m.agency_id.toString()));
     res.json({
       success: true,
       data: result.data.map((m) =>
-        AgentMembershipMapper.toDtoWithAgency(m, names.get(m.agency_id.toString()) ?? null)
+        AgentMembershipMapper.toDtoWithAgency(
+          m,
+          agencies.get(m.agency_id.toString()) ?? UNKNOWN_AGENCY
+        )
       ),
       meta: {
         total: result.meta.total,
@@ -259,12 +262,13 @@ export class AgentSelfController {
     const { membershipId } = MembershipIdParamSchema.parse(req.params);
     const membership = await agentContractService.getForAgent(selfId(req), membershipId);
 
-    const names = await resolveAgencyNames([membership.agency_id.toString()]);
+    const agencyId = membership.agency_id.toString();
+    const agencies = await resolveAgencyContexts([agencyId]);
     res.json({
       success: true,
       data: AgentMembershipMapper.toDtoWithAgency(
         membership,
-        names.get(membership.agency_id.toString()) ?? null
+        agencies.get(agencyId) ?? UNKNOWN_AGENCY
       ),
     });
   });
@@ -734,14 +738,39 @@ export class AgentSelfController {
   });
 }
 
-async function resolveAgencyNames(agencyIds: string[]): Promise<Map<string, string>> {
+/**
+ * The counterparty agency's business surface for the agent's contract views,
+ * batched: two queries for a whole page, never one pair per row.
+ *
+ * Split across two collections because the platform splits them — the business
+ * name and declared coverage are the Magazin's, the registered country is the
+ * agency's (set once at onboarding, and what the coverage catalogue is scoped
+ * to). An agency missing either simply reads back as null / empty; nothing here
+ * is required for the contract itself to render.
+ */
+async function resolveAgencyContexts(
+  agencyIds: string[]
+): Promise<Map<string, ContractAgencyContext>> {
   const unique = [...new Set(agencyIds)];
-  const nameById = new Map<string, string>();
-  // Business name lives on the Magazin (source of truth), keyed by agency_id.
-  const magazinNames = await magazinRepo.findNamesByAgencyIds(unique);
+  const byId = new Map<string, ContractAgencyContext>();
+  if (unique.length === 0) return byId;
+
+  const [magazinNames, coverageAreas, agencies] = await Promise.all([
+    magazinRepo.findNamesByAgencyIds(unique),
+    magazinRepo.findCoverageAreasByAgencyIds(unique),
+    agencyRepo.findByIds(unique),
+  ]);
+  const countryById = new Map(agencies.map((a) => [a._id.toString(), a.country ?? null]));
+
   for (const id of unique) {
-    const name = magazinNames.get(id)?.name;
-    if (name) nameById.set(id, name);
+    byId.set(id, {
+      name: magazinNames.get(id)?.name ?? null,
+      country: countryById.get(id) ?? null,
+      coverageAreas: coverageAreas.get(id) ?? [],
+    });
   }
-  return nameById;
+  return byId;
 }
+
+/** The context of an agency that could not be resolved at all. */
+const UNKNOWN_AGENCY: ContractAgencyContext = { name: null, country: null, coverageAreas: [] };

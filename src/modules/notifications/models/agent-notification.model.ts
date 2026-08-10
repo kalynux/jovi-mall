@@ -77,6 +77,38 @@ export type AgentNotificationType =
 export type AgentAggregateType = 'deposit' | 'offer' | 'shipment' | 'contract' | 'plan' | 'storage';
 
 /**
+ * Every situation above, as a runtime array. The Mongoose enum is built FROM
+ * this rather than hand-maintained beside it.
+ *
+ * WHY: the schema enum used to be a second copy, and it had drifted — all eight
+ * `agent_contract.*` situations were in the union and absent from the enum, so
+ * every contract notification (an agency requesting an agent, a proposed
+ * termination, a counter-offer) threw a Mongoose ValidationError and the agent
+ * was never told. Deriving one from the other makes that class of silence
+ * impossible; adding a situation to the union now updates the enum with it.
+ */
+export const AGENT_NOTIFICATION_TYPES: readonly AgentNotificationType[] = [
+    'cod.deposit.recorded',
+    'cod.deposit.confirmed',
+    'cod.deposit.rejected',
+    'agent_contract.request_received',
+    'agent_contract.approved',
+    'agent_contract.rejected',
+    'agent_contract.status_request_raised',
+    'agent_contract.status_request_resolved',
+    'agent_contract.terms_countered',
+    'agent_contract.terms_proposed',
+    'agent_contract.terms_resolved',
+    'shipment.offer.received',
+    'shipment.offer.reminder',
+    'shipment.offer.expired',
+    'shipment.reassigned_away',
+    'plan.expiring',
+    'plan.expired',
+    'storage.alert'
+] as const;
+
+/**
  * Deep-link action for a notification, localized in the agent's language.
  * Mirrors agency-notification.model.ts's AgencyNotificationAction.
  */
@@ -114,23 +146,18 @@ const AgentNotificationSchema = new Schema<IAgentNotification>(
         },
         type: {
             type: String,
-            enum: [
-                'cod.deposit.recorded',
-                'cod.deposit.confirmed',
-                'cod.deposit.rejected',
-                'shipment.offer.received',
-                'shipment.offer.reminder',
-                'shipment.offer.expired',
-                'shipment.reassigned_away',
-                'plan.expiring',
-                'plan.expired',
-                'storage.alert'
-            ],
+            enum: [...AGENT_NOTIFICATION_TYPES],
             required: true
         },
         title: { type: String, required: true, trim: true, maxlength: 200 },
         message: { type: String, required: true, trim: true, maxlength: 1000 },
-        aggregateType: { type: String, enum: ['deposit', 'offer', 'shipment', 'plan', 'storage'], required: true },
+        // 'contract' was likewise missing here, so even with the type fixed a
+        // contract notification would still have failed on this field.
+        aggregateType: {
+            type: String,
+            enum: ['deposit', 'offer', 'shipment', 'contract', 'plan', 'storage'],
+            required: true
+        },
         aggregateId: { type: Schema.Types.ObjectId, required: true },
         action: {
             type: new Schema(

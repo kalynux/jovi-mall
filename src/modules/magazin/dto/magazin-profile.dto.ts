@@ -5,6 +5,7 @@ import { IStorageProvider } from '../../../core/storage';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 import { resolveFileDetail } from '../../catalog/read-models/file-detail.resolver';
 import { toGeoAddress } from '../../../core/types/geo-address.types';
+import { geoAddressEquals } from '../../../core/validation/address-country.helper';
 import { MagazinHeadquartersAddressInput } from '../validators/magazin.validator';
 
 /**
@@ -19,14 +20,58 @@ import { MagazinHeadquartersAddressInput } from '../validators/magazin.validator
  * resolves no city for many rural/landmark results), never as an override, so a
  * stale typed city can't contradict the pin. Both stay null when neither source
  * has one; nothing downstream requires them.
+ *
+ * ## `_id` continuity
+ *
+ * The write is a whole-array `$set`, so Mongoose casts every element afresh and
+ * applies the auto-`ObjectId` default to any plain object arriving without one.
+ * That used to re-mint every depot's `_id` on every save — harmless while nothing
+ * referenced them, fatal now that a product's `delivery.pickup_location
+ * .agency_address_id` points at one. Two mechanisms keep an `_id` alive, in order:
+ *
+ * 1. **The client echoes `id`** (the contract). Authoritative, and the only thing
+ *    that survives an agency editing a depot's address text.
+ * 2. **Content match against `previous`** (the safety net). An entry with no `id`
+ *    whose `address_description` and geocoded place both match an existing entry
+ *    inherits its `_id`. This is what protects an agency whose dashboard has not
+ *    shipped the echo yet — the same "unchanged is content-based" predicate
+ *    `assertHeadquartersInCountry` already trusts.
+ *
+ * The content match CONSUMES each previous entry at most once. Two depots at the
+ * same address would otherwise collapse onto a single `_id`, which is precisely
+ * the ambiguity the duplicate-id validator guard exists to prevent.
+ *
+ * Anything that matches neither is genuinely new and is left `_id`-less for
+ * Mongoose to mint.
  */
 export function toPersistableHeadquarters(
   entries: MagazinHeadquartersAddressInput[],
+  previous: IAgencyHeadquartersAddress[] = [],
 ): IAgencyHeadquartersAddress[] {
+  // Entries claimed by an explicit `id` are off the table for content matching —
+  // otherwise entry A's echoed id could also be inherited by an id-less entry B.
+  const claimed = new Set(entries.map((e) => e.id).filter((id): id is string => !!id));
+  const availableForContentMatch = previous.filter((p) => !claimed.has(p._id?.toString()));
+
   return entries.map((e) => {
     const geo = e.geo ? toGeoAddress(e.geo) : null;
     const location = geo ? geo.coordinates : (e.location ?? null);
+
+    let id: mongoose.Types.ObjectId | undefined = e.id ? new mongoose.Types.ObjectId(e.id) : undefined;
+    if (!id) {
+      const matchIndex = availableForContentMatch.findIndex(
+        (p) => p.address_description === e.address_description && geoAddressEquals(e.geo, p.geo),
+      );
+      if (matchIndex !== -1) {
+        // Consume it, so a second identical entry cannot claim the same `_id`.
+        const [match] = availableForContentMatch.splice(matchIndex, 1);
+        id = match._id;
+      }
+    }
+
     return {
+      // Absent for a genuinely new location — Mongoose mints one.
+      ...(id ? { _id: id } : {}),
       label: e.label,
       region: geo?.components.region ?? e.region ?? null,
       city: geo?.components.city ?? e.city ?? null,
@@ -36,6 +81,22 @@ export function toPersistableHeadquarters(
       geo,
     } as unknown as IAgencyHeadquartersAddress;
   });
+}
+
+/**
+ * The ids an incoming HQ array claims that do NOT exist on the magazin being
+ * written. A non-empty result means the client is working from a stale (or
+ * fabricated) view of the list — the same situation an optimistic-lock miss
+ * describes, so callers answer it the same way.
+ */
+export function findUnknownHeadquartersIds(
+  entries: MagazinHeadquartersAddressInput[],
+  previous: IAgencyHeadquartersAddress[] = [],
+): Array<{ index: number; id: string }> {
+  const known = new Set(previous.map((p) => p._id?.toString()).filter((id): id is string => !!id));
+  return entries
+    .map((e, index) => ({ index, id: e.id ?? null }))
+    .filter((e): e is { index: number; id: string } => !!e.id && !known.has(e.id));
 }
 
 /**

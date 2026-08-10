@@ -3,7 +3,21 @@
 
 import { IMapper } from "../../../../core/database/mapper.interface";
 import { IProduct } from "../../models";
-import { ProductMode, ProductSuspension, VectorisationStatus } from "../../models/product.model";
+import { ProductMode, ProductStatus, ProductSuspensionReason, VectorisationStatus } from "../../models/product.model";
+
+/**
+ * Domain view of `IProduct.suspension`. Distinct from the persistence type
+ * because `suspendedByAgencyId` is an ObjectId on the document and a string
+ * everywhere above the repository — the same rule every other id here follows.
+ */
+export interface ProductSuspensionView {
+  reason: ProductSuspensionReason;
+  previousStatus: Exclude<ProductStatus, 'suspended'>;
+  suspendedAt: Date;
+  /** Only ever set for `agency_storage_suspended`. */
+  suspendedByAgencyId: string | null;
+  note: string | null;
+}
 
 // Domain Entity (Simplified for now, matching IProduct structure but purely decoupled if needed later)
 // For Phase 3, we can reuse the interface logic or define a specific class. 
@@ -46,11 +60,14 @@ export interface Product {
     pickupLocation: {
       source: 'vendor_address' | 'agency_storage';
       vendorAddressId: string | null;
+      /** Which agency depot, for `agency_storage`. Null = the agency's primary. */
+      agencyAddressId: string | null;
     } | null;
   };
 
-  // System-driven suspension snapshot. Undefined/null unless currently suspended by a cascade.
-  suspension?: ProductSuspension | null;
+  // Suspension snapshot. Undefined/null unless currently suspended — by a
+  // delivery-agency cascade, or by the warehousing agency by hand.
+  suspension?: ProductSuspensionView | null;
 
   // ─── Vectorisation tracking ───────────────────────────────────────────────
   vectorisationEnabled: boolean;
@@ -94,6 +111,7 @@ export class ProductMapper implements IMapper<Product, IProduct> {
             ? {
               source: doc.delivery.pickup_location.source,
               vendorAddressId: doc.delivery.pickup_location.vendor_address_id?.toString() ?? null,
+              agencyAddressId: doc.delivery.pickup_location.agency_address_id?.toString() ?? null,
             }
             : null,
         }
@@ -103,6 +121,8 @@ export class ProductMapper implements IMapper<Product, IProduct> {
           reason: doc.suspension.reason,
           previousStatus: doc.suspension.previousStatus,
           suspendedAt: doc.suspension.suspendedAt,
+          suspendedByAgencyId: doc.suspension.suspendedByAgencyId?.toString() ?? null,
+          note: doc.suspension.note ?? null,
         }
         : null,
       vectorisationEnabled: doc.vectorisationEnabled ?? false,

@@ -121,8 +121,9 @@ export class VendorInventoryController {
             updates = body.updates;
         }
 
-        // Execute bulk update
-        const result = await bulkUpdateService.execute(vendorId, updates);
+        // Execute bulk update. Rows on agency-warehoused products are NOT written —
+        // they come back under `requested` as pending approvals.
+        const result = await bulkUpdateService.execute(vendorId, updates, req.auth!.user._id.toString());
 
         if (result.success) {
             sendSuccess(res, result);

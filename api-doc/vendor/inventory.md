@@ -110,7 +110,18 @@ Returns a paginated list of variants that are at or below their configured `lowS
 Set absolute stock levels for multiple physical product variants in a single atomic operation.
 
 > [!IMPORTANT]
-> **All-or-nothing semantics.** The entire batch runs inside a database transaction. If any row fails validation, **no rows are updated** and a `{ "success": false, "errors": [...] }` response is returned. There is no partial success for this endpoint.
+> **All-or-nothing semantics** — for the rows this endpoint actually writes. The batch runs inside a database transaction. If any row fails validation, **no rows are updated** and a `{ "success": false, "errors": [...] }` response is returned. There is no partial success.
+
+> [!WARNING]
+> **Rows on an agency-warehoused product are not written.** A SKU whose product has
+> `delivery.pickupLocation.source === "agency_storage"` is one an agency physically
+> holds, and its quantity now needs that agency's countersignature — see
+> [Stock requests](./stock-requests.md). Such rows are partitioned out before the
+> transaction opens and come back under **`requested`** as pending approvals, never
+> under `variants`.
+>
+> They sit outside the transaction on purpose: a proposal is not a stock write, and one
+> SKU already having an open request must not roll back rows that legitimately applied.
 
 **Max rows per request**: 1,000
 
@@ -195,15 +206,34 @@ Returned when **all rows** pass validation and are updated:
       "previousStock": 8,
       "newStock": 0
     }
-  ]
+  ],
+  "requested": [
+    {
+      "variantId": "507f1f77bcf86cd799439062",
+      "sku": "NIKE-AIR-MAX-90-BLK-42",
+      "requestId": "665a1f77bcf86cd799439061",
+      "requestedQuantity": 200
+    }
+  ],
+  "notRequested": []
 }
 ```
 
 | Field | Description |
 |-------|-------------|
 | `batchId` | UUID identifying this batch in the audit log |
-| `updated` | Number of variants updated |
-| `variants` | Per-variant result showing previous and new stock |
+| `updated` | Number of variants **written**. Counts `variants` only, never `requested` |
+| `variants` | Rows that applied — previous and new stock |
+| `requested` | Agency-warehoused rows. **Nothing was written for these**; each became a pending [stock request](./stock-requests.md) |
+| `notRequested` | Rows that could neither apply nor be queued — `{ variantId, sku, error, message }` |
+
+> **Report the three groups separately.** A row under `requested` has *not* changed
+> yet; presenting it as updated is the one way to make this response lie.
+>
+> `notRequested` is almost always `STOCK_REQUEST_ALREADY_PENDING` — a request is already
+> open on that SKU, and somebody has to resolve it first. It is reported rather than
+> thrown because the `variants` rows have already committed; failing the whole call
+> here would claim a rollback that did not happen.
 
 ---
 

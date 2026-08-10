@@ -9,6 +9,7 @@ import { FileRepositoryMongo } from '../repositories/mongo/file.repository.mongo
 import { FileReferenceRepositoryMongo } from '../repositories/mongo/file-reference.repository.mongo';
 import { getStorageProvider } from '../../../core/storage';
 import { enrichProduct } from '../read-models/enrich-product-detail';
+import { pickupLocationDetailResolver } from '../read-models/pickup-location-detail.resolver';
 import { ProductDraftService } from '../domain/services/ProductDraftService';
 import { ProductUpdateService } from '../domain/services/ProductUpdateService';
 import { ProductArchiveService } from '../domain/services/ProductArchiveService';
@@ -124,7 +125,7 @@ export class VendorProductController {
         const { id } = req.params;
         const product = await productRepository.findById(id, vendorId);
         if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
-        const detail = await enrichProduct(product, fileRepository, storageProvider);
+        const detail = await enrichProduct(product, fileRepository, storageProvider, pickupLocationDetailResolver);
         res.json({ success: true, data: detail });
     });
 
@@ -168,7 +169,7 @@ export class VendorProductController {
             seoDescription: input.seoDescription,
             fileIds: input.fileIds,
         });
-        const detail = await enrichProduct(product, fileRepository, storageProvider);
+        const detail = await enrichProduct(product, fileRepository, storageProvider, pickupLocationDetailResolver);
 
         // Return response immediately — vectorisation is async and must not block
         res.status(201).json({ success: true, data: detail, message: 'Product created successfully' });
@@ -222,7 +223,7 @@ export class VendorProductController {
         const finalProduct = (demoted || agencyFixup?.restored)
             ? (await productRepository.findById(id, vendorId)) ?? product
             : product;
-        const detail = await enrichProduct(finalProduct, fileRepository, storageProvider);
+        const detail = await enrichProduct(finalProduct, fileRepository, storageProvider, pickupLocationDetailResolver);
 
         const message = agencyFixup && agencyFixup.reassignedCount > 0
             ? `Product updated successfully. ${agencyFixup.reassignedCount} pending order item(s) reassigned to the new agency.`

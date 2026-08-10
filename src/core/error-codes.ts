@@ -34,6 +34,8 @@ type DomainPrefix =
     | 'BILLING'
     | 'EARNINGS'
     | 'COD'
+    | 'INVENTORY'     // what an agency warehouses, per depot
+    | 'STOCK'         // the two-sided stock-adjustment request flow
     | 'INTERNAL'      // INTERNAL_SERVER_ERROR
     | 'NOT'           // NOT_FOUND — router-level only
     | 'VALIDATION';   // VALIDATION_ERROR — ZodError catch in global handler only
@@ -279,6 +281,11 @@ export const ERROR_CODES = Object.freeze({
     CATALOG_PRODUCT_NO_DELIVERY_AGENCY: 'CATALOG_PRODUCT_NO_DELIVERY_AGENCY',
     CATALOG_PRODUCT_NO_PICKUP_LOCATION: 'CATALOG_PRODUCT_NO_PICKUP_LOCATION',
     CATALOG_PRODUCT_INVALID_PICKUP_LOCATION: 'CATALOG_PRODUCT_INVALID_PICKUP_LOCATION',
+    // A warehouse cannot hold an unbounded quantity: `isInfiniteStock` and
+    // `pickup_location.source === 'agency_storage'` are mutually exclusive.
+    // Both an activation blocker and a hard refusal on the two write paths that
+    // could otherwise reach that combination on an already-active product.
+    CATALOG_PRODUCT_AGENCY_STORAGE_INFINITE_STOCK: 'CATALOG_PRODUCT_AGENCY_STORAGE_INFINITE_STOCK',
     CATALOG_PRODUCT_VECTORISATION_PENDING: 'CATALOG_PRODUCT_VECTORISATION_PENDING',
     CATALOG_PRODUCT_VECTORISATION_NOT_ELIGIBLE: 'CATALOG_PRODUCT_VECTORISATION_NOT_ELIGIBLE',
     // Authoring mode (see product.model.ts ProductMode). A `simple` product is
@@ -372,6 +379,11 @@ export const ERROR_CODES = Object.freeze({
     DELIVERY_AGENT_NOTIFICATION_CHANNEL_NOT_VERIFIED: 'DELIVERY_AGENT_NOTIFICATION_CHANNEL_NOT_VERIFIED',
     DELIVERY_AGENT_NOTIFICATION_DELIVERY_FAILED: 'DELIVERY_AGENT_NOTIFICATION_DELIVERY_FAILED',
 
+    // ── CUSTOMER NOTIFICATIONS (the fourth multi-channel stack) ───────────────
+    CUSTOMER_NOTIFICATION_NOT_FOUND: 'CUSTOMER_NOTIFICATION_NOT_FOUND',
+    CUSTOMER_NOTIFICATION_CHANNEL_NOT_VERIFIED: 'CUSTOMER_NOTIFICATION_CHANNEL_NOT_VERIFIED',
+    CUSTOMER_NOTIFICATION_DELIVERY_FAILED: 'CUSTOMER_NOTIFICATION_DELIVERY_FAILED',
+
     // ── AGENT (the agent domain: profile, membership, availability, tracking) ──
     AGENT_NOT_FOUND: 'AGENT_NOT_FOUND',
     AGENT_NOT_ACTIVE: 'AGENT_NOT_ACTIVE',
@@ -422,6 +434,7 @@ export const ERROR_CODES = Object.freeze({
     // Coverage / contract terms
     CONTRACT_COVERAGE_OUTSIDE_AGENT_RADIUS: 'CONTRACT_COVERAGE_OUTSIDE_AGENT_RADIUS',
     CONTRACT_COVERAGE_REGION_NOT_COVERED: 'CONTRACT_COVERAGE_REGION_NOT_COVERED',
+    CONTRACT_COVERAGE_REGION_INVALID: 'CONTRACT_COVERAGE_REGION_INVALID',
     CONTRACT_SHIPMENT_VALUE_EXCEEDED: 'CONTRACT_SHIPMENT_VALUE_EXCEEDED',
     CONTRACT_FEE_SPLIT_INVALID: 'CONTRACT_FEE_SPLIT_INVALID',
     // Terms negotiation. CONTRACT_TERMS_NOT_PROPOSED is the guard that makes a
@@ -477,6 +490,54 @@ export const ERROR_CODES = Object.freeze({
     // ── MAGAZIN (agency business surface) ───────────────────────────────────────
     MAGAZIN_NOT_FOUND: 'MAGAZIN_NOT_FOUND',
     MAGAZIN_CONFLICT: 'MAGAZIN_CONFLICT',
+    // A headquarters entry was removed while products are still stored there.
+    // Deliberately NOT MAGAZIN_CONFLICT: that one means "your view is stale,
+    // refresh and retry", which would be a lie here — retrying changes nothing.
+    // Mirrors VENDOR_BUSINESS_ADDRESS_IN_USE on the vendor side.
+    MAGAZIN_LOCATION_IN_USE: 'MAGAZIN_LOCATION_IN_USE',
+
+    // ── AGENCY INVENTORY (what an agency stores, per depot) ─────────────────────
+    INVENTORY_STOCK_LEVEL_NOT_FOUND: 'INVENTORY_STOCK_LEVEL_NOT_FOUND',
+    // The depot named on an agency write is not one of the caller's own.
+    INVENTORY_LOCATION_UNKNOWN: 'INVENTORY_LOCATION_UNKNOWN',
+    // No stock row for (agency, product). Deliberately a 404, never a 403 —
+    // whether a given product id exists is not information this caller is owed.
+    INVENTORY_PRODUCT_NOT_STORED_HERE: 'INVENTORY_PRODUCT_NOT_STORED_HERE',
+    // Only an ACTIVE product can be storage-suspended, mirroring the
+    // delivery-agency cascade's rule that non-active products are left alone.
+    INVENTORY_PRODUCT_NOT_SUSPENDABLE: 'INVENTORY_PRODUCT_NOT_SUSPENDABLE',
+    INVENTORY_PRODUCT_NOT_AGENCY_SUSPENDED: 'INVENTORY_PRODUCT_NOT_AGENCY_SUSPENDED',
+    // Unsuspend re-runs the activation gate; `details.blockers` carries the checklist.
+    INVENTORY_PRODUCT_UNSUSPEND_BLOCKED: 'INVENTORY_PRODUCT_UNSUSPEND_BLOCKED',
+
+    // ── STOCK ADJUSTMENT REQUESTS (vendor ↔ agency, two-sided) ─────────────────
+    STOCK_REQUEST_NOT_FOUND: 'STOCK_REQUEST_NOT_FOUND',
+    STOCK_REQUEST_ALREADY_PENDING: 'STOCK_REQUEST_ALREADY_PENDING',
+    // A compare-and-set miss on resolve. A CONFLICT, never a not-found — the row
+    // exists, somebody else just resolved it. Callers must not re-read and retry.
+    STOCK_REQUEST_NOT_PENDING: 'STOCK_REQUEST_NOT_PENDING',
+    STOCK_REQUEST_NOT_YOURS: 'STOCK_REQUEST_NOT_YOURS',
+    // The product stopped being stored with this agency while the request stood.
+    STOCK_REQUEST_STALE: 'STOCK_REQUEST_STALE',
+    STOCK_REQUEST_NO_CHANGE: 'STOCK_REQUEST_NO_CHANGE',
+
+    // ── BLOG / EDITORIAL ──────────────────────────────────────────────────────
+    // Public reads produce only the first three; the rest are the editor's.
+    BLOG_ARTICLE_NOT_FOUND: 'BLOG_ARTICLE_NOT_FOUND',
+    /** 404 + `details.slug`: this URL's article moved. The FRONTEND owes the 301. */
+    BLOG_ARTICLE_MOVED: 'BLOG_ARTICLE_MOVED',
+    /** 410 + `details.categoryKey`: unpublished for good. Send the reader to the hub. */
+    BLOG_ARTICLE_GONE: 'BLOG_ARTICLE_GONE',
+    BLOG_ARTICLE_KEY_TAKEN: 'BLOG_ARTICLE_KEY_TAKEN',
+    BLOG_ARTICLE_NOT_PUBLISHABLE: 'BLOG_ARTICLE_NOT_PUBLISHABLE',
+    BLOG_ARTICLE_ALREADY_PUBLISHED: 'BLOG_ARTICLE_ALREADY_PUBLISHED',
+    /** A published article is archived, never deleted — its URL has inbound links. */
+    BLOG_ARTICLE_DELETE_NOT_ALLOWED: 'BLOG_ARTICLE_DELETE_NOT_ALLOWED',
+    BLOG_SLUG_TAKEN: 'BLOG_SLUG_TAKEN',
+    BLOG_SLUG_RESERVED: 'BLOG_SLUG_RESERVED',
+    BLOG_AUTHOR_NOT_FOUND: 'BLOG_AUTHOR_NOT_FOUND',
+    BLOG_AUTHOR_KEY_TAKEN: 'BLOG_AUTHOR_KEY_TAKEN',
+    BLOG_AUTHOR_IN_USE: 'BLOG_AUTHOR_IN_USE',
 
     // ── VENDOR ────────────────────────────────────────────────────────────────
     VENDOR_FISCAL_CALENDAR_INVALID: 'VENDOR_FISCAL_CALENDAR_INVALID',
@@ -531,6 +592,18 @@ export const ERROR_CODES = Object.freeze({
     BOOKING_INVALID_SLOT_ID: 'BOOKING_INVALID_SLOT_ID',
     BOOKING_NOT_RESCHEDULABLE: 'BOOKING_NOT_RESCHEDULABLE',
     BOOKING_SLOT_FULL: 'BOOKING_SLOT_FULL',
+    /** No balance is outstanding on this booking. */
+    BOOKING_NO_BALANCE_DUE: 'BOOKING_NO_BALANCE_DUE',
+    /** The outstanding balance has already been settled. */
+    BOOKING_BALANCE_ALREADY_SETTLED: 'BOOKING_BALANCE_ALREADY_SETTLED',
+    /** A balance payment is already in flight with the gateway. */
+    BOOKING_BALANCE_PAYMENT_IN_PROGRESS: 'BOOKING_BALANCE_PAYMENT_IN_PROGRESS',
+    /** The booking must be completed before its balance can be settled. */
+    BOOKING_NOT_COMPLETED: 'BOOKING_NOT_COMPLETED',
+    /** An active booking already overlaps the requested interval (commit-time race). */
+    BOOKING_SLOT_UNAVAILABLE: 'BOOKING_SLOT_UNAVAILABLE',
+    /** The booking is past the point where it can be cancelled by its owner. */
+    BOOKING_NOT_CANCELLABLE: 'BOOKING_NOT_CANCELLABLE',
 
     // ── AVAILABILITY RULES (service products) ─────────────────────────────────
     AVAILABILITY_PRODUCT_NOT_FOUND: 'AVAILABILITY_PRODUCT_NOT_FOUND',
@@ -539,6 +612,8 @@ export const ERROR_CODES = Object.freeze({
     AVAILABILITY_INVALID_TIME_RANGE: 'AVAILABILITY_INVALID_TIME_RANGE',
     AVAILABILITY_TIME_OVERLAP: 'AVAILABILITY_TIME_OVERLAP',
     AVAILABILITY_FORBIDDEN: 'AVAILABILITY_FORBIDDEN',
+    /** `timezone` is not a resolvable IANA zone name. */
+    AVAILABILITY_INVALID_TIMEZONE: 'AVAILABILITY_INVALID_TIMEZONE',
 
     // ── ADMIN ─────────────────────────────────────────────────────────────────
     ADMIN_NOT_FOUND: 'ADMIN_NOT_FOUND',

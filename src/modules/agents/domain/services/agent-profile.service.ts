@@ -23,6 +23,7 @@ import { FileReferenceRepositoryMongo } from '../../../catalog/repositories/mong
 import { FileReferenceService } from '../../../catalog/domain/services/media/FileReferenceService';
 import { getStorageProvider, IStorageProvider } from '../../../../core/storage';
 import { resolveFileDetail } from '../../../catalog/read-models/file-detail.resolver';
+import { mergeVehicleInfo, VehicleInfoPatch } from '../vehicle-info';
 
 /**
  * AgentProfileService — the agent's own record: identity, vehicle, contacts,
@@ -46,13 +47,16 @@ export class AgentProfileService {
   }
 
   /**
-   * Build the profile response with the avatar File reference resolved to a
-   * public URL (falling back to the legacy `avatar_url`). Every profile-returning
-   * method funnels through here so the resolution happens in exactly one place.
+   * Build the profile response with the agent's File references (avatar and
+   * vehicle photo) resolved to public URLs. Every profile-returning method
+   * funnels through here so the resolution happens in exactly one place.
    */
   private async present(agent: IDeliveryAgent): Promise<GetAgentProfileResponseDto> {
-    const avatar = await resolveFileDetail(agent.avatar_file_id?.toString(), this.fileRepository, this.storageProvider);
-    return AgentProfileMapper.toResponseDto(agent, new Date(), avatar);
+    const [avatar, vehiclePhoto] = await Promise.all([
+      resolveFileDetail(agent.avatar_file_id?.toString(), this.fileRepository, this.storageProvider),
+      resolveFileDetail(agent.vehicle_info?.photo_file_id?.toString(), this.fileRepository, this.storageProvider),
+    ]);
+    return AgentProfileMapper.toResponseDto(agent, new Date(), avatar, vehiclePhoto);
   }
 
   /**
@@ -76,6 +80,67 @@ export class AgentProfileService {
     });
   }
 
+  /**
+   * The same reconcile for the vehicle photo, under its own field so the two
+   * slots are counted independently. Without it, replacing a photo ten times
+   * leaves ten undeletable files against the agent's storage quota — a
+   * reference row is what makes `GET /api/files/:id` report the usage and what
+   * releases the previous file when a new one is attached.
+   */
+  private async reconcileVehiclePhotoFileReference(
+    agentId: string,
+    previous: IDeliveryAgent['avatar_file_id'] | undefined,
+    next: string | null | undefined,
+  ): Promise<void> {
+    await this.fileReferenceService.reconcile({
+      previousFileIds: previous ? [previous.toString()] : [],
+      nextFileIds: next ? [next] : [],
+      actor: { type: 'agent', id: agentId },
+      entityType: 'agent',
+      entityId: agentId,
+      field: 'vehicle_photo',
+    });
+  }
+
+  /**
+   * `POST /api/files/upload` accepts any allowed kind, so nothing stops a PDF's
+   * id being sent as a vehicle photo. Ownership is checked by `reconcile`; the
+   * media type is only checkable here, at attach time.
+   */
+  private async assertVehiclePhotoIsImage(fileId: string): Promise<void> {
+    const [file] = await this.fileRepository.findManyByIds([fileId]);
+    if (!file) {
+      throw createAppError(ERROR_CODES.CATALOG_FILE_NOT_FOUND, 404, `File not found: ${fileId}`);
+    }
+    if (!file.mimeType?.startsWith('image/')) {
+      throw createAppError(
+        ERROR_CODES.CATALOG_FILE_TYPE_INVALID,
+        400,
+        `A vehicle photo must be an image; file ${fileId} is ${file.mimeType}`,
+      );
+    }
+  }
+
+  /**
+   * Validate and reference-count the photo slot of an incoming `vehicle_info`.
+   * Shared by the profile PATCH and onboarding step 1 — both take the same
+   * `VehicleInfoSchema`, so guarding only one of them is a hole in the other.
+   * No-ops when the key is absent, which is what `clearable()` means.
+   */
+  private async settleVehiclePhoto(
+    agentId: string,
+    agent: IDeliveryAgent,
+    patch: VehicleInfoPatch,
+  ): Promise<void> {
+    if (patch.photo_file_id === undefined) return;
+    if (patch.photo_file_id) await this.assertVehiclePhotoIsImage(patch.photo_file_id);
+    await this.reconcileVehiclePhotoFileReference(
+      agentId,
+      agent.vehicle_info?.photo_file_id ?? undefined,
+      patch.photo_file_id,
+    );
+  }
+
   async getProfile(agentId: string): Promise<GetAgentProfileResponseDto> {
     const agent = await this.requireAgent(agentId);
     return this.present(agent);
@@ -92,8 +157,13 @@ export class AgentProfileService {
     if (input.avatar_file_id !== undefined) {
       await this.reconcileAvatarFileReference(agentId, agent.avatar_file_id, input.avatar_file_id);
     }
+    if (input.vehicle_info !== undefined) {
+      await this.settleVehiclePhoto(agentId, agent, input.vehicle_info);
+    }
 
-    const payload = AgentProfileMapper.toUpdatePayload(input);
+    // The stored vehicle is passed in so the sub-document is MERGED, not
+    // replaced — see AgentProfileMapper.toUpdatePayload.
+    const payload = AgentProfileMapper.toUpdatePayload(input, agent.vehicle_info);
     const updated = await this.agents.updateProfile(agentId, payload);
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 
@@ -158,8 +228,12 @@ export class AgentProfileService {
       throw createAppError(ERROR_CODES.AGENT_ONBOARDING_ALREADY_COMPLETED, 409);
     }
 
+    await this.settleVehiclePhoto(agentId, agent, input.vehicle_info);
+
+    // Merged, not replaced: an agent stepping back through onboarding to change
+    // their vehicle type must not lose the photo or plate they already saved.
     const updated = await this.agents.updateProfile(agentId, {
-      vehicle_info: input.vehicle_info as IAgentVehicleInfo,
+      vehicle_info: mergeVehicleInfo(agent.vehicle_info, input.vehicle_info),
     });
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 

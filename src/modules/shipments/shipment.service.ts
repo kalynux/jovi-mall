@@ -15,6 +15,8 @@ import { VendorRepository } from '../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../delivery/delivery-agency.repository';
 import { StoreRepository } from '../store/repositories/store.repository';
 import { MagazinRepository } from '../magazin/repositories/magazin.repository';
+import { IAgencyHeadquartersAddress } from '../magazin/models/magazin.model';
+import { resolveHqAddress, resolveHqAddressFor } from '../magazin/domain/hq-address.resolver';
 import { AgencyIdentity, resolveAgencyIdentities, resolveAgencyIdentity } from '../magazin/read-models/agency-identity.resolver';
 import {
     AgentRepository,
@@ -158,6 +160,13 @@ export interface AgentFailureReport {
     reason: ShipmentFailureReason | null;
     note: string | null;
 }
+
+/**
+ * Agency id → that agency's depots, in stored order (index 0 is the primary).
+ * The batch result of `MagazinRepository.findHqAddressListsByAgencyIds`; read it
+ * through `resolveHqAddressFor`, never by index.
+ */
+type HqAddressMap = Map<string, IAgencyHeadquartersAddress[]>;
 
 /**
  * Where a shipment is collected from, and how many distinct collection points it
@@ -328,7 +337,7 @@ export class ShipmentService {
             this._batchResolveCustomerNames(customerIds),
             // Storage-based items are collected from the agency's own HQ, which
             // is resolved live rather than snapshotted onto the order.
-            this.magazinRepo.findHqAddressesByAgencyIds(agencyIds),
+            this.magazinRepo.findHqAddressListsByAgencyIds(agencyIds),
             viewer.role === 'agent'
                 ? this.earningsQuotes.quoteForShipments(page.data, orderMap as any, viewer.agentId)
                 : Promise.resolve(new Map<string, AgentEarningQuoteResult>()),
@@ -474,7 +483,7 @@ export class ShipmentService {
             throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404);
         }
 
-        const hqMap = await this.magazinRepo.findHqAddressesByAgencyIds([shipment.agency_id.toString()]);
+        const hqMap = await this.magazinRepo.findHqAddressListsByAgencyIds([shipment.agency_id.toString()]);
         const pickups = this._resolveAllPickups(shipment, order, hqMap);
         const origin = pickups[0] ?? null;
         const waypoints = pickups.slice(1);
@@ -551,7 +560,7 @@ export class ShipmentService {
         const [hqMap, customerAddressMap] = await Promise.all([
             // Storage-based items are collected from the agency's own HQ, which
             // is resolved live rather than snapshotted onto the order.
-            this.magazinRepo.findHqAddressesByAgencyIds(agencyIds),
+            this.magazinRepo.findHqAddressListsByAgencyIds(agencyIds),
             // Legacy orders predate `order.delivery_address` and fall back to
             // the customer's current default saved address.
             this._batchResolveCustomerAddresses(
@@ -666,7 +675,7 @@ export class ShipmentService {
     private _resolvePickup(
         shipment: IShipment,
         order: any,
-        hqMap: Map<string, any>
+        hqMap: HqAddressMap
     ): PickupSummary {
         const resolved = this._resolvePickupEntries(shipment, order, hqMap);
         if (resolved.length === 0) return { address: null, mode: null, count: 0 };
@@ -679,7 +688,7 @@ export class ShipmentService {
     }
 
     /** Every distinct pickup address for a shipment, in collection order. */
-    private _resolveAllPickups(shipment: IShipment, order: any, hqMap: Map<string, any>): Array<AddressDetail | null> {
+    private _resolveAllPickups(shipment: IShipment, order: any, hqMap: HqAddressMap): Array<AddressDetail | null> {
         return this._resolvePickupEntries(shipment, order, hqMap).map(r => r.address);
     }
 
@@ -695,13 +704,12 @@ export class ShipmentService {
     private _resolvePickupEntries(
         shipment: IShipment,
         order: any,
-        hqMap: Map<string, any>
+        hqMap: HqAddressMap
     ): Array<{ address: AddressDetail | null; mode: 'pickup_based' | 'storage_based' }> {
         if (shipment.handover?.pickup) {
             return [{ address: fromHandoverPickup(shipment.handover.pickup), mode: 'pickup_based' }];
         }
 
-        const agencyHq = hqMap.get(shipment.agency_id.toString()) ?? null;
         const orderItemsById = new Map<string, any>(
             (order?.items ?? []).map((i: any) => [i._id.toString(), i])
         );
@@ -711,9 +719,17 @@ export class ShipmentService {
         for (const item of shipment.items) {
             const pl = orderItemsById.get(item.order_item_id.toString())?.delivery?.pickup_location;
             if (!pl) continue; // legacy order item predating the pickup snapshot
+            // Resolved PER ITEM, not once per shipment: two items can name two
+            // different depots of the same agency, and the dedupe below then
+            // correctly reports two stops.
             const entry =
                 pl.source === 'agency_storage'
-                    ? { address: fromHqAddress(agencyHq), mode: 'storage_based' as const }
+                    ? {
+                        address: fromHqAddress(
+                            resolveHqAddressFor(hqMap, shipment.agency_id, pl.agency_address_id)
+                        ),
+                        mode: 'storage_based' as const,
+                    }
                     : { address: fromPickupSnapshot(pl.address_snapshot), mode: 'pickup_based' as const };
             const key = `${entry.mode}:${entry.address?.formattedAddress ?? ''}`;
             if (seen.has(key)) continue;
@@ -811,11 +827,12 @@ export class ShipmentService {
         // configured pickup_location — see ProductStatusValidationService /
         // order.service.ts) rather than guessed from the vendor's first address —
         // a shipment can carry several of the vendor's products, each configured
-        // differently. The agency's own HQ address is still resolved live (not
-        // snapshotted) since it isn't vendor/product-specific.
+        // differently. The agency's own depot address is still resolved live (not
+        // snapshotted) since only WHICH depot is product-specific — the address
+        // itself is the agency's record and must follow their corrections.
         // HQ addresses live on the Magazin now.
         const agencyMagazin = agency ? await this.magazinRepo.findByAgencyIdOrNull(agency._id.toString()) : null;
-        const agencyHq = agencyMagazin?.headquarters_addresses?.[0] ?? null;
+        const agencyDepots = agencyMagazin?.headquarters_addresses ?? null;
         const orderItemsById = new Map((order as any).items.map((i: any) => [i._id.toString(), i]));
         // What each item looks like: the variant's own media, else the product's.
         // Resolved live rather than from the order snapshot — see the resolver.
@@ -833,7 +850,12 @@ export class ShipmentService {
             const pickupLocation = !pl
                 ? null // legacy order item predating this feature
                 : pl.source === 'agency_storage'
-                    ? { mode: 'storage_based' as const, alreadyInYourStorage: true, address: fromHqAddress(agencyHq) }
+                    ? {
+                        mode: 'storage_based' as const,
+                        alreadyInYourStorage: true,
+                        // Per item — two items can name two different depots.
+                        address: fromHqAddress(resolveHqAddress(agencyDepots, pl.agency_address_id)),
+                    }
                     : { mode: 'pickup_based' as const, alreadyInYourStorage: false, address: fromPickupSnapshot(pl.address_snapshot) };
             return {
                 orderItemId: si.order_item_id.toString(),
@@ -932,7 +954,7 @@ export class ShipmentService {
             pickup: this._resolvePickup(
                 shipment,
                 order,
-                new Map(agency ? [[agency._id.toString(), agencyHq]] : [])
+                new Map(agency ? [[agency._id.toString(), agencyDepots ?? []]] : [])
             ),
             agent: agent ? { id: agent._id.toString(), name: agent.name, phone: agent.phone ?? null, avatar: agentAvatar } : null,
             // Reassignment handover: where the (replacement) agent collects this
@@ -1281,14 +1303,40 @@ export class ShipmentService {
     }
 
     /**
-     * Fire-and-forget notify the live-tracking integration (geo-tracker, via the
-     * outbox) that a shipment's status changed, so an agency/customer that can no
-     * longer track its agent loses access immediately. Best-effort: a failure
-     * here never affects the delivery flow (mirrors the codebase's post-commit
-     * event emission pattern). Terminal statuses are what actually revoke; other
-     * transitions are re-checked and kept if still valid on the geo-tracker side.
+     * Fire-and-forget announcement that a shipment's status changed.
+     *
+     * TWO AUDIENCES, and the method name predates the second:
+     *
+     * 1. **The live-tracking integration** (geo-tracker, via the outbox) — so an
+     *    agency/customer that can no longer track its agent loses access
+     *    immediately. Terminal statuses are what actually revoke; other
+     *    transitions are re-checked and kept if still valid on the geo-tracker side.
+     * 2. **The customer notification stack** — which turns four of these statuses
+     *    into "on its way" / "out for delivery" / "delivered" / "attempt failed".
+     *
+     * Best-effort: a failure here never affects the delivery flow (mirrors the
+     * codebase's post-commit event emission pattern).
+     *
+     * ── Why the descriptive fields are on the payload, not re-read ────────────
+     *
+     * `trackingNumber` and the failure reason are taken from the shipment this
+     * transition produced — the document the CAS returned — for the same reason
+     * `status` is: a burst of transitions must produce one honest payload each.
+     * `delivery_failures` is APPEND-ONLY and `failed → in_transit → failed` is an
+     * allowed cycle, so a consumer re-reading it later could describe the wrong
+     * attempt. Both are already in hand at every call site; this costs no query.
+     *
+     * NOTE: adding fields here does NOT change what reaches geo-tracker.
+     * `TrackingEventSubscriber` reads named fields into a fixed outbox row, so
+     * anything it does not name is invisible to the other service.
      */
     private _emitTrackingStatusChanged(shipment: IShipment, customerId: string | null): void {
+        // The attempt THIS event is about: the newest entry matching the status
+        // being reported, not merely the newest entry.
+        const failure = [...(shipment.delivery_failures ?? [])]
+            .reverse()
+            .find((f) => f.status === shipment.status);
+
         void eventBus.publish('shipment.status_changed', {
             eventType: 'shipment.status_changed',
             aggregateId: shipment._id.toString(),
@@ -1300,6 +1348,10 @@ export class ShipmentService {
                 agentId: shipment.agent_id ? shipment.agent_id.toString() : null,
                 customerId,
                 status: shipment.status,
+                // Descriptive only — no consumer branches on these.
+                trackingNumber: shipment.tracking_number ?? null,
+                failureReason: failure?.reason ?? null,
+                failureNote: failure?.note ?? null,
             },
         }).catch((err) => console.error('[ShipmentService] tracking emit failed:', err));
     }

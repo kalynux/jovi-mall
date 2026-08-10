@@ -24,7 +24,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > owner, and the order to finish in.
 >
 > `npm run test:agent-domain` was stale against the new model and is **repaired**;
-> it is green at **201 assertions** as of 2026-08-05. It is DB-free, so it still
+> it is green at **211 assertions** as of 2026-08-06. It is DB-free, so it still
 > cannot cover the COD allocation race or the money movements — see the handoff doc.
 > `npm run test:agent-shipment-status` (green at **32**, added 2026-07-30) covers
 > the shared transition map, the map↔schema drift guard, and the agency
@@ -58,7 +58,13 @@ npm run migrate:agent-memberships        # agency_id → memberships (idempotent
 npm run migrate:agent-deposits           # backfill deposit status/recipient (idempotent, --dry-run)
 npm run migrate:contract-terms           # terms_proposed_by/terms_version (idempotent, --dry-run)
 npm run migrate:cod-late-deposit-index   # DROP the agent-scoped late_deposit index (--dry-run)
+npm run migrate:agent-vehicle-colors     # normalize vehicle_info.color to the palette; reports
+                                         # every off-vocabulary value (idempotent, --dry-run)
+npm run migrate:booking-rule-timezones   # clear the legacy 'UTC' default off availability rules so
+                                         # they inherit the vendor's zone; reports every rule whose
+                                         # effective hours would move (idempotent, --dry-run)
 npm run seed:tickets [-- --clean]        # also: seed:plans, seed:cod [-- --clean]
+npm run seed:blog                        # the house byline ONLY — no articles, deliberately
 npm run seed:cod-shipments [-- --clean]  # 7 COD shipments across the lifecycle, on the
                                          # EXISTING agency b0…05 + agent b0…06, with real
                                          # geocoded Douala pickup/drop-off addresses
@@ -69,13 +75,27 @@ No test *framework* is configured. Tests are plain ts-node scripts under `script
 hand-rolled asserts — follow that convention rather than introducing a runner:
 
 ```bash
-npm run test:agent-domain                      # agent domain (201 assertions, no DB needed)
+npm run test:agent-domain                      # agent domain (211 assertions, no DB needed)
 npm run test:earnings-quote                    # the delivery-fee arithmetic (29, no DB needed)
+npm run test:pickup-depot                      # the agency-depot pickup location (44, no DB needed)
+npm run test:agency-inventory                  # the agency stored-SKU roster (31, no DB needed)
+npm run test:vehicle-profile                   # vehicle colour + photo merge (31, no DB needed)
+npm run test:payout-methods                    # the shared payout schema + switch (53, no DB needed)
+npm run test:booking-availability               # booking windows/timezones/seats (54, no DB needed)
+npm run test:customer-notifications             # customer catalog + balance settlement (30, no DB needed)
+npm run test:blog                              # article blocks, slugs, DTO projection (100, no DB needed)
 npm run verify:live-parity                     # agent↔agency smoke test — NEEDS Mongo
+npm run verify:blog                            # blog lifecycle + index builds + route order — NEEDS Mongo
 npx ts-node scripts/test/test-profile-mappers.ts
 ```
 
-`verify:live-parity` is the one script here that requires a database, and it exists because the
+`verify:blog` is the blog's counterpart to `verify:live-parity`, for the same three reasons — it is
+the only place the unique multikey index on `slug_keys` is proven to build, the `$elemMatch`
+translation queries are proven to run, and `/articles/index` is proven to be declared before
+`/articles/:slug`. Unlike `verify:live-parity` it **writes**, then deletes its own `verify-blog-*`
+documents, pass or fail.
+
+`verify:live-parity` is the other script here that requires a database, and it exists because the
 DB-free suites structurally cannot cover four things: that the schema **indexes actually build**
 against real data (`autoIndex` is on, so a failed 2dsphere fails *silently* at boot), that the
 directory **aggregation pipeline runs** (Mongo validates pipelines at execution time, not compile
@@ -140,7 +160,15 @@ Token resolution order: `access_token` httpOnly **cookie first**, then `Authoriz
 Background workers/consumers register at boot, all after the Mongo connection: aggregation scheduler, plan-expiry worker + notification consumer, vendor / agency / **agent** notification consumers, file-cleanup, earnings-release, unpaid-order-cancel, COD deposit-deadline, and the tracking event subscriber + dispatch worker. A feature that needs periodic sweeps registers here; sub-minute cadences use `setInterval`, daily ones use `node-cron`.
 
 ### Notifications (`src/modules/notifications/`)
-Three parallel multi-channel stacks — vendor, agency, and **agent** — each its own model + preference + repository + catalog + event-handler + consumer, all following the same rules (mandatory in-app record, always-on FCM push, at most one preference-gated secondary channel of email/telegram/whatsapp, catalog-driven copy localized in en/fr/pt/es/ar with a startup completeness assert). They are deliberately **not** DRY'd into one generic stack: the copy is written per-audience and the situations barely overlap. When adding a situation, add its `base` copy in **all five languages** or the consumer throws at boot. The agent stack is the newest and narrowest — it exists because the COD cash chain moves an agent's money on an agency's say-so, and the agent needed a durable record of it (`cod.deposit.recorded` with no prior declaration is the agent's only signal that an agency under-recorded a hand-over). Some events are shared: `cod.deposit.recorded` is consumed by both the agent handler (all cases) and the agency handler (direct-to-platform only), each no-oping on payloads that are not theirs — the same pattern the `connection.*` events use across vendor and agency.
+**Four** parallel multi-channel stacks — vendor, agency, agent, and **customer** — each its own model + preference + repository + catalog + event-handler + consumer, all following the same rules (mandatory in-app record, always-on FCM push, at most one preference-gated secondary channel of email/telegram/whatsapp, catalog-driven copy localized in en/fr/pt/es/ar with a startup completeness assert). They are deliberately **not** DRY'd into one generic stack: the copy is written per-audience and the situations barely overlap. When adding a situation, add its `base` copy in **all five languages** or the consumer throws at boot.
+
+**Derive the Mongoose enum from the type union — never hand-maintain both.** Each stack exports a `*_NOTIFICATION_TYPES` array that the schema `enum` spreads. This is not tidiness: the agent stack kept two copies and they drifted, leaving all eight `agent_contract.*` situations in the union and absent from the enum, so every contract notification threw a `ValidationError` and the agent was simply never told. The same applied to its `aggregateType: 'contract'`. Covered by `npm run test:customer-notifications`, which asserts catalog↔enum agreement for **both** stacks.
+
+**`shipment.status_changed` now carries descriptive fields, and that is NOT a geo-tracker change.** `trackingNumber`, `failureReason` and `failureNote` were added for the customer stack's "on its way / attempt failed" copy. `TrackingEventSubscriber` reads *named* fields into a fixed outbox row, so anything it does not name never reaches geo-tracker — this was a one-sided change. They are taken from the shipment the CAS returned, not re-read: `delivery_failures` is append-only and `failed → in_transit → failed` is an allowed cycle, so a later read would describe the wrong attempt. Three subscribers share this event (tracking, assignment, customer notifications); none branches on the new fields.
+
+**`renderTemplate` tidies whitespace after substitution.** Several situations end in an optional sentence (`{{codLine}}`, `{{reasonLine}}`), and an empty one otherwise leaves a trailing or doubled space that reaches push and email un-trimmed — only the in-app copy passes a `trim: true` Mongoose path. Runs of *spaces/tabs* are collapsed, never newlines: no catalog template contains one today, but a multi-paragraph email body added later must not be flattened.
+
+**The customer stack is the newest, and two of its rules are its own.** (1) Times are formatted in the **customer's** timezone (`Customer.timezone`) before reaching a template — a reminder printing a UTC instant is worse than no reminder. (2) **Some situations cannot be muted.** Money (payments, refunds, balance due) and cancellations carry no key in `SITUATION_PREFERENCE`, so no preference silences them; a customer is the *counterparty* to someone else's action there, not the owner of a dashboard. Only progress reporting is gated (`bookingUpdates`, `bookingReminders`, `orderUpdates`; `marketing` is reserved and defaults **off**). Several events are consumed by two stacks at once (`booking.created`, `order.created`) — one event, two audiences, two entirely different messages, exactly as `cod.deposit.recorded` already works across agent and agency. Deep links use `STOREFRONT_URL`. The agent stack is the newest and narrowest — it exists because the COD cash chain moves an agent's money on an agency's say-so, and the agent needed a durable record of it (`cod.deposit.recorded` with no prior declaration is the agent's only signal that an agency under-recorded a hand-over). Some events are shared: `cod.deposit.recorded` is consumed by both the agent handler (all cases) and the agency handler (direct-to-platform only), each no-oping on payloads that are not theirs — the same pattern the `connection.*` events use across vendor and agency.
 
 ### Domain events (`src/core/events/event-bus.ts`)
 In-memory, **per-process**, no persistence and no retry — a `Map<eventType, handler[]>` where `publish` awaits handlers in sequence and swallows their errors. Anything that must survive a crash or cross a process boundary needs its own durable buffer on top (this is exactly why the geo-tracker integration has an outbox).
@@ -241,6 +269,36 @@ Four rules that are load-bearing:
 
 Both splits are post-commit and best-effort, so both have a recovery stage in
 `EarningsReleaseWorker` (`recoverMissedCodSplits`, `recoverMissedDeliverySplits`).
+
+**Payout destinations are ONE schema for all three owners** (`src/core/types/payout.types.ts`):
+vendor, agency and agent each store an ordered `IPayoutMethod[]` (1–3, index 0 preferred), and
+`PayoutRequest` snapshots index 0 at request time. Adding a *kind* means the discriminated union,
+the Mongoose sub-schema, `maskPayoutMethods`, the vendor and agency DTOs' own copies of the masker,
+and `describePayoutMethod` — five places, none of which the compiler will point you at except the
+DTOs. The three kinds are `mobile_money`, `bank` and `card`.
+
+**Which kinds may be CONFIGURED is a switch, separate from which exist** —
+`ENABLED_PAYOUT_METHODS`, currently `['mobile_money']`. Two schemas express the split:
+`PayoutMethodShapeZodSchema` is what a payout method *is* (all three kinds, always), and
+`PayoutMethodZodSchema` — what every write path parses with — is the switch **piped in front of**
+it, so a client posting a half-filled bank form hears "not available right now" instead of
+"bank_name is required". Three things deliberately ignore the switch: reads (`maskPayoutMethods`
+and both DTO maskers), the payout pipeline (`resolvePreferredPayoutMethod`, `describePayoutMethod`),
+and the Mongoose enum. Switching a kind off must never hide an owner's stored destination or strand
+money already addressed to one — it closes the door on *new* configuration only. Re-enabling is
+adding the string back to that array; the tests assert the current setting rather than a hardcoded
+one, so they follow it.
+
+**`card` holds no PAN and no CVV, and that asymmetry with `bank` is deliberate.** A card's account
+number *is* the PAN, so storing it the way `bank.account_number` is stored would put every
+collection in PCI-DSS scope — the opposite of the rule `UserPaymentMethod` already established. A
+card is identified by brand + last4 + holder + expiry, and the transfer rides an optional
+`gateway_token`. The validator **refuses** `number`/`pan`/`cvv`/… rather than letting Zod silently
+strip them: a client that gets a 200 back would otherwise reasonably believe the number is on file.
+Don't "fix" that by adding the field. Contract is documented **per role** —
+`api-doc/{vendor,agency,agent}/payout-methods.md`, one schema written out three times because each
+role reaches it through different endpoints; change the schema and all three need the edit. Covered
+DB-free by `npm run test:payout-methods`.
 
 **All of the fee arithmetic lives in `EarningsQuoteService`, and `EarningsSplitService` calls it** —
 that is what stops what somebody is *quoted* drifting from what they are *paid*. Four pure,
@@ -361,6 +419,8 @@ Consume the domain through the barrel (`src/modules/agents/index.ts`) — **exce
 
 **Everything unknown here FAILS OPEN.** Empty `coverage.regions` is the schema default on every contract ever written, so treating it as "covers nowhere" would make the whole roster undispatchable at once; a missing delivery region (orders predating the snapshot) and an uncomputable shipment value do the same. These are narrowing terms, not authorization — see the header of `contract-coverage.service.ts`.
 
+**Writing coverage is the strict half, and that asymmetry is the design.** `coverage.regions` used to be free text; it is now **picked**, from the agency's country's region catalogue in `locations.json` — the same list the agency's own `coverage_areas` use on its location tab. `normalizeContractRegions` (third pure function in `contract-coverage.service.ts`) canonicalises every write and refuses anything that does not resolve to a region of that country: `"Extrême-Nord"` → `far_north`, `"Douala"` → `400 CONTRACT_COVERAGE_REGION_INVALID`. It runs through **one choke point**, `AgentContractService.normalizeCoverageTerms`, called on all six terms-write paths (both request paths, `updateTerms`→`counterTerms`, `counterTerms`, `proposeTermsChange`, `counterTermsProposalAs`) — a term is only as good as its weakest write path. Reading still fails open for the legacy free-text rows. The catalogue is the **country's**, deliberately not the agency's declared areas (an agency contracts agents for a region before it declares it); the agent side is given `agencyCountry` + `agencyCoverageAreas` on `AgentMembershipWithAgencyDto` so its picker can scope itself and mark what the agency actually serves.
+
 **`remittance_terms` drives the COD late-deposit clock** via `nextRemittanceDueAt` (pure, UTC, `on_demand` ⇒ no deadline ever). `CodDepositDeadlineWorker` iterates **contracts, not cash accounts**: the agent's cash pot is global while the cadence is per-agency, so there is no single deadline to compare a pot against. The `late_deposit` flag is now per-contract while the trust penalty stays agent-global and applied once — four agencies must each learn they are owed, and the agent must not take four penalties for one bad week.
 
 **Device location** is the one input jovi-mall cannot observe; it resolves via `IAgentDeviceLocationProvider` (`ports/device-location.port.ts`), swapped in `agent.bootstrap.ts`. The signal is tri-state and `null` (unknown) must never be coerced to `false` — that would make every agent ineligible the instant geo-tracker went down. Policy for unknown lives in `AGENT_CONFIG`, not in the rule.
@@ -384,8 +444,208 @@ The stored value object is **`GeoAddress`** (`geo-address.types.ts`): `formatted
 
 Geocoding lives in jovi-mall by the governing rule: an address is order/profile-model data, and jovi-mall owns that — geo-tracker owns live positions and road networks, not address resolution. The order's durable geocoded drop-off is **available to geo-tracker routing** but was a **data-only** change: no outbox event shape changed, so geo-tracker code is untouched.
 
+### Pickup locations, and which agency depot (`agency_address_id`)
+
+A physical product's `delivery.pickup_location` is `{ source, vendor_address_id, agency_address_id }`, and **exactly one id is meaningful per source** — `mergeDeliveryConfig` normalises the other to null rather than trusting the caller, so a stale id can't resurface if the source is flipped back.
+
+The two sources snapshot **different amounts** onto the order at checkout, and the asymmetry is the design:
+
+| | `vendor_address` | `agency_storage` |
+|---|---|---|
+| snapshotted onto the order | the whole address (`address_snapshot`) | only the **choice** (`agency_address_id`) |
+| address resolved | frozen at checkout | **live**, every read |
+| why | it is the vendor's record of a place they chose per product; history must not re-point when they edit their profile | the depot's address is the *agency's* record — an agent must be driven to where it is now, so a corrected typo fixes every in-flight shipment |
+
+**`agency_address_id: null` means the agency's PRIMARY depot** (`headquarters_addresses[0]`), and that is a real steady state, not a missing value: it keeps tracking the primary if the agency reorders. Three populations rely on it — every product predating the depot picker, every auto-derived one (`PickupLocationResolver` deliberately never picks a depot, even when the agency has exactly one), and any product whose depot the agency later deleted. Consequently **activation can never fail over a depot**, and no backfill was needed.
+
+**`resolveHqAddress` (`magazin/domain/hq-address.resolver.ts`) is the only place that fallback lives.** Four readers route an agent off it — `ShipmentService._resolvePickupEntries` + the detail builder, `AssignmentCandidateService.resolvePickupLocation`, and `HandoverPickupService.fromAgencyBusiness` — and they resolve **per item**, not per shipment, because two items can name two depots of one agency (the pickup dedupe then correctly reports two stops). `MagazinRepository.findHqAddressListsByAgencyIds` returns the whole list for the batch paths; it replaced the old index-0 method rather than sitting beside it, so nothing can keep resolving the primary by accident.
+
+**HQ subdocument `_id`s are now a durable reference, and the magazin PATCH is a full-array replace.** `MagazinHeadquartersAddressSchema` accepts an optional `id` that clients echo back; `toPersistableHeadquarters` sets `_id` from it, and falls back to a **one-to-one consuming** content match (`address_description` + `geoAddressEquals`) for clients that don't. An `id` not on the caller's own magazin is `409 MAGAZIN_CONFLICT` — same remedy as a version miss. Both write paths (`PATCH /api/agency/magazin` and onboarding Step 1) must pass the **raw** `headquarters_addresses` for preservation, never the country-gated `existingHq`, or a country change re-mints every `_id` and orphans every product pointing at one.
+
+`PickupLocationValidationService` takes depot **ids** (`string[] | null`) as a required 4th parameter rather than the magazin document — it stays repository-free, and required-not-optional so a new call site must decide instead of silently skipping the check. Both call sites load the list only when a depot was actually named. The vendor-facing picker is `GET /api/vendor/delivery-agencies/:agencyId/locations` (connection-gated) — the one place the "only the primary HQ is exposed" rule in `VendorAgencyMapper.toListItemDto` is narrowly reversed.
+
+Covered DB-free by `npm run test:pickup-depot`.
+
+### Agency inventory (`src/modules/inventory/`)
+
+`agency_stock_levels` — `(agency_id, location_id, vendor_id, product_id, variant_id)` + `quantity_on_hand` / `quantity_reserved` — is the platform's only record of **what an agency warehouses**. Before it, `agency_storage` was a routing flag carrying no quantity and `ProductVariant.stock` was one global scalar with no location dimension. `GET /api/agency/inventory` + `/:id` read it.
+
+**Phase 1 rows are DERIVED, not counted, and the wire says so** (`countsAreDerived` + per-row `source: 'derived' | 'counted'`). `AgencyInventoryReconciler` builds the roster from products whose pickup is `agency_storage` and whose effective agency is this one, one row per active variant; quantities stay **0**. Do not seed them from `variant.stock` — that is the vendor's global number across every channel, and copying it per depot manufactures precision nobody can verify. Reconciliation is **mark-and-sweep** (one shared `last_reconciled_at`, then retire older `derived` rows) and runs debounced on the read path, not from a cron — a derived roster isn't worth a scheduled job, and Phase 2's event-driven quantities are where a worker earns its place. `source: 'counted'` rows are **never** swept: once a row asserts goods are physically present, a config change must not silently delete it.
+
+**`resolveStockLocationId` is not `resolveHqAddress`, and the difference is the whole design.** Both send a product naming no depot to the primary, and a product naming a live depot to that depot. They diverge on a **dangling** id: routing falls back to the primary (an agent must be sent *somewhere*), inventory records **`location_id: null`** and the screen surfaces it as unassigned. Falling back would move goods between buildings on paper. Never call the routing resolver from the inventory module.
+
+**Deleting a depot that holds stock is refused** — `409 MAGAZIN_LOCATION_IN_USE` on both magazin write paths (`MagazinProfileService.updateMagazin`, `AgencyProfileService.persistLogisticsToMagazin`). Removals are diffed against the array `toPersistableHeadquarters` is about to persist, **not** the request: an entry that omitted its `id` may still have kept one by content match, and diffing the raw payload would 409 every save from a client that hasn't shipped the id echo. "Holds stock" is **row existence** in Phase 1 — every quantity is 0, so a `quantity > 0` test would never fire; tighten `countByLocations` when Phase 2 lands. The guard is check-then-write (`updateByAgencyId` is not session-aware); the `version` CAS narrows the race.
+
+**`IShipmentItem.variant_id` exists now and is nullable forever.** Stock lives on the variant, so a delivered shipment previously could not say which variant left. Written at all three construction sites (checkout + both reassignment branches). Nullable because legacy shipments have none and `addItem` uses a raw `$push` no default reaches — readers treat null as "legacy, join `order_item_id` against the order", which is what they already do for title/sku. `sku` is deliberately **not** denormalized: `CashCollectionService.computeExpectedAmount` hard-throws on a missing order-item join where ~14 other readers tolerate it, and a second source of truth would change that failure behaviour for money code.
+
+Covered DB-free by `npm run test:agency-inventory`. Contract in `api-doc/agency/inventory.md`.
+
+**The agency now WRITES, and three of the four writes are one-sided on purpose.** Phase 1
+was read-only; `src/modules/inventory/services/agency-stored-product.service.ts` adds
+`PATCH /products/:productId/depot` + `POST /products/:productId/{suspend,unsuspend}`, all
+keyed on the **product** (the depot lives once on `product.delivery.pickup_location`;
+suspension is a product status) and all authorised by the same predicate —
+`findRowsForAgencyAndProduct` returning rows. That predicate *is* the storage arrangement,
+it avoids a cross-vendor product query, and it yields the `vendorId` each write needs to
+stay vendor-scoped. Depot changes go through `mergeDeliveryConfig` and force a reconcile so
+the row moves before the next read; they apply with **no vendor confirmation**, because the
+depot's address is already the agency's own record (the same reason checkout snapshots only
+the depot *choice* for `agency_storage`).
+
+**Suspension reuses `Product.status = 'suspended'` with a fourth reason,
+`agency_storage_suspended`.** Two properties keep it from colliding with the
+delivery-agency cascade, and both are load-bearing: `DELIVERY_AGENCY_REASONS` is a closed
+list that excludes it (so a restore sweep can never lift an agency's leverage — **do not
+widen it**), and `suspendVendorPhysicalProducts` only touches `active` products (so the
+cascade skips an already-suspended one, and the agency's later unsuspend re-runs the gate
+and correctly refuses). Unsuspend is the one place a 422 carries the whole blocker
+checklist (`INVENTORY_PRODUCT_UNSUSPEND_BLOCKED` + `details.blockers`) rather than silently
+skipping, because it is an explicit human action. `findAgencyStoredVariants` was widened to
+keep `agency_storage_suspended` rows — otherwise suspending a product deletes the row its
+own unsuspend button lives on.
+
+**The storage fee is displayed, never charged.** `storage-fee.calculator.ts` is pure and
+quotes `monthly_storage_fee_per_sku × quantity`. Two things it deliberately does not do:
+it does not price by size (dimensions and volume are surfaced so an agency can sanity-check
+a flat rate against what it is shelving — a client must not multiply by them), and it does
+not read `quantity_on_hand`, which is Phase 2's and still 0. The quantity is
+`ProductVariant.stock`, exposed on the wire as a **separate `catalogStock` block** and never
+written into `quantity_on_hand`: the model's prohibition on seeding derived counters from
+the catalogue stands. What makes the catalogue number legitimate to bill against is the
+stock-request flow below — it is now jointly agreed and guaranteed finite.
+
+### Two-sided stock adjustment (`src/modules/stock-requests/`)
+
+**On an `agency_storage` product, nobody writes `ProductVariant.stock` alone.** One party
+proposes, the other approves, and the number moves in the same transaction that records the
+approval — a request marked `approved` whose stock never landed would leave the two sides
+believing different things about a warehouse. The module is an endpoint-for-endpoint mirror
+of `agency-connections/` (`approve`/`reject`/`withdraw` on both routers, per-outcome
+sub-documents, every status in the list by default); the FSM mechanics are lifted from
+`ContractTermsProposal` — one-open-per-SKU as a partial unique index, and resolution as a
+compare-and-set on `status: 'pending'` whose null return is a **conflict, never a
+not-found**.
+
+Three things worth knowing before extending it:
+
+- **`resolveAvailableActions` is the single authority table**, read by the service to
+  enforce and by the DTO to render buttons. The asymmetry is deliberate: author ⇒
+  `withdraw` only, counterparty ⇒ `approve`/`reject` only. A second copy is how a
+  dashboard offers a verb the API refuses.
+- **The quantity is ABSOLUTE, never a delta.** A delta approved days later applies to a
+  number nobody agreed on. `quantity_before` (proposal time) and
+  `approval.quantity_at_apply` (approval time) both persist, so drift is *auditable*
+  rather than rejected — it is not a 409.
+- **`StockChangeGate` intercepts the three existing vendor write paths** (variant PATCH,
+  simple-product PATCH, `PATCH /api/vendor/inventory/bulk-update`) rather than sitting
+  beside them as an opt-in surface. Leaving those writing directly would make the rule
+  advisory — bypassable by not using it. They return **200** (not 202) with
+  `meta.stockAdjustment` and an unchanged `data.stock`; bulk-update gains
+  `requested[]`/`notRequested[]` siblings to `variants[]`, raised **after** the commit
+  because a proposal is not a stock write. *Creating* a variant or a simple product still
+  writes stock directly: an initial quantity is a declaration, not an adjustment.
+
+**A warehoused product cannot have unlimited stock**
+(`catalog/domain/services/agency-storage-stock.rule.ts`). Enforced in three places from one
+definition — as an activation blocker, as a refusal on `ProductUpdateService` when pickup
+becomes `agency_storage` (throwing rather than letting `revalidateActiveStatus` silently
+demote a live product to `draft`), and at request *creation*, so no approvable request can
+leave a product failing its own gate. Deliberately **not** a `stock > 0` rule: that would
+unpublish a product the moment it sold out. Pre-existing offenders are listed by
+`npm run audit:infinite-agency-stock` (read-only, no migration).
+
+Covered DB-free by `npm run test:stock-requests` (40) and the extended
+`npm run test:agency-inventory` (53). Contracts in `api-doc/{agency,vendor}/stock-requests.md`;
+the dashboard hand-off is `api-doc/FRONTEND-CHANGELOG-agency-storage.md`.
+
+### Blog / editorial (`src/modules/blog/`)
+
+The marketing site's article pages, in two halves that never touch: a **public reader**
+(`/api/public/articles`, no auth, `Cache-Control: public, max-age=300`) and an **editor**
+(`/api/admin/articles` + `/api/admin/article-authors`, `requireRole(['admin'])`). Built to
+`api-doc/BACKEND-BLOG-REQUIREMENTS.md`; contracts in `api-doc/public/articles.md` and
+`api-doc/admin/articles.md`.
+
+**Bodies are typed blocks, never an HTML string, and `article-body.validator.ts` is the security
+boundary.** The frontend renders blocks through React components rather than
+`dangerouslySetInnerHTML`, so what that Zod union accepts is what renders on the same origin as the
+auth pages. It is `.strict()` throughout — an unknown block type *and* an unknown key on a known
+block are both 400s. Mongoose stores `body` as `Mixed` on purpose (a parallel sub-schema would be a
+second copy of a 9-type union that nothing keeps in step), which makes one rule load-bearing: **no
+write path may set a body that did not come through `ArticleBodySchema`.** Adding a block type is a
+two-repo change — `ArticleBody.tsx` switches exhaustively over the union.
+
+**One article, many translations — not one document per language.** `hreflang` and the sitemap's
+language alternates are only reconstructible if the languages are one document. The corollary is
+that **a missing translation is a 404, never a fallback**: serving English at a Portuguese URL
+publishes a page contradicting its own `lang` attribute and competing with its own original. The one
+deliberate fallback in the module is the **author bio** (`toPublicAuthorDto`), because a blank byline
+where the structured data expects an author is worse than a bio in the wrong language.
+
+**`slug_keys` exists because MongoDB refuses the index you'd reach for first.** A compound unique
+index on `translations.locale` + `translations.slug` is two parallel array paths and is rejected at
+write time, so every `(locale, slug)` pair is flattened to `"<locale>:<slug>"` in one array with an
+ordinary unique multikey index. It holds **retired slugs too**: a renamed slug keeps answering
+(`404 BLOG_ARTICLE_MOVED` carrying the current one) and no other article can claim it, because a
+reused slug turns a permanent redirect into a wrong answer. `buildSlugKeys` derives it on every
+write — never set it by hand.
+
+**The redirect is a machine-readable hint, not an HTTP redirect, and that is the correct split.**
+This API can only redirect its own URL; the address needing the 301 is the *page*, which only the
+frontend can emit. Same reasoning behind `410 BLOG_ARTICLE_GONE` carrying `categoryKey`.
+
+**`draft` and `archived` are both invisible publicly and are not interchangeable** — a draft 404s
+(never live), an archived article 410s with its hub (was live, has inbound links). That is why
+`DELETE` is refused once `published_at` is set, and why a preview is
+`GET /api/admin/articles/:id/preview` returning the *public* DTO behind the admin guard rather than a
+flag that returns drafts from the public route.
+
+**`content_updated_at` is stamped from a content comparison, not from Mongoose's `updatedAt`.**
+`featured`, `categoryKey` and a translation's `published` all move the document; stamping off the row
+would put a `dateModified` in the structured data for a revision that never happened. `contentChanged`
+fingerprints only what a reader sees. Likewise `wordCount` is derived on write and `readingMinutes`
+is deliberately **not sent** — the frontend computes it from the body it is about to render.
+
+Two rules the requirements ask for that are **not** enforced in code, by agreement: no prices in
+article bodies (they go stale silently — link `/pricing`), and no invented metrics.
+
+Covered by `npm run test:blog` (100 assertions, DB-free) and `npm run verify:blog` (47, needs Mongo —
+index builds, the whole lifecycle against real persistence, and that `/articles/index` is declared
+before `/articles/:slug`). `npm run seed:blog` creates the house byline; **no articles are seeded**,
+deliberately.
+
 ### Payments (`src/modules/payments/`)
 Gateway-agnostic orchestrator (`PaymentOrchestratorService`) supports Stripe (cards), NotchPay, and MyCoolPay (mobile money). Each gateway implements `PaymentGateway` interface. Webhook payloads are deduplicated via hash before processing.
+
+**`refundPayment` serves BOTH payable things** — orders and bookings — via a `RefundSource` discriminated union. Only four points branch (the payment lookup, the `RefundTransaction` foreign key, the source-status write, the earnings reversal); the money invariants in between are shared *on purpose*, so a second implementation cannot drift on refundable balance or escrow. Only **Stripe** implements a real gateway refund; NotchPay's and MyCoolPay's are explicitly `PLACEHOLDER` and raise `REFUND_GATEWAY_NOT_SUPPORTED` — callers must handle that as an expected outcome, not a bug.
+
+### Bookings (`src/modules/booking/`) — service products
+
+Services never enter the cart; they are booked. Availability → 15-min Redis hold → booking → payment.
+
+**The booking rows are the authority on a product's own occupancy, not Google Calendar.** This is the load-bearing rule. Availability previously derived busy time from the calendar alone, so a `manual` booking — which writes no calendar event until the vendor accepts it — never blocked its own slot and the same hour could be sold without limit. `ProductBookingService.getAvailability` now subtracts `fullWindows(bookedWindows, seats)` for **every** mode; the calendar only ever *adds* the vendor's other commitments on top. Consequences that follow, and must not be "simplified" back:
+
+- Calendar writes are **best-effort everywhere** (create, reschedule, capacity). A Google outage can no longer reject or lose a confirmed sale, and a vendor with no calendar connected still sells correctly. Safe *only* because of the rule above.
+- `AvailabilityService` **unions** persisted `ExternalCalendarBlock` rows with a live query rather than choosing one. Subtracting an interval twice is idempotent, so a union only ever over-blocks (self-healing on the next sync) and never under-blocks. `InboundCalendarSyncWorker` is registered in `server.ts` and keeps that cache warm.
+- `createBooking` re-checks overlap and inserts **inside one transaction** (`BOOKING_SLOT_UNAVAILABLE`, 409). The Redis hold is the first line of defence; it evaporates if Redis restarts, so the CAS is what actually guarantees single occupancy.
+
+**Wall-clock times resolve in the VENDOR's timezone.** `Vendor.timezone` (required, defaults `Africa/Douala`) is the source of truth; `AvailabilityRule.timezone` is now an optional per-rule override, not a `'UTC'` default nobody read. Both availability windows and the peak-hours surcharge go through `booking/utils/availability-timezone.util.ts` — never `setHours`/`getHours`, which resolved against the *server's* clock and shifted every vendor's day when the server moved. `npm run migrate:booking-rule-timezones` (idempotent, `--dry-run`, reports every rule whose hours would move) clears legacy `'UTC'` rows to inherit.
+
+**The pure window arithmetic lives in `booking/utils/availability-windows.util.ts`**, extracted off `AvailabilityService` so it can be tested without Mongo *and* Google. Every availability defect found in review lived there — notably `clipWindow`, which now trims a window to the query range instead of discarding any window not wholly inside it (a mid-day query used to lose the whole day, indistinguishable from fully booked). Covered DB-free by `npm run test:booking-availability` (54).
+
+**Cancelling a paid booking refunds it** (`BookingRefundService`), from **both** the customer and vendor paths — neither refunded anything before. Auto where the gateway supports it; otherwise `paymentStatus: 'refund_pending'` + a HIGH ticket for manual payout, with earnings reversed either way. A refund failure never blocks the cancellation: releasing the slot matters more, and money owed is recoverable from the ticket.
+
+**The customer surface is `/api/customer/bookings`** (list · detail · cancel · reschedule), beside `/customer/orders`. Before it, a customer could pay and then do nothing — `cancelBooking` was fully written, complete with `assertCancellationAllowed`, and simply had no route, so the vendor's cancellation policy was enforced *nowhere*. `UnpaidBookingCancelWorker` sweeps confirmed-but-unpaid bookings (never `pending` ones, which await the vendor).
+
+**The completion balance is REQUESTED, never auto-charged.** `CompletionPricingService` used to compute a shortfall, bury it in `metadata` and stop. It now writes a first-class `booking.settlement` (`finalPrice`, `balanceDue`, `balancePaid`, `creditDue`, indexed for the vendor's outstanding-balance report) and asks the customer for it (`booking.balance.due`). Three rules hold it together:
+
+- **The balance is measured against what was PAID, not what was quoted.** `max(0, finalPrice − amountPaid)`, where `amountPaid` is 0 unless the booking is `paid`. Comparing to `priceSnapshot` billed an unpaid customer only for the overrun and let the original price vanish.
+- **Charging is the customer's action.** They agreed to the quote, not to whatever the vendor settles at afterwards. They pay via `POST /api/customer/bookings/:id/pay-balance`, or the vendor records cash via `POST /api/vendor/bookings/:id/settle-balance` (clamped to what is owed, so a mistyped amount cannot inflate earnings).
+- **A balance payment is a SECOND payment on the same booking**, discriminated by `PaymentTransaction.purpose = 'booking_balance'` (default `'primary'`, so no migration). Without it the webhook's already-paid early return swallows it. It splits through `splitBookingBalance`, which uses its own source id — `('booking', bookingId)` is already taken by the original — and matures immediately, since the completion that would otherwise start the hold clock has already happened.
+
+`creditDue` (settling *below* what was paid) is **recorded, not refunded**, by explicit product decision — usually a goodwill discount the vendor hands back themselves. It is surfaced so it is at least visible.
+
+**Customers are notified now** — see the notifications section. `BookingReminderWorker` fires ~24h before `startAt`, which the platform owed them: it records `no-show` against people it had never once reminded. Each sweep covers `[now+lead, now+lead+interval)` so consecutive passes tile exactly, and the idempotency key makes a replay harmless.
 
 ### Redis (`src/infra/redis/redis.factory.ts`)
 Uses dedicated DB indices (3–10) per feature (email tokens, WhatsApp codes, booking slot locks, download tokens, etc.). Connects lazily.
@@ -430,6 +690,7 @@ Inert when `GEO_TRACKER_BASE_URL` is unset — the outbox still fills, nothing d
 | Tracking-allow policy (geo-tracker consumes) | `src/modules/agents/domain/services/agent-tracking-policy.service.ts` |
 | geo-tracker integration seam | `src/modules/agents/ports/device-location.port.ts` |
 | Agent domain config (all eligibility assumptions) | `src/modules/agents/config/agent.config.ts` |
+| Article block vocabulary (the blog's security boundary) | `src/modules/blog/validators/article-body.validator.ts` |
 | Error factory & AppError class | `src/core/errors.ts` |
 | Error code registry | `src/core/error-codes.ts` |
 | Base repository | `src/core/repositories/base.repository.ts` |

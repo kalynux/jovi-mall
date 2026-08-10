@@ -213,6 +213,7 @@ export function createAppError(
     [ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY]: 'Set an active default delivery agency on your vendor profile to publish physical products',
     [ERROR_CODES.CATALOG_PRODUCT_NO_PICKUP_LOCATION]: 'Choose where the delivery agency should collect this product from',
     [ERROR_CODES.CATALOG_PRODUCT_INVALID_PICKUP_LOCATION]: 'The chosen pickup location is not compatible with your delivery agency',
+    [ERROR_CODES.CATALOG_PRODUCT_AGENCY_STORAGE_INFINITE_STOCK]: 'A product stored in an agency warehouse must have a countable stock quantity. Turn off unlimited stock on every active variant',
     [ERROR_CODES.CATALOG_IMAGE_LIMIT_EXCEEDED]: 'Too many images for this product',
     [ERROR_CODES.CATALOG_PRODUCT_SIMPLE_MODE_LOCKED]: 'This product uses the simple editor. Convert it to the advanced editor to use this operation',
     [ERROR_CODES.CATALOG_PRODUCT_NOT_SIMPLE_MODE]: 'This product uses the advanced editor — use the standard product and variant endpoints to edit it',
@@ -346,6 +347,22 @@ export function createAppError(
     [ERROR_CODES.DIGITAL_ASSET_IN_USE]: 'digital asset in use',
     [ERROR_CODES.DIGITAL_ENTITLEMENT_CONFIG_MISSING]: 'digital entitlement config missing',
     [ERROR_CODES.DIGITAL_ENTITLEMENT_CONFIG_INACTIVE]: 'digital entitlement config inactive',
+
+    // Blog. The first three are reachable by a logged-out visitor, so they read as
+    // explanations rather than as code identifiers.
+    [ERROR_CODES.BLOG_ARTICLE_NOT_FOUND]: 'No published article at this address',
+    [ERROR_CODES.BLOG_ARTICLE_MOVED]: 'This article has moved to a new address',
+    [ERROR_CODES.BLOG_ARTICLE_GONE]: 'This article is no longer published',
+    [ERROR_CODES.BLOG_ARTICLE_KEY_TAKEN]: 'An article already uses this id',
+    [ERROR_CODES.BLOG_ARTICLE_NOT_PUBLISHABLE]: 'This article is not ready to be published',
+    [ERROR_CODES.BLOG_ARTICLE_ALREADY_PUBLISHED]: 'This article is already published',
+    [ERROR_CODES.BLOG_ARTICLE_DELETE_NOT_ALLOWED]:
+      'This article has been published — archive it instead, so its URL can answer 410 rather than 404',
+    [ERROR_CODES.BLOG_SLUG_TAKEN]: 'Another article already uses this slug in this language',
+    [ERROR_CODES.BLOG_SLUG_RESERVED]: 'This slug would collide with a blog route',
+    [ERROR_CODES.BLOG_AUTHOR_NOT_FOUND]: 'Author not found',
+    [ERROR_CODES.BLOG_AUTHOR_KEY_TAKEN]: 'An author already uses this id',
+    [ERROR_CODES.BLOG_AUTHOR_IN_USE]: 'This author is credited on one or more articles',
   };
 
   const resolvedMessage = message ?? defaultMessages[code] ?? 'An unexpected error occurred';

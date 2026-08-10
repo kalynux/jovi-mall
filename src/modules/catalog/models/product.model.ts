@@ -25,19 +25,38 @@ export type ProductMode = 'simple' | 'advanced';
 export type VectorisationStatus = 'not_started' | 'pending' | 'completed' | 'failed' | 'skipped_no_credits';
 
 /**
- * Reason a product was system-suspended. Scopes which suspended products a
- * given restoration cascade is allowed to touch — other reasons must be left alone.
+ * Reason a product was suspended. Scopes which suspended products a given
+ * restoration cascade is allowed to touch — other reasons must be left alone.
+ *
+ * The first three are **system** cascades driven by a broken delivery agency
+ * (see ProductDeliveryAgencySuspensionService). `agency_storage_suspended` is the
+ * odd one out and deliberately so: it is a **human** act by the agency that
+ * warehouses the product — its lever when storage rent goes unpaid — so nothing
+ * automatic may ever clear it. The delivery-agency cascade's restore paths are
+ * scoped to `DELIVERY_AGENCY_REASONS`, which is what keeps the two apart; do not
+ * widen that list.
  */
-export type ProductSuspensionReason = 'default_delivery_agency_removed' | 'product_delivery_agency_removed' | 'agency_connection_paused';
+export type ProductSuspensionReason =
+  | 'default_delivery_agency_removed'
+  | 'product_delivery_agency_removed'
+  | 'agency_connection_paused'
+  | 'agency_storage_suspended';
 
 /**
  * Snapshot captured when a product is force-suspended, so it can be restored
  * to its exact prior status later (not a hardcoded assumption).
+ *
+ * `suspendedByAgencyId` + `note` are set only by `agency_storage_suspended`: the
+ * agency id is the authorisation check on the way back out (only the agency that
+ * suspended may unsuspend), and the note is what the vendor is shown as the
+ * reason. Both stay absent on the three system cascades, which have no actor.
  */
 export interface ProductSuspension {
   reason: ProductSuspensionReason;
   previousStatus: Exclude<ProductStatus, 'suspended'>;
   suspendedAt: Date;
+  suspendedByAgencyId?: Types.ObjectId | null;
+  note?: string | null;
 }
 
 export interface DigitalConfig {
@@ -56,10 +75,22 @@ export type PickupLocationSource = 'vendor_address' | 'agency_storage';
  * `agency_storage` means the agency already warehouses this vendor's stock
  * (requires `policies.pricing.storage_based.enabled`); `vendor_address_id` is
  * always null in that case. See PickupLocationValidationService.
+ *
+ * Exactly one of the two ids is meaningful per source; the other is normalised
+ * to null by `mergeDeliveryConfig` rather than trusted from the caller.
+ *
+ * `agency_address_id` names WHICH of the agency's depots
+ * (`magazin.headquarters_addresses[]`) warehouses this product. It is optional:
+ * **null means the primary depot** (index 0), which is what every product
+ * written before the depot picker existed resolves to, and what the auto-derive
+ * path still writes. Resolution lives in exactly one place —
+ * `resolveHqAddress` (magazin/domain/hq-address.resolver.ts) — so the fallback
+ * cannot drift between the readers that route an agent.
  */
 export interface PickupLocation {
   source: PickupLocationSource;
   vendor_address_id: Types.ObjectId | null;
+  agency_address_id: Types.ObjectId | null;
 }
 
 /**
@@ -215,7 +246,12 @@ const ProductSchema = new Schema<IProduct>({
       pickup_location: {
         type: {
           source: { type: String, enum: ['vendor_address', 'agency_storage'], required: true },
+          // Neither id carries a `ref`: both point at a SUBDOCUMENT of another
+          // collection (vendor.business_addresses[] / magazin.headquarters_addresses[]),
+          // which Mongoose cannot populate. They are resolved by hand on read.
           vendor_address_id: { type: Schema.Types.ObjectId, default: null },
+          // Which agency depot. Null = the primary (headquarters_addresses[0]).
+          agency_address_id: { type: Schema.Types.ObjectId, default: null },
         },
         required: false,
         default: null,
@@ -225,16 +261,31 @@ const ProductSchema = new Schema<IProduct>({
     default: undefined,
   },
 
-  // System-driven suspension snapshot. Null unless currently suspended by a cascade.
+  // Suspension snapshot. Null unless currently suspended — by a delivery-agency
+  // cascade (the first three reasons) or by the warehousing agency by hand
+  // (`agency_storage_suspended`).
   suspension: {
     type: {
-      reason: { type: String, enum: ['default_delivery_agency_removed', 'product_delivery_agency_removed', 'agency_connection_paused'], required: true },
+      reason: {
+        type: String,
+        enum: [
+          'default_delivery_agency_removed',
+          'product_delivery_agency_removed',
+          'agency_connection_paused',
+          'agency_storage_suspended',
+        ],
+        required: true,
+      },
       previousStatus: {
         type: String,
         enum: ['draft', 'active', 'archived', 'pending_review'],
         required: true,
       },
       suspendedAt: { type: Date, required: true },
+      // Set only by `agency_storage_suspended`. No `ref`: resolved by hand, and
+      // it is an authorisation predicate rather than something to populate.
+      suspendedByAgencyId: { type: Schema.Types.ObjectId, default: null },
+      note: { type: String, default: null, maxlength: 500, trim: true },
     },
     required: false,
     default: null,

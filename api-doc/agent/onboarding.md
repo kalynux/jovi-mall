@@ -63,11 +63,24 @@ This step captures the agent's vehicle information.
   "step": 1,
   "vehicle_info": {
     "vehicle_type": "bike", // Enums allowed: 'bike', 'car', 'van', 'truck'
-    "color": "Red", // Min 1, Max 50 characters
-    "plate_number": "LT-123-AB" // Optional/Nullable — null or "" clears it
+    "color": "red", // Min 1, Max 50 characters — see the palette below
+    "plate_number": "LT-123-AB", // Optional/Nullable — null or "" clears it
+    "photo_file_id": "665f1c2a9b1e4a0012a3b4ee" // Optional/Nullable — id from POST /api/files/upload
   }
 }
 ```
+
+> **`color` is a vocabulary, not an enum.** Prefer one of
+> `white silver grey black red orange yellow green blue purple brown beige gold` — lowercase,
+> English, never localized on the wire. Any other string is still accepted, for the "another colour"
+> case. Values are trimmed, lowercased and de-aliased (`gray` → `grey`) on write.
+
+> **The vehicle photo is a file reference.** Upload the image via `POST /api/files/upload` and send
+> the returned `id`. It must be an image (`400 CATALOG_FILE_TYPE_INVALID` otherwise). Reads return
+> the resolved object as `vehicle_info.photo` — see [profile.md](./profile.md).
+
+> Re-submitting step 1 **merges**: `plate_number` and `photo_file_id` keep their stored value when
+> the key is omitted, so going back to change the vehicle type does not discard the photo.
 
 ### Step 2: Identity Setup (Optional)
 

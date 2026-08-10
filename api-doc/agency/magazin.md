@@ -72,6 +72,7 @@ Retrieve the authenticated agency's magazin.
 - `logo` is a resolved **file object** (`{ id, key, url, mimeType, size, originalName }`) or `null`, not a URL string — same shape as product media and the Store logo. Upload via `POST /api/files/upload`, then submit the returned id as `logoFileId`.
 - `coverageAreas` are region keys of the agency's `country`.
 - `headquartersAddresses[]` are the agency's physical / pickup locations (index 0 = primary). Each carries a geocoded `geo`; `location`, `region` and `city` are all **derived from it** on write — `location` is the GeoJSON point kept for map/proximity use. `_id` identifies each entry.
+- ⚠️ **`_id` is a durable reference — echo it back on PATCH.** A vendor can point a product at a specific depot (`delivery.pickupLocation.agencyAddressId`), and orders carry that id through to the agent's pickup address. The PATCH below is a full-array replace, so **every entry you keep must be sent back with its `id`**; an entry sent without one is treated as a brand-new location and gets a new `_id`, silently re-pointing every product that named the old one at the primary depot instead. See the `headquarters_addresses` notes there.
 - `headquartersAddresses[].label`, `.region` and `.city` are **`string | null` on read**. Entries saved before labels existed have `label: null` — fall back to `"Primary Headquarters"` for index 0 and `"Branch N"` after it. `region`/`city` are null when the entry's geocode resolves none (common for rural/landmark results); use `geo.formatted_address` when you need something to show.
 - `version` is the optimistic-locking counter.
 
@@ -96,6 +97,7 @@ Update the authenticated agency's magazin.
   "coverage_areas": ["littoral", "centre", "ouest"],
   "headquarters_addresses": [
     {
+      "id": "6641abc123def457",
       "label": "Douala HQ",
       "address_description": "Akwa, Rue Sylvani, immeuble ABC",
       "support_contact": { "phone": "+237612345678", "email": "douala@fasttrack.cm" },
@@ -117,10 +119,14 @@ Update the authenticated agency's magazin.
 
 > Phone and email formats are platform-wide — see [Contact formats](../README.md#contact-formats-phone--email).
 - `coverage_areas` (`string[]`, min 1): **Full replace.** Region keys of the agency's `country` (from `locations.json`). Entries that aren't regions of that country → `400 AGENCY_COVERAGE_AREA_INVALID`.
-- `headquarters_addresses` (`object[]`, min 1): **Full replace**; index 0 = primary. Each entry is `{ label, address_description, support_contact:{ phone, email? }, geo }`. Every **new or edited** entry must carry a geocoded `geo` (a selected `/api/geo/search` result) resolving inside the agency's `country` — else `400 ADDRESS_GEO_REQUIRED` / `400 ADDRESS_COUNTRY_MISMATCH`. `location`, `region` and `city` are all derived from `geo` on write. Same flow as a vendor `business_addresses` entry.
+  - The **same catalogue** now backs the coverage picker on an agent contract's terms (`coverage.regions`) — see [Coverage regions are picked, not typed](./agent-roster.md#coverage-regions-are-picked-not-typed). A contract may name any region of the country, not only the ones listed here; these are shown alongside as "regions this agency serves".
+- `headquarters_addresses` (`object[]`, min 1): **Full replace**; index 0 = primary. Each entry is `{ id?, label, address_description, support_contact:{ phone, email? }, geo }`. Every **new or edited** entry must carry a geocoded `geo` (a selected `/api/geo/search` result) resolving inside the agency's `country` — else `400 ADDRESS_GEO_REQUIRED` / `400 ADDRESS_COUNTRY_MISMATCH`. `location`, `region` and `city` are all derived from `geo` on write. Same flow as a vendor `business_addresses` entry.
+  - **`id`** (string, ObjectId, optional): the `_id` of an entry that already exists, from a prior `GET`. **Send it for every entry you are keeping.** Omit it only for a genuinely new location. Two entries carrying the same `id` → `400`. An `id` that isn't on your magazin → `409 MAGAZIN_CONFLICT` (your view of the list is stale — refetch).
+  - **Removing an entry is guarded.** Dropping a location that still holds stored products → `409 MAGAZIN_LOCATION_IN_USE` with `details.locations[]`. Note this is judged against what would actually be *persisted*, so an entry you kept via the content-match net does **not** count as removed.
+    - *Why it matters*: products reference a depot by `_id` (`pickupLocation.agencyAddressId`). An entry saved without its `id` is a new row with a new `_id`, and every product naming the old one quietly falls back to your primary depot. There is a safety net — an entry whose `address_description` **and** geocoded place both match an existing one inherits its `_id` even without an `id` — but it does not survive editing the address text, so do not rely on it.
   - `label` (string, 1–50 chars) is **required on every entry you write** — the agency's own name for the location, the one field the map result can't supply.
   - `region` / `city` are **optional and derived** from `geo.components`. Send them only to name a place whose geocode has neither; whenever `geo` carries one, `geo` wins. Both persist as `null` when neither source has a value.
-  - "Unchanged" (grandfathered, geo not required) means **same `address_description` and same geocoded place**. Adding or renaming a `label`, and omitting `region`/`city`, are therefore not "edits" — re-saving the list never forces a re-geocode of legacy rows.
+  - "Unchanged" (grandfathered, geo not required) means the **same geocoded place**, plus *either* the same `address_description` *or* a matching `id`. Adding or renaming a `label`, omitting `region`/`city`, and (when you send `id`) correcting the address text are therefore not "edits" — re-saving the list never forces a re-geocode of legacy rows. Moving the pin always is an edit, `id` or not.
 - `version` (**required**, number): current magazin version for optimistic locking.
 
 **Clearing a field**: every *clearable* field accepts `null` **or `""`** (stored/returned as `null`); omit a key to leave it unchanged. `name`, `coverage_areas`, and `headquarters_addresses` are full-replace, not clearable. See [Conventions](../README.md#conventions).
@@ -133,13 +139,22 @@ Update the authenticated agency's magazin.
 
 | Code | HTTP | Description |
 |------|------|-------------|
-| `VALIDATION_ERROR` | 400 | Request body failed validation |
+| `VALIDATION_ERROR` | 400 | Request body failed validation — including two HQ entries sharing one `id` |
 | `AGENCY_COVERAGE_AREA_INVALID` | 400 | A coverage area is not a region of the agency's country |
 | `ADDRESS_GEO_REQUIRED` | 400 | A new/edited HQ address is missing its geocoded `geo` |
 | `ADDRESS_COUNTRY_MISMATCH` | 400 | An HQ address resolves outside the agency's country |
 | `UNAUTHORIZED` | 401 | Missing or invalid JWT token |
 | `FORBIDDEN` | 403 | Wrong role |
-| `MAGAZIN_CONFLICT` | 409 | Optimistic-locking version mismatch — refresh and retry |
+| `MAGAZIN_CONFLICT` | 409 | Optimistic-locking version mismatch, **or** an HQ entry carries an `id` not on this magazin (`details.unknownIds`) — refresh and retry in both cases |
+| `MAGAZIN_LOCATION_IN_USE` | 409 | A removed HQ entry still holds stored products (`details.locations[] = { id, label, skuCount }`). **Retrying will not help** — re-point or clear those products first. See [Inventory](./inventory.md) |
+
+> **You can now clear a blocking depot yourself.** `PATCH /api/agency/inventory/products/:productId/depot`
+> moves a stored product to another of your depots (or to your primary, with
+> `locationId: null`) without waiting on the vendor — the depot is your record, not
+> theirs. Find the products holding a depot open by filtering the inventory list on that
+> `locationId`, re-point each, then retry this save. Note that a product **you have
+> storage-suspended** still holds its depot open, which is correct: the goods are still in
+> the building. See [Inventory §4–5](./inventory.md#4-move-a-product-to-another-depot).
 | `INTERNAL_ERROR` | 500 | Unexpected server error |
 
 ---

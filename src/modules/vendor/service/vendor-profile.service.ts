@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { VendorProfileMapper, GetVendorProfileResponseDto, VendorCompletionStatusDto, VendorOnboardingStatusDto } from '../dto/vendor-profile.dto';
-import { VendorAgencyMapper, VendorAgencyListItemDto, AgencyListMeta } from '../dto/vendor-agency.dto';
+import { VendorAgencyMapper, VendorAgencyListItemDto, VendorAgencyLocationDto, AgencyListMeta } from '../dto/vendor-agency.dto';
 import { VendorConfig } from '../config/vendor.config';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -741,6 +741,42 @@ export class VendorProfileService {
     if (!agency) return null;
 
     return this.toVendorAgencyDto(agency);
+  }
+
+  /**
+   * Every physical location a connected agency operates, so a vendor can name
+   * which one warehouses a product (`pickupLocation.agencyAddressId`). Ordered
+   * as the agency stores them; the first is the primary and is what a product
+   * that names no depot resolves to.
+   *
+   * Gated on an ACTIVE connection, matching `setDefaultDeliveryAgency` and
+   * `ProductUpdateService`'s agency-override gate: a vendor cannot point a
+   * product at an agency they are not connected to, so listing that agency's
+   * warehouses would only render a picker whose every option is unusable.
+   * Browsing agencies stays open — it is choosing one that requires a contract.
+   */
+  async listAgencyLocations(vendorId: string, agencyId: string): Promise<VendorAgencyLocationDto[]> {
+    const agencyRepo = new DeliveryAgencyRepository();
+    const agency = await agencyRepo.findById(agencyId);
+    if (!agency) {
+      throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, 'The selected delivery agency does not exist.');
+    }
+
+    const connection = await this.connectionService.findByVendorAndAgency(vendorId, agencyId);
+    if (!connection || connection.status !== 'active') {
+      throw createAppError(
+        ERROR_CODES.CONNECTION_NOT_ACTIVE,
+        422,
+        'You need an active, approved connection with this agency before choosing one of its pickup locations.',
+      );
+    }
+
+    const magazin = await this.magazinRepo.findByAgencyIdOrNull(agencyId);
+    // An agency with no magazin yet is a legitimate empty list, not an error —
+    // it simply has no depot for the vendor to choose.
+    return (magazin?.headquarters_addresses ?? []).map((hq, index) =>
+      VendorAgencyMapper.toLocationDto(hq, index),
+    );
   }
 
   /** Map one agency to the vendor-facing DTO, resolving its business name + logo from the Magazin. */

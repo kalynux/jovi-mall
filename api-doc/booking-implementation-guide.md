@@ -74,7 +74,22 @@ These are independent of each other; build as needed.
 - **Step 9** — Status transitions: `PATCH /api/vendor/bookings/:id/status` (enforces the [state machine](./vendor/bookings.md#booking-status-state-machine)).
 - **Step 10** — Reschedule (lock the new slot first) / cancel: `PATCH .../reschedule`, `POST .../cancel`.
 - **Step 11** — Mark a cash booking paid: `PATCH .../payment-status`.
-- **Step 12** — Complete + settle final price: `POST /api/vendor/bookings/:id/complete` — recomputes the price from the actual elapsed duration (or a flat `fixedPrice`) and returns `finalPrice` + `additionalAmountDue`. **Note:** the additional-payment request to the customer is currently **stubbed** (the shortfall is recorded/returned but no charge is created). See [vendor/bookings.md](./vendor/bookings.md).
+- **Step 12** — Complete + settle final price: `POST /api/vendor/bookings/:id/complete` — recomputes the price from the actual elapsed duration (or a flat `fixedPrice`) and returns `finalPrice`, `additionalAmountDue` and `creditDue`. A shortfall is **requested, not charged**: the customer gets a `booking.balance.due` notification and pays it themselves, or you record it as cash.
+- **Step 12b** — Take the balance in cash: `POST /api/vendor/bookings/:id/settle-balance`, body `{ amount? }`. See [vendor/bookings.md](./vendor/bookings.md).
+
+---
+
+## Phase 4 — Customer booking management (storefront)  → [customer/bookings.md](./customer/bookings.md#managing-your-bookings)
+
+Everything after the purchase. All under `/api/customer/bookings`, customer role, scoped to the caller.
+
+- **Step 13** — "My bookings": `GET /api/customer/bookings` (paged, filterable) and `GET /api/customer/bookings/:id`.
+- **Step 14** — Cancel: `POST /api/customer/bookings/:id/cancel`. Gated by the vendor's cancellation policy — handle `422 CANCELLATION_NOT_ALLOWED` and show `error.details.deadline`. A paid booking is refunded, or flagged `refund_pending` with a ticket raised.
+- **Step 15** — Reschedule: lock the new slot (Step 6), then `PATCH /api/customer/bookings/:id/reschedule` with `{ newSlotId }`.
+- **Step 16** — Pay an outstanding balance: `GET /api/customer/bookings/:id/balance`, then `POST /api/customer/bookings/:id/pay-balance` with `{ gateway, channel }`.
+- **Step 17** — The notification inbox: `GET /api/customer/notifications` (+ `/unread-count`, `/preferences`). See [customer/notifications.md](./customer/notifications.md).
+
+> **Customers are now notified.** Booking placed, confirmed, moved, cancelled, completed, paid, refunded, balance due — plus a reminder ~24h before the appointment. Money and cancellations cannot be switched off; progress updates and reminders can.
 
 ---
 
@@ -96,4 +111,5 @@ These are independent of each other; build as needed.
 | Create the service variant (`serviceConfig` + price) | [vendor/variants.md](./vendor/variants.md) |
 | Weekly availability rules | [vendor/availability-rules.md](./vendor/availability-rules.md) |
 | Customer slot → lock → book → pay | [customer/bookings.md](./customer/bookings.md) |
+| Customer lists / cancels / reschedules | [customer/bookings.md](./customer/bookings.md#managing-your-bookings) |
 | Vendor manages bookings | [vendor/bookings.md](./vendor/bookings.md) |

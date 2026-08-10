@@ -15,7 +15,11 @@ import { IDeliveryAgency, IAgencyPolicies } from '../delivery-agency.model';
 import { IPayoutMethod } from '../../../core/types/payout.types';
 import { assertHeadquartersInCountry } from '../../../core/validation/address-country.helper';
 import { normalizeCoverageAreasForCountry } from '../../../core/constants/locations.helper';
-import { toPersistableHeadquarters } from '../../magazin/dto/magazin-profile.dto';
+import { toPersistableHeadquarters, findUnknownHeadquartersIds } from '../../magazin/dto/magazin-profile.dto';
+import {
+    findRemovedDepotIds,
+    assertRemovedDepotsAreEmpty,
+} from '../../inventory/domain/services/depot-removal.guard';
 import { AgencyOnboardingStep, AgencyOnboardingStepValue } from '../../../core/constants/onboarding-steps';
 import { AGENCY_ONBOARDING_EVENTS } from '../events/agency-onboarding.events';
 import { ConnectionService } from '../../agency-connections/connection.service';
@@ -361,10 +365,47 @@ export class AgencyProfileService {
             agencyCurrentCountry && agencyCurrentCountry === input.country
                 ? magazin.headquarters_addresses
                 : [];
+
+        // Same stale-reference guard as PATCH /api/agency/magazin. Checked against
+        // the RAW list, not `existingHq` — an id is a valid reference to a row that
+        // exists regardless of whether a country change disqualifies it from being
+        // grandfathered past the geo assertion.
+        const unknownIds = findUnknownHeadquartersIds(
+            input.headquarters_addresses,
+            magazin.headquarters_addresses,
+        );
+        if (unknownIds.length > 0) {
+            throw createAppError(
+                ERROR_CODES.MAGAZIN_CONFLICT,
+                409,
+                'One or more headquarters addresses reference an id that no longer exists. Please refresh and try again.',
+                { unknownIds },
+            );
+        }
+
         assertHeadquartersInCountry(input.headquarters_addresses, existingHq, input.country);
+
+        // RAW list again, deliberately: `existingHq` is empty on a country
+        // change, and passing it would re-mint every depot's `_id` — silently
+        // orphaning every product that points at one — as a side effect of a
+        // country correction.
+        const persistable = toPersistableHeadquarters(
+            input.headquarters_addresses,
+            magazin.headquarters_addresses,
+        );
+
+        // Same depot-in-use guard as PATCH /api/agency/magazin. Re-running an
+        // onboarding step is a legitimate edit path, so it can drop a depot just
+        // as the profile endpoint can.
+        await assertRemovedDepotsAreEmpty(
+            agencyId,
+            findRemovedDepotIds(magazin.headquarters_addresses, persistable),
+            magazin.headquarters_addresses,
+        );
+
         await this.magazinRepo.updateByAgencyId(agencyId, magazin.version, {
             coverage_areas: normalizeCoverageAreasForCountry(input.coverage_areas, input.country),
-            headquarters_addresses: toPersistableHeadquarters(input.headquarters_addresses),
+            headquarters_addresses: persistable,
         });
     }
 

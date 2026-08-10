@@ -97,11 +97,15 @@ Delivery Agents (Drivers) must provide vehicle information. Identity setup can b
   "step": 1,
   "vehicle_info": {
     "vehicle_type": "bike", // Enums: "bike", "car", "van", "truck"
-    "color": "red",
-    "plate_number": "string" // Optional/Nullable
+    "color": "red", // Lowercase English colour token; free text accepted
+    "plate_number": "string", // Optional/Nullable
+    "photo_file_id": "665f1c2a9b1e4a0012a3b4ee" // Optional/Nullable — id from POST /api/files/upload
   }
 }
 ```
+
+> Full contract (colour palette, photo rules, merge semantics):
+> [agent/onboarding.md](../agent/onboarding.md) and [agent/profile.md](../agent/profile.md).
 
 #### **Step 2: Identity Setup (Skippable)**
 **Payload**:
@@ -165,6 +169,9 @@ validated against `country`. Coverage areas are **region keys** of that country 
 #### **Step 2: Payout Setup (Mandatory)**
 
 `payout_details` is an **ordered array** of methods (max 3); the first entry is the preferred one.
+Each is `mobile_money`, `bank` or `card` — though 🚧 **only `mobile_money` can be configured right
+now**. Full field reference: [Agency payout methods](../agency/payout-methods.md) (vendors: [the
+same schema, vendor side](../vendor/payout-methods.md)).
 
 **Payload**:
 ```jsonc

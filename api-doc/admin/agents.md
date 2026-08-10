@@ -89,7 +89,7 @@ able to pull an agent off a rival's roster.
       "tracking": { "allowed": true },
       "capacity": { "active_shipment_count": 1, "max_active_shipments": 20 },
       "cod": { "max_threshold": 500000, "trust_score": 82 },
-      "vehicle_info": { "vehicle_type": "bike", "color": "red" }
+      "vehicle_info": { "vehicle_type": "bike", "color": "red", "plate_number": "LT-4412", "photo": null }
     },
     "memberships": [
       {

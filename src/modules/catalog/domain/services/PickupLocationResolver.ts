@@ -24,7 +24,11 @@ export type PickupResolutionReason =
 
 export interface ResolvedPickupLocation {
     /** Snake-cased, ready to embed in `product.delivery`. Null when nothing could be derived. */
-    pickupLocation: { source: PickupLocationSource; vendor_address_id: string | null } | null;
+    pickupLocation: {
+        source: PickupLocationSource;
+        vendor_address_id: string | null;
+        agency_address_id: string | null;
+    } | null;
     reason: PickupResolutionReason;
 }
 
@@ -97,7 +101,11 @@ export function derivePickupLocation(vendor: IVendor, agency: IDeliveryAgency): 
         // agency already warehouses this vendor's stock, which is a standing
         // arrangement they would have configured deliberately, not a default.
         return {
-            pickupLocation: { source: 'vendor_address', vendor_address_id: addresses[0]._id.toString() },
+            pickupLocation: {
+                source: 'vendor_address',
+                vendor_address_id: addresses[0]._id.toString(),
+                agency_address_id: null,
+            },
             reason: 'derived_single_address',
         };
     }
@@ -107,8 +115,14 @@ export function derivePickupLocation(vendor: IVendor, agency: IDeliveryAgency): 
     }
 
     if (storageEnabled) {
+        // Deliberately does NOT pick a depot, even when the agency has exactly
+        // one. `agency_address_id: null` already MEANS the primary and tracks it
+        // if the agency reorders; stamping an id here would freeze a guess the
+        // vendor was never asked to make. Note the asymmetry with the vendor
+        // address above: there, null is not a legal steady state, so a single
+        // unambiguous candidate has to be recorded.
         return {
-            pickupLocation: { source: 'agency_storage', vendor_address_id: null },
+            pickupLocation: { source: 'agency_storage', vendor_address_id: null, agency_address_id: null },
             reason: 'derived_agency_storage',
         };
     }

@@ -35,7 +35,7 @@ import { agentDepositService } from '../../cod/services/agent-deposit.service';
 import { CodPaginationQuerySchema } from '../../cod/validators/cod.validators';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
 import { getStorageProvider } from '../../../core/storage';
-import { resolveFileDetails } from '../../catalog/read-models/file-detail.resolver';
+import { resolveFileDetail, resolveFileDetails } from '../../catalog/read-models/file-detail.resolver';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
 import { IDeliveryAgent } from '../models/agent.model';
 
@@ -334,12 +334,18 @@ export class AgencyRosterController {
     const membership = await agentContractService.getForAgency(agencyId(req), membershipId);
     const agent = await agentRepository.findById(membership.agent_id.toString());
     const avatar = agent ? (await resolveAgentAvatars([agent])).get(agent._id.toString()) ?? null : null;
+    // The detail view returns the full profile DTO, which carries the vehicle
+    // photo. The roster LIST does not — it maps to the photo-less summary
+    // shape rather than reporting `photo: null` for a file it never looked up.
+    const vehiclePhoto = agent
+      ? await resolveFileDetail(agent.vehicle_info?.photo_file_id?.toString(), fileRepository, storageProvider)
+      : null;
 
     res.json({
       success: true,
       data: {
         membership: AgentMembershipMapper.toDto(membership),
-        agent: agent ? AgentProfileMapper.toResponseDto(agent, new Date(), avatar) : null,
+        agent: agent ? AgentProfileMapper.toResponseDto(agent, new Date(), avatar, vehiclePhoto) : null,
       },
     });
   });

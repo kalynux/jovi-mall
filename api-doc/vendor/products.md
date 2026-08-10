@@ -112,15 +112,45 @@ This is the full shape of a product object returned by all read endpoints.
     "agencyId": null,
     "freeDelivery": false,
     "pickupLocation": {
-      "source": "vendor_address",
-      "vendorAddressId": "683abc1234567890abcdef02"
+      "source": "agency_storage",
+      "vendorAddressId": null,
+      "agencyAddressId": "6641abc123def458"
     }
+  },
+  "pickup": {
+    "source": "agency_storage",
+    "vendorAddressId": null,
+    "agencyAddressId": "6641abc123def458",
+    "address": {
+      "label": "Bonabéri branch",
+      "formattedAddress": "Bonabéri, Douala, Cameroon",
+      "addressLine1": "Bonabéri, Rue des Palmiers",
+      "addressLine2": null,
+      "city": "Douala",
+      "state": "Littoral",
+      "country": "Cameroon",
+      "coordinates": { "lat": 4.0731, "lng": 9.6812 }
+    },
+    "isPrimaryFallback": false
   }
 }
 ```
 
 > [!IMPORTANT]
-> **Physical products require a `delivery.pickupLocation` to activate** — it tells the resolved delivery agency where to collect the item from. `source: "vendor_address"` points at one of your [`business_addresses`](./profile.md) (`vendorAddressId` required); `source: "agency_storage"` means the agency already warehouses your stock for this product (no address needed — `vendorAddressId` is always `null`). Which sources are actually usable depends on the **resolved agency's** own policy — see the note under [Update Product](#update-product) and [Delivery Agencies](./delivery-agencies.md#pickup_based--storage_based-and-pickup-locations).
+> **Physical products require a `delivery.pickupLocation` to activate** — it tells the resolved delivery agency where to collect the item from. `source: "vendor_address"` points at one of your [`business_addresses`](./profile.md) (`vendorAddressId` required); `source: "agency_storage"` means the agency already warehouses your stock for this product (`vendorAddressId` is always `null`; `agencyAddressId` optionally names *which* depot). Which sources are actually usable depends on the **resolved agency's** own policy — see the note under [Update Product](#update-product) and [Delivery Agencies](./delivery-agencies.md#pickup_based--storage_based-and-pickup-locations).
+
+**`pickup` (read-only, on product detail responses)** — the same pickup location with its address
+resolved, so you can label the current choice without a second request. `null` for products with no
+pickup location (digital, service, or an unconfigured physical product). `delivery.pickupLocation`
+keeps the raw ids, so a client can round-trip that object back on a `PATCH`.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `source` | `"vendor_address"` \| `"agency_storage"` | Mirrors `delivery.pickupLocation.source`. |
+| `vendorAddressId` | string \| null | Mirrors the request field. |
+| `agencyAddressId` | string \| null | Mirrors the request field. `null` = the agency's primary depot. |
+| `address` | object \| null | Standard address shape (`label`, `formattedAddress`, `addressLine1/2`, `city`, `state`, `country`, `coordinates: { lat, lng }`). `null` when the referenced address no longer exists — for `vendor_address`, an address you deleted; the activation gate will report it. |
+| `isPrimaryFallback` | boolean | `true` when `address` is the agency's **primary** depot standing in — either because `agencyAddressId` is null (no choice made) or because it names a depot the agency has since deleted. Worth surfacing: it means the address shown is a default, not something the vendor picked. Always `false` for `vendor_address`. |
 
 <a id="service-products"></a>
 > [!NOTE]
@@ -373,6 +403,18 @@ Partial update — only provided fields are changed. Allowed on `draft` and `act
 |-------|------|-------|
 | `source` | `"vendor_address"` \| `"agency_storage"` | Required. `vendor_address` — collect from one of your business addresses. `agency_storage` — the agency already warehouses your stock; nothing to collect. |
 | `vendorAddressId` | string \| null | Required (and must match an entry in your [`business_addresses`](./profile.md)) when `source` is `vendor_address`; ignored/omit when `source` is `agency_storage`. |
+| `agencyAddressId` | string \| null | **Optional.** Which of the agency's depots warehouses this product, when `source` is `agency_storage`; ignored/omit for `vendor_address`. List the options with [GET /delivery-agencies/:agencyId/locations](./delivery-agencies.md#list-an-agencys-pickup-locations) and send one of their `id`s. |
+
+> [!NOTE]
+> **`agencyAddressId` is optional, and omitting it is meaningful: it means the agency's *primary*
+> depot.** It keeps meaning that — if the agency later reorders its locations, the product follows
+> the new primary. Storing the primary's id explicitly pins that depot instead. Those are two
+> different intents, so don't pre-fill the picker with the primary's id when the vendor hasn't
+> chosen; leave it null and mark the `isPrimary` option as the default.
+>
+> This is also why every product created before depots were selectable keeps working: they all
+> carry `agencyAddressId: null` and collect from the primary, exactly as before. A depot the agency
+> later **deletes** falls back to the primary too, rather than stranding the delivery.
 
 > [!IMPORTANT]
 > **Changing `delivery.agencyId` can restore the product and reassign in-flight orders.** If this product was suspended because its previous override agency went inactive, setting it to a **new active** agency (or clearing it back to `null`, falling back to the vendor's active default) automatically restores the product if it's now eligible again, and reassigns any of its still `pending`/`assigned`/held order items from the old agency over to the new one. The response `message` reports how many order items were moved. See [Admin: Delivery Agencies](../admin/delivery-agencies.md) for the full cascade.
@@ -425,7 +467,7 @@ changed and at least one order item was moved (see the important note above) —
 - `422 CATALOG_PRODUCT_INVALID_STATE` — Product is `archived` or `pending_review`; update not allowed. **`suspended` products ARE editable** — editing is often the way out of suspension (e.g. repointing `delivery.agencyId` at a working agency, which auto-restores the product if it's eligible again).
 - `422 CONNECTION_NOT_ACTIVE` — `delivery.agencyId` was set to an agency you don't have an active, approved connection with. See [Agency Connections](./agency-connections.md).
 - `422 CATALOG_PRODUCT_NO_DELIVERY_AGENCY` — `delivery.pickupLocation` was set but no delivery agency (override or vendor default) is resolvable yet.
-- `422 CATALOG_PRODUCT_INVALID_PICKUP_LOCATION` — `delivery.pickupLocation` doesn't match the resolved agency's policy, or `vendorAddressId` doesn't match one of your business addresses.
+- `422 CATALOG_PRODUCT_INVALID_PICKUP_LOCATION` — `delivery.pickupLocation` doesn't match the resolved agency's policy, `vendorAddressId` doesn't match one of your business addresses, or `agencyAddressId` isn't one of the resolved agency's locations.
 - `400 VALIDATION_ERROR` — Body schema invalid
 
 ---
@@ -1219,6 +1261,24 @@ Summary of what the backend validates when changing status to `active`. Frontend
 | If set, the product's own `delivery.agencyId` override is independently active, with an active connection | `CATALOG_PRODUCT_NO_DELIVERY_AGENCY` | Clear the override or point it at a working agency via `PATCH /:id` |
 | `delivery.pickupLocation` is set | `CATALOG_PRODUCT_NO_PICKUP_LOCATION` | Set it via `PATCH /:id` — see [Update Product](#update-product) |
 | `delivery.pickupLocation` matches the resolved agency's policy (`pickup_based`/`storage_based`) and, for `vendor_address`, still references an existing business address | `CATALOG_PRODUCT_INVALID_PICKUP_LOCATION` | Re-pick a valid pickup location for the resolved agency |
+| **For `agency_storage` pickup only:** no active variant has `isInfiniteStock: true` | `CATALOG_PRODUCT_AGENCY_STORAGE_INFINITE_STOCK` | Turn off unlimited stock and record a real quantity, or move pickup back to a vendor address. `details.variant` names the offender |
+
+> [!IMPORTANT]
+> **A warehouse cannot hold an unbounded quantity.** An agency that stores your goods
+> bills per SKU against a quantity and reconciles a shelf against a number, so
+> `agency_storage` and `isInfiniteStock` are mutually exclusive.
+>
+> The same rule is enforced as a **refusal**, not a blocker, on the two write paths that
+> could otherwise put a *live* product into that state:
+> - `PATCH /api/vendor/products/:id` moving pickup to `agency_storage` while a variant is
+>   unlimited → `422`, with `details.variants` listing every offender. The save is
+>   rejected rather than accepted-and-silently-unpublished.
+> - a [stock request](./stock-requests.md) asking to go unlimited on a warehoused SKU →
+>   `422` at creation, so no approvable request can leave a product failing its own gate.
+>
+> Note this is **not** a `stock > 0` rule. A warehoused product may legitimately be at
+> zero, and requiring a positive quantity would silently demote it to `draft` the moment
+> it sold out.
 
 **Digital products only:**
 
@@ -1279,6 +1339,7 @@ Validation errors include a `details` array:
 | `CATALOG_PRODUCT_NO_DELIVERY_AGENCY` | 422 | Activation blocked (or `delivery.pickupLocation` update rejected) — physical product has no resolvable active delivery agency/connection |
 | `CATALOG_PRODUCT_NO_PICKUP_LOCATION` | 422 | Activation blocked — physical product has no `delivery.pickupLocation` set |
 | `CATALOG_PRODUCT_INVALID_PICKUP_LOCATION` | 422 | `delivery.pickupLocation` doesn't match the resolved agency's policy, or its business address no longer exists |
+| `CATALOG_PRODUCT_AGENCY_STORAGE_INFINITE_STOCK` | 422 | Activation blocked, **or** a `PATCH /:id` moving pickup to `agency_storage` rejected — an active variant has `isInfiniteStock: true` |
 | `CATALOG_VARIANT_NO_DIGITAL_ASSET` | 422 | Activation blocked — a digital variant has no uploaded asset |
 | `CATALOG_DIGITAL_VARIANT_LIMIT_EXCEEDED` | 400/422 | Digital product exceeds 5 variants (400 on create, 422 on activation) |
 | `CATALOG_PRODUCT_SERVICE_NO_DURATION` | 422 | Activation blocked — service product has no duration |

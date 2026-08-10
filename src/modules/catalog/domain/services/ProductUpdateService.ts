@@ -8,8 +8,15 @@ import { assertProductImageLimit } from './media/image-limits';
 import { ConnectionRepository } from '../../../agency-connections/connection.repository';
 import { VendorRepository } from '../../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../../delivery/delivery-agency.repository';
+import { MagazinRepository } from '../../../magazin/repositories/magazin.repository';
 import { PickupLocationValidationService } from './PickupLocationValidationService';
 import { mergeDeliveryConfig } from './delivery-config.merge';
+import { IVariantRepository } from '../../repositories/interfaces/variant.repository.interface';
+import { VariantRepositoryMongo } from '../../repositories/mongo/variant.repository.mongo';
+import {
+  assertCountableStockForAgencyStorage,
+  requiresCountableStock,
+} from './agency-storage-stock.rule';
 
 // Per-variant asset/limits live on ProductVariant.digitalConfig now.
 // Only the product-wide `isActive` kill switch is updatable here.
@@ -23,6 +30,8 @@ export interface UpdateDeliveryConfigDto {
   pickupLocation?: {
     source: 'vendor_address' | 'agency_storage';
     vendorAddressId?: string | null;
+    /** Which agency depot, for `agency_storage`. Omitted/null = the primary. */
+    agencyAddressId?: string | null;
   } | null;
 }
 
@@ -51,6 +60,11 @@ export class ProductUpdateService {
     private readonly vendorRepository: VendorRepository = new VendorRepository(),
     private readonly deliveryAgencyRepository: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
     private readonly pickupLocationValidationService: PickupLocationValidationService = new PickupLocationValidationService(),
+    // The agency's depot list lives on the Magazin, not the DeliveryAgency.
+    private readonly magazinRepository: MagazinRepository = new MagazinRepository(),
+    // Read only when pickup becomes `agency_storage` — the countable-stock rule is
+    // the one delivery check that needs variants.
+    private readonly variantRepository: IVariantRepository = new VariantRepositoryMongo(),
   ) { }
 
   async execute(
@@ -157,14 +171,35 @@ export class ProductUpdateService {
           throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY, 422, 'The resolved delivery agency was not found.');
         }
 
+        // The agency's depot list, loaded ONLY when a depot was actually named —
+        // so a vendor-address pickup, or a storage pickup that takes the primary,
+        // costs no extra query.
+        const agencyAddressId = command.delivery.pickupLocation.agencyAddressId ?? null;
+        const agencyDepotIds = agencyAddressId
+          ? await this.magazinRepository.findHqAddressIdsByAgencyId(effectiveAgencyId)
+          : null;
+
         this.pickupLocationValidationService.assertValid(
           {
             source: command.delivery.pickupLocation.source,
             vendorAddressId: command.delivery.pickupLocation.vendorAddressId ?? null,
+            agencyAddressId,
           },
           agency,
           vendor,
+          agencyDepotIds,
         );
+
+        // Refuse rather than demote. Moving pickup to `agency_storage` while a
+        // variant has unlimited stock breaks the activation gate, and
+        // `revalidateActiveStatus` (wired into this very update path) would answer
+        // that by quietly dropping a live product to `draft`. A vendor who edited an
+        // address and found their product unpublished with no explanation would have
+        // no way to know why — so the write is what fails, with the reason.
+        if (requiresCountableStock(command.delivery.pickupLocation.source)) {
+          const variants = await this.variantRepository.findByProduct(productId);
+          assertCountableStockForAgencyStorage(command.delivery.pickupLocation.source, variants);
+        }
       }
 
       (updates as any).delivery = merged;

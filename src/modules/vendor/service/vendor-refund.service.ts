@@ -106,9 +106,10 @@ export class VendorRefundService {
         }
 
         const result = await this.orchestrator.refundPayment({
-            orderId,
+            source: { kind: 'order', orderId },
             vendorId,
             initiatedBy,
+            initiatedByRole: 'vendor',
             amount: requested,
             reason: input.reason
         });

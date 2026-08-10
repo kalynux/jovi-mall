@@ -12,6 +12,7 @@ export interface DeliveryConfigPatch {
     pickupLocation?: {
         source: PickupLocationSource;
         vendorAddressId?: string | null;
+        agencyAddressId?: string | null;
     } | null;
 }
 
@@ -22,6 +23,7 @@ export interface DeliveryConfigPersistence {
     pickup_location: {
         source: PickupLocationSource;
         vendor_address_id: string | null;
+        agency_address_id: string | null;
     } | null;
 }
 
@@ -52,22 +54,29 @@ export function mergeDeliveryConfig(
 
     let pickup_location: DeliveryConfigPersistence['pickup_location'];
     if (patch.pickupLocation === undefined) {
-        // Untouched — carry the persisted value across, re-snake-casing it.
+        // Untouched — carry the persisted value across, re-snake-casing it. EVERY
+        // sub-field must be listed here: one omitted is one silently wiped by an
+        // unrelated `freeDelivery`-only patch, which is the whole reason this
+        // function exists.
         pickup_location = existing?.pickupLocation
             ? {
                 source: existing.pickupLocation.source,
                 vendor_address_id: existing.pickupLocation.vendorAddressId,
+                agency_address_id: existing.pickupLocation.agencyAddressId,
             }
             : null;
     } else if (patch.pickupLocation === null) {
         pickup_location = null;
     } else {
-        const { source, vendorAddressId } = patch.pickupLocation;
+        const { source, vendorAddressId, agencyAddressId } = patch.pickupLocation;
         pickup_location = {
             source,
-            // An agency-warehoused product has no vendor address by definition;
-            // normalise rather than trusting the caller to omit it.
+            // Exactly one id is meaningful per source; normalise the other away
+            // rather than trusting the caller to omit it. A stale id left on the
+            // document would resurface if the source were ever flipped back.
             vendor_address_id: source === 'agency_storage' ? null : (vendorAddressId ?? null),
+            // Null is legal here and means "the agency's primary depot".
+            agency_address_id: source === 'vendor_address' ? null : (agencyAddressId ?? null),
         };
     }
 

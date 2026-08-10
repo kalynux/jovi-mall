@@ -83,12 +83,25 @@ export function assertGeoInCountry(
 
 /**
  * Assert every NEW or EDITED headquarters/address entry in a full-replace array
- * carries a geocoded `geo` inside the registered country. HQ entries carry no
- * client `_id`, so "unchanged" is content-based — same `address_description` and
- * the same geocoded place — and those entries are grandfathered. Shared by the
- * agency onboarding flow and the Magazin update endpoint.
+ * carries a geocoded `geo` inside the registered country; unchanged entries are
+ * grandfathered. Shared by the agency onboarding flow and the Magazin update
+ * endpoint.
  *
- * Deliberately excluded from that comparison:
+ * An entry counts as unchanged when its geocoded place is equal AND either:
+ * - it carries an `id` matching an existing entry (the entry says which row it
+ *   is), or
+ * - its `address_description` matches an existing entry (the content route).
+ *
+ * Both routes are kept. HQ entries only recently gained a client-supplied `id`,
+ * so going id-only would treat every legacy row — and every entry from a client
+ * that has not shipped the echo — as brand new, demanding a re-geocode of the
+ * whole list just to re-save it. The id route only ADDS the case content-matching
+ * misses: correcting a typo in `address_description` while the pin stays put.
+ *
+ * `geoAddressEquals` is mandatory on BOTH routes. Same id with a moved pin is a
+ * move, and a move into another country is exactly what this guards.
+ *
+ * Deliberately excluded from the comparison:
  * - `region` / `city`, because they are now DERIVED from `geo` rather than typed.
  *   A client that omits them (as it should) would otherwise make every legacy
  *   plain-text row look edited and demand a re-geocode just to re-save the list.
@@ -98,16 +111,17 @@ export function assertGeoInCountry(
  * this assertion protects.
  */
 export function assertHeadquartersInCountry(
-    incoming: Array<{ label?: string | null; address_description: string; geo?: GeoAddressInput | null }>,
-    existing: Array<{ address_description: string; geo?: IGeoAddress | null }> | undefined,
+    incoming: Array<{ id?: string | null; label?: string | null; address_description: string; geo?: GeoAddressInput | null }>,
+    existing: Array<{ _id?: { toString(): string }; address_description: string; geo?: IGeoAddress | null }> | undefined,
     country: string | null | undefined,
 ): void {
     const previous = existing ?? [];
     incoming.forEach((entry, index) => {
         const unchanged = previous.some(
             (p) =>
-                entry.address_description === p.address_description &&
-                geoAddressEquals(entry.geo, p.geo),
+                geoAddressEquals(entry.geo, p.geo) &&
+                (entry.address_description === p.address_description ||
+                    (!!entry.id && entry.id === p._id?.toString())),
         );
         if (unchanged) return;
         assertGeoInCountry(entry.geo, country, { index, label: entry.label ?? null });

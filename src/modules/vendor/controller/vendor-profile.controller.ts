@@ -34,6 +34,10 @@ const SetDefaultDeliveryAgencySchema = z.object({
   agencyId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId'),
 });
 
+const AgencyIdParamSchema = z.object({
+  agencyId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Must be a valid MongoDB ObjectId'),
+});
+
 const SetAutoRedirectOrdersSchema = z.object({
   enabled: z.boolean(),
   thresholdAmount: z.number().min(0).nullable().optional(),
@@ -101,6 +105,20 @@ export class VendorProfileController {
     });
 
     res.json({ success: true, data: result.agencies, meta: result.meta });
+  });
+
+  /**
+   * GET /api/vendor/delivery-agencies/:agencyId/locations
+   *
+   * The agency's depots, for the product editor's "which warehouse holds this?"
+   * picker. Unpaginated — an agency has a handful of locations, and a picker that
+   * hides options behind a page boundary is worse than no picker.
+   */
+  static listAgencyLocations = asyncHandler(async (req: Request, res: Response) => {
+    const vendorId = req.auth!.role_entity._id.toString();
+    const { agencyId } = AgencyIdParamSchema.parse(req.params);
+    const locations = await vendorProfileService.listAgencyLocations(vendorId, agencyId);
+    res.json({ success: true, data: locations });
   });
 
   // ─── Onboarding Step Handlers ─────────────────────────────────────────────

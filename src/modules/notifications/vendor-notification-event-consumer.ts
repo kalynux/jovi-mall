@@ -35,6 +35,16 @@ export function initializeVendorNotificationEventConsumers(): void {
     // Subscription plan lifecycle (owner-typed; handler no-ops on non-vendor owners).
     eventBus.subscribe('plan.expiring', handler.handlePlanExpiring.bind(handler));
     eventBus.subscribe('plan.expired', handler.handlePlanExpired.bind(handler));
+    // Agency-warehoused stock. The first three are shared with the agency consumer
+    // and discriminated on `recipientRole` — each handler no-ops on payloads that
+    // aren't theirs, the same pattern `connection.*` uses. The last three are
+    // vendor-only: the agency took the action, so it needs no telling.
+    eventBus.subscribe('storage.stock_request.received', handler.handleStockRequestReceived.bind(handler));
+    eventBus.subscribe('storage.stock_request.approved', handler.handleStockRequestApproved.bind(handler));
+    eventBus.subscribe('storage.stock_request.rejected', handler.handleStockRequestRejected.bind(handler));
+    eventBus.subscribe('storage.depot_changed', handler.handleStorageDepotChanged.bind(handler));
+    eventBus.subscribe('storage.product_suspended', handler.handleStorageProductSuspended.bind(handler));
+    eventBus.subscribe('storage.product_unsuspended', handler.handleStorageProductUnsuspended.bind(handler));
 
     console.log(
         `[VendorNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`

@@ -32,34 +32,80 @@ refresh; if you find yourself wanting one, push is misconfigured.
 
 ## What the backend sends
 
-Every push is built in [`fcm-push.service.ts`](../../src/modules/notifications/services/fcm-push.service.ts)
-and carries **both** a `notification` block and a `data` block:
+Every push is built in [`fcm-push.service.ts`](../../src/modules/notifications/services/fcm-push.service.ts),
+and there are **two shapes**. Which one you get is decided by the situation, and only by the
+situation:
+
+| Shape | Situations | Who draws the Android notification |
+|---|---|---|
+| **Data-only** | `shipment.offer.received`, `shipment.offer.reminder` | **The app** — which is what lets it hang Accept / Decline off it |
+| **Notification + data** | everything else, `shipment.offer.expired` included | The OS |
+
+The split exists because action buttons live on the notification the *app* builds. A message
+carrying a `notification` block is drawn by the operating system: when the app is backgrounded or
+killed the FCM SDK renders the tray row itself and never calls into the app, so the app never gets
+the chance to attach buttons. Only an actionable offer is worth that trade — see
+[the tradeoff](#the-tradeoff) below.
+
+### Shape A — actionable offer (data-only)
 
 ```jsonc
 {
-  "notification": {
-    "title": "New delivery offer",
+  // NO "notification" block. Absent, not empty — an empty object still counts,
+  // and its presence is what hands the draw back to the OS.
+  "data": {
+    "type": "shipment.offer.received",   // or shipment.offer.reminder
+    "aggregateType": "offer",
+    "aggregateId": "665f1f77bcf86cd799439400",
+    "path": "offers/665f1f77bcf86cd799439400",  // THE OFFER ID IS PARSED OUT OF THIS
+    "title": "New delivery offer",              // present ONLY on this shape
     "body": "Douala Express is offering you a delivery for order ORD-10432. Review and accept it before it expires."
   },
-  "data": {
-    "type": "shipment.offer.received",   // the situation
-    "aggregateType": "offer",            // deposit | offer | shipment | contract | plan | storage
-    "aggregateId": "665f1f77bcf86cd799439400",
-    "path": "offers/665f1f77bcf86cd799439400"  // relative deep-link; absent when the situation has no action
-    // "url" — absolute, only present when AGENT_APP_URL is configured. Web-oriented; ignore it on mobile.
-  },
   "android": {
-    "priority": "high",
-    "notification": { "channel_id": "jovi_agent_offers", "notification_priority": "PRIORITY_MAX", "default_sound": true }
+    "priority": "high"
+    // No "notification" sub-block either — it only configures a row the OS isn't drawing.
+    // The channel is NOT lost: map data.type → jovi_agent_offers yourself (see below).
   },
   "apns": {
     "headers": { "apns-priority": "10" },
-    "payload": { "aps": { "sound": "default" } }
+    "payload": { "aps": { "sound": "default", "category": "jovi_agent_offer" } }
   }
 }
 ```
 
-Carrying a `notification` block has one consequence you must design around:
+**iOS still gets its alert payload.** `dataOnly` is an Android-only lever — iOS has no
+background-draw path and would show nothing at all. Its buttons come from the
+`jovi_agent_offer` category instead, which the app registers as a `UNNotificationCategory` at
+startup.
+
+### Shape B — everything else
+
+```jsonc
+{
+  "notification": {
+    "title": "Cash deposit confirmed",
+    "body": "Douala Express confirmed your deposit of 45,000 XAF."
+  },
+  "data": {
+    "type": "cod.deposit.confirmed",     // the situation
+    "aggregateType": "deposit",          // deposit | offer | shipment | contract | plan | storage
+    "aggregateId": "665f1f77bcf86cd799439400",
+    "path": "cod/deposits/665f1f77bcf86cd799439400"  // relative deep-link; absent when the situation has no action
+    // "url" — absolute, only present when AGENT_APP_URL is configured. Web-oriented; ignore it on mobile.
+    // No "title"/"body" here — read them off message.notification.
+  },
+  "android": {
+    "priority": "high",
+    "notification": { "channel_id": "jovi_default", "notification_priority": "PRIORITY_MAX", "default_sound": true }
+  },
+  "apns": {
+    "headers": { "apns-priority": "10" },
+    "payload": { "aps": { "sound": "default" } }   // no category — no buttons
+  }
+}
+```
+
+Shape B has one consequence you must design around:
 
 | App state | Who draws the tray notification | What you must do |
 |---|---|---|
@@ -68,15 +114,52 @@ Carrying a `notification` block has one consequence you must design around:
 | **Foreground (Android)** | **Nobody** — Flutter never auto-displays | `onMessage` → update state in place, and render a banner yourself via `flutter_local_notifications` |
 | **Foreground (iOS)** | iOS, *if* you opt in | Call `setForegroundNotificationPresentationOptions` (below) |
 
+### The exact contract for Shape A
+
+| Field | Value | Why it matters |
+|---|---|---|
+| `notification` | **absent** | Present ⇒ the OS draws it ⇒ no buttons |
+| `android.priority` | `"high"` | Doze will otherwise hold the message and the background handler never runs |
+| `data.type` | `shipment.offer.received` \| `shipment.offer.reminder` | Picks the channel, and decides that buttons apply |
+| `data.title` / `data.body` | the copy | The app has no other source for it |
+| `data.path` | `offers/{offerId}` | **The offer id is parsed out of this.** Without it the buttons have nothing to act on |
+| `data.aggregateId` | the offer id | Unchanged; used for inbox routing |
+| `apns…aps.category` | `jovi_agent_offer` | The iOS category the app registers at startup |
+| APNs alert payload | **kept** | iOS has no background-draw path |
+
+All `data` values are strings — an FCM constraint, and it applies to `title`/`body` too.
+
+Pressing a button opens the app, which then calls the ordinary
+[`POST /api/agent/offers/:id/accept`](./offers.md) or `/reject` with the agent's bearer token.
+**No new endpoint, and no change to either of those.** The buttons deliberately wake the app rather
+than answering in the background, because accepting fails often and for reasons the agent has to
+read — `SHIPMENT_ALREADY_HAS_AGENT`, `AGENT_AT_CAPACITY`, `CONTRACT_SHIPMENT_VALUE_EXCEEDED` — and a
+silent background POST has nowhere to report them.
+
+### The tradeoff
+
+A data-only push needs the app's background isolate to start; a notification push is drawn by the OS
+whatever state the app is in. In practice the difference is small — a force-stopped app receives
+neither — but aggressive OEM battery managers (Xiaomi/MIUI, Huawei/EMUI, some Oppo and Vivo builds)
+kill background isolates more readily than they suppress system-drawn notifications.
+
+The in-app inbox is unaffected either way: `GET /api/agent/notifications` still has the row, and the
+app reconciles against it on every resume. A push that never draws costs the agent the interruption,
+not the information. If offer delivery rates drop measurably on those devices, the fallback is to
+send both — data-only for the buttons, then a notification-block message to tokens that did not
+acknowledge. Measure before building that.
+
 ### What the backend deliberately does **not** send
 
 - **No TTL / expiry.** An auto-assignment offer stays acceptable until the shipment binds to
   somebody (only *manual* offers expire), so a push that arrives late is still actionable. Do not
   discard an offer push because it looks old — check the offer.
-- **No collapse key.** Two offers are two notifications; never coalesce them client-side.
+- **No collapse key.** Two offers are two notifications; never coalesce them client-side. A
+  *reminder* for an offer already in the shade is the one exception, and it is handled client-side:
+  key the local notification id off the offer id so the reminder **replaces** rather than stacks.
 - **No badge count.** Drive the app icon badge from `unreadCount` in `GET /api/agent/notifications`.
-- **No data-only (silent) messages.** Every push is user-visible, so a background isolate handler is
-  only needed if you want to do extra work — the tray notification does not depend on it.
+- **No silent messages.** Shape A is data-only but still user-visible — the app draws it. Nothing
+  here is a background sync.
 
 ---
 
@@ -86,10 +169,15 @@ The backend addresses two channels **by id**. These ids are a contract: if the a
 channel with the matching id, Android falls back to the manifest default channel and the importance
 the backend asked for is silently lost.
 
-| Channel id | Used for | Create it with |
-|---|---|---|
-| `jovi_agent_offers` | `shipment.offer.received`, `shipment.offer.reminder` | `Importance.max` — heads-up banner + sound |
-| `jovi_default` | Everything else (COD deposits, plan, storage, expired/reassigned) | `Importance.high` |
+| Channel id | Used for | Named by | Create it with |
+|---|---|---|---|
+| `jovi_agent_offers` | `shipment.offer.received`, `shipment.offer.reminder` | **the app** — map it from `data.type` | `Importance.max` — heads-up banner + sound |
+| `jovi_default` | Everything else (COD deposits, plan, storage, expired/reassigned) | the message (`android.notification.channel_id`) | `Importance.high` |
+
+Note the asymmetry: those are exactly the two data-only situations, and a data-only message carries
+no `android.notification` block to put a channel id in. The channel is **not** lost — the app maps
+`data.type` → `jovi_agent_offers` itself when it builds the notification. That mapping is now part
+of the contract, not an implementation detail.
 
 > **On Android 8+ the channel importance you create wins over the message priority.** The backend
 > asks for `PRIORITY_MAX`, but that only takes effect if `jovi_agent_offers` was created with
@@ -234,26 +322,32 @@ Registration is an upsert keyed on the token, so calling it repeatedly is safe a
 ### Receive
 
 ```dart
-// Foreground: nothing is drawn on Android — do it yourself, on the same channel.
+// Foreground: nothing is drawn on Android — do it yourself, on the right channel.
 FirebaseMessaging.onMessage.listen((message) {
   notificationStore.prepend(message.data);   // update list + unread badge in place
+  if (!Platform.isAndroid) return;           // iOS already drew it
 
-  final n = message.notification;
-  if (n == null || !Platform.isAndroid) return;   // iOS already drew it
+  // Shape A puts the copy in data; Shape B puts it on the notification block.
+  final title = message.notification?.title ?? message.data['title'];
+  final body  = message.notification?.body  ?? message.data['body'];
+  if (title == null) return;
 
   final isOffer = message.data['type'] == 'shipment.offer.received'
       || message.data['type'] == 'shipment.offer.reminder';
   final channel = isOffer ? _offersChannel : _defaultChannel;
 
   _localNotifications.show(
-    message.hashCode,
-    n.title,
-    n.body,
+    // Keyed off the OFFER, not the message, so a reminder replaces the original
+    // notification in the shade instead of stacking a second one.
+    isOffer ? offerIdFrom(message.data['path']).hashCode : message.hashCode,
+    title,
+    body,
     NotificationDetails(
       android: AndroidNotificationDetails(
         channel.id, channel.name,
         importance: channel.importance,
         priority: Priority.max,
+        actions: isOffer ? _offerActions : null,   // Accept / Decline
       ),
     ),
     payload: message.data['path'],
@@ -268,14 +362,23 @@ final initial = await FirebaseMessaging.instance.getInitialMessage();
 if (initial != null) routeToPath(initial.data['path']);
 ```
 
-If you also want a background isolate handler, it must be a **top-level** function annotated
-`@pragma('vm:entry-point')` and registered via `FirebaseMessaging.onBackgroundMessage`. It is
-optional here — the tray notification is drawn by the SDK either way.
+**A background isolate handler is now required, not optional.** Shape A carries no `notification`
+block, so the FCM SDK draws nothing — the app must, and it can only do that from a top-level
+function annotated `@pragma('vm:entry-point')` and registered via
+`FirebaseMessaging.onBackgroundMessage`. Return early when `message.notification != null`: that is
+Shape B, already drawn by the OS, and drawing it again duplicates the row.
+
+Both buttons **open the app** and let it call `POST /api/agent/offers/:id/{accept,reject}` on the
+foreground session. Do not answer from the background isolate — it has no auth session, and the
+failures that matter (`SHIPMENT_ALREADY_HAS_AGENT`, `AGENT_AT_CAPACITY`,
+`CONTRACT_SHIPMENT_VALUE_EXCEEDED`) have nowhere to be shown.
 
 ### Route
 
 `data.path` is a relative route; map it onto your navigator. `path` is absent for
 `shipment.reassigned_away` (there is nothing left to act on) — fall back to the notifications list.
+For the two offer situations it is also the **only** source of the offer id the buttons act on, so a
+push without it must render no buttons rather than guess.
 
 | `type` | `aggregateType` | `data.path` | Screen |
 |---|---|---|---|
@@ -323,6 +426,18 @@ on the iOS simulator):
 - [ ] An offer push shows as a **heads-up banner** (not a silent tray row) → the `jovi_agent_offers`
       channel exists with `Importance.max`.
 - [ ] A foreground push updates the badge **and** draws a banner on Android.
+- [ ] **Buttons, Android:** a `shipment.offer.received` push with the app **swiped away** shows
+      **Accept** and **Decline**. Pressing **Decline** opens the app, rejects the offer, and
+      confirms it; pressing **Accept** on another lands on the shipment just taken.
+- [ ] **Buttons, iOS:** long-pressing an offer notification shows the two buttons — they come from
+      the `jovi_agent_offer` category, so this fails if the category was not registered at startup.
+- [ ] **No buttons where there shouldn't be:** a `cod.deposit.confirmed` push looks exactly as it
+      always did — OS-drawn, no buttons. Same for `shipment.offer.expired`; there is nothing left
+      to accept.
+- [ ] **No double-draw:** a Shape B push draws **one** row, not two — the background handler
+      returns early on `message.notification != null`.
+- [ ] **Reminder replaces:** a `shipment.offer.reminder` for an offer still in the shade replaces
+      that row rather than stacking a second one.
 - [ ] Logout unregisters the token, and the device stops receiving.
 - [ ] Killing FCM server-side (`FCM_ENABLED=false`) still leaves every notification visible in
       `GET /api/agent/notifications` — the fallback path works.
@@ -342,6 +457,10 @@ on the iOS simulator):
 | Notifications stop after a while | `onTokenRefresh` not wired; the rotated token was never re-registered |
 | Previous user still gets notifications | Logout did not `DELETE /api/agent/devices` before clearing the session |
 | Push works, `deliveredVia` has no `"push"` | No device token was targeted at send time — the token was registered after the notification fired |
+| Offer push arrives with **no buttons**, everything else fine | The background isolate handler isn't registered, or it bailed because `data.path` was missing (no offer id ⇒ nothing to act on) |
+| Offer push draws **twice** | The background handler is not returning early on `message.notification != null` — that message is Shape B and the OS already drew it |
+| **Only offers** fail to arrive, on Xiaomi/Huawei/Oppo/Vivo | The OEM battery manager is killing the background isolate. Offers are the only data-only shape, so they are the only ones that need it — whitelist the app in the OEM's autostart/battery settings |
+| Buttons on Android, none on iOS | The `jovi_agent_offer` `UNNotificationCategory` was not registered at startup; iOS takes its buttons from the category, never from the payload |
 
 ---
 

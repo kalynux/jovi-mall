@@ -88,14 +88,27 @@ export interface IOrderItem {
     /**
      * Snapshot of the product's pickup location at the moment this order was
      * created — not a live reference, so a later edit to the vendor's business
-     * addresses doesn't retroactively change history. `address_snapshot` is
-     * null when `source === 'agency_storage'` (the agency's own HQ address is
-     * resolved live from `agency_id` instead, since it isn't vendor/product
-     * specific). See ProductStatusValidationService / order.service.ts.
+     * addresses doesn't retroactively change history.
+     *
+     * The two sources snapshot different amounts on purpose:
+     *
+     * - `vendor_address` copies the whole address into `address_snapshot`. It is
+     *   the vendor's record of a place they chose per product, and history must
+     *   not re-point when they edit their profile.
+     * - `agency_storage` snapshots only the CHOICE — `agency_address_id`, which
+     *   depot — and leaves `address_snapshot` null. The depot's street line is
+     *   the agency's own live record, and an agent must be driven to where that
+     *   depot *is*, not where it was at checkout, so an agency correcting an
+     *   address fixes every in-flight shipment. A null `agency_address_id` means
+     *   the primary depot; see `resolveHqAddress`.
+     *
+     * See ProductStatusValidationService / order.service.ts.
      */
     pickup_location: {
       source: 'vendor_address' | 'agency_storage';
       vendor_address_id: mongoose.Types.ObjectId | null;
+      /** Which agency depot, when `source === 'agency_storage'`. Null = primary. */
+      agency_address_id: mongoose.Types.ObjectId | null;
       address_snapshot: {
         label: string;
         address_line1: string;
@@ -253,6 +266,9 @@ const OrderItemSchema = new Schema({
         type: {
           source: { type: String, enum: ['vendor_address', 'agency_storage'], required: true },
           vendor_address_id: { type: Schema.Types.ObjectId, default: null },
+          // Which agency depot was chosen. Null = the primary. Deliberately an id
+          // rather than a snapshot — see the interface comment above.
+          agency_address_id: { type: Schema.Types.ObjectId, default: null },
           address_snapshot: {
             type: {
               label: { type: String, required: true },

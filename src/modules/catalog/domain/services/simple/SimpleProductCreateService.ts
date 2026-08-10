@@ -34,7 +34,12 @@ export interface CreateSimpleProductInput {
     height?: number;
 
     freeDelivery: boolean;
-    pickupLocation?: { source: PickupLocationSource; vendorAddressId?: string | null };
+    pickupLocation?: {
+        source: PickupLocationSource;
+        vendorAddressId?: string | null;
+        /** Which agency depot, for `agency_storage`. Omitted/null = the primary. */
+        agencyAddressId?: string | null;
+    };
 }
 
 export interface CreateSimpleProductResult {
@@ -99,6 +104,9 @@ export class SimpleProductCreateService {
                         vendor_address_id: input.pickupLocation.source === 'agency_storage'
                             ? null
                             : (input.pickupLocation.vendorAddressId ?? null),
+                        agency_address_id: input.pickupLocation.source === 'vendor_address'
+                            ? null
+                            : (input.pickupLocation.agencyAddressId ?? null),
                     },
                     reason: 'explicit' as PickupResolutionReason,
                 }
@@ -110,6 +118,7 @@ export class SimpleProductCreateService {
                     ? {
                         source: resolved.pickupLocation.source,
                         vendorAddressId: resolved.pickupLocation.vendor_address_id,
+                        agencyAddressId: resolved.pickupLocation.agency_address_id,
                     }
                     : null,
             });

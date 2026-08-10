@@ -262,6 +262,18 @@ notification-preferences payload.
 | `codDepositUpdates` | `cod.deposit.declared`, `cod.deposit.direct_to_platform` | `deposit` | An agent declares a hand-over you must confirm/reject, or pays the platform directly. `action.path` deep-links to `cod/deposits/{depositId}`. See [COD cash management](./cod-cash-management.md). |
 | `planUpdates` | `plan.expiring`, `plan.expired`, `shipment.cap.exceeded` | `plan` | **Billing.** Your subscription plan is nearing expiry / has expired (handed over to a queued plan or downgraded to free), or you crossed your plan's unterminated-shipment **soft** cap. `aggregateId` is the agency id; `action.path` deep-links to `plans`. See [Agency Billing](./billing.md). The shipment-cap alert is monitoring-only — deliveries are never blocked. |
 | `storageAlert` | `storage.alert` | `storage` | **Media storage** crossed 80 / 90 / 100% of your plan cap (highest crossed band only, at most once per month per band). `aggregateId` is the agency id; `action.path` deep-links to `settings/storage`. See [Storage](./storage.md). Agent delivery proofs count toward this. |
+| `stockRequestUpdates` | `storage.stock_request.received`, `storage.stock_request.approved`, `storage.stock_request.rejected` | `stock_request` | A **stock adjustment** on a SKU you warehouse: the vendor proposed a quantity (yours to answer), or answered one you proposed. `aggregateId` is the `StockAdjustmentRequest` id; `action.path` deep-links to `stock-requests/{requestId}`. See [Stock requests](./stock-requests.md). Nothing fires for `withdrawn`. |
+
+> [!IMPORTANT]
+> **`storageAlert` and `stockRequestUpdates` are unrelated despite sharing a word.** The
+> first is your **media-file quota** (product images, delivery proofs). The second is
+> **product warehousing** — physical goods on your shelves. Their `aggregateType`s differ
+> (`storage` vs `stock_request`) and so do their deep-links, so label the two toggles
+> distinctly or an agency will switch off the wrong one.
+>
+> Switching `stockRequestUpdates` off silences the push, **not the obligation**: a
+> vendor's request still sits in your inbox awaiting an answer, the same way opting out
+> of `codDepositUpdates` does not stop the deposit clock.
 
 Note the direction: these fire when the **vendor** is the actor on a connection the agency cares
 about (vendor sent a request, approved/rejected/reapproved one). The symmetric vendor-side events

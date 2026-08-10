@@ -71,6 +71,7 @@ Only agencies that meet **both** of the following conditions are returned:
         "city": "Douala",
         "address_description": "4th Floor, Immeuble Ndokotti, Akwa"
       },
+      "country": "CM",
       "coverageAreas": ["littoral", "centre", "west"],
       "rating": null,
       "policies": {
@@ -122,7 +123,8 @@ Only agencies that meet **both** of the following conditions are returned:
 | `logo` | `FileDetail \| null` | Agency logo as a resolved file object (`{ id, key, url, mimeType, size, originalName }`). `null` if not set. |
 | `kycVerified` | `boolean` | Whether admin has verified the agency's business documents (KYC). `true` = verified. |
 | `headquartersAddress` | `object \| null` | Primary headquarters address (always index 0). See below. |
-| `coverageAreas` | `string[]` | Region keys this agency serves (e.g. `["littoral", "centre"]`). |
+| `country` | `string \| null` | 🆕 ISO-2 country the agency operates in (e.g. `"CM"`), set once at their onboarding. What scopes `coverageAreas` to a region catalogue. `null` on legacy agencies. |
+| `coverageAreas` | `string[]` | Region keys this agency serves (e.g. `["littoral", "centre"]`), from `locations.json`, always within `country`. |
 | `rating` | `number \| null` | Average rating (0–5). Always `null` until the rating system is implemented. |
 | `policies` | `object \| null` | Policy summary. See below. Always present for agencies with `onboardingStep = 0`. |
 
@@ -134,7 +136,7 @@ Only agencies that meet **both** of the following conditions are returned:
 | `city` | `string \| null` | City name (e.g. `"Douala"`), derived from the entry's geocode. `null` when it resolves none (rural / landmark addresses). |
 | `address_description` | `string` | Full street address, building, or landmark. Always present — use it when `region`/`city` are null. |
 
-> **Note**: Only the primary HQ address is returned. Branch addresses and per-location support contacts are intentionally omitted from this listing endpoint.
+> **Note**: Only the primary HQ address is returned **by this listing endpoint**. Per-location support contacts are never returned anywhere. To list an agency's *other* locations — which you need when a vendor picks the depot that warehouses a product — use [GET /api/vendor/delivery-agencies/:agencyId/locations](#list-an-agencys-pickup-locations), which requires an active connection.
 
 ### `policies`
 
@@ -161,6 +163,83 @@ An agency can offer both (a vendor might warehouse fast-moving SKUs here while d
 others), either, or — if both are `false` — neither, in which case no physical product can be
 activated against it. Before presenting the pickup-location picker to a vendor, fetch this agency
 (or the vendor's resolved default/override) and only offer the source(s) whose flag is `true`.
+
+When the vendor chooses `agency_storage`, follow up with the locations endpoint below so they can
+also say **which** depot — an agency commonly has several.
+
+---
+
+## List an agency's pickup locations
+
+`GET /api/vendor/delivery-agencies/:agencyId/locations`
+
+Every physical location (depot / warehouse) the agency operates, so a vendor can name the one that
+warehouses a product — the value that goes into `delivery.pickupLocation.agencyAddressId` (see
+[Vendor Products — Update Product](./products.md#update-product)).
+
+Unpaginated: an agency has a handful of locations, and a picker that hides options behind a page
+boundary is worse than no picker.
+
+**This is the one vendor-facing endpoint that goes past the primary HQ.** It is gated on an
+**active connection** with the agency, matching the gate on setting a default agency and on a
+product-level agency override: a vendor cannot point a product at an agency they aren't connected
+to, so listing that agency's warehouses would only render a picker whose every option is unusable.
+Browsing agencies stays open — it is *choosing* one that requires a contract. Per-location
+`support_contact` is still withheld.
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "6641abc123def457",
+      "label": "Douala HQ",
+      "region": "Littoral",
+      "city": "Douala",
+      "addressDescription": "Akwa, Rue Sylvani, immeuble ABC",
+      "isPrimary": true
+    },
+    {
+      "id": "6641abc123def458",
+      "label": "Bonabéri branch",
+      "region": "Littoral",
+      "city": "Douala",
+      "addressDescription": "Bonabéri, Rue des Palmiers",
+      "isPrimary": false
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `string` | The depot's id — send this as `agencyAddressId` when configuring a product. |
+| `label` | `string \| null` | The agency's own name for the location. `null` on entries saved before labels existed — fall back to `"Primary Headquarters"` / `"Branch N"`. |
+| `region` | `string \| null` | Derived from the entry's geocode; `null` when it resolves none. |
+| `city` | `string \| null` | Derived from the entry's geocode; `null` when it resolves none. |
+| `addressDescription` | `string` | Street address / building / landmark. Always present — use it when `region`/`city` are null. |
+| `isPrimary` | `boolean` | `true` for the agency's primary depot (the first entry). |
+
+Returned in the agency's own order; the first entry is the primary.
+
+> **The primary is the default.** A product that names no `agencyAddressId` is collected from the
+> primary depot, and keeps tracking it if the agency reorders its list. Mark the `isPrimary` option
+> as the default in the picker rather than pre-selecting its id — storing `null` and storing the
+> primary's id are *not* the same thing.
+
+> **An empty array is a valid answer**, not an error: the agency has no location on file yet.
+
+### Error Responses
+
+| Code | HTTP | Description |
+|------|------|-------------|
+| `VALIDATION_ERROR` | 400 | `agencyId` is not a valid ObjectId |
+| `UNAUTHORIZED` | 401 | Missing or invalid JWT token |
+| `FORBIDDEN` | 403 | Wrong role |
+| `DELIVERY_AGENCY_NOT_FOUND` | 404 | No such agency |
+| `CONNECTION_NOT_ACTIVE` | 422 | No active, approved connection with this agency |
 
 #### `policies.returns`
 
@@ -224,6 +303,8 @@ export interface VendorAgencyListItemDto {
   logo: FileDetail | null;
   kycVerified: boolean;
   headquartersAddress: VendorAgencyHQAddressDto | null;
+  /** ISO-2, e.g. "CM". Scopes `coverageAreas`. null on legacy agencies. */
+  country: string | null;
   coverageAreas: string[];
   /** Always null until the rating system is implemented. */
   rating: number | null;

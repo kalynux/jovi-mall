@@ -3,13 +3,24 @@ import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../cor
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 
 export type StockOperation = 'manual' | 'bulk' | 'reservation' | 'release' | 'order' | 'adjustment';
-export type ActorType = 'vendor' | 'system' | 'admin';
+/**
+ * Who moved the number.
+ *
+ * `agency` exists because stock on an agency-warehoused SKU is no longer the
+ * vendor's to set alone: either party proposes a change and the *other* approves
+ * it (see `src/modules/stock-requests/`). The approver is the actor, so an
+ * adjustment the agency signed off on is stamped `agency` even though the vendor
+ * asked for it — `metadata.requestId` is what ties the row back to who proposed.
+ */
+export type ActorType = 'vendor' | 'system' | 'admin' | 'agency';
 
 export interface StockAuditMetadata {
     orderId?: Types.ObjectId;
     reservationId?: string;
     batchId?: string;
     reason?: string;
+    /** The `StockAdjustmentRequest` this row applied. Set only by that flow. */
+    requestId?: string;
 }
 
 export interface IStockAuditLog extends IBaseDocument {
@@ -71,7 +82,7 @@ const StockAuditLogSchema = new Schema<IStockAuditLog>({
     },
     actorType: {
         type: String,
-        enum: ['vendor', 'system', 'admin'],
+        enum: ['vendor', 'system', 'admin', 'agency'],
         required: true
     },
     actorId: {
@@ -82,7 +93,8 @@ const StockAuditLogSchema = new Schema<IStockAuditLog>({
         orderId: { type: Schema.Types.ObjectId, ref: MODELS.ORDER },
         reservationId: { type: String },
         batchId: { type: String, index: true }, // For bulk operations
-        reason: { type: String }
+        reason: { type: String },
+        requestId: { type: String, index: true } // Stock-adjustment request that applied
     },
 
     timestamp: {
