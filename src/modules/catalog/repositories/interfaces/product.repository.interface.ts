@@ -1,7 +1,7 @@
 import { Product } from '../mappers/product.mapper';
 import { Page, PaginationOptions, RepositoryOptions } from '../types';
 import { ProductListProjection } from '../../read-models/product-detail.read-model';
-import { ProductStatus, ProductSuspensionReason } from '../../models/product.model';
+import { ProductStatus, ProductSuspensionReason, ProductType } from '../../models/product.model';
 
 export interface IProductRepository {
   create(product: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>, options?: RepositoryOptions): Promise<Product>;
@@ -91,20 +91,49 @@ export interface IProductRepository {
   ): Promise<string[]>;
 
   /**
-   * Suspend a single physical product (no-op unless currently 'active'), capturing
-   * its current status so it can be restored later. Returns whether it was suspended.
+   * Suspend all of a vendor's currently-ACTIVE products, of EVERY type.
+   *
+   * The sibling of `suspendVendorPhysicalProducts`, and the type filter is the whole
+   * difference. That one exists to answer a broken delivery agency, which can only
+   * affect something that ships; this one answers the vendor themselves being
+   * suspended, where a digital download and a bookable service must stop selling
+   * exactly as a parcel does.
+   *
+   * Same two exclusions as the physical sweep, for the same reasons: only `active`
+   * products are touched, and a product mid-vectorisation is skipped because
+   * `VectorisationService` writes `status: 'active'` on completion and would silently
+   * undo the suspension.
+   *
+   * Returns the affected product ids.
+   */
+  suspendAllVendorProducts(
+    vendorId: string,
+    reason: ProductSuspensionReason,
+    options?: RepositoryOptions,
+  ): Promise<string[]>;
+
+  /**
+   * Suspend a single product (no-op unless currently 'active'), capturing its current
+   * status so it can be restored later. Returns whether it was suspended.
    *
    * `actor` is set only by the agency's manual storage suspension: the agency id is
    * what authorises the way back out (only the agency that suspended may unsuspend)
    * and the note is what the vendor is shown. The three delivery-agency cascades
    * have no actor and pass nothing.
+   *
+   * `types` defaults to `['physical']`, which is every pre-existing caller's meaning.
+   * An administrator's `platform_oversight` takedown widens it: a listing can be
+   * removed on its merits whatever it ships as. There is no admin actor id here —
+   * the record of WHO is the wi-admin audit row, and the vendor-facing explanation
+   * rides `note`; only the reason is needed to authorise the way back out.
    */
   suspendProduct(
     productId: string,
     vendorId: string,
     reason: ProductSuspensionReason,
     options?: RepositoryOptions,
-    actor?: { agencyId: string; note?: string | null },
+    actor?: { agencyId?: string; note?: string | null },
+    types?: ProductType[],
   ): Promise<boolean>;
 
   /**
@@ -121,6 +150,7 @@ export interface IProductRepository {
     vendorId: string,
     reasons: ProductSuspensionReason[],
     options?: RepositoryOptions,
+    types?: ProductType[],
   ): Promise<Product[]>;
 
   /**

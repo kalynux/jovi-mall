@@ -360,8 +360,8 @@ const OrderSchema = new Schema<IOrder>({
   payment_status: {
     type: String,
     enum: ['pending', 'AWAITING_PAYMENT', 'partially_paid', 'paid', 'disputed', 'failed', 'refunded'],
-    default: 'pending',
-    index: true  // For payment status queries
+    default: 'pending'
+    // No single-field index: `{ payment_status: 1, created_at: -1 }` below is a superset.
   },
   payment_intent_id: {
     type: String
@@ -371,8 +371,8 @@ const OrderSchema = new Schema<IOrder>({
   fulfillment_status: {
     type: String,
     enum: ['pending', 'processing', 'partially_shipped', 'shipped', 'partially_delivered', 'delivered', 'fulfilled', 'cancelled', 'returned'],
-    default: 'pending',
-    index: true  // For fulfillment status queries
+    default: 'pending'
+    // No single-field index: `{ fulfillment_status: 1, created_at: -1 }` below is a superset.
   },
 
   // Payment-dispute hold (set/cleared by the Stripe dispute webhook).
@@ -455,5 +455,31 @@ OrderSchema.index({ order_type: 1, fulfillment_status: 1 }); // Fulfillment quer
 OrderSchema.index({ vendor_id: 1, created_at: -1 });  // Vendor order history
 OrderSchema.index({ vendor_id: 1, fulfillment_status: 1 });  // Vendor fulfillment queries
 OrderSchema.index({ vendor_id: 1, payment_status: 1 });  // Vendor payment queries
+
+// ── Platform-wide administrative oversight ──────────────────────────────────
+// Every index here backs a sort or filter on wi-admin's `/api/v1/orders`, which is the
+// first surface to query this collection WITHOUT a vendor or customer scope. Before them
+// the default list — newest first, no filter — was a full collection scan plus a blocking
+// in-memory sort, and a client could ask for it by query string.
+//
+// The rule wi-admin's ORDER_SORT map states: a sortable field with no index is a
+// collection scan somebody can request. These are what pay for it.
+OrderSchema.index({ created_at: -1 });                            // the unfiltered admin list
+OrderSchema.index({ payment_status: 1, created_at: -1 });         // filter + default sort
+OrderSchema.index({ fulfillment_status: 1, created_at: -1 });     // filter + default sort
+
+// The dispute queue. PARTIAL, so it holds only the handful of frozen orders rather than a
+// key per order in the collection, and it matches the queue's own filter exactly.
+OrderSchema.index(
+  { 'dispute_hold.disputed_at': -1 },
+  { partialFilterExpression: { 'dispute_hold.active': true }, name: 'dispute_queue' }
+);
+
+// NOTE: the two compounds above make the standalone `payment_status` and
+// `fulfillment_status` single-field indexes redundant — they are prefixes of the new keys.
+// `index: true` has been removed from both field definitions, but Mongoose's `autoIndex`
+// CREATES indexes and never DROPS them, so the old ones survive on any database that has
+// already run. `npm run migrate:admin-order-indexes` removes them; it is safe to re-run
+// and safe to skip (a redundant index costs write throughput, not correctness).
 
 export const OrderModel = mongoose.model<IOrder>(MODELS.ORDER, OrderSchema, COLLECTIONS.ORDER);

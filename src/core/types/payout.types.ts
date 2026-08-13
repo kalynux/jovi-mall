@@ -286,6 +286,55 @@ export function isCardExpired(
 }
 
 /**
+ * Mask ONE payout destination.
+ *
+ * Split out of `maskPayoutMethods` because not every destination lives in an
+ * ordered list: `PayoutRequest.payout_method_snapshot` is a single embedded
+ * method, and wrapping it in an array only to unwrap the result made the one
+ * place that most needs masking read like a workaround.
+ *
+ * `isPreferred` is a parameter rather than derived, for the same reason — it is
+ * a fact about a position in a list, and a snapshot has no position. A snapshot
+ * passes `true`: it *was* the preferred method at the moment it was frozen.
+ */
+export function maskPayoutMethod(
+    method: IPayoutMethod,
+    isPreferred: boolean
+): PayoutMethodMasked {
+    return {
+        method: method.method,
+        is_preferred: isPreferred,
+        mobile_money: method.mobile_money
+            ? {
+                provider: method.mobile_money.provider,
+                phone_number_masked: maskTail(method.mobile_money.phone_number),
+                account_name: method.mobile_money.account_name,
+            }
+            : null,
+        bank: method.bank
+            ? {
+                bank_name: method.bank.bank_name,
+                account_number_masked: maskTail(method.bank.account_number),
+                account_name: method.bank.account_name,
+                country: method.bank.country,
+            }
+            : null,
+        card: method.card
+            ? {
+                brand: method.card.brand,
+                last4: method.card.last4,
+                number_masked: formatMaskedCardNumber(method.card.last4),
+                card_holder_name: method.card.card_holder_name,
+                expiry_month: method.card.expiry_month,
+                expiry_year: method.card.expiry_year,
+                issuing_bank: method.card.issuing_bank ?? null,
+                country: method.card.country,
+            }
+            : null,
+    };
+}
+
+/**
  * Mask an ordered payout list for reading back. Position is meaningful — index 0
  * is the preferred method — so order is preserved.
  *
@@ -297,37 +346,7 @@ export function maskPayoutMethods(
     methods: IPayoutMethod[] | null | undefined
 ): PayoutMethodMasked[] {
     if (!methods) return []; // legacy documents predating the array form
-    return methods.map((m, index) => ({
-        method: m.method,
-        is_preferred: index === 0,
-        mobile_money: m.mobile_money
-            ? {
-                provider: m.mobile_money.provider,
-                phone_number_masked: maskTail(m.mobile_money.phone_number),
-                account_name: m.mobile_money.account_name,
-            }
-            : null,
-        bank: m.bank
-            ? {
-                bank_name: m.bank.bank_name,
-                account_number_masked: maskTail(m.bank.account_number),
-                account_name: m.bank.account_name,
-                country: m.bank.country,
-            }
-            : null,
-        card: m.card
-            ? {
-                brand: m.card.brand,
-                last4: m.card.last4,
-                number_masked: formatMaskedCardNumber(m.card.last4),
-                card_holder_name: m.card.card_holder_name,
-                expiry_month: m.card.expiry_month,
-                expiry_year: m.card.expiry_year,
-                issuing_bank: m.card.issuing_bank ?? null,
-                country: m.card.country,
-            }
-            : null,
-    }));
+    return methods.map((m, index) => maskPayoutMethod(m, index === 0));
 }
 
 // ─── Zod Validators ─────────────────────────────────────────────────────────

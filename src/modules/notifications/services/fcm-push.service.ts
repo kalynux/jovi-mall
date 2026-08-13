@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import type { messaging } from 'firebase-admin';
 import { getFcmMessaging } from '../providers/fcm.client';
 import { DeviceTokenRepository } from '../repositories/device-token.repository';
+import { recordIntegrationCall } from '../../system/domain/integration-observations';
 
 /**
  * Android notification channels this backend addresses.
@@ -158,6 +159,12 @@ export class FcmPushService {
             data.body = payload.body;
         }
 
+        // Reachability for `/system/integrations`. FCM is `never` probed — a probe would mint
+        // an OAuth token against Google on every dashboard load — so a real send is the only
+        // honest signal available.
+        const observedAt = Date.now();
+        let observedError: unknown;
+
         const response = await messaging.sendEachForMulticast({
             tokens,
             // Omitted ENTIRELY for a data-only push — an empty object still counts
@@ -174,6 +181,10 @@ export class FcmPushService {
             data,
             android: this.androidConfig(payload),
             apns: this.apnsConfig(payload)
+        }).catch((error) => {
+            observedError = error;
+            recordIntegrationCall('fcm', observedAt, error);
+            throw error;
         });
 
         // Prune tokens FCM rejected as permanently invalid (self-healing).
@@ -186,6 +197,11 @@ export class FcmPushService {
                 }
             }
         });
+
+        // Recorded as reachable when the CALL succeeded, regardless of per-token results: an
+        // expired device token says nothing about whether FCM is up, and treating it as a
+        // failure would paint the integration red on an entirely healthy day.
+        if (!observedError) recordIntegrationCall('fcm', observedAt);
 
         if (invalidTokens.length > 0) {
             await this.deviceTokenRepo.deleteManyTokens(invalidTokens);

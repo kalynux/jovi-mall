@@ -36,8 +36,11 @@ type DomainPrefix =
     | 'COD'
     | 'INVENTORY'     // what an agency warehouses, per depot
     | 'STOCK'         // the two-sided stock-adjustment request flow
+    | 'SYSTEM'        // operations surface: maintenance mode, cache controls
     | 'INTERNAL'      // INTERNAL_SERVER_ERROR
     | 'NOT'           // NOT_FOUND — router-level only
+    | 'REQUEST'       // body-parser rejections — global handler only (Phase 16)
+    | 'RATE'          // RATE_LIMIT_EXCEEDED — rate-limit middleware only (Phase 16)
     | 'VALIDATION';   // VALIDATION_ERROR — ZodError catch in global handler only
 
 // Compile-time check: every key must start with a known domain prefix.
@@ -69,6 +72,30 @@ export const ERROR_CODES = Object.freeze({
     AUTH_ROLE_PROFILE_NOT_FOUND: 'AUTH_ROLE_PROFILE_NOT_FOUND',
     AUTH_WA_PHONE_ID_REQUIRED: 'AUTH_WA_PHONE_ID_REQUIRED',
     AUTH_FORBIDDEN: 'AUTH_FORBIDDEN',
+
+    /**
+     * The credentials were fine; the account is suspended.
+     *
+     * Deliberately distinct from AUTH_INVALID_CREDENTIALS. A suspended person who is
+     * told "wrong password" retries, resets, and eventually opens a ticket nobody can
+     * resolve — the platform knows exactly why they are locked out and saying so costs
+     * nothing, because the check runs only AFTER the password comparison, so it is not
+     * an oracle over accounts a caller cannot already authenticate to.
+     *
+     * Raised on three paths, which together are what makes a suspension take effect:
+     * login, refresh-token rotation, and every authenticated request (`requireAuth`).
+     */
+    AUTH_ACCOUNT_SUSPENDED: 'AUTH_ACCOUNT_SUSPENDED',
+
+    /**
+     * The vendor role entity is suspended, though the account itself is fine.
+     *
+     * Its own code rather than `AUTH_ACCOUNT_SUSPENDED`, because the two have different
+     * remedies and a client has to be able to say which happened: "your login is
+     * suspended" ends every session on every role, while "your shop is suspended" leaves
+     * the same person's customer account working. Raised by `requireAuth` and `login`.
+     */
+    AUTH_VENDOR_SUSPENDED: 'AUTH_VENDOR_SUSPENDED',
 
     // ── PAYMENT ───────────────────────────────────────────────────────────────
     PAYMENT_ORDER_NOT_FOUND: 'PAYMENT_ORDER_NOT_FOUND',
@@ -104,6 +131,20 @@ export const ERROR_CODES = Object.freeze({
     REFUND_ORDER_NOT_PAID: 'REFUND_ORDER_NOT_PAID',
     REFUND_GATEWAY_FAILED: 'REFUND_GATEWAY_FAILED',
     REFUND_GATEWAY_NOT_SUPPORTED: 'REFUND_GATEWAY_NOT_SUPPORTED',
+    /** The order a group payment names could not be loaded — its per-order ceiling is unknowable. */
+    REFUND_ORDER_NOT_FOUND: 'REFUND_ORDER_NOT_FOUND',
+    /**
+     * A COD order was never charged through a gateway, so there is nothing to refund.
+     * Its own code rather than falling through to `REFUND_PAYMENT_NOT_FOUND`, which reads
+     * as "the record is missing" when the truth is "this money never went through a
+     * gateway" — a different conversation with the customer.
+     */
+    REFUND_ORDER_IS_COD: 'REFUND_ORDER_IS_COD',
+    /**
+     * An administrator asked to refund outside the vendor's commercial policy without
+     * saying so. The override is available; it has to be deliberate and reasoned.
+     */
+    REFUND_POLICY_OVERRIDE_REQUIRED: 'REFUND_POLICY_OVERRIDE_REQUIRED',
 
     // ── TICKET ────────────────────────────────────────────────────────────────
     TICKET_NOT_FOUND: 'TICKET_NOT_FOUND',
@@ -158,6 +199,9 @@ export const ERROR_CODES = Object.freeze({
     GOOGLE_TOKEN_ENCRYPTION_KEY_MISSING: 'GOOGLE_TOKEN_ENCRYPTION_KEY_MISSING',
     GOOGLE_TOKEN_INVALID_FORMAT: 'GOOGLE_TOKEN_INVALID_FORMAT',
     INTEGRATION_UNSUPPORTED_CALENDAR_PROVIDER: 'INTEGRATION_UNSUPPORTED_CALENDAR_PROVIDER',
+    // Raised inside a diagnostics probe and always caught by it — "this integration is
+    // unreachable" is an ANSWER from /system/integrations, never a failure of it.
+    INTEGRATION_PROBE_FAILED: 'INTEGRATION_PROBE_FAILED',
 
     // ── DATABASE ──────────────────────────────────────────────────────────────
     DATABASE_UNAVAILABLE: 'DATABASE_UNAVAILABLE',
@@ -172,6 +216,12 @@ export const ERROR_CODES = Object.freeze({
     ORDER_PAYMENT_REQUIRED: 'ORDER_PAYMENT_REQUIRED',
     ORDER_PAYMENT_FAILED_STATE: 'ORDER_PAYMENT_FAILED_STATE',
     ORDER_DISPUTE_HOLD: 'ORDER_DISPUTE_HOLD',
+    /**
+     * A manual dispute resolution had nothing to resolve. The webhook paths treat this as
+     * a harmless replay; an operator is told, because "resolved as won" for an order that
+     * was never disputed is a lie a support ticket gets closed on.
+     */
+    ORDER_DISPUTE_NOT_ACTIVE: 'ORDER_DISPUTE_NOT_ACTIVE',
     ORDER_WRONG_TYPE: 'ORDER_WRONG_TYPE',
     ORDER_DELIVERY_AGENCY_NOT_FOUND: 'ORDER_DELIVERY_AGENCY_NOT_FOUND',
     ORDER_ITEM_NOT_FOUND: 'ORDER_ITEM_NOT_FOUND',
@@ -224,9 +274,14 @@ export const ERROR_CODES = Object.freeze({
     CONFIG_MISSING_WA_ACCESS_TOKEN: 'CONFIG_MISSING_WA_ACCESS_TOKEN',
     CONFIG_MISSING_WA_PHONE_ID: 'CONFIG_MISSING_WA_PHONE_ID',
     CONFIG_MISSING_STORAGE_PROVIDER: 'CONFIG_MISSING_STORAGE_PROVIDER',
+    CONFIG_MISSING_JWT_SECRET: 'CONFIG_MISSING_JWT_SECRET',
     CONFIG_NOTIFICATION_CATALOG_INCOMPLETE: 'CONFIG_NOTIFICATION_CATALOG_INCOMPLETE',
     CONFIG_INVALID_STORAGE_PROVIDER: 'CONFIG_INVALID_STORAGE_PROVIDER',
     CONFIG_INVALID_GEO_PROVIDER: 'CONFIG_INVALID_GEO_PROVIDER',
+    // Boot assertions for the operations surface (Phase 14). Both are startup-only: a metric
+    // label space that outgrew its cap, and a Redis database with no cache-flush policy row.
+    CONFIG_METRICS_CARDINALITY_UNBOUNDED: 'CONFIG_METRICS_CARDINALITY_UNBOUNDED',
+    CONFIG_CACHE_POLICY_MISSING: 'CONFIG_CACHE_POLICY_MISSING',
     STORAGE_UPLOAD_FAILED: 'STORAGE_UPLOAD_FAILED',
     UPLOAD_POLICY_VIOLATION: 'UPLOAD_POLICY_VIOLATION',
 
@@ -279,6 +334,13 @@ export const ERROR_CODES = Object.freeze({
     CATALOG_PRODUCT_NOT_DIGITAL: 'CATALOG_PRODUCT_NOT_DIGITAL',
     CATALOG_PRODUCT_NO_DIGITAL_CONFIG: 'CATALOG_PRODUCT_NO_DIGITAL_CONFIG',
     CATALOG_PRODUCT_NO_DELIVERY_AGENCY: 'CATALOG_PRODUCT_NO_DELIVERY_AGENCY',
+    /**
+     * The vendor is suspended, so none of their products may be on sale — a
+     * product-level activation blocker, so it applies to digital and service listings
+     * too. It is what stops an unrelated cascade (an agency problem resolved while the
+     * vendor is suspended) walking their listings back onto the storefront.
+     */
+    CATALOG_PRODUCT_VENDOR_SUSPENDED: 'CATALOG_PRODUCT_VENDOR_SUSPENDED',
     CATALOG_PRODUCT_NO_PICKUP_LOCATION: 'CATALOG_PRODUCT_NO_PICKUP_LOCATION',
     CATALOG_PRODUCT_INVALID_PICKUP_LOCATION: 'CATALOG_PRODUCT_INVALID_PICKUP_LOCATION',
     // A warehouse cannot hold an unbounded quantity: `isInfiniteStock` and
@@ -363,6 +425,12 @@ export const ERROR_CODES = Object.freeze({
     AGENCY_COVERAGE_AREA_INVALID: 'AGENCY_COVERAGE_AREA_INVALID',
     DELIVERY_AGENT_NOT_FOUND: 'DELIVERY_AGENT_NOT_FOUND',
     DELIVERY_AGENCY_ALREADY_EXISTS: 'DELIVERY_AGENCY_ALREADY_EXISTS',
+    /**
+     * A compare-and-set on `delivery_agencies.status` missed — the agency was not in the
+     * status the operation required. Two administrators holding one agency's screen open
+     * is the case: the loser is told the state moved rather than overwriting the winner.
+     */
+    DELIVERY_AGENCY_STATUS_CONFLICT: 'DELIVERY_AGENCY_STATUS_CONFLICT',
     DELIVERY_ONBOARDING_STEP_INVALID: 'DELIVERY_ONBOARDING_STEP_INVALID',
     DELIVERY_ONBOARDING_STEP_INCOMPLETE: 'DELIVERY_ONBOARDING_STEP_INCOMPLETE',
     DELIVERY_ONBOARDING_ALREADY_COMPLETED: 'DELIVERY_ONBOARDING_ALREADY_COMPLETED',
@@ -458,6 +526,15 @@ export const ERROR_CODES = Object.freeze({
     AGENT_SERVICE_TOKEN_INVALID: 'AGENT_SERVICE_TOKEN_INVALID',
     AGENT_SERVICE_TOKEN_NOT_CONFIGURED: 'AGENT_SERVICE_TOKEN_NOT_CONFIGURED',
 
+    // ── AUTH — service-to-service (wi-admin → jovi-mall) ──────────────────────
+    // The internal admin API. A SEPARATE credential from the agent one above:
+    // geo-tracker and the admin service have different blast radii, so sharing one
+    // secret would make either compromise the other's.
+    AUTH_ADMIN_CALLER_TOKEN_INVALID: 'AUTH_ADMIN_CALLER_TOKEN_INVALID',
+    AUTH_ADMIN_CALLER_NOT_CONFIGURED: 'AUTH_ADMIN_CALLER_NOT_CONFIGURED',
+    /** The token verified but the caller named no administrator, or named one badly. */
+    AUTH_ADMIN_CALLER_ACTOR_MISSING: 'AUTH_ADMIN_CALLER_ACTOR_MISSING',
+
     // ── CONNECTION (vendor <-> agency consensual linking) ─────────────────────
     CONNECTION_NOT_FOUND: 'CONNECTION_NOT_FOUND',
     CONNECTION_VENDOR_NOT_FOUND: 'CONNECTION_VENDOR_NOT_FOUND',
@@ -482,6 +559,54 @@ export const ERROR_CODES = Object.freeze({
     // ── USER ──────────────────────────────────────────────────────────────────
     USER_NOT_FOUND: 'USER_NOT_FOUND',
     USER_INVALID_PASSWORD: 'USER_INVALID_PASSWORD',
+
+    /**
+     * A status write lost its compare-and-set: the account was not in the status the
+     * caller believed it was in.
+     *
+     * Same discipline as SHIPMENT_STATUS_CONFLICT, and for the same reason — two
+     * administrators can hold one user's screen open, and an unguarded write lets the
+     * loser's audit row claim a transition that never happened.
+     */
+    USER_STATUS_CONFLICT: 'USER_STATUS_CONFLICT',
+
+    /**
+     * The edit would leave the account with neither an email nor a phone.
+     *
+     * Both login identifiers are individually optional, but `login` resolves an account
+     * by one of them — clearing both makes the account permanently unreachable, with no
+     * self-service path back.
+     */
+    USER_CONTACT_REQUIRED: 'USER_CONTACT_REQUIRED',
+
+    // ── VENDOR ADMINISTRATION (wi-admin's `/api/internal/admin/vendors`) ──────
+    VENDOR_NOT_FOUND: 'VENDOR_NOT_FOUND',
+
+    /**
+     * The vendor was not in the status the caller believed it was in.
+     *
+     * The compare-and-set miss, and the exact counterpart of `USER_STATUS_CONFLICT`:
+     * two administrators can hold one vendor's screen open, and an unguarded write lets
+     * the loser's reason overwrite the winner's while their audit row claims a
+     * transition that never happened.
+     */
+    VENDOR_STATUS_CONFLICT: 'VENDOR_STATUS_CONFLICT',
+
+    /** Approving an already-approved vendor, or rejecting an already-rejected one. */
+    VENDOR_KYC_STATUS_CONFLICT: 'VENDOR_KYC_STATUS_CONFLICT',
+
+    /** Only a product currently on sale can be taken off it. */
+    VENDOR_PRODUCT_NOT_SUSPENDABLE: 'VENDOR_PRODUCT_NOT_SUSPENDABLE',
+
+    /**
+     * The product is suspended, but not by platform oversight — so this is not the
+     * endpoint that lifts it. A product an agency suspended over unpaid storage is
+     * that agency's to release.
+     */
+    VENDOR_PRODUCT_NOT_OVERSIGHT_SUSPENDED: 'VENDOR_PRODUCT_NOT_OVERSIGHT_SUSPENDED',
+
+    /** Unsuspend re-runs the activation gate; `details.blockers` carries the checklist. */
+    VENDOR_PRODUCT_UNSUSPEND_BLOCKED: 'VENDOR_PRODUCT_UNSUSPEND_BLOCKED',
 
     // ── STORE ─────────────────────────────────────────────────────────────────
     STORE_NOT_FOUND: 'STORE_NOT_FOUND',
@@ -714,6 +839,60 @@ export const ERROR_CODES = Object.freeze({
     // ── DIGITAL ENTITLEMENT ───────────────────────────────────────────────────
     DIGITAL_ENTITLEMENT_CONFIG_MISSING: 'DIGITAL_ENTITLEMENT_CONFIG_MISSING',
     DIGITAL_ENTITLEMENT_CONFIG_INACTIVE: 'DIGITAL_ENTITLEMENT_CONFIG_INACTIVE',
+
+    // ── DEVELOPER TOOLS ── the operational surface wi-admin drives (Phase 12) ─
+    // Reached only through /api/internal/admin/dev-tools, never from /api/admin/*.
+    DEV_TOOLS_WORKER_UNKNOWN: 'DEV_TOOLS_WORKER_UNKNOWN',
+    DEV_TOOLS_WORKER_BUSY: 'DEV_TOOLS_WORKER_BUSY',
+    DEV_TOOLS_CACHE_DB_UNKNOWN: 'DEV_TOOLS_CACHE_DB_UNKNOWN',
+    DEV_TOOLS_CACHE_FLUSH_REFUSED: 'DEV_TOOLS_CACHE_FLUSH_REFUSED',
+    DEV_TOOLS_CACHE_UNAVAILABLE: 'DEV_TOOLS_CACHE_UNAVAILABLE',
+    // Phase 15 — the one new dangerous verb on that router.
+    DEV_TOOLS_OUTBOX_PRUNE_REFUSED: 'DEV_TOOLS_OUTBOX_PRUNE_REFUSED',
+
+    // ── SYSTEM ── the operations surface (Phase 14) ──────────────────────────
+    // `SYSTEM_MAINTENANCE_ACTIVE` is the ONLY 503 this service raises deliberately, and it is
+    // raised by middleware rather than a service — the one place a maintenance window turns
+    // into an HTTP response.
+    SYSTEM_MAINTENANCE_ACTIVE: 'SYSTEM_MAINTENANCE_ACTIVE',
+    SYSTEM_MAINTENANCE_REASON_REQUIRED: 'SYSTEM_MAINTENANCE_REASON_REQUIRED',
+
+    // ── SYSTEM ── developer tools (Phase 15) ─────────────────────────────────
+    /**
+     * Boot-time only. Raised by `assertExposedConfigSafe()` when the config whitelist names
+     * something credential-shaped — the process must die rather than serve it once.
+     */
+    SYSTEM_CONFIG_EXPOSURE_UNSAFE: 'SYSTEM_CONFIG_EXPOSURE_UNSAFE',
+    SYSTEM_LOGS_UNAVAILABLE: 'SYSTEM_LOGS_UNAVAILABLE',
+    SYSTEM_DB_INSPECT_UNAVAILABLE: 'SYSTEM_DB_INSPECT_UNAVAILABLE',
+    /** A Redis command that is not on the read-only allowlist. Should be unreachable. */
+    SYSTEM_REDIS_COMMAND_REFUSED: 'SYSTEM_REDIS_COMMAND_REFUSED',
+
+    // ── REQUEST — malformed BEFORE any schema sees it (Phase 16) ─────────────
+    // Express rejects these inside `express.json()`, so no route and no Zod schema is ever
+    // reached. Without them the global handler had no branch and a caller sending malformed
+    // JSON was told `500 INTERNAL_SERVER_ERROR — Something went wrong`: our fault reported
+    // for their payload, with nothing they could act on. Ported from wi-admin, which fixed
+    // this first (ADR-005 D-9 records that jovi-mall still had it).
+    //
+    // Distinct from VALIDATION_ERROR, which means the JSON parsed and then failed a rule.
+
+    /** The body is not parseable JSON at all. */
+    REQUEST_BODY_INVALID: 'REQUEST_BODY_INVALID',
+    /** The body exceeds the ceiling set on `express.json()` in `app.ts`. */
+    REQUEST_BODY_TOO_LARGE: 'REQUEST_BODY_TOO_LARGE',
+    /** An unsupported `Content-Type` or charset. */
+    REQUEST_MEDIA_TYPE_UNSUPPORTED: 'REQUEST_MEDIA_TYPE_UNSUPPORTED',
+
+    // ── RATE LIMITING (Phase 16) ─────────────────────────────────────────────
+    /**
+     * Raised by the rate-limit middleware only.
+     *
+     * Distinct from `COD_CODE_RESEND_TOO_SOON`, which is also a 429 but is a per-resource
+     * cooldown on one delivery code rather than a request-volume ceiling. A client backs off
+     * differently for each: this one clears on a clock, that one clears on a resend window.
+     */
+    RATE_LIMIT_EXCEEDED: 'RATE_LIMIT_EXCEEDED',
 
     // ── MIDDLEWARE / ROUTER FALLBACKS — DO NOT USE IN SERVICES ───────────────
     INTERNAL_SERVER_ERROR: 'INTERNAL_SERVER_ERROR',  // assigned by global handler

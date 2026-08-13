@@ -20,7 +20,16 @@ export type TrackingEventType =
   // Phase 6: an agent shipment action (pickup/delivery/return/cancel) and its
   // outcome. Routed to geo-tracker's agent-action audit endpoint, not the
   // tracking webhook — the dispatcher branches on this type.
-  | 'agent.action';
+  | 'agent.action'
+  // Phase 9: an administrator changed `tracking.allowed`.
+  //
+  // The one event on this list that is about the AGENT rather than a shipment. Before it,
+  // the flag was enforced in jovi-mall only — `assertEligible` refused new dispatch — and
+  // geo-tracker never learned, so an agent whose tracking an administrator had just
+  // revoked went on streaming their position and go on being broadcast. Nothing else
+  // closed that gap: `visible-agents` does not consult the flag either, so even
+  // geo-tracker's revocation sweep kept every watcher.
+  | 'agent.tracking_allow_changed';
 
 /** Agent shipment action kind (Phase 6). */
 export type AgentActionKind = 'pickup' | 'delivery' | 'return' | 'cancel';
@@ -70,6 +79,21 @@ export interface ITrackingOutbox extends Document {
   // a lost terminal event); it can never open one. null when not applicable (no
   // agent on the event).
   agent_has_active_shipment: boolean | null;
+
+  // ─── the agent-level tracking permission (Phase 9) ─────────────────────
+  //
+  // jovi-mall's `tracking.allowed` for this agent, after the change. Populated only for
+  // `agent.tracking_allow_changed`; null everywhere else, and null means "not reported"
+  // rather than "revoked" — the same optional-verdict posture as the three fields above,
+  // for the same reason: an older row must never read as a decision nobody made.
+  //
+  // It is deliberately NOT one of the shipment verdicts. This says whether the agent may
+  // be located AT ALL — including with no shipment, which is exactly the read that finds
+  // the agent nearest a pickup — so it gates the live position rather than any session.
+  // A revocation therefore suppresses GPS without ending a delivery, which is the correct
+  // outcome: jovi-mall owns whether the shipment is over, and this event does not say.
+  tracking_allowed: boolean | null;
+
   // Agent-action audit fields (Phase 6). Populated only for `agent.action`
   // events; null otherwise.
   action: AgentActionKind | null;
@@ -80,6 +104,18 @@ export interface ITrackingOutbox extends Document {
   status: TrackingOutboxStatus;
   attempts: number;
   last_error: string | null;
+  /**
+   * The request that produced this row (Phase 15). Nullable forever — worker-produced rows
+   * have no ambient request, and every row written before this field existed has none either.
+   *
+   * **It is deliberately NOT part of the webhook payload.** Both payload builders in
+   * `tracking-dispatch.worker.ts` enumerate their fields explicitly, so a new column here is
+   * structurally incapable of reaching geo-tracker — which is exactly what makes this a
+   * one-repo change rather than an event-shape change requiring `webhook/domain/entity.go` in
+   * the same commit. It travels to geo-tracker as an `X-Request-Id` HEADER instead, which is
+   * outside the HMAC (computed over the body alone) and therefore changes no signature.
+   */
+  request_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -95,6 +131,7 @@ const TrackingOutboxSchema = new Schema<ITrackingOutbox>(
     shipment_trackable: { type: Boolean, default: null },
     shipment_terminal: { type: String, default: null },
     agent_has_active_shipment: { type: Boolean, default: null },
+    tracking_allowed: { type: Boolean, default: null },
     action: { type: String, default: null },
     outcome: { type: String, default: null },
     actor_role: { type: String, default: null },
@@ -103,6 +140,8 @@ const TrackingOutboxSchema = new Schema<ITrackingOutbox>(
     status: { type: String, enum: ['pending', 'sent', 'failed'], default: 'pending' },
     attempts: { type: Number, default: 0 },
     last_error: { type: String, default: null },
+    // Additive and unindexed: it is read one row at a time by the dispatcher, never queried on.
+    request_id: { type: String, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

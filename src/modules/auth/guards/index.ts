@@ -44,6 +44,20 @@ export const requireRoleEntityActive = (req: Request, res: Response, next: NextF
 
 /**
  * Checks if the Business (Vendor/Agency) is verified.
+ *
+ * ⚠️ **ZERO CALL SITES, and it would deny every vendor if you attached one.**
+ *
+ * It reads the TOP-LEVEL `entity.legit_verified`. On a vendor that field does not exist:
+ * the real one is `kyc_details.legit_verified`, and the deprecated top-level mirror was
+ * removed with the vendor-management phase (its schema path had been commented out long
+ * before, so Mongoose never populated it anyway). `undefined !== true` is `true`, so every
+ * vendor takes the 403 branch.
+ *
+ * Every other guard in this file is dead too — none of the three has a caller. They are
+ * left here rather than deleted because removing them is its own change, but do not reach
+ * for this one as though it worked. If vendor verification should gate selling, that is a
+ * deliberate product decision (it locks out the entire existing roster until each vendor
+ * is reviewed), and the check belongs on `kyc_details.legit_verified`.
  */
 export const requireLegitBusiness = (req: Request, res: Response, next: NextFunction) => {
   const entity = req.auth?.role_entity;

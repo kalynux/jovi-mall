@@ -175,6 +175,38 @@ export class EarningsAccountRepository {
   }
 
   /**
+   * Every owner's account, ranked by what the platform owes them.
+   *
+   * Added for wi-admin's cross-owner balances table, which previously had no way to
+   * ask this question — the repository could find ONE account, or every account over
+   * a threshold, and nothing in between.
+   *
+   * The platform singleton is excluded: it is the marketplace's own commission, it
+   * pays itself nothing, and mixing it into a ranking of what is owed to other
+   * people makes the largest row on the page mean the opposite of the rest.
+   *
+   * Sorted by `available_balance` — the withdrawable figure, i.e. the one an
+   * operator is deciding about — with `_id` as a tiebreaker so paging is stable
+   * across two accounts holding the same amount.
+   */
+  async listForAdmin(
+    ownerType: EarningsOwnerType | null,
+    page: number,
+    limit: number
+  ): Promise<{ data: IEarningsAccount[]; total: number }> {
+    const query: Record<string, unknown> = ownerType
+      ? { owner_type: ownerType }
+      : { owner_type: { $in: ['vendor', 'agency', 'agent'] } };
+
+    const skip = (page - 1) * limit;
+    const [data, total] = await Promise.all([
+      EarningsAccountModel.find(query).sort({ available_balance: -1, _id: 1 }).skip(skip).limit(limit),
+      EarningsAccountModel.countDocuments(query),
+    ]);
+    return { data, total };
+  }
+
+  /**
    * Atomically move the account's ENTIRE `available_balance` into
    * `requested_balance` (payout request). `amount` must be the value the
    * caller just read in the same session — the exact-match guard means this

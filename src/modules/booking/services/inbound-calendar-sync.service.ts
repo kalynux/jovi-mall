@@ -1,4 +1,5 @@
-import { createClient, RedisClientType } from 'redis';
+import { RedisClientType } from 'redis';
+import { getRedisClient } from '../../../infra/redis/redis.factory';
 import { ConnectedCalendarAccount } from '../../integrations/calendar/google/connected-account.model';
 import { CalendarClientFactory } from '../../integrations/calendar/calendar-client.factory';
 import { CalendarEvent } from '../../integrations/calendar/interfaces/calendar-client.interface';
@@ -50,13 +51,22 @@ export class InboundCalendarSyncService {
     private redisClient: RedisClientType | null = null;
 
     constructor() {
-        // Redis client for sync locking (optional, graceful degradation if unavailable)
+        // Redis client for sync locking (optional, graceful degradation if unavailable).
+        //
+        // Routed through the factory rather than `createClient` directly. It used to build its
+        // own client, which made it invisible to `redisClientSnapshot()` — so `/system/cache`
+        // and `/system/dependencies` would have under-reported this process's real connection
+        // count without ever saying so. Safe to share: `closeRedisClients()` has no call sites,
+        // so nothing can `quit()` it out from under a sync in flight.
         if (process.env.REDIS_URL) {
-            this.redisClient = createClient({ url: process.env.REDIS_URL });
-            this.redisClient.connect().catch((err) => {
-                console.error('[InboundCalendarSync] Redis connection failed, sync locking disabled:', err);
-                this.redisClient = null;
-            });
+            getRedisClient(0)
+                .then((client) => {
+                    this.redisClient = client;
+                })
+                .catch((err) => {
+                    console.error('[InboundCalendarSync] Redis connection failed, sync locking disabled:', err);
+                    this.redisClient = null;
+                });
         }
     }
 

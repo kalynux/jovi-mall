@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { BillingOwnerType, BILLING_OWNER_TYPES } from '../billing.types';
+import { ActorSource, actorStampFields } from '../../../core/types/actor-source.types';
 
 /**
  * SubscriberPlan - An owner's assignment to a pricing plan.
@@ -33,6 +34,15 @@ export interface ISubscriberPlan extends Document {
   expires_at: Date | null;
   /** Admin user who assigned the plan (null for the lazily-created free default). */
   assigned_by: mongoose.Types.ObjectId | null;
+  /**
+   * Which identity space `assigned_by` belongs to, and a snapshot of who it was.
+   *
+   * A wi-admin administrator assigning a plan holds no `users` row here, so the id
+   * alone resolves in no collection with nothing marking it as such. See
+   * `core/types/actor-source.types.ts`.
+   */
+  assigned_by_source: ActorSource;
+  assigned_by_name: string | null;
   /** Gateway transaction reference that paid for this term, if any. */
   payment_reference: string | null;
   /** True once the plan's credit allowance has been credited to the wallet. */
@@ -55,6 +65,7 @@ const SubscriberPlanSchema = new Schema<ISubscriberPlan>(
     started_at: { type: Date, default: null },
     expires_at: { type: Date, default: null },
     assigned_by: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+    ...actorStampFields('assigned_by'),
     payment_reference: { type: String, default: null },
     allowance_granted: { type: Boolean, default: false },
   },
@@ -71,8 +82,23 @@ SubscriberPlanSchema.index(
   { owner_type: 1, owner_id: 1 },
   { unique: true, name: 'uniq_pending_per_owner', partialFilterExpression: { status: 'pending_activation' } }
 );
-// Worker scans active plans by expiry.
+// Worker scans active plans by expiry. Also serves wi-admin's expiring-soon queue.
 SubscriberPlanSchema.index({ status: 1, expires_at: 1 });
+
+/**
+ * The two cross-owner reads wi-admin added at Phase 11.
+ *
+ * Every query in THIS service is single-owner (`findByOwnerAndStatus`), so the partial
+ * uniques above covered them all. `GET /api/v1/billing/plans/:planId/subscribers` — "who
+ * is on this plan", asked immediately before editing its commission — and
+ * `GET /api/v1/billing/subscriptions` page by recency across every owner, and without
+ * these they are collection scans plus a blocking in-memory sort.
+ *
+ * `autoIndex` is on, so both build at boot. Same reasoning as the indexes
+ * `delivery_agencies` gained at Phase 9, when it acquired an admin directory.
+ */
+SubscriberPlanSchema.index({ plan_id: 1, created_at: -1 });
+SubscriberPlanSchema.index({ created_at: -1 });
 
 export const SubscriberPlanModel = mongoose.model<ISubscriberPlan>(
   MODELS.SUBSCRIBER_PLAN,

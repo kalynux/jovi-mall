@@ -50,6 +50,7 @@ import { shipmentAssignmentOfferRepository } from '../shipment-assignment/reposi
 import { geoRoutingClient } from '../shipment-assignment/services/geo-routing.client';
 import { haversineKm } from '../../core/utils/geo-distance.util';
 import { IGeoPoint } from '../../core/types/geo.types';
+import { RoleActorRef } from '../../core/types/actor-source.types';
 
 /**
  * Shipment-status transitions that may be triggered directly on the status
@@ -1426,7 +1427,7 @@ export class ShipmentService {
      * the admin agency-deactivation cascade, so the vendor's existing
      * updateDeliveryAgency endpoint can reassign them without new logic.
      */
-    async reject(agencyId: string, shipmentId: string, reason: ShipmentRejectionReason, note: string | null, actorUserId: string): Promise<any> {
+    async reject(agencyId: string, shipmentId: string, reason: ShipmentRejectionReason, note: string | null, actor: RoleActorRef): Promise<any> {
         const shipment = await this.shipmentRepo.findByIdAndAgency(shipmentId, agencyId);
         if (!shipment) {
             throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
@@ -1437,7 +1438,19 @@ export class ShipmentService {
         }
 
         await transactionManager.runInTransaction(async (session) => {
-            await this.shipmentRepo.applyRejection(shipmentId, reason, note, actorUserId, session);
+            // Guarded compare-and-set on the (agency, 'assigned') pair read above. A miss
+            // means somebody else moved the shipment in between — the agent picked it up,
+            // or a second reject landed first. Fail rather than clobber: everything below
+            // and every post-commit side effect assumes THIS rejection is the one that
+            // happened.
+            const rejected = await this.shipmentRepo.applyRejection(shipmentId, agencyId, reason, note, actor, session);
+            if (!rejected) {
+                throw createAppError(ERROR_CODES.SHIPMENT_STATUS_CONFLICT, 409,
+                    'This shipment was updated by someone else — reload it and try again', {
+                    expectedStatus: 'assigned',
+                    to: 'rejected',
+                });
+            }
             await this.orderRepo.holdItemsForRejectedShipment(shipmentId, session);
             // Kill any live offer on this shipment: the agency is declining the
             // whole shipment for reassignment, so an outstanding offer must not
@@ -1518,7 +1531,11 @@ export class ShipmentService {
         agencyId: string,
         shipmentId: string,
         reason: string,
-        actorUserId: string | null,
+        // Role as well as id: the reassignment's `status_history` entry records who drove
+        // it, and an administrator reassigning through `/api/internal/admin/shipments` is
+        // not the agency desk. `role` was hardcoded 'agency' before this had a second
+        // caller.
+        actor: { userId: string | null; role: string },
         handoverPickup: IShipmentHandoverPickup | null = null
     ): Promise<{ shipment: IShipment; previousAgentId: string; previousStatus: ShipmentStatus }> {
         const shipment = await this.shipmentRepo.findByIdAndAgency(shipmentId, agencyId);
@@ -1569,7 +1586,7 @@ export class ShipmentService {
         let reopened: { collection: ICashCollection; code: string } | { collection: null; code: null } = { collection: null, code: null };
         await transactionManager.runInTransaction(async (session) => {
             detached = await this.shipmentRepo.claimForReassignment(
-                shipmentId, agencyId, previousAgentId, previousStatus, targetStatus, actorUserId, handover, session
+                shipmentId, agencyId, previousAgentId, previousStatus, targetStatus, actor, handover, session
             );
             // The CAS missed — the shipment moved since we read it (a concurrent
             // accept / pickup / collect / reassign). Fail closed, don't double-detach.

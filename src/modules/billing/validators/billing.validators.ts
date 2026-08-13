@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import { PaymentChannelSchema } from '../../payments/validators/payment.validators';
+import { BILLING_OWNER_TYPES } from '../billing.types';
 
-const PlanRoleSchema = z.enum(['vendor', 'agency', 'agent']);
+// Derived from the module's own list, never retyped beside it — the same rule the
+// notification catalogs follow, for the same reason: two hand-maintained copies of one
+// vocabulary drift, and the drift is silent until a request is refused for no reason.
+const PlanRoleSchema = z.enum([...BILLING_OWNER_TYPES]);
 
 /**
  * Admin: create a pricing plan. Limit fields are role-specific and nullable —
@@ -89,4 +93,15 @@ export const PaginationQuerySchema = z.object({
 /** Vendor: how many days before expiry to be notified. */
 export const ExpiryNoticeSchema = z.object({
   notifyDaysBeforeExpiry: z.number().int().min(0).max(90),
+});
+
+/**
+ * The owner a plan-driven entitlement is being read for.
+ *
+ * `BILLING_OWNER_TYPES` rather than a typed-out list, so this cannot drift from the
+ * roles plans are actually scoped to.
+ */
+export const EntitlementParamsSchema = z.object({
+  ownerType: PlanRoleSchema,
+  ownerId: z.string().trim().regex(/^[a-f\d]{24}$/i, 'Not a valid id'),
 });

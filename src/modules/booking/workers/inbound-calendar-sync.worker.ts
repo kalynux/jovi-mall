@@ -1,3 +1,5 @@
+import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { CalendarSyncConfig } from '../config/calendar-sync.config';
 import { InboundCalendarSyncService } from '../services/inbound-calendar-sync.service';
 
@@ -16,11 +18,49 @@ import { InboundCalendarSyncService } from '../services/inbound-calendar-sync.se
  * - Handles SIGTERM for graceful shutdown
  */
 
-export class InboundCalendarSyncWorker {
+export class InboundCalendarSyncWorker implements ObservableWorker {
     private nearFutureInterval: NodeJS.Timeout | null = null;
     private farFutureInterval: NodeJS.Timeout | null = null;
     private syncService: InboundCalendarSyncService;
     private isRunning = false;
+    private nearSyncing = false;
+    private farSyncing = false;
+
+    /**
+     * Two intervals — which is exactly why `schedules` is a list rather than one value.
+     *
+     * This worker is also the reason the inventory and the *triggerable* registry are separate
+     * exports. Its work splits across two private methods with different horizons and it holds
+     * per-instance state, so "run it once" has no single honest meaning and it stays out of
+     * `WORKER_REGISTRY`. But an operator could previously not see that it EXISTS at all, which
+     * is a different problem from not being able to trigger it — so it appears here.
+     */
+    get schedules(): WorkerSchedule[] {
+        return [
+            {
+                kind: 'interval',
+                everyMs: CalendarSyncConfig.nearFutureIntervalMs,
+                source: 'CALENDAR_SYNC_NEAR_INTERVAL_MS',
+            },
+            {
+                kind: 'interval',
+                everyMs: CalendarSyncConfig.farFutureIntervalMs,
+                source: 'CALENDAR_SYNC_FAR_INTERVAL_MS',
+            },
+        ];
+    }
+
+    get scheduled(): boolean {
+        return this.nearFutureInterval !== null || this.farFutureInterval !== null;
+    }
+
+    get executing(): boolean {
+        return this.nearSyncing || this.farSyncing;
+    }
+
+    get enabled(): boolean {
+        return CalendarSyncConfig.enabled;
+    }
 
     constructor() {
         this.syncService = new InboundCalendarSyncService();
@@ -67,7 +107,10 @@ export class InboundCalendarSyncWorker {
 
         // Then run on interval
         this.nearFutureInterval = setInterval(
-            () => this.runNearFutureSync(),
+            () => {
+                if (maintenanceBlocksWorkers()) return;
+                void this.runNearFutureSync();
+            },
             CalendarSyncConfig.nearFutureIntervalMs
         );
     }
@@ -85,7 +128,10 @@ export class InboundCalendarSyncWorker {
 
         // Then run on interval
         this.farFutureInterval = setInterval(
-            () => this.runFarFutureSync(),
+            () => {
+                if (maintenanceBlocksWorkers()) return;
+                void this.runFarFutureSync();
+            },
             CalendarSyncConfig.farFutureIntervalMs
         );
     }
@@ -100,6 +146,7 @@ export class InboundCalendarSyncWorker {
 
         console.log(`[InboundCalendarSyncWorker] Running near-future sync: ${fromDate.toISOString()} → ${toDate.toISOString()}`);
 
+        this.nearSyncing = true;
         try {
             const report = await this.syncService.syncAllVendors(fromDate, toDate);
 
@@ -113,6 +160,8 @@ export class InboundCalendarSyncWorker {
             });
         } catch (error: any) {
             console.error('[InboundCalendarSyncWorker] Near-future sync failed:', error);
+        } finally {
+            this.nearSyncing = false;
         }
     }
 
@@ -128,6 +177,7 @@ export class InboundCalendarSyncWorker {
 
         console.log(`[InboundCalendarSyncWorker] Running far-future sync: ${fromDate.toISOString()} → ${toDate.toISOString()}`);
 
+        this.farSyncing = true;
         try {
             const report = await this.syncService.syncAllVendors(fromDate, toDate);
 
@@ -141,6 +191,8 @@ export class InboundCalendarSyncWorker {
             });
         } catch (error: any) {
             console.error('[InboundCalendarSyncWorker] Far-future sync failed:', error);
+        } finally {
+            this.farSyncing = false;
         }
     }
 
@@ -170,3 +222,14 @@ export class InboundCalendarSyncWorker {
         console.log('[InboundCalendarSyncWorker] Stopped');
     }
 }
+
+/**
+ * The instance the application runs.
+ *
+ * `server.ts` used to do `new InboundCalendarSyncWorker().start()` inline, which left the
+ * running worker **unreachable by anything else** — so the operations surface could not report
+ * on it even in principle, and `stop()` could never be called on the one that was actually
+ * scheduled. A singleton is what makes `scheduled`/`executing` describe the real worker rather
+ * than a second, idle copy.
+ */
+export const inboundCalendarSyncWorker = new InboundCalendarSyncWorker();

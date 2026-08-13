@@ -16,6 +16,7 @@ import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repos
 import { resolveFileDetail, resolveFileDetails } from '../../catalog/read-models/file-detail.resolver';
 import { getStorageProvider, IStorageProvider } from '../../../core/storage';
 import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
+import { ActorRef } from '../../../core/types/actor-source.types';
 
 /**
  * AdminAgencyService: admin-facing delivery agency management.
@@ -90,6 +91,44 @@ export class AdminAgencyService {
     }
 
     /**
+     * Approve an agency's business verification — the exit from `pending_verification`.
+     *
+     * ── Why this endpoint exists ─────────────────────────────────────────────────
+     * Every agency is created at `pending_verification` and, until this, nothing moved it
+     * off. `setLegitVerified` had no caller, `requireLegitBusiness` had no call sites, and
+     * the only writers of `status` were deactivate/reactivate — so approval was being done
+     * by calling `reactivate` on an agency that had never been active, which also runs the
+     * whole product-restore cascade over products that were never suspended.
+     *
+     * ── Why it is not a transaction ──────────────────────────────────────────────
+     * Unlike its two neighbours there is no cascade: approving an agency suspends nothing
+     * and restores nothing. The whole write is one compare-and-set, which is atomic on its
+     * own, so a transaction would buy a session and no additional guarantee.
+     *
+     * A miss is 409, never 404: the agency exists (we would not know its status otherwise),
+     * it is simply no longer pending — already approved by a colleague, or deactivated in
+     * between. Those are different remedies and the caller needs to be able to tell.
+     */
+    async verify(agencyId: string, actor: ActorRef): Promise<AdminAgencyListItemDto> {
+        const verified = await this.agencyRepo.markVerifiedIfPending(agencyId, actor);
+        if (verified) return this.toDto(verified);
+
+        // The CAS returned nothing. Distinguish "no such agency" from "not pending" —
+        // collapsing them would send an administrator looking for a typo in the id when
+        // the real answer is that somebody else already approved it.
+        const existing = await this.agencyRepo.findById(agencyId);
+        if (!existing) {
+            throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, 'Delivery agency not found');
+        }
+        throw createAppError(
+            ERROR_CODES.DELIVERY_AGENCY_STATUS_CONFLICT,
+            409,
+            `This agency is ${existing.status}, not pending verification — re-read it before deciding`,
+            { currentStatus: existing.status },
+        );
+    }
+
+    /**
      * Deactivate an agency. Idempotent — no-op if the agency is already inactive.
      */
     async deactivate(agencyId: string, actorUserId: string): Promise<{
@@ -123,7 +162,7 @@ export class AdminAgencyService {
                     heldOrderItemCount: heldItems.length,
                 },
                 timestamp: new Date(),
-            });
+            }, session);
 
             return { agency: await this.toDto(updated!), affectedProductIds, heldOrderItemCount: heldItems.length };
         });
@@ -163,7 +202,7 @@ export class AdminAgencyService {
                     unheldOrderItemCount: unheldItems.length,
                 },
                 timestamp: new Date(),
-            });
+            }, session);
 
             return { agency: await this.toDto(updated!), restoredProducts, unheldOrderItemCount: unheldItems.length };
         });

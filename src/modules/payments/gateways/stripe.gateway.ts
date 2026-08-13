@@ -10,6 +10,7 @@ import {
   PaymentGatewayStatus
 } from './gateway.interface';
 import { getStripeClient, toStripeCharge, fromMinorUnit } from './stripe.client';
+import { recordIntegrationCall } from '../../system/domain/integration-observations';
 
 /**
  * StripeGateway - Card Payment Gateway
@@ -40,6 +41,11 @@ export class StripeGateway implements PaymentGateway {
    * Initiate card payment (create PaymentIntent).
    */
   async initiatePayment(payload: PaymentInitPayload): Promise<PaymentInitResult> {
+    // Reachability for `/system/integrations`. Stripe is `never` probed — a health check is an
+    // authenticated call against a live merchant account, consuming rate limit and appearing in
+    // the gateway's own logs — so a real checkout is the only honest signal.
+    const observedAt = Date.now();
+
     try {
       const stripe = getStripeClient();
       const { amount, currency } = toStripeCharge(payload.amount, payload.currency);
@@ -68,6 +74,7 @@ export class StripeGateway implements PaymentGateway {
         { idempotencyKey: `pi_${idempotencyKey}` }
       );
 
+      recordIntegrationCall('stripe', observedAt);
       const status = this.normalizeStripeStatus(intent.status);
 
       return {
@@ -88,6 +95,7 @@ export class StripeGateway implements PaymentGateway {
         },
       };
     } catch (error: any) {
+      recordIntegrationCall('stripe', observedAt, error);
       return this.toFailure(error, 'initiatePayment');
     }
   }

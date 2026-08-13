@@ -290,10 +290,22 @@ export class VendorProfileMapper {
     if (input.operating_hours !== undefined) payload.operating_hours = input.operating_hours as IVendorOperatingHours[];
     if (input.payout_details !== undefined) payload.payout_details = input.payout_details as IPayoutDetails;
     if (input.kyc_details !== undefined) {
-      payload.kyc_details = {
-        national_id_number: input.kyc_details.national_id_number ?? null,
-        legit_verified: false, // legit_verified is admin-only; never set from user input
-      };
+      /**
+       * A DOTTED path, deliberately — not a `kyc_details` object.
+       *
+       * Assigning the sub-document whole REPLACES it, which is how this used to force
+       * `legit_verified: false` on every profile save that carried a KYC field. That was
+       * an artefact of the replacement rather than a rule: re-submitting the same number
+       * un-verified the vendor too. Now that the block also carries the admin's verdict
+       * (`status`, `verified_at`, `rejection_reason`, the reviewer stamp), a whole-object
+       * write would erase a verification decision from a vendor's own profile edit.
+       *
+       * Mongoose lifts a top-level dotted key into `$set`, so exactly the one field the
+       * vendor owns is written and the admin-owned siblings are untouched. Setting
+       * `legit_verified` from user input remains impossible — it is simply never named.
+       */
+      (payload as Record<string, unknown>)['kyc_details.national_id_number'] =
+        input.kyc_details.national_id_number ?? null;
     }
     if (input.social_links !== undefined) payload.social_links = input.social_links as IVendorSocialLinks;
     if (input.policies !== undefined) payload.policies = input.policies as IVendorPolicies;

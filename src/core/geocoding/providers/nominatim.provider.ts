@@ -1,5 +1,6 @@
 import { createAppError } from '../../errors';
 import { ERROR_CODES } from '../../error-codes';
+import { recordIntegrationCall } from '../../../modules/system/domain/integration-observations';
 import { IGeoAddressComponents } from '../../types/geo-address.types';
 import { NominatimConfig } from '../geocoding.config';
 import {
@@ -101,6 +102,13 @@ export class NominatimProvider implements IGeocodingProvider {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
 
+        // Reported to the operations surface, which cannot probe this provider: Nominatim's
+        // usage policy is roughly one request per second with bans for abuse, so an operator
+        // opening a dashboard must not spend that budget. Real traffic already knows the
+        // answer — `/system/integrations` reports what this call learns.
+        const observedAt = Date.now();
+        let observedError: unknown;
+
         try {
             const response = await fetch(url, {
                 method: 'GET',
@@ -121,6 +129,7 @@ export class NominatimProvider implements IGeocodingProvider {
             }
             return (await response.json()) as T;
         } catch (err) {
+            observedError = err;
             // Re-throw AppErrors (e.g. the non-2xx above) untouched.
             if (err && typeof err === 'object' && 'code' in err) throw err;
             // Timeout (AbortError) or network failure → provider unavailable.
@@ -132,6 +141,7 @@ export class NominatimProvider implements IGeocodingProvider {
             );
         } finally {
             clearTimeout(timer);
+            recordIntegrationCall('geocoding', observedAt, observedError);
         }
     }
 

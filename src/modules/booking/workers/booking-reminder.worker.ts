@@ -1,4 +1,6 @@
 import mongoose from 'mongoose';
+import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { Booking } from '../models/booking.model';
 import { BookingStatus } from '../types/booking.types';
 import { BOOKING_CONFIG } from '../config/booking.config';
@@ -35,10 +37,31 @@ import { resolveLanguage, Language, DEFAULT_LANGUAGE } from '../../notifications
  * mid-sweep, an overlapping pass, or a second instance of the app can all replay
  * the same window without a customer being reminded twice.
  */
-export class BookingReminderWorker {
+export class BookingReminderWorker implements ObservableWorker {
     private interval: NodeJS.Timeout | null = null;
     private running = false;
     private sweeping = false;
+
+    get schedules(): WorkerSchedule[] {
+        return [{
+            kind: 'interval',
+            everyMs: BOOKING_CONFIG.reminder.intervalMs,
+            source: 'BOOKING_REMINDER_INTERVAL_MS',
+        }];
+    }
+
+    get scheduled(): boolean {
+        return this.interval !== null;
+    }
+
+    /** `sweeping` is in-flight here; `running` means "started". See `ObservableWorker`. */
+    get executing(): boolean {
+        return this.sweeping;
+    }
+
+    get enabled(): boolean {
+        return BOOKING_CONFIG.reminder.enabled;
+    }
     private readonly vendorRepo = new VendorRepository();
 
     start(): void {
@@ -55,7 +78,10 @@ export class BookingReminderWorker {
         );
 
         void this.sweep();
-        this.interval = setInterval(() => void this.sweep(), intervalMs);
+        this.interval = setInterval(() => {
+            if (maintenanceBlocksWorkers()) return;
+            void this.sweep();
+        }, intervalMs);
     }
 
     stop(): void {

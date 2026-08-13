@@ -14,6 +14,36 @@ import customerBookingRoutes from '../modules/booking/routes/customer-booking.ro
 
 const router = express.Router();
 
+/**
+ * ── Administrative action logging — MUST be registered before every `/admin*` mount ──
+ *
+ * One `use('/admin', …)` matches all twelve of them by prefix, so this cannot miss an
+ * endpoint by omission — including ones added to the legacy surface later. That property is
+ * the entire reason it sits here rather than being attached per router, and it depends on
+ * registration ORDER: Express runs middleware in the order it was mounted, so moving this
+ * below any `router.use('/admin…')` silently stops recording that router.
+ *
+ * It deliberately does NOT cover `/internal/admin/*` (mounted further down): those are
+ * wi-admin's delegated calls, already audited there against a real administrator identity.
+ * Recording them here would double-count every ported operation.
+ *
+ * Interim, and deleted with the legacy surface at the Phase 8 cutover.
+ */
+import { adminActionLogMiddleware } from './middlewares/admin-action-log.middleware';
+router.use('/admin', adminActionLogMiddleware);
+
+/**
+ * The three legacy admin endpoints that do NOT live under `/admin`. Named individually
+ * because a prefix cannot reach them, and they are exactly the kind of thing a sweep
+ * misses — an admin-only capability sitting on a public-looking path.
+ *
+ * `/files` also serves `express.static` and public reads; the middleware skips safe methods,
+ * so nothing there is affected. Both mounts are wider than the endpoints they exist for,
+ * which is accepted for a surface being deleted.
+ */
+router.use('/files', adminActionLogMiddleware);
+router.use('/webhooks/telegram', adminActionLogMiddleware);
+
 // Shared middleware and routes can be exported from here
 // export * from './middlewares';
 // export * from './utils';
@@ -22,6 +52,23 @@ const router = express.Router();
 export const commandBus = new CommandBus();
 register_all_commands(commandBus);
 
+/**
+ * The credential bucket sits in front of BOTH auth mounts.
+ *
+ * It is the only strict limit in the service — 20 per minute per IP, where everything else
+ * is in the hundreds. The two are protecting against different things: the global ceilings
+ * are a runaway-loop backstop, this is a security control. It bounds one source spraying a
+ * common password across many accounts, which is precisely the attack an account-level
+ * lockout cannot see, because every individual account sees only one or two attempts.
+ *
+ * jovi-mall has had neither control until now. `PHASE-0-DISCOVERY` recorded it as finding
+ * A6: "No login throttling, lockout, or failed-attempt record."
+ *
+ * Mounted here rather than inside each router so it covers registration, password reset and
+ * verification-code resend as well as login — every path that takes a credential or sends
+ * one out, including the ones added later.
+ */
+router.use('/auth', authRateLimiter);
 router.use('/auth', authRouter);
 router.use('/auth/browser', browserAuthRoutes);  // Browser session auth
 router.use('/webhooks/whatsapp', createWhatsappRouter(commandBus));
@@ -119,14 +166,14 @@ import adminEarningsRoutes from '../modules/earnings/routes/admin-earnings.route
 router.use('/vendor', vendorEarningsRoutes);
 router.use('/agency', agencyEarningsRoutes);
 router.use('/agent', agentEarningsRoutes);
-router.use('/admin', adminEarningsRoutes);
+router.use('/admin/earnings', adminEarningsRoutes);
 
 // Payout requests: vendor/agency/agent request a withdrawal of their entire
 // available balance, which opens a PAYOUT_REQUEST ticket for admins to process.
 // /vendor/earnings/payout, /agency/earnings/payout, /agent/earnings/payout (all
 // mounted above alongside earnings) + the admin processing queue below.
 import adminPayoutRequestsRoutes from '../modules/earnings/routes/admin-payout-requests.routes';
-router.use('/admin', adminPayoutRequestsRoutes);
+router.use('/admin/payout-requests', adminPayoutRequestsRoutes);
 
 // Unified transactions feed (merges plan purchases, credit top-ups, credit usage
 // and earnings into one history) — same engine for vendor, agency & agent.
@@ -230,6 +277,7 @@ import agentSelfRoutes from '../modules/agents/routes/agent.routes';
 import agencyRosterRoutes from '../modules/agents/routes/agency-roster.routes';
 import adminAgentRoutes from '../modules/agents/routes/admin-agent.routes';
 import internalAgentRoutes from '../modules/agents/routes/internal-agent.routes';
+import internalAdminRoutes from './routes/internal-admin.routes';
 router.use('/agent', agentSelfRoutes);
 router.use('/agency/agents', agencyRosterRoutes);
 router.use('/admin/agents', adminAgentRoutes);
@@ -239,9 +287,21 @@ router.use('/admin/agents', adminAgentRoutes);
 // owns tracking execution. Disabled entirely when INTERNAL_SERVICE_TOKEN is unset.
 router.use('/internal/agents', internalAgentRoutes);
 
-// Admin delivery agency management (deactivate/reactivate cascades to vendor products)
+// Service-to-service API consumed by the wi-admin backend. Same shape as the
+// geo-tracker door above, a SEPARATE secret (INTERNAL_ADMIN_SERVICE_TOKEN), and
+// the same fail-closed rule. It re-exposes existing admin routers behind a
+// service-token guard so wi-admin executes platform logic here rather than
+// reproducing it against the shared database — see
+// `admin/docs/ADR-004-DOMAIN-OWNERSHIP.md`. The public /admin/* mounts stay live
+// alongside it until cutover.
+router.use('/internal/admin', internalAdminRoutes);
+
+// Admin delivery agency management (deactivate/reactivate cascades to vendor products).
+// The prefix carries the `/delivery-agencies` segment that the router used to declare on
+// every route — it became path-relative at Phase 9 so the same factory could also be
+// mounted under `/api/internal/admin/agencies`. Public URLs are unchanged.
 import adminAgencyRoutes from '../modules/delivery/admin-agency.routes';
-router.use('/admin', adminAgencyRoutes);
+router.use('/admin/delivery-agencies', adminAgencyRoutes);
 
 // Admin COD oversight (cash chain: remittance confirmation, liabilities, discrepancies)
 import adminCodRoutes from '../modules/cod/admin-cod.routes';
@@ -270,6 +330,7 @@ router.use('/me', userAccountRoutes);
 // File upload and management routes
 import fileRoutes from './routes/file-upload.routes';
 import path from "path";
+import { authRateLimiter } from './rate-limit/rate-limit.middleware';
 router.use('/files', express.static(path.join(__dirname, '../..', 'storage')));
 router.use('/files', fileRoutes);
 

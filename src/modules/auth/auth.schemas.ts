@@ -40,7 +40,11 @@ export const RegisterSchema = z.object({
   email: OptionalEmailAddressSchema,
   name: z.string().min(2, "Name required"),
   password: z.string().min(6, "Password must be at least 6 characters"),
-  role: z.enum(['customer', 'vendor', 'agency', 'agent', 'admin']).default('vendor'),
+  // 'admin' is NOT registerable. This endpoint is public (no auth middleware), so
+  // accepting it here let anyone POST themselves a platform administrator and get a
+  // signed admin token back in the same response. Administrators are created only by
+  // the admin service's bootstrap CLI, in the separate `wi-admin` database.
+  role: z.enum(['customer', 'vendor', 'agency', 'agent']).default('vendor'),
   business_name: z.string().optional(), // For vendors
   agency_name: z.string().optional(), // For agencies
 });
@@ -57,8 +61,11 @@ export const AuthMeSchema = z.object({
 });
 
 export const AddRoleSchema = z.object({
-  role: z.enum(['customer', 'vendor', 'agency', 'agent', 'admin']),
-  name: z.string().min(2, 'Name required').optional(),          // customer / agent / admin
+  // 'admin' is NOT addable — this route only requires `requireAuth`, so accepting it
+  // let any signed-in customer promote themselves. An admin holds no other role at
+  // all: admin identity lives in `wi-admin` and is not a role on a platform User.
+  role: z.enum(['customer', 'vendor', 'agency', 'agent']),
+  name: z.string().min(2, 'Name required').optional(),          // customer / agent
   business_name: z.string().optional(),                          // vendor
   agency_name: z.string().optional(),                            // agency
 });

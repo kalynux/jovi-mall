@@ -4,6 +4,7 @@ import { GeoAddressSchema, IGeoAddress } from '../../core/types/geo-address.type
 import { PayoutMethodSchema, IPayoutDetails } from '../../core/types/payout.types';
 import { VendorOnboardingStep } from '../../core/constants/onboarding-steps';
 import { SUPPORTED_LANGUAGES, Language } from '../../core/constants/languages';
+import { ActorSource, actorStampFields } from '../../core/types/actor-source.types';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 // ─── Vendor Policy Sub-Schemas ────────────────────────────────────────────────
@@ -147,6 +148,24 @@ const BusinessAddressSchema = new Schema(
 
 // ─── KYC Details Sub-Schema ───────────────────────────────────────────────────
 
+/**
+ * Business verification — the verdict, and who reached it.
+ *
+ * ── Why `status` exists beside `legit_verified` ───────────────────────────────
+ * The boolean alone cannot tell "never reviewed" from "reviewed and rejected": both
+ * are `false`. A review queue is unbuildable over a field with that ambiguity, and an
+ * administrator reopening a vendor has no way to see that a decision was already made.
+ * `status` carries the verdict; `legit_verified` stays as its boolean projection,
+ * because `agency-vendor-browse.dto.ts` reads it to render `kycVerified` to agencies.
+ *
+ * The two are written together by `VendorRepository.setKycVerdict` and never apart —
+ * the same rule as the suspension stamp below.
+ *
+ * Shape mirrors `DeliveryAgent.kyc`, which is the platform's existing admin-reviewed
+ * KYC block. `reviewed_by_user_id` carries NO `ref`: it holds a wi-admin
+ * `admin_accounts._id`, which does not resolve in this database — see
+ * `actor-source.types.ts` for why the companion `_source`/`_name` fields exist.
+ */
 const VendorKycDetailsSchema = new Schema(
   {
     national_id_number: { type: String, default: null, trim: true },
@@ -156,6 +175,15 @@ const VendorKycDetailsSchema = new Schema(
      * is admin-controlled.
      */
     legit_verified: { type: Boolean, default: false },
+    status: {
+      type: String,
+      enum: ['pending', 'verified', 'rejected'],
+      default: 'pending',
+    },
+    verified_at: { type: Date, default: null },
+    rejection_reason: { type: String, default: null, trim: true, maxlength: 500 },
+    reviewed_by_user_id: { type: Schema.Types.ObjectId, default: null },
+    ...actorStampFields('reviewed_by'),
   },
   { _id: false }
 );
@@ -237,10 +265,33 @@ export interface IVendorOperatingHours {
   is_closed: boolean;
 }
 
+export type VendorKycStatus = 'pending' | 'verified' | 'rejected';
+
 export interface IVendorKycDetails {
   national_id_number: string | null;
+  /** The boolean projection of `status === 'verified'`. Written together, never apart. */
   legit_verified: boolean;
+  status: VendorKycStatus;
+  verified_at: Date | null;
+  rejection_reason: string | null;
+  /** A wi-admin `admin_accounts._id` — deliberately unref'd, see actor-source.types.ts. */
+  reviewed_by_user_id: mongoose.Types.ObjectId | null;
+  reviewed_by_source: ActorSource;
+  reviewed_by_name: string | null;
 }
+
+/**
+ * Whether this vendor may operate.
+ *
+ * A DIFFERENT axis from `User.status`, and deliberately not cascaded either way:
+ * suspending the account blocks sign-in entirely, suspending the vendor blocks the
+ * vendor role and its listings. Collapsing the two would make reinstatement guess
+ * which of them was true before — see `admin-user.service.ts`.
+ *
+ * `inactive` is the administrative suspension (`AdminVendorService`);
+ * `pending_verification` is the registration default, cleared by email verification.
+ */
+export type VendorStatus = 'active' | 'pending_verification' | 'inactive';
 
 export interface IVendorSocialLinks {
   instagram: string | null;
@@ -279,8 +330,6 @@ export interface IVendor extends Document {
    * a policy edit and pause any active connections that need reapproval.
    */
   policy_version: number;
-  /** @deprecated Use kyc_details.legit_verified instead. Kept for query backward compatibility during migration. */
-  legit_verified: boolean;
   default_delivery_agency_id?: mongoose.Types.ObjectId | null;
   wa?: {
     verified: boolean;
@@ -299,7 +348,28 @@ export interface IVendor extends Document {
   timezone: string;
   /** Preferred language for notifications/messaging (ISO 639-1). */
   preferred_language: Language;
-  status: 'active' | 'pending_verification' | 'inactive';
+  status: VendorStatus;
+
+  /**
+   * Suspension provenance — written as a whole by `AdminVendorService`, never a field
+   * at a time, or a reason outlives the suspension it describes.
+   */
+  suspended_at: Date | null;
+  suspended_reason: string | null;
+  /**
+   * The status to return to on reinstatement — never a hardcoded `'active'`.
+   *
+   * `status` has three values, so restoring is not the boolean flip it is on `User`.
+   * A fraudulent signup gets suspended while still `pending_verification`, and
+   * reinstating it must put it back there rather than promote it past a verification
+   * step it never passed. Same idea, and same reason, as `ProductSuspension.previousStatus`.
+   */
+  suspended_from_status: Exclude<VendorStatus, 'inactive'> | null;
+  /** A wi-admin `admin_accounts._id`. No `ref` — it does not resolve in this database. */
+  suspended_by_user_id: mongoose.Types.ObjectId | null;
+  suspended_by_source: ActorSource;
+  suspended_by_name: string | null;
+
   /**
    * Onboarding progress. See VendorOnboardingStep constants.
    * 0 = completed, 1+ = step to complete.
@@ -341,12 +411,6 @@ const VendorSchema = new Schema<IVendor>(
     },
     policies: { type: VendorPoliciesSchema, default: null },
     policy_version: { type: Number, default: 0 },
-    /**
-     * @deprecated Kept for backward compatibility. Always mirrors kyc_details.legit_verified.
-     * The single source of truth is kyc_details.legit_verified.
-     * Remove this field after all existing reads are updated.
-     */
-    // legit_verified: { type: Boolean, default: false },
     default_delivery_agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, default: null },
     wa: {
       verified: { type: Boolean, default: false },
@@ -369,6 +433,19 @@ const VendorSchema = new Schema<IVendor>(
       enum: ['active', 'pending_verification', 'inactive'],
       default: 'pending_verification',
     },
+
+    // Suspension provenance. Written together by AdminVendorService — never one at a
+    // time, or a reason ends up describing a suspension that was lifted.
+    suspended_at: { type: Date, default: null },
+    suspended_reason: { type: String, default: null, trim: true, maxlength: 500 },
+    suspended_from_status: {
+      type: String,
+      enum: ['active', 'pending_verification'],
+      default: null,
+    },
+    suspended_by_user_id: { type: Schema.Types.ObjectId, default: null },
+    ...actorStampFields('suspended_by'),
+
     onboarding_step: {
       type: Number,
       default: VendorOnboardingStep.BASIC_SETUP,
@@ -381,5 +458,19 @@ const VendorSchema = new Schema<IVendor>(
 // Geospatial indexes for vendor business addresses (legacy bare point + GeoAddress)
 VendorSchema.index({ 'business_addresses.location': '2dsphere' }, { sparse: true });
 VendorSchema.index({ 'business_addresses.geo.coordinates': '2dsphere' }, { sparse: true });
+
+/**
+ * The admin vendor directory sorts by `created_at` and filters on `status`.
+ *
+ * Until wi-admin's `/api/v1/vendors` existed, this collection carried nothing but its two
+ * 2dsphere indexes — so any status-filtered page of the directory would scan it whole.
+ * `status` leads because it is the more selective of the pair, and `created_at` closes
+ * the index so the default `-createdAt` ordering is served from it rather than sorted in
+ * memory. Same shape, and same reasoning, as `UserSchema.index({ status, roles, created_at })`.
+ */
+VendorSchema.index({ status: 1, created_at: -1 });
+
+/** The KYC review queue: "every vendor still pending, oldest first". */
+VendorSchema.index({ 'kyc_details.status': 1, created_at: -1 });
 
 export const VendorModel = mongoose.model<IVendor>(MODELS.VENDOR, VendorSchema, COLLECTIONS.VENDOR);

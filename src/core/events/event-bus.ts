@@ -1,3 +1,8 @@
+import {
+  eventBusHandlerFailuresTotal,
+  eventBusPublishedTotal,
+} from '../../modules/system/metrics/metrics';
+
 /**
  * Domain Event Interface
  * 
@@ -63,10 +68,24 @@ export class EventBus {
 
     // Notify all registered handlers
     const handlers = this.handlers.get(eventType) || [];
+
+    /**
+     * The metric label, bounded by SUBSCRIPTION rather than by an allowlist.
+     *
+     * `eventType` is a free-form string, so labelling by it directly would be an unbounded
+     * label space — the thing `modules/system/domain/route-group.ts` goes to some trouble to
+     * avoid on the HTTP side. But there is a natural bound here that needs no maintenance: the
+     * set of event types something actually SUBSCRIBES to is finite, fixed at boot, and cannot
+     * be grown by a caller. A published event nobody handles collapses to `unhandled` — which
+     * is also a genuinely useful signal, since it means somebody is emitting into the void.
+     */
+    eventBusPublishedTotal.inc({ event_type: handlers.length > 0 ? eventType : 'unhandled' });
+
     for (const handler of handlers) {
       try {
         await handler(payload);
       } catch (error) {
+        eventBusHandlerFailuresTotal.inc({ event_type: eventType });
         console.error(`[EventBus] Error in handler for ${eventType}:`, error);
         // Continue processing other handlers even if one fails
       }

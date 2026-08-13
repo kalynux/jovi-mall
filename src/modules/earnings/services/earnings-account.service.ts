@@ -253,6 +253,49 @@ export class EarningsAccountService {
   }
 
   /**
+   * Every owner's balances, ranked by what is withdrawable — the administrative
+   * "who are we holding money for" view.
+   *
+   * Goes through this service rather than letting a caller read `earnings_accounts`
+   * directly, for the same reason `getBalances` does: four sub-balances only this
+   * service's transactions move, and a second reader deriving them elsewhere would
+   * be a second opinion about how much money exists. The platform singleton is
+   * excluded by the repository — see `listForAdmin`.
+   */
+  async listAccountsForAdmin(
+    ownerType: EarningsOwnerType | null,
+    page: number,
+    limit: number
+  ): Promise<{
+    data: Array<{
+      ownerType: EarningsOwnerType;
+      ownerId: string | null;
+      pending: number;
+      available: number;
+      reserve: number;
+      requested: number;
+      currency: string;
+      updatedAt: string;
+    }>;
+    total: number;
+  }> {
+    const { data, total } = await this.accountRepo.listForAdmin(ownerType, page, limit);
+    return {
+      data: data.map((account) => ({
+        ownerType: account.owner_type,
+        ownerId: account.owner_id ? account.owner_id.toString() : null,
+        pending: account.pending_balance,
+        available: account.available_balance,
+        reserve: account.reserve_balance,
+        requested: account.requested_balance,
+        currency: account.currency,
+        updatedAt: account.updated_at.toISOString(),
+      })),
+      total,
+    };
+  }
+
+  /**
    * Payout request created: move the account's ENTIRE available balance into
    * `requested_balance`. Throws if there's nothing to move (zero available) or
    * if a concurrent mutation changed the balance between read and write (the

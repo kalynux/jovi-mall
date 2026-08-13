@@ -113,6 +113,60 @@ export class EntitlementService {
     const { liveTrackingEnabled } = await this.getShipmentEntitlements(ownerType, ownerId);
     return liveTrackingEnabled;
   }
+
+  // ── The administrative read ──────────────────────────────────────────────────
+
+  /**
+   * Every plan-driven limit for one owner, in one answer — what wi-admin's account
+   * surface renders. The two methods above answer half each and both resolve the same
+   * plan, so an admin view asking for both would load it twice.
+   *
+   * ── This one does NOT create a plan, and that is the whole reason it exists ───
+   * `getActivePlan` lazily creates the role's free tier and grants its credit
+   * allowance the first time an owner has none. That is correct when the OWNER is
+   * asking — the grant is theirs and the first read is effectively signup. It is wrong
+   * when an ADMINISTRATOR is asking: browsing a list of accounts would materialise a
+   * subscriber_plans row and a credit grant for every owner an operator happened to
+   * open, and wi-admin's whole data model rests on reads not mutating this database.
+   *
+   * So this reads the active row and reports `null` when there is none, leaving the
+   * grant to happen when the owner turns up. An owner with no active plan is a real,
+   * renderable state — "never subscribed" — not an error and not a reason to write.
+   */
+  async getAdminEntitlements(
+    ownerType: BillingOwnerType,
+    ownerId: string
+  ): Promise<{
+    planCode: string | null;
+    maxActiveProducts: number | null;
+    maxStorageBytes: number | null;
+    commissionPercent: number | null;
+    maxUnterminatedShipments: number | null;
+    liveTrackingEnabled: boolean | null;
+  }> {
+    const active = await this.plans.findActivePlanWithoutCreating(ownerType, ownerId);
+    const plan = active ? await this.planRepo.findById(active.plan_id.toString()) : null;
+
+    if (!plan) {
+      return {
+        planCode: null,
+        maxActiveProducts: null,
+        maxStorageBytes: null,
+        commissionPercent: null,
+        maxUnterminatedShipments: null,
+        liveTrackingEnabled: null,
+      };
+    }
+
+    return {
+      planCode: plan.code,
+      maxActiveProducts: plan.max_active_products,
+      maxStorageBytes: plan.max_storage_bytes ?? DEFAULT_MAX_STORAGE_BYTES,
+      commissionPercent: plan.commission_percent ?? 0,
+      maxUnterminatedShipments: plan.max_unterminated_shipments,
+      liveTrackingEnabled: plan.live_tracking_enabled,
+    };
+  }
 }
 
 export const entitlementService = new EntitlementService();

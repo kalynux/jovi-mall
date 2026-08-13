@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import { ActorSource, actorStampFields } from '../../../core/types/actor-source.types';
 
 /**
  * AgencyRemittance - the agency handing collected COD cash up to the platform
@@ -26,6 +27,17 @@ export interface IAgencyRemittance extends Document {
   declared_at: Date;
   resolved_at: Date | null;
   resolved_by_user_id: mongoose.Types.ObjectId | null;
+  /**
+   * Which identity space `resolved_by_user_id` belongs to.
+   *
+   * `'admin'` means it is a **wi-admin** id that does NOT resolve in this database — an
+   * administrator holds no `users` row since the admin backend was split out. Defaults to
+   * `'platform'`, which is correct for every row written before the split.
+   * See `core/types/actor-source.types.ts`.
+   */
+  resolved_by_source: ActorSource;
+  /** Snapshot of who resolved it — an admin id cannot be looked up from this service. */
+  resolved_by_name: string | null;
   rejection_reason: string | null;
   created_at: Date;
   updated_at: Date;
@@ -47,7 +59,10 @@ const AgencyRemittanceSchema = new Schema<IAgencyRemittance>(
     declared_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true },
     declared_at: { type: Date, required: true, default: () => new Date() },
     resolved_at: { type: Date, default: null },
+    // `ref` kept for documentation of intent, but note it no longer always resolves:
+    // an admin-resolved remittance carries a wi-admin id. `resolved_by_source` says which.
     resolved_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+    ...actorStampFields('resolved_by'),
     rejection_reason: { type: String, default: null, trim: true, maxlength: 500 },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }

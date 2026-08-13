@@ -3,6 +3,7 @@ import { DeliveryAgencyModel, IDeliveryAgency } from './delivery-agency.model';
 import { IAgencyHeadquartersAddress } from '../magazin/models/magazin.model';
 import { AgencyOnboardingStepValue } from '../../core/constants/onboarding-steps';
 import { COLLECTIONS } from '../../core/database/collections';
+import { ActorRef, actorStamp } from '../../core/types/actor-source.types';
 
 /**
  * An agency row joined to its Magazin's business surface (name, logo, coverage
@@ -183,6 +184,53 @@ export class DeliveryAgencyRepository {
     const query = DeliveryAgencyModel.findByIdAndUpdate(
       agencyId,
       { onboarding_step: step },
+      { new: true },
+    );
+    if (session) query.session(session);
+    return query.exec();
+  }
+
+  /**
+   * Admin action: approve a pending agency's business verification — status and both
+   * `legit_verified` mirrors, as ONE compare-and-set.
+   *
+   * ── Why a CAS and not `updateStatusById` + `setLegitVerified` ─────────────────
+   * Two administrators can hold this screen open. Without the `status` predicate the loser
+   * would silently re-approve an agency somebody had already deactivated in between,
+   * dragging it back to `active` with a verification stamp naming the wrong person and the
+   * wrong moment. Returning null on a miss lets the service answer 409 — the state moved,
+   * re-read it — which is the same shape as `ShipmentRepository.applyStatusChangeIfCurrent`.
+   *
+   * ── Why the three fields move together ───────────────────────────────────────
+   * `status` is what actually gates anything today (`findAvailableForVendors` filters on
+   * it); `legit_verified` gates nothing, because `requireLegitBusiness` has no call sites.
+   * Writing only the flag would be a button that flips a column nobody reads, and writing
+   * only the status would leave the flag saying the opposite. They are one decision, so
+   * they are one write.
+   *
+   * `verified_at` and the actor stamp are set here rather than by the caller for the same
+   * reason `actorStamp` writes its three fields together: a timestamp that can disagree
+   * with the flag beside it is worse than no timestamp.
+   */
+  async markVerifiedIfPending(
+    agencyId: string,
+    actor: ActorRef,
+    session?: ClientSession,
+  ): Promise<IDeliveryAgency | null> {
+    const query = DeliveryAgencyModel.findOneAndUpdate(
+      { _id: agencyId, status: 'pending_verification' },
+      {
+        $set: {
+          status: 'active',
+          legit_verified: true,
+          'kyc_details.legit_verified': true,
+          'kyc_details.verified_at': new Date(),
+          // The prefix is a dotted PATH, so one call still writes the three stamp fields
+          // together — which is the property that stops a `_source` drifting from the id
+          // beside it, and the reason `actorStamp` exists rather than three `$set` keys.
+          ...actorStamp('kyc_details.verified_by', actor),
+        },
+      },
       { new: true },
     );
     if (session) query.session(session);

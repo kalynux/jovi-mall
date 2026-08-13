@@ -1,6 +1,7 @@
 import { PaymentTransactionModel } from '../models/payment-transaction.model';
 import { OrderModel, FulfillmentStatus } from '../../orders/order.model';
 import { OrderTimelineRepository } from '../../orders/order-timeline.repository';
+import { TimelineActorType } from '../../orders/order-timeline.model';
 import { Booking } from '../../booking/models/booking.model';
 import { BookingStatus } from '../../booking/types/booking.types';
 import { BookingCalendarSyncService } from '../../booking/services/booking-calendar-sync.service';
@@ -11,6 +12,29 @@ import { ticketService } from '../../tickets/services/ticket.service';
 import { TicketType, EntityType, TicketImportance } from '../../tickets/types/ticket.types';
 import { eventBus } from '../../../core/events/event-bus';
 import { BillingOwnerType } from '../../billing/billing.types';
+
+/**
+ * Who resolved a dispute, for the order timeline.
+ *
+ * Defaulted to `SYSTEM_ACTOR` on every method below so the four webhook call sites are
+ * untouched — a gateway event genuinely has no human behind it. The parameter exists for
+ * the manual override, which previously recorded the one admin-driven write on an order as
+ * `system`/null: an anonymous entry on the only record a payment dispute is arbitrated
+ * from.
+ */
+export type DisputeActor = { type: TimelineActorType; id: string | null };
+const SYSTEM_ACTOR: DisputeActor = { type: 'system', id: null };
+
+/**
+ * Whether a resolution actually changed anything.
+ *
+ * The `resolve*` methods return early when there is nothing to unwind, which is CORRECT
+ * for a webhook (Stripe retries, and a replay must be harmless) and WRONG for an operator
+ * — `adminResolveOrder` used to answer "resolved as won" for an order that was never
+ * disputed. The service reports which happened; the CALLER decides what it means. The
+ * webhook paths ignore it, the admin controller turns `noop` into a 409.
+ */
+export type DisputeResolution = 'resolved' | 'noop';
 
 /** Map a billing owner type to the ticket EntityType for chargeback tickets. */
 function ownerEntityType(ownerType: BillingOwnerType): EntityType {
@@ -178,10 +202,14 @@ export class PaymentDisputeService {
     );
   }
 
-  private async resolveOrderWon(orderId: string, disputeId: string | null): Promise<void> {
+  private async resolveOrderWon(
+    orderId: string,
+    disputeId: string | null,
+    actor: DisputeActor = SYSTEM_ACTOR
+  ): Promise<DisputeResolution> {
     const order = await OrderModel.findById(orderId);
-    if (!order) return;
-    if (!order.dispute_hold?.active && order.payment_status !== 'disputed') return; // idempotent
+    if (!order) return 'noop';
+    if (!order.dispute_hold?.active && order.payment_status !== 'disputed') return 'noop'; // idempotent
 
     await OrderModel.updateOne(
       { _id: order._id },
@@ -195,20 +223,25 @@ export class PaymentDisputeService {
       }
     );
 
-    await this.appendTimeline(orderId, 'Dispute won — order unfrozen, payment restored to paid', {
-      disputeId,
-    });
+    await this.appendTimeline(
+      orderId,
+      'Dispute won — order unfrozen, payment restored to paid',
+      { disputeId },
+      actor
+    );
     await this.publishDisputeEvent(orderId, 'order', 'won', { disputeId });
+    return 'resolved';
   }
 
   private async resolveOrderLost(
     orderId: string,
     paymentIntentId: string,
     reason: 'chargeback' | 'refund',
-    disputeId: string | null
-  ): Promise<void> {
+    disputeId: string | null,
+    actor: DisputeActor = SYSTEM_ACTOR
+  ): Promise<DisputeResolution> {
     const order = await OrderModel.findById(orderId);
-    if (!order) return;
+    if (!order) return 'noop';
     if (order.payment_status === 'refunded') {
       // Already unwound (e.g. by our own refund flow). Just clear any hold.
       if (order.dispute_hold?.active) {
@@ -216,8 +249,11 @@ export class PaymentDisputeService {
           { _id: order._id },
           { $set: { 'dispute_hold.active': false, 'dispute_hold.resolved_at': new Date() } }
         );
+        // The hold WAS lifted, so this is a real change — an operator asking to resolve a
+        // frozen-but-already-refunded order got what they wanted.
+        return 'resolved';
       }
-      return;
+      return 'noop';
     }
 
     // Goods already in motion must come back; otherwise the order is cancelled.
@@ -253,7 +289,8 @@ export class PaymentDisputeService {
     await this.appendTimeline(
       orderId,
       `Dispute ${reason === 'refund' ? 'refund' : 'lost'} — order refunded and ${newFulfillment}`,
-      { paymentIntentId, disputeId, fulfillment: newFulfillment }
+      { paymentIntentId, disputeId, fulfillment: newFulfillment },
+      actor
     );
     await this.publishDisputeEvent(orderId, 'order', 'lost', { paymentIntentId, disputeId });
 
@@ -265,6 +302,8 @@ export class PaymentDisputeService {
       `Order ${order.order_number} was ${reason}d (PaymentIntent ${paymentIntentId}). ` +
         `It is now refunded and marked '${newFulfillment}'; vendor earnings were reversed.`
     );
+
+    return 'resolved';
   }
 
   // ─── Bookings ───────────────────────────────────────────────────────────────
@@ -346,14 +385,28 @@ export class PaymentDisputeService {
    * Manually resolve an order dispute (admin override) — for when a Stripe event
    * is missed or the case is handled out of band. `won` lifts the hold and
    * restores `paid`; `lost` refunds + returns/cancels and reverses escrow.
+   *
+   * Returns `'noop'` when there was nothing to resolve. **The caller decides what that
+   * means**: this method is reachable only from an operator, so its controller raises a
+   * 409 rather than reporting a resolution that never happened — but the policy lives at
+   * the edge, beside the other status codes, not buried in a service the webhooks share.
    */
-  async adminResolveOrder(orderId: string, outcome: 'won' | 'lost'): Promise<void> {
+  async adminResolveOrder(
+    orderId: string,
+    outcome: 'won' | 'lost',
+    actor: DisputeActor = SYSTEM_ACTOR
+  ): Promise<DisputeResolution> {
     if (outcome === 'won') {
-      await this.resolveOrderWon(orderId, null);
-      return;
+      return await this.resolveOrderWon(orderId, null, actor);
     }
-    const tx = await PaymentTransactionModel.findOne({ orderId });
-    await this.resolveOrderLost(orderId, tx?.gatewayRef ?? '', 'chargeback', null);
+    // `orderIds` as well as `orderId`: a cart checkout writes ONE payment for N orders
+    // (`cartId` + `orderIds[]`, never `orderId` — the model enforces exactly one source
+    // field), so matching on `orderId` alone finds nothing for the entire cart-checkout
+    // population and the unwind proceeds with an empty gateway ref.
+    const tx = await PaymentTransactionModel.findOne({
+      $or: [{ orderId }, { orderIds: orderId }],
+    });
+    return await this.resolveOrderLost(orderId, tx?.gatewayRef ?? '', 'chargeback', null, actor);
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -388,7 +441,8 @@ export class PaymentDisputeService {
   private async appendTimeline(
     orderId: string,
     description: string,
-    metadata: Record<string, unknown>
+    metadata: Record<string, unknown>,
+    actor: DisputeActor = SYSTEM_ACTOR
   ): Promise<void> {
     try {
       await this.timelineRepo.appendEvent({
@@ -396,8 +450,8 @@ export class PaymentDisputeService {
         eventType: 'payment.updated',
         description,
         metadata,
-        actorType: 'system',
-        actorId: null,
+        actorType: actor.type,
+        actorId: actor.id,
       });
     } catch (error) {
       console.error('[PaymentDispute] Failed to append timeline entry:', error);

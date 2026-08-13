@@ -84,6 +84,21 @@ npm run test:payout-methods                    # the shared payout schema + swit
 npm run test:booking-availability               # booking windows/timezones/seats (54, no DB needed)
 npm run test:customer-notifications             # customer catalog + balance settlement (30, no DB needed)
 npm run test:blog                              # article blocks, slugs, DTO projection (100, no DB needed)
+npm run test:errors                            # Phase 16: the taxonomy, the exposure policy, the
+                                               # envelope, the body-parser branch and the rate-limit
+                                               # policy (69, no DB). Includes a CENSUS of all 1362
+                                               # createAppError sites — it fails if a NEW code is
+                                               # raised at two statuses that disagree on category.
+                                               # 25 pre-existing conflicts are baselined in the file
+                                               # with the reasoning, and the baseline cannot go stale.
+npm run test:system                            # worker schedules, maintenance exemptions, cache-flush
+                                               # policy, metric cardinality, plus Phase 15's scrubber,
+                                               # ring buffer, console bridge, exposed-config whitelist,
+                                               # index-drift diff, prune policy and the safe-execution
+                                               # source scan (175, no DB needed)
+npm run verify:logs                            # the logging sink against real Mongo (18) — proves the
+                                               # collection is genuinely CAPPED, $collStats is permitted
+                                               # here, and the warn+ level floor is enforced. NEEDS Mongo
 npm run verify:live-parity                     # agent↔agency smoke test — NEEDS Mongo
 npm run verify:blog                            # blog lifecycle + index builds + route order — NEEDS Mongo
 npx ts-node scripts/test/test-profile-mappers.ts
@@ -142,22 +157,140 @@ export class VendorProductController {
 }
 ```
 
-### Error handling
-**Never** use `throw new Error()` or `res.status().json({ error: ... })`. ESLint enforces this.
+### Error handling (Phase 16 — `../admin/docs/ADR-016-ERROR-SYSTEM.md`)
+**Never** use `throw new Error()` or `res.status().json({ error: ... })`. ESLint enforces this — and the `res.json` selector now matches `error` **anywhere** in the object literal, not only as its first property, which is exactly how eight hand-rolled error responses had accumulated.
 - Use `createAppError(code, statusCode, message?, details?)` from `src/core/errors.ts`
-- Pass errors to `next(error)` — the global error handler in `src/api/middlewares/error-handler.middleware.ts` normalises AppError, ZodError, and Mongoose errors into a consistent JSON shape
-- Error codes are domain-prefixed string literals defined in `src/core/error-codes.ts` (e.g. `AUTH_INVALID_CREDENTIALS`, `CATALOG_INSUFFICIENT_STOCK`)
+- Pass errors to `next(error)` — the global handler normalises AppError, ZodError, body-parser rejections, Mongoose and Multer errors into one shape
+- Error codes are domain-prefixed literals in `src/core/error-codes.ts` (541 of them, 1362 call sites, zero ad-hoc strings)
+
+**Every error carries a `category`** — one of nine (`src/core/error-category.ts`), **derived** from `(code, statusCode)` in the `AppError` constructor rather than in the factory, because four subclasses and six `ticket.service.ts` sites call `super()` directly. Never annotate one by hand: the same code is raised at different statuses at different sites, so an annotation would be wrong at one of them. **`400` is a schema failure and `422` is a business rule** — that split already exists at 136 and 139 call sites and the derivation depends on it.
+
+**Filtering happens at the BOUNDARY, keyed on category — never at the throw site.** For `internal` and `external_service` the handler substitutes the code's registry message and **drops `details` entirely**, in *every* environment. That is what closed the `{ cause: error.message }` leak in `payment-orchestrator.service.ts` without editing it, and it is why a service may still put diagnostic context in `details` on a 5xx — it is journaled, not sent.
+
+**The client envelope gained one field, `category`, and nothing else.** `isOperational` is now derived (`statusCode < 500`); it was hardcoded `true`, so the masking its own docstring promised had never once happened.
+
+**Errors are journaled under one `httpError` key** on the log line, read back through `GET /api/internal/admin/system/errors`. That endpoint returns the FULL record — the developer/admin/support ladder is applied in **wi-admin**, the only service that knows an administrator's tier. `X-Actor-Tier` reaches this service and must stay advisory: the token authenticating that call grants everything, so enforcing on the header would be theatre.
+
+⚠ `core/logging/log-record.ts` assigns every persisted field **by name**. A new field must be added there, in the sink, AND in `log-query.service.ts`'s `toRecord` — miss one and the data is written and silently dropped on read. That is why the whole error record nests under a single key.
+
+### Rate limiting (`src/api/rate-limit/`)
+Three layers. **Layer A** (`globalRateLimiter`, mounted in `app.ts`) is IP-scoped and runs before auth, so it protects the login endpoint. **Layer B** (`identityRateLimiter`) is attached at the **tail of `requireAuth`** — one edit, and every authenticated route inherits the per-role ceiling; a router added next year gets it without its author knowing. **Layer C** is per-endpoint and deliberately unbuilt.
+
+**Never classify a caller from an unverified JWT.** Selecting a *more generous* bucket from an attacker-chosen claim hands a forger the biggest one — that is the entire reason for the two-layer split rather than one clever limiter.
+
+Ceilings are backstops, not budgets (agent/admin 1200, vendor/agency 900, customer 600, anonymous 600/IP; **auth endpoints 20/IP**, the one strict number and the one security control). Redis DB 11. **The store fails OPEN** — `rate-limit-redis` rejects when Redis is down and express-rate-limit turns that into a 500 on *every* request, so `FailOpenStore` is not garnish: without it, wiring Redis in adds a single point of failure in front of every route. `/api/health*`, `/metrics` and `/api/webhooks/*` are exempt, with a written reason each.
+
+`app.set('trust proxy')` and `express.json({ limit })` are load-bearing companions — the first because `req.ip` is the limiter's key, the second because `REQUEST_BODY_TOO_LARGE` is unreachable without a named ceiling.
 
 ### Auth & request context
 `requireAuth` middleware (`src/api/middlewares/auth.middleware.ts`) populates `req.auth = { user, role, role_entity }`.
+
+**There is a second door onto `req.auth`, and it builds one from nothing.** `requireAdminCaller` (`src/api/middlewares/admin-caller.middleware.ts`) guards `/api/internal/admin/*`, the surface the **wi-admin** backend calls. Administrators live in a separate database and hold no `users` row and no `admins` row here, so that middleware *synthesises* the whole `req.auth` shape from request headers with **no database query** — `X-Actor-Id` becomes both `user.id` and `role_entity._id`, and the role is the constant `'admin'`.
+
+The consequence is deliberate and worth knowing before you touch an actor field: **a `*_by_user_id` written through that door holds an id that resolves to nothing in this database.** It is safe only because no `.populate()` anywhere dereferences an actor (`*_by*`) field — 13 populate sites, none of them. Adding one would silently return null. What makes it legible instead of mysterious is the pair of companion fields from `core/types/actor-source.types.ts`: `*_source: 'platform' | 'admin'` says which identity space the id belongs to, and `*_name` snapshots who it was, because a cross-database join cannot exist. Use `actorStampFields()` in the schema and `actorStamp()` on the write — writing the three together is what stops a source disagreeing with the id beside it. Applied so far to `agency_remittances.resolved_by` and `agent_deposits.recorded_by`.
+
+`INTERNAL_ADMIN_SERVICE_TOKEN` authenticates that caller and is deliberately **not** `INTERNAL_SERVICE_TOKEN` (geo-tracker's) — different blast radii, so one secret would make either compromise the other's. Both fail closed when unset. Note the token is a *full-privilege* credential: authorization is resolved in wi-admin before the call and this service re-checks nothing, exactly as it trusts geo-tracker.
+
+**Admin routers are dual-mounted, via a factory.** `buildAdminCodRouter(guards)` is instantiated twice — once with `[requireAuth, requireRole(['admin'])]` at `/api/admin/cod` for the dashboard, once with `[requireAdminCaller]` at `/api/internal/admin/cod`. A single Router instance cannot be mounted twice because its `router.use` guards would re-run, which is why the guards are a parameter. The remaining admin routers follow the same shape as they migrate; both surfaces run until cutover. Ownership per domain is recorded in `../admin/docs/ADR-004-DOMAIN-OWNERSHIP.md`.
+
+**`buildAdminAgentRouter` and `buildAdminAgencyRouter` followed at Phase 9**, mounted at `/api/admin/agents` + `/api/internal/admin/agents` and `/api/admin/delivery-agencies` + `/api/internal/admin/agencies`. The agency one carries a trap worth knowing: its routes used to declare `/delivery-agencies/...` because it was mounted at the bare `/admin` prefix, so they were made **path-relative** and `api/index.ts` absorbed the segment. Public URLs are byte-identical; if you change one of those paths, check that mount. wi-admin reads both collections directly and calls only the writes plus the three *verdict* reads (`tracking-policy`, `cod-allocation`, `eligibility`) — see `../admin/docs/ADR-009-DELIVERY-NETWORK.md` D-1.
+
+**`buildAdminUserRouter` is the exception: mounted ONCE, internal only.** The user domain never had a public admin surface, so there is no dashboard calling `/api/admin/users` to keep alive — a public mount would create surface whose only future is the cutover deletion list. It carries writes only (`PATCH /:userId` for the login identifiers, `POST /:userId/{suspend,restore}`); wi-admin reads the `users` collection directly.
+
+**`buildAdminVendorRouter` follows it** — mounted once at `/api/internal/admin/vendors`, writes only, no public twin. Seven operations: suspend/restore, KYC approve/reject, per-product suspend/restore, and a narrow settings PATCH. Contract in `api-doc/admin/vendors.md`; design record `../admin/docs/ADR-008-VENDOR-MANAGEMENT.md`. Note this domain *does* already have one public admin endpoint — `POST /api/admin/vendors/:vendorId/plan` in the billing module, which sets commission by assigning a plan. Nothing on the internal router duplicates it.
+
+**`Vendor.status` is now enforced, and this is the second time that sentence has been written here.** It used to be read by exactly one query (`findAvailableForAgencies`, hiding `inactive` vendors from the agency directory) and written by nothing — `updateStatus` had zero callers, and the three guards in `auth/guards/index.ts` that would have read it (`requireActiveUser`, `requireRoleEntityActive`, `requireLegitBusiness`) **still have zero call sites**. `requireAuth` and `login` now refuse a vendor whose role entity is `inactive` with `403 AUTH_VENDOR_SUSPENDED`.
+
+The check is deliberately `=== 'inactive'`, **never `!== 'active'`**: `pending_verification` is the schema default at registration, so the negated form would lock out every vendor who never verified their email. Refusing only `inactive` is provably a no-op against existing data. Don't "tidy" it — `wi-admin`'s `test:vendors` asserts the narrow form is what is in the file, and `verify:vendors` plants a `pending_verification` vendor to prove it stays untouched.
+
+Suspension is written **only** through `/api/internal/admin/vendors` as a compare-and-set, carries `suspended_at` / `suspended_reason` / `suspended_from_status` / a `suspended_by` actor stamp, and **cascades**: it takes every `active` product of that vendor off sale in the same transaction (`ProductPlatformSuspensionService`, reason `vendor_suspended`), and the restore re-runs the activation gate on each rather than republishing blindly. `Vendor.status` and `User.status` remain separate axes and do **not** cascade into one another in either direction — one account can hold `vendor` and `customer`, and closing the shop must not sign the person out of their own shopping.
+
+**`markEmailVerified` is now conditional, and that matters.** It used to `$set: { status: 'active' }` unconditionally — harmless while nothing wrote any other value, but the moment an administrator can suspend a vendor it means a suspended vendor lifts their own suspension by re-clicking an old verification link. It is a `$cond` pipeline update that only ever promotes out of `pending_verification`. `delivery-agency.repository.ts:135` has the same shape and therefore the same latent bug; flagged, not fixed.
+
+**The deprecated top-level `Vendor.legit_verified` is gone**, and it was worse than dead: its schema path was commented out, so Mongoose strict mode silently stripped it from `setLegitVerified`'s `$set` — half that method never did anything — while `requireLegitBusiness` read it and would therefore have denied *every* vendor the day anybody attached it. The single source of truth is `kyc_details`, which now carries a three-valued `status` (`pending|verified|rejected`) beside the boolean, plus `verified_at`, `rejection_reason` and a reviewer stamp. `legit_verified` stays as the boolean projection because `agency-vendor-browse.dto.ts` renders `kycVerified` from it; the two are written in one `$set` and never apart.
 Vendor-scoped queries extract `req.auth!.role_entity._id.toString()` as `vendorId` and pass it to repositories, which enforce scoping at the query level.
 
 Token resolution order: `access_token` httpOnly **cookie first**, then `Authorization: Bearer`. On expiry `requireAuth` performs a **silent refresh** from the refresh cookie and transparently re-issues the access cookie — so bearer-only callers (e.g. geo-tracker forwarding a viewer's token) get no refresh and simply fail closed on expiry.
+
+**`User.status` is now enforced, and on three paths rather than one.** It used to be written by nothing and read by nothing — `requireActiveUser` had zero call sites, `login` never looked at it, `rotateRefreshToken` never looked at it, and `UserRepository.updateStatus` had no callers. A suspended account was a label. `login`, `rotateRefreshToken` **and `requireAuth`** now refuse a non-`active` account with `403 AUTH_ACCOUNT_SUSPENDED`. The third is the load-bearing one: access tokens are stateless and 15 minutes long while the refresh cookie is 30 days, so a check at login alone would let a suspended person keep working and then silently refresh back in. `requireAuth` already loads the user row, so it costs a comparison and no query. **Consequence:** any `users` row already sitting at `suspended` loses access the moment this deploys, and there is no way for the person to get back in without an administrator — which is the correct meaning of the column, but check the count before rolling out.
+
+Suspension is written **only** through `/api/internal/admin/users` (wi-admin's `users.suspend`), as a compare-and-set on the current status, and it carries `suspended_at` / `suspended_reason` / a `suspended_by` actor stamp. It deliberately does **not** cascade into the role entities: `Vendor.status`, `DeliveryAgent.status` and the rest are a separate axis with their own meanings, and collapsing the two makes reinstatement guess which was true before. The account lock is complete on its own — a suspended user cannot authenticate at all, whatever their role entities say. Design record: `../admin/docs/ADR-007-USER-MANAGEMENT.md`.
 
 `JWT_SECRET` falls back to the literal string `'secret'` here, while geo-tracker fails closed on an empty secret. A misconfigured deploy therefore fails asymmetrically — treat the fallback as a known smell, not a default to rely on.
 
 ### Startup composition (`src/server.ts`)
 Background workers/consumers register at boot, all after the Mongo connection: aggregation scheduler, plan-expiry worker + notification consumer, vendor / agency / **agent** notification consumers, file-cleanup, earnings-release, unpaid-order-cancel, COD deposit-deadline, and the tracking event subscriber + dispatch worker. A feature that needs periodic sweeps registers here; sub-minute cadences use `setInterval`, daily ones use `node-cron`.
+
+Two things now run **before the listener opens**: `initializeMetrics()` (the private Prometheus registry, plus the Redis error sink) and `primeMaintenanceState()`. The second is load-bearing — an instance starting during a maintenance window must come up already closed, or a rolling deploy serves one full cache window of writes against a platform that is supposed to be shut.
+
+**Register the singleton, never `new` a worker inline.** `server.ts` used to do `new InboundCalendarSyncWorker().start()`, which left the running worker unreachable by anything else: the operations surface could not report on it even in principle, and `stop()` could never reach the instance that was actually scheduled. Every worker now exports a singleton and `server.ts` starts that.
+
+### System operations (`src/modules/system/`)
+The operator surface, split across two mounts by what it does rather than by convention:
+
+- **`/api/internal/admin/system/*` — every route a GET, nothing audited.** `dependencies` (Mongo readyState + `serverStatus`, Redis per logical DB), `integrations`, `queues`, `cache`, `workers`, `metrics` (JSON), `maintenance`.
+- **`/api/internal/admin/dev-tools/*` — everything that changes something**, including the two Phase-14 additions: `PUT /maintenance` and `POST /cache/flush`.
+
+Four rules run through it, and each exists because the obvious implementation is wrong:
+
+- **A probe observes; it does not provision.** Redis connects lazily here and never at boot, so every read goes through `peekRedisClient` (already-open client or null) — a DB this process has not needed reports `idle`, not `down`. `/api/health/ready` therefore treats Redis as **non-required**: requiring it would create a connection on DB 0 (which nothing uses) on every probe interval, and would fail the whole instance for a partial capability loss. The cache *flush* is the one deliberate exception and uses `getRedisClient`; the asymmetry is documented on both accessors.
+- **`configured` and `reachable` are different columns**, and most integrations may not be probed at all — a Stripe health check is an authenticated call on a live merchant account, a WhatsApp one is a message to a real person. `domain/integration-catalog.ts` holds the per-provider policy; unprobeable providers report what **real traffic** last learned, via `recordIntegrationCall()`.
+- **Metric labels are bounded by a closed allowlist, not by normalisation.** prom-client enforces no cardinality cap, so `domain/route-group.ts`'s allowlist *is* the cap; `event_type` is bounded by *subscription* instead. Never label by user, role, vendor or order id.
+- **Maintenance state lives in Mongo and every unknown fails OPEN.** Redis would converge faster but a restart would silently drop the window. An unrecognised mode or a corrupt document reads as `off`, because the failure mode of failing closed is a platform that is down and whose own operator door may be part of what is down.
+
+**`GET /api/health` is FROZEN** — exact path, exact body, unconditional 200. geo-tracker's `NodeAPIChecker` is a **readiness** checker pointed at it and treats any status ≥ 300 as an error, so putting readiness semantics on that path means a jovi-mall Redis wobble pulls geo-tracker out of rotation and kills every live tracking session. `/api/health/{live,ready}` sit beside it. Contracts: `api-doc/health.md`, `api-doc/admin/system.md`, `api-doc/admin/dev-tools.md`; design record `../admin/docs/ADR-014-SYSTEM-OPERATIONS.md`. Covered DB-free by `npm run test:system` (70 assertions).
+
+**Phase 15 added the developer-tools half** — four more GETs on `/system` (`config`, `logs`,
+`cache/keys`, `database`) and one more verb on `/dev-tools` (`outbox/prune`, the only new
+dangerous one). Design record: `../admin/docs/ADR-015-DEVELOPER-TOOLS.md`. Four rules of its own:
+
+- **`GET /system/config` is a whitelist, never a dump** (`domain/exposed-config.ts`).
+  `assertExposedConfigSafe()` runs at boot beside `assertSigningSecrets()` and kills the process
+  if the list names anything credential-shaped. No `*_URL`/`*_URI` is exposed at all — the
+  derived `wiring` block answers "is it pointed anywhere" without being able to carry a password.
+  `SMTP_USER` is absent by a *human* decision the regex cannot make, which is the point.
+- **Values never leave the cache.** `/system/cache/keys` returns names, types and TTLs; there is
+  deliberately no single-key value read, because that is a disclosure oracle for download tokens,
+  verification codes and WhatsApp idempotency keys. Every Redis command goes through the closed
+  allowlist in `domain/redis-command-policy.ts` — *the allowlist is the cap*, the same argument
+  `route-group.ts` makes about metric labels.
+- **`/system/database` reports index drift and never repairs it.** `autoIndex` is on and a failed
+  build fails *silently* at boot, so `missing` is the actionable bucket. Building or dropping an
+  index is a migration, not a button.
+- **`outbox/prune` accepts `status: 'sent'` and nothing else.** Pruning `failed` destroys what
+  `outbox/replay` acts on; pruning `pending` destroys undelivered events. `confirm` repeats the
+  *age*, because the age is what decides the blast radius.
+
+### Logging (`src/core/logging/`) — Phase 15
+
+This service had **no logging library** until Phase 15: 1268 `console.*` calls, stdout only, no
+levels, no redaction, nothing queryable. It now has **pino**, with two sinks — a bounded in-memory
+ring buffer and a **capped** `system_logs` collection persisting warn+ — behind
+`GET /api/internal/admin/system/logs`.
+
+- **`initLogging()` runs first in `startServer()`**, before the secret assertions, so a refused
+  boot is itself captured. `enableLogPersistence()` runs after `mongoose.connect`. Lines between
+  the two land in the ring only, and the endpoint reports the sink state so that boundary is
+  visible rather than mysterious.
+- **`console.*` is bridged** through the logger — that is what gives the 311 existing
+  `console.error('…', err)` sites structured, searchable stacks without editing one. Only the
+  five level-shaped methods are swapped; `console.table`/`dir`/`trace` stay native.
+  `LOG_CONSOLE_BRIDGE=false` is the kill switch. **A test harness must print through
+  `originalConsole`**, or the bridge swallows its own results.
+- **Redaction is two layers and only one is a boundary.** `REDACTED_PATHS` is derived from
+  `core/audit/redact.ts` (so it cannot drift), filtering out that set's two bracketed *path
+  fragments* — they are not valid pino paths and pino throws at construction. `scrub.ts` is a
+  heuristic net over rendered strings and says so in its own header; it deliberately does not
+  match bare long hex, because ObjectIds and upload fingerprints are logged legitimately.
+- **The collection is capped, not TTL'd**, and has **no Mongoose model** — `autoIndex` would
+  create it uncapped first, and a capped collection cannot be converted afterwards.
+  `LOG_MONGO_CAP_BYTES` is a one-way door.
+- **`requestId` reaches every line via an `AsyncLocalStorage` mixin**, not a child logger — a
+  child would have to be threaded through ~500 signatures and could never reach a bridged
+  `console.*` call. `requireAdminCaller` stamps the administrator too, so wi-admin's audit
+  `correlation_id` and a jovi-mall log line share one value.
+
+**Workers report three booleans, never one.** `scheduled` / `executing` / `manualClaim`, because three different things in this codebase were all called `running` and `GET /dev-tools/workers` reported the least useful of them — a scheduled sweep churning for ten minutes showed `running: false`. Schedules are **derived** from the value each worker schedules with (`core/jobs/worker-schedule.ts`); the old hand-typed strings were wrong for **eight of ten** workers. Two workers were missing entirely: `AssignmentSweepWorker` is now registered (it is the only thing advancing auto-assignment sessions, so a stalled sweep was invisible from every angle), and `InboundCalendarSyncWorker` appears in `WORKER_INVENTORY` but stays out of the triggerable `WORKER_REGISTRY` — "run it once" has no single meaning for it. ⚠ The seven cron workers still have **no overlap guard**; `executing` makes that visible and deliberately does not fix it.
 
 ### Notifications (`src/modules/notifications/`)
 **Four** parallel multi-channel stacks — vendor, agency, agent, and **customer** — each its own model + preference + repository + catalog + event-handler + consumer, all following the same rules (mandatory in-app record, always-on FCM push, at most one preference-gated secondary channel of email/telegram/whatsapp, catalog-driven copy localized in en/fr/pt/es/ar with a startup completeness assert). They are deliberately **not** DRY'd into one generic stack: the copy is written per-audience and the situations barely overlap. When adding a situation, add its `base` copy in **all five languages** or the consumer throws at boot.
@@ -427,6 +560,8 @@ Consume the domain through the barrel (`src/modules/agents/index.ts`) — **exce
 
 **Tracking split:** jovi-mall owns whether tracking is *allowed*; geo-tracker owns *execution*. `agent.last_known_tracking_state` is a business mirror, stale by construction — never serve it as a live position, and no assignment rule reads it.
 
+**The admin tracking flag now actually reaches geo-tracker (Phase 9).** `agent.tracking_allow_changed` was published from the day the flag existed and **nothing subscribed to it**, so disabling tracking refused new dispatch (`assertEligible`) and changed nothing else — the agent kept streaming and kept being broadcast. `TrackingEventSubscriber` now enqueues an `agent.tracking_allow_changed` outbox row carrying `trackingAllowed` and **no shipment verdicts** (it says nothing about any shipment), the dispatcher POSTs it to `/webhooks/node`, and geo-tracker suppresses the live position. **This changed the outbox event shape, so it was a two-repo change** — `webhook/domain/entity.go` gained `TrackingAllowed *bool` in the same commit. Note what it still does not do: `visible-agents` does not consult the flag, so a watcher is not revoked — they stay subscribed and receive nothing.
+
 Because `assertEligible` requires tracking-allowed before dispatch, geo-tracker **refuses** an agent's attempt to switch Tracking Allow off while they hold an active shipment (it would strand a delivery assigned on that promise). Note what Tracking Allow is *for* on geo-tracker's side: it is the permission to read an agent's **live position at all** — including an agent with no shipment, which is exactly the read that finds the one nearest a pickup. It is not what starts a tracking session; only a shipment is.
 
 Migration for pre-existing data: `npm run migrate:agent-memberships` (idempotent; `--dry-run` supported). The dead `agent_invites` collection is left in place — nothing reads it, and dropping it is a manual call.
@@ -498,7 +633,30 @@ delivery-agency cascade, and both are load-bearing: `DELIVERY_AGENCY_REASONS` is
 list that excludes it (so a restore sweep can never lift an agency's leverage — **do not
 widen it**), and `suspendVendorPhysicalProducts` only touches `active` products (so the
 cascade skips an already-suspended one, and the agency's later unsuspend re-runs the gate
-and correctly refuses). Unsuspend is the one place a 422 carries the whole blocker
+and correctly refuses).
+
+**There are now FOUR disjoint reason sets, and none may absorb another's members.** Vendor
+management added `vendor_suspended` (the vendor-level cascade — a system act, reversed by
+reinstating the vendor) and `platform_oversight` (one listing removed by an administrator —
+a *human* act, so nothing automatic clears it, **including the vendor restore**). That last
+exclusion is the point: suspending and reinstating a vendor must not silently republish a
+counterfeit listing somebody took down on its merits. `ProductPlatformSuspensionService`
+owns both, mirrors `ProductDeliveryAgencySuspensionService` including its `restoreEligible`
+re-validation, and covers **every product type** rather than physical only — a suspension
+that left the downloads and the bookable services selling would not be one.
+
+The `enum` on `suspension.reason` is now spread from `PRODUCT_SUSPENSION_REASONS` rather
+than hand-maintained beside the union — the same rule the notification stacks follow, for
+the same reason.
+
+**`ProductStatusValidationService` now blocks activation while the VENDOR is suspended**
+(`CATALOG_PRODUCT_VENDOR_SUSPENDED`), as a product-level check that applies to every type.
+That is not belt-and-braces: the vendor cascade takes listings down, but three *other*
+paths put them back — the delivery-agency cascade, the agency-storage unsuspend, and the
+vendor's own activation — and an agency problem resolved while a vendor is suspended would
+otherwise walk their catalogue back onto the storefront. Putting the rule in the one
+function that answers "may this be on sale" closes all of them at once, and closes the ones
+added later by construction. Unsuspend is the one place a 422 carries the whole blocker
 checklist (`INVENTORY_PRODUCT_UNSUSPEND_BLOCKED` + `details.blockers`) rather than silently
 skipping, because it is an explicit human action. `findAgencyStoredVariants` was widened to
 keep `agency_storage_suspended` rows — otherwise suspending a product deletes the row its
@@ -648,7 +806,11 @@ Services never enter the cart; they are booked. Availability → 15-min Redis ho
 **Customers are notified now** — see the notifications section. `BookingReminderWorker` fires ~24h before `startAt`, which the platform owed them: it records `no-show` against people it had never once reminded. Each sweep covers `[now+lead, now+lead+interval)` so consecutive passes tile exactly, and the idempotency key makes a replay harmless.
 
 ### Redis (`src/infra/redis/redis.factory.ts`)
-Uses dedicated DB indices (3–10) per feature (email tokens, WhatsApp codes, booking slot locks, download tokens, etc.). Connects lazily.
+Uses dedicated DB indices (3–10) per feature (email tokens, WhatsApp codes, booking slot locks, download tokens, etc.). Connects lazily — **never at boot**, which is why the readiness probe treats it as non-required (see System operations above).
+
+`REDIS_DB_CATALOG` is the table three separate features needed (`/system/dependencies`, `/system/cache`, the flush allowlist) and which previously existed only as trailing comments on the eight constants. The constants stay exported, so no call site changed.
+
+Two accessors, and they are not interchangeable: `getRedisClient(db)` connects if needed (real work, and the cache flush); `peekRedisClient(db)` returns an already-open client or null and **never connects** (every diagnostics read). `redisClientSnapshot()` hands out data rather than handles — exporting the `clients` map would let a caller `quit()` a client out from under a live request.
 
 ### Live tracking integration (`src/modules/tracking-integration/`)
 The whole jovi-mall half of the geo-tracker contract: the durable outbox (`models/tracking-outbox.model.ts` + repository), `services/tracking-event-subscriber.ts` (subscribes to `shipment.status_changed`, `cod.collection.recorded`, and `shipment.agent_released`), `services/visible-agents.service.ts` (**the tracking authorization policy** — admin=all, agent=self, agency=agents on approved+active shipments, customer=agents on active orders, vendor=none), `workers/tracking-dispatch.worker.ts` (drains every 2s, HMAC-SHA256, POSTs), and `GET /api/tracking/visible-agents`.

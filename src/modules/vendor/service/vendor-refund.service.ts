@@ -154,10 +154,7 @@ export class VendorRefundService {
     }
 
     private async findSuccessfulPayment(orderId: string) {
-        return PaymentTransactionModel.findOne({
-            orderId: new Types.ObjectId(orderId),
-            status: 'SUCCEEDED'
-        }).lean().exec();
+        return findSuccessfulPaymentForOrder(orderId);
     }
 
     private computeEligibility(
@@ -165,6 +162,54 @@ export class VendorRefundService {
         returnPolicy: IVendorReturnPolicy | null,
         paymentTx: { amountSnapshot: number; totalRefunded: number; currencySnapshot: string } | null
     ): RefundEligibilityDto {
+        return computeVendorRefundEligibility(order, returnPolicy, paymentTx);
+    }
+
+    private statusForReason(reasonCode?: string): number {
+        return refundStatusForReason(reasonCode);
+    }
+}
+
+/**
+ * Find the SUCCEEDED payment that settled an order.
+ *
+ * `orderIds` as well as `orderId`: a cart checkout writes one payment for N orders and
+ * sets only `orderIds`, so matching `orderId` alone reported "no payment" — and therefore
+ * "not refundable" — for the majority of orders on the platform. Shared with the admin
+ * refund path so both surfaces answer the same question the same way.
+ */
+export async function findSuccessfulPaymentForOrder(orderId: string) {
+    return PaymentTransactionModel.findOne({
+        $or: [
+            { orderId: new Types.ObjectId(orderId) },
+            { orderIds: new Types.ObjectId(orderId) },
+        ],
+        status: 'SUCCEEDED'
+    }).lean().exec();
+}
+
+/**
+ * Does the VENDOR's return policy allow a refund on this order, and how much?
+ *
+ * ── Why this is module-level and exported ─────────────────────────────────────
+ * It used to be a private method, which meant the only way to consult the vendor's policy
+ * was to be gated by it. The administrator's refund path needs the opposite: to REPORT the
+ * vendor's verdict — "this is 9 days outside their 14-day window" — while not being bound
+ * by it, because a return window is the vendor's commercial promise to their customer and
+ * the platform is not party to it.
+ *
+ * A flag on `VendorRefundService.refund` would have been the smaller diff and the wrong
+ * shape: a policy layer that can be told to skip itself is not a policy layer, and it
+ * would leave the vendor's own endpoint one boolean away from ignoring the vendor's
+ * policy. Pure and shared instead — one definition, two callers, neither able to drift.
+ *
+ * Never throws. Ineligibility is a `reasonCode`, not an exception.
+ */
+export function computeVendorRefundEligibility(
+    order: IOrder,
+    returnPolicy: IVendorReturnPolicy | null,
+    paymentTx: { amountSnapshot: number; totalRefunded: number; currencySnapshot: string } | null
+): RefundEligibilityDto {
         const currency = paymentTx?.currencySnapshot ?? order.currency ?? null;
         const remaining = paymentTx ? paymentTx.amountSnapshot - paymentTx.totalRefunded : 0;
         const base: RefundEligibilityDto = {
@@ -211,18 +256,18 @@ export class VendorRefundService {
             return { ...base, reasonCode: ERROR_CODES.REFUND_NOT_ELIGIBLE };
         }
 
-        return { ...base, eligible: true, maxRefundable, remaining, currency };
-    }
+    return { ...base, eligible: true, maxRefundable, remaining, currency };
+}
 
-    private statusForReason(reasonCode?: string): number {
-        switch (reasonCode) {
-            case ERROR_CODES.REFUND_PAYMENT_NOT_FOUND:
-                return 404;
-            case ERROR_CODES.REFUND_ORDER_NOT_PAID:
-            case ERROR_CODES.REFUND_ALREADY_FULLY_REFUNDED:
-                return 409;
-            default:
-                return 422;
-        }
+/** The HTTP status an ineligibility reason deserves. Shared by both refund surfaces. */
+export function refundStatusForReason(reasonCode?: string): number {
+    switch (reasonCode) {
+        case ERROR_CODES.REFUND_PAYMENT_NOT_FOUND:
+            return 404;
+        case ERROR_CODES.REFUND_ORDER_NOT_PAID:
+        case ERROR_CODES.REFUND_ALREADY_FULLY_REFUNDED:
+            return 409;
+        default:
+            return 422;
     }
 }

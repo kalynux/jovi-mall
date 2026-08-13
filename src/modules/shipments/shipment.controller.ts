@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { asyncHandler } from '../../api/middlewares/async-handler';
 import { ShipmentService } from './shipment.service';
 import { ShipmentStatus } from './shipment.model';
+import { roleActorFromRequest } from '../../core/types/actor-source.types';
 import {
     ListShipmentsQuerySchema,
     AgentListShipmentsQuerySchema,
@@ -192,11 +193,15 @@ export class ShipmentController {
      */
     static reject = asyncHandler(async (req: Request, res: Response): Promise<void> => {
         const agencyId = req.auth!.role_entity._id.toString();
-        const actorUserId = req.auth!.user.id;
         const shipmentId = req.params.id;
         const { reason, note } = RejectShipmentSchema.parse(req.body);
 
-        const shipment = await shipmentService.reject(agencyId, shipmentId, reason, note ?? null, actorUserId);
+        // `roleActorFromRequest` rather than a bare user id: the rejection now carries an
+        // actor stamp, and deriving the source here — beside the id it describes — is what
+        // stops a row claiming 'platform' next to an id from the other database.
+        const shipment = await shipmentService.reject(
+            agencyId, shipmentId, reason, note ?? null, roleActorFromRequest(req)
+        );
 
         res.json({ success: true, data: shipment, message: 'Shipment rejected' });
     });

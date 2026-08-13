@@ -3,6 +3,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { transactionManager } from '../../../core/database/transaction.manager';
 import { eventBus } from '../../../core/events/event-bus';
+import { ActorSource, actorStamp } from '../../../core/types/actor-source.types';
 import {
   AgentDepositModel,
   IAgentDeposit,
@@ -52,6 +53,18 @@ import { AgentRepository, AgentMembershipRepository } from '../../agents';
  * no money, so it cannot be abused to free headroom; what it does is start a
  * clock the agency has to beat.
  */
+/**
+ * Which identity space the confirming actor's id belongs to.
+ *
+ * `by` already distinguishes the two doors onto these methods, so the source follows from
+ * it rather than being passed separately and risking disagreement with it: an `'admin'`
+ * caller arrives through `requireAdminCaller` holding a wi-admin id, an `'agency'` caller
+ * through `requireAuth` holding a `users` id.
+ */
+function sourceOf(by: 'agency' | 'admin'): ActorSource {
+  return by === 'admin' ? 'admin' : 'platform';
+}
+
 export class AgentDepositService {
   constructor(
     private readonly cashAccounts: CodCashAccountService = codCashAccountService,
@@ -126,6 +139,8 @@ export class AgentDepositService {
     /** Scope guard — the agency confirming must be the one on the deposit. */
     agencyId?: string;
     confirmedByUserId: string;
+    /** Snapshot of the actor's name. Required in practice for 'admin' — that id resolves nowhere here. */
+    actorName?: string | null;
   }): Promise<IAgentDeposit> {
     const { depositId, by, agencyId, confirmedByUserId } = params;
 
@@ -150,7 +165,13 @@ export class AgentDepositService {
         {
           $set: {
             status: 'confirmed',
-            recorded_by_user_id: new Types.ObjectId(confirmedByUserId),
+            // This field holds an agency user id OR a wi-admin id; `recorded_by_source` is
+            // what lets a reader tell which, since the latter resolves nowhere here.
+            ...actorStamp('recorded_by', {
+              userId: confirmedByUserId,
+              source: sourceOf(by),
+              name: params.actorName ?? null,
+            }),
             resolved_at: new Date(),
           },
         },
@@ -179,6 +200,7 @@ export class AgentDepositService {
     agencyId?: string;
     reason: string;
     rejectedByUserId: string;
+    actorName?: string | null;
   }): Promise<IAgentDeposit> {
     const { depositId, by, agencyId, reason, rejectedByUserId } = params;
 
@@ -191,7 +213,11 @@ export class AgentDepositService {
         $set: {
           status: 'rejected',
           rejection_reason: reason,
-          recorded_by_user_id: new Types.ObjectId(rejectedByUserId),
+          ...actorStamp('recorded_by', {
+            userId: rejectedByUserId,
+            source: sourceOf(by),
+            name: params.actorName ?? null,
+          }),
           resolved_at: new Date(),
         },
       },
@@ -224,6 +250,9 @@ export class AgentDepositService {
     reference?: string | null;
     note?: string | null;
     recordedByUserId: string;
+    /** Defaults to 'platform' — the agency desk. The admin path passes 'admin'. */
+    actorSource?: ActorSource;
+    actorName?: string | null;
   }): Promise<IAgentDeposit> {
     const { agencyId, agentId, amount, note, recordedByUserId } = params;
     const recipient = params.recipient ?? 'agency';
@@ -250,7 +279,11 @@ export class AgentDepositService {
             reference: params.reference?.trim() || null,
             declared_by_user_id: null,
             declared_at: null,
-            recorded_by_user_id: recordedByUserId,
+            ...actorStamp('recorded_by', {
+              userId: recordedByUserId,
+              source: params.actorSource ?? 'platform',
+              name: params.actorName ?? null,
+            }),
             resolved_at: new Date(),
           },
         ],

@@ -2,6 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { EarningsOwnerType } from './earnings-account.model';
 import { PayoutMethodSchema, IPayoutMethod } from '../../../core/types/payout.types';
+import { ActorSource, actorStampFields } from '../../../core/types/actor-source.types';
 
 /**
  * PayoutRequest - a vendor/agency/agent's request to withdraw their ENTIRE
@@ -21,6 +22,16 @@ import { PayoutMethodSchema, IPayoutMethod } from '../../../core/types/payout.ty
  */
 
 export type PayoutRequestStatus = 'pending' | 'paid' | 'rejected';
+
+/**
+ * Who can be owed a payout. NOT `EarningsOwnerType` — that includes `'platform'`, and
+ * the marketplace does not pay itself out.
+ *
+ * Exported so the schema `enum` and every validator filtering on it spread ONE list.
+ * They used to be typed out separately and drifted: the admin queue's filter stopped at
+ * vendor and agency, so an agent's payout could not be filtered for at all.
+ */
+export const PAYOUT_OWNER_TYPES = ['vendor', 'agency', 'agent'] as const;
 
 /**
  * `manual` - the vendor/agency called POST .../earnings/payout themselves.
@@ -44,6 +55,22 @@ export interface IPayoutRequest extends Document {
   requested_by_user_id: mongoose.Types.ObjectId;
   resolved_at: Date | null;
   resolved_by: mongoose.Types.ObjectId | null;
+  /**
+   * Which identity space `resolved_by` belongs to, and a snapshot of who it was.
+   *
+   * An administrator marking a payout paid now arrives through `requireAdminCaller`
+   * and holds no `users` row here, so `resolved_by` would otherwise be an id that
+   * resolves in no collection with nothing saying so. See
+   * `core/types/actor-source.types.ts`.
+   *
+   * Note the id field is `resolved_by`, not `resolved_by_user_id` as on
+   * `agency_remittances` and `agent_deposits`. That predates the convention and is
+   * left alone deliberately: renaming it is a data migration, and this fix is a
+   * prerequisite for a write path that is about to go live. `actorStamp`'s third
+   * parameter exists to bridge exactly that.
+   */
+  resolved_by_source: ActorSource;
+  resolved_by_name: string | null;
   paid_reference: string | null;
   rejection_reason: string | null;
   created_at: Date;
@@ -54,7 +81,7 @@ const PayoutRequestSchema = new Schema<IPayoutRequest>(
   {
     // No 'platform': the platform account is the marketplace's own commission,
     // and it does not pay itself out.
-    owner_type: { type: String, enum: ['vendor', 'agency', 'agent'], required: true },
+    owner_type: { type: String, enum: [...PAYOUT_OWNER_TYPES], required: true },
     owner_id: { type: Schema.Types.ObjectId, required: true },
     amount: { type: Number, required: true, min: 1 },
     currency: { type: String, required: true, uppercase: true, trim: true },
@@ -65,6 +92,7 @@ const PayoutRequestSchema = new Schema<IPayoutRequest>(
     requested_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true },
     resolved_at: { type: Date, default: null },
     resolved_by: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+    ...actorStampFields('resolved_by'),
     paid_reference: { type: String, default: null, trim: true },
     rejection_reason: { type: String, default: null, trim: true },
   },

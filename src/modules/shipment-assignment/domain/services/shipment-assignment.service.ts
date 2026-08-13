@@ -46,10 +46,22 @@ import { ASSIGNMENT_CONFIG } from '../../config/assignment.config';
 import { AssignmentCandidateService, assignmentCandidateService, RankedCandidate } from './assignment-candidate.service';
 import { agentAssignmentAuditService } from '../../services/assignment-audit.service';
 
-/** Who is placing an offer. `system` for auto-assignment, `agency` for a manual pick. */
+/**
+ * Who is placing an offer. `system` for auto-assignment, `agency` for a manual pick,
+ * `admin` for a platform intervention through `/api/internal/admin/shipments`.
+ */
 export interface OfferCreator {
-  role: 'agency' | 'system';
+  role: 'agency' | 'system' | 'admin';
   userId: string | null;
+  /**
+   * The actor's display name, snapshotted.
+   *
+   * Load-bearing only when `role` is `admin`: that id is a wi-admin `admin_accounts._id`
+   * and resolves in NO collection here, so this snapshot is the only record of who acted
+   * there will ever be. See `core/types/actor-source.types.ts` — `role` is itself the
+   * identity-space discriminator, which is why no `_source` field sits beside it.
+   */
+  name?: string | null;
 }
 
 /**
@@ -723,7 +735,9 @@ export class ShipmentAssignmentService {
       override,
     });
 
-    const detach = await this.shipmentSvc.reassignAgent(agencyId, shipmentId, reason, creator.userId, pickup);
+    const detach = await this.shipmentSvc.reassignAgent(
+      agencyId, shipmentId, reason, { userId: creator.userId, role: creator.role }, pickup
+    );
 
     // A deliberate re-pick disposes of any prior auto-assignment ranking.
     await this.sessions.deleteForShipment(shipmentId);
@@ -894,7 +908,11 @@ export class ShipmentAssignmentService {
       origin: 'manual',
       session_id: null,
       round: 0,
-      created_by: { role: creator.role, user_id: creator.userId ? new Types.ObjectId(creator.userId) : null },
+      created_by: {
+        role: creator.role,
+        user_id: creator.userId ? new Types.ObjectId(creator.userId) : null,
+        name: creator.name ?? null,
+      },
       expires_at: this.nextFrontier(new Date()),
       score: null,
       score_breakdown: null,

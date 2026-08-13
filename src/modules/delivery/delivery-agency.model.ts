@@ -1,5 +1,6 @@
-import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document, Types } from 'mongoose';
 import { PayoutMethodSchema, IPayoutMethod } from '../../core/types/payout.types';
+import { ActorSource, actorStampFields } from '../../core/types/actor-source.types';
 import { AgencyOnboardingStep } from '../../core/constants/onboarding-steps';
 import { SUPPORTED_LANGUAGES, Language } from '../../core/constants/languages';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
@@ -133,6 +134,18 @@ const AgencyKycDetailsSchema = new Schema(
      * Agencies submit kyc data; admin controls legit_verified.
      */
     legit_verified: { type: Boolean, default: false },
+    /**
+     * Who approved the verification, and when (Phase 9).
+     *
+     * Until then the flag was written by nothing — `setLegitVerified` had no caller — so
+     * there was nothing to stamp. `POST /api/admin/delivery-agencies/:id/verify` is the
+     * one writer, and the actor is usually an administrator whose id resolves in the
+     * wi-admin database and nowhere here, which is exactly what the `_source`/`_name`
+     * companions from `actorStampFields` exist to make legible.
+     */
+    verified_at: { type: Date, default: null },
+    verified_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+    ...actorStampFields('verified_by'),
   },
   { _id: false }
 );
@@ -212,6 +225,11 @@ export interface IAgencyKycDetails {
   registration_number: string | null;
   transport_license_id: string | null;
   legit_verified: boolean;
+  /** Stamped by `POST /api/admin/delivery-agencies/:id/verify` (Phase 9). */
+  verified_at?: Date | null;
+  verified_by_user_id?: Types.ObjectId | string | null;
+  verified_by_source?: ActorSource;
+  verified_by_name?: string | null;
 }
 
 /**
@@ -348,5 +366,23 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
 );
 
 // HQ geospatial indexes moved to the Magazin schema (coverage/HQ live there now).
+
+// ── The administrative directory (wi-admin `GET /api/v1/agencies`) ──────────
+//
+// Until Phase 9 this schema declared NO index at all beyond the unique `user_id`
+// its field definition creates — including none behind `findAllForAdmin`, which
+// filters on `status` and pages. That was survivable only because the collection
+// is small; it is still a collection scan plus a blocking sort.
+//
+// Both forms, for the same reason as the agent directory: a single-field index is
+// walkable in either direction, a compound one only in the declared one.
+//
+// Note what is deliberately NOT indexed: the business name. It lives on the
+// Magazin, and both admin list queries sort or search it AFTER a `$lookup`, where
+// no index on the joined collection is reachable. Making it indexable means
+// driving the pipeline from `agency_magazins`, which loses every agency that has
+// not been provisioned one.
+DeliveryAgencySchema.index({ created_at: -1 });
+DeliveryAgencySchema.index({ status: 1, created_at: -1 });
 
 export const DeliveryAgencyModel = mongoose.model<IDeliveryAgency>(MODELS.DELIVERY_AGENCY, DeliveryAgencySchema, COLLECTIONS.DELIVERY_AGENCY);

@@ -213,7 +213,8 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Gateway payments (role-neutral)](./payments/README.md) — initiate · verify · read a transaction
 - **Payout methods** — where you get paid *to* (mobile money · bank · **card**), one schema documented per role: [vendor](./vendor/payout-methods.md) · [agency](./agency/payout-methods.md) · [agent](./agent/payout-methods.md). Distinct from *payment* methods, which are what you pay *with*
 - [Uploads (role-neutral)](./uploads/README.md)
-- [System uptime / status](./system-uptime-status.md)
+- [**Health probes & metrics**](./health.md) — `/api/health` (frozen — geo-tracker's readiness depends on it), `/api/health/{live,ready}`, `/metrics`
+- [System uptime / status](./system-uptime-status.md) — ⚠ an **unserved** frontend spec; the operator surface is [admin/system.md](./admin/system.md)
 - [WhatsApp](./whatsapp/README.md) · [WhatsApp notification templates](./notifications/whatsapp-templates.md)
 - [Telegram linking & notifications](./telegram/README.md) · [Google Calendar (OAuth)](./integrations/google-calendar.md)
 
@@ -252,6 +253,8 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Billing](./admin/billing.md) · [Billing overview](./admin/billing-overview.md) · [Catalogue vectorisation](./admin/catalogue-vectorisation.md)
 - [Payment methods](./admin/payment-methods.md) · [Tickets](./admin/tickets.md)
 - [**Blog editor**](./admin/articles.md) — articles + bylines; the write side of [public/articles.md](./public/articles.md)
+- [**System operations**](./admin/system.md) — dependency health · integration status · queue depth · cache status · background jobs · operational metrics. **Read-only, every route a GET**
+- [**Developer tools**](./admin/dev-tools.md) — the dangerous half: run a worker · replay the outbox · rebuild search vectors · **maintenance mode** · **cache flush**
 
 ### Tracking (authorization; streaming is in geo-tracker)
 - [Live tracking](./tracking/live-tracking.md) · [Agent tracking policy](./tracking/agent-tracking-policy.md)

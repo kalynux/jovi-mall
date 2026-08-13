@@ -10,6 +10,7 @@ import { TrackingNumberGenerator } from './utils/tracking-number.generator';
 // barrel: that barrel pulls in the agent services, which import this file.
 import { ACTIVE_SHIPMENT_STATUSES } from '../agents/config/agent.config';
 import { AgentShipmentScope } from './shipment.validator';
+import { RoleActorRef } from '../../core/types/actor-source.types';
 
 /**
  * Ceiling on each id set pre-resolved during a shipment text search.
@@ -490,29 +491,54 @@ export class ShipmentRepository {
     );
   }
 
-  /** Record a rejection with reason (+ optional note) and set `status = 'rejected'`. */
+  /**
+   * Record a rejection with reason (+ optional note) and set `status = 'rejected'`.
+   *
+   * ── A guarded compare-and-set, not a blind update ─────────────────────────
+   * The filter pins BOTH the owning agency and the status the caller validated
+   * (`assigned` — the only status `reject` permits). A miss returns null and the
+   * caller raises `SHIPMENT_STATUS_CONFLICT`, exactly as `applyStatusChangeIfCurrent`
+   * does on the forward path.
+   *
+   * This used to be a bare `findByIdAndUpdate`, guarded only by a read-then-check in
+   * `ShipmentService.reject` — so two concurrent rejects both won, and a reject racing
+   * a pickup clobbered it. The post-commit block (offer cancellation, capacity release,
+   * vendor notification) then fired for a status nobody was in. That is the same
+   * failure the CAS on the forward path exists to prevent, and it matters more now that
+   * an administrator is a second actor on this document beside the agency desk.
+   */
   async applyRejection(
     shipmentId: string,
+    agencyId: string,
     reason: ShipmentRejectionReason,
     note: string | null,
-    rejectedByUserId: string,
+    actor: RoleActorRef,
     session?: ClientSession
   ): Promise<IShipment | null> {
     const sessionOpt = session ? { session } : {};
     const now = new Date();
-    return await ShipmentModel.findByIdAndUpdate(
-      shipmentId,
+    return await ShipmentModel.findOneAndUpdate(
+      { _id: shipmentId, agency_id: agencyId, status: 'assigned' },
       {
         $set: {
           status: 'rejected',
-          rejection: { reason, note: note ?? null, rejectedAt: now, rejectedBy: new Types.ObjectId(rejectedByUserId) },
+          rejection: {
+            reason,
+            note: note ?? null,
+            rejectedAt: now,
+            rejectedBy: new Types.ObjectId(actor.userId),
+            // The actor stamp — `rejectedBy` holds an id that resolves to nothing here
+            // when an administrator acted. See `core/types/actor-source.types.ts`.
+            rejectedBySource: actor.source,
+            rejectedByName: actor.name ?? null,
+          },
         },
         $push: {
           status_history: {
             status: 'rejected',
             changed_at: now,
-            changed_by_user_id: new Types.ObjectId(rejectedByUserId),
-            changed_by_role: 'agency',
+            changed_by_user_id: new Types.ObjectId(actor.userId),
+            changed_by_role: actor.role,
           },
         },
       },
@@ -695,7 +721,11 @@ export class ShipmentRepository {
     prevAgentId: string,
     prevStatus: ShipmentStatus,
     targetStatus: ShipmentStatus,
-    actorUserId: string | null,
+    // The role travels with the id so `changed_by_role` records who actually drove the
+    // reassignment. It used to be hardcoded 'agency', which is now wrong: an
+    // administrator can reassign through `/api/internal/admin/shipments`, and the
+    // history is the record a delivery dispute is arbitrated from.
+    actor: { userId: string | null; role: string },
     handover: IShipmentHandover | null,
     session?: ClientSession
   ): Promise<IShipment | null> {
@@ -721,8 +751,8 @@ export class ShipmentRepository {
           status_history: {
             status: targetStatus,
             changed_at: now,
-            changed_by_user_id: actorUserId ? new Types.ObjectId(actorUserId) : null,
-            changed_by_role: 'agency',
+            changed_by_user_id: actor.userId ? new Types.ObjectId(actor.userId) : null,
+            changed_by_role: actor.role,
           },
         },
       },

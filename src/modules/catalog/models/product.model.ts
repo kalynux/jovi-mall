@@ -35,12 +35,38 @@ export type VectorisationStatus = 'not_started' | 'pending' | 'completed' | 'fai
  * automatic may ever clear it. The delivery-agency cascade's restore paths are
  * scoped to `DELIVERY_AGENCY_REASONS`, which is what keeps the two apart; do not
  * widen that list.
+ *
+ * The last two arrive with wi-admin's vendor management and follow the same rule
+ * from the other side — each is scoped to the sweep that created it, and **neither
+ * belongs to `DELIVERY_AGENCY_REASONS`**, so no delivery-agency restore can lift
+ * either one:
+ *
+ *   `vendor_suspended`   the vendor-level cascade. A system act, reversible by the
+ *                        matching vendor restore and by nothing else.
+ *   `platform_oversight` one listing taken down by an administrator. A human act, so
+ *                        — exactly like `agency_storage_suspended` — nothing automatic
+ *                        may clear it, INCLUDING the vendor restore. Only the
+ *                        administrator's own restore endpoint lifts it.
+ *
+ * That last exclusion is the load-bearing one: a vendor suspended and then restored
+ * must not silently republish a listing an administrator took down on its merits.
  */
-export type ProductSuspensionReason =
-  | 'default_delivery_agency_removed'
-  | 'product_delivery_agency_removed'
-  | 'agency_connection_paused'
-  | 'agency_storage_suspended';
+export const PRODUCT_SUSPENSION_REASONS = [
+  'default_delivery_agency_removed',
+  'product_delivery_agency_removed',
+  'agency_connection_paused',
+  'agency_storage_suspended',
+  'vendor_suspended',
+  'platform_oversight',
+] as const;
+
+/**
+ * Derived from the array above, never hand-maintained beside it — the schema `enum`
+ * spreads the same constant. The agent notification stack already paid for the
+ * alternative: two copies drifted, and every contract notification threw a
+ * ValidationError for a type that was in the union and missing from the enum.
+ */
+export type ProductSuspensionReason = (typeof PRODUCT_SUSPENSION_REASONS)[number];
 
 /**
  * Snapshot captured when a product is force-suspended, so it can be restored
@@ -262,18 +288,15 @@ const ProductSchema = new Schema<IProduct>({
   },
 
   // Suspension snapshot. Null unless currently suspended — by a delivery-agency
-  // cascade (the first three reasons) or by the warehousing agency by hand
-  // (`agency_storage_suspended`).
+  // cascade (the first three reasons), by the warehousing agency by hand
+  // (`agency_storage_suspended`), by the vendor-level cascade (`vendor_suspended`)
+  // or by an administrator on this one listing (`platform_oversight`).
   suspension: {
     type: {
       reason: {
         type: String,
-        enum: [
-          'default_delivery_agency_removed',
-          'product_delivery_agency_removed',
-          'agency_connection_paused',
-          'agency_storage_suspended',
-        ],
+        // Spread from the union's own source of truth — see PRODUCT_SUSPENSION_REASONS.
+        enum: [...PRODUCT_SUSPENSION_REASONS],
         required: true,
       },
       previousStatus: {

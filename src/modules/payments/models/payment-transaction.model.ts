@@ -231,6 +231,10 @@ PaymentTransactionSchema.pre('validate', function (next) {
 
 // Composite indexes for common queries
 PaymentTransactionSchema.index({ orderId: 1, status: 1 });  // Order payment status
+// Multikey. A CART checkout writes ONE payment for N orders and sets `orderIds`, never
+// `orderId`, so this is the index that finds a cart-checkout order's payment — the lookup
+// the refund path makes on every refund of the majority of orders on the platform.
+PaymentTransactionSchema.index({ orderIds: 1, status: 1 }); // Cart-group order payment status
 PaymentTransactionSchema.index({ bookingId: 1, status: 1 }); // Booking payment status
 PaymentTransactionSchema.index({ userId: 1, createdAt: -1 }); // Customer payment history
 PaymentTransactionSchema.index({ gateway: 1, status: 1, createdAt: -1 }); // Gateway analytics

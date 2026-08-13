@@ -5,7 +5,7 @@ import { IProductRepository, AgencyStoredVariant } from '../interfaces/product.r
 import { COLLECTIONS } from '../../../../core/database/collections';
 import { Product, ProductMapper } from '../mappers/product.mapper';
 import { ProductListProjection } from '../../read-models/product-detail.read-model';
-import { ProductStatus, ProductSuspensionReason } from '../../models/product.model';
+import { ProductStatus, ProductSuspensionReason, ProductType } from '../../models/product.model';
 
 export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> implements IProductRepository {
   constructor() {
@@ -374,16 +374,69 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
   }
 
   /**
-   * Suspend a single physical product (no-op unless currently 'active' — see
+   * Suspend all of a vendor's currently-ACTIVE products, of EVERY type.
+   *
+   * The type filter is the only difference from `suspendVendorPhysicalProducts`, and
+   * it is the point: that sweep answers a broken delivery agency, which can only
+   * affect something that ships, while this one answers the vendor being suspended —
+   * where a digital download and a bookable service must stop selling exactly as a
+   * parcel does.
+   *
+   * The two exclusions are carried over deliberately rather than by habit. Only
+   * `active` products are swept, for the reason above. And a product mid-vectorisation
+   * is skipped because `VectorisationService` writes `status: 'active'` when its job
+   * completes — suspending one would be silently undone by that worker, which is worse
+   * than not suspending it, because the suspension would appear to have taken.
+   */
+  async suspendAllVendorProducts(
+    vendorId: string,
+    reason: ProductSuspensionReason,
+    options?: RepositoryOptions,
+  ): Promise<string[]> {
+    const sessionOpt = options?.session ? { session: options.session } : {};
+    const filter: FilterQuery<IProduct> = {
+      vendorId: vendorId as any,
+      status: 'active',
+      deletedAt: null,
+      vectorisationStatus: { $ne: 'pending' },
+    };
+
+    const docs = await this.model.find(filter, { _id: 1 }, sessionOpt).lean();
+    if (docs.length === 0) return [];
+
+    const ids = docs.map(d => d._id);
+    await this.model.updateMany(
+      { _id: { $in: ids } },
+      [
+        {
+          $set: {
+            suspension: { reason, previousStatus: '$status', suspendedAt: '$$NOW' },
+            status: 'suspended',
+            updatedAt: '$$NOW',
+          },
+        },
+      ] as any,
+      sessionOpt,
+    ).exec();
+
+    return ids.map(id => id.toString());
+  }
+
+  /**
+   * Suspend a single product (no-op unless currently 'active' — see
    * suspendVendorPhysicalProducts for why non-active statuses are left alone),
    * capturing its current status. Returns whether it was suspended.
+   *
+   * `types` defaults to `['physical']` so every pre-existing caller keeps its exact
+   * meaning; an administrator's `platform_oversight` takedown passes all three.
    */
   async suspendProduct(
     productId: string,
     vendorId: string,
     reason: ProductSuspensionReason,
     options?: RepositoryOptions,
-    actor?: { agencyId: string; note?: string | null },
+    actor?: { agencyId?: string; note?: string | null },
+    types: ProductType[] = ['physical'],
   ): Promise<boolean> {
     if (!Types.ObjectId.isValid(productId)) return false;
     const sessionOpt = options?.session ? { session: options.session } : {};
@@ -394,7 +447,11 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
       suspendedAt: '$$NOW',
     };
     if (actor) {
-      suspension.suspendedByAgencyId = new Types.ObjectId(actor.agencyId);
+      // Absent for an administrator's takedown: there is no agency, and the id is an
+      // authorisation predicate rather than provenance. What authorises the way back
+      // out of `platform_oversight` is the reason itself — only the admin endpoint
+      // lifts it — and who did it is the wi-admin audit row.
+      if (actor.agencyId) suspension.suspendedByAgencyId = new Types.ObjectId(actor.agencyId);
       // `$literal` because this is an aggregation-pipeline update, where a plain
       // string beginning with `$` is read as a FIELD PATH. A note like
       // "$40 000 storage unpaid" would otherwise resolve to a missing field and
@@ -406,7 +463,7 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
       {
         _id: productId,
         vendorId: vendorId as any,
-        type: 'physical',
+        type: { $in: types },
         status: 'active',
         deletedAt: null,
         vectorisationStatus: { $ne: 'pending' },
@@ -435,11 +492,12 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
     vendorId: string,
     reasons: ProductSuspensionReason[],
     options?: RepositoryOptions,
+    types: ProductType[] = ['physical'],
   ): Promise<Product[]> {
     const sessionOpt = options?.session ? { session: options.session } : {};
     const filter: FilterQuery<IProduct> = {
       vendorId: vendorId as any,
-      type: 'physical',
+      type: { $in: types },
       status: 'suspended',
       'suspension.reason': { $in: reasons },
       deletedAt: null,

@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { SHIPMENT_FAILURE_REASONS, ShipmentFailureReason } from './shipment.model';
+import {
+    SHIPMENT_FAILURE_REASONS,
+    SHIPMENT_REJECTION_REASONS,
+    ShipmentFailureReason,
+    ShipmentRejectionReason,
+} from './shipment.model';
 
 /**
  * Shipment API Validators
@@ -129,7 +134,12 @@ export type AgentUpdateShipmentStatusDto = z.infer<typeof AgentUpdateShipmentSta
 // explaining the decision. The note is optional for the concrete reasons.
 export const RejectShipmentSchema = z
     .object({
-        reason: z.enum(['out_of_coverage_area', 'capacity_exceeded', 'invalid_address', 'vendor_item_not_ready', 'other'], {
+        // Spread from the model's vocabulary rather than retyped, so the enum here and the
+        // schema enum cannot drift. `platform_intervention` is accepted by the shared
+        // schema but is the ADMINISTRATOR's reason — an agency naming it is harmless
+        // (the row still records `changed_by_role: 'agency'`), and refusing it here would
+        // mean a second, narrower copy of the list, which is the drift this spread avoids.
+        reason: z.enum(SHIPMENT_REJECTION_REASONS as [ShipmentRejectionReason, ...ShipmentRejectionReason[]], {
             errorMap: () => ({ message: 'Invalid rejection reason' })
         }),
         note: z.string().trim().max(200, 'Rejection note must be 200 characters or fewer').optional()

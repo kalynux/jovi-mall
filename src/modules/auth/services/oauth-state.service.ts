@@ -1,8 +1,15 @@
 import jwt from 'jsonwebtoken';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import { getJwtSecret } from '../../../config/secrets.config';
 
-const OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET || process.env.JWT_SECRET || 'oauth-state-secret';
+/**
+ * Resolved per call, not at import time: `getJwtSecret()` throws when unset, and
+ * a module-level const would turn that into an import-time crash whose stack
+ * points at whichever file happened to import this one first.
+ */
+const oauthStateSecret = (): string => process.env.OAUTH_STATE_SECRET?.trim() || getJwtSecret();
+
 const STATE_EXPIRATION = '5m'; // 5 minutes
 
 interface OAuthStatePayload {
@@ -20,7 +27,7 @@ export class OAuthStateService {
             {
                 userId: payload.userId
             },
-            OAUTH_STATE_SECRET,
+            oauthStateSecret(),
             {
                 expiresIn: STATE_EXPIRATION,
             }
@@ -35,7 +42,7 @@ export class OAuthStateService {
      */
     verifyState(state: string): OAuthStatePayload {
         try {
-            const decoded = jwt.verify(state, OAUTH_STATE_SECRET) as any;
+            const decoded = jwt.verify(state, oauthStateSecret()) as any;
 
             if (!decoded.userId && !decoded.sessionId) {
                 throw createAppError(ERROR_CODES.AUTH_OAUTH_STATE_INVALID, 400, 'Invalid state payload');

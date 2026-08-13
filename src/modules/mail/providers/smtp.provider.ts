@@ -19,6 +19,18 @@ export class SmtpMailProvider implements IMailProvider {
     });
   }
 
+  /**
+   * `transporter.verify()` — EHLO plus AUTH, and nothing sent.
+   *
+   * This is the one genuinely side-effect-free probe among the platform's integrations, and
+   * until Phase 15 it did not exist: `probeSmtp` looked for it, did not find it, and reported
+   * an error every time. The consequence was that a broken SMTP configuration was discovered
+   * on a customer's verification email rather than on an operator's dashboard.
+   */
+  async verify(): Promise<void> {
+    await this.transporter.verify();
+  }
+
   async sendEmail(options: ProviderSendOptions): Promise<void> {
     await this.transporter.sendMail({
       from: options.from,

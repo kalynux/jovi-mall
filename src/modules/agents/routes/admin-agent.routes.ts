@@ -1,70 +1,108 @@
-import { Router } from 'express';
+import { RequestHandler, Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
 import { AdminAgentController } from '../controllers/admin-agent.controller';
 
-/** Admin agent administration — mounted at /api/admin/agents. */
-const router = Router();
-
-router.use(requireAuth);
-router.use(requireRole(['admin']));
-
 /**
- * POST /api/admin/agents/transfer
- * Body: { agentId, fromAgencyId, toAgencyId, reason? }
+ * Admin agent administration.
  *
- * Admin-only: an agency must not be able to pull an agent off a rival's
- * roster. Declared before /:agentId so "transfer" is not read as an id.
+ * Mounted TWICE, at two paths, behind two different guards:
+ *
+ *   /api/admin/agents            requireAuth + requireRole(['admin'])   the dashboard, today
+ *   /api/internal/admin/agents   requireAdminCaller                     the wi-admin service
+ *
+ * The factory shape and the reason for it are `admin-cod.routes.ts`'s: both surfaces run at
+ * once until cutover, and mounting a single Router instance twice re-runs the guards it
+ * already carries — so the guards have to be a parameter. Change the routes in
+ * `attachRoutes`, never in a second copy.
+ *
+ * ── What wi-admin calls, and what it does not ─────────────────────────────────
+ * wi-admin reads the `delivery_agents` collection DIRECTLY (ADR-008 D-1: a record is read
+ * directly, a verdict is delegated), so `GET /:agentId` and `GET /:agentId/history` are not
+ * on its path even though they are mounted here. What it does call is the three reads whose
+ * answer is a VERDICT the platform acts on — `tracking-policy`, `cod-allocation`,
+ * `eligibility` — plus every write. Those are the ones a second implementation would drift
+ * on: eligibility reports every failed rule at once, and a copy loses that property first.
  */
-router.post('/transfer', AdminAgentController.transfer);
+function attachRoutes(router: Router): Router {
+    /**
+     * POST /transfer
+     * Body: { agentId, fromAgencyId, toAgencyId, reason? }
+     *
+     * Admin-only: an agency must not be able to pull an agent off a rival's
+     * roster. Declared before /:agentId so "transfer" is not read as an id.
+     */
+    router.post('/transfer', AdminAgentController.transfer);
 
-/** GET /api/admin/agents/:agentId — profile + every membership. */
-router.get('/:agentId', AdminAgentController.getAgent);
+    /** GET /:agentId — profile + every membership. */
+    router.get('/:agentId', AdminAgentController.getAgent);
 
-/**
- * PATCH /api/admin/agents/:agentId/status
- * Body: { status, reason? } — reason required when suspending.
- * Memberships are intentionally left intact so reinstatement restores them.
- */
-router.patch('/:agentId/status', AdminAgentController.setStatus);
+    /**
+     * PATCH /:agentId/status
+     * Body: { status, reason? } — reason required when suspending.
+     * Memberships are intentionally left intact so reinstatement restores them.
+     */
+    router.patch('/:agentId/status', AdminAgentController.setStatus);
 
-/**
- * PUT /api/admin/agents/:agentId/tracking-allow
- * Body: { allowed: boolean, reason? } — reason required when disabling.
- * jovi-mall owns this flag; geo-tracker enforces it.
- */
-router.put('/:agentId/tracking-allow', AdminAgentController.setTrackingAllowed);
+    /**
+     * PUT /:agentId/tracking-allow
+     * Body: { allowed: boolean, reason? } — reason required when disabling.
+     *
+     * jovi-mall owns this flag; geo-tracker enforces it. Since Phase 9 the decision is
+     * also PUSHED to geo-tracker (an `agent.tracking_allow_changed` outbox row), which
+     * suppresses the live position. Before that it was inert across the boundary: the
+     * flag stopped new dispatch and nothing else.
+     */
+    router.put('/:agentId/tracking-allow', AdminAgentController.setTrackingAllowed);
 
-/** GET /api/admin/agents/:agentId/tracking-policy — what geo-tracker would see. */
-router.get('/:agentId/tracking-policy', AdminAgentController.getTrackingPolicy);
+    /** GET /:agentId/tracking-policy — what geo-tracker would see. */
+    router.get('/:agentId/tracking-policy', AdminAgentController.getTrackingPolicy);
 
-/**
- * PUT /api/admin/agents/:agentId/kyc
- * Body: { status, reference?, rejectionReason? } — reason required on reject.
- * Eligibility passes only on `verified`, so this is what lets an agent work.
- */
-router.put('/:agentId/kyc', AdminAgentController.setKyc);
+    /**
+     * PUT /:agentId/kyc
+     * Body: { status, reference?, rejectionReason? } — reason required on reject.
+     * Eligibility passes only on `verified`, so this is what lets an agent work.
+     */
+    router.put('/:agentId/kyc', AdminAgentController.setKyc);
 
-/**
- * PUT /api/admin/agents/:agentId/ban
- * Body: { banned: boolean, reason? } — reason required when banning.
- * An override consulted by every gate, not a cascade over contracts.
- */
-router.put('/:agentId/ban', AdminAgentController.setBan);
+    /**
+     * PUT /:agentId/ban
+     * Body: { banned: boolean, reason? } — reason required when banning.
+     * An override consulted by every gate, not a cascade over contracts.
+     *
+     * wi-admin splits this into `POST /ban` and `POST /unban` on its own surface, because
+     * a boolean standing in for a state collapses two opposite acts under one audit label.
+     * Both map onto this one endpoint with different bodies — the split is in the API
+     * contract, not in the mechanism.
+     */
+    router.put('/:agentId/ban', AdminAgentController.setBan);
 
-/**
- * PUT /api/admin/agents/:agentId/cod-threshold
- * Body: { maxThreshold } — the agent's whole COD pool, which every contract
- * sub-allocates from. Lowering below what is already allocated is rejected.
- */
-router.put('/:agentId/cod-threshold', AdminAgentController.setCodThreshold);
+    /**
+     * PUT /:agentId/cod-threshold
+     * Body: { maxThreshold } — the agent's whole COD pool, which every contract
+     * sub-allocates from. Lowering below what is already allocated is rejected.
+     */
+    router.put('/:agentId/cod-threshold', AdminAgentController.setCodThreshold);
 
-/** GET /api/admin/agents/:agentId/cod-allocation — pool, slices, headroom. */
-router.get('/:agentId/cod-allocation', AdminAgentController.getCodAllocation);
+    /** GET /:agentId/cod-allocation — pool, slices, headroom. */
+    router.get('/:agentId/cod-allocation', AdminAgentController.getCodAllocation);
 
-/** GET /api/admin/agents/:agentId/history */
-router.get('/:agentId/history', AdminAgentController.getHistory);
+    /** GET /:agentId/history */
+    router.get('/:agentId/history', AdminAgentController.getHistory);
 
-/** GET /api/admin/agents/:agentId/eligibility?agencyId= */
-router.get('/:agentId/eligibility', AdminAgentController.getEligibility);
+    /** GET /:agentId/eligibility?agencyId= */
+    router.get('/:agentId/eligibility', AdminAgentController.getEligibility);
+
+    return router;
+}
+
+/** Build the agent admin surface behind an arbitrary guard chain. */
+export function buildAdminAgentRouter(guards: RequestHandler[]): Router {
+    const router = Router();
+    router.use(...guards);
+    return attachRoutes(router);
+}
+
+/** The public mount — unchanged behaviour, same guards and same paths as before. */
+const router = buildAdminAgentRouter([requireAuth, requireRole(['admin'])]);
 
 export default router;

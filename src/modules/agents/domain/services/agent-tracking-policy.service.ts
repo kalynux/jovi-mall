@@ -9,6 +9,7 @@ import { IDeliveryAgent, IAgentLastKnownTrackingState, AgentTrackingStateStatus 
 import { AGENT_CONFIG } from '../../config/agent.config';
 import { IGeoPoint } from '../../../../core/types/geo.types';
 import { eventBus } from '../../../../core/events/event-bus';
+import { RoleActorRef } from '../../../../core/types/actor-source.types';
 
 /**
  * The answer geo-tracker needs before streaming an agent's position.
@@ -135,16 +136,15 @@ export class AgentTrackingPolicyService {
     agentId: string,
     allowed: boolean,
     reason: string | null,
-    actor: { userId: string | null; role: string }
+    actor: RoleActorRef
   ): Promise<IDeliveryAgent> {
     const agent = await this.agents.findById(agentId);
     if (!agent) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 
     const previous = agent.tracking?.allowed ?? null;
-    const updated = await this.agents.setTrackingAllowed(agentId, allowed, reason, {
-      userId: actor.userId,
-      role: actor.role,
-    });
+    // Unlike KYC and the ban, this stamp is never cleared: `tracking.allowed` has no
+    // "nobody decided" state — it is true or false, and either way somebody chose it.
+    const updated = await this.agents.setTrackingAllowed(agentId, allowed, reason, actor);
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 
     if (previous !== allowed) {

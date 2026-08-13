@@ -1,3 +1,5 @@
+import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { Booking } from '../models/booking.model';
 import { BookingStatus } from '../types/booking.types';
 import { BOOKING_CONFIG } from '../config/booking.config';
@@ -21,10 +23,38 @@ import { BookingService } from '../services/booking.service';
  * Free bookings (`requiresPayment: false`) are auto-marked paid at creation, so
  * they never match anyway — but the filter states it rather than relying on that.
  */
-export class UnpaidBookingCancelWorker {
+export class UnpaidBookingCancelWorker implements ObservableWorker {
   private interval: NodeJS.Timeout | null = null;
   private running = false;
   private sweeping = false;
+
+  get schedules(): WorkerSchedule[] {
+    return [{
+      kind: 'interval',
+      everyMs: BOOKING_CONFIG.unpaidExpiry.intervalMs,
+      source: 'BOOKING_UNPAID_EXPIRY_INTERVAL_MS',
+    }];
+  }
+
+  get scheduled(): boolean {
+    return this.interval !== null;
+  }
+
+  /**
+   * `sweeping`, not `running` — and that distinction is the whole point of these getters.
+   *
+   * In THIS worker `running` means "start() was called"; in `TrackingDispatchWorker` the field
+   * with the same name means "a pass is in flight"; in the registry it meant "an operator
+   * triggered it manually". One word, three meanings, and `GET /dev-tools/workers` reported the
+   * third — so a sweep churning away for ten minutes showed `running: false`.
+   */
+  get executing(): boolean {
+    return this.sweeping;
+  }
+
+  get enabled(): boolean {
+    return BOOKING_CONFIG.unpaidExpiry.enabled;
+  }
   private readonly bookingService = new BookingService();
 
   start(): void {
@@ -41,7 +71,10 @@ export class UnpaidBookingCancelWorker {
     );
 
     void this.sweep();
-    this.interval = setInterval(() => void this.sweep(), intervalMs);
+    this.interval = setInterval(() => {
+      if (maintenanceBlocksWorkers()) return;
+      void this.sweep();
+    }, intervalMs);
   }
 
   stop(): void {

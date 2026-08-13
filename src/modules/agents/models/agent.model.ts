@@ -5,6 +5,7 @@ import { SUPPORTED_LANGUAGES, Language } from '../../../core/constants/languages
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { PayoutMethodSchema, IPayoutMethod } from '../../../core/types/payout.types';
 import { AGENT_CONFIG } from '../config/agent.config';
+import { ActorSource, actorStampFields } from '../../../core/types/actor-source.types';
 
 /**
  * DeliveryAgent — the person who physically moves packages.
@@ -126,6 +127,9 @@ export interface IAgentTracking {
   changed_at: Date;
   changed_by_user_id: mongoose.Types.ObjectId | null;
   changed_by_role: string | null;
+  /** Which identity space `changed_by_user_id` belongs to. See `actor-source.types.ts`. */
+  changed_by_source?: ActorSource;
+  changed_by_name?: string | null;
 }
 
 /**
@@ -242,6 +246,8 @@ export interface IAgentKyc {
   status: AgentKycStatus;
   verified_at: Date | null;
   verified_by_user_id: mongoose.Types.ObjectId | null;
+  verified_by_source?: ActorSource;
+  verified_by_name?: string | null;
   rejection_reason: string | null;
   /** Free-form reference to whatever document set was checked, off-platform. */
   reference: string | null;
@@ -257,6 +263,8 @@ export interface IAgentPlatformBan {
   reason: string | null;
   banned_at: Date | null;
   banned_by_user_id: mongoose.Types.ObjectId | null;
+  banned_by_source?: ActorSource;
+  banned_by_name?: string | null;
 }
 
 /**
@@ -407,6 +415,14 @@ const TrackingSchema = new Schema(
     changed_at: { type: Date, default: Date.now, required: true },
     changed_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
     changed_by_role: { type: String, default: null },
+    /**
+     * `changed_by_role` is not the same question as `changed_by_source`, and keeping both
+     * is deliberate. The role says WHAT KIND of actor decided — it is already `'admin'` for
+     * every write on this path, since there is no agency or agent write path at all. The
+     * source says WHICH DATABASE the id beside it lives in, and that is the one a reader
+     * needs to know before trying to resolve it. See `actor-source.types.ts`.
+     */
+    ...actorStampFields('changed_by'),
   },
   { _id: false }
 );
@@ -436,6 +452,10 @@ const KycSchema = new Schema(
     },
     verified_at: { type: Date, default: null },
     verified_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+    // KYC is admin-written on every path — eligibility passes only on `verified`, so this
+    // is the field that decides whether an agent may work at all, and it is the one whose
+    // actor a dispute is most likely to ask about.
+    ...actorStampFields('verified_by'),
     rejection_reason: { type: String, default: null, trim: true },
     reference: { type: String, default: null, trim: true },
   },
@@ -448,6 +468,10 @@ const PlatformBanSchema = new Schema(
     reason: { type: String, default: null, trim: true },
     banned_at: { type: Date, default: null },
     banned_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+    // Lifting a ban CLEARS the reason and the timestamp, so between the two the audit row
+    // in wi-admin is the only record it happened. While a ban stands, this stamp is the
+    // only thing on the agent's own document naming who imposed it.
+    ...actorStampFields('banned_by'),
   },
   { _id: false }
 );
@@ -717,6 +741,24 @@ DeliveryAgentSchema.index({
 
 // Lookups by email — auth/account resolution (AgentRepository.findByEmail).
 DeliveryAgentSchema.index({ email: 1 }, { sparse: true });
+
+// ── The administrative directory (wi-admin `GET /api/v1/agents`) ────────────
+//
+// Every index above serves a query that FILTERS first: dispatch, the browsable
+// directory, an email lookup. The admin list is the opposite shape — its whole
+// point is finding the agents those queries exclude (unverified, banned,
+// suspended, mid-onboarding), so its common case is no filter at all and its
+// default order is `-created_at`. With nothing here that is a collection scan
+// plus a blocking in-memory sort, requestable from a query string.
+//
+// Both the bare and the status-compound form, deliberately. A single-field index
+// is walkable in either direction, so `{created_at: -1}` also serves an ascending
+// sort; a compound one is not, so `{status, created_at: -1}` serves
+// `?status=active&sort=-createdAt` and not its ascending twin — which the bare
+// index then covers.
+DeliveryAgentSchema.index({ created_at: -1 });
+DeliveryAgentSchema.index({ status: 1, created_at: -1 });
+DeliveryAgentSchema.index({ updated_at: -1 });
 
 export const DeliveryAgentModel = mongoose.model<IDeliveryAgent>(
   MODELS.DELIVERY_AGENT,

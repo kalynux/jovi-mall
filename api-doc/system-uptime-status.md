@@ -1,3 +1,29 @@
+> ## ⚠ This is an unserved frontend spec. No backend implements it, and that is a decision.
+>
+> Nothing in this document is backed by an endpoint. The three-dot widget below describes what a
+> dashboard *should render given a health signal*, and the public health signal it assumes has
+> deliberately **not** been built.
+>
+> The operator-facing equivalent exists and is where this information actually lives:
+>
+> - [`admin/system.md`](./admin/system.md) — dependency health, integration status, queue depth,
+>   cache status, worker state, operational metrics. Service-token only, rendered by wi-admin.
+> - [`health.md`](./health.md) — `/api/health` (frozen), `/api/health/live`, `/api/health/ready`,
+>   and `/metrics`.
+>
+> **Before implementing any of the below, read `admin/docs/ADR-014-SYSTEM-OPERATIONS.md`.** A
+> public, unauthenticated status endpoint was considered in that phase and refused: the useful
+> version of this widget needs infrastructure detail (pool saturation, replication lag, cache hit
+> rate, job backlog) that is exactly what should not be exposed to an anonymous caller, and the
+> non-useful version is three green dots that stay green during an outage. If the product need
+> returns, the decision to revisit is *what a coarse public verdict may safely say* — not whether
+> to plumb this document's thresholds through to the browser.
+>
+> Left in place because the colour vocabulary and the user-communication guidance are still the
+> right reference for a frontend rendering a status signal from any source.
+
+---
+
 ## Overview
 
 The dashboard displays **three colored dots** representing the health of each system layer. This provides instant visibility into where an issue is occurring.

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { clearable } from '../../../core/validation/zod.helpers';
+import { actorFromRequest } from '../../../core/types/actor-source.types';
 import { agencyRemittanceService } from '../services/agency-remittance.service';
 import { agentDepositService } from '../services/agent-deposit.service';
 import { codDiscrepancyService } from '../services/cod-discrepancy.service';
@@ -86,7 +87,7 @@ export class AdminCodController {
    * liability and FIFO-settles its collections (unlocking earnings release).
    */
   static confirmRemittance = asyncHandler(async (req: Request, res: Response) => {
-    const result = await agencyRemittanceService.confirm(req.params.id, req.auth!.user.id);
+    const result = await agencyRemittanceService.confirm(req.params.id, actorFromRequest(req));
 
     res.json({
       success: true,
@@ -103,7 +104,7 @@ export class AdminCodController {
   static rejectRemittance = asyncHandler(async (req: Request, res: Response) => {
     const { reason } = RejectRemittanceSchema.parse(req.body);
 
-    const remittance = await agencyRemittanceService.reject(req.params.id, req.auth!.user.id, reason);
+    const remittance = await agencyRemittanceService.reject(req.params.id, actorFromRequest(req), reason);
 
     res.json({ success: true, data: remittance, message: 'Remittance declaration rejected.' });
   });
@@ -142,6 +143,8 @@ export class AdminCodController {
   static recordDirectDeposit = asyncHandler(async (req: Request, res: Response) => {
     const { agentId, agencyId, amount, reference, note } = RecordDirectDepositSchema.parse(req.body);
 
+    const actor = actorFromRequest(req);
+
     const deposit = await agentDepositService.record({
       agencyId,
       agentId,
@@ -149,7 +152,9 @@ export class AdminCodController {
       recipient: 'platform',
       reference,
       note,
-      recordedByUserId: req.auth!.user.id,
+      recordedByUserId: actor.userId,
+      actorSource: actor.source,
+      actorName: actor.name,
     });
 
     res.status(201).json({
@@ -176,10 +181,13 @@ export class AdminCodController {
    * recording one: both legs settle.
    */
   static confirmDeposit = asyncHandler(async (req: Request, res: Response) => {
+    const actor = actorFromRequest(req);
+
     const deposit = await agentDepositService.confirm({
       depositId: req.params.id,
       by: 'admin',
-      confirmedByUserId: req.auth!.user.id,
+      confirmedByUserId: actor.userId,
+      actorName: actor.name,
     });
 
     res.json({
@@ -206,11 +214,14 @@ export class AdminCodController {
   static rejectDeposit = asyncHandler(async (req: Request, res: Response) => {
     const { reason } = RejectDepositSchema.parse(req.body);
 
+    const actor = actorFromRequest(req);
+
     const deposit = await agentDepositService.reject({
       depositId: req.params.id,
       by: 'admin',
       reason,
-      rejectedByUserId: req.auth!.user.id,
+      rejectedByUserId: actor.userId,
+      actorName: actor.name,
     });
 
     res.json({

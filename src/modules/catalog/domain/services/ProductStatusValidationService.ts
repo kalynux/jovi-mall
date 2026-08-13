@@ -170,9 +170,37 @@ export class ProductStatusValidationService {
             add(createAppError(ERROR_CODES.CATALOG_PRODUCT_NO_DEFAULT_VARIANT, 422, undefined, { type: product.type }));
         }
 
-        if (product.type === 'physical') {
-            const vendor = await this.vendorRepository.findById(product.vendorId, session);
+        /**
+         * The vendor itself must not be suspended — a product-level check, so it applies
+         * to digital and service listings as well as physical ones.
+         *
+         * ── Why this belongs HERE rather than in the vendor suspension cascade ────
+         * The cascade takes a suspended vendor's products off sale, but it is not the
+         * only thing that puts them back. Three other paths restore a product to
+         * `active`: the delivery-agency cascade, the agency-storage unsuspend, and the
+         * vendor's own activation. Without this blocker, an agency problem resolved
+         * WHILE a vendor is suspended would walk their listings back onto the storefront
+         * — `ProductDeliveryAgencySuspensionService.restoreForVendor` sweeps by its own
+         * reasons and knows nothing about the vendor's status.
+         *
+         * Putting the rule in the one function that answers "may this product be on
+         * sale" closes every one of those paths at once, and closes the ones added later
+         * by construction rather than by their author remembering.
+         *
+         * The vendor is loaded once here and reused by the physical chain below, so this
+         * costs a lookup only for digital and service products.
+         */
+        const vendor = await this.vendorRepository.findById(product.vendorId, session);
 
+        if (vendor?.status === 'inactive') {
+            add(createAppError(
+                ERROR_CODES.CATALOG_PRODUCT_VENDOR_SUSPENDED,
+                422,
+                'This vendor is suspended, so their products cannot be put on sale.',
+            ));
+        }
+
+        if (product.type === 'physical') {
             // Vendor-default agency chain. Each link needs the previous one's
             // result, so a failure ends the chain rather than cascading.
             let effectiveAgency: IDeliveryAgency | null = null;

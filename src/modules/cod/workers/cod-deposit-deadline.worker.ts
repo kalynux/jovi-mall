@@ -1,4 +1,6 @@
 import cron from 'node-cron';
+import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { COD_CONFIG, daysAgo } from '../config/cod.config';
 import { CashCollectionModel } from '../models/cash-collection.model';
 import { AgentDepositModel } from '../models/agent-deposit.model';
@@ -31,8 +33,30 @@ import { AgentDepositService, agentDepositService } from '../services/agent-depo
  *
  * Lifecycle mirrors `EarningsReleaseWorker` (node-cron, daily, batched).
  */
-export class CodDepositDeadlineWorker {
+export class CodDepositDeadlineWorker implements ObservableWorker {
   private task: ReturnType<typeof cron.schedule> | null = null;
+  private sweeping = false;
+
+  get schedules(): WorkerSchedule[] {
+    return [{
+      kind: 'cron',
+      expression: COD_CONFIG.DEPOSIT_SWEEP_CRON,
+      source: 'COD_DEPOSIT_SWEEP_CRON',
+    }];
+  }
+
+  get scheduled(): boolean {
+    return this.task !== null;
+  }
+
+  /** Observation only — no overlap guard. See `ObservableWorker`. */
+  get executing(): boolean {
+    return this.sweeping;
+  }
+
+  get enabled(): boolean {
+    return true;
+  }
 
   constructor(
     private readonly discrepancies: CodDiscrepancyService = codDiscrepancyService,
@@ -46,6 +70,7 @@ export class CodDepositDeadlineWorker {
       return;
     }
     this.task = cron.schedule(COD_CONFIG.DEPOSIT_SWEEP_CRON, () => {
+      if (maintenanceBlocksWorkers()) return;
       void this.runSweep();
     });
     console.log(
@@ -60,12 +85,18 @@ export class CodDepositDeadlineWorker {
 
   /** Run the sweep once. Safe to call manually (tests/ops). */
   async runSweep(now: Date = new Date()): Promise<void> {
-    console.log('[CodDepositDeadlineWorker] Starting deposit-deadline sweep');
-    const contracts = await this.flagLateContracts(now);
-    const agencies = await this.flagUnansweredDeclarations(now);
-    console.log(
-      `[CodDepositDeadlineWorker] Sweep complete — flagged ${contracts} contract(s), ${agencies} unanswered declaration(s)`
-    );
+    // Flag only — deliberately NOT an early return. See `ObservableWorker`.
+    this.sweeping = true;
+    try {
+      console.log('[CodDepositDeadlineWorker] Starting deposit-deadline sweep');
+      const contracts = await this.flagLateContracts(now);
+      const agencies = await this.flagUnansweredDeclarations(now);
+      console.log(
+        `[CodDepositDeadlineWorker] Sweep complete — flagged ${contracts} contract(s), ${agencies} unanswered declaration(s)`
+      );
+    } finally {
+      this.sweeping = false;
+    }
   }
 
   /**

@@ -433,25 +433,38 @@ export class PaymentOrchestratorService {
     const sourceId = isBooking ? source.bookingId : source.orderId;
 
     // 1. Resolve the successful payment for this source.
+    //
+    // `orderIds` as well as `orderId`: a CART checkout writes ONE payment for N orders
+    // (`cartId` + `orderIds[]`, and never `orderId` — the model's pre-save hook enforces
+    // exactly one source field). Matching on `orderId` alone therefore found nothing for
+    // the entire cart-checkout population, so every such order — the overwhelming majority
+    // — answered `REFUND_PAYMENT_NOT_FOUND` on the vendor's own refund endpoint.
     const paymentTx = await PaymentTransactionModel.findOne({
       ...(isBooking
         ? { bookingId: new Types.ObjectId(sourceId) }
-        : { orderId: new Types.ObjectId(sourceId) }),
+        : { $or: [{ orderId: new Types.ObjectId(sourceId) }, { orderIds: new Types.ObjectId(sourceId) }] }),
       status: 'SUCCEEDED'
     });
     if (!paymentTx) {
       throw createAppError(ERROR_CODES.REFUND_PAYMENT_NOT_FOUND, 404);
     }
 
-    // 2. Validate amount against remaining refundable balance.
-    const remaining = paymentTx.amountSnapshot - paymentTx.totalRefunded;
-    if (remaining <= 0) {
+    // 2. Validate the amount against the remaining refundable balance FOR THIS SOURCE.
+    //
+    // On a group payment the payment's own balance is the WHOLE CART's, so validating
+    // against it alone would let one vendor's refund be paid out of another vendor's
+    // customer's money. `refundableCeilingFor` narrows it to this order's own share; on a
+    // single-source payment the two are identical, which is why nothing noticed.
+    const ceiling = await this.refundableCeilingFor(paymentTx, sourceId, isBooking);
+
+    if (paymentTx.amountSnapshot - paymentTx.totalRefunded <= 0 || ceiling.remaining <= 0) {
       throw createAppError(ERROR_CODES.REFUND_ALREADY_FULLY_REFUNDED, 409);
     }
-    if (amount <= 0 || amount > remaining) {
+    if (amount <= 0 || amount > ceiling.remaining) {
       throw createAppError(ERROR_CODES.REFUND_AMOUNT_EXCEEDS_MAX, 400, undefined, {
         requested: amount,
-        remaining
+        remaining: ceiling.remaining,
+        ...(ceiling.isGrouped ? { scope: 'order', groupPaymentId: paymentTx._id.toString() } : {})
       });
     }
 
@@ -501,8 +514,21 @@ export class PaymentOrchestratorService {
     }
 
     // 6. Finalize atomically: refund record + payment totals + order status.
+    //
+    // TWO booleans, because a group payment makes them different questions:
+    //
+    //   sourceFullyRefunded  — is THIS order/booking square? Drives the source's own
+    //                          payment_status and the escrow reversal.
+    //   paymentFullyRefunded — is the whole PAYMENT exhausted? Drives the gateway
+    //                          transaction's status.
+    //
+    // On a single-source payment they are always equal. On a two-vendor cart, refunding
+    // one order fully must unwind that order and its earnings while leaving the payment
+    // `SUCCEEDED` with a balance for the other. Using one boolean for both meant a
+    // refunded order kept `payment_status: 'paid'` and its vendor kept the money.
     const newTotalRefunded = paymentTx.totalRefunded + amount;
-    const fullyRefunded = newTotalRefunded >= paymentTx.amountSnapshot;
+    const paymentFullyRefunded = newTotalRefunded >= paymentTx.amountSnapshot;
+    const sourceFullyRefunded = ceiling.alreadyRefunded + amount >= ceiling.sourceTotal;
 
     await transactionManager.runInTransaction(async (session) => {
       refund.status = 'completed';
@@ -511,15 +537,15 @@ export class PaymentOrchestratorService {
       await refund.save({ session });
 
       paymentTx.totalRefunded = newTotalRefunded;
-      paymentTx.hasPartialRefund = !fullyRefunded && newTotalRefunded > 0;
-      if (fullyRefunded) {
+      paymentTx.hasPartialRefund = !paymentFullyRefunded && newTotalRefunded > 0;
+      if (paymentFullyRefunded) {
         paymentTx.status = 'REFUNDED';
       }
       await paymentTx.save({ session });
 
       // The source's payment status only flips to 'refunded' on a FULL refund —
       // a partial refund leaves it paid, with the balance tracked on the payment.
-      if (fullyRefunded) {
+      if (sourceFullyRefunded) {
         if (isBooking) {
           await Booking.updateOne(
             { _id: new Types.ObjectId(sourceId) },
@@ -536,9 +562,9 @@ export class PaymentOrchestratorService {
       }
     });
 
-    // On a full refund, reverse the source's still-held earnings out of escrow.
+    // On a full refund of THIS source, reverse its still-held earnings out of escrow.
     // Best-effort: a failure must not fail the (already-completed) refund.
-    if (fullyRefunded) {
+    if (sourceFullyRefunded) {
       try {
         if (isBooking) {
           await earningsRefundService.onRefund('booking', sourceId);
@@ -561,7 +587,8 @@ export class PaymentOrchestratorService {
         refundId: refund._id.toString(),
         amount,
         currency: paymentTx.currencySnapshot,
-        fullyRefunded
+        // The SOURCE's verdict — subscribers act on the order/booking, not on the cart.
+        fullyRefunded: sourceFullyRefunded
       },
       occurredAt: new Date()
     }).catch(() => { /* non-blocking */ });
@@ -572,7 +599,63 @@ export class PaymentOrchestratorService {
       amount,
       currency: paymentTx.currencySnapshot,
       totalRefunded: newTotalRefunded,
-      fullyRefunded
+      fullyRefunded: sourceFullyRefunded
+    };
+  }
+
+  /**
+   * How much of a payment may still be refunded AGAINST ONE SOURCE.
+   *
+   * ── Why this is not just `amountSnapshot - totalRefunded` ─────────────────
+   * A cart checkout settles N orders with ONE payment (`cartId` + `orderIds[]`), so the
+   * payment's own balance is the whole cart's. Validating a single order's refund against
+   * it would let one vendor's refund be paid out of another vendor's customer's money —
+   * and would let the sum of per-order refunds exceed what any one customer was charged
+   * for that order. The ceiling has to be the order's own share.
+   *
+   * `alreadyRefunded` is tallied from COMPLETED refunds carrying this order's id.
+   * Deliberately not from a counter on the order: `refund_transactions` is the ledger, it
+   * is indexed on `orderId`, and a second counter is a second thing to keep in step.
+   *
+   * On a single-source payment (`orderId`/`bookingId` set) the source total IS the payment
+   * snapshot, so this returns exactly what the old arithmetic did. That equivalence is
+   * what makes the change safe for every path that already worked.
+   */
+  private async refundableCeilingFor(
+    paymentTx: IPaymentTransaction,
+    sourceId: string,
+    isBooking: boolean
+  ): Promise<{ remaining: number; alreadyRefunded: number; sourceTotal: number; isGrouped: boolean }> {
+    const isGrouped = !isBooking && !paymentTx.orderId && (paymentTx.orderIds?.length ?? 0) > 0;
+
+    if (!isGrouped) {
+      return {
+        remaining: paymentTx.amountSnapshot - paymentTx.totalRefunded,
+        alreadyRefunded: paymentTx.totalRefunded,
+        sourceTotal: paymentTx.amountSnapshot,
+        isGrouped: false
+      };
+    }
+
+    const order = await OrderModel.findById(sourceId).select('total_amount').lean().exec();
+    if (!order) {
+      throw createAppError(ERROR_CODES.REFUND_ORDER_NOT_FOUND, 404, undefined, { orderId: sourceId });
+    }
+
+    const [tally] = await RefundTransactionModel.aggregate<{ total: number }>([
+      { $match: { orderId: new Types.ObjectId(sourceId), status: 'completed' } },
+      { $group: { _id: null, total: { $sum: '$refundAmount' } } }
+    ]);
+    const alreadyRefunded = tally?.total ?? 0;
+    const sourceTotal = (order as { total_amount: number }).total_amount;
+
+    return {
+      // Never more than the payment itself still has — the group balance remains a hard
+      // upper bound, so a data inconsistency can only narrow the ceiling, never widen it.
+      remaining: Math.min(sourceTotal - alreadyRefunded, paymentTx.amountSnapshot - paymentTx.totalRefunded),
+      alreadyRefunded,
+      sourceTotal,
+      isGrouped: true
     };
   }
 

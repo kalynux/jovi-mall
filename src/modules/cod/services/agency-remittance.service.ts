@@ -3,6 +3,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { transactionManager } from '../../../core/database/transaction.manager';
 import { eventBus } from '../../../core/events/event-bus';
+import { ActorRef, actorStamp } from '../../../core/types/actor-source.types';
 import { AgencyRemittanceModel, IAgencyRemittance, AgencyRemittanceStatus } from '../models/agency-remittance.model';
 import { CodCashAccountService, codCashAccountService } from './cod-cash-account.service';
 import { CodSettlementService, codSettlementService } from './cod-settlement.service';
@@ -75,7 +76,7 @@ export class AgencyRemittanceService {
    * Admin confirms the platform received the cash. ONE transaction: remittance
    * resolved, agency liability debited (+ledger), FIFO settlement applied.
    */
-  async confirm(remittanceId: string, adminUserId: string) {
+  async confirm(remittanceId: string, actor: ActorRef) {
     const remittance = await AgencyRemittanceModel.findById(remittanceId);
     if (!remittance) {
       throw createAppError(ERROR_CODES.COD_REMITTANCE_NOT_FOUND, 404);
@@ -90,7 +91,9 @@ export class AgencyRemittanceService {
           $set: {
             status: 'confirmed',
             resolved_at: new Date(),
-            resolved_by_user_id: adminUserId,
+            // Three fields written together — the id, which identity space it belongs to,
+            // and a name snapshot for the admin case that cannot be looked up from here.
+            ...actorStamp('resolved_by', actor),
           },
         },
         { new: true, session }
@@ -137,14 +140,14 @@ export class AgencyRemittanceService {
   }
 
   /** Admin rejects the declaration (nothing arrived / mismatch). No money moves. */
-  async reject(remittanceId: string, adminUserId: string, reason: string) {
+  async reject(remittanceId: string, actor: ActorRef, reason: string) {
     const rejected = await AgencyRemittanceModel.findOneAndUpdate(
       { _id: remittanceId, status: 'declared' },
       {
         $set: {
           status: 'rejected',
           resolved_at: new Date(),
-          resolved_by_user_id: adminUserId,
+          ...actorStamp('resolved_by', actor),
           rejection_reason: reason,
         },
       },

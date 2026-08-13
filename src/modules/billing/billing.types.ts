@@ -11,8 +11,17 @@
  */
 export type BillingOwnerType = 'vendor' | 'agency' | 'agent';
 
-/** All billing owner types, for schema enums and iteration (seed, expiry sweep). */
-export const BILLING_OWNER_TYPES: readonly BillingOwnerType[] = ['vendor', 'agency', 'agent'] as const;
+/**
+ * All billing owner types, for schema enums, Zod enums and iteration (seed, expiry sweep).
+ *
+ * Deliberately NOT annotated `readonly BillingOwnerType[]`. That annotation widens the
+ * literal tuple back to a plain array, which costs the two things this constant exists to
+ * give: `z.enum([...BILLING_OWNER_TYPES])` cannot infer its members, and a validator
+ * derived from it degrades to `string` — so a schema meant to accept exactly these three
+ * silently accepts anything, and the drift the shared list was preventing comes back in
+ * through the validator instead.
+ */
+export const BILLING_OWNER_TYPES = ['vendor', 'agency', 'agent'] as const satisfies readonly BillingOwnerType[];
 
 /**
  * The free, never-expiring default tier code per role. Every owner falls back to

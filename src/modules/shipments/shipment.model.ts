@@ -2,6 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
 import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
 import { GeoAddressSchema, IGeoAddress } from '../../core/types/geo-address.types';
+import { ACTOR_SOURCES, ActorSource } from '../../core/types/actor-source.types';
 
 // `handing_over` is the post-pickup reassignment state: an agent had picked the
 // parcel up but could not deliver it, so the shipment was pulled off them and is
@@ -48,7 +49,29 @@ export type ShipmentRejectionReason =
   | 'capacity_exceeded'
   | 'invalid_address'
   | 'vendor_item_not_ready'
+  | 'platform_intervention'
   | 'other';
+
+/**
+ * The reason vocabulary, spread into the schema enum and the validator so the three
+ * cannot drift — the rule `AGENT_CANCELLATION_REASONS` and `SHIPMENT_FAILURE_REASONS`
+ * beside it already follow, and which the notification stacks paid for once by keeping
+ * two copies that diverged.
+ *
+ * `platform_intervention` is the administrator's, and it is deliberately DISJOINT from
+ * every agency-driven reason. Same argument as `ProductSuspensionReason`'s
+ * `platform_oversight` (ADR-008): a reason an administrator owns must be tellable apart
+ * from an agency's, or a later reader cannot distinguish "the agency could not carry
+ * this" from "the platform pulled it". Folding it into `other` would erase exactly that.
+ */
+export const SHIPMENT_REJECTION_REASONS: ShipmentRejectionReason[] = [
+  'out_of_coverage_area',
+  'capacity_exceeded',
+  'invalid_address',
+  'vendor_item_not_ready',
+  'platform_intervention',
+  'other',
+];
 
 /**
  * Reason an ASSIGNED agent cancels a shipment mid-delivery (the agent-initiated
@@ -306,7 +329,16 @@ export interface IShipment extends Document {
   // permanent record even after the affected items move to a new agency. `note`
   // is a free-text explanation — required when `reason` is 'other' (enforced by
   // the request validator), optional otherwise; null when none was given.
-  rejection?: { reason: ShipmentRejectionReason; note?: string | null; rejectedAt: Date; rejectedBy: mongoose.Types.ObjectId } | null;
+  rejection?: {
+    reason: ShipmentRejectionReason;
+    note?: string | null;
+    rejectedAt: Date;
+    rejectedBy: mongoose.Types.ObjectId;
+    /** Which identity space `rejectedBy` resolves in. `admin` ids resolve nowhere here. */
+    rejectedBySource?: ActorSource;
+    /** Snapshot of who rejected it — the only record when the source is `admin`. */
+    rejectedByName?: string | null;
+  } | null;
   /**
    * Per-shipment customer delivery confirmation — the analogue of
    * `Order.completion`, scoped to this one shipment. Set once the customer
@@ -396,12 +428,22 @@ const ShipmentSchema = new Schema<IShipment>({
     type: {
       reason: {
         type: String,
-        enum: ['out_of_coverage_area', 'capacity_exceeded', 'invalid_address', 'vendor_item_not_ready', 'other'],
+        enum: SHIPMENT_REJECTION_REASONS,
         required: true,
       },
       note: { type: String, default: null, trim: true, maxlength: 200 },
       rejectedAt: { type: Date, required: true },
       rejectedBy: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true },
+      // The actor stamp. `rejectedBy` is `ref: MODELS.USER`, but an administrator acting
+      // through `/api/internal/admin` holds no `users` row — that id resolves to nothing
+      // in this database. These two make the difference legible instead of looking like
+      // a bug. See `core/types/actor-source.types.ts`.
+      //
+      // camelCase rather than `actorStampFields()`'s snake_case, deliberately: putting
+      // `rejected_by_source` beside `rejectedBy` would be worse than the local casing
+      // split. The RULE is still shared — the value comes from `actorSourceOfRole()`.
+      rejectedBySource: { type: String, enum: ACTOR_SOURCES, default: 'platform' },
+      rejectedByName: { type: String, default: null, trim: true, maxlength: 200 },
     },
     required: false,
     default: null,
@@ -555,5 +597,23 @@ ShipmentSchema.index(
   { tracking_number: 1 },
   { unique: true, partialFilterExpression: { tracking_number: { $type: 'string' } } }
 );
+
+// ── Platform-wide administrative oversight ──────────────────────────────────
+// wi-admin's `/api/v1/shipments` is the first surface to query this collection without an
+// agency or agent scope. The two `{x, status}` indexes above stay: they serve the dispatch
+// board's status-equality queries, and folding `created_at` into them would not serve an
+// agency filter WITHOUT a status, which is exactly the administrative case.
+//
+// Four more B-trees on a hot write collection is a real cost, taken deliberately. The
+// alternative is a platform-wide list that blocking-sorts the whole collection per page.
+ShipmentSchema.index({ created_at: -1 });                 // the unfiltered admin list
+ShipmentSchema.index({ status: 1, created_at: -1 });      // status filter + default sort
+ShipmentSchema.index({ agency_id: 1, created_at: -1 });   // one agency's, newest first
+ShipmentSchema.index({ agent_id: 1, created_at: -1 });    // one agent's, newest first
+
+// No index is added for the tracking-number search: wi-admin anchors that regex (`^`) and
+// leaves it case-SENSITIVE precisely so the partial-unique index above serves it. An
+// unanchored, case-insensitive `contains` there would silently be the scan these indexes
+// exist to avoid.
 
 export const ShipmentModel = mongoose.model<IShipment>(MODELS.SHIPMENT, ShipmentSchema, COLLECTIONS.SHIPMENT);

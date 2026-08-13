@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { IGeoPoint } from '../../../core/types/geo.types';
+import { getJwtSecret } from '../../../config/secrets.config';
 import { ASSIGNMENT_CONFIG } from '../config/assignment.config';
 import {
   TRACKING_INTEGRATION_CONFIG,
@@ -220,7 +221,7 @@ export class GeoRoutingClient {
   }
 
   private mintServiceToken(): string {
-    const secret = process.env.JWT_SECRET || 'secret';
+    const secret = getJwtSecret();
     return jwt.sign(
       { userId: ASSIGNMENT_CONFIG.GEO_SERVICE_TOKEN_SUBJECT, role: ASSIGNMENT_CONFIG.GEO_SERVICE_TOKEN_ROLE },
       secret,

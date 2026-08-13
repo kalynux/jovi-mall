@@ -5,6 +5,7 @@ import { SendResult } from '../types/whatsapp-message.types';
 import { ProviderPayload } from '../handlers/handler.interface';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import { recordIntegrationCall } from '../../system/domain/integration-observations';
 
 /**
  * Meta WhatsApp Cloud Provider
@@ -54,12 +55,19 @@ export class MetaWhatsAppCloudProvider implements WhatsAppProvider {
     }
 
     async send(payload: ProviderPayload): Promise<SendResult> {
+        // The only reachability signal `/system/integrations` can honestly have for WhatsApp.
+        // Probing it means sending a message to a real person and paying for it, so the
+        // catalog marks it `never` and this — a send that was happening anyway — is what the
+        // operations surface reports instead.
+        const observedAt = Date.now();
+
         try {
             const endpoint = `/${this.phoneNumberId}/messages`;
 
             console.log(`[MetaWhatsAppCloudProvider] Sending ${payload.type} message to ${payload.to}`);
 
             const response = await this.client.post(endpoint, payload);
+            recordIntegrationCall('whatsapp', observedAt);
 
             // WhatsApp Cloud API response format:
             // {
@@ -78,6 +86,7 @@ export class MetaWhatsAppCloudProvider implements WhatsAppProvider {
                 },
             };
         } catch (error: any) {
+            recordIntegrationCall('whatsapp', observedAt, error);
             console.error('[MetaWhatsAppCloudProvider] Send failed:', error);
 
             // Handle WhatsApp API errors

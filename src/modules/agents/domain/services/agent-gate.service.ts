@@ -4,6 +4,7 @@ import { ERROR_CODES } from '../../../../core/error-codes';
 import { AgentRepository, agentRepository } from '../../repositories/agent.repository';
 import { IDeliveryAgent } from '../../models/agent.model';
 import { eventBus } from '../../../../core/events/event-bus';
+import { RoleActorRef, actorStampOrCleared } from '../../../../core/types/actor-source.types';
 
 export type GateFailure = 'agent_not_found' | 'kyc_not_verified' | 'platform_banned';
 
@@ -81,7 +82,7 @@ export class AgentGateService {
   async setKycStatus(
     agentId: string,
     status: IDeliveryAgent['kyc']['status'],
-    actor: { userId: string | null; role: string },
+    actor: RoleActorRef,
     options: { reference?: string | null; rejectionReason?: string | null } = {}
   ): Promise<IDeliveryAgent> {
     const agent = await this.agents.findById(agentId);
@@ -90,7 +91,12 @@ export class AgentGateService {
     const updated = await this.agents.setKyc(agentId, {
       status,
       verified_at: status === 'verified' ? new Date() : null,
-      verified_by_user_id: (status === 'verified' ? actor.userId : null) as never,
+      // Set on `verified`, cleared on anything else — including a later `rejected`, which
+      // must not leave the previous approver's name attached to a rejection. One call
+      // writes all three so the id, the space it lives in and the snapshot cannot diverge.
+      ...(actorStampOrCleared('verified_by', status === 'verified' ? actor : null) as Partial<
+        IDeliveryAgent['kyc']
+      >),
       rejection_reason: status === 'rejected' ? (options.rejectionReason ?? null) : null,
       ...(options.reference !== undefined ? { reference: options.reference } : {}),
     });
@@ -131,7 +137,7 @@ export class AgentGateService {
     agentId: string,
     banned: boolean,
     reason: string | null,
-    actor: { userId: string | null; role: string }
+    actor: RoleActorRef
   ): Promise<IDeliveryAgent> {
     const agent = await this.agents.findById(agentId);
     if (!agent) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
@@ -140,7 +146,12 @@ export class AgentGateService {
       banned,
       reason: banned ? reason : null,
       banned_at: banned ? new Date() : null,
-      banned_by_user_id: (banned ? actor.userId : null) as never,
+      // Cleared on unban alongside the reason and the timestamp: the three describe one
+      // ban, so leaving the stamp behind would make an unbanned agent read as banned by
+      // whoever last banned them.
+      ...(actorStampOrCleared('banned_by', banned ? actor : null) as Partial<
+        IDeliveryAgent['platform_ban']
+      >),
     });
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 

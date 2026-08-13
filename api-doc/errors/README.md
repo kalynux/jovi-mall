@@ -14,10 +14,53 @@ Whenever an API request fails (e.g., due to validation, business logic violation
     "code": "string",       // e.g., "AUTH_INVALID_CREDENTIALS"
     "message": "string",    // Human-readable fallback message
     "statusCode": number,   // HTTP status code (e.g., 400, 401, 404)
+    "category": "string",   // NEW — one of nine values, see below. Always present.
     "details"?: {}          // Optional object with supplemental error data
   }
 }
 ```
+
+---
+
+## `error.category` — the nine-value taxonomy
+
+**New in Phase 16.** Always present, on every error, from all three backend services
+(jovi-mall, wi-admin and geo-tracker emit the same nine strings).
+
+It exists so a client can behave sensibly about an error it has **no specific handling
+for** — which is most of them, since the registry has 541 codes. Branch on `code` when you
+have something particular to do; fall back to `category` for everything else.
+
+| `category` | Means | What a client should generally do |
+|---|---|---|
+| `authentication` | Not signed in, session ended, or the account cannot sign in at all | Send them to sign in. Do **not** retry |
+| `authorization` | Signed in, but this is not theirs | Show a "no access" state. Do not retry |
+| `validation` | The request was malformed or failed a field rule | Surface it against the form. `details.fields` is populated for schema failures |
+| `not_found` | No such record — **or** it exists and is not yours | Treat as absent. Never infer existence from a 404 |
+| `conflict` | The state moved underneath you | **Reload, then retry** — do not resend the same intent |
+| `business_rule` | Well-formed and refused on purpose | Show `message`; it explains which rule. This is not a fault |
+| `rate_limit` | Too many requests | Back off. Respect `Retry-After`; see [rate-limits.md](../rate-limits.md) |
+| `external_service` | A third party (gateway, maps, messaging) did not respond | Offer a retry. Not the user's fault and not fixable by them |
+| `internal` | Our fault | Show the generic message **and the `requestId`**. Offer a retry |
+
+### Two categories are deliberately opaque
+
+For **`external_service`** and **`internal`**:
+
+- `message` is a fixed, generic sentence — never the underlying failure.
+- **`details` is omitted entirely.**
+
+This is **permanent and applies in every environment**, including development. Do not build
+a client that expects to read a cause out of a 5xx: it was never a stable contract, and as
+of Phase 16 it is not sent at all. The information still exists — it is journaled internally
+against the `requestId`, and support staff and administrators can look it up.
+
+`code` is still real on a 5xx (`PAYMENT_INITIATION_FAILED`, not a generic stand-in), so
+specific handling remains possible.
+
+> **This is what makes `requestId` matter.** On a 5xx it is the only handle anyone has.
+> Show it. A user who can quote `req_abc123` turns an unactionable "something went wrong"
+> into a support conversation that resolves.
 
 ### Field Descriptions
 
@@ -56,6 +99,33 @@ Occurs when the request payload (body, query, or params) fails base schema valid
 }
 ```
 *Frontend usage:* Map the `fields` array to the appropriate form input elements to display inline validation errors.
+
+### 1b. Request-Level Rejections (malformed before any schema ran)
+
+**Codes:** `REQUEST_BODY_INVALID` (400) · `REQUEST_BODY_TOO_LARGE` (413) ·
+`REQUEST_MEDIA_TYPE_UNSUPPORTED` (415)
+
+Raised when the body could not be parsed at all, so no route and no schema was reached. All
+three are `category: "validation"` and carry no `details`.
+
+Previously these returned **`500 INTERNAL_SERVER_ERROR`** — the server blaming itself for
+the caller's payload. If you have a workaround keyed on that, remove it. The three are
+distinct because the remedies are: fix the JSON, send less, send a different `Content-Type`.
+
+### 1c. Rate Limiting
+
+**Code:** `RATE_LIMIT_EXCEEDED` (429), `category: "rate_limit"`
+
+```json
+{ "details": { "retryAfterSeconds": 60 } }
+```
+
+Also carries `RateLimit`, `RateLimit-Policy` and `Retry-After` headers (IETF draft-7).
+**Prefer the headers**; the body field is a convenience. Full policy:
+[rate-limits.md](../rate-limits.md).
+
+Distinct from `COD_CODE_RESEND_TOO_SOON`, which is also a 429 but is a per-resource cooldown
+on one delivery code rather than a request-volume ceiling — and clears differently.
 
 ### 2. Database Constraint Violations (Duplicate Keys)
 **Code:** `DATABASE_UNIQUE_CONSTRAINT_VIOLATION` (Status `409`)
@@ -376,4 +446,8 @@ The first three are reachable by a **logged-out visitor**, so their `message` is
 
 1. **Always default to parsing `error.code`.** Do not write business logic dependent on `statusCode` limits (e.g., `if (statusCode === 400)`) unless parsing a generic networking failure. Use `if (error.code === 'AUTH_TOKEN_EXPIRED') { triggerLogout(); }`.
 2. **Use `error.message` as a fallback.** If your application supports full i18n, map the backend `error.code` directly to a translation key. If the key is missing in your dictionary, display the backend's `error.message` directly to the user.
-3. **Log the `requestId`.** If the error is an unexpected `INTERNAL_SERVER_ERROR`, present the `requestId` in the UI to help the user report it: *"An unexpected error occurred. If you contact support, please provide this ID: req-1234abc"*.
+3. **Use `error.category` as your default branch.** You will never have specific handling for
+   all 541 codes. The category tells you the four things that actually change client
+   behaviour: is it worth retrying, should the user re-authenticate, is it their input, or is
+   it ours.
+4. **Log the `requestId`.** If the error is an unexpected `INTERNAL_SERVER_ERROR`, present the `requestId` in the UI to help the user report it: *"An unexpected error occurred. If you contact support, please provide this ID: req-1234abc"*.

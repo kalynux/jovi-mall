@@ -1,7 +1,8 @@
 import { ClientSession, PipelineStage, Types } from 'mongoose';
-import { VendorModel, IVendor } from './vendor.model';
+import { VendorModel, IVendor, VendorStatus } from './vendor.model';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
 import { VendorOnboardingStep } from '../../core/constants/onboarding-steps';
+import { ActorRef, actorStamp } from '../../core/types/actor-source.types';
 import { COLLECTIONS } from '../../core/database/collections';
 
 /**
@@ -47,10 +48,32 @@ export class VendorRepository {
     return query.exec();
   }
 
+  /**
+   * Verify the email address, and promote out of `pending_verification` — but ONLY
+   * out of `pending_verification`.
+   *
+   * This used to `$set: { status: 'active' }` unconditionally, which was harmless while
+   * nothing could put a vendor anywhere else. Now that an administrator can suspend one,
+   * an unconditional write means a suspended vendor lifts their own suspension by
+   * re-clicking the verification link in an old email — the suspension would appear to
+   * work and then quietly undo itself.
+   *
+   * A pipeline update rather than a read-then-write: the conditional and the write are
+   * one atomic operation, so there is no window between them.
+   */
   async markEmailVerified(userId: string): Promise<IVendor | null> {
     return await VendorModel.findOneAndUpdate(
       { user_id: userId },
-      { $set: { email_verified: true, status: 'active' } },
+      [
+        {
+          $set: {
+            email_verified: true,
+            status: {
+              $cond: [{ $eq: ['$status', 'pending_verification'] }, 'active', '$status'],
+            },
+          },
+        },
+      ],
       { new: true }
     );
   }
@@ -71,8 +94,35 @@ export class VendorRepository {
     );
   }
 
-  async updateStatus(userId: string, status: string): Promise<IVendor | null> {
-    return await VendorModel.findOneAndUpdate({ user_id: userId }, { status }, { new: true });
+  /**
+   * Move the vendor between statuses, but only from the status the caller believes it
+   * is in — the vendor half of the compare-and-set every two-actor document on this
+   * platform now uses (`UserRepository.applyStatusChangeIfCurrent`,
+   * `ShipmentRepository.applyStatusChangeIfCurrent`).
+   *
+   * Two administrators can hold one vendor's screen open. Without the guard both read
+   * `active`, both write `inactive`, and the loser's audit row claims a transition that
+   * never happened while their reason silently overwrites the winner's. A miss returns
+   * null and the caller raises `VENDOR_STATUS_CONFLICT`.
+   *
+   * `fields` carries the whole suspension stamp or the whole clearing of it — never a
+   * fragment, or a reason outlives the suspension it describes.
+   *
+   * Session-aware, unlike the user version: this write is the first step of a
+   * transaction that also suspends the vendor's products.
+   */
+  async applyStatusChangeIfCurrent(
+    vendorId: string,
+    fromStatus: VendorStatus,
+    toStatus: VendorStatus,
+    fields: Record<string, unknown>,
+    session?: ClientSession,
+  ): Promise<IVendor | null> {
+    return await VendorModel.findOneAndUpdate(
+      { _id: vendorId, status: fromStatus },
+      { $set: { status: toStatus, ...fields } },
+      { new: true, session }
+    );
   }
 
   /**
@@ -143,18 +193,41 @@ export class VendorRepository {
   }
 
   /**
-   * Admin-only: flip legit_verified on both top-level (deprecated) and kyc_details.
+   * Admin-only: record a business-verification verdict.
+   *
+   * Replaces `setLegitVerified`, which wrote a bare boolean to two places — one of them
+   * a top-level `legit_verified` whose schema path was commented out, so Mongoose's
+   * strict mode silently dropped half of every write. That field is gone; this writes
+   * the whole verdict in one `$set` so the boolean, the status, the timestamp, the
+   * rejection reason and the reviewer stamp can never disagree.
+   *
+   * `legit_verified` stays as the boolean projection of `status === 'verified'` because
+   * `agency-vendor-browse.dto.ts` renders `kycVerified` from it.
    */
-  async setLegitVerified(vendorId: string, verified: boolean): Promise<IVendor | null> {
+  async setKycVerdict(
+    vendorId: string,
+    verdict: 'verified' | 'rejected',
+    actor: ActorRef,
+    rejectionReason?: string | null,
+    session?: ClientSession,
+  ): Promise<IVendor | null> {
+    const verified = verdict === 'verified';
+
     return await VendorModel.findByIdAndUpdate(
       vendorId,
       {
         $set: {
-          legit_verified: verified,
+          'kyc_details.status': verdict,
           'kyc_details.legit_verified': verified,
+          // Cleared on rejection rather than left behind: a `verified_at` beside a
+          // `rejected` status describes an approval that has been withdrawn, and the
+          // durable record of it is the wi-admin audit row.
+          'kyc_details.verified_at': verified ? new Date() : null,
+          'kyc_details.rejection_reason': verified ? null : (rejectionReason ?? null),
+          ...actorStamp('kyc_details.reviewed_by', actor),
         },
       },
-      { new: true }
+      { new: true, session }
     );
   }
 

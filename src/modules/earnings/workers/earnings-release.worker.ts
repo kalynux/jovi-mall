@@ -1,4 +1,7 @@
 import cron from 'node-cron';
+import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
+import { recordWorkerRun } from '../../system/metrics/metrics';
 import { transactionManager } from '../../../core/database/transaction.manager';
 import { EarningsAllocationRepository } from '../repositories/earnings-allocation.repository';
 import { EarningsAccountRepository } from '../repositories/earnings-account.repository';
@@ -42,8 +45,26 @@ import { ActorRole } from '../../tickets/types/ticket.types';
  * release by an atomic `held → released` claim, and the split by its
  * per-source idempotency index.
  */
-export class EarningsReleaseWorker {
+export class EarningsReleaseWorker implements ObservableWorker {
   private task: ReturnType<typeof cron.schedule> | null = null;
+  private sweeping = false;
+
+  get schedules(): WorkerSchedule[] {
+    return [{ kind: 'cron', expression: EARNINGS_CONFIG.CRON, source: 'EARNINGS_CRON' }];
+  }
+
+  get scheduled(): boolean {
+    return this.task !== null;
+  }
+
+  /** Observation only — no overlap guard. See `ObservableWorker`. */
+  get executing(): boolean {
+    return this.sweeping;
+  }
+
+  get enabled(): boolean {
+    return true;
+  }
 
   constructor(
     private readonly allocationRepo: EarningsAllocationRepository = new EarningsAllocationRepository(),
@@ -62,6 +83,7 @@ export class EarningsReleaseWorker {
       return;
     }
     this.task = cron.schedule(EARNINGS_CONFIG.CRON, () => {
+      if (maintenanceBlocksWorkers()) return;
       void this.runSweep();
     });
     console.log(`[EarningsReleaseWorker] Scheduled daily earnings sweep (${EARNINGS_CONFIG.CRON})`);
@@ -74,15 +96,29 @@ export class EarningsReleaseWorker {
 
   /** Run the full sweep once. Safe to call manually (tests/ops). */
   async runSweep(now: Date = new Date()): Promise<void> {
-    console.log('[EarningsReleaseWorker] Starting earnings sweep');
-    await this.autoConfirmStaleShipments(now);
-    await this.autoConfirmStaleOrders(now);
-    await this.releaseMaturedHolds(now);
-    await this.recoverMissedCodSplits(now);
-    await this.recoverMissedDeliverySplits(now);
-    await this.releaseMaturedReserves(now);
-    await this.autoTriggerPayoutsOverThreshold();
-    console.log('[EarningsReleaseWorker] Earnings sweep complete');
+    // Flag only — deliberately NOT an early return. See `ObservableWorker`.
+    this.sweeping = true;
+    // Phase 15: this sweep moves money — it releases matured holds and recovers missed COD and
+    // delivery splits. Of the twelve workers it is the one whose silent stall is most expensive,
+    // so it is one of the four instrumented first.
+    const startedAt = Date.now();
+    try {
+      console.log('[EarningsReleaseWorker] Starting earnings sweep');
+      await this.autoConfirmStaleShipments(now);
+      await this.autoConfirmStaleOrders(now);
+      await this.releaseMaturedHolds(now);
+      await this.recoverMissedCodSplits(now);
+      await this.recoverMissedDeliverySplits(now);
+      await this.releaseMaturedReserves(now);
+      await this.autoTriggerPayoutsOverThreshold();
+      console.log('[EarningsReleaseWorker] Earnings sweep complete');
+      recordWorkerRun('earnings-release', 'scheduled', 'success', (Date.now() - startedAt) / 1000);
+    } catch (error) {
+      recordWorkerRun('earnings-release', 'scheduled', 'failure', (Date.now() - startedAt) / 1000);
+      throw error;
+    } finally {
+      this.sweeping = false;
+    }
   }
 
   /**

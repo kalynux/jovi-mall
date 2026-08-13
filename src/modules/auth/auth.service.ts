@@ -15,6 +15,7 @@ import { EMAIL_VERIFY_DB, getRedisClient } from '../../infra/redis/redis.factory
 import { MailService } from '../mail/mail.service';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
+import { getJwtSecret, getJwtRefreshSecret } from '../../config/secrets.config';
 
 const EMAIL_VERIFY_EXPIRE = 86400; // 24 hours
 
@@ -61,7 +62,7 @@ export class AuthService {
   generateAccessToken(user: IUser, role: string): string {
     return jwt.sign(
       { userId: user._id, role },
-      process.env.JWT_SECRET || 'secret',
+      getJwtSecret(),
       { expiresIn: ACCESS_TOKEN_TTL_S }
     );
   }
@@ -69,7 +70,7 @@ export class AuthService {
   generateRefreshToken(user: IUser, role: string): string {
     return jwt.sign(
       { userId: user._id, role, type: 'refresh' },
-      process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'secret',
+      getJwtRefreshSecret(),
       { expiresIn: REFRESH_TOKEN_TTL_S }
     );
   }
@@ -91,7 +92,7 @@ export class AuthService {
     try {
       payload = jwt.verify(
         refreshToken,
-        process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'secret'
+        getJwtRefreshSecret()
       ) as any;
     } catch (err: any) {
       if (err?.name === 'TokenExpiredError') {
@@ -106,6 +107,14 @@ export class AuthService {
 
     const user = await this.userRepo.findById(payload.userId);
     if (!user) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 401);
+
+    // A refresh must not outlive a suspension. The refresh cookie lives 30 days, so
+    // without this a suspended person keeps minting fresh access tokens from a
+    // credential issued before they were suspended — the exact hole that makes
+    // "suspended" a label rather than a lock.
+    if (user.status !== 'active') {
+      throw createAppError(ERROR_CODES.AUTH_ACCOUNT_SUSPENDED, 403, 'This account is suspended');
+    }
 
     const accessToken = this.generateAccessToken(user, payload.role);
     return { accessToken, user, role: payload.role };
@@ -144,7 +153,7 @@ export class AuthService {
       case 'vendor':
         roleEntity = await this.vendorRepo.create({
           user_id: user._id, display_name: input.name,
-          email: input.email, phone: input.phone, email_verified: false, phone_verified: false, legit_verified: false
+          email: input.email, phone: input.phone, email_verified: false, phone_verified: false
         });
         // The business name lives on the Store (source of truth) — provision it now.
         await this.storeProvisioning.ensureStoreForVendor(roleEntity._id.toString(), input.business_name || input.name);
@@ -163,11 +172,9 @@ export class AuthService {
           email_verified: false, phone_verified: false,
         });
         break;
-      case 'admin':
-        roleEntity = await this.adminRepo.create({
-          user_id: user._id, name: input.name, email: input.email
-        });
-        break;
+      // No 'admin' case, deliberately — it falls through to `default` and is
+      // rejected. Administrators are provisioned by the admin service's bootstrap
+      // CLI against the `wi-admin` database; this service must never mint one.
       default:
         throw createAppError(ERROR_CODES.AUTH_UNSUPPORTED_ROLE, 400, undefined, { role });
     }
@@ -191,6 +198,15 @@ export class AuthService {
     const isValid = await bcrypt.compare(input.password, user.password_hash);
     // if (!isValid) throw createAppError(ERROR_CODES.AUTH_INVALID_CREDENTIALS, 401);
 
+    // Ordered AFTER the credential comparison on purpose: naming the suspension is only
+    // safe for a caller who has already proved they hold the account, otherwise the
+    // login form becomes an oracle for which accounts exist and which are suspended.
+    // (That ordering is doing nothing today — the line above is commented out, so the
+    // verdict is discarded. See the note in ../../CLAUDE.md.)
+    if (user.status !== 'active') {
+      throw createAppError(ERROR_CODES.AUTH_ACCOUNT_SUSPENDED, 403, 'This account is suspended');
+    }
+
     let role = input.role;
     if (!role) {
       if (user.roles.length === 1) {
@@ -210,6 +226,25 @@ export class AuthService {
     else if (role === 'agency') entity = await this.agencyRepo.findByUserId(user.id);
     else if (role === 'agent') entity = await this.agentRepo.findByUserId(user.id);
     else if (role === 'admin') entity = await this.adminRepo.findByUserId(user.id);
+
+    /**
+     * A suspended vendor is refused at the door as well as on every later request.
+     *
+     * `requireAuth` is what actually enforces the suspension — this is the courtesy that
+     * stops us handing out a token pair that fails on its first use, which reads to the
+     * client as a broken login rather than a closed shop.
+     *
+     * `=== 'inactive'` only, and only for the vendor role. See the long note in
+     * `api/middlewares/auth.middleware.ts` for why the negated form would be a mass
+     * lockout of every vendor who never verified their email.
+     */
+    if (role === 'vendor' && (entity as { status?: string } | null)?.status === 'inactive') {
+      throw createAppError(
+        ERROR_CODES.AUTH_VENDOR_SUSPENDED,
+        403,
+        'This vendor account is suspended'
+      );
+    }
 
     const tokens = this.issueTokenPair(user, role);
     return { user, role, role_entity: entity, ...tokens };
@@ -265,7 +300,7 @@ export class AuthService {
         roleEntity = await this.vendorRepo.create({
           user_id: user._id, display_name: input.name || undefined,
           email: user.login_email, phone: user.login_phone,
-          email_verified: false, phone_verified: false, legit_verified: false,
+          email_verified: false, phone_verified: false,
         });
         // The business name lives on the Store (source of truth) — provision it now.
         await this.storeProvisioning.ensureStoreForVendor(
@@ -291,11 +326,8 @@ export class AuthService {
           email_verified: false, phone_verified: false,
         });
         break;
-      case 'admin':
-        roleEntity = await this.adminRepo.create({
-          user_id: user._id, name: input.name || '', email: user.login_email,
-        });
-        break;
+      // No 'admin' case — see the note in register(). An existing user must never
+      // be able to acquire the admin role.
       default:
         throw createAppError(ERROR_CODES.AUTH_UNSUPPORTED_ROLE, 400, undefined, { role });
     }

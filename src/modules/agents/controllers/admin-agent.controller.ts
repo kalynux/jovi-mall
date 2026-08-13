@@ -10,6 +10,7 @@ import { agentRepository } from '../repositories/agent.repository';
 import { agentMembershipEventRepository } from '../repositories/agent-membership-event.repository';
 import { AgentMembershipMapper } from '../dto/agent-membership.dto';
 import { AgentProfileMapper } from '../dto/agent-profile.dto';
+import { RoleActorRef, roleActorFromRequest } from '../../../core/types/actor-source.types';
 import {
   SetAgentStatusSchema,
   SetTrackingAllowedSchema,
@@ -40,8 +41,17 @@ async function agentVehiclePhoto(agent: IDeliveryAgent) {
   return resolveFileDetail(agent.vehicle_info?.photo_file_id?.toString(), fileRepository, storageProvider);
 }
 
-function actorOf(req: Request) {
-  return { userId: req.auth!.user.id, role: req.auth!.role };
+/**
+ * Who is acting, in the form every write on this controller stamps.
+ *
+ * `role` and `source` are not the same thing and both are stored. Under
+ * `requireAdminCaller` — the door wi-admin comes through — `req.auth` is SYNTHESISED from
+ * headers with no database read, so `user.id` is a `wi-admin` `admin_accounts._id` that
+ * resolves to nothing here. `actorFromRequest` is what marks it as such and snapshots the
+ * name, because a cross-database join is not available at any price.
+ */
+function actorOf(req: Request): RoleActorRef {
+  return roleActorFromRequest(req);
 }
 
 /**

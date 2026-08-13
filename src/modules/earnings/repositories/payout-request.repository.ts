@@ -2,6 +2,7 @@ import { ClientSession, Types } from 'mongoose';
 import { PayoutRequestModel, IPayoutRequest, PayoutRequestOrigin } from '../models/payout-request.model';
 import { EarningsOwnerType } from '../models/earnings-account.model';
 import { IPayoutMethod } from '../../../core/types/payout.types';
+import { ActorRef, actorStamp } from '../../../core/types/actor-source.types';
 
 export interface CreatePayoutRequestInput {
   owner_type: EarningsOwnerType;
@@ -71,10 +72,17 @@ export class PayoutRequestRepository {
     await PayoutRequestModel.updateOne({ _id: id }, { $set: { ticket_id: new Types.ObjectId(ticketId) } });
   }
 
-  /** Guarded on `status: 'pending'` — returns null if already resolved (race lost). */
+  /**
+   * Guarded on `status: 'pending'` — returns null if already resolved (race lost).
+   *
+   * The resolver is an `ActorRef`, not a bare id, because it may be a wi-admin
+   * administrator whose id resolves in no collection here. `actorStamp` writes the id,
+   * its source and a name snapshot together; the third argument names the id column,
+   * which on this model is `resolved_by` rather than `resolved_by_user_id`.
+   */
   async markPaid(
     id: string,
-    adminUserId: string,
+    resolvedBy: ActorRef,
     reference: string | null,
     session?: ClientSession
   ): Promise<IPayoutRequest | null> {
@@ -84,7 +92,7 @@ export class PayoutRequestRepository {
         $set: {
           status: 'paid',
           resolved_at: new Date(),
-          resolved_by: new Types.ObjectId(adminUserId),
+          ...actorStamp('resolved_by', resolvedBy, 'resolved_by'),
           paid_reference: reference,
         },
       },
@@ -95,7 +103,7 @@ export class PayoutRequestRepository {
   /** Guarded on `status: 'pending'` — returns null if already resolved (race lost). */
   async markRejected(
     id: string,
-    adminUserId: string,
+    resolvedBy: ActorRef,
     reason: string,
     session?: ClientSession
   ): Promise<IPayoutRequest | null> {
@@ -105,7 +113,7 @@ export class PayoutRequestRepository {
         $set: {
           status: 'rejected',
           resolved_at: new Date(),
-          resolved_by: new Types.ObjectId(adminUserId),
+          ...actorStamp('resolved_by', resolvedBy, 'resolved_by'),
           rejection_reason: reason,
         },
       },

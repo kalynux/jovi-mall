@@ -9,6 +9,36 @@ import { IUploadObserver, IVirusScanner } from '../../core/uploads/upload-policy
 import { FileOwnerType } from '../../modules/catalog/models/file.model';
 import { entitlementService } from '../../modules/billing/services/entitlement.service';
 import { mediaStorageService } from '../../modules/catalog/domain/services/media/MediaStorageService';
+import { createAppError } from '../../core/errors';
+import { ERROR_CODES } from '../../core/error-codes';
+
+/**
+ * A pre-pipeline upload refusal, in the shape the pipeline's own refusals already use.
+ *
+ * ── Why these are not their own codes ─────────────────────────────────────────
+ * These four gates (no files, too many files, too large, wrong claimed type) used to
+ * answer with hand-built bodies carrying `'NO_FILES_UPLOADED'`, `'TOO_MANY_FILES'`,
+ * `'FILE_TOO_LARGE'` and `'FILE_TYPE_INVALID'` — strings in no registry, in an envelope
+ * with no `requestId`. They were a second upload vocabulary sitting beside the documented
+ * one, differing from it by a word (`FILE_TYPE_INVALID` where the pipeline says
+ * `MIME_NOT_ALLOWED`), and a client had to know both.
+ *
+ * They are the same class of failure as the pipeline's, checked earlier and more cheaply,
+ * so they now raise the same `UPLOAD_POLICY_VIOLATION` with the same `details.violations[]`
+ * shape documented in `api-doc/errors/README.md` §7. One vocabulary, one envelope, and the
+ * per-file codes are the ones already published.
+ */
+function uploadViolation(
+    statusCode: number,
+    violation: { code: string; message: string; fileIndex?: number; metadata?: Record<string, unknown> },
+) {
+    return createAppError(
+        ERROR_CODES.UPLOAD_POLICY_VIOLATION,
+        statusCode,
+        'Upload policy violations found',
+        { violations: [violation] },
+    );
+}
 
 // Role-based file size limits (in bytes). Coarse per-request ceiling only — the
 // per-MIME-type caps in the upload config (and the plan storage quota) are
@@ -115,25 +145,19 @@ export class FileUploadController {
 
             // Validate files were uploaded
             if (!req.files || !Array.isArray(req.files) || req.files.length === 0) {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'NO_FILES_UPLOADED',
-                        message: 'At least one file is required',
-                    },
-                });
+                next(uploadViolation(400, {
+                    code: 'NO_FILES_UPLOADED',
+                    message: 'At least one file is required',
+                }));
                 return;
             }
 
             // Validate file count
             if (req.files.length > 10) {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'TOO_MANY_FILES',
-                        message: 'Maximum 10 files per request',
-                    },
-                });
+                next(uploadViolation(400, {
+                    code: 'TOO_MANY_FILES',
+                    message: 'Maximum 10 files per request',
+                }));
                 return;
             }
 
@@ -143,13 +167,10 @@ export class FileUploadController {
             // Validate each file size against role limit
             for (const file of req.files) {
                 if (file.size > maxFileSize) {
-                    res.status(413).json({
-                        success: false,
-                        error: {
-                            code: 'FILE_TOO_LARGE',
-                            message: `File "${file.originalname}" exceeds ${userRole} limit of ${maxFileSize / (1024 * 1024)} MB`,
-                        },
-                    });
+                    next(uploadViolation(413, {
+                        code: 'FILE_TOO_LARGE',
+                        message: `File "${file.originalname}" exceeds ${userRole} limit of ${maxFileSize / (1024 * 1024)} MB`,
+                    }));
                     return;
                 }
             }
@@ -232,51 +253,42 @@ export class FileUploadController {
 
             // Validate files were uploaded
             if (!req.files || !Array.isArray(req.files) || req.files.length === 0) {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'NO_FILES_UPLOADED',
-                        message: 'At least one video file is required (field name "videos")',
-                    },
-                });
+                next(uploadViolation(400, {
+                    code: 'NO_FILES_UPLOADED',
+                    message: 'At least one video file is required (field name "videos")',
+                }));
                 return;
             }
 
             // Per-actor count limit: customers may upload 1 video, others up to 3
             const maxFiles = userRole === 'customer' ? VIDEO_MAX_FILES_CUSTOMER : VIDEO_MAX_FILES_OTHER;
             if (req.files.length > maxFiles) {
-                res.status(400).json({
-                    success: false,
-                    error: {
-                        code: 'TOO_MANY_FILES',
-                        message: `Maximum ${maxFiles} video(s) per request for ${userRole}`,
-                    },
-                });
+                next(uploadViolation(400, {
+                    code: 'TOO_MANY_FILES',
+                    message: `Maximum ${maxFiles} video(s) per request for ${userRole}`,
+                }));
                 return;
             }
 
             for (const file of req.files) {
                 // Defensive per-file size gate (multer also caps at 70 MB)
                 if (file.size > VIDEO_MAX_FILE_SIZE) {
-                    res.status(413).json({
-                        success: false,
-                        error: {
-                            code: 'FILE_TOO_LARGE',
-                            message: `Video "${file.originalname}" exceeds the ${VIDEO_MAX_FILE_SIZE / (1024 * 1024)} MB limit`,
-                        },
-                    });
+                    next(uploadViolation(413, {
+                        code: 'FILE_TOO_LARGE',
+                        message: `Video "${file.originalname}" exceeds the ${VIDEO_MAX_FILE_SIZE / (1024 * 1024)} MB limit`,
+                    }));
                     return;
                 }
 
                 // Claimed-MIME pre-pipeline gate (real type is re-verified by sniffing)
                 if (!isAcceptableClaimedMimeType(file.mimetype, ACCEPTABLE_VIDEO_CLAIMED_TYPES)) {
-                    res.status(400).json({
-                        success: false,
-                        error: {
-                            code: 'FILE_TYPE_INVALID',
-                            message: `File "${file.originalname}" (${file.mimetype}) is not a supported video. Allowed: mp4, mov, webm`,
-                        },
-                    });
+                    // MIME_NOT_ALLOWED, not FILE_TYPE_INVALID: this is the same refusal the
+                    // sniffing pipeline makes later, and api-doc publishes that spelling.
+                    next(uploadViolation(400, {
+                        code: 'MIME_NOT_ALLOWED',
+                        message: `File "${file.originalname}" (${file.mimetype}) is not a supported video. Allowed: mp4, mov, webm`,
+                        metadata: { claimedMimeType: file.mimetype, originalName: file.originalname },
+                    }));
                     return;
                 }
             }

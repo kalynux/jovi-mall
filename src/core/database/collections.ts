@@ -83,6 +83,20 @@ export const MODELS = Object.freeze({
   // Live-tracking integration (outbox → geo-tracker service)
   TRACKING_OUTBOX: 'TrackingOutbox',
 
+  // System operations — the maintenance-mode singleton
+  SYSTEM_STATE: 'SystemState',
+
+  /**
+   * System logs (Phase 15) — a CAPPED collection with no Mongoose model, deliberately.
+   *
+   * It is listed here so the collection registry stays the single source of truth for physical
+   * names, but `core/logging/mongo-sink.ts` reaches it through the raw driver. Compiling a
+   * Mongoose model for it would let `autoIndex` create the collection UNCAPPED before
+   * `enableLogPersistence()` gets to create it properly — and a capped collection cannot be
+   * converted afterwards. See that file's header.
+   */
+  SYSTEM_LOG: 'SystemLog',
+
   // Payments
   PAYMENT_TRANSACTION: 'PaymentTransaction',
   REFUND_TRANSACTION: 'RefundTransaction',
@@ -212,6 +226,12 @@ export const COLLECTIONS = Object.freeze({
   // Live-tracking integration (outbox → geo-tracker service)
   TRACKING_OUTBOX: 'tracking_outbox',
 
+  // System operations — the maintenance-mode singleton
+  SYSTEM_STATE: 'system_state',
+
+  /** Capped, driver-managed. See the MODELS entry above for why there is no Mongoose model. */
+  SYSTEM_LOG: 'system_logs',
+
   // Payments
   PAYMENT_TRANSACTION: 'payment_transactions',
   REFUND_TRANSACTION: 'refund_transactions',
@@ -281,6 +301,18 @@ export const COLLECTIONS = Object.freeze({
   AGENCY_REMITTANCE: 'agency_remittances',
   COD_DISCREPANCY: 'cod_discrepancies',
   COD_TRUST_EVENT: 'cod_trust_events',
+
+  /**
+   * Administrative actions performed on THIS service (Phase 12).
+   *
+   * Interim: it exists because the dashboard still calls `/api/admin/*` here until the
+   * cutover, and those actions were recorded nowhere. wi-admin reads it directly and serves
+   * it on a separate, labelled endpoint — it is NOT the compliance record, which is
+   * `admin_audit_log` in the `wi-admin` database.
+   *
+   * Deleted with the legacy surface at cutover.
+   */
+  ADMIN_ACTION_LOG: 'admin_action_log',
 } as const);
 
 export type ModelName = (typeof MODELS)[keyof typeof MODELS];

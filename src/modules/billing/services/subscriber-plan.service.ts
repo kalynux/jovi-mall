@@ -9,10 +9,29 @@ import { CreditWalletService, creditWalletService } from './credit-wallet.servic
 import { ISubscriberPlan } from '../models/subscriber-plan.model';
 import { IPricingPlan } from '../models/pricing-plan.model';
 import { BillingOwnerType, freePlanCode } from '../billing.types';
+import { ActorRef } from '../../../core/types/actor-source.types';
 
 export interface AssignPlanOptions {
   paymentRef?: string | null;
-  adminId?: string | null;
+  /**
+   * Who assigned the plan, when a human did.
+   *
+   * An `ActorRef` rather than a bare id: an administrator assigning a plan now arrives
+   * through `requireAdminCaller` and holds no `users` row here, so `assigned_by` alone
+   * would be an id resolving in no collection with nothing to say so. `null` for the
+   * self-service purchase path and for the lazily-created free default — nobody assigned
+   * those. See `core/types/actor-source.types.ts`.
+   */
+  assignedBy?: ActorRef | null;
+}
+
+/** The three columns one actor stamp writes, for a create (not an update) path. */
+function assignedByFields(actor: ActorRef | null | undefined) {
+  return {
+    assigned_by: actor ? new Types.ObjectId(actor.userId) : null,
+    assigned_by_source: actor?.source ?? 'platform',
+    assigned_by_name: actor?.name ?? null,
+  };
 }
 
 export interface SubscriberPlanView {
@@ -51,7 +70,7 @@ export class SubscriberPlanService {
     const free = await this.requirePlanByCode(ownerType, freePlanCode(ownerType));
     try {
       const created = await transactionManager.runInTransaction((session) =>
-        this.activateNew(ownerType, ownerId, free, { adminId: null, paymentRef: null }, true, session)
+        this.activateNew(ownerType, ownerId, free, { assignedBy: null, paymentRef: null }, true, session)
       );
       void this.emitActivated(ownerType, ownerId, free);
       return created;
@@ -63,6 +82,22 @@ export class SubscriberPlanService {
       }
       throw err;
     }
+  }
+
+  /**
+   * The owner's active plan, or `null` — WITHOUT the lazy free-tier creation.
+   *
+   * `getActivePlan` above creates the free tier and grants its allowance when an owner
+   * has none, which is right for the owner's own first read and wrong for anyone
+   * observing them: an administrator paging a list of accounts must not mint a plan and
+   * a credit grant for each one they look at. Callers that observe use this; callers
+   * that act on the owner's behalf use `getActivePlan`.
+   */
+  async findActivePlanWithoutCreating(
+    ownerType: BillingOwnerType,
+    ownerId: string
+  ): Promise<ISubscriberPlan | null> {
+    return this.planRepoAssignments.findByOwnerAndStatus(ownerType, ownerId, 'active');
   }
 
   /** Full plan view (active + pending) for the owner-facing read API. */
@@ -134,7 +169,7 @@ export class SubscriberPlanService {
       status: 'pending_activation',
       started_at: startsAt,
       expires_at: plan.term_days ? new Date(startsAt.getTime() + plan.term_days * 86_400_000) : null,
-      assigned_by: opts.adminId ? new Types.ObjectId(opts.adminId) : null,
+      ...assignedByFields(opts.assignedBy),
       payment_reference: opts.paymentRef ?? null,
       allowance_granted: false,
     });
@@ -188,7 +223,7 @@ export class SubscriberPlanService {
     const free = await this.requirePlanByCode(ownerType, freePlanCode(ownerType));
     const activated = await transactionManager.runInTransaction(async (session) => {
       await this.planRepoAssignments.setStatus(expiredActiveId, { status: 'expired' }, session);
-      return this.activateNew(ownerType, ownerId, free, { adminId: null, paymentRef: null }, false, session);
+      return this.activateNew(ownerType, ownerId, free, { assignedBy: null, paymentRef: null }, false, session);
     });
     void this.emitActivated(ownerType, ownerId, free);
     return activated;
@@ -219,7 +254,7 @@ export class SubscriberPlanService {
         status: 'active',
         started_at: now,
         expires_at: plan.term_days ? new Date(now.getTime() + plan.term_days * 86_400_000) : null,
-        assigned_by: opts.adminId ? new Types.ObjectId(opts.adminId) : null,
+        ...assignedByFields(opts.assignedBy),
         payment_reference: opts.paymentRef ?? null,
         allowance_granted: willGrant,
       },

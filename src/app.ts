@@ -3,164 +3,168 @@ import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { requestIdMiddleware } from './api/middlewares/request-id.middleware';
+import { requestContextMiddleware } from './api/middlewares/request-context.middleware';
+import { healthRoutes } from './api/routes/health.routes';
+import { maintenanceModeMiddleware } from './api/middlewares/maintenance-mode.middleware';
+import { httpMetricsMiddleware } from './modules/system/metrics/http-metrics.middleware';
+import { metricsRoutes } from './modules/system/metrics/metrics.routes';
 import { errorHandlerMiddleware } from './api/middlewares/error-handler.middleware';
 import { ERROR_CODES } from './core/error-codes';
 import { createAppError } from './core/errors';
+import { ALLOWED_ORIGINS, JSON_BODY_LIMIT, TRUST_PROXY, WEBHOOK_BODY_LIMIT } from './config/http.config';
+import { logger } from './core/logging';
+import { globalRateLimiter } from './api/rate-limit/rate-limit.middleware';
+
+/**
+ * The CORS policy. Mirrors wi-admin's `buildCorsOptions`, including its two subtleties.
+ */
+function buildCorsOptions(): cors.CorsOptions {
+    const allowed = new Set(ALLOWED_ORIGINS);
+
+    return {
+        origin(origin, callback) {
+            // No Origin header: a server-to-server caller, a mobile app, or curl. CORS is a
+            // browser mechanism and does not apply to any of them.
+            if (!origin || allowed.has(origin)) {
+                callback(null, true);
+                return;
+            }
+            logger().warn({ origin }, 'CORS: rejected disallowed origin');
+            // `false`, never an Error. This omits the CORS headers, which is the correct
+            // browser-visible outcome; throwing would turn a blocked cross-origin READ into
+            // a 500 in our logs and tell the caller more than a silent refusal does.
+            callback(null, false);
+        },
+        credentials: true,
+        methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
+        // So a browser client can read the correlation id off a failed response and quote
+        // it — which is what makes the Support lookup usable from a bug report.
+        exposedHeaders: ['X-Request-Id'],
+        maxAge: 600,
+    };
+}
 
 const app = express();
 
 // ─── Request Correlation ID (must be first) ───────────────────────────────────
 app.use(requestIdMiddleware);
 
-// Middleware
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-      "script-src": ["'self'", "'unsafe-inline'"], // Allow inline scripts for development
-      "script-src-attr": ["'unsafe-inline'"], // Allow inline event handlers for development
-    },
-  },
-}));
+// ─── Request context — immediately after, and that adjacency matters ──────────
+// It opens the AsyncLocalStorage store the logger's `mixin` reads, so every log line produced
+// while serving this request carries its correlation id with nothing threaded by hand. Anything
+// mounted between the two would log without one — including, before this, the metrics
+// middleware directly below.
+app.use(requestContextMiddleware);
 
-// CORS configuration for session authentication (cookies)
-app.use(cors({
-  origin: true, // Allow any origin in development (or specify your frontend URL)
-  credentials: true, // Required for cookies
-}));
+// ─── HTTP metrics — nearly first, and deliberately so ─────────────────────────
+// It records on `res.on('finish')`, so mounting it ahead of helmet, CORS and the body parsers
+// is what makes a request rejected by CORS — or one that dies in body parsing — still counted
+// and timed. Mounted after them, the traffic you most want during an incident is exactly the
+// traffic that never reaches the counter.
+app.use(httpMetricsMiddleware);
+
+// ─── Trust proxy — required before anything reads req.ip ─────────────────────
+//
+// Without this every request behind an ingress reports the PROXY's address as
+// `req.ip`, so the rate limiter's anonymous bucket would treat the entire
+// internet as one client and throttle the platform as a whole. Off by default
+// (`TRUST_PROXY` unset ⇒ `false`) because trusting `X-Forwarded-For` when
+// nothing strips it lets any caller spoof their own address and bypass the
+// limit — it must be switched on only where a proxy really does sit in front.
+app.set('trust proxy', TRUST_PROXY);
+app.disable('x-powered-by');
+
+// ─── helmet, with its defaults intact ────────────────────────────────────────
+//
+// The CSP used to be widened to `script-src 'unsafe-inline'` and
+// `script-src-attr 'unsafe-inline'`, labelled "for development" and applied in
+// every environment. It existed for exactly one thing: the inline `<script>`
+// and the `onclick=` handlers in the `GET /test-auth` page below it. That page
+// is gone, so the relaxation goes with it — this is the rare security fix that
+// comes free with a deletion.
+app.use(helmet());
+
+// ─── CORS — an allowlist, not a mirror ───────────────────────────────────────
+//
+// This was `cors({ origin: true, credentials: true })`, unconditionally, in every
+// environment. `origin: true` REFLECTS whatever `Origin` the request carried, and
+// combined with `credentials: true` that means any website on the internet could make
+// authenticated, cookie-bearing requests to this API in a logged-in user's browser and
+// read the responses — the exact thing the same-origin policy exists to prevent. The
+// comment beside it said "in development"; there was no environment branch.
+//
+// Now: an explicit allowlist from `ALLOWED_ORIGINS`, mirroring wi-admin's
+// `buildCorsOptions`. A request with NO `Origin` header is still allowed — that is every
+// server-to-server caller (geo-tracker, wi-admin, the gateways) and every mobile client,
+// none of which is subject to CORS at all; refusing them would break the platform to
+// protect against a mechanism that does not apply to them.
+//
+// ⚠ This is the one change in Phase 16 that can break a frontend nobody wrote down.
+// `ALLOWED_ORIGINS` must be populated with the origins actually in use before this ships.
+// Left empty, browser clients on other origins lose access — which is the correct failure
+// direction for a security control, and a loud one.
+app.use(cors(buildCorsOptions()));
 
 // Stripe webhook signature verification needs the raw request bytes, so this
 // path must bypass the JSON body parser. Mounted BEFORE express.json().
-app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }));
+//
+// Its own limit is deliberately larger than the global one: a Stripe event with
+// a big expanded object is legitimate traffic we cannot ask the sender to
+// shrink, and a 413 here loses a payment notification.
+app.use('/api/webhooks/stripe', express.raw({ type: 'application/json', limit: WEBHOOK_BODY_LIMIT }));
 
-app.use(express.json());
+// ─── Body parsing, with a ceiling ────────────────────────────────────────────
+//
+// `express.json()` had no `limit`, so it fell back to body-parser's 100 kb
+// default — which meant the ceiling existed but nothing in this service could
+// name it, and `REQUEST_BODY_TOO_LARGE` was unreachable because the rejection
+// had no branch in the error handler. Setting it explicitly makes the number a
+// decision rather than a default, and the handler's new body-parser branch
+// turns the rejection into a 413 a caller can act on instead of a 500 blaming
+// the server for their payload.
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
+app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
 app.use(cookieParser()); // Required for session authentication
 
-// Routes
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
+// ─── Probes and telemetry — before the maintenance gate ──────────────────────
+//
+// `/api/health` keeps its exact path and its exact body; geo-tracker's readiness checker and
+// wi-admin's `pingPlatform()` both depend on it. See `api/routes/health.routes.ts`.
+//
+// Both mounts sit ahead of `maintenanceModeMiddleware` on purpose: a probe that fails during a
+// maintenance window makes the orchestrator restart the fleet, and telemetry matters most
+// during the incident.
+app.use('/api/health', healthRoutes);
+app.use('/metrics', metricsRoutes);
 
-// Serve test page from same origin (for testing session auth)
-app.get('/test-auth', (req, res) => {
-  res.send(`<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Login & Connect Google Calendar</title>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        padding: 40px;
-        max-width: 500px;
-        margin: auto;
-      }
-      input,
-      select,
-      button {
-        width: 100%;
-        padding: 10px;
-        margin-top: 10px;
-        font-size: 16px;
-      }
-      button {
-        cursor: pointer;
-      }
-      #connect {
-        display: none;
-        margin-top: 30px;
-      }
-      .error {
-        color: red;
-        margin-top: 10px;
-      }
-      .success {
-        color: green;
-        margin-top: 10px;
-      }
-    </style>
-  </head>
-  <body>
-    <h2>User Login (Session Cookie)</h2>
+// ─── Rate limiting, Layer A — IP-scoped backstop ─────────────────────────────
+//
+// Position is four decisions at once:
+//
+//  - AFTER `/api/health` and `/metrics`, so probes and scrapes are structurally exempt
+//    rather than exempt by a list that could be edited wrong. `exempt-paths.ts` names them
+//    too; belt and braces, because a 429 on `/api/health` pulls geo-tracker out of rotation
+//    and kills every live tracking session (ADR-014 D-1).
+//  - AFTER `httpMetricsMiddleware`, so a 429 is counted and timed like any other response.
+//    That middleware's own header makes this argument about CORS and body-parse failures.
+//  - BEFORE `maintenanceModeMiddleware` and `/api`, so a flood is refused cheaply rather
+//    than after a database read.
+//  - BEFORE authentication, which is the point of Layer A: it protects the login endpoint,
+//    which by definition has no authenticated caller to key on. Layer B, mounted at the
+//    tail of `requireAuth`, is where the per-role ceilings live.
+app.use(globalRateLimiter);
 
-    <input
-      id="identifier"
-      type="text"
-      placeholder="Email or Phone"
-      value="vendor@example.com"
-    />
-    <input
-      id="password"
-      type="password"
-      placeholder="Password"
-      value="password123"
-    />
-
-    <select id="role">
-      <option value="vendor">Vendor</option>
-      <option value="customer">Customer</option>
-      <option value="agency">Agency</option>
-      <option value="agent">Agent</option>
-      <option value="admin">Admin</option>
-    </select>
-
-    <button onclick="login()">Login with Session Cookie</button>
-
-    <div id="message"></div>
-
-    <div id="connect">
-      <h2>Google Calendar</h2>
-      <button onclick="connectGoogle()">Connect Google Calendar</button>
-    </div>
-
-    <script>
-      async function login() {
-        const identifier = document.getElementById("identifier").value;
-        const password = document.getElementById("password").value;
-        const role = document.getElementById("role").value;
-
-        console.log({ identifier, password, role });
-
-        try {
-          const res = await fetch("/api/auth/browser/login", {
-            method: "POST",
-            credentials: "include",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ identifier, password, role }),
-          });
-
-          console.log("Response status:", res.status);
-          const data = await res.json();
-          console.log("Response data:", data);
-
-          if (!res.ok) {
-            document.getElementById("message").innerHTML =
-              '<div class="error">Login failed: ' +
-              (data.error || data.message || "Unknown error") +
-              "</div>";
-            return;
-          }
-
-          document.getElementById("message").innerHTML =
-            '<div class="success">Login successful! Session cookie set.</div>';
-          document.getElementById("connect").style.display = "block";
-        } catch (error) {
-          console.error("Login error:", error);
-          document.getElementById("message").innerHTML =
-            '<div class="error">Login error: ' + error.message + "</div>";
-        }
-      }
-
-      function connectGoogle() {
-        // Direct navigation - browser will automatically send cookies
-        window.location.href = '/api/integrations/google/connect';
-      }
-    </script>
-  </body>
-</html>`);
-});
+// ─── Maintenance gate ────────────────────────────────────────────────────────
+//
+// After body parsing and after the probes, immediately before every business route. Mounted
+// once by prefix rather than per router for the same reason `api/index.ts` mounts
+// `adminActionLogMiddleware` that way: one mount cannot miss an endpoint by omission, and a
+// router added next year inherits it without its author having to know it exists.
+//
+// The exemption list — and in particular why `/api/internal/admin/*`, `/api/internal/agents/*`
+// and the gateway webhooks stay open — is in `modules/system/domain/maintenance-mode.ts`.
+app.use(maintenanceModeMiddleware);
 
 import { apiRouter } from './api';
 app.use('/api', apiRouter);

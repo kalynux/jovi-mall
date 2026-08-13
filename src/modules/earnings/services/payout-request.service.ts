@@ -11,6 +11,8 @@ import {
 } from '../repositories/payout-request.repository';
 import { EarningsAccountService, earningsAccountService } from './earnings-account.service';
 import { IPayoutMethod } from '../../../core/types/payout.types';
+import { ActorRef } from '../../../core/types/actor-source.types';
+import { AdminPayoutRequestDto, toAdminPayoutRequestDto } from '../dto/admin-payout-request.dto';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
 import { AgentRepository } from '../../agents/repositories/agent.repository';
@@ -159,7 +161,17 @@ export class PayoutRequestService {
     return payoutRequest;
   }
 
-  async markPaid(payoutRequestId: string, adminUserId: string, reference: string | null): Promise<IPayoutRequest> {
+  /**
+   * `resolvedBy` is an `ActorRef` rather than a bare id: since the admin split the
+   * resolver may be a wi-admin administrator holding no `users` row here, and the row
+   * has to record which identity space the id belongs to. `resolveTicketBestEffort`
+   * still takes the plain id — the ticket module's own actor model is unchanged.
+   */
+  async markPaid(
+    payoutRequestId: string,
+    resolvedBy: ActorRef,
+    reference: string | null
+  ): Promise<IPayoutRequest> {
     const payoutRequest = await this.getByIdOrThrow(payoutRequestId);
     if (payoutRequest.status !== 'pending') {
       throw createAppError(ERROR_CODES.EARNINGS_PAYOUT_REQUEST_NOT_PENDING, 409);
@@ -172,7 +184,7 @@ export class PayoutRequestService {
         payoutRequest.amount,
         session
       );
-      const marked = await this.payoutRepo.markPaid(payoutRequestId, adminUserId, reference, session);
+      const marked = await this.payoutRepo.markPaid(payoutRequestId, resolvedBy, reference, session);
       if (!marked) {
         throw createAppError(ERROR_CODES.EARNINGS_PAYOUT_REQUEST_NOT_PENDING, 409);
       }
@@ -181,7 +193,7 @@ export class PayoutRequestService {
 
     await this.resolveTicketBestEffort(
       updated,
-      adminUserId,
+      resolvedBy.userId,
       `Payout of ${updated.currency} ${updated.amount.toLocaleString()} confirmed paid${reference ? ` (ref: ${reference})` : ''}.`
     );
 
@@ -203,7 +215,11 @@ export class PayoutRequestService {
     return updated;
   }
 
-  async reject(payoutRequestId: string, adminUserId: string, reason: string): Promise<IPayoutRequest> {
+  async reject(
+    payoutRequestId: string,
+    resolvedBy: ActorRef,
+    reason: string
+  ): Promise<IPayoutRequest> {
     const payoutRequest = await this.getByIdOrThrow(payoutRequestId);
     if (payoutRequest.status !== 'pending') {
       throw createAppError(ERROR_CODES.EARNINGS_PAYOUT_REQUEST_NOT_PENDING, 409);
@@ -216,14 +232,14 @@ export class PayoutRequestService {
         payoutRequest.amount,
         session
       );
-      const marked = await this.payoutRepo.markRejected(payoutRequestId, adminUserId, reason, session);
+      const marked = await this.payoutRepo.markRejected(payoutRequestId, resolvedBy, reason, session);
       if (!marked) {
         throw createAppError(ERROR_CODES.EARNINGS_PAYOUT_REQUEST_NOT_PENDING, 409);
       }
       return marked;
     });
 
-    await this.resolveTicketBestEffort(updated, adminUserId, `Payout request rejected: ${reason}`);
+    await this.resolveTicketBestEffort(updated, resolvedBy.userId, `Payout request rejected: ${reason}`);
 
     await eventBus.publish('payout.rejected', {
       eventType: 'payout.rejected',
@@ -251,14 +267,26 @@ export class PayoutRequestService {
     return this.payoutRepo.findById(id);
   }
 
+  /**
+   * One payout for the admin queue, with the destination MASKED.
+   *
+   * Separate from `getById`, which still returns the document, because the two have
+   * different audiences: `getById` feeds `markPaid`/`reject`, which need the real
+   * amount and status, and the admin HTTP surface, which must not see an account
+   * number. Returning the document to both is how the plaintext reached a response.
+   */
+  async getByIdForAdmin(id: string): Promise<AdminPayoutRequestDto | null> {
+    const payoutRequest = await this.payoutRepo.findById(id);
+    if (!payoutRequest) return null;
+    const names = await this.resolveOwnerNames([payoutRequest]);
+    return toAdminPayoutRequestDto(payoutRequest, this.ownerNameOf(names, payoutRequest));
+  }
+
   async list(filters: ListPayoutRequestsFilters, pagination: PaginationOptions) {
     const { data, total } = await this.payoutRepo.listForAdmin(filters, pagination);
     const ownerNamesByType = await this.resolveOwnerNames(data);
     return {
-      data: data.map((r) => ({
-        ...r.toObject(),
-        ownerName: ownerNamesByType.get(`${r.owner_type}:${r.owner_id.toString()}`) ?? null,
-      })),
+      data: data.map((r) => toAdminPayoutRequestDto(r, this.ownerNameOf(ownerNamesByType, r))),
       meta: {
         total,
         page: pagination.page,
@@ -266,6 +294,10 @@ export class PayoutRequestService {
         totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
       },
     };
+  }
+
+  private ownerNameOf(names: Map<string, string>, row: IPayoutRequest): string | null {
+    return names.get(`${row.owner_type}:${row.owner_id.toString()}`) ?? null;
   }
 
   private async getByIdOrThrow(id: string): Promise<IPayoutRequest> {

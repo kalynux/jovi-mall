@@ -1,4 +1,4 @@
-import { UserModel, IUser } from './user.model';
+import { UserModel, IUser, UserStatus } from './user.model';
 import { normalizeEmailAddress } from '../../core/validation/email';
 import { normalizePhoneNumber } from '../../core/validation/phone';
 
@@ -28,8 +28,51 @@ export class UserRepository {
     return await UserModel.findById(userId);
   }
 
-  async updateStatus(userId: string, status: string): Promise<IUser | null> {
-    return await UserModel.findByIdAndUpdate(userId, { status }, { new: true });
+  /**
+   * Move an account between statuses, guarded on the status it is moving FROM.
+   *
+   * A compare-and-set rather than a plain update, for the same reason
+   * `ShipmentRepository.applyStatusChangeIfCurrent` is one: two administrators can hold
+   * the same user open, and an unguarded write lets the loser's audit row claim a
+   * transition that never happened. A miss returns null and the caller raises
+   * `USER_STATUS_CONFLICT`.
+   *
+   * `fields` carries the whole suspension stamp (reason, actor, timestamp) or the whole
+   * clearing of it — never a fragment, so a reason cannot outlive its suspension.
+   */
+  async applyStatusChangeIfCurrent(
+    userId: string,
+    fromStatus: UserStatus,
+    toStatus: UserStatus,
+    fields: Record<string, unknown>
+  ): Promise<IUser | null> {
+    return await UserModel.findOneAndUpdate(
+      { _id: userId, status: fromStatus },
+      { $set: { status: toStatus, ...fields } },
+      { new: true }
+    );
+  }
+
+  /**
+   * Replace the login identifiers.
+   *
+   * `$unset` rather than `$set: null` for a cleared identifier: `login_email` and
+   * `login_phone` carry SPARSE unique indexes, and a null is a value as far as that
+   * index is concerned — two accounts explicitly set to null would collide. Removing
+   * the field is what keeps them out of the index entirely.
+   */
+  async updateContact(
+    userId: string,
+    set: Record<string, string>,
+    unset: string[]
+  ): Promise<IUser | null> {
+    const update: Record<string, unknown> = {};
+    if (Object.keys(set).length > 0) update.$set = set;
+    if (unset.length > 0) update.$unset = Object.fromEntries(unset.map((field) => [field, '']));
+
+    if (Object.keys(update).length === 0) return await this.findById(userId);
+
+    return await UserModel.findByIdAndUpdate(userId, update, { new: true });
   }
 
   /**

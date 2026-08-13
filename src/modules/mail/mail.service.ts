@@ -21,6 +21,19 @@ export class MailService {
     }
   }
 
+  /**
+   * Ask the configured provider to prove it can reach its backend, sending nothing.
+   *
+   * Exists for `GET /system/integrations?probe=smtp` and is called from nowhere else — a
+   * diagnostics-only method, and the only reason it is on the service rather than reached
+   * through the private `provider` field is that `probeSmtp` must not have to break
+   * encapsulation to find it. It was breaking it, via an `unknown` cast, and that is precisely
+   * why the probe was broken for a whole phase.
+   */
+  async verify(): Promise<void> {
+    await this.provider.verify();
+  }
+
   async send(options: SendEmailOptions): Promise<void> {
     // The last gate before an address leaves the platform. Recipients reach this
     // service from stored profile fields, not from a request body, so the

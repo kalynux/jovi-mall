@@ -1,3 +1,6 @@
+import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
+import { recordWorkerRun } from '../../system/metrics/metrics';
 import { shipmentAssignmentService } from '../domain/services/shipment-assignment.service';
 import { ASSIGNMENT_CONFIG } from '../config/assignment.config';
 
@@ -19,9 +22,30 @@ import { ASSIGNMENT_CONFIG } from '../config/assignment.config';
  * transition, so several instances running this sweep cannot double-offer or
  * double-expire.
  */
-export class AssignmentSweepWorker {
+export class AssignmentSweepWorker implements ObservableWorker {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+
+  get schedules(): WorkerSchedule[] {
+    return [{
+      kind: 'interval',
+      everyMs: ASSIGNMENT_CONFIG.OFFER_EXPIRY_SWEEP_INTERVAL_MS,
+      source: 'SHIPMENT_ASSIGNMENT_OFFER_EXPIRY_SWEEP_INTERVAL_MS',
+    }];
+  }
+
+  get scheduled(): boolean {
+    return this.timer !== null;
+  }
+
+  /** `running` means in-flight here, as in the tracking dispatcher. */
+  get executing(): boolean {
+    return this.running;
+  }
+
+  get enabled(): boolean {
+    return true;
+  }
 
   start(): void {
     if (this.timer) {
@@ -29,6 +53,7 @@ export class AssignmentSweepWorker {
       return;
     }
     this.timer = setInterval(() => {
+      if (maintenanceBlocksWorkers()) return;
       void this.sweepOnce();
     }, ASSIGNMENT_CONFIG.OFFER_EXPIRY_SWEEP_INTERVAL_MS);
     console.log(
@@ -45,12 +70,24 @@ export class AssignmentSweepWorker {
   async sweepOnce(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    /**
+     * Phase 15 instrumentation, and this is the worker ADR-014 D-6 singles out: it is the only
+     * thing that advances an auto-assignment session and the only thing that expires a manual
+     * offer, and if it stops **nothing throws and nothing logs** — shipments simply sit on offer
+     * forever while agencies wonder why nobody picks anything up. A `last_success` timestamp is
+     * the only signal that can catch that.
+     */
+    const startedAt = Date.now();
+    let handled = 0;
     try {
       const advanced = await shipmentAssignmentService.advanceDueSessions();
       if (advanced > 0) console.log(`[AssignmentSweepWorker] Advanced ${advanced} assignment session(s)`);
       const expired = await shipmentAssignmentService.expireDueOffers();
       if (expired > 0) console.log(`[AssignmentSweepWorker] Expired ${expired} manual offer(s)`);
+      handled = advanced + expired;
+      recordWorkerRun('assignment-sweep', 'scheduled', 'success', (Date.now() - startedAt) / 1000, handled);
     } catch (error) {
+      recordWorkerRun('assignment-sweep', 'scheduled', 'failure', (Date.now() - startedAt) / 1000, handled);
       console.error('[AssignmentSweepWorker] Sweep failed:', error);
     } finally {
       this.running = false;

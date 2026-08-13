@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import { ActorSource, actorStampFields } from '../../../core/types/actor-source.types';
 
 /**
  * AgentDeposit - an agent handing collected COD cash back, under exactly one
@@ -68,6 +69,17 @@ export interface IAgentDeposit extends Document {
 
   /** Who confirmed receipt — an agency user, or an admin for platform deposits. */
   recorded_by_user_id: mongoose.Types.ObjectId | null;
+  /**
+   * Which identity space `recorded_by_user_id` belongs to.
+   *
+   * This field carries BOTH kinds by design — the same three methods are reached by the
+   * agency desk and by the platform — so unlike a purely admin-written column, here the
+   * discriminator is the only way to tell one from the other. `'admin'` ids do not resolve
+   * in this database. See `core/types/actor-source.types.ts`.
+   */
+  recorded_by_source: ActorSource;
+  /** Snapshot of who recorded it — an admin id cannot be looked up from this service. */
+  recorded_by_name: string | null;
   resolved_at: Date | null;
   rejection_reason: string | null;
 
@@ -101,7 +113,10 @@ const AgentDepositSchema = new Schema<IAgentDeposit>(
     declared_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
     declared_at: { type: Date, default: null },
 
+    // Holds both an agency user id and a wi-admin administrator id, depending on who
+    // recorded the hand-over. `recorded_by_source` is how a reader tells them apart.
     recorded_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+    ...actorStampFields('recorded_by'),
     resolved_at: { type: Date, default: null },
     rejection_reason: { type: String, default: null, trim: true, maxlength: 500 },
   },

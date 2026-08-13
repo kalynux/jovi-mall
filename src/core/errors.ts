@@ -1,48 +1,70 @@
 import { ErrorCode, ERROR_CODES } from './error-codes';
+import { categoryFor, ErrorCategory } from './error-category';
 
 /**
  * Base error class for all application errors.
  *
- * - `code`    — machine-readable, domain-prefixed identifier (from ERROR_CODES registry)
- * - `statusCode` — HTTP status code
- * - `isOperational` — true for expected domain errors; false for programming/infra bugs
- * - `details` — optional supplemental data (typed as Record<string, unknown>)
+ * - `code`          — machine-readable, domain-prefixed identifier (from ERROR_CODES)
+ * - `statusCode`    — HTTP status code
+ * - `category`      — the Phase-16 taxonomy value, DERIVED from (code, statusCode)
+ * - `isOperational` — expected domain error, or a bug on our side
+ * - `details`       — optional supplemental data
  *
- * The global error handler uses `isOperational` to decide log severity and
- * whether to mask the message in production.
+ * ── Why `category` is computed in the CONSTRUCTOR ─────────────────────────────
+ * Not in `createAppError`. The four retained subclasses below call `super(...)` directly,
+ * and so do six sites in `ticket.service.ts`, so the factory is not the only construction
+ * path — the constructor is the only place that sees all of them. Putting the derivation
+ * here is what makes "every AppError has a category" true by construction rather than by
+ * everybody remembering.
+ *
+ * ── `isOperational` is now DERIVED, and it used to be a lie ───────────────────
+ * `createAppError` hardcoded `true` for every error it ever made, so the masking this
+ * field's own docstring promised has never once happened — a 500 raised through the factory
+ * was logged as an expected business outcome. It now defaults to `statusCode < 500`,
+ * matching wi-admin, and the explicit parameter survives only for the `ticket.service.ts`
+ * sites that already pass `false` deliberately.
+ *
+ * The global handler uses `category` to decide what reaches the client and `isOperational`
+ * to decide log severity. They answer different questions and neither substitutes for the
+ * other: a 503 maintenance window is operational AND masked.
  */
 export class AppError extends Error {
+  public readonly isOperational: boolean;
+  public readonly category: ErrorCategory;
+
   constructor(
     public readonly message: string,
     public readonly statusCode: number,
     public readonly code: ErrorCode,
-    public readonly isOperational = true,
+    isOperational?: boolean,
     public readonly details?: Record<string, unknown>
   ) {
     super(message);
     Object.setPrototypeOf(this, new.target.prototype);
     Error.captureStackTrace(this, this.constructor);
+    this.isOperational = isOperational ?? statusCode < 500;
+    this.category = categoryFor(code, statusCode);
   }
 }
 
-/**
- * createAppError — primary factory for throwing domain errors.
- *
- * Use this in services and middleware instead of `throw new Error(...)`.
- *
- * @example
- *   throw createAppError(ERROR_CODES.AUTH_INVALID_CREDENTIALS, 401);
- *   throw createAppError(ERROR_CODES.PAYMENT_ORDER_NOT_FOUND, 404, undefined, { orderId });
- */
+/** The message a code with no registry entry resolves to. */
+export const GENERIC_ERROR_MESSAGE = 'An unexpected error occurred';
 
-export function createAppError(
-  code: ErrorCode,
-  statusCode: number,
-  message?: string,
-  details?: Record<string, unknown>
-): AppError {
-  // Default messages keyed to code — keeps throw-sites terse
-  const defaultMessages: Partial<Record<ErrorCode, string>> = {
+/**
+ * Default messages keyed to code — keeps throw-sites terse.
+ *
+ * ── Why this is at module scope ───────────────────────────────────────────────
+ * It used to be declared INSIDE `createAppError`, which meant this ~330-line object literal
+ * was rebuilt on every one of the 1362 throw sites in the service. Hoisting it changes no
+ * behaviour and is the same lines; it is here rather than left alone because Phase 16 needs
+ * to READ it from outside the factory — `error-detail-policy.ts` substitutes the registry
+ * default for an `internal` or `external_service` error's thrown message, and it cannot
+ * reach a local.
+ *
+ * Frozen for the same reason `ERROR_CODES` is: a message rewritten at runtime is a contract
+ * changed at runtime.
+ */
+export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object.freeze({
     [ERROR_CODES.INTERNAL_SERVER_ERROR]: 'Something went wrong',
     [ERROR_CODES.NOT_FOUND]: 'Resource not found',
     [ERROR_CODES.VALIDATION_ERROR]: 'Validation failed',
@@ -211,6 +233,7 @@ export function createAppError(
     [ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_CAPACITY]: 'Capacity-mode service variants need a seat count of at least 1',
     [ERROR_CODES.CATALOG_PRODUCT_VARIANT_ZERO_PRICE]: 'Every active variant needs a price greater than 0',
     [ERROR_CODES.CATALOG_PRODUCT_NO_DELIVERY_AGENCY]: 'Set an active default delivery agency on your vendor profile to publish physical products',
+    [ERROR_CODES.CATALOG_PRODUCT_VENDOR_SUSPENDED]: 'This vendor is suspended, so their products cannot be put on sale',
     [ERROR_CODES.CATALOG_PRODUCT_NO_PICKUP_LOCATION]: 'Choose where the delivery agency should collect this product from',
     [ERROR_CODES.CATALOG_PRODUCT_INVALID_PICKUP_LOCATION]: 'The chosen pickup location is not compatible with your delivery agency',
     [ERROR_CODES.CATALOG_PRODUCT_AGENCY_STORAGE_INFINITE_STOCK]: 'A product stored in an agency warehouse must have a countable stock quantity. Turn off unlimited stock on every active variant',
@@ -363,10 +386,51 @@ export function createAppError(
     [ERROR_CODES.BLOG_AUTHOR_NOT_FOUND]: 'Author not found',
     [ERROR_CODES.BLOG_AUTHOR_KEY_TAKEN]: 'An author already uses this id',
     [ERROR_CODES.BLOG_AUTHOR_IN_USE]: 'This author is credited on one or more articles',
-  };
 
-  const resolvedMessage = message ?? defaultMessages[code] ?? 'An unexpected error occurred';
-  return new AppError(resolvedMessage, statusCode, code, true, details);
+    // ── System operations (Phase 14) ──────────────────────────────────────────
+    // The maintenance message is the one default here written for a CUSTOMER rather than an
+    // operator — it is what a shopper sees mid-checkout. The operator's own reason is carried
+    // in `details.reason` and overrides this when set.
+    [ERROR_CODES.SYSTEM_MAINTENANCE_ACTIVE]:
+      'The platform is temporarily unavailable for maintenance. Please try again shortly.',
+    [ERROR_CODES.SYSTEM_MAINTENANCE_REASON_REQUIRED]:
+      'A reason is required to open a maintenance window — it is shown to callers and recorded in the audit trail',
+    [ERROR_CODES.DEV_TOOLS_CACHE_DB_UNKNOWN]: 'No cache database by that name',
+    [ERROR_CODES.DEV_TOOLS_CACHE_FLUSH_REFUSED]: 'That cache flush is not permitted',
+    [ERROR_CODES.DEV_TOOLS_CACHE_UNAVAILABLE]: 'The cache is not reachable from this process',
+
+    // ── Request-level and rate limiting (Phase 16) ────────────────────────────
+    // Each of the three request-body messages names the remedy, because they are the three
+    // DIFFERENT things a caller has to do about it: fix the JSON, send less, send a
+    // different Content-Type.
+    [ERROR_CODES.REQUEST_BODY_INVALID]: 'The request body could not be read as JSON',
+    [ERROR_CODES.REQUEST_BODY_TOO_LARGE]: 'The request body is too large',
+    [ERROR_CODES.REQUEST_MEDIA_TYPE_UNSUPPORTED]:
+      'Unsupported content type — send application/json; charset=utf-8',
+    [ERROR_CODES.RATE_LIMIT_EXCEEDED]: 'Too many requests — please wait a moment and try again',
+});
+
+/**
+ * createAppError — primary factory for throwing domain errors.
+ *
+ * Use this in services and middleware instead of `throw new Error(...)`.
+ *
+ * `isOperational` is deliberately NOT passed: the constructor derives it from the status.
+ * This factory used to hardcode `true`, which made every 500 it produced look like an
+ * expected business outcome in the logs.
+ *
+ * @example
+ *   throw createAppError(ERROR_CODES.AUTH_INVALID_CREDENTIALS, 401);
+ *   throw createAppError(ERROR_CODES.PAYMENT_ORDER_NOT_FOUND, 404, undefined, { orderId });
+ */
+export function createAppError(
+  code: ErrorCode,
+  statusCode: number,
+  message?: string,
+  details?: Record<string, unknown>
+): AppError {
+  const resolvedMessage = message ?? DEFAULT_ERROR_MESSAGES[code] ?? GENERIC_ERROR_MESSAGE;
+  return new AppError(resolvedMessage, statusCode, code, undefined, details);
 }
 
 // ─── Retained Subclasses (non-standard constructors) ──────────────────────────

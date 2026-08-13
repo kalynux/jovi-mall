@@ -1,5 +1,7 @@
 import cron from 'node-cron';
 import { randomUUID } from 'crypto';
+import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { getStorageProvider } from '../../../core/storage';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
 import { FileReferenceRepositoryMongo } from '../../catalog/repositories/mongo/file-reference.repository.mongo';
@@ -30,8 +32,38 @@ import { DeliveryAgentModel } from '../../agents/models/agent.model';
  * master switch, per-stage toggles and dryRun from FileCleanupConfig. `runSweep`
  * is safe to call manually for ops/verification.
  */
-export class FileCleanupWorker {
+export class FileCleanupWorker implements ObservableWorker {
   private task: ReturnType<typeof cron.schedule> | null = null;
+  private sweeping = false;
+
+  /**
+   * Reports **the captured config**, never a fresh `loadFileCleanupConfig()`.
+   *
+   * This worker snapshots its config in the constructor, so a fresh load could legitimately
+   * disagree with what it actually scheduled — and reporting the fresh value would recreate,
+   * in a new place, exactly the drift this getter exists to eliminate.
+   */
+  get schedules(): WorkerSchedule[] {
+    return [{ kind: 'cron', expression: this.config.cron, source: 'FILE_CLEANUP_CRON' }];
+  }
+
+  get scheduled(): boolean {
+    return this.task !== null;
+  }
+
+  /** Observation only — no overlap guard. See `ObservableWorker`. */
+  get executing(): boolean {
+    return this.sweeping;
+  }
+
+  /**
+   * The master switch. Without this on the wire, a worker turned off by
+   * `FILE_CLEANUP_ENABLED=false` reads identically to a scheduled one — an operator sees
+   * "Orphaned file cleanup — daily at 04:00" on a deploy where it has never run.
+   */
+  get enabled(): boolean {
+    return this.config.enabled;
+  }
 
   private readonly config: FileCleanupConfig;
   private readonly productDetach: ProductInactivityDetachService;
@@ -91,6 +123,7 @@ export class FileCleanupWorker {
       return;
     }
     this.task = cron.schedule(this.config.cron, () => {
+      if (maintenanceBlocksWorkers()) return;
       void this.runSweep();
     });
     console.log(
@@ -111,6 +144,16 @@ export class FileCleanupWorker {
       return;
     }
 
+    // Flag only — deliberately NOT an early return. See `ObservableWorker`.
+    this.sweeping = true;
+    try {
+      await this.runStages(now);
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
+  private async runStages(now: Date): Promise<void> {
     const sweepId = randomUUID();
     console.log(`[FileCleanupWorker] Starting sweep ${sweepId}${this.config.dryRun ? ' [DRY RUN]' : ''}`);
 

@@ -92,10 +92,20 @@ export interface IShipmentAssignmentOffer extends Document {
   /** Which broadcast round created (or last re-nudged) this offer. 0 for manual. */
   round: number;
 
-  /** Who created the offer. `system` for auto, `agency` for a manual pick. */
+  /**
+   * Who created the offer. `system` for auto, `agency` for a manual pick, `admin` for a
+   * platform intervention.
+   *
+   * `name` is a snapshot, and it exists for the `admin` case: that `user_id` belongs to
+   * the wi-admin database and resolves to nothing here, so without it a reader sees an
+   * offer placed by an unresolvable id. No `_source` field is needed — `role` IS the
+   * discriminator (`actorSourceOfRole()`), and since the Phase 0.5 patch there is no way
+   * to hold the `admin` role on a platform `users` row.
+   */
   created_by: {
-    role: 'agency' | 'system';
+    role: 'agency' | 'system' | 'admin';
     user_id: mongoose.Types.ObjectId | null;
+    name?: string | null;
   };
 
   /** now + ASSIGNMENT_CONFIG.OFFER_TIMEOUT_SECONDS at creation time. */
@@ -173,8 +183,9 @@ const ShipmentAssignmentOfferSchema = new Schema<IShipmentAssignmentOffer>(
     created_by: {
       type: new Schema(
         {
-          role: { type: String, enum: ['agency', 'system'], required: true },
+          role: { type: String, enum: ['agency', 'system', 'admin'], required: true },
           user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+          name: { type: String, default: null, trim: true, maxlength: 200 },
         },
         { _id: false }
       ),

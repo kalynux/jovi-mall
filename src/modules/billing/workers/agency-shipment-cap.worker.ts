@@ -1,4 +1,6 @@
 import cron from 'node-cron';
+import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { eventBus } from '../../../core/events/event-bus';
 import { SubscriberPlanRepository } from '../repositories/subscriber-plan.repository';
 import { PricingPlanRepository } from '../repositories/pricing-plan.repository';
@@ -16,8 +18,29 @@ import { ShipmentRepository } from '../../shipments/shipment.repository';
  * debounced via `BillingSettings.shipment_cap_alerted_at` so it fires once per
  * crossing and re-arms only after the agency drops back under cap.
  */
-export class AgencyShipmentCapWorker {
+export class AgencyShipmentCapWorker implements ObservableWorker {
+  /** The one place this cadence is written — `start()` and `schedules` both read it. */
+  static readonly CRON = '30 3 * * *';
+
   private task: ReturnType<typeof cron.schedule> | null = null;
+  private sweeping = false;
+
+  get schedules(): WorkerSchedule[] {
+    return [{ kind: 'cron', expression: AgencyShipmentCapWorker.CRON, source: 'hardcoded' }];
+  }
+
+  get scheduled(): boolean {
+    return this.task !== null;
+  }
+
+  /** Observation only — no overlap guard on this worker. See `ObservableWorker`. */
+  get executing(): boolean {
+    return this.sweeping;
+  }
+
+  get enabled(): boolean {
+    return true;
+  }
 
   constructor(
     private readonly planRepo: SubscriberPlanRepository = new SubscriberPlanRepository(),
@@ -32,7 +55,8 @@ export class AgencyShipmentCapWorker {
       console.log('[AgencyShipmentCapWorker] Already started');
       return;
     }
-    this.task = cron.schedule('30 3 * * *', () => {
+    this.task = cron.schedule(AgencyShipmentCapWorker.CRON, () => {
+      if (maintenanceBlocksWorkers()) return;
       void this.runSweep();
     });
     console.log('[AgencyShipmentCapWorker] Scheduled daily agency shipment-cap sweep (03:30)');
@@ -45,6 +69,16 @@ export class AgencyShipmentCapWorker {
 
   /** Run the full sweep once. Safe to call manually (tests/ops). */
   async runSweep(now: Date = new Date()): Promise<void> {
+    // Flag only — deliberately NOT an early return. See `ObservableWorker`.
+    this.sweeping = true;
+    try {
+      await this.sweepOwners(now);
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
+  private async sweepOwners(now: Date): Promise<void> {
     const activePlans = await this.planRepo.findAllActiveByOwnerType('agency');
     for (const assignment of activePlans) {
       const agencyId = assignment.owner_id.toString();

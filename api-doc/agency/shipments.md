@@ -508,7 +508,10 @@ Only allowed while the shipment is still `assigned` (not yet picked up).
 { "reason": "other", "note": "Bike courier off sick today; no cover until Monday." }
 ```
 - `reason` (string, required) — one of `out_of_coverage_area`, `capacity_exceeded`,
-  `invalid_address`, `vendor_item_not_ready`, `other`. Fixed set, not free text.
+  `invalid_address`, `vendor_item_not_ready`, `platform_intervention`, `other`. Fixed set,
+  not free text. `platform_intervention` is the **administrator's** reason (a platform
+  cancellation through the internal admin API); an agency has no reason to send it, and a
+  rejection carrying it that an agency did send still records `changed_by_role: 'agency'`.
 - `note` (string, optional; **required when `reason` is `other`**) — free-text explanation,
   max **200** characters. The four concrete reasons are self-describing, so a note is optional
   for them; `other` is not, so it must be accompanied by a note. Persisted on the shipment's
@@ -539,6 +542,11 @@ they know why it was declined before rerouting.
 **Error Responses**:
 - `404` – `SHIPMENT_NOT_FOUND` – Shipment does not exist or is not handled by this agency.
 - `422` – `SHIPMENT_REJECTION_NOT_ALLOWED` – Shipment has already been picked up (or otherwise isn't `assigned`). `details.status` shows the current status.
+- `409` – `SHIPMENT_STATUS_CONFLICT` – **New.** The shipment moved between the read that
+  validated this rejection and the write: an agent picked it up, or a second rejection
+  landed first. Reload and retry. Previously this path wrote blindly, so both racing
+  rejections appeared to succeed and each fired its own post-commit block (offer
+  cancellation, capacity release, vendor notification) for a status nobody was in.
 - `400` – validation error – `reason` missing/invalid, `note` longer than 200 chars, or `note` missing when `reason` is `other`.
 
 ---

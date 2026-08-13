@@ -1,4 +1,6 @@
 import cron from 'node-cron';
+import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { OrderModel } from '../order.model';
 import { OrderService } from '../order.service';
 import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
@@ -14,8 +16,30 @@ import { UNPAID_ORDER_CANCEL_CONFIG, daysAgo } from '../config/unpaid-order-canc
  * (cached within a run). Lifecycle mirrors `EarningsReleaseWorker` (node-cron,
  * daily) and is safe to re-run: `cancelOrder` no-ops on already-cancelled orders.
  */
-export class UnpaidOrderCancelWorker {
+export class UnpaidOrderCancelWorker implements ObservableWorker {
   private task: ReturnType<typeof cron.schedule> | null = null;
+  private sweeping = false;
+
+  get schedules(): WorkerSchedule[] {
+    return [{
+      kind: 'cron',
+      expression: UNPAID_ORDER_CANCEL_CONFIG.CRON,
+      source: 'UNPAID_ORDER_CANCEL_CRON',
+    }];
+  }
+
+  get scheduled(): boolean {
+    return this.task !== null;
+  }
+
+  /** Observation only — no overlap guard. See `ObservableWorker`. */
+  get executing(): boolean {
+    return this.sweeping;
+  }
+
+  get enabled(): boolean {
+    return UNPAID_ORDER_CANCEL_CONFIG.ENABLED;
+  }
 
   constructor(
     private readonly orderService: OrderService = new OrderService(),
@@ -33,6 +57,7 @@ export class UnpaidOrderCancelWorker {
       return;
     }
     this.task = cron.schedule(UNPAID_ORDER_CANCEL_CONFIG.CRON, () => {
+      if (maintenanceBlocksWorkers()) return;
       void this.runSweep();
     });
     console.log(
@@ -47,6 +72,16 @@ export class UnpaidOrderCancelWorker {
 
   /** Run the sweep once. Safe to call manually (tests/ops). */
   async runSweep(now: Date = new Date()): Promise<void> {
+    // Flag only — deliberately NOT an early return. See `ObservableWorker`.
+    this.sweeping = true;
+    try {
+      await this.sweepCandidates(now);
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
+  private async sweepCandidates(now: Date): Promise<void> {
     console.log('[UnpaidOrderCancelWorker] Starting unpaid-order sweep');
 
     // Cheap pre-filter: anything unpaid for less than a day can't have crossed

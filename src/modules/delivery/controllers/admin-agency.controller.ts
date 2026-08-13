@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { AdminAgencyService } from '../services/admin-agency.service';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { vectorisationService } from '../../catalog/domain/services/VectorisationService';
+import { actorFromRequest } from '../../../core/types/actor-source.types';
 
 const adminAgencyService = new AdminAgencyService();
 
@@ -26,6 +27,19 @@ export class AdminAgencyController {
     static getById = asyncHandler(async (req: Request, res: Response) => {
         const agency = await adminAgencyService.getById(req.params.id);
         res.json({ success: true, data: agency });
+    });
+
+    /**
+     * POST /api/admin/delivery-agencies/:id/verify
+     *
+     * `actorFromRequest` rather than the bare `user._id` its two neighbours use: this write
+     * STAMPS the actor onto the agency, and under `requireAdminCaller` that id belongs to
+     * the wi-admin database and resolves to nothing here. The `_source`/`_name` companions
+     * are what make it legible rather than look like a dangling reference.
+     */
+    static verify = asyncHandler(async (req: Request, res: Response) => {
+        const agency = await adminAgencyService.verify(req.params.id, actorFromRequest(req));
+        res.json({ success: true, data: agency, message: 'Agency verified and activated.' });
     });
 
     /** PATCH /api/admin/delivery-agencies/:id/deactivate */

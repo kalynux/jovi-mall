@@ -181,7 +181,8 @@ export class PlanPurchaseService {
         claimed.owner_type,
         claimed.owner_id.toString(),
         claimed.plan_id.toString(),
-        { paymentRef: claimed.gateway_ref, adminId: null }
+        // Nobody assigned this one — the owner bought it and the gateway confirmed it.
+        { paymentRef: claimed.gateway_ref, assignedBy: null }
       );
       const finalDoc =
         (await this.repo.setStatus(claimed._id, 'paid', { subscriber_plan_id: subscriberPlan._id })) ?? claimed;

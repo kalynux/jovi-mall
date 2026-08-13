@@ -1,13 +1,16 @@
 import mongoose, { ClientSession } from 'mongoose';
-import { IOrder, OrderType, OrderPaymentMethod } from './order.model';
+import { IOrder, OrderType, OrderPaymentMethod, FulfillmentStatus } from './order.model';
 import { OrderRepository } from './order.repository';
 import { CustomerModel } from '../customers/customer.model';
 import { IGeoAddress, GeoAddressInput, toGeoAddress } from '../../core/types/geo-address.types';
 import { CartService, CartResponse } from '../cart/services/cart.service';
 import { transactionManager } from '../../core/database/transaction.manager';
 import { ShipmentRepository } from '../shipments/shipment.repository';
-import { IShipment } from '../shipments/shipment.model';
+import { IShipment, ShipmentModel, ShipmentStatus } from '../shipments/shipment.model';
+import { IVendorCancellationPolicy } from '../vendors/vendor.model';
+import { assertCancellationAllowed } from '../vendors/utils/cancellation-policy.util';
 import { OrderTimelineRepository } from './order-timeline.repository';
+import { TimelineActorType } from './order-timeline.model';
 import { VendorRepository } from '../vendors/vendor.repository';
 import { VendorSettingsRepository } from '../vendors/repositories/vendor-settings.repository';
 import { IVendor } from '../vendors/vendor.model';
@@ -43,6 +46,33 @@ import { codEligibilityService } from '../cod/services/cod-eligibility.service';
  * - Branches fulfillment by order_type
  * - Safe for webhook retries
  */
+/** Fulfillment states from which an order may still be cancelled (pre-shipment). */
+export const CANCELLABLE_FULFILLMENT_STATES: FulfillmentStatus[] = ['pending', 'processing'];
+
+/**
+ * Shipment statuses past which a COD order is no longer cancellable: the package left the
+ * agency (or already reached the customer), so the failed-delivery flow owns the outcome
+ * from here.
+ */
+export const COD_NON_CANCELLABLE_SHIPMENT_STATUSES: ShipmentStatus[] = [
+  'picked_up', 'in_transit', 'agent_delivered', 'delivered', 'failed', 'returned',
+];
+
+/**
+ * How each dispatcher is described on the order timeline.
+ *
+ * A table rather than a ternary because the timeline is the one record a delivery dispute
+ * reads, and a two-way branch would describe an ADMINISTRATOR's dispatch as
+ * "auto-dispatched" — which is the exact fact in question when somebody asks why an order
+ * left the vendor's hands. `metadata.auto` stays `actor.type === 'system'` and remains
+ * correct.
+ */
+const DISPATCH_DESCRIPTION: Record<'vendor' | 'system' | 'admin', string> = {
+  vendor: 'Vendor dispatched the order to its delivery agency',
+  system: 'Order auto-dispatched to the delivery agency in charge',
+  admin: 'An administrator dispatched the order to its delivery agency',
+};
+
 export class OrderService {
   private orderRepo: OrderRepository;
   private cartService: CartService;
@@ -75,9 +105,79 @@ export class OrderService {
    * (the event vendor notifications already listen for). Idempotent: a no-op if
    * the order is already cancelled. Applies to physical and digital orders.
    */
+  /**
+   * Refuse a cancellation that would move money or a parcel.
+   *
+   * ── Why this lives on the service ─────────────────────────────────────────
+   * These six guards were inline in `customer-order.controller.ts`, along with the two
+   * constants above, and `cancelOrder` itself checks only idempotency — deliberately, so
+   * the unpaid-order sweep can call it directly. The moment a SECOND actor can cancel, a
+   * controller-bound rule is a rule with one enforcer: the other caller either copies it
+   * (and the two drift on a money question) or skips it (and the platform cancels a paid,
+   * shipped order). Both are worse than a shared method.
+   *
+   * ── The one rule an administrator does not answer to ──────────────────────
+   * `vendorPolicy` — the return window, the `cancellable` flag — is the VENDOR's
+   * commercial promise to their CUSTOMER. The platform is not party to it, so an admin
+   * cancellation skips it. Every other guard here is physical (a parcel is in a van) or
+   * financial (money was taken), and binds an administrator exactly as it binds a
+   * customer. If a second exemption is ever proposed, it needs a reason of that kind.
+   */
+  async assertCancellable(
+    order: IOrder,
+    opts: { actorType: 'customer' | 'admin'; vendorPolicy: IVendorCancellationPolicy | null }
+  ): Promise<void> {
+    if (order.fulfillment_status === 'cancelled') {
+      throw createAppError(ERROR_CODES.ORDER_ALREADY_CANCELLED, 409);
+    }
+    if (!CANCELLABLE_FULFILLMENT_STATES.includes(order.fulfillment_status)) {
+      throw createAppError(ERROR_CODES.ORDER_NOT_CANCELLABLE, 422, undefined, {
+        fulfillmentStatus: order.fulfillment_status,
+      });
+    }
+
+    // Orders have no firm delivery date, so delivery-based deadlines fall back to
+    // creation-based handling.
+    if (opts.actorType === 'customer') {
+      assertCancellationAllowed(opts.vendorPolicy, {
+        createdAt: order.created_at,
+        isPending: order.fulfillment_status === 'pending',
+      });
+    }
+
+    // Paid orders require a refund — out of scope for this eligibility-only path.
+    if (order.payment_status === 'paid') {
+      throw createAppError(ERROR_CODES.ORDER_CANCEL_REQUIRES_REFUND, 422);
+    }
+    if (order.payment_status !== 'pending' && order.payment_status !== 'AWAITING_PAYMENT') {
+      throw createAppError(ERROR_CODES.ORDER_NOT_CANCELLABLE, 422, undefined, {
+        paymentStatus: order.payment_status,
+      });
+    }
+
+    // COD orders fulfil before payment, so "unpaid" alone isn't enough: once any package
+    // left the agency (picked_up onwards) the handoff/failed-delivery flow owns the
+    // outcome — no silent cancellation underneath it.
+    if (order.payment_method === 'cash_on_delivery' && order.order_type === 'physical') {
+      const inFlight = await ShipmentModel.countDocuments({
+        order_id: order._id,
+        status: { $in: COD_NON_CANCELLABLE_SHIPMENT_STATUSES },
+      });
+      if (inFlight > 0) {
+        throw createAppError(ERROR_CODES.ORDER_NOT_CANCELLABLE, 422, undefined, {
+          reason: 'A shipment is already out for delivery or has been handled',
+        });
+      }
+    }
+  }
+
   async cancelOrder(
     order: IOrder,
-    opts: { actorType: 'system' | 'customer' | 'vendor'; actorId: string | null; reason?: string }
+    // `TimelineActorType` rather than a fourth hand-written member: this value is passed
+    // straight to `timelineRepo.appendEvent`'s `actorType`, whose enum has ALWAYS included
+    // 'admin'. The local union was a narrower copy of that type, written before an
+    // administrator could reach this method — and a copy of an enum is what drifts.
+    opts: { actorType: TimelineActorType; actorId: string | null; reason?: string }
   ): Promise<void> {
     if (order.fulfillment_status === 'cancelled') return; // already terminal
 
@@ -205,7 +305,10 @@ export class OrderService {
    * `actor` is attributed on the timeline entry — 'vendor' for this manual
    * path, 'system' for the auto-redirect path (see maybeDispatchToAgencies).
    */
-  async dispatchToAgency(orderId: string, actor: { type: 'vendor' | 'system'; id: string | null }): Promise<number> {
+  async dispatchToAgency(
+    orderId: string,
+    actor: { type: 'vendor' | 'system' | 'admin'; id: string | null }
+  ): Promise<number> {
     const order = await this.orderRepo.findById(orderId);
     if (!order) {
       throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404, undefined, { orderId });
@@ -241,9 +344,7 @@ export class OrderService {
     await this.timelineRepo.appendEvent({
       orderId: order._id.toString(),
       eventType: 'delivery.agency_updated',
-      description: actor.type === 'vendor'
-        ? 'Vendor dispatched the order to its delivery agency'
-        : 'Order auto-dispatched to the delivery agency in charge',
+      description: DISPATCH_DESCRIPTION[actor.type],
       metadata: { auto: actor.type === 'system', shipmentsAssigned: assignedShipments.length },
       actorType: actor.type,
       actorId: actor.id,

@@ -1,4 +1,6 @@
 import cron from 'node-cron';
+import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { eventBus } from '../../../core/events/event-bus';
 import { SubscriberPlanRepository } from '../repositories/subscriber-plan.repository';
 import { SubscriberPlanService, subscriberPlanService } from '../services/subscriber-plan.service';
@@ -20,8 +22,33 @@ const MAX_NOTIFY_WINDOW_DAYS = 90;
  * Lifecycle mirrors the analytics aggregation scheduler (node-cron, daily).
  * Idempotent: re-running the same day produces no duplicate transitions.
  */
-export class PlanExpiryWorker {
+export class PlanExpiryWorker implements ObservableWorker {
+  /**
+   * The one place this cadence is written. `start()` schedules with it and `schedules` reports
+   * it, so the operator-facing answer cannot drift from the scheduled one — which it did, for
+   * this exact worker (the registry advertised `daily 00:05`). See `core/jobs/worker-schedule.ts`.
+   */
+  static readonly CRON = '0 3 * * *';
+
   private task: ReturnType<typeof cron.schedule> | null = null;
+  private sweeping = false;
+
+  get schedules(): WorkerSchedule[] {
+    return [{ kind: 'cron', expression: PlanExpiryWorker.CRON, source: 'hardcoded' }];
+  }
+
+  get scheduled(): boolean {
+    return this.task !== null;
+  }
+
+  /** Observation only — this worker has no overlap guard. See `ObservableWorker`. */
+  get executing(): boolean {
+    return this.sweeping;
+  }
+
+  get enabled(): boolean {
+    return true;
+  }
 
   constructor(
     private readonly planRepo: SubscriberPlanRepository = new SubscriberPlanRepository(),
@@ -36,7 +63,8 @@ export class PlanExpiryWorker {
       console.log('[PlanExpiryWorker] Already started');
       return;
     }
-    this.task = cron.schedule('0 3 * * *', () => {
+    this.task = cron.schedule(PlanExpiryWorker.CRON, () => {
+      if (maintenanceBlocksWorkers()) return;
       void this.runSweep();
     });
     console.log('[PlanExpiryWorker] Scheduled daily plan-expiry sweep (03:00)');
@@ -49,10 +77,18 @@ export class PlanExpiryWorker {
 
   /** Run the full sweep once. Safe to call manually (tests/ops). */
   async runSweep(now: Date = new Date()): Promise<void> {
-    console.log('[PlanExpiryWorker] Starting plan-expiry sweep');
-    await this.processExpired(now);
-    await this.processExpiringSoon(now);
-    console.log('[PlanExpiryWorker] Plan-expiry sweep complete');
+    // Flag only — deliberately NOT an early return. Adding an overlap guard here would change
+    // scheduling behaviour on a live sweep; this phase makes the condition observable and
+    // leaves the fix to its own decision. See `ObservableWorker`.
+    this.sweeping = true;
+    try {
+      console.log('[PlanExpiryWorker] Starting plan-expiry sweep');
+      await this.processExpired(now);
+      await this.processExpiringSoon(now);
+      console.log('[PlanExpiryWorker] Plan-expiry sweep complete');
+    } finally {
+      this.sweeping = false;
+    }
   }
 
   private async processExpired(now: Date): Promise<void> {

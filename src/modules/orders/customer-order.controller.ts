@@ -9,9 +9,7 @@ import { OrderCompletionService, orderCompletionService } from './order-completi
 import { OrderService } from './order.service';
 import { OrderRepository } from './order.repository';
 import { VendorRepository } from '../vendors/vendor.repository';
-import { assertCancellationAllowed } from '../vendors/utils/cancellation-policy.util';
 import { ShipmentService } from '../shipments/shipment.service';
-import { ShipmentModel } from '../shipments/shipment.model';
 import { cashCollectionService } from '../cod/services/cash-collection.service';
 
 const completionService: OrderCompletionService = orderCompletionService;
@@ -32,17 +30,10 @@ function aggregatePaymentStatus(statuses: string[]): string {
   return 'mixed';
 }
 
-/** Fulfillment states from which a customer may still cancel (pre-shipment). */
-const CANCELLABLE_FULFILLMENT_STATES = ['pending', 'processing'];
-
-/**
- * Shipment statuses past which a COD order is no longer customer-cancellable:
- * the package left the agency (or already reached the customer), so the
- * failed-delivery flow owns the outcome from here.
- */
-const COD_NON_CANCELLABLE_SHIPMENT_STATUSES = [
-  'picked_up', 'in_transit', 'agent_delivered', 'delivered', 'failed', 'returned',
-];
+// `CANCELLABLE_FULFILLMENT_STATES` and `COD_NON_CANCELLABLE_SHIPMENT_STATUSES` moved to
+// `order.service.ts` alongside `assertCancellable`, which now owns the whole guard
+// sequence. They were module-private here, which made them uncopyable by the second actor
+// that needs them — an administrator cancelling through `/api/internal/admin/orders`.
 
 const CheckoutSchema = z
   .object({
@@ -303,48 +294,14 @@ export class CustomerOrderController {
       throw createAppError(ERROR_CODES.EARNINGS_FORBIDDEN, 403);
     }
 
-    if (order.fulfillment_status === 'cancelled') {
-      throw createAppError(ERROR_CODES.ORDER_ALREADY_CANCELLED, 409);
-    }
-    if (!CANCELLABLE_FULFILLMENT_STATES.includes(order.fulfillment_status)) {
-      throw createAppError(ERROR_CODES.ORDER_NOT_CANCELLABLE, 422, undefined, {
-        fulfillmentStatus: order.fulfillment_status,
-      });
-    }
-
-    // Enforce the vendor's cancellation policy. Orders have no firm delivery
-    // date, so delivery-based deadlines fall back to creation-based handling.
+    // Every cancellation guard lives on the service, so the administrator's cancel path
+    // enforces the same six rules from the same code. The vendor's cancellation policy is
+    // the one the customer answers to and an administrator does not — hence `actorType`.
     const vendor = await vendorRepository.findById(order.vendor_id.toString());
-    assertCancellationAllowed(vendor?.policies?.cancellation_policy ?? null, {
-      createdAt: order.created_at,
-      isPending: order.fulfillment_status === 'pending',
+    await orderService.assertCancellable(order, {
+      actorType: 'customer',
+      vendorPolicy: vendor?.policies?.cancellation_policy ?? null,
     });
-
-    // Paid orders require a refund — out of scope for this eligibility-only path.
-    if (order.payment_status === 'paid') {
-      throw createAppError(ERROR_CODES.ORDER_CANCEL_REQUIRES_REFUND, 422);
-    }
-    // Only unpaid orders can be cancelled here; anything else is non-cancellable.
-    if (order.payment_status !== 'pending' && order.payment_status !== 'AWAITING_PAYMENT') {
-      throw createAppError(ERROR_CODES.ORDER_NOT_CANCELLABLE, 422, undefined, {
-        paymentStatus: order.payment_status,
-      });
-    }
-
-    // COD orders fulfil before payment, so "unpaid" alone isn't enough: once
-    // any package left the agency (picked_up onwards) the handoff/failed-
-    // delivery flow owns the outcome — no silent cancellation underneath it.
-    if (order.payment_method === 'cash_on_delivery' && order.order_type === 'physical') {
-      const inFlight = await ShipmentModel.countDocuments({
-        order_id: orderId,
-        status: { $in: COD_NON_CANCELLABLE_SHIPMENT_STATUSES },
-      });
-      if (inFlight > 0) {
-        throw createAppError(ERROR_CODES.ORDER_NOT_CANCELLABLE, 422, undefined, {
-          reason: 'A shipment is already out for delivery or has been handled',
-        });
-      }
-    }
 
     await orderService.cancelOrder(order, {
       actorType: 'customer',

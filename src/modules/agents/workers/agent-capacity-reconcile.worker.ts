@@ -1,4 +1,6 @@
 import cron from 'node-cron';
+import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { AgentCapacityService, agentCapacityService } from '../domain/services/agent-capacity.service';
 
 /**
@@ -15,9 +17,27 @@ import { AgentCapacityService, agentCapacityService } from '../domain/services/a
  *
  * Daily node-cron, mirroring the other maintenance sweeps.
  */
-export class AgentCapacityReconcileWorker {
+export class AgentCapacityReconcileWorker implements ObservableWorker {
   private task: ReturnType<typeof cron.schedule> | null = null;
+  private sweeping = false;
   private readonly schedule = process.env.AGENT_CAPACITY_RECONCILE_CRON || '0 4 * * *';
+
+  get schedules(): WorkerSchedule[] {
+    return [{ kind: 'cron', expression: this.schedule, source: 'AGENT_CAPACITY_RECONCILE_CRON' }];
+  }
+
+  get scheduled(): boolean {
+    return this.task !== null;
+  }
+
+  /** Observation only — no overlap guard. See `ObservableWorker`. */
+  get executing(): boolean {
+    return this.sweeping;
+  }
+
+  get enabled(): boolean {
+    return true;
+  }
 
   constructor(private readonly capacity: AgentCapacityService = agentCapacityService) {}
 
@@ -27,6 +47,7 @@ export class AgentCapacityReconcileWorker {
       return;
     }
     this.task = cron.schedule(this.schedule, () => {
+      if (maintenanceBlocksWorkers()) return;
       void this.runSweep();
     });
     console.log(`[AgentCapacityReconcileWorker] Scheduled daily capacity reconcile (${this.schedule})`);
@@ -39,11 +60,15 @@ export class AgentCapacityReconcileWorker {
 
   /** Run once. Safe to call manually (ops/tests). */
   async runSweep(): Promise<void> {
+    // Flag only — deliberately NOT an early return. See `ObservableWorker`.
+    this.sweeping = true;
     try {
       const { checked, corrected } = await this.capacity.reconcileAll();
       console.log(`[AgentCapacityReconcileWorker] Reconciled ${checked} agent(s), corrected ${corrected}`);
     } catch (error) {
       console.error('[AgentCapacityReconcileWorker] Sweep failed:', error);
+    } finally {
+      this.sweeping = false;
     }
   }
 }

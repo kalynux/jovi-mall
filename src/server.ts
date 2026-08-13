@@ -5,7 +5,14 @@ import 'dotenv/config';
 // dotenv.config();
 import mongoose from 'mongoose';
 import { app } from './app';
+import { initLogging, enableLogPersistence, logger } from './core/logging';
+import { assertSigningSecrets } from './config/secrets.config';
+import { assertInternalAdminToken } from './config/internal-admin.config';
+import { assertExposedConfigSafe } from './modules/system/domain/exposed-config';
 import { initAggregationScheduler } from './core/jobs/aggregation-scheduler';
+import { initializeMetrics, installOutboxDepthProvider, recordMongoError } from './modules/system/metrics/metrics';
+import { outboxDepthForMetrics } from './modules/system/services/queue-depth.service';
+import { primeMaintenanceState } from './modules/system/services/maintenance.service';
 import { planExpiryWorker } from './modules/billing/workers/plan-expiry.worker';
 import { agencyShipmentCapWorker } from './modules/billing/workers/agency-shipment-cap.worker';
 import { registerAgentPlanCapacityConsumer } from './modules/agents/events/agent-plan-capacity.consumer';
@@ -18,13 +25,14 @@ import { earningsReleaseWorker } from './modules/earnings/workers/earnings-relea
 import { unpaidOrderCancelWorker } from './modules/orders/workers/unpaid-order-cancel.worker';
 import { unpaidBookingCancelWorker } from './modules/booking/workers/unpaid-booking-cancel.worker';
 import { bookingReminderWorker } from './modules/booking/workers/booking-reminder.worker';
-import { InboundCalendarSyncWorker } from './modules/booking/workers/inbound-calendar-sync.worker';
+import { inboundCalendarSyncWorker } from './modules/booking/workers/inbound-calendar-sync.worker';
 import { codDepositDeadlineWorker } from './modules/cod/workers/cod-deposit-deadline.worker';
 import { registerTrackingEventSubscriber } from './modules/tracking-integration/services/tracking-event-subscriber';
 import { trackingDispatchWorker } from './modules/tracking-integration/workers/tracking-dispatch.worker';
 import { initializeAgentDomain } from './modules/agents';
 import { initializeShipmentAssignment } from './modules/shipment-assignment';
 import { agentCapacityReconcileWorker } from './modules/agents/workers/agent-capacity-reconcile.worker';
+import { initRateLimiters } from './api/rate-limit/rate-limit.middleware';
 
 
 const PORT = process.env.PORT || 8022;
@@ -32,9 +40,79 @@ const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/jovi-mall'
 
 async function startServer() {
   try {
+    // Logging FIRST — before the assertions below, so a refused boot is itself captured
+    // rather than being the one event nothing records. `dotenv/config` has already run at
+    // import, so LOG_LEVEL and the rest are readable. Only the ring buffer is live at this
+    // point; persistence needs Mongo and is enabled further down.
+    initLogging();
+
+    // Signing secrets, before anything else: a missing JWT_SECRET used to fall back
+    // to the literal 'secret', so a misconfigured deploy booted fine and accepted
+    // forged tokens. Fail here, loudly, instead of on the first request.
+    assertSigningSecrets();
+    // Optional until the admin service cuts over — but a token set to a placeholder is
+    // worse than none, because the API is then open and looks configured.
+    assertInternalAdminToken();
+    // Same posture, one step further: a config whitelist that names a credential must kill the
+    // process rather than serve it once. Pure function of code, so it belongs beside the other
+    // two and before anything can accept a request.
+    assertExposedConfigSafe();
+
     // Database Connection
     await mongoose.connect(MONGO_URI);
     console.log('Connected to MongoDB');
+
+    /**
+     * Connection-level Mongo error counting.
+     *
+     * `jovimall_mongo_operation_errors_total` was declared in Phase 14 and incremented by
+     * nothing, while `api-doc/admin/system.md` claimed it covered connection errors AND query
+     * errors "caught by a schema-level post-hook" — a hook that does not exist anywhere in
+     * `src/`. So the counter read a permanent zero, which is worse than a counter that is
+     * honestly partial. These two listeners close the connection-level half and bring it level
+     * with Redis, which has had an error sink since Phase 14. The query-level half needs a
+     * global Mongoose plugin registered before the first `model()` call; that is a bootstrap
+     * ordering change across 182 models and is deliberately NOT done here (ADR-015, debts).
+     */
+    mongoose.connection.on('error', (error: Error) => {
+      recordMongoError('connection');
+      logger().error({ err: error }, 'Mongo connection error');
+    });
+    mongoose.connection.on('disconnected', () => {
+      recordMongoError('disconnected');
+      logger().warn('Mongo disconnected');
+    });
+
+    // Log persistence, now that there is a connection to write to. Lines produced before this
+    // point live in the ring buffer only; `/system/logs` reports the sink state so that
+    // boundary is visible rather than mysterious.
+    await enableLogPersistence();
+
+    // Metrics: install the private registry's hooks before anything can emit. Also the point
+    // where the Redis error sink is wired, so a connection failure during boot is counted.
+    initializeMetrics();
+    // Outbox depth is computed ON SCRAPE rather than on a timer — this process already carries
+    // thirteen of those, and a poller would run the aggregation whether or not anyone is
+    // looking. Installed here so the collector cannot import the tracking module directly.
+    installOutboxDepthProvider(outboxDepthForMetrics);
+
+    // Maintenance mode, BEFORE the listener opens. An instance starting during a window must
+    // come up already closed — otherwise a rolling deploy serves one full cache window of
+    // writes against a platform that is supposed to be shut, which is precisely the thing the
+    // window exists to prevent, at precisely the worst moment.
+    const maintenance = await primeMaintenanceState();
+
+        // Swap the rate limiters onto the shared Redis store, now that Mongo is up and the
+        // process is committed to serving. Before this they use an in-memory store, which
+        // still bounds a caller — just per process, so N instances multiply the ceiling by
+        // N. Awaited rather than fired off, so the listener never opens on a limiter that
+        // is halfway through being replaced.
+        await initRateLimiters();
+    if (maintenance.mode !== 'off') {
+      console.warn(
+        `[Maintenance] Starting INSIDE a "${maintenance.mode}" window — ${maintenance.reason ?? 'no reason recorded'}`
+      );
+    }
 
     // Agent domain: installs the device-location provider behind the
     // eligibility rules. Must run before any dispatch path evaluates an agent;
@@ -88,7 +166,9 @@ async function startServer() {
     // does not hit Google on every request. Availability unions these cached blocks
     // with a live query, so a stale block can only ever over-block briefly (the
     // sync soft-deletes removed events, which self-heals) and never under-block.
-    new InboundCalendarSyncWorker().start();
+    // The exported singleton, not a fresh instance. A locally-constructed worker is unreachable
+    // by anything else, so the operations surface could not report on the one actually running.
+    inboundCalendarSyncWorker.start();
 
     // COD: daily flagging of agents holding cash past the deposit deadline
     codDepositDeadlineWorker.start();

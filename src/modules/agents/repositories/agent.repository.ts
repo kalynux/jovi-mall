@@ -10,6 +10,7 @@ import {
   AgentWorkingState,
 } from '../models/agent.model';
 import { IGeoPoint } from '../../../core/types/geo.types';
+import { RoleActorRef, actorStamp } from '../../../core/types/actor-source.types';
 import { AgentOnboardingStep } from '../../../core/constants/onboarding-steps';
 import { normalizeEmailAddress } from '../../../core/validation/email';
 
@@ -365,7 +366,7 @@ export class AgentRepository {
     agentId: string,
     allowed: boolean,
     reason: string | null,
-    actor: { userId: string | null; role: string | null }
+    actor: RoleActorRef
   ): Promise<IDeliveryAgent | null> {
     return await DeliveryAgentModel.findByIdAndUpdate(
       agentId,
@@ -374,8 +375,11 @@ export class AgentRepository {
           'tracking.allowed': allowed,
           'tracking.reason': reason,
           'tracking.changed_at': new Date(),
-          'tracking.changed_by_user_id': actor.userId,
           'tracking.changed_by_role': actor.role,
+          // Writes `changed_by_user_id` too. The role above says an admin decided; this
+          // says which database that id lives in, which since the admin split is usually
+          // not this one.
+          ...actorStamp('tracking.changed_by', actor),
         },
       },
       { new: true }

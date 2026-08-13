@@ -36,6 +36,7 @@ export class TrackingEventSubscriber {
     eventBus.subscribe('shipment.status_changed', (e) => this.onShipmentStatusChanged(e));
     eventBus.subscribe('cod.collection.recorded', (e) => this.onCodCollectionRecorded(e));
     eventBus.subscribe('shipment.agent_released', (e) => this.onShipmentAgentReleased(e));
+    eventBus.subscribe('agent.tracking_allow_changed', (e) => this.onTrackingAllowChanged(e));
     console.log('[TrackingEventSubscriber] Registered tracking outbox handlers');
   }
 
@@ -104,6 +105,43 @@ export class TrackingEventSubscriber {
       shipmentTrackable: false,
       shipmentTerminal: null,
       agentHasActiveShipment: await this.agentHasActiveShipment(agentId),
+      occurredAt: event.occurredAt,
+    });
+  }
+
+  /**
+   * An administrator changed `tracking.allowed` (Phase 9).
+   *
+   * ── Why this event exists at all ──────────────────────────────────────────
+   * It was published from the day the flag was, and nothing subscribed to it. So the
+   * admin switch was enforced on ONE side: `assertEligible` refused to dispatch a new
+   * shipment, while geo-tracker — which had never been told — went on recording the
+   * agent's position and broadcasting it to every watcher. Nothing else covered the gap:
+   * `visible-agents` does not consult the flag either, so even geo-tracker's revocation
+   * sweep would have kept every watcher on re-check. An administrator pressing "disable
+   * tracking" changed strictly less than the button claimed.
+   *
+   * ── Why it carries no shipment verdicts ───────────────────────────────────
+   * All three are left null, and that is the point rather than an omission. This event
+   * says nothing about any shipment, and geo-tracker treats a null verdict as "not
+   * reported" — so revoking tracking suppresses the agent's GPS without closing a
+   * delivery that jovi-mall still considers in flight. Ending a shipment is a decision
+   * only jovi-mall makes, and it is not the decision that was made here.
+   *
+   * The event is emitted only on a real change (`previous !== allowed`), so a repeated
+   * write of the same value does not enqueue.
+   */
+  private async onTrackingAllowChanged(event: DomainEvent): Promise<void> {
+    const p = event.payload;
+    const agentId = str(p.agentId);
+    if (!agentId) return;
+
+    await this.outbox.enqueue({
+      type: 'agent.tracking_allow_changed',
+      agentId,
+      trackingAllowed: p.to === true,
+      reason: str(p.reason),
+      actorRole: str(p.actorRole),
       occurredAt: event.occurredAt,
     });
   }
