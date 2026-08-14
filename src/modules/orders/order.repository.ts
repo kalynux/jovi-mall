@@ -2,6 +2,25 @@ import { ClientSession, Types } from 'mongoose';
 import { OrderModel, IOrder } from './order.model';
 import { ShipmentModel } from '../shipments/shipment.model';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
+import { buildSearchRegex } from '../../core/utils/regex.util';
+
+/**
+ * Narrowing options for the customer's order history.
+ *
+ * The list previously accepted `page` and `limit` and nothing else, so a customer with a
+ * year of orders had no way to find one. Every field here is optional and absent means
+ * "don't narrow" — never a default that quietly hides rows.
+ */
+export interface CustomerOrderGroupFilters {
+  /** e.g. `delivered`, `cancelled`. Matched on the per-vendor order, not the group. */
+  fulfillmentStatus?: string;
+  /** e.g. `paid`, `AWAITING_PAYMENT`. Note the two spellings that coexist on this field. */
+  paymentStatus?: string;
+  from?: Date;
+  to?: Date;
+  /** Substring over the order number and the line titles. Escaped before it reaches Mongo. */
+  q?: string;
+}
 
 const HELD_STATUS = 'pending_agency_reassignment';
 const REASSIGNABLE_STATUSES = ['pending', 'assigned'];
@@ -54,13 +73,48 @@ export class OrderRepository {
    */
   async findGroupsByCustomer(
     customerId: string,
-    pagination: PaginationOptions
+    pagination: PaginationOptions,
+    filters: CustomerOrderGroupFilters = {}
   ): Promise<Page<CustomerOrderGroup>> {
     const { page = 1, limit = 20 } = pagination;
     const skip = (page - 1) * limit;
 
+    /**
+     * Filters are pushed into the FIRST `$match`, alongside `customer_id`.
+     *
+     * That placement is the whole design. Applying them after the `$group` would filter
+     * *groups* by whether some member matched, which reads sensibly for a status but is
+     * wrong for pagination: `meta.total` would count groups the customer cannot see the
+     * matching half of. Filtering rows first means a group appears only with the orders that
+     * actually matched, and the count is honest.
+     *
+     * It also keeps the `{ customer_id, cart_id }` index doing the work — the match stays
+     * the indexed prefix plus a residual predicate, rather than becoming a post-group scan.
+     */
+    const match: Record<string, unknown> = { customer_id: new Types.ObjectId(customerId) };
+
+    if (filters.fulfillmentStatus) match.fulfillment_status = filters.fulfillmentStatus;
+    if (filters.paymentStatus) match.payment_status = filters.paymentStatus;
+
+    if (filters.from || filters.to) {
+      const range: Record<string, Date> = {};
+      if (filters.from) range.$gte = filters.from;
+      if (filters.to) range.$lte = filters.to;
+      match.created_at = range;
+    }
+
+    if (filters.q) {
+      // Substring search over what a customer would actually type looking for an order:
+      // the order number they were given, or the name of something they bought. Escaped —
+      // an unescaped term here is regex injection and a ReDoS.
+      match.$or = [
+        { order_number: buildSearchRegex(filters.q) },
+        { 'items.title': buildSearchRegex(filters.q) },
+      ];
+    }
+
     const [result] = await OrderModel.aggregate([
-      { $match: { customer_id: new Types.ObjectId(customerId) } },
+      { $match: match },
       { $sort: { created_at: -1 } },
       {
         $group: {

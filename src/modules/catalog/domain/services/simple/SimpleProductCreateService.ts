@@ -12,6 +12,7 @@ import { PickupLocationResolver, PickupResolutionReason } from '../PickupLocatio
 import { mergeDeliveryConfig } from '../delivery-config.merge';
 import { generateSimpleSku } from './sku-generator';
 import { PickupLocationSource } from '../../../models/product.model';
+import { BargainInput, resolveBargainWrite } from '../bargain-price.rule';
 
 export interface CreateSimpleProductInput {
     vendorId: string;
@@ -25,6 +26,8 @@ export interface CreateSimpleProductInput {
 
     price: number;
     compareAtPrice?: number;
+    /** Optional haggling window. `minPrice` defaults to `price` when omitted. */
+    bargain?: BargainInput;
     stock: number;
     isInfiniteStock: boolean;
     sku?: string;
@@ -92,6 +95,18 @@ export class SimpleProductCreateService {
                 throw createAppError(ERROR_CODES.CATALOG_VARIANT_SKU_EXISTS, 409, undefined, { sku: requestedSku });
             }
         }
+
+        // Also outside the transaction, and for the same reason as the SKU check:
+        // a bargain window that disagrees with the price is a 422 the caller should
+        // get before anything is written. Simple products are always physical, so
+        // the rule's service-product refusal cannot fire here.
+        const bargain = resolveBargainWrite({
+            mode: 'create',
+            productType: 'physical',
+            price: input.price,
+            bargain: input.bargain,
+            variantLabel: requestedSku || input.title.trim(),
+        });
 
         return this.transactionManager.runInTransaction(async (session) => {
             // Explicit choice wins; otherwise derive from the vendor's profile.
@@ -170,6 +185,9 @@ export class SimpleProductCreateService {
                 optionSignature: sku,
                 price: input.price,
                 compareAtPrice: input.compareAtPrice,
+                // camelCase in both the domain and the schema, so — unlike the two
+                // snake_case fields noted below — this survives create()'s raw pass.
+                bargain: bargain ?? undefined,
                 stock: input.stock,
                 isInfiniteStock: input.isInfiniteStock,
                 weight: input.weight,

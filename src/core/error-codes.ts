@@ -62,6 +62,16 @@ export const ERROR_CODES = Object.freeze({
     AUTH_EMAIL_ALREADY_VERIFIED: 'AUTH_EMAIL_ALREADY_VERIFIED',
     AUTH_EMAIL_MISSING: 'AUTH_EMAIL_MISSING',
     AUTH_VERIFY_TOKEN_INVALID: 'AUTH_VERIFY_TOKEN_INVALID',
+    /**
+     * A password-reset token was absent, expired, malformed or already spent.
+     *
+     * Deliberately **one code for all four**. Telling a caller which of them applies tells
+     * an attacker whether a token they hold was ever real, and the remedy is identical in
+     * every case: ask for a new link. Distinct from `AUTH_VERIFY_TOKEN_INVALID` only so the
+     * client can put the right copy and the right "resend" button on the screen — the two
+     * flows land on different pages.
+     */
+    AUTH_RESET_TOKEN_INVALID: 'AUTH_RESET_TOKEN_INVALID',
     AUTH_WA_ALREADY_VERIFIED: 'AUTH_WA_ALREADY_VERIFIED',
     AUTH_PROFILE_NOT_FOUND: 'AUTH_PROFILE_NOT_FOUND',
     AUTH_PHONE_REQUIRED_FOR_WA: 'AUTH_PHONE_REQUIRED_FOR_WA',
@@ -381,6 +391,20 @@ export const ERROR_CODES = Object.freeze({
     CATALOG_VARIANT_INVALID_STOCK: 'CATALOG_VARIANT_INVALID_STOCK',
     CATALOG_VARIANT_INVALID_PRICE: 'CATALOG_VARIANT_INVALID_PRICE',
     CATALOG_VARIANT_COMPARE_PRICE_INVALID: 'CATALOG_VARIANT_COMPARE_PRICE_INVALID',
+
+    // ── Bargainable pricing ──────────────────────────────────────────────────
+    // A haggling window stored on the variant (`bargain: { minPrice, maxPrice }`),
+    // effective only while the parent product has `vectorisationEnabled === true`.
+    // Every rule lives in `catalog/domain/services/bargain-price.rule.ts`.
+    //
+    // Each code is raised at EXACTLY ONE status: `test:errors` censuses every
+    // createAppError site and fails when one code yields two categories. That is
+    // why the min/max ordering check exists only in the rule (422) and never in
+    // Zod (400) — the same violation arrives three ways, only one of which a
+    // schema can see.
+    CATALOG_VARIANT_BARGAIN_NOT_SUPPORTED: 'CATALOG_VARIANT_BARGAIN_NOT_SUPPORTED',
+    CATALOG_VARIANT_BARGAIN_RANGE_INVALID: 'CATALOG_VARIANT_BARGAIN_RANGE_INVALID',
+    CATALOG_VARIANT_BARGAIN_PRICE_MISMATCH: 'CATALOG_VARIANT_BARGAIN_PRICE_MISMATCH',
     CATALOG_VARIANT_LIMIT_EXCEEDED: 'CATALOG_VARIANT_LIMIT_EXCEEDED',
     CATALOG_VARIANT_NO_OPTIONS: 'CATALOG_VARIANT_NO_OPTIONS',
     CATALOG_VARIANT_OPTION_EMPTY: 'CATALOG_VARIANT_OPTION_EMPTY',
@@ -705,6 +729,21 @@ export const ERROR_CODES = Object.freeze({
     ORDER_PRODUCT_NOT_FOUND: 'ORDER_PRODUCT_NOT_FOUND',
     ORDER_VENDOR_NOT_FOUND: 'ORDER_VENDOR_NOT_FOUND',
     ORDER_NO_DELIVERY_AGENCY: 'ORDER_NO_DELIVERY_AGENCY',
+    /**
+     * A physical checkout resolved no geocoded drop-off.
+     *
+     * Deliberately NOT `ADDRESS_GEO_REQUIRED`, which is a **400** raised by
+     * `address-country.helper.ts` when a supplied address object carries no `geo` — a
+     * schema failure on a payload the caller sent. This one is a **422 business rule**: the
+     * request is well-formed (both address fields are optional), and the rule is that a
+     * physical order must have somewhere to go. Sharing one code would make its category
+     * depend on which site raised it, which is what `test:errors`' census refuses.
+     *
+     * `details.reason` separates the two causes: `no_delivery_address` (nothing selected
+     * and no default) versus `selected_address_not_geocoded` (an address the customer DID
+     * choose, typed by hand rather than picked from `GET /api/geo/search`).
+     */
+    ORDER_DELIVERY_ADDRESS_REQUIRED: 'ORDER_DELIVERY_ADDRESS_REQUIRED',
 
     // ── CART ──────────────────────────────────────────────────────────────────
     CART_VARIANT_REQUIRED: 'CART_VARIANT_REQUIRED',
@@ -717,6 +756,15 @@ export const ERROR_CODES = Object.freeze({
     CART_DIGITAL_LIMIT_REACHED: 'CART_DIGITAL_LIMIT_REACHED',
     CART_NOT_FOUND: 'CART_NOT_FOUND',
     CART_EMPTY_CHECKOUT: 'CART_EMPTY_CHECKOUT',
+    /**
+     * A variant-keyed cart operation named a line that is not in the cart.
+     *
+     * Distinct from `CART_VARIANT_NOT_FOUND`, which means the *variant* does not exist in
+     * the catalogue at all. Here the variant is real and simply is not in this cart — a
+     * stale tab, or a second device that already removed the line — and the client's remedy
+     * is to re-read the cart rather than to re-check the product.
+     */
+    CART_ITEM_NOT_FOUND: 'CART_ITEM_NOT_FOUND',
 
     // ── BOOKING ───────────────────────────────────────────────────────────────
     BOOKING_PRODUCT_NOT_FOUND: 'BOOKING_PRODUCT_NOT_FOUND',

@@ -153,11 +153,55 @@ export const AUTH_POLICY: RateLimitPolicy = Object.freeze({
     }),
 });
 
+/**
+ * The storefront bucket — `/api/public/*`, mounted ahead of the public routers.
+ *
+ * It exists because anonymous browse traffic is the one flow that shares Layer A's
+ * single IP bucket with everything else on the address. A product grid fires a list
+ * call plus a categories call per page view, and behind an office NAT or a Cameroonian
+ * mobile carrier that is hundreds of people contending for one 1200/min counter — so
+ * the storefront would be what trips it, for everybody, including the signed-in users
+ * on the same address who then cannot check out.
+ *
+ * Giving it its own `key` gives it its own counters (the bucket name is
+ * `${policy.key}:${scope key}`), so public reads can no longer exhaust the global
+ * backstop on behalf of the rest of the API.
+ *
+ * **This is a widening, not a tightening.** Layer A still applies on top — `/api/public`
+ * is deliberately not in `EXEMPT_PATHS` — so the effective ceiling for a public read is
+ * the lower of the two. The default is set above the global one on purpose: these are
+ * cacheable, unauthenticated reads of already-published data, the cheapest requests the
+ * service serves, and they carry `Cache-Control: public, max-age=300`.
+ *
+ * `scope: 'ip'` is forced by the surface, not chosen: `/api/public` runs no `requireAuth`,
+ * so there is never a `req.auth` to key on and `'identity'` would silently fall through
+ * to the IP anyway (see `rateLimitKey`) — the label would just be a lie.
+ */
+export const PUBLIC_POLICY: RateLimitPolicy = Object.freeze({
+    key: 'public',
+    windowSeconds: 60,
+    scope: 'ip',
+    limits: Object.freeze({
+        internal_service: 'exempt',
+        // Nothing here can resolve a role — the mount is ahead of every guard — so in
+        // practice every caller lands on `anonymous`. The rest are present because the
+        // record is total, and they carry the same number so a signed-in shopper reading
+        // the public catalog is never treated differently from a logged-out one.
+        admin: envInt('RATE_LIMIT_PUBLIC_PER_MIN', 3000),
+        vendor: envInt('RATE_LIMIT_PUBLIC_PER_MIN', 3000),
+        agency: envInt('RATE_LIMIT_PUBLIC_PER_MIN', 3000),
+        agent: envInt('RATE_LIMIT_PUBLIC_PER_MIN', 3000),
+        customer: envInt('RATE_LIMIT_PUBLIC_PER_MIN', 3000),
+        anonymous: envInt('RATE_LIMIT_PUBLIC_PER_MIN', 3000),
+    }),
+});
+
 /** Every policy, for the tests and for the operations surface. */
 export const POLICIES: readonly RateLimitPolicy[] = Object.freeze([
     GLOBAL_POLICY,
     IDENTITY_POLICY,
     AUTH_POLICY,
+    PUBLIC_POLICY,
 ]);
 
 /**

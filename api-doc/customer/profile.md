@@ -20,8 +20,10 @@ parameter — a customer can only read/write **their own** record.
 | `PATCH` | `/customer/profile` | Update profile fields & preferences |
 | `GET` | `/customer/profile/completion-status` | Profile completeness (always complete for customers) |
 | `POST` | `/customer/addresses` | Add a saved address |
+| `PATCH` | `/customer/addresses/:id` | **Edit a saved address in place** |
 | `DELETE` | `/customer/addresses/:id` | Remove a saved address |
 | `PATCH` | `/customer/addresses/:id/default` | Mark a saved address as default |
+| `POST` · `DELETE` | `/customer/devices` | Register / unregister a push token |
 | `POST` | `/customer/payment-methods` | Save payment-method display metadata |
 | `DELETE` | `/customer/payment-methods/:id` | Remove a saved payment method |
 
@@ -37,24 +39,43 @@ parameter — a customer can only read/write **their own** record.
 
 **Auth**: Required · **Permissions**: `customer`
 
+> **⚠️ Casing: camelCase at the top level, snake_case inside nested objects.**
+>
+> This page used to show the whole response in snake_case, and that was wrong — it has misled
+> at least one integrator. `CustomerProfileMapper.toResponseDto` renames only the **scalars**
+> and passes `savedAddresses`, `preferences` and `savedPaymentMethods` through verbatim, so
+> their inner keys keep the persistence spelling. `modules/customers/dto/customer-profile.dto.ts`
+> is the authority. The example below is a real response.
+
 ### Example success `200`
 
 ```json
 {
   "success": true,
   "data": {
-    "_id": "664cust...",
-    "user_id": "664usr...",
+    "id": "664cust...",
     "name": "Jane Doe",
     "email": "jane@example.com",
-    "phone": "08098765432",
-    "email_verified": false,
-    "phone_verified": true,
+    "emailVerified": false,
+    "phone": "+237670000000",
+    "phoneVerified": true,
     "avatar": null,
     "bio": null,
-    "date_of_birth": null,
-    "saved_addresses": [],
-    "saved_payment_methods": [],
+    "dateOfBirth": null,
+    "savedAddresses": [
+      {
+        "_id": "664addr...",
+        "label": "Home",
+        "address_line1": "123 Market St",
+        "address_line2": null,
+        "city": "Douala",
+        "state": "Littoral",
+        "country": "CM",
+        "is_default": true,
+        "geo": { "formatted_address": "…", "coordinates": { "type": "Point", "coordinates": [9.7043, 4.0611] } }
+      }
+    ],
+    "savedPaymentMethods": [],
     "preferences": {
       "language": "en",
       "currency": "XAF",
@@ -63,8 +84,13 @@ parameter — a customer can only read/write **their own** record.
       "ads_compact_mode": false,
       "compact_mode": false
     },
-    "onboarding_step": 0,
-    "status": "active"
+    "recentProductCode": null,
+    "wa": null,
+    "timezone": "Africa/Douala",
+    "status": "active",
+    "onboardingStep": 0,
+    "createdAt": "…",
+    "updatedAt": "…"
   }
 }
 ```
@@ -193,6 +219,53 @@ carries the coordinates + provider place id + admin components used for mapping 
 
 ---
 
+## PATCH `/customer/addresses/:id`
+
+**Purpose**: Edit a saved address **in place**. Returns the updated profile.
+
+**Auth**: Required · **Permissions**: `customer` · **Path param**: `id` = saved-address id
+
+> **Why this exists.** Editing used to mean delete + re-add, which mints a **new** `_id` —
+> while past orders still reference the old one through `deliveryAddressId`. A customer
+> correcting a typo in their street name silently orphaned every order delivered there.
+
+### Request body
+
+Every field of [`POST /customer/addresses`](#post-customeraddresses) is accepted and **all are
+optional**; only the keys you send are written. Omitting a key leaves the stored value alone.
+
+| Field | Type | Notes |
+|---|---|---|
+| `label`, `address_line1`, `city` | string | Same constraints as on create |
+| `address_line2`, `state` | string \| null | *Clearable* |
+| `country` | string(2) | No default here — a PATCH must not rewrite an unrelated field |
+| `location` | GeoPoint \| null | *(deprecated — prefer `geo`)* |
+| `geo` | GeoAddress \| null | Send `null` to clear. See the warning below |
+
+> **`is_default` is NOT accepted here.** It is a relationship *between* addresses — exactly
+> one may hold it — not a property of one, so setting it means clearing every sibling.
+> [`PATCH /customer/addresses/:id/default`](#patch-customeraddressesiddefault) owns that.
+
+> **⚠️ Clearing `geo` makes the address unusable for physical checkout.** `geo` is what a
+> delivery is routed to, and it is only populated by picking a result from
+> `GET /api/geo/search`. An address without it is refused at checkout with
+> `422 ORDER_DELIVERY_ADDRESS_REQUIRED`.
+
+### Example success `200`
+
+```json
+{ "success": true, "data": { "id": "664cust...", "savedAddresses": [{ "_id": "664addr...", "city": "Yaoundé" }] }, "message": "Address updated" }
+```
+
+### Errors
+
+| `error.code` | Status | When |
+|---|---|---|
+| `CUSTOMER_ADDRESS_NOT_FOUND` | 404 | No such address on this profile |
+| `VALIDATION_ERROR` | 400 | A supplied field fails its constraint |
+
+---
+
 ## DELETE `/customer/addresses/:id`
 
 **Purpose**: Remove a saved address. Returns the updated profile.
@@ -218,6 +291,33 @@ carries the coordinates + provider place id + admin components used for mapping 
 ```json
 { "success": true, "data": { "_id": "664cust...", "saved_addresses": [{ "_id": "664addr...", "is_default": true }] }, "message": "Default address updated" }
 ```
+
+---
+
+## POST · DELETE `/customer/devices`
+
+**Purpose**: Register (or unregister) an FCM token so the customer can receive push
+notifications. Returns `{ success, data }` / `{ success, message }`.
+
+**Auth**: Required · **Permissions**: `customer`
+
+Identical contract to the vendor, agency and agent mounts — see
+[agent/push-notifications.md](../agent/push-notifications.md). The controller is
+role-agnostic and keys on the **user**, not the customer record.
+
+```json
+{ "token": "fcm-token…", "platform": "web" }
+```
+
+`platform` is `web` | `android` | `ios`. `DELETE` takes `{ "token": "…" }`.
+
+> **This mount was simply missing.** The customer notification catalog has always said push
+> is sent "to every device the customer has registered" — but there was no way for a customer
+> to register one, so `FcmPushService` resolved tokens by user and always found none. It was
+> a promise to nobody.
+
+> Not to be confused with `/api/agent/device` (singular) — that is an agent's device
+> *capabilities* and location permission, a different concept on an adjacent path.
 
 ---
 

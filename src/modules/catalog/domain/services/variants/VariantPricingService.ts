@@ -25,6 +25,17 @@ export interface BulkSetPricesCommand {
 
 /**
  * VariantPricingService: Handle all variant pricing logic
+ *
+ * ⚠ DEAD CODE — exported only through `variants/index.ts`, which nothing imports.
+ * The live price writers are `vendor-variant.controller.ts` and the two
+ * SimpleProduct services.
+ *
+ * ⚠ It does NOT maintain the bargainable-pricing invariant. `setPrice` and
+ * `bulkSetPrices` write `price` directly, so on a variant with a `bargain` window
+ * they would leave `bargain.minPrice` pointing at the old price and could push the
+ * price above `maxPrice`. Before this is ever wired to a route it must resolve the
+ * window through `resolveBargainWrite` (`../bargain-price.rule`), exactly as the
+ * three live write paths do. Flagged, not fixed: reviving it is a separate change.
  */
 export class VariantPricingService {
   constructor(

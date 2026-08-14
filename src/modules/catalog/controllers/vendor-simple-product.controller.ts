@@ -98,7 +98,7 @@ async function attemptPublish(product: Product, vendorId: string): Promise<{ pro
 async function buildDetail(product: Product, variant: Variant): Promise<Record<string, unknown>> {
     const [enrichedProduct, enrichedVariant] = await Promise.all([
         enrichProduct(product, fileRepository, storageProvider, pickupLocationDetailResolver),
-        enrichVariant(variant, fileRepository, storageProvider, product.title),
+        enrichVariant(variant, fileRepository, storageProvider, product),
     ]);
     return { ...enrichedProduct, defaultVariant: enrichedVariant };
 }

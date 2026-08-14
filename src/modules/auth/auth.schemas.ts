@@ -11,6 +11,9 @@ import {
   PHONE_FORMAT_MESSAGE,
   PhoneNumberSchema,
 } from '../../core/validation/phone';
+// The documented single source of truth for password strength — shared with
+// `PATCH /api/me/password` so a reset cannot land on a weaker rule than a change.
+import { PasswordStrengthSchema } from '../users/user.validator';
 
 /**
  * The roles a person may authenticate AS on this service.
@@ -86,6 +89,40 @@ export const LoginSchema = z.object({
   identifier: LoginIdentifierSchema,
   password: z.string().min(1, "Password required"),
   role: z.enum(AUTHENTICATABLE_ROLES).optional(),
+});
+
+/**
+ * `POST /auth/forgot-password`.
+ *
+ * The **same** identifier schema `login` uses, deliberately: it normalises email to
+ * lowercase and phone to E.164 exactly as the stored `login_email` / `login_phone` are, so
+ * the reset lookup finds precisely the row a login would. A second, looser schema here is
+ * how "I can log in but reset says no such account" happens.
+ *
+ * Note this schema can still reject — a malformed identifier is a 400. That is not an
+ * enumeration leak: it says the *input* is not a well-formed address or number, which the
+ * caller can see for themselves. The non-leaking part is that a well-formed identifier
+ * always yields the same 200 whether or not it matches an account.
+ */
+export const ForgotPasswordSchema = z.object({
+  identifier: LoginIdentifierSchema,
+});
+
+/**
+ * `POST /auth/reset-password`.
+ *
+ * `newPassword` uses `PasswordStrengthSchema` — 8 chars + upper + lower + digit + symbol —
+ * which is the documented single source of truth for password strength and what
+ * `PATCH /api/me/password` already enforces.
+ *
+ * ⚠️ That is deliberately **stricter than `RegisterSchema`**, which still accepts 6
+ * characters with no complexity rule. The two disagree, and this is the right side of the
+ * disagreement: raising registration is a breaking change for existing clients and was left
+ * out of scope, but a *new* password set through a *new* endpoint has no back-compat debt.
+ */
+export const ResetPasswordSchema = z.object({
+  token: z.string().min(1, 'Reset token required'),
+  newPassword: PasswordStrengthSchema,
 });
 
 // Same rule, and this one is the role SWITCHER — it re-issues the pair for another of

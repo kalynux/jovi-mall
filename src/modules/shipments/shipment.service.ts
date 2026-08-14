@@ -43,6 +43,7 @@ import {
     AgencyEarningQuoteResult,
 } from '../earnings/services/earnings-quote.service';
 import { earningsSplitService } from '../earnings/services/earnings-split.service';
+import { orderStockService } from '../orders/services/order-stock.service';
 import { cashCollectionService, CodShipmentSummary } from '../cod/services/cash-collection.service';
 import { eventBus } from '../../core/events/event-bus';
 import { agentActionAuditService } from '../tracking-integration/services/agent-action-audit.service';
@@ -1227,6 +1228,28 @@ export class ShipmentService {
         // still holding the parcel and may retry via failed → in_transit.)
         if (newStatus === 'returned') {
             this._releaseAgentCapacity(updated, 'returned');
+
+            /**
+             * The goods physically came back — put them on the shelf.
+             *
+             * A **restock**, not a release: by the time a shipment can be returned its
+             * reservation is `committed` (a prepaid order committed at payment success, a
+             * COD one at creation), and `StockReleaseService` refuses a committed row by
+             * design. Calling the release here would silently do nothing.
+             *
+             * ⚠️ Scoped to **this shipment's** items, not the order's. An order splits into
+             * one shipment per delivery agency, so a returned parcel is often only part of
+             * it — restocking the whole order would put items still out for delivery back on
+             * the shelf and let the vendor oversell them.
+             *
+             * Post-commit and best-effort, like the emits and the earnings split beside it:
+             * a stock write must never block a delivery outcome. The reservation row stays
+             * `committed` — it records that the sale happened, which remains true; the
+             * return is a separate, later fact.
+             */
+            void orderStockService
+                .restockForShipment(order._id.toString(), updated!)
+                .catch((err) => console.error('[ShipmentService] returned-shipment restock failed:', err));
         }
         // Phase 6: record the agent-action audit for a pickup/delivery/return/
         // cancel transition (fire-and-forget; a no-op for other statuses or when

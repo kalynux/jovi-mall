@@ -188,6 +188,7 @@ Content-Type: application/json
 | `price` | number | ✅ | `>= 0` (must be `> 0` to activate). |
 | `name` | string | No | 1–100 chars. If omitted, `displayName` is derived from the asset. |
 | `compareAtPrice` | number | No | `>= 0`. |
+| `bargain` | object | No | `{ minPrice?, maxPrice }` — bargainable pricing is **supported on digital variants**, identically to physical. `minPrice` defaults to `price`; `maxPrice` must be `>= price`. `null` clears it on PATCH. See [Bargainable pricing](./variants.md#bargainable-pricing). |
 | `isInfiniteStock` | boolean | No | Digital variants are typically `true`. |
 | `stock` | number | No | Ignored when `isInfiniteStock` is `true`. |
 | `digitalConfig.maxDownloads` | number \| null | No | Per-variant download cap. `null`/omitted = unlimited. |

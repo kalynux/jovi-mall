@@ -63,6 +63,43 @@ export class CustomerRepository {
     );
   }
 
+  /**
+   * Edit a saved address **in place**, preserving its `_id`.
+   *
+   * That preservation is the whole point. Editing used to mean delete + re-add, which mints
+   * a new subdocument id — while past orders still reference the old one through
+   * `deliveryAddressId`. A customer correcting a typo in their street name silently orphaned
+   * every order that had been delivered there.
+   *
+   * Only the keys present in `updates` are written, as dotted paths, so an edit of one field
+   * cannot blank the others. `is_default` is deliberately NOT accepted here — it is a
+   * relationship between addresses rather than a property of one, and `setDefaultAddress`
+   * owns the clear-then-set that keeps it single.
+   */
+  async updateAddress(
+    customerId: string,
+    addressId: string,
+    updates: Partial<ICustomer['saved_addresses'][number]>,
+  ): Promise<ICustomer | null> {
+    const set: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(updates)) {
+      if (value === undefined) continue;
+      set[`saved_addresses.$.${key}`] = value;
+    }
+
+    // Nothing to write — return the document unchanged rather than sending an empty `$set`,
+    // which MongoDB rejects outright ("'$set' is empty").
+    if (Object.keys(set).length === 0) {
+      return await CustomerModel.findById(customerId);
+    }
+
+    return await CustomerModel.findOneAndUpdate(
+      { _id: customerId, 'saved_addresses._id': addressId },
+      { $set: set },
+      { new: true },
+    );
+  }
+
   /** Remove an address by its embedded document _id. */
   async removeAddress(customerId: string, addressId: string): Promise<ICustomer | null> {
     return await CustomerModel.findByIdAndUpdate(

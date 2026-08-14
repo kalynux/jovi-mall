@@ -11,6 +11,7 @@ import { PickupLocationSource } from '../../../models/product.model';
 // repositories, so a barrel import here risks a require cycle.
 import { StockChangeGate, stockChangeGate } from '../../../../stock-requests/services/stock-change-gate';
 import { StockRequestDto } from '../../../../stock-requests/dto/stock-adjustment-request.dto';
+import { BargainInput, resolveBargainWrite } from '../bargain-price.rule';
 
 export interface UpdateSimpleProductInput {
     title?: string;
@@ -23,6 +24,8 @@ export interface UpdateSimpleProductInput {
 
     price?: number;
     compareAtPrice?: number;
+    /** `null` clears the window. Omitted leaves it alone — but a `price` change auto-syncs its minPrice. */
+    bargain?: BargainInput | null;
     stock?: number;
     isInfiniteStock?: boolean;
     lowStockThreshold?: number | null;
@@ -115,6 +118,19 @@ export class SimpleProductUpdateService {
             }
         }
 
+        // Resolved BEFORE the product write and the stock gate below. A 422 raised
+        // after either would leave a half-applied edit — a title already changed, or
+        // an approval request in the agency's queue — for a PATCH that failed.
+        // `test:bargain-price` asserts this ordering by source scan.
+        const nextBargain = resolveBargainWrite({
+            mode: 'update',
+            productType: product.type,
+            current: { price: variant.price, bargain: variant.bargain },
+            price: input.price,
+            bargain: input.bargain,
+            variantLabel: variant.name || variant.sku,
+        });
+
         const hasDeliveryPatch = input.freeDelivery !== undefined || input.pickupLocation !== undefined;
 
         const updatedProduct = await this.productUpdateService.execute(productId, vendorId, {
@@ -149,6 +165,11 @@ export class SimpleProductUpdateService {
         const variantUpdates: Partial<Variant> = {};
         if (input.price !== undefined) variantUpdates.price = input.price;
         if (input.compareAtPrice !== undefined) variantUpdates.compareAtPrice = input.compareAtPrice;
+        // Folded into the one variant write below, never issued separately: this
+        // service is deliberately not transactional (see the header), so a second
+        // call could leave `price` and `bargain.minPrice` disagreeing — the exact
+        // invariant the feature exists to keep.
+        if (nextBargain !== undefined) variantUpdates.bargain = nextBargain;
         // Skipped entirely when the gate queued a request — the quantity is the
         // agency's to confirm, and writing it here would defeat the whole flow.
         if (!stockAdjustment) {

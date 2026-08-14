@@ -19,7 +19,24 @@ router.post('/checkout', CustomerOrderController.checkout);
 router.get('/', CustomerOrderController.listOrderGroups);
 
 // One checkout group in detail (all its per-vendor orders with items).
+//
+// ⚠️ Declared BEFORE `/:id`. Express matches in declaration order, so reversing these makes
+// `/groups/<cartId>` resolve as an order whose id is the literal string "groups".
 router.get('/groups/:cartId', CustomerOrderController.getOrderGroup);
+
+// One per-vendor order in detail. The group above is the customer's "logical" order; this
+// is one seller's slice of it, which is what a push deep-link or an email carries.
+router.get('/:id', CustomerOrderController.getOrder);
+
+/**
+ * The parcels on an order.
+ *
+ * This is what makes the two `:shipmentId` routes below reachable: nothing customer-facing
+ * returned a shipment id except COD's `codCollections`, so a prepaid customer could never
+ * confirm a delivery. Declared before them for readability — the paths differ in length, so
+ * they cannot shadow each other.
+ */
+router.get('/:orderId/shipments', CustomerOrderController.listOrderShipments);
 
 // Confirm delivery / satisfaction → completes the order, starts the escrow hold.
 router.patch('/:id/confirm-delivery', CustomerOrderController.confirmDelivery);

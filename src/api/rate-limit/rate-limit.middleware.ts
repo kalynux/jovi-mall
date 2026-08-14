@@ -10,7 +10,7 @@ import { recordRateLimited } from '../../modules/system/metrics/metrics';
 import { resolveCallerClass, rateLimitKey } from './caller-class';
 import { isExemptPath } from './exempt-paths';
 import { FailOpenStore } from './fail-open-store';
-import { AUTH_POLICY, ceilingFor, GLOBAL_POLICY, IDENTITY_POLICY, RateLimitPolicy } from './policy';
+import { AUTH_POLICY, ceilingFor, GLOBAL_POLICY, IDENTITY_POLICY, PUBLIC_POLICY, RateLimitPolicy } from './policy';
 
 /**
  * The rate limiters (Phase 16). jovi-mall had none of any kind before this.
@@ -159,3 +159,12 @@ export const identityRateLimiter: RequestHandler = delegate(IDENTITY_POLICY);
 
 /** The credential bucket — `/api/auth/*`. Strict, and the only strict one. */
 export const authRateLimiter: RequestHandler = delegate(AUTH_POLICY);
+
+/**
+ * The storefront bucket — `/api/public/*`, mounted ahead of the public routers.
+ *
+ * Its own `policy.key` gives it its own counters, so anonymous browse traffic can no
+ * longer exhaust the global backstop on behalf of every other caller sharing the address.
+ * Layer A still applies on top; see `PUBLIC_POLICY` for why that is deliberate.
+ */
+export const publicRateLimiter: RequestHandler = delegate(PUBLIC_POLICY);

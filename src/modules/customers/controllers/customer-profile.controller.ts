@@ -4,6 +4,7 @@ import { CustomerProfileService } from '../services/customer-profile.service';
 import {
     UpdateCustomerProfileSchema,
     AddCustomerAddressSchema,
+    UpdateCustomerAddressSchema,
     AddCustomerPaymentMethodSchema,
 } from '../validators/customer-onboarding.validator';
 
@@ -40,6 +41,19 @@ export class CustomerProfileController {
         const input = AddCustomerAddressSchema.parse(req.body);
         const profile = await customerProfileService.addAddress(customerId, input);
         res.status(201).json({ success: true, data: profile, message: 'Address added' });
+    });
+
+    /**
+     * PATCH /api/customer/addresses/:id — edit in place.
+     *
+     * The `_id` survives, which is the reason this exists: delete + re-add mints a new one,
+     * and past orders reference the old through `deliveryAddressId`.
+     */
+    static updateAddress = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        const customerId = req.auth!.role_entity._id.toString();
+        const input = UpdateCustomerAddressSchema.parse(req.body ?? {});
+        const profile = await customerProfileService.updateAddress(customerId, req.params.id, input);
+        res.json({ success: true, data: profile, message: 'Address updated' });
     });
 
     static removeAddress = asyncHandler(async (req: Request, res: Response): Promise<void> => {

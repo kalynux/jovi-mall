@@ -32,17 +32,17 @@ LOCAL_STORAGE_BASE_PATH=./storage
 LOCAL_STORAGE_BASE_URL=http://localhost:3000/storage
 
 # Firebase Storage Config
-FIREBASE_PROJECT_ID=your-project-id
-FIREBASE_CLIENT_EMAIL=your-service-account@project.iam.gserviceaccount.com
-FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-FIREBASE_BUCKET=your-project.appspot.com
-FIREBASE_PUBLIC=true
+STORAGE_FIREBASE_PROJECT_ID=your-project-id
+STORAGE_FIREBASE_CLIENT_EMAIL=your-service-account@project.iam.gserviceaccount.com
+STORAGE_FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+STORAGE_FIREBASE_BUCKET=your-project.appspot.com
+STORAGE_FIREBASE_PUBLIC=true
 
 # Cloudinary Config
-CLOUDINARY_CLOUD_NAME=your-cloud-name
-CLOUDINARY_API_KEY=your-api-key
-CLOUDINARY_API_SECRET=your-api-secret
-CLOUDINARY_FOLDER_PREFIX=jovi
+STORAGE_CLOUDINARY_CLOUD_NAME=your-cloud-name
+STORAGE_CLOUDINARY_API_KEY=your-api-key
+STORAGE_CLOUDINARY_API_SECRET=your-api-secret
+STORAGE_CLOUDINARY_FOLDER_PREFIX=jovi
 ```
 
 ### Application Configuration
@@ -59,18 +59,18 @@ export const storageConfig: StorageConfig = {
   },
   
   firebase: {
-    projectId: process.env.FIREBASE_PROJECT_ID!,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL!,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY!,
-    bucket: process.env.FIREBASE_BUCKET!,
-    public: process.env.FIREBASE_PUBLIC === 'true',
+    projectId: process.env.STORAGE_FIREBASE_PROJECT_ID!,
+    clientEmail: process.env.STORAGE_FIREBASE_CLIENT_EMAIL!,
+    privateKey: process.env.STORAGE_FIREBASE_PRIVATE_KEY!,
+    bucket: process.env.STORAGE_FIREBASE_BUCKET!,
+    public: process.env.STORAGE_FIREBASE_PUBLIC === 'true',
   },
   
   cloudinary: {
-    cloudName: process.env.CLOUDINARY_CLOUD_NAME!,
-    apiKey: process.env.CLOUDINARY_API_KEY!,
-    apiSecret: process.env.CLOUDINARY_API_SECRET!,
-    folderPrefix: process.env.CLOUDINARY_FOLDER_PREFIX || 'jovi',
+    cloudName: process.env.STORAGE_CLOUDINARY_CLOUD_NAME!,
+    apiKey: process.env.STORAGE_CLOUDINARY_API_KEY!,
+    apiSecret: process.env.STORAGE_CLOUDINARY_API_SECRET!,
+    folderPrefix: process.env.STORAGE_CLOUDINARY_FOLDER_PREFIX || 'jovi',
   },
 };
 ```

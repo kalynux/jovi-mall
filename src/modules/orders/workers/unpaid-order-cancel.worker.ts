@@ -11,11 +11,19 @@ import { UNPAID_ORDER_CANCEL_CONFIG, daysAgo } from '../config/unpaid-order-canc
  * UnpaidOrderCancelWorker - daily idempotent sweep that cancels orders left
  * unpaid past each vendor's `auto_cancel_unpaid_days` window.
  *
- * Stock is not reserved at order creation, so cancellation is a clean status
- * change + notification (see `OrderService.cancelOrder`). The sweep pre-filters
- * to orders unpaid for at least a day, then applies the per-vendor day cutoff
- * (cached within a run). Lifecycle mirrors `EarningsReleaseWorker` (node-cron,
- * daily) and is safe to re-run: `cancelOrder` no-ops on already-cancelled orders.
+ * Stock **is** reserved at order creation now, so cancellation releases the hold as well as
+ * changing the status — `OrderService.cancelOrder` calls `orderStockService.releaseForOrder`
+ * and this sweep inherits it by going through that method. (This paragraph used to say the
+ * opposite, and it was true at the time: nothing in the order path touched `variant.stock`.)
+ *
+ * Note the release is a belt-and-braces convenience rather than the mechanism that frees the
+ * units: a checkout hold carries a TTL and stops counting against availability the moment it
+ * lapses, which is well before this daily sweep runs. What the sweep adds is tidiness —
+ * an explicit `released` row instead of one waiting to be reaped.
+ *
+ * The sweep pre-filters to orders unpaid for at least a day, then applies the per-vendor day
+ * cutoff (cached within a run). Lifecycle mirrors `EarningsReleaseWorker` (node-cron, daily)
+ * and is safe to re-run: `cancelOrder` no-ops on already-cancelled orders.
  */
 export class UnpaidOrderCancelWorker implements ObservableWorker {
   private task: ReturnType<typeof cron.schedule> | null = null;

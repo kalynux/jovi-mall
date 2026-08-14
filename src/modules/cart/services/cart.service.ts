@@ -46,6 +46,32 @@ export interface CartResponse {
   totalItems: number;
 }
 
+/**
+ * How an anonymous cart is reconciled with a signed-in one.
+ *
+ * `sum` is the default because it matches what a shopper means — both carts are theirs.
+ * `replace` and `keep_server` exist for a client that has already asked the shopper which
+ * one they want; the API does not guess.
+ */
+export type CartMergeStrategy = 'sum' | 'replace' | 'keep_server';
+
+/**
+ * Why one incoming line did not survive the merge.
+ *
+ * Reported rather than thrown — see `mergeCart`. The codes are deliberately coarse: a
+ * shopper does not need to know whether a product was archived, suspended or soft-deleted,
+ * only that it is no longer for sale.
+ */
+export interface CartMergeDropped {
+  variantId: string;
+  reason:
+  | 'PRODUCT_UNAVAILABLE'
+  | 'PRODUCT_TYPE_CONFLICT'
+  | 'DIGITAL_LIMIT_REACHED'
+  | 'SERVICE_NOT_ALLOWED'
+  | 'SERVER_CART_KEPT';
+}
+
 export class CartService {
   private productRepository: ProductRepositoryMongo;
   private variantRepository: VariantRepositoryMongo;
@@ -198,6 +224,101 @@ export class CartService {
   }
 
   /**
+   * Set a line's quantity to an ABSOLUTE value.
+   *
+   * `addToCart` does `quantity += quantity`, so before this there was no way to *decrease*
+   * a line or to set one directly — the quantity stepper on the cart page could increment
+   * and nothing else. This is that missing half, not a replacement: `POST /items` keeps its
+   * increment semantics, which is what "add to cart" means from a product page.
+   *
+   * Two behaviours are inherited from the increment path on purpose:
+   *
+   *   - **The snapshot price is not refreshed.** `addToCart` only resolves a price when it
+   *     *inserts* a line; incrementing an existing one leaves the original. Re-resolving
+   *     here would mean the same button changes the price on one path and not the other,
+   *     which is worse than either rule on its own. The price a cart quotes is re-resolved
+   *     at checkout, which is the moment that actually binds.
+   *   - **Digital lines stay at 1.** The rule is the product type's, not the endpoint's.
+   *
+   * `quantity: 0` is rejected rather than treated as a delete: two different intentions
+   * should not share one call, and a client that computes its way to zero has a bug worth
+   * surfacing. Use `DELETE /items/:variantId`.
+   */
+  async setItemQuantity(
+    userId: string,
+    variantId: string,
+    quantity: number,
+  ): Promise<CartResponse> {
+    const cart = await CartModel.findOne({ userId });
+    if (!cart) {
+      throw createAppError(ERROR_CODES.CART_NOT_FOUND, 404, 'Cart not found');
+    }
+
+    // Same matcher `addToCart` uses — cart items carry no `_id` (CartItemSchema is
+    // `{ _id: false }`), so the variant is the only key a line can be addressed by.
+    const index = cart.items.findIndex((item) => item.variantId.toString() === variantId);
+    if (index === -1) {
+      throw createAppError(
+        ERROR_CODES.CART_ITEM_NOT_FOUND,
+        404,
+        'That item is no longer in your cart.',
+        { variantId },
+      );
+    }
+
+    if (cart.items[index].productType === 'digital' && quantity !== 1) {
+      throw createAppError(
+        ERROR_CODES.CART_DIGITAL_QUANTITY_MUST_BE_ONE,
+        400,
+        'Digital products can only be purchased with quantity of 1.',
+      );
+    }
+
+    cart.items[index].quantity = quantity;
+    await cart.save();
+
+    return this.formatCartResponse(cart);
+  }
+
+  /**
+   * Remove ONE line, keyed on the variant.
+   *
+   * `removeFromCart` below filters on `productId`, so removing one size of a T-shirt
+   * removes every size of it — the per-line remove button could not be built against it.
+   * Both exist: the product-keyed route is kept for back-compat (it is a documented
+   * endpoint with live callers), and this is the one a cart row should call.
+   */
+  async removeVariantFromCart(userId: string, variantId: string): Promise<CartResponse> {
+    const cart = await CartModel.findOne({ userId });
+    if (!cart) {
+      throw createAppError(ERROR_CODES.CART_NOT_FOUND, 404, 'Cart not found');
+    }
+
+    const before = cart.items.length;
+    cart.items = cart.items.filter((item) => item.variantId.toString() !== variantId);
+
+    if (cart.items.length === before) {
+      throw createAppError(
+        ERROR_CODES.CART_ITEM_NOT_FOUND,
+        404,
+        'That item is no longer in your cart.',
+        { variantId },
+      );
+    }
+
+    // `undefined` rather than null, matching removeFromCart: the schema path defaults to
+    // null and Mongoose treats an undefined assignment as an unset, which is what an empty
+    // cart should look like — the same document a cart that never held anything has.
+    if (cart.items.length === 0) {
+      cart.productType = undefined;
+    }
+
+    await cart.save();
+
+    return this.formatCartResponse(cart);
+  }
+
+  /**
    * Removes a product from cart.
    * @param userId - User ID
    * @param productId - Product to remove
@@ -222,6 +343,151 @@ export class CartService {
     await cart.save();
 
     return this.formatCartResponse(cart);
+  }
+
+  /**
+   * Hand an anonymous cart over at sign-in.
+   *
+   * Checkout requires an account, but browsing does not — so a visitor fills a cart in
+   * `localStorage`, signs in at checkout, and must not lose it. This is the one-time
+   * handover, and it is deliberately the only write on this service that **reports**
+   * failures instead of throwing them.
+   *
+   * ── Why lines are dropped, not refused ──────────────────────────────────────
+   *
+   * Every other cart write is a single deliberate action, so a 4xx is the right answer:
+   * the shopper asked for one thing and it could not be done. A merge is a *batch* the
+   * shopper never itemised — they added a T-shirt last Tuesday and a product that has
+   * since been unpublished, and throwing `CART_MIXED_PRODUCT_TYPES` at sign-in would lose
+   * the whole basket to explain one bad line. So unusable lines are dropped and returned
+   * in `meta.dropped[]`, and the UI can say which — silently losing a line is exactly what
+   * this endpoint exists to prevent.
+   *
+   * ── The server cart wins ────────────────────────────────────────────────────
+   *
+   * On a type conflict the *server* cart is authoritative and the incoming lines are
+   * dropped. That is not arbitrary: the server cart was built while signed in, so it is
+   * the one the shopper has seen on more than one device, and it is the one an in-flight
+   * checkout would be reading.
+   */
+  async mergeCart(
+    userId: string,
+    incoming: Array<{ productId: string; variantId: string; quantity: number }>,
+    strategy: CartMergeStrategy = 'sum',
+  ): Promise<{ cart: CartResponse; dropped: CartMergeDropped[] }> {
+    const dropped: CartMergeDropped[] = [];
+    const cart = (await CartModel.findOne({ userId })) ?? new CartModel({ userId, items: [] });
+
+    // `replace` starts from an empty server cart, so the incoming set defines both the
+    // contents and the product type. It is the only strategy where the server cart's
+    // existing type does not constrain the merge.
+    if (strategy === 'replace') {
+      cart.items = [];
+      cart.productType = undefined;
+    }
+
+    // `keep_server` is a no-op against a non-empty cart — by definition. Reported rather
+    // than silently ignored so the client can tell "your saved cart was kept" from
+    // "nothing you sent was usable".
+    if (strategy === 'keep_server' && cart.items.length > 0) {
+        for (const line of incoming) {
+            dropped.push({ variantId: line.variantId, reason: 'SERVER_CART_KEPT' });
+        }
+        return { cart: this.formatCartResponse(cart), dropped };
+    }
+
+    for (const line of incoming) {
+      // ── Is this still a thing anyone may buy? ────────────────────────────────
+      const product = await this.productRepository.findByIdUnscoped(line.productId);
+      if (!product) {
+        dropped.push({ variantId: line.variantId, reason: 'PRODUCT_UNAVAILABLE' });
+        continue;
+      }
+      if (product.type === 'service') {
+        dropped.push({ variantId: line.variantId, reason: 'SERVICE_NOT_ALLOWED' });
+        continue;
+      }
+
+      const variant = await this.variantRepository.findById(line.variantId);
+      if (!variant || variant.productId !== line.productId) {
+        dropped.push({ variantId: line.variantId, reason: 'PRODUCT_UNAVAILABLE' });
+        continue;
+      }
+
+      // `PriceResolverService` is what enforces `product.status === 'active'` and
+      // `variant.status === 'active'` — the same gate `addToCart` relies on. A throw here
+      // means the product left the catalogue while the cart sat in localStorage, which is
+      // precisely the case this endpoint exists to report rather than crash on.
+      let unitPrice: number;
+      try {
+        const resolved = await this.priceResolverService.execute({
+          productId: line.productId,
+          variantId: line.variantId,
+          vendorId: product.vendorId,
+          quantity: line.quantity,
+        });
+        unitPrice = resolved.unitPrice;
+      } catch {
+        dropped.push({ variantId: line.variantId, reason: 'PRODUCT_UNAVAILABLE' });
+        continue;
+      }
+
+      // ── Does it fit alongside what is already here? ──────────────────────────
+      const effectiveType = cart.productType ?? (cart.items.length > 0 ? cart.items[0].productType : undefined);
+
+      if (effectiveType && effectiveType !== product.type) {
+        dropped.push({ variantId: line.variantId, reason: 'PRODUCT_TYPE_CONFLICT' });
+        continue;
+      }
+
+      const quantity = product.type === 'digital' ? 1 : line.quantity;
+
+      if (product.type === 'digital') {
+        const alreadyHasDigital = cart.items.length > 0;
+        const sameVariantAlready = cart.items.some((i) => i.variantId.toString() === line.variantId);
+        // One digital product per cart (v1 scope), and a second copy of the same one is
+        // not a quantity — a licence bought twice is still one licence.
+        if (alreadyHasDigital && !sameVariantAlready) {
+          dropped.push({ variantId: line.variantId, reason: 'DIGITAL_LIMIT_REACHED' });
+          continue;
+        }
+        if (sameVariantAlready) continue;
+      }
+
+      const existingIndex = cart.items.findIndex((i) => i.variantId.toString() === line.variantId);
+      if (existingIndex !== -1) {
+        // `sum` is the default because it matches what a shopper means: the two carts are
+        // both theirs, and two of a thing in each is four.
+        if (product.type !== 'digital') {
+          cart.items[existingIndex].quantity += quantity;
+        }
+      } else {
+        cart.items.push({
+          variantId: new Types.ObjectId(line.variantId),
+          sku: variant.sku,
+          variantTitle: this.generateVariantTitle(variant.optionSignature),
+          optionsSnapshot: variant.optionSignature,
+          productId: new Types.ObjectId(product.id),
+          title: product.title,
+          vendorId: new Types.ObjectId(product.vendorId),
+          productType: product.type as 'physical' | 'digital',
+          quantity,
+          // Priced NOW, not from whatever the anonymous cart carried. A localStorage cart
+          // is client-controlled data: trusting its price would let anyone name their own.
+          price: unitPrice,
+          currency: 'XAF',
+        });
+        cart.productType = product.type as 'physical' | 'digital';
+      }
+    }
+
+    if (cart.items.length === 0) {
+      cart.productType = undefined;
+    }
+
+    await cart.save();
+
+    return { cart: this.formatCartResponse(cart), dropped };
   }
 
   /**

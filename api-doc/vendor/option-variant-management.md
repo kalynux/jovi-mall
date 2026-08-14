@@ -106,6 +106,8 @@ These are hard limits enforced by the backend. Plan your UI around them.
   "optionSignature": "507f1f77bcf86cd799439030|507f1f77bcf86cd799439031",
   "price": 29.99,
   "compareAtPrice": 39.99,
+  "bargain": { "minPrice": 29.99, "maxPrice": 45.00 },
+  "bargainable": true,
   "stock": 100,
   "isInfiniteStock": false,
   "lowStockThreshold": 10,
@@ -808,6 +810,16 @@ async function bulkUpdatePrices(productId, variantUpdates) {
   }
 }
 ```
+
+> [!IMPORTANT]
+> **Bargainable variants and bulk price edits.** On a variant with a
+> [bargain window](./variants.md#bargainable-pricing), each `{ price }` write also re-points
+> `bargain.minPrice` at the new price — so the loop above keeps the invariant without
+> knowing the feature exists. But any row whose new price would exceed its own stored
+> `bargain.maxPrice` is rejected with `422 CATALOG_VARIANT_BARGAIN_RANGE_INVALID`, and
+> because these are independent requests the successful rows still commit. Send
+> `{ price, bargain: { maxPrice } }` for those rows, and surface `failed` per-variant rather
+> than as a single count.
 
 ---
 

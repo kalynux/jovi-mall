@@ -11,6 +11,7 @@ import { OrderRepository } from './order.repository';
 import { VendorRepository } from '../vendors/vendor.repository';
 import { ShipmentService } from '../shipments/shipment.service';
 import { cashCollectionService } from '../cod/services/cash-collection.service';
+import { customerOrderViewService } from './services/customer-order-view.service';
 
 const completionService: OrderCompletionService = orderCompletionService;
 const orderService = new OrderService();
@@ -22,8 +23,21 @@ const shipmentService = new ShipmentService();
  * Collapse a checkout group's per-order payment statuses into one label the
  * customer UI can show for the logical "order": all paid → paid; any paid or
  * partially collected (COD) → partially_paid; none paid → awaiting_payment.
+ *
+ * ⚠️ **The empty case is checked first, and that is a fix rather than defensiveness.**
+ * `[].every(...)` is `true` in JavaScript, so an empty group used to report `'paid'` — the
+ * most reassuring possible answer to "what happened to my money" derived from no data at
+ * all. A group with no orders is `'unknown'`, which is at least honest.
+ *
+ * The other correction is `failed` / `refunded` / `disputed`: they previously fell through
+ * to `'mixed'`, so a fully refunded group read as "mixed" and a customer looking for their
+ * refund saw a word that means nothing. They now get their own labels.
  */
 function aggregatePaymentStatus(statuses: string[]): string {
+  if (statuses.length === 0) return 'unknown';
+  if (statuses.every(s => s === 'refunded')) return 'refunded';
+  if (statuses.every(s => s === 'failed')) return 'failed';
+  if (statuses.some(s => s === 'disputed')) return 'disputed';
   if (statuses.every(s => s === 'paid')) return 'paid';
   if (statuses.some(s => s === 'paid' || s === 'partially_paid')) return 'partially_paid';
   if (statuses.every(s => s === 'AWAITING_PAYMENT' || s === 'pending')) return 'awaiting_payment';
@@ -34,6 +48,35 @@ function aggregatePaymentStatus(statuses: string[]): string {
 // `order.service.ts` alongside `assertCancellable`, which now owns the whole guard
 // sequence. They were module-private here, which made them uncopyable by the second actor
 // that needs them — an administrator cancelling through `/api/internal/admin/orders`.
+
+/**
+ * `GET /customer/orders` — pagination plus the filters the history screen needs.
+ *
+ * The endpoint accepted `page` and `limit` and nothing else, so a customer with a year of
+ * orders had no way to find one: no status filter, no date range, no search.
+ *
+ * `status` and `paymentStatus` are typed against the model's own enums rather than left as
+ * free strings — an unknown value is a `400` naming the field, instead of a silent empty
+ * page that looks like "you have no orders". Note `payment_status` carries two spellings for
+ * the unpaid state (`pending` and `AWAITING_PAYMENT`); both are accepted because both exist
+ * in the data.
+ */
+const CustomerOrderListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  status: z
+    .enum([
+      'pending', 'processing', 'partially_shipped', 'shipped',
+      'partially_delivered', 'delivered', 'fulfilled', 'cancelled', 'returned',
+    ])
+    .optional(),
+  paymentStatus: z
+    .enum(['pending', 'AWAITING_PAYMENT', 'partially_paid', 'paid', 'disputed', 'failed', 'refunded'])
+    .optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+  q: z.string().trim().min(1).max(200).optional(),
+});
 
 const CheckoutSchema = z
   .object({
@@ -113,10 +156,22 @@ export class CustomerOrderController {
    */
   static listOrderGroups = asyncHandler(async (req: Request, res: Response) => {
     const customerId = req.auth!.role_entity._id.toString();
-    const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? '20'), 10) || 20));
+    // Parsed by a schema rather than by hand-rolled `parseInt` fallbacks: the filters below
+    // reach a `$match`, so a malformed value must be a 400 with a named field rather than
+    // being silently coerced into something that quietly returns the wrong rows.
+    const query = CustomerOrderListQuerySchema.parse(req.query);
 
-    const { data, meta } = await orderRepository.findGroupsByCustomer(customerId, { page, limit });
+    const { data, meta } = await orderRepository.findGroupsByCustomer(
+      customerId,
+      { page: query.page, limit: query.limit },
+      {
+        fulfillmentStatus: query.status,
+        paymentStatus: query.paymentStatus,
+        from: query.from,
+        to: query.to,
+        q: query.q,
+      },
+    );
 
     res.status(200).json({
       success: true,
@@ -150,12 +205,9 @@ export class CustomerOrderController {
 
     const totalAmount = orders.reduce((sum, o) => sum + o.total_amount, 0);
 
-    // COD: per-shipment cash blocks, incl. the delivery code for still-pending
-    // handoffs — this is the customer's own view, the code is their secret.
-    const hasCod = orders.some(o => o.payment_method === 'cash_on_delivery');
-    const codByOrder = hasCod
-      ? await cashCollectionService.getCodBlocksForOrders(orders.map(o => o._id.toString()), true)
-      : new Map<string, any[]>();
+    // One projection for both this and GET /:id — see customer-order.dto.ts. Store
+    // identity, thumbnails and COD blocks are all batched across the whole group.
+    const dtos = await customerOrderViewService.toDtos(orders);
 
     res.status(200).json({
       success: true,
@@ -166,34 +218,36 @@ export class CustomerOrderController {
         totalAmount,
         orderCount: orders.length,
         paymentStatus: aggregatePaymentStatus(orders.map(o => o.payment_status)),
-        orders: orders.map(order => ({
-          id: order._id.toString(),
-          orderNumber: order.order_number,
-          vendorId: order.vendor_id.toString(),
-          orderType: order.order_type,
-          total: order.total_amount,
-          currency: order.currency,
-          paymentMethod: order.payment_method,
-          paymentStatus: order.payment_status,
-          fulfillmentStatus: order.fulfillment_status,
-          codCollections: order.payment_method === 'cash_on_delivery'
-            ? (codByOrder.get(order._id.toString()) ?? [])
-            : undefined,
-          items: order.items.map(item => ({
-            id: item._id.toString(),
-            productId: item.product_id.toString(),
-            variantId: item.variant_id.toString(),
-            sku: item.sku,
-            title: item.title,
-            variantTitle: item.variant_title,
-            quantity: item.quantity,
-            price: item.price,
-            currency: item.currency,
-            freeDelivery: item.delivery?.free_delivery ?? false,
-          })),
-        })),
+        orders: dtos,
       },
     });
+  });
+
+  /**
+   * GET /customer/orders/:id
+   *
+   * One per-vendor order in detail.
+   *
+   * Before this the only per-order read was `GET /groups/:cartId`, which returns the whole
+   * checkout group — so a customer holding a single `orderId` (from a push deep link, an
+   * email, or the `orderId` every notification carries) had no endpoint to open it with.
+   * They had to already know the `cartId`, which nothing had told them.
+   *
+   * Same body as one element of the group's `orders[]`, built by the same projection.
+   */
+  static getOrder = asyncHandler(async (req: Request, res: Response) => {
+    const customerId = req.auth!.role_entity._id.toString();
+    const orderId = req.params.id;
+
+    // Ownership is the query, not a check after it: a mismatch is indistinguishable from a
+    // nonexistent order, so the endpoint cannot confirm whether an id is real.
+    const order = await OrderModel.findOne({ _id: orderId, customer_id: customerId });
+    if (!order) {
+      throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404, undefined, { orderId });
+    }
+
+    const [dto] = await customerOrderViewService.toDtos([order]);
+    res.status(200).json({ success: true, data: dto });
   });
 
   /**
@@ -227,6 +281,23 @@ export class CustomerOrderController {
         completed_at: order.completion.confirmed_at,
       },
     });
+  });
+
+  /**
+   * GET /customer/orders/:orderId/shipments
+   *
+   * Where the customer's parcels are — and the endpoint that makes the two below
+   * **reachable at all**. Both need a `:shipmentId`, and until now no customer-facing
+   * response returned one except inside `codCollections`, which is undefined for every
+   * online-paid order. A prepaid customer therefore had no way to confirm a delivery.
+   *
+   * Statuses are collapsed to the five-word customer vocabulary and the agent's identity
+   * and the internal failure notes are never included — see `customer-shipment.dto.ts`.
+   */
+  static listOrderShipments = asyncHandler(async (req: Request, res: Response) => {
+    const customerId = req.auth!.role_entity._id.toString();
+    const shipments = await orderService.listShipmentsForCustomer(customerId, req.params.orderId);
+    res.status(200).json({ success: true, data: shipments });
   });
 
   /**

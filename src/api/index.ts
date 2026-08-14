@@ -29,7 +29,7 @@ import customerBookingRoutes from '../modules/booking/routes/customer-booking.ro
  *
  * If you add an import that a `router.use` above it consumes, put it here.
  */
-import { authRateLimiter } from './rate-limit/rate-limit.middleware';
+import { authRateLimiter, publicRateLimiter } from './rate-limit/rate-limit.middleware';
 
 const router = express.Router();
 
@@ -163,6 +163,16 @@ router.use('/admin', adminBillingRoutes);
 // Anything added under this prefix is world-readable with no further review, so a
 // router mounted here must contain only reads of already-published data. See the
 // header of public-billing.routes.ts.
+
+// The storefront bucket, in front of EVERY public router — mounted first, for the
+// same reason the credential bucket is: a prefix mount cannot miss a route, including
+// ones added later. `/public` is the only anonymous read surface with real traffic
+// volume (a product grid fires two calls per page view), and without its own counters
+// it shares Layer A's single IP bucket with every other caller on the address — so a
+// crawler on an office NAT would 429 the signed-in shoppers sitting beside it.
+// Layer A still applies on top; this is a separate bucket, not a replacement.
+router.use('/public', publicRateLimiter);
+
 import publicBillingRoutes from '../modules/billing/routes/public-billing.routes';
 router.use('/public', publicBillingRoutes);
 
@@ -172,6 +182,18 @@ router.use('/public', publicBillingRoutes);
 // The editor's side is /api/admin/articles, mounted below behind requireRole(['admin']).
 import publicBlogRoutes from '../modules/blog/routes/public-blog.routes';
 router.use('/public', publicBlogRoutes);
+
+// The storefront's read side — products, categories and stores, for the shop at
+// /shop/*. Same prefix, same rules: only products a vendor has deliberately put on
+// sale, only stores that sell one, five-minute cache, no identity. This is the third
+// router on the prefix; the paths do not overlap (/products, /categories, /stores vs
+// /plans, /credit-packs, /articles*).
+//
+// Visibility for every route here is decided by ONE predicate —
+// catalog/domain/services/public-catalog.filter.ts. The vendor's own catalogue stays
+// on /api/vendor/products behind requireRole(['vendor']).
+import publicCatalogRoutes from '../modules/catalog/routes/public-catalog.routes';
+router.use('/public', publicCatalogRoutes);
 
 // Earnings: commission/escrow ledger. Vendor sees held vs withdrawable balances;
 // agency sees its own held vs withdrawable delivery-fee balance; agent sees their

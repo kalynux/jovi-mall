@@ -16,6 +16,27 @@ export interface IProductVariant extends IBaseDocument {
   price: number;
   compareAtPrice?: number;
 
+  /**
+   * Bargainable pricing — the window a buyer may haggle within.
+   *
+   * `minPrice` IS `price`: the two are kept identical by every write path
+   * (`bargain-price.rule.ts`), so this adds no second selling price. `maxPrice`
+   * is the ceiling bargaining may reach and is unrelated to `compareAtPrice`
+   * (a "was" price, which sits *above* the selling price for a different reason).
+   *
+   * Absent = not bargainable. Present but with the parent product's
+   * `vectorisationEnabled === false` = configured and INERT: the range is kept,
+   * never deleted, and the read model reports `bargainable: false`.
+   *
+   * Not set on service products — their `price` is a per-minute base that
+   * BookingPriceResolver prorates and peak-surcharges, so a flat range is
+   * meaningless there.
+   */
+  bargain?: {
+    minPrice: number;
+    maxPrice: number;
+  };
+
   stock: number;
   isInfiniteStock: boolean;
 
@@ -84,6 +105,19 @@ const ProductVariantSchema = new Schema<IProductVariant>({
 
   price: { type: Number, required: true },
   compareAtPrice: { type: Number },
+
+  // Bargainable pricing. camelCase deliberately — `create` passes the raw domain
+  // object to Mongoose (VariantRepositoryMongo.create), so a snake_case path here
+  // would be silently stripped on every create, exactly as happened to
+  // low_stock_threshold / allow_oversell below. No index: nothing queries by it.
+  bargain: {
+    type: {
+      minPrice: { type: Number, required: true, min: 0 },
+      maxPrice: { type: Number, required: true, min: 0 },
+    },
+    required: false,
+    default: undefined,
+  },
 
   stock: { type: Number, required: true, default: 0 },
   isInfiniteStock: { type: Boolean, default: false },

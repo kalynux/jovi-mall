@@ -229,6 +229,60 @@ function agencyUnavailable(reason: AgencyEarningUnavailableReason): AgencyEarnin
  *
  * All amounts are integers in minor currency units.
  */
+/**
+ * Which fulfilment modes a delivery covers — the only thing the fee formula reads.
+ *
+ * A delivery may be both: each product configures its own pickup independently, so one
+ * shipment can carry a vendor-collected item and a warehoused one.
+ */
+export interface PickupMix {
+  hasPickupBased: boolean;
+  hasStorageBased: boolean;
+}
+
+/**
+ * The delivery-fee formula itself — pure, and the ONLY definition of it.
+ *
+ * Extracted from `computeShipmentDeliveryFee` so that the **cart quote**, which runs before
+ * any shipment exists, divides by exactly the same arithmetic the split will later charge.
+ * Everything shipment-shaped (looking up order items, classifying their pickup source) stays
+ * in the caller; what is left here takes a policy and a mix and returns a number.
+ *
+ * That split is the same rule the rest of this file follows and says so in its header: one
+ * definition, so a quote cannot drift from a charge. Add a fee component **here**, never at
+ * a call site.
+ */
+export function deliveryFeeForPickupMix(policies: IAgencyPolicies, mix: PickupMix): number {
+  let fee = 0;
+
+  // A delivery mixing both fulfilment modes is charged BOTH components: real distinct
+  // fulfilment work happens for each class.
+  if (mix.hasPickupBased) {
+    fee += policies.pricing.pickup_based.base_rate_first_kg;
+    // TODO(earnings): additional_per_kg — deferred. Needs a weight snapshot that doesn't
+    // exist on IOrderItem; weight only lives on ProductVariant today.
+    // TODO(earnings): out_of_region_surcharge — deferred. No region-matching concept
+    // (customer delivery region vs the vendor pickup address / agency coverage_areas)
+    // exists anywhere yet.
+  }
+  if (mix.hasStorageBased) {
+    fee +=
+      policies.pricing.storage_based.local_delivery_fee +
+      policies.pricing.storage_based.pick_pack_fee_per_order;
+    // TODO(earnings): out_of_region_delivery_fee — deferred, same reason as above.
+    // TODO(earnings): monthly_storage_fee_per_sku — intentionally EXCLUDED from any
+    // per-order split. It is a recurring rent-style charge (per SKU stored, per month),
+    // not tied to any single order.
+  }
+
+  // TODO(earnings): free_delivery — IOrderItem.delivery.free_delivery is a per-item flag;
+  // this shipment-level computation doesn't consult it, so a delivery carrying a
+  // free-delivery item is still charged its flat component(s) in full. Revisit once fee
+  // calc needs item-level granularity below the two flat components above.
+
+  return fee;
+}
+
 export class EarningsQuoteService {
   constructor(
     private readonly agencyRepo: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
@@ -264,54 +318,22 @@ export class EarningsQuoteService {
       return EARNINGS_CONFIG.DELIVERY_FLAT_FEE;
     }
 
-    let hasPickupBased = false;
-    let hasStorageBased = false;
+    // Classify this shipment's lines, then hand the mix to the shared formula.
+    // The classification is shipment-shaped and stays here; the arithmetic is not
+    // and lives in `deliveryFeeForPickupMix`, so the cart quote divides by the same
+    // definition before any shipment exists.
+    const mix: PickupMix = { hasPickupBased: false, hasStorageBased: false };
     for (const item of shipment.items) {
       const orderItem = orderItemsById.get(item.order_item_id.toString());
       const source = orderItem?.delivery?.pickup_location?.source;
-      if (source === 'vendor_address') hasPickupBased = true;
-      if (source === 'agency_storage') hasStorageBased = true;
+      if (source === 'vendor_address') mix.hasPickupBased = true;
+      if (source === 'agency_storage') mix.hasStorageBased = true;
       // else: no matching order item, or a legacy item with
       // pickup_location: null (predates this feature) — can't classify;
       // contributes no fee component.
     }
 
-    let shipmentFee = 0;
-    // A shipment mixing both fulfillment modes (each product
-    // independently configured — see ShipmentService.getDetailForAgency)
-    // is charged BOTH components: real distinct fulfillment work happens
-    // for each class.
-    if (hasPickupBased) {
-      shipmentFee += policies.pricing.pickup_based.base_rate_first_kg;
-      // TODO(earnings): additional_per_kg — deferred. Needs a weight
-      // snapshot that doesn't exist on IOrderItem; weight only lives on
-      // ProductVariant today. Add `+ additional_per_kg * extraKg` here
-      // once order items snapshot a weight at checkout.
-      // TODO(earnings): out_of_region_surcharge — deferred. No
-      // region-matching concept (customer delivery region vs the vendor
-      // pickup address / agency coverage_areas) exists anywhere yet.
-    }
-    if (hasStorageBased) {
-      shipmentFee +=
-        policies.pricing.storage_based.local_delivery_fee +
-        policies.pricing.storage_based.pick_pack_fee_per_order;
-      // TODO(earnings): out_of_region_delivery_fee — deferred, same
-      // reason as pickup_based.out_of_region_surcharge above.
-      // TODO(earnings): monthly_storage_fee_per_sku — intentionally
-      // EXCLUDED from this per-order split. It's a recurring rent-style
-      // charge (per SKU stored, per month), not tied to any single
-      // order. Future work: bill it on its own recurring cadence
-      // (separate job/module), not here.
-    }
-
-    // TODO(earnings): free_delivery — IOrderItem.delivery.free_delivery
-    // is a per-item flag; this per-shipment computation doesn't consult
-    // it, so a shipment carrying a free-delivery item is still charged
-    // its flat component(s) in full. Revisit once fee calc needs
-    // item-level granularity below the two shipment-level flat
-    // components above.
-
-    return shipmentFee;
+    return deliveryFeeForPickupMix(policies, mix);
   }
 
   /**

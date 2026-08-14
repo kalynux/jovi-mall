@@ -1,5 +1,8 @@
 # Variant Management API
 
+> Bargainable pricing (`bargain` / `bargainable`) is new. Dashboard hand-off:
+> [Front-end changelog](../FRONTEND-CHANGELOG-bargainable-pricing.md).
+
 ## Overview
 
 Variants are the SKU-level entities that hold **price**, **stock**, **physical attributes**, and (for services) **booking configuration** for a product. Every product — physical, digital, or service — must have at least one variant before it can be activated.
@@ -51,6 +54,8 @@ This is the full shape of a variant object returned by all read endpoints:
   "optionSignature": "507f1f77bcf86cd799439030|507f1f77bcf86cd799439031",
   "price": 29.99,
   "compareAtPrice": 39.99,
+  "bargain": { "minPrice": 29.99, "maxPrice": 45.00 },
+  "bargainable": true,
   "stock": 100,
   "isInfiniteStock": false,
   "lowStockThreshold": 10,
@@ -142,6 +147,8 @@ For the single variant of a `type: "service"` product, read endpoints also retur
 | `optionSignature` | string | System-generated — pipe-joined sorted optionValueIds. Empty string `""` for variants with no options |
 | `price` | number | Selling price |
 | `compareAtPrice` | number \| undefined | Original/MSRP price — show as "was" price if > price |
+| `bargain` | object \| undefined | The haggling window, `{ minPrice, maxPrice }`. Absent when not configured. **`minPrice` always equals `price`** — it is not a second price. `maxPrice` is the ceiling bargaining may reach and is unrelated to `compareAtPrice`. Still returned when `bargainable` is `false`. See [Bargainable pricing](#bargainable-pricing) |
+| `bargainable` | boolean | **Always present.** `true` only when a `bargain` window is configured **and** the parent product has `vectorisationEnabled: true`. Never infer "is this live?" from the mere presence of `bargain` |
 | `stock` | number | Current inventory count |
 | `isInfiniteStock` | boolean | If `true`, stock is unlimited; `stock` field is ignored |
 | `lowStockThreshold` | number \| null | Alert threshold. `null` = no alerts |
@@ -176,6 +183,7 @@ Create a new variant for a product.
   "name": "Red / Medium",
   "price": 29.99,
   "compareAtPrice": 39.99,
+  "bargain": { "maxPrice": 45.00 },
   "stock": 100,
   "isInfiniteStock": false,
   "weight": 200,
@@ -195,6 +203,7 @@ Create a new variant for a product.
   "sku": "JS-COURSE-PDF",
   "name": "PDF Edition",
   "price": 29.99,
+  "bargain": { "maxPrice": 45.00 },
   "isInfiniteStock": true,
   "stock": 0,
   "digitalConfig": {
@@ -232,6 +241,7 @@ Create a new variant for a product.
 > - `serviceConfig` is **required** for the service variant. `price` is the base price **per `durationMinutes`** — the booking price is prorated by the actual elapsed duration.
 > - Creating a **second** variant returns `409 CATALOG_SERVICE_VARIANT_EXISTS`.
 > - `optionValueIds`, `deliveryAgencyId`, dimensions (`weight`/`length`/`width`/`height`), and `digitalConfig` are **rejected** (`400 CATALOG_PRODUCT_INVALID_TYPE`).
+> - `bargain` is **rejected** (`400 CATALOG_VARIANT_BARGAIN_NOT_SUPPORTED`) — a flat range cannot describe a price the booking engine prorates and peak-surcharges.
 > - `peakHours` is optional; the surcharge applies only to booking minutes overlapping the window on the listed `daysOfWeek`.
 > - Update the scheduling/peak config later via `PATCH /products/:productId/variants/:variantId/service/config`, or the price via the variant `PATCH` endpoint.
 
@@ -254,6 +264,7 @@ Create a new variant for a product.
 | `price` | number | ✅ | >= 0 | All |
 | `name` | string | No | 1–100 chars | All |
 | `compareAtPrice` | number | No | >= 0 | All |
+| `bargain` | object | No | `{ minPrice?, maxPrice }`, both >= 0. `minPrice` defaults to `price`; sending one that differs → `422`. `maxPrice < price` → `422`. See [Bargainable pricing](#bargainable-pricing) | Physical + digital (**rejected** on service, `400`) |
 | `stock` | number | No | Integer >= 0; default `0` | All |
 | `isInfiniteStock` | boolean | No | Default `false` | All |
 | `optionValueIds` | string[] | No | Array of valid ObjectIds; default `[]` | Physical only |
@@ -450,6 +461,7 @@ Update a variant. All fields are optional — only provided fields are changed.
   "name": "Red / Medium",
   "price": 34.99,
   "compareAtPrice": 39.99,
+  "bargain": { "maxPrice": 45.00 },
   "stock": 80,
   "isInfiniteStock": false,
   "lowStockThreshold": 10,
@@ -469,8 +481,9 @@ Update a variant. All fields are optional — only provided fields are changed.
 |-------|------|----------|------------|---------------|
 | `sku` | string | No | 1–100 chars; globally unique | All |
 | `name` | string | No | 1–100 chars | All |
-| `price` | number | No | >= 0 | All |
+| `price` | number | No | >= 0. **On a bargainable variant this also moves `bargain.minPrice`** — see the auto-sync in [Bargainable pricing](#bargainable-pricing) | All |
 | `compareAtPrice` | number | No | >= 0 | All |
+| `bargain` | object \| null | No | `{ minPrice?, maxPrice }`, both >= 0. **`null` clears the window.** `minPrice` defaults to the effective price (this request's `price` if present, else the stored one) | Physical + digital (**rejected** on service, `400` — except `null`, always allowed) |
 | `stock` | number | No | Integer >= 0 | All |
 | `isInfiniteStock` | boolean | No | — | All |
 | `lowStockThreshold` | number \| null | No | Integer >= 1, or `null` to disable alerts | All |
@@ -614,6 +627,16 @@ Toggle a variant between `"active"` and `"archived"`. Designed for the **fronten
 
 Sending the variant's **current** status is a no-op and returns `200` with `"Variant is already <status>"`.
 
+> [!NOTE]
+> Both responses of this endpoint return the **full enriched variant** — the same shape as
+> the GET and PATCH endpoints, including `files`, `displayName`, `digital`, `bargain` and
+> `bargainable`. It previously returned the bare stored record; the enriched shape is a
+> superset, so no field was removed.
+>
+> Archiving does not clear a bargain window. An archived variant keeps its configuration and
+> is never sent to the AI index, so `bargainable` describes the parent product's opt-in, not
+> whether the variant is on sale.
+
 **Side Effects:**
 
 - **Archiving:** If the archived variant was `product.defaultVariantId`, the backend reassigns `defaultVariantId` to the next active variant (lowest `createdAt`) or clears it if none remain. `product.hasVariants` is updated accordingly.
@@ -631,6 +654,7 @@ Sending the variant's **current** status is a no-op and returns `200` with `"Var
     "status": "archived",
     "price": 29.99,
     "stock": 0,
+    "bargainable": false,
     "...": "...other variant fields"
   },
   "message": "Variant status changed to archived"
@@ -698,6 +722,7 @@ Archive a variant (soft delete). Sets `status` to `"archived"`. Data is preserve
 | `deliveryAgencyId` | ✅ | ❌ | ❌ |
 | `digitalConfig` (per-variant asset/limits) | ❌ | ✅ | ❌ |
 | `serviceConfig` (duration/buffers/bookingMode/peakHours) | ❌ | ❌ | ✅ (required) |
+| `bargain` (bargainable pricing) | ✅ | ✅ | ❌ (clear-only) |
 | Max variants | unlimited | **5** | **1** |
 | Max images per variant | **3** | **1** | **0** (use product media) |
 | Images settable on create | ✅ | ✅ | ❌ |
@@ -779,7 +804,112 @@ When an order is placed for a physical variant, the fulfillment agency is resolv
 
 Frontend should warn the vendor if no agency is configured for a variant and the vendor has no default set.
 
+### Bargainable pricing
+
+A variant may carry a **bargain window** — the price range a buyer is allowed to haggle
+within. It is optional; a variant with no window is simply not bargainable.
+
+```json
+"bargain": { "minPrice": 29.99, "maxPrice": 45.00 }
+```
+
+**`minPrice` is the variant's actual selling price.** It is not a second price field: the
+backend keeps `bargain.minPrice === price` on every write path, so there is exactly one
+number a buyer pays before any negotiation. `maxPrice` is the ceiling negotiation may
+reach. Neither has anything to do with `compareAtPrice`, which sits *above* the selling
+price as a "was" price for a completely different reason.
+
+#### Writing it
+
+Accepted on `POST /:id/variants`, `PATCH /:productId/variants/:variantId`,
+`POST /api/vendor/products/simple` and `PATCH /api/vendor/products/:id/simple`.
+
+| Body | Effect |
+|---|---|
+| `"bargain": { "maxPrice": 45.00 }` | Window set. `minPrice` **defaults to the effective price** — the `price` in the same request if there is one, otherwise the stored price |
+| `"bargain": { "minPrice": 29.99, "maxPrice": 45.00 }` | Same, but `minPrice` must equal that effective price |
+| `"bargain": null` | **Clears** the window. Update endpoints only — the field is removed, not set to null |
+| `bargain` omitted | Untouched. But see the auto-sync below |
+| `"price": 32.00` alone, window configured | **`minPrice` auto-syncs to 32.00**; `maxPrice` is unchanged. A client that knows nothing about bargaining cannot break the invariant |
+
+`maxPrice` is required whenever a `bargain` object is present — it is the only number a
+vendor genuinely has to choose. `maxPrice === minPrice` is allowed and means "bargainable,
+no headroom yet".
+
+**Raising a price above the ceiling is refused** rather than silently lifting the ceiling.
+Send both fields in one body:
+
+```jsonc
+// 422 — 50.00 is above the stored maxPrice of 45.00
+{ "price": 50.00 }
+
+// 200 — the vendor decides the new ceiling explicitly
+{ "price": 50.00, "bargain": { "maxPrice": 65.00 } }
+```
+
+#### When it is in effect — `bargainable`
+
+Bargaining is gated on the parent product's **vectorisation** opt-in
+(`PATCH /api/vendor/products/:id/vectorisation`), because the agent that negotiates reads
+its catalogue from the AI index. So the read models return two things, and they answer
+different questions:
+
+- `bargain` — what the vendor configured.
+- `bargainable` — whether it is live right now: `product.vectorisationEnabled && bargain != null`.
+
+A window may be **configured on any product at any time**, whether or not vectorisation is
+on; it is fully price-validated either way. It is simply inert until the flag is on. Three
+consequences worth designing for:
+
+- **Turning vectorisation off never deletes a window.** `bargainable` flips to `false` and
+  the range stays visible and editable.
+- **The flag can turn itself off.** A product that stops being eligible for vectorisation
+  (demoted from `active`, or its title/description/category emptied) has
+  `vectorisationEnabled` reset to `false` by the indexing pipeline. `bargainable` will flip
+  with no pricing edit having taken place — re-read rather than caching it.
+- **`PATCH /api/vendor/products/:id` responds before the toggle is applied.** A body
+  flipping `vectorisationEnabled` returns data built *before* the flip, so `bargainable` is
+  eventually consistent there. Use `PATCH /:id/vectorisation`, which awaits the toggle, when
+  you need the flag and the flag's effect in one round trip. Note also that while
+  `vectorisationStatus` is `pending`, every variant write returns
+  `409 CATALOG_PRODUCT_VECTORISATION_PENDING` — do not reveal a bargain editor on the
+  strength of the flag alone without handling that window.
+
+#### Not supported on service products
+
+`type: "service"` variants refuse a bargain window with
+`400 CATALOG_VARIANT_BARGAIN_NOT_SUPPORTED`. Their `price` is a base rate per
+`serviceConfig.durationMinutes` that the booking engine prorates and peak-surcharges, so a
+flat range would not describe what a customer is charged. Clearing (`"bargain": null`) is
+always allowed, on every type.
+
+#### Errors
+
+| Code | Status | Raised when |
+|---|---|---|
+| `CATALOG_VARIANT_BARGAIN_NOT_SUPPORTED` | 400 | A window was sent for a service product's variant |
+| `CATALOG_VARIANT_BARGAIN_PRICE_MISMATCH` | 422 | An explicit `minPrice` disagrees with the effective price |
+| `CATALOG_VARIANT_BARGAIN_RANGE_INVALID` | 422 | `maxPrice` is below the effective price (including a bare price edit that would rise above the stored ceiling) |
+| `VALIDATION_ERROR` | 400 | Shape problems: `maxPrice` missing, a negative or non-numeric bound, an unknown key inside `bargain`, or `bargain: null` on a create endpoint |
+
+All three carry `details.variant` (the variant's `name` or `sku`) plus the numbers involved.
+
+> ⚠ **Typos behave differently on the two editors.** `PATCH /:productId/variants/:variantId`
+> does not reject unknown body keys, so `{"bargin": {...}}` returns **200 with nothing
+> written**. The simple-product endpoints are strict and **400** the same typo. A silently
+> swallowed price ceiling is worth guarding against client-side.
+
+#### Concurrency
+
+Two simultaneous PATCHes — one setting `price`, one setting `bargain.maxPrice` — each
+validate against the stored state and both commit, which can leave `price` above
+`maxPrice`. There is no version check on variant writes (the same is true of
+`compareAtPrice` vs `price`). Serialise writes to one variant client-side if this matters.
+
 ### Pricing Display (Frontend Guidance)
+
+`maxPrice` is a **negotiation ceiling, not a "was" price** — never render it as a
+strikethrough or a discount reference. Only `compareAtPrice` means that.
 
 ```javascript
 // Show discount badge when compareAtPrice is greater than price
@@ -837,4 +967,7 @@ Validation errors include a `details` array:
 | `CATALOG_PRODUCT_VARIANT_ZERO_PRICE` | 422 | Status change rejected — cannot activate a variant with `price = 0` |
 | `CATALOG_VARIANT_NO_DIGITAL_ASSET` | 422 | Status change rejected — digital variant has no uploaded asset |
 | `CATALOG_PRODUCT_SERVICE_NO_DURATION` | 422 | Status change rejected — service variant has no `serviceConfig.durationMinutes` |
+| `CATALOG_VARIANT_BARGAIN_NOT_SUPPORTED` | 400 | A `bargain` window was sent for a **service** product's variant. Clearing with `null` is still allowed |
+| `CATALOG_VARIANT_BARGAIN_PRICE_MISMATCH` | 422 | An explicit `bargain.minPrice` disagrees with the effective price. `details`: `{ variant, price, minPrice }` |
+| `CATALOG_VARIANT_BARGAIN_RANGE_INVALID` | 422 | `bargain.maxPrice` is below the effective price — including a bare `price` edit that would rise above the stored ceiling. `details`: `{ variant, price, minPrice, maxPrice }` |
 | `VALIDATION_ERROR` | 400 | Zod schema validation failed |

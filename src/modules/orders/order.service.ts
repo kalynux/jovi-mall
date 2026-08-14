@@ -25,6 +25,10 @@ import { VendorCustomerSyncService } from '../vendors/services/vendor-customer-s
 import { eventBus } from '../../core/events/event-bus';
 import { earningsSplitService } from '../earnings/services/earnings-split.service';
 import { codEligibilityService } from '../cod/services/cod-eligibility.service';
+import { orderStockService } from './services/order-stock.service';
+import { MagazinRepository } from '../magazin/repositories/magazin.repository';
+import { CustomerShipmentDto, toCustomerShipmentDto } from './dto/customer-shipment.dto';
+import { OrderModel } from './order.model';
 
 /**
  * OrderService - Cart-aware, payment-ready order management
@@ -83,6 +87,8 @@ export class OrderService {
   private productRepo: ProductRepositoryMongo;
   private variantRepo: VariantRepositoryMongo;
   private vendorCustomerSync: VendorCustomerSyncService;
+  /** An agency's business name lives on its Magazin, not on the DeliveryAgency. */
+  private magazinRepo: MagazinRepository;
 
   constructor() {
     this.orderRepo = new OrderRepository();
@@ -94,6 +100,7 @@ export class OrderService {
     this.productRepo = new ProductRepositoryMongo();
     this.variantRepo = new VariantRepositoryMongo();
     this.vendorCustomerSync = new VendorCustomerSyncService();
+    this.magazinRepo = new MagazinRepository();
   }
 
   /**
@@ -195,6 +202,21 @@ export class OrderService {
     }
     await order.save();
 
+    /**
+     * Give the units back.
+     *
+     * This is a **release**, not a restock: a cancellable order is by definition unpaid
+     * (`assertCancellable` refuses `paid` with `ORDER_CANCEL_REQUIRES_REFUND`), so its
+     * reservations are still `active` and nothing has been decremented. Flipping them to
+     * `released` is the whole operation.
+     *
+     * A cash-on-delivery order is the exception worth knowing: it committed at creation, so
+     * its reservations are `committed` and `StockReleaseService` correctly refuses them.
+     * Those units went out on a van — they come back through the returned-shipment path as
+     * a restock, not through here. The refusal is logged, not thrown.
+     */
+    await orderStockService.releaseForOrder(order);
+
     await this.timelineRepo.appendEvent({
       orderId: order._id.toString(),
       eventType: 'fulfillment.updated',
@@ -215,6 +237,41 @@ export class OrderService {
       },
       occurredAt: new Date(),
     });
+  }
+
+  /**
+   * The parcels on one of the caller's orders.
+   *
+   * Ownership is enforced by loading the order **scoped to this customer** first: a
+   * `customer_id` mismatch is a `404 ORDER_NOT_FOUND`, the same answer as an order that does
+   * not exist, so the endpoint cannot be used to probe whether an order id is real.
+   *
+   * The agency's business name comes from its Magazin (the source of truth for an agency's
+   * business identity), batched across the order's shipments rather than looked up per row.
+   */
+  async listShipmentsForCustomer(customerId: string, orderId: string): Promise<CustomerShipmentDto[]> {
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404, undefined, { orderId });
+    }
+
+    const order = await OrderModel.findOne({ _id: orderId, customer_id: customerId });
+    if (!order) {
+      throw createAppError(ERROR_CODES.ORDER_NOT_FOUND, 404, undefined, { orderId });
+    }
+
+    const shipments = await this.shipmentRepo.findByOrderId(orderId);
+    if (shipments.length === 0) return [];
+
+    const namesByAgency = await this.magazinRepo.findNamesByAgencyIds(
+      shipments.map((s) => s.agency_id.toString()),
+    );
+
+    return shipments.map((shipment) =>
+      toCustomerShipmentDto(
+        shipment,
+        namesByAgency.get(shipment.agency_id.toString())?.name ?? null,
+      ),
+    );
   }
 
   /**
@@ -473,6 +530,37 @@ export class OrderService {
       ? await this.resolveDeliveryAddress(customerId, deliveryInput)
       : null;
 
+    /**
+     * A physical order MUST have somewhere to go.
+     *
+     * `resolveDeliveryAddress` falls through inline → named → default saved → **null**, and
+     * until now nothing rejected the null: the order was created with
+     * `delivery_address: null`, no drop-off, and the failure surfaced much later as a
+     * shipment nobody could route.
+     *
+     * The subtle half is worse than the missing-address case. It returns `chosen.geo ?? null`,
+     * and `geo` is only populated by the address picker (`GET /api/geo/search`) — so **an
+     * address the customer explicitly selected still yields null if they typed it by hand**.
+     * From the customer's side they chose an address and checkout succeeded; from the
+     * agent's side there is no destination. Refusing here is what makes those two agree.
+     *
+     * `ORDER_DELIVERY_ADDRESS_REQUIRED` (422), not `ADDRESS_GEO_REQUIRED` (400): the
+     * request here is well-formed — both address fields are optional — so this is a
+     * business rule, not a schema failure. `details.reason` distinguishes the two causes so
+     * the client can either open the address picker or ask the customer to re-select.
+     */
+    if (orderType === 'physical' && !deliveryAddress) {
+      const hadSelection = Boolean(deliveryInput?.addressId || deliveryInput?.address);
+      throw createAppError(
+        ERROR_CODES.ORDER_DELIVERY_ADDRESS_REQUIRED,
+        422,
+        hadSelection
+          ? 'The delivery address you selected has no geocoded location. Please re-select it from the address search so we can route your delivery.'
+          : 'A delivery address is required for physical orders. Add one, or select a saved address that was chosen from the address search.',
+        { reason: hadSelection ? 'selected_address_not_geocoded' : 'no_delivery_address' },
+      );
+    }
+
     // 2. GROUP CART ITEMS BY VENDOR — one order per vendor (this IS the
     //    single-vendor-per-order enforcement).
     const vendorGroups = new Map<string, CartResponse['items']>();
@@ -484,6 +572,36 @@ export class OrderService {
 
     // 3. CREATE ALL ORDERS ATOMICALLY (one per vendor).
     const { orders, shipments } = await transactionManager.runInTransaction(async (session) => {
+      /**
+       * Hold the stock FIRST, inside this transaction.
+       *
+       * Before anything reserved, `variant.stock` was a number a vendor typed in that the
+       * order path never touched — overselling was unconstrained, and the unpaid-cancel
+       * worker said so outright in its own comment.
+       *
+       * Two properties come from doing it here rather than after the orders exist:
+       *
+       *   - **All or nothing.** If the third line is out of stock, the first two must not
+       *     stay held for an order that was never created. Sharing this session means the
+       *     holds roll back with the orders.
+       *   - **It fails before any order number is burned.** `CATALOG_INSUFFICIENT_STOCK`
+       *     (422) reaches the customer as "that size just went", with the line named in
+       *     `details`, rather than as an order they then cannot be given.
+       *
+       * The holds are *released* by cancellation or expiry and *committed* at payment
+       * success — or, for COD, immediately below, since a COD order fulfils before payment.
+       */
+      await orderStockService.reserveForCheckout(
+        cart.cartId!,
+        cart.items.map((item) => ({
+          productId: item.productId,
+          variantId: item.variantId,
+          vendorId: item.vendorId,
+          quantity: item.quantity,
+        })),
+        session,
+      );
+
       const createdOrders: IOrder[] = [];
       const createdShipments: any[] = [];
 
@@ -494,6 +612,16 @@ export class OrderService {
         );
         createdOrders.push(built.order);
         createdShipments.push(...built.shipments);
+      }
+
+      // A cash-on-delivery order fulfils BEFORE payment — the vendor packs it and an agent
+      // carries it out — so the units leave the shelf now, not when the cash arrives at the
+      // door. Committed in the same transaction that created the order, because if the
+      // order does not exist neither should the decrement.
+      if (paymentMethod === 'cash_on_delivery') {
+        for (const order of createdOrders) {
+          await orderStockService.commitForOrder(order, session);
+        }
       }
 
       return { orders: createdOrders, shipments: createdShipments };
@@ -589,10 +717,27 @@ export class OrderService {
     // Order number (unique per order)
     const orderNumber = await OrderNumberGenerator.generateOrderNumber();
 
-    // Price breakdown from THIS vendor's items only
+    /**
+     * Price breakdown from THIS vendor's items only.
+     *
+     * ⚠️ These figures are the ones `POST /api/customer/cart/quote` reports, and they must
+     * stay that way — a quote that disagrees with the charge is worse than no quote.
+     * `CartQuoteService` is the other half; read its header before changing any line here.
+     *
+     * **No delivery component, deliberately.** The agency's delivery fee is real and is
+     * charged, but to the **vendor**: `splitOrder` computes
+     * `vendorNet = gross − commission − deliveryTotal` off this same `total`. Adding it here
+     * as well would collect it twice. Moving delivery onto the customer is a business-model
+     * change that has to be paired with `splitOrder` no longer deducting it.
+     *
+     * `tax` and `discount` are pinned zeros rather than absent: there is no tax engine and
+     * no coupon model (`price_breakdown.discount` is the field a coupon feature would fill).
+     * Keeping the fields present and zero means the receipt shape does not change the day
+     * either arrives.
+     */
     const base = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    const tax = 0;       // TODO: Implement tax calculation
-    const discount = 0;  // TODO: Implement discount calculation
+    const tax = 0;       // No tax engine — see the note above.
+    const discount = 0;  // No coupon model — see the note above.
     const total = base + tax - discount;
     const priceBreakdown = { base, tax, discount, total };
 
@@ -827,6 +972,20 @@ export class OrderService {
 
     // Update payment status
     order.payment_status = 'paid';
+
+    /**
+     * The sale is real — take the units off the shelf.
+     *
+     * This is the prepaid half of the pair; a cash-on-delivery order commits at creation
+     * instead (it fulfils before payment). Guarded by the idempotency check above, which
+     * matters because payment webhooks are re-delivered: without that early return, a
+     * replay would decrement twice.
+     *
+     * Best-effort and deliberately not awaited into a failure — see `commitForOrder`. The
+     * money has already moved by the time this runs, so throwing would report an error for
+     * a payment that succeeded. A missed commit leaves a hold that expires on its own.
+     */
+    await orderStockService.commitForOrder(order);
 
     // Branch fulfillment by order type
     if (order.order_type === 'physical') {

@@ -1,5 +1,9 @@
 import { z } from 'zod';
 import { productFileIdsSchema, pickupLocationSchema } from './product.validator';
+// The same fragment the layered variant endpoints use — one definition, so the
+// two editors cannot disagree about what a bargain window is. Both schemas here
+// are .strict(), so omitting it would 400 the field rather than ignore it.
+import { BargainRangeSchema } from './variant.validator';
 
 /**
  * Simple-mode product schemas.
@@ -51,6 +55,9 @@ export const CreateSimpleProductSchema = z.object({
     // accepting 0 here would only buy the vendor a silent blocker later.
     price: z.number().positive('Price must be greater than 0'),
     compareAtPrice: z.number().min(0).optional(),
+    // Optional. `minPrice` may be omitted — it defaults to `price` above, which
+    // this schema already forces positive.
+    bargain: BargainRangeSchema.optional(),
     stock: z.number().int().min(0, 'Stock must be non-negative').default(0),
     isInfiniteStock: z.boolean().default(false),
     // Optional: auto-generated from the title + product id when omitted.
@@ -89,6 +96,8 @@ export const UpdateSimpleProductSchema = z.object({
     // ─── The single variant ───────────────────────────────────────────────────
     price: z.number().positive('Price must be greater than 0').optional(),
     compareAtPrice: z.number().min(0).optional(),
+    // Explicit null clears the range. A bare `price` edit auto-syncs its minPrice.
+    bargain: BargainRangeSchema.nullable().optional(),
     stock: z.number().int().min(0).optional(),
     isInfiniteStock: z.boolean().optional(),
     lowStockThreshold: z.number().int().min(1).nullable().optional(),

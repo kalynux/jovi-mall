@@ -120,6 +120,11 @@ export class ProductDuplicateService {
             optionSignature: sku,
             price: source.price,
             compareAtPrice: source.compareAtPrice,
+            // The price is copied verbatim, so `minPrice === price` still holds and
+            // the window needs no re-resolution. The duplicate is born
+            // `vectorisationEnabled: false` (above), so it arrives configured but
+            // inert — which is exactly what the flag is defined to mean.
+            bargain: source.bargain ?? undefined,
             stock: source.stock,
             isInfiniteStock: source.isInfiniteStock,
             lowStockThreshold: source.lowStockThreshold,

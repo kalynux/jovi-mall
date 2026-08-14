@@ -138,7 +138,8 @@ Every route tree is guarded by role. `✅` = full access to that area's endpoint
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
 | Auth (register/login/refresh/logout) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Current user / role switch | — | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Catalog browse / product booking availability | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Product booking availability (`/products/:id/availability`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Public catalog (`/public/products`, `/public/stores`, `/public/categories`) | ✅⁵ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Published price list (`/public/plans`, `/public/credit-packs`) | ✅⁵ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Published blog (`/public/articles`) | ✅⁵ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Blog editor (`/admin/articles`, `/admin/article-authors`) | — | — | — | — | — | ✅ |
@@ -178,11 +179,18 @@ change, 2026-07-29 — it used to be open). See [payments/README.md](./payments/
 ⁴ Vendors read a *booking's* payment state via `GET /api/bookings/:id/payment-status` for bookings
 they own. Vendor/agency/agent **plan and credit purchases are a different surface** and create no
 `PaymentTransaction` — see [billing-plans-across-roles.md](./billing-plans-across-roles.md).
-⁵ The **only** unauthenticated route tree besides auth, catalog browse and the payment
-initiate/verify pair. It reads the plan catalog, the credit packs and the published blog — the same
-prices and prose the marketing site publishes — and nothing else. Read-only, no identity, no
-owner-scoped data; see [public/README.md](./public/README.md) and
-[public/articles.md](./public/articles.md).
+⁵ `/api/public/*` is the **only** unauthenticated route tree besides auth, the single
+booking-availability route above and the payment initiate/verify pair. It reads the plan catalog,
+the credit packs, the published blog and the published product catalog — read-only, no identity, no
+owner-scoped data. See [public/README.md](./public/README.md),
+[public/catalog.md](./public/catalog.md) and [public/articles.md](./public/articles.md).
+
+> **Correction (2026-08-14).** This row used to read "Catalog browse / product booking
+> availability ✅" for Anonymous, and this footnote used to say "catalog browse" was already
+> unauthenticated. Both were wrong: the *only* unauthenticated catalog route was
+> `GET /api/products/:productId/availability` (service booking), and no public product read
+> existed at all. It does now — the two are listed separately above because they are two
+> different surfaces.
 ⁶ Customers have their own notification stack at `/api/customer/notifications` — inbox,
 `unread-count`, mark-one-read, mark-all-read and channel preferences. It is the fourth of the four
 stacks; see [customer/notifications.md](./customer/notifications.md).
@@ -223,6 +231,7 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Auth & sessions](./auth/README.md) · [Onboarding](./auth/onboarding.md)
 - [Change password (`/me/password`, all roles)](./me/password.md)
 - [**Public API (no auth)**](./public/README.md) — the published price list: plan catalog + credit packs, for the marketing site
+- [**Public catalog (no auth)**](./public/catalog.md) — the storefront's read side: products, categories, stores. **Product URLs are nested under their store**
 - [**Public blog (no auth)**](./public/articles.md) — articles, typed blocks, hreflang & slug redirects. Editor: [admin/articles.md](./admin/articles.md)
 - [**Billing, plans & credit — cross-dashboard guide**](./billing-plans-across-roles.md) (vendor · agency · agent · admin)
 - [Error catalog](./errors/README.md)
@@ -241,7 +250,7 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 
 ### Vendor
 - [Store](./vendor/store.md) · [Profile](./vendor/profile.md) · [Onboarding](./vendor/onboarding.md)
-- [Products](./vendor/products.md) · [Product update](./vendor/product-update.md) · [Upload flow](./vendor/product-upload-flow.md) · [Variants](./vendor/variants.md) · [Options & variants](./vendor/option-variant-management.md) · [Digital products](./vendor/digital-products.md)
+- [Products](./vendor/products.md) · [Product update](./vendor/product-update.md) · [Upload flow](./vendor/product-upload-flow.md) · [Variants](./vendor/variants.md) · [Options & variants](./vendor/option-variant-management.md) · [Digital products](./vendor/digital-products.md) · [Rich descriptions](./vendor/product-description-rich.md)
 - [Inventory](./vendor/inventory.md) · [Orders](./vendor/orders.md) · [Shipping](./vendor/shipping.md) · [Delivery agencies](./vendor/delivery-agencies.md) · [Agency connections](./vendor/agency-connections.md)
 - [Bookings](./vendor/bookings.md) · [Booking guide](./booking-implementation-guide.md) · [Calendar](./vendor/calendar.md) · [Availability rules](./vendor/availability-rules.md)
 - [Billing](./vendor/billing.md) · [Billing overview](./vendor/billing-overview.md) · [Earnings](./vendor/earnings.md) · [Transactions](./vendor/transactions.md) · [Stripe payments](./vendor/stripe-payments.md) · [Payment methods](./vendor/payment-methods.md) (pay *with*) · [**Payout methods**](./vendor/payout-methods.md) (get paid *to* — mobile money only right now; 🚧 bank + card switched off)

@@ -346,4 +346,45 @@ ProductSchema.index({ 'delivery.agency_id': 1 });
 // ProductSchema.index({ fileIds: 1 }); // Optional: for finding products by file
 // ProductSchema.index({ deletedAt: 1 });
 
+// ─── Storefront (public catalog) indexes ─────────────────────────────────────
+// Every vendor-facing query is prefixed by `vendorId`, so none of the indexes
+// above can serve the public catalog: it filters on status + deletedAt across
+// ALL vendors. `status` alone is a five-value enum — far too low a cardinality
+// for the planner to choose it — so without these the storefront's primary
+// query is a collection scan on every page view.
+//
+// The leading pair is the publishable predicate itself (see PUBLISHABLE_PRODUCT_FILTER
+// in public-catalog.filter.ts); the trailing key is what each one sorts or narrows by.
+ProductSchema.index({ status: 1, deletedAt: 1, createdAt: -1 });
+ProductSchema.index({ status: 1, deletedAt: 1, category: 1 });
+
+/**
+ * The one full-text index in this codebase.
+ *
+ * Every other search here is an unanchored substring `$regex` (see regex.util.ts),
+ * which cannot use an index and carries no relevance score — so `sort=relevance`
+ * on the public product list would have nothing to sort by, and an anonymous
+ * search would scan the collection.
+ *
+ * Two deliberate choices:
+ *   - `default_language: 'none'` disables stemming. The platform ships five
+ *     locales over one set of string fields, so any single stemmer would be
+ *     wrong for four of them.
+ *   - Weights make a title hit outrank a tag hit, which outranks a body hit.
+ *
+ * ⚠️ MongoDB permits exactly ONE text index per collection. Adding a second
+ * field means editing this one, not declaring another.
+ *
+ * ⚠️ `$text` matches whole words, not substrings: "dres" will not match "dress".
+ * That is the trade for an indexed, ranked search — the public list documents it.
+ */
+ProductSchema.index(
+  { title: 'text', tags: 'text', description: 'text' },
+  {
+    name: 'product_storefront_text',
+    default_language: 'none',
+    weights: { title: 10, tags: 4, description: 1 },
+  },
+);
+
 export const ProductModel = model<IProduct>(MODELS.PRODUCT, ProductSchema, COLLECTIONS.PRODUCT);

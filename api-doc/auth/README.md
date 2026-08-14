@@ -14,6 +14,23 @@ http://localhost:8022/api
 
 The auth system handles user registration, login, token management, and account verification. Authentication is **role-based** — every user has one or more roles (`vendor`, `customer`, `agency`, `agent`, `admin`), and all JWTs are scoped to a **single active role** at a time.
 
+> ## 🚨 KNOWN HOLE — `POST /auth/login` does not check the password
+>
+> `auth.service.ts:203-204` computes `bcrypt.compare(...)` and **throws the result away** —
+> the `if (!isValid) throw` line is commented out. **Any password authenticates any account**,
+> for every role.
+>
+> This is recorded here rather than fixed because it was explicitly scoped out of the
+> storefront work (2026-08-14), and because password reset was built on this same path in the
+> same change: the reset flow itself is correct, but the login it protects is not, so **the
+> reset does not currently reduce anyone's exposure**. Everything downstream — the
+> password-epoch revocation, the suspension checks, the credential rate limit — is sound and
+> is simply being bypassed at the front door.
+>
+> Fixing it is one line. The caveat worth knowing before flipping it: any dev, seed or test
+> flow that relies on "any password works" breaks immediately, and seeded accounts will need
+> their real passwords.
+
 ### Session Strategy: Two-Cookie JWT
 
 On every successful login or registration, the server sets **two HttpOnly cookies**:
@@ -98,13 +115,91 @@ A user can hold **multiple roles** and log in under any of them independently.
 | `POST` | `/auth/send-email-verification` | Required | Send email verification link |
 | `GET` | `/auth/verify-email` | Public | Confirm email via token link |
 | `POST` | `/auth/request-wa-verification` | Required | Start WhatsApp phone verification |
+| `POST` | `/auth/forgot-password` | Public | Start a password reset. **Always answers 200** |
+| `POST` | `/auth/reset-password` | Public | Redeem a reset token and set a new password |
 | `POST` | `/auth/browser/login` | Public | Browser-namespace login (JSON only) — see below |
 | `POST` | `/auth/browser/refresh` | Public (cookie) | Explicitly issue a new access token from the refresh cookie |
 | `POST` | `/auth/browser/logout` | Public | Browser-namespace logout (JSON only) |
 
-There is **no** `POST /auth/refresh`, `/auth/forgot-password`, `/auth/reset-password` or
-`/auth/verify-code` on this service; the table above is the complete auth surface
-(`src/modules/auth/auth.routes.ts` + `src/modules/auth/routes/browser-auth.routes.ts`).
+There is **no** `POST /auth/refresh` or `/auth/verify-code` on this service; the table above is
+the complete auth surface (`src/modules/auth/auth.routes.ts` +
+`src/modules/auth/routes/browser-auth.routes.ts`).
+
+---
+
+## Password reset
+
+Added 2026-08-14. Before it there was no recovery path at all: `PATCH /api/me/password`
+requires the **old** password, and the only other way to change a login identifier is an
+admin-only route on the internal service surface — so a forgotten password was a permanent
+lockout.
+
+### POST `/auth/forgot-password`
+
+```json
+{ "identifier": "jane@example.com" }
+```
+
+`identifier` is an email address or an E.164 phone number, normalised exactly as `/auth/login`
+normalises it.
+
+**Always answers `200` with the same body**, whether or not the account exists:
+
+```json
+{ "success": true, "data": null, "message": "If that account exists, a password reset link has been sent." }
+```
+
+> **⚠️ Do not treat any part of this response as a signal about whether an account exists.**
+> The uniformity is deliberate: any observable difference — a 404, a different message, a
+> suspended-account error — turns this endpoint into an account-enumeration oracle. Feed it a
+> list of phone numbers and learn which ones bank here. A suspended account is also answered
+> with the same 200 and no email.
+>
+> A malformed identifier *is* still a `400`. That leaks nothing: it says the **input** is not
+> a well-formed address or number, which the caller can see for themselves.
+
+**Delivery is over email *and* WhatsApp** when both identifiers are on file. WhatsApp matters
+here: `phone` is the required registration field and `email` is optional, so an email-only
+reset would be undeliverable for a large share of this audience.
+
+The link points at `STOREFRONT_URL/reset-password?token=…` — the **storefront**, not this API,
+because a reset needs a form for the new password and only the frontend has one. (Contrast
+email verification, whose link is a `GET` this service answers directly.)
+
+The token lives **30 minutes** and is single-use.
+
+### POST `/auth/reset-password`
+
+```json
+{ "token": "…64 hex…", "newPassword": "Str0ng!Pass" }
+```
+
+`newPassword` must satisfy the shared strength rule: **8+ characters with an uppercase, a
+lowercase, a digit and a symbol** — the same `PasswordStrengthSchema`
+`PATCH /api/me/password` uses.
+
+> ⚠️ That is deliberately **stricter than `POST /auth/register`**, which still accepts 6
+> characters with no complexity rule. The two disagree, and this is the right side of the
+> disagreement: raising registration is a breaking change for existing clients and is out of
+> scope, but a new password set through a new endpoint has no back-compat debt.
+
+**Success `200`** — `{ "success": true, "data": null, "message": "Your password has been reset…" }`
+
+> **It does not sign you in.** The link arrives by email or WhatsApp, either of which may be
+> read on a device that is not the one asking — issuing a session on redemption would hand it
+> to whoever opened the message. Sign in with the new password through `/auth/login`.
+
+> **It revokes every other session.** The write stamps `password_changed_at`, and any token
+> issued before that instant is refused with `401 AUTH_PASSWORD_CHANGED` on both the access
+> and refresh paths. That is the point of a reset after a compromise.
+
+| `error.code` | Status | When |
+|---|---|---|
+| `AUTH_RESET_TOKEN_INVALID` | 400 | Token absent, expired, malformed **or already spent** — deliberately one code for all four, so the response cannot confirm whether a token was ever real |
+| `AUTH_ACCOUNT_SUSPENDED` | 403 | The account was suspended between the request and the redemption |
+| `VALIDATION_ERROR` | 400 | `newPassword` fails the strength rule |
+
+Both endpoints inherit the credential bucket below (20/min/IP).
 
 > **The `/auth/browser/*` trio is a parallel namespace, not a different session model.** It
 > exists so OAuth redirect flows have a stable browser login URL; it issues the *same* two JWT

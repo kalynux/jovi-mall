@@ -70,11 +70,36 @@ const variantFileIdsSchema = z.array(
     { message: 'File IDs must be unique' }
 );
 
+/**
+ * Bargainable pricing — the window a buyer may haggle within.
+ *
+ * `maxPrice` is required: it is the only number a vendor genuinely has to choose,
+ * since `minPrice` IS the variant's price and defaults to it. Sending a `minPrice`
+ * that disagrees with the price is refused by the rule, not here.
+ *
+ * `.min(0)` rather than `.positive()`, mirroring `price`'s own `.min(0)` below —
+ * a bound stricter than the price it is defined to equal would reject
+ * `{ price: 0, bargain: { minPrice: 0, maxPrice: 100 } }` while accepting the same
+ * thing with `minPrice` omitted. (A zero-priced variant is already unactivatable
+ * via CATALOG_PRODUCT_VARIANT_ZERO_PRICE.)
+ *
+ * NOTE the check that is deliberately NOT here: `maxPrice >= minPrice`. That
+ * violation also arrives as `price` + `bargain` siblings, and as a bare `price`
+ * against stored state — neither visible to a schema. Enforcing the visible third
+ * here would raise one error code at both 400 and 422, which `npm run test:errors`
+ * refuses. It lives in `bargain-price.rule.ts`, at 422, for all three shapes.
+ */
+export const BargainRangeSchema = z.object({
+    minPrice: z.number().min(0, 'bargain.minPrice must be non-negative').optional(),
+    maxPrice: z.number().min(0, 'bargain.maxPrice must be non-negative'),
+}).strict();
+
 export const CreateVariantSchema = z.object({
     sku: z.string().min(1, 'SKU is required').max(100, 'SKU must be at most 100 characters'),
     name: z.string().min(1, 'Name is required').max(100, 'Name must be at most 100 characters').optional(), // Optional; digital read model falls back to "<asset> - <format> - <size>"
     price: z.number().min(0, 'Price must be positive'),
     compareAtPrice: z.number().min(0).optional(),
+    bargain: BargainRangeSchema.optional(),
     stock: z.number().int().min(0, 'Stock must be non-negative').default(0),
     isInfiniteStock: z.boolean().default(false),
     weight: z.number().min(0).optional(),
@@ -93,6 +118,10 @@ export const UpdateVariantSchema = z.object({
     name: z.string().min(1).max(100).optional(),
     price: z.number().min(0).optional(),
     compareAtPrice: z.number().min(0).optional(),
+    // Explicit null clears the range. Omitted leaves it untouched — except that a
+    // `price` change auto-syncs `bargain.minPrice`, so the invariant holds without
+    // the client having to know the field exists.
+    bargain: BargainRangeSchema.nullable().optional(),
     stock: z.number().int().min(0).optional(),
     isInfiniteStock: z.boolean().optional(),
     lowStockThreshold: z.number().int().min(1).nullable().optional(),

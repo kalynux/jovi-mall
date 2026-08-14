@@ -5,6 +5,64 @@ import { IVariantRepository } from '../interfaces/variant.repository.interface';
 import { Variant, VariantMapper } from '../mappers/variant.mapper';
 import { COLLECTIONS } from '../../../../core/database/collections';
 
+/**
+ * Translate a domain patch into MongoDB update operators.
+ *
+ * Extracted from `update()` and exported so it can be tested without Mongo, the
+ * way every other pure derivation here is (`npm run test:bargain-price` group 7).
+ */
+export function buildVariantUpdateOps(
+  updates: Partial<Variant>,
+): { $set?: Record<string, unknown>; $unset?: Record<string, 1> } {
+  // Translate domain camelCase fields to the snake_case names used in MongoDB
+  const set: Record<string, any> = { ...updates };
+  const unset: Record<string, 1> = {};
+
+  if ('lowStockThreshold' in updates) {
+    set.low_stock_threshold = updates.lowStockThreshold;
+    delete set.lowStockThreshold;
+  }
+  if ('allowOversell' in updates) {
+    set.allow_oversell = updates.allowOversell;
+    delete set.allowOversell;
+  }
+
+  // For partial digitalConfig updates, expand into dotted paths so we don't
+  // overwrite untouched sub-fields (e.g. assetId when only limits change).
+  // If callers want to replace the whole sub-doc (incl. clearing), they should
+  // pass digitalConfig: undefined or use a separate $unset path elsewhere.
+  if ('digitalConfig' in updates && updates.digitalConfig && typeof updates.digitalConfig === 'object') {
+    const dc = updates.digitalConfig as { assetId?: string; maxDownloads?: number | null; expiresAfterDays?: number | null };
+    if (dc.assetId !== undefined) set['digitalConfig.assetId'] = dc.assetId;
+    if ('maxDownloads' in dc) set['digitalConfig.maxDownloads'] = dc.maxDownloads;
+    if ('expiresAfterDays' in dc) set['digitalConfig.expiresAfterDays'] = dc.expiresAfterDays;
+    delete set.digitalConfig;
+  }
+
+  // An explicit `bargain: null` CLEARS the range, and it must be $unset. The
+  // schema path is `default: undefined`, so `$set: null` would store a literal
+  // null — after which "never configured" and "configured then cleared" are two
+  // different documents meaning the same thing, and `{ bargain: { $exists: true } }`
+  // matches a variant with no range. $unset restores the exact state a variant
+  // that never had one is already in.
+  //
+  // Nothing else needs dotted-path expansion here: `resolveBargainWrite` always
+  // returns a COMPLETE { minPrice, maxPrice } pair, so a whole-object $set can
+  // never drop a sub-field the way a half-filled digitalConfig would.
+  if ('bargain' in updates && updates.bargain === null) {
+    delete set.bargain;
+    unset.bargain = 1;
+  }
+
+  return {
+    // `$set: {}` is rejected by MongoDB ("'$set' is empty"). Already reachable
+    // today via `PATCH /variants/:id {}` — UpdateVariantSchema is neither
+    // .strict() nor requires a field — and a bargain-only clear is a new way in.
+    ...(Object.keys(set).length > 0 ? { $set: set } : {}),
+    ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
+  };
+}
+
 export class VariantRepositoryMongo extends BaseRepository<IProductVariant, Variant> implements IVariantRepository {
   constructor() {
     super(ProductVariantModel, new VariantMapper());
@@ -52,32 +110,9 @@ export class VariantRepositoryMongo extends BaseRepository<IProductVariant, Vari
   async update(id: string, updates: Partial<Variant>, options?: RepositoryOptions): Promise<Variant | null> {
     if (!Types.ObjectId.isValid(id)) return null;
 
-    // Translate domain camelCase fields to the snake_case names used in MongoDB
-    const persistenceUpdates: Record<string, any> = { ...updates };
-    if ('lowStockThreshold' in updates) {
-      persistenceUpdates.low_stock_threshold = updates.lowStockThreshold;
-      delete persistenceUpdates.lowStockThreshold;
-    }
-    if ('allowOversell' in updates) {
-      persistenceUpdates.allow_oversell = updates.allowOversell;
-      delete persistenceUpdates.allowOversell;
-    }
-
-    // For partial digitalConfig updates, expand into dotted paths so we don't
-    // overwrite untouched sub-fields (e.g. assetId when only limits change).
-    // If callers want to replace the whole sub-doc (incl. clearing), they should
-    // pass digitalConfig: undefined or use a separate $unset path elsewhere.
-    if ('digitalConfig' in updates && updates.digitalConfig && typeof updates.digitalConfig === 'object') {
-      const dc = updates.digitalConfig as { assetId?: string; maxDownloads?: number | null; expiresAfterDays?: number | null };
-      if (dc.assetId !== undefined) persistenceUpdates['digitalConfig.assetId'] = dc.assetId;
-      if ('maxDownloads' in dc) persistenceUpdates['digitalConfig.maxDownloads'] = dc.maxDownloads;
-      if ('expiresAfterDays' in dc) persistenceUpdates['digitalConfig.expiresAfterDays'] = dc.expiresAfterDays;
-      delete persistenceUpdates.digitalConfig;
-    }
-
     const doc = await this.model.findOneAndUpdate(
       { _id: id, deletedAt: null },
-      { $set: persistenceUpdates },
+      buildVariantUpdateOps(updates),
       { new: true, session: options?.session }
     );
     return doc ? this.mapper.toDomain(doc) : null;

@@ -9,6 +9,7 @@ Two groups, documented separately:
 | | Contract |
 |---|---|
 | The published **price list** | this file |
+| The **catalog** (`/products`, `/categories`, `/stores`) | [catalog.md](./catalog.md) |
 | The **blog** (`/articles`) | [articles.md](./articles.md) |
 
 Everything else in this API is behind `requireAuth`. `/api/public` is the only exception, so the rule
@@ -28,7 +29,14 @@ An endpoint that needs to know who is asking belongs on a role router instead.
 | GET | `/api/public/plans` | Pricing-plan catalog for every role |
 | GET | `/api/public/credit-packs` | Credit top-up packs + per-action credit costs |
 
-The blog's three endpoints share this prefix and these rules — see [articles.md](./articles.md).
+The blog's three endpoints and the catalog's seven share this prefix and these rules — see
+[articles.md](./articles.md) and [catalog.md](./catalog.md).
+
+> **This prefix now has its own rate-limit bucket.** `RATE_LIMIT_PUBLIC_PER_MIN` (default
+> 3000/min per IP) applies **in addition to** the global 1200/min backstop, so the effective
+> ceiling is the lower of the two. It exists because the catalog put real traffic on this
+> prefix: a product grid fires two calls per page view, and without separate counters an
+> anonymous crawler behind an office NAT would 429 the signed-in shoppers beside it.
 
 Both use the standard [response envelope](../README.md#the-response-envelope-read-this-first) and
 send `Cache-Control: public, max-age=300`.

@@ -63,6 +63,10 @@ npm run migrate:agent-vehicle-colors     # normalize vehicle_info.color to the p
 npm run migrate:booking-rule-timezones   # clear the legacy 'UTC' default off availability rules so
                                          # they inherit the vendor's zone; reports every rule whose
                                          # effective hours would move (idempotent, --dry-run)
+npm run migrate:storefront-indexes       # build the public-catalog indexes, incl. the ONE $text
+                                         # index in this codebase. autoIndex builds them too, but
+                                         # silently — a failed build leaves every storefront request
+                                         # scanning the collection (idempotent, --dry-run)
 npm run seed:tickets [-- --clean]        # also: seed:plans, seed:cod [-- --clean]
 npm run seed:blog                        # the house byline ONLY — no articles, deliberately
 npm run seed:cod-shipments [-- --clean]  # 7 COD shipments across the lifecycle, on the
@@ -84,6 +88,26 @@ npm run test:payout-methods                    # the shared payout schema + swit
 npm run test:booking-availability               # booking windows/timezones/seats (54, no DB needed)
 npm run test:customer-notifications             # customer catalog + balance settlement (30, no DB needed)
 npm run test:blog                              # article blocks, slugs, DTO projection (100, no DB needed)
+npm run test:public-catalog                    # the storefront's visibility rules and projections
+                                               # (86, no DB). Its core is a set of LEAK assertions:
+                                               # DTOs are built from documents carrying vendorId,
+                                               # suspension notes, pickup address ids and
+                                               # vectorisation state, and the serialised output is
+                                               # asserted to contain none of it. /api/public/* has no
+                                               # auth guard, so those projections ARE the access
+                                               # control.
+npm run test:storefront-checkout               # stock semantics + the cart write contract (50, no DB).
+                                               # Largely a SOURCE SCAN, because the invariant that
+                                               # matters is structural: reserve writes no stock,
+                                               # commit writes it once, release writes none. A
+                                               # regression is invisible to every other test — orders
+                                               # still work and stock just quietly drains.
+npm run test:bargain-price                     # bargainable pricing (145, no DB) — the Zod fragment on
+                                               # all four schemas, the pure rule's whole decision table,
+                                               # the `bargainable` derivation, the repository's update
+                                               # operators, and a SOURCE SCAN proving the rule is called
+                                               # BEFORE the stock gate and the file reconcile, and that
+                                               # cart/orders/earnings/cod/shipments never mention it
 npm run test:password-epoch                    # password-change revocation: the iat-vs-epoch
                                                # predicate, the whole-second boundary that keeps the
                                                # caller's own replacement token valid, and a source
@@ -113,8 +137,20 @@ npm run verify:logs                            # the logging sink against real M
                                                # here, and the warn+ level floor is enforced. NEEDS Mongo
 npm run verify:live-parity                     # agent↔agency smoke test — NEEDS Mongo
 npm run verify:blog                            # blog lifecycle + index builds + route order — NEEDS Mongo
+npm run verify:storefront                      # the storefront against real Mongo (28) — proves the
+                                               # indexes actually BUILD (incl. the $text one, and that
+                                               # there is exactly one), that every public aggregation
+                                               # RUNS, that a pending_verification vendor is published
+                                               # while a suspended one is not, and that the route
+                                               # tables resolve. Writes then deletes its own
+                                               # `verify-storefront-*` fixtures, pass or fail. NEEDS Mongo
 npx ts-node scripts/test/test-profile-mappers.ts
 ```
+
+`verify:storefront` is the third of these, and the `$text` index is why it matters most: MongoDB
+permits exactly one per collection, `autoIndex` builds it silently, and a failure leaves every
+public search scanning `products`. It also pins the empirical trade — `"Kettl"` does **not** match
+"Kettle" — so nobody re-discovers it in production.
 
 `verify:blog` is the blog's counterpart to `verify:live-parity`, for the same three reasons — it is
 the only place the unique multikey index on `slug_keys` is proven to build, the `$elemMatch`
@@ -780,6 +816,56 @@ Covered DB-free by `npm run test:stock-requests` (40) and the extended
 `npm run test:agency-inventory` (53). Contracts in `api-doc/{agency,vendor}/stock-requests.md`;
 the dashboard hand-off is `api-doc/FRONTEND-CHANGELOG-agency-storage.md`.
 
+### Bargainable pricing (`catalog/domain/services/bargain-price.rule.ts`)
+
+A variant may carry `bargain: { minPrice, maxPrice }` — the window a buyer may haggle within.
+**`minPrice === price`, always**, which is what makes this a window rather than a second price
+field: nothing downstream (cart, orders, COD, earnings) reads `bargain`, and all of it still
+reads `price` alone. `maxPrice` is a negotiation ceiling and is unrelated to `compareAtPrice`.
+
+**Every write path funnels through `resolveBargainWrite`** — the variant controller's create and
+update, and both SimpleProduct services. It is three-valued (`undefined` leave alone / `null`
+clear / a **complete** pair), and returning only complete pairs is what lets
+`VariantRepositoryMongo` keep a whole-object `$set` here instead of `digitalConfig`'s dotted-path
+expansion. Four properties are load-bearing:
+
+- **The min/max ordering check is NOT in Zod.** The same violation arrives three ways — inside one
+  object, as `price` + `bargain` siblings, and as a bare `price` against stored state — and only
+  the first is visible to a schema. Splitting it would raise one code at both 400 and 422, which
+  `test:errors`' census refuses. Zod does shape and non-negativity; the rule does the rest at 422.
+- **A bare `price` edit auto-syncs `minPrice`**, so a caller that knows nothing about bargaining
+  cannot break the invariant. A price rising above the stored ceiling is a 422, never a silent
+  ceiling lift — that is the vendor's call.
+- **The rule must run before every side effect.** In `updateVariant` that means before
+  `fileReferenceService.reconcile` and `stockChangeGate.intercept`; a 422 after the gate leaves an
+  approval request in an agency's queue for a PATCH that failed. `test:bargain-price` asserts the
+  ordering by source scan rather than trusting it.
+- **`bargain: null` is a write-only clear signal** the repository turns into `$unset` — never
+  `$set: null`, or "never configured" and "cleared" become two documents meaning the same thing on
+  a `default: undefined` path. `toDomain` never produces a `null`.
+
+**The vectorisation flag gates the EFFECT, not the write.** A window may be configured at any time
+and is always price-validated; it is live only while `Product.vectorisationEnabled` is true, which
+the read model reports as the derived `bargainable`. Nothing is ever deleted when the flag flips —
+`prepareForVectorisation` silently resets it on any product that becomes ineligible, so deleting
+would destroy vendor config nobody asked to remove. A hard write-gate was rejected because
+eligibility requires the product to already be `active`, which would make a window unconfigurable
+while building a product.
+
+Service products are refused (400) — their `price` is a per-minute base `BookingPriceResolver`
+prorates and peak-surcharges. Clearing is allowed on every type, so a stray window is never stuck.
+**No activation blocker**, deliberately: `collectActivationBlockers` runs from
+`revalidateActiveStatus`, which silently demotes a live product to `draft` rather than refusing a
+write — the same failure mode `agency-storage-stock.rule.ts` was written to avoid.
+
+⚠ `VariantPricingService` (dead, barrel-only) writes `price` with no sync and must call the rule
+before it is ever wired up; flagged in its header, not fixed.
+
+Covered DB-free by `npm run test:bargain-price` (145). Contract in
+`api-doc/vendor/variants.md#bargainable-pricing`; the dashboard hand-off is
+`api-doc/FRONTEND-CHANGELOG-bargainable-pricing.md`. **This phase is configuration only** — there
+is no offer/counter-offer flow and no path by which a bargained price reaches a cart or an order.
+
 ### Blog / editorial (`src/modules/blog/`)
 
 The marketing site's article pages, in two halves that never touch: a **public reader**
@@ -835,6 +921,80 @@ Covered by `npm run test:blog` (100 assertions, DB-free) and `npm run verify:blo
 index builds, the whole lifecycle against real persistence, and that `/articles/index` is declared
 before `/articles/:slug`). `npm run seed:blog` creates the house byline; **no articles are seeded**,
 deliberately.
+
+### The public storefront (`/api/public/*` — catalog half)
+
+The shop's read side, built to `api-doc/public/BACKEND-SHOP-REQUIREMENTS.md` Tiers 1–2.
+Contract: `api-doc/public/catalog.md`. **There was no catalog-browse API before this** — the
+only non-vendor product router was service booking, so cart and checkout were blocked by the
+same gap as browse (a mock catalogue's ids are not ObjectIds).
+
+**Visibility is ONE predicate, in one file.** `catalog/domain/services/public-catalog.filter.ts`
+— `status: 'active'` + `deletedAt: null` + `suspension: null` + vendor not `inactive` — applied
+by every read in `PublicCatalogRepositoryMongo` and by the booking-availability route. Six
+hand-written copies is how a product ends up in the grid and 404ing on its own page.
+
+The vendor half is `!== 'inactive'`, **never `=== 'active'`** — the same form
+`ProductStatusValidationService` uses, and for the same reason `requireAuth` does:
+`pending_verification` is the registration default, so the positive form hides those vendors'
+stores while their products stay listed. §2.4 of the requirements asked for the positive form;
+it is wrong.
+
+**Products are nested under their store, and that was a decision.** `Product.slug` is unique
+per *vendor*, so `/products/:slug` cannot resolve two vendors owning `blue-shirt`. The
+canonical URL is `/public/stores/:storeSlug/products/:productSlug` — which resolves the store
+first and therefore hits the existing `{vendorId, slug}` unique index exactly. No migration was
+run. `/public/products/:productId` (ObjectId) is a deep-link fallback, not an alternative.
+
+**The DTOs are the security boundary**, and they are explicit projections for one reason: a
+spread publishes whatever the model gains next, silently. Do **not** reuse `EnrichedProduct` —
+it is `Omit<Product,'fileIds'>` and carries `vendorId`, `suspension.note` (free vendor-facing
+text), `delivery.pickup_location` (vendor home/warehouse address ids) and the vectorisation
+fields, and is N+1 on files. `test:public-catalog` asserts the absence of each by serialising a
+DTO built from a document carrying all of them.
+
+⚠ **The first `$text` index in this codebase** is on `products` (title/tags/description,
+`default_language: 'none'`). Every other search here is unanchored `$regex`, which cannot use
+an index and has no relevance score — so `sort=relevance` would have had nothing to rank by and
+public search would scan the collection. Trade: whole-word matching, and Mongo permits exactly
+one text index per collection. Built by `npm run migrate:storefront-indexes`.
+
+`/api/public/*` has its own IP-scoped rate-limit bucket on top of Layer A, so anonymous browse
+traffic cannot exhaust the global counter for the signed-in users behind the same NAT.
+
+### Stock reservation (`catalog/domain/services/pricing-inventory/` + `orders/services/order-stock.service.ts`)
+
+**Nothing in the order path used to touch `variant.stock`** — the `StockReservation` family
+existed with zero call sites anywhere, so `activeReservations` was read from a collection
+nothing wrote and overselling was unconstrained.
+
+⚠ **The dead code could not be wired as written, and the fix is the important part.**
+`reservePhysicalStock` decremented at *reserve* time while the model TTL-**deletes** an expired
+reservation — and only the release restored stock, which can never run on a row that no longer
+exists. Every abandoned checkout would have permanently destroyed its units. It also
+double-counted against `InventoryAvailabilityCalculator`'s `stock − activeReservations`.
+
+Corrected, and this is now the contract:
+
+| Stage | `variant.stock` | reservation row |
+|---|---|---|
+| **reserve** (checkout) | untouched | `active`, 30-min TTL |
+| **commit** (payment success; COD at *creation*) | decremented **once** | `committed`, TTL pushed out so the audit survives |
+| **release** (cancel) | untouched | `released` |
+| **expiry** | untouched | TTL-deleted; availability self-heals |
+
+Three properties are load-bearing: availability is `stock − Σ active reservations` and
+`countActiveByVariant` sums **quantity** while **excluding already-expired rows** (so a lapsed
+hold frees units immediately rather than waiting for Mongo's 60s sweep); all three services
+accept the caller's `session` so a rolled-back order cannot leave a hold behind; and a
+**returned** shipment *restocks* rather than releases — a committed reservation is refused by
+design, because those units were sold and physically came back. `OrderStockService` owns the
+wiring and derives the reservation id as `"<cartId>:<variantId>"`, so commit and release
+reconstruct it with no new column.
+
+Covered DB-free by `npm run test:storefront-checkout`, which is largely a **source scan**: the
+invariant "reserve writes no stock · commit writes it once · release writes none" is structural,
+and a regression there is invisible to every other test — stock would just quietly drain.
 
 ### Payments (`src/modules/payments/`)
 Gateway-agnostic orchestrator (`PaymentOrchestratorService`) supports Stripe (cards), NotchPay, and MyCoolPay (mobile money). Each gateway implements `PaymentGateway` interface. Webhook payloads are deduplicated via hash before processing.

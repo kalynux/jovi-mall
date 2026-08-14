@@ -8,6 +8,7 @@ import { FileRepositoryMongo } from '../repositories/mongo/file.repository.mongo
 import { FileReferenceRepositoryMongo } from '../repositories/mongo/file-reference.repository.mongo';
 import { getStorageProvider } from '../../../core/storage';
 import { enrichVariant, enrichVariants } from '../read-models/enrich-product-detail';
+import { resolveBargainWrite } from '../domain/services/bargain-price.rule';
 import { ProductStatusValidationService } from '../domain/services/ProductStatusValidationService';
 import { FileReferenceService } from '../domain/services/media/FileReferenceService';
 import { assertVariantImageLimit } from '../domain/services/media/image-limits';
@@ -153,6 +154,17 @@ export class VendorVariantController {
             );
         }
 
+        // Bargainable pricing. Resolved here rather than inline so create and update
+        // share one definition of the `minPrice === price` invariant; it also refuses
+        // a window on a service product, alongside the per-type bans above.
+        const bargain = resolveBargainWrite({
+            mode: 'create',
+            productType: product.type,
+            price: input.price,
+            bargain: input.bargain,
+            variantLabel: input.name || input.sku,
+        });
+
         const existingVariant = await variantRepository.findBySku(input.sku);
         if (existingVariant) throw createAppError(ERROR_CODES.CATALOG_VARIANT_SKU_EXISTS, 409, undefined, { sku: input.sku });
 
@@ -181,6 +193,9 @@ export class VendorVariantController {
             optionSignature,
             price: input.price,
             compareAtPrice: input.compareAtPrice,
+            // `resolveBargainWrite` returns undefined (no window) or a complete pair;
+            // `null` is an update-only signal and cannot reach here.
+            bargain: bargain ?? undefined,
             stock: input.stock,
             isInfiniteStock: input.isInfiniteStock,
             lowStockThreshold: null,
@@ -237,7 +252,7 @@ export class VendorVariantController {
             });
         }
 
-        const detail = await enrichVariant(variant, fileRepository, storageProvider, product.title);
+        const detail = await enrichVariant(variant, fileRepository, storageProvider, product);
         res.status(201).json({ success: true, data: detail, message: 'Variant created successfully' });
     });
 
@@ -260,7 +275,7 @@ export class VendorVariantController {
         const start = (query.page - 1) * query.limit;
         const paginatedVariants = variants.slice(start, start + query.limit);
 
-        const enrichedVariants = await enrichVariants(paginatedVariants, fileRepository, storageProvider, product.title);
+        const enrichedVariants = await enrichVariants(paginatedVariants, fileRepository, storageProvider, product);
 
         res.json({
             success: true,
@@ -283,7 +298,7 @@ export class VendorVariantController {
         const variant = await variantRepository.findById(variantId);
         if (!variant || variant.productId !== productId) throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
 
-        const detail = await enrichVariant(variant, fileRepository, storageProvider, product.title);
+        const detail = await enrichVariant(variant, fileRepository, storageProvider, product);
         res.json({ success: true, data: detail });
     });
 
@@ -335,6 +350,23 @@ export class VendorVariantController {
         if (!existingVariant || existingVariant.productId !== productId)
             throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
 
+        // Bargainable pricing, resolved BEFORE any side effect below. A 422 raised
+        // after `stockChangeGate.intercept` would leave an approval request sitting
+        // in an agency's queue for a PATCH that failed, and one after
+        // `fileReferenceService.reconcile` would leave orphaned file references.
+        // `test:bargain-price` asserts this ordering by source scan.
+        //
+        // Three cases: undefined = leave the field alone, null = clear it, an object
+        // = a complete pair (including the auto-sync when only `price` moved).
+        const nextBargain = resolveBargainWrite({
+            mode: 'update',
+            productType: product.type,
+            current: { price: existingVariant.price, bargain: existingVariant.bargain },
+            price: input.price,
+            bargain: input.bargain,
+            variantLabel: input.name || existingVariant.name || existingVariant.sku,
+        });
+
         if (input.sku && input.sku !== existingVariant.sku) {
             const skuInUse = await variantRepository.findBySku(input.sku);
             if (skuInUse) throw createAppError(ERROR_CODES.CATALOG_VARIANT_SKU_EXISTS, 409, undefined, { sku: input.sku });
@@ -375,8 +407,14 @@ export class VendorVariantController {
         // Build the persistence payload. serviceConfig is merged over the existing config so
         // a partial PATCH doesn't drop untouched fields (the repository $set replaces the whole
         // sub-document). A null peakHours clears the surcharge.
-        const { serviceConfig: scInput, ...restInput } = input;
+        //
+        // `bargain` is destructured OUT deliberately: the raw input may be a partial
+        // `{ maxPrice }` with no minPrice, and the repository $sets this field whole,
+        // so letting it through the spread would wipe the stored minPrice. Only the
+        // rule's complete pair is written, below.
+        const { serviceConfig: scInput, bargain: _rawBargain, ...restInput } = input;
         const updates: Partial<Variant> = { ...restInput };
+        if (nextBargain !== undefined) updates.bargain = nextBargain;
         if (stockIntent) {
             delete updates.stock;
             delete updates.isInfiniteStock;
@@ -403,7 +441,7 @@ export class VendorVariantController {
         // price <= 0). Re-check and demote the product to draft if it slipped.
         await productStatusValidationService.revalidateActiveStatus(productId, vendorId);
 
-        const detail = await enrichVariant(updatedVariant, fileRepository, storageProvider, product.title);
+        const detail = await enrichVariant(updatedVariant, fileRepository, storageProvider, product);
         // One status code — 200 — whether or not the stock change was queued. A 202
         // here would make a client branch on the code for a response whose body it
         // has to read either way; `data.stock` still shows the UNCHANGED quantity and
@@ -446,8 +484,12 @@ export class VendorVariantController {
         if (!variant || variant.productId !== productId)
             throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
 
+        // Enriched, like every other variant response. Returning the raw domain
+        // object here would ship `bargain` without `bargainable` — worse than
+        // shipping neither, since a client could read a window and assume it is live.
         if (variant.status === status) {
-            res.json({ success: true, data: variant, message: `Variant is already ${status}` });
+            const unchanged = await enrichVariant(variant, fileRepository, storageProvider, product);
+            res.json({ success: true, data: unchanged, message: `Variant is already ${status}` });
             return;
         }
 
@@ -479,7 +521,10 @@ export class VendorVariantController {
         // variant; re-activating one doesn't break invariants but is cheap to check.
         await productStatusValidationService.revalidateActiveStatus(productId, vendorId);
 
-        res.json({ success: true, data: updatedVariant, message: `Variant status changed to ${status}` });
+        const detail = updatedVariant
+            ? await enrichVariant(updatedVariant, fileRepository, storageProvider, product)
+            : null;
+        res.json({ success: true, data: detail, message: `Variant status changed to ${status}` });
     });
 
     /**
@@ -562,7 +607,7 @@ export class VendorVariantController {
         const updated = await variantRepository.update(variantId, { serviceConfig: merged });
         if (!updated) throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
 
-        const detail = await enrichVariant(updated, fileRepository, storageProvider, product.title);
+        const detail = await enrichVariant(updated, fileRepository, storageProvider, product);
         res.json({ success: true, data: detail, message: 'Service config updated' });
     });
 }

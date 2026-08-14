@@ -5,6 +5,7 @@ import { DigitalAssetModel } from '../../digital-delivery/models/digital-asset.m
 import { IStorageProvider } from '../../../core/storage/storage-provider.interface';
 import { FileDetail, AssetDetail } from './product-detail.read-model';
 import { PickupLocationDetail, PickupLocationDetailResolver } from './pickup-location-detail.resolver';
+import { BargainRange, isBargainEffective } from '../domain/services/bargain-price.rule';
 
 /**
  * Fetch File documents for an array of IDs and compute their public URLs.
@@ -88,10 +89,11 @@ export async function enrichProduct(
  *
  * - `files` replaces `fileIds` (variant-specific images with URLs)
  * - `displayName` falls back to "<asset.originalName> - <format> - <size>" when
- *   variant.name is unset (or to productTitle as a final fallback if no asset yet)
+ *   variant.name is unset (or to the product title as a final fallback if no asset yet)
  * - `digital` populates the asset + limits for digital variants
+ * - `bargainable` reports whether the stored bargain window is currently in effect
  */
-export type EnrichedVariant = Omit<Variant, 'fileIds' | 'digitalConfig'> & {
+export type EnrichedVariant = Omit<Variant, 'fileIds' | 'digitalConfig' | 'bargain'> & {
   files: FileDetail[];
   displayName: string;
   digital?: {
@@ -99,13 +101,31 @@ export type EnrichedVariant = Omit<Variant, 'fileIds' | 'digitalConfig'> & {
     maxDownloads: number | null;
     expiresAfterDays: number | null;
   };
+  /**
+   * The configured haggling window, absent when none is set. Still returned when
+   * `bargainable` is false — the vectorisation flag makes a window inert, never
+   * deletes it, and a vendor must be able to see and edit what they configured.
+   */
+  bargain?: BargainRange;
+  /**
+   * `product.vectorisationEnabled && bargain != null`. Always present, so a client
+   * never has to infer "is this live?" from the window's mere existence.
+   */
+  bargainable: boolean;
 };
 
+/**
+ * @param parent the variant's product. Required, not optional: an optional
+ *   parameter is how one call site ends up returning a variant without
+ *   `bargainable` while the rest return one with it — a wire-shape difference no
+ *   consumer can see coming. Every call site already holds the Product from the
+ *   ownership `findById` above it, so this costs no query.
+ */
 export async function enrichVariant(
   variant: Variant,
   fileRepo: FileRepositoryMongo,
   storage: IStorageProvider,
-  productTitle?: string,
+  parent: Pick<Product, 'title' | 'vectorisationEnabled'>,
 ): Promise<EnrichedVariant> {
   const files = await buildFileDetails(variant.fileIds, fileRepo, storage);
 
@@ -139,18 +159,27 @@ export async function enrichVariant(
     displayName = `${asset.originalName} - ${mimeSubtype(asset.mimeType)} - ${humanFileSize(asset.size)}`;
   }
   if (!displayName) {
-    displayName = productTitle ?? variant.sku;
+    displayName = parent.title || variant.sku;
   }
 
-  const { fileIds: _dropped, digitalConfig: _dc, ...rest } = variant;
-  return { ...rest, files, displayName, digital };
+  // `bargain` must be destructured OUT and conditionally re-added: the domain type
+  // carries `| null` as a write-time clear signal, which this wire type does not.
+  const { fileIds: _dropped, digitalConfig: _dc, bargain, ...rest } = variant;
+  return {
+    ...rest,
+    files,
+    displayName,
+    digital,
+    ...(bargain ? { bargain } : {}),
+    bargainable: isBargainEffective(parent.vectorisationEnabled, bargain),
+  };
 }
 
 export async function enrichVariants(
   variants: Variant[],
   fileRepo: FileRepositoryMongo,
   storage: IStorageProvider,
-  productTitle?: string,
+  parent: Pick<Product, 'title' | 'vectorisationEnabled'>,
 ): Promise<EnrichedVariant[]> {
-  return Promise.all(variants.map(v => enrichVariant(v, fileRepo, storage, productTitle)));
+  return Promise.all(variants.map(v => enrichVariant(v, fileRepo, storage, parent)));
 }

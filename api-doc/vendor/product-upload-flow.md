@@ -327,6 +327,7 @@ Values are **unique per option** (case-insensitive). Duplicates are silently ski
 |-------|------|-------|
 | `name` | string | Variant display name |
 | `compareAtPrice` | number | Original/MSRP price; show as "was" price if > `price` |
+| `bargain` | object | `{ minPrice?, maxPrice }` — the haggling window. `minPrice` defaults to `price` and always equals it; `maxPrice` is the negotiation ceiling. Physical + digital only. See [Bargainable pricing](./variants.md#bargainable-pricing) |
 | `stock` | number | Integer >= 0; default 0 |
 | `isInfiniteStock` | boolean | Default `false` |
 | `weight` | number | Grams |
@@ -834,6 +835,7 @@ All product types require at least one variant to be activated. There is no "var
 **Variant Level:**
 - `sku` (unique identifier)
 - `price`, `compareAtPrice`
+- `bargain` (the bargainable-pricing window — physical + digital only)
 - `stock`, `isInfiniteStock`
 - `lowStockThreshold`, `allowOversell`
 - `weight`, `length`, `width`, `height` (physical only)
@@ -864,13 +866,15 @@ The target must be an active variant belonging to this product.
 ### Pricing Display (Frontend)
 
 ```javascript
-// Show price range for products with multiple variants
+// Show price range for products with multiple variants.
+// NOTE these locals are a range ACROSS variants — unrelated to a single variant's
+// bargain.minPrice / bargain.maxPrice, which are one variant's negotiation window.
 const prices = variants.filter(v => v.status === 'active').map(v => v.price);
-const minPrice = Math.min(...prices);
-const maxPrice = Math.max(...prices);
-const priceDisplay = minPrice === maxPrice
-  ? `$${minPrice.toFixed(2)}`
-  : `$${minPrice.toFixed(2)} – $${maxPrice.toFixed(2)}`;
+const lowestPrice = Math.min(...prices);
+const highestPrice = Math.max(...prices);
+const priceDisplay = lowestPrice === highestPrice
+  ? `$${lowestPrice.toFixed(2)}`
+  : `$${lowestPrice.toFixed(2)} – $${highestPrice.toFixed(2)}`;
 
 // Show discount badge
 if (variant.compareAtPrice && variant.compareAtPrice > variant.price) {
@@ -878,6 +882,12 @@ if (variant.compareAtPrice && variant.compareAtPrice > variant.price) {
     ((variant.compareAtPrice - variant.price) / variant.compareAtPrice) * 100
   );
   // Display: "$29.99  ~~$39.99~~  (25% off)"
+}
+
+// Bargainable badge. `bargain.maxPrice` is a negotiation CEILING, not a "was" price —
+// never render it struck through or as a discount reference. Only `compareAtPrice` is that.
+if (variant.bargainable) {
+  // Display: "$29.99 · negotiable up to $45.00"
 }
 ```
 

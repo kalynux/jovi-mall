@@ -5,6 +5,9 @@
 > **Intended Audience**: Frontend engineers building the "quick add" product flow.
 >
 > **See also**: [product-upload-flow.md](./product-upload-flow.md) for the full multi-step (advanced) flow.
+>
+> Bargainable pricing (`bargain` / `bargainable`) is new. Dashboard hand-off:
+> [Front-end changelog](../FRONTEND-CHANGELOG-bargainable-pricing.md).
 
 ---
 
@@ -71,12 +74,14 @@ Creates the product, its single variant and its delivery config in **one transac
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `title` | string | ✅ | 3–200 chars |
-| `description` | string | ✅ | Non-empty. Required here (unlike the draft endpoint) because an empty description blocks publishing. |
+| `description` | string | ✅ | Non-empty. Required here (unlike the draft endpoint) because an empty description blocks publishing. Plain text — no markup. |
+| `descriptionRich` | object \| null | No | Structured description powering WhatsApp / Telegram formatting. `description` must be its plain-text projection — see [product-description-rich.md](./product-description-rich.md). |
 | `category` | string | ✅ | Non-empty |
 | `price` | number | ✅ | **> 0**. Zero is rejected outright — a zero-priced product can never be activated. |
 | `stock` | integer | | ≥ 0, default `0` |
 | `isInfiniteStock` | boolean | | default `false` |
 | `compareAtPrice` | number | | "was" price; show struck through when > `price` |
+| `bargain` | object | | `{ minPrice?, maxPrice }` — the haggling window. `minPrice` **defaults to `price`**, so `{ "maxPrice": 60000 }` is a complete configuration; sending one that differs from `price` is a `422`. `maxPrice` must be ≥ `price`. Never a "was" price — see [Bargainable pricing](./variants.md#bargainable-pricing). |
 | `sku` | string | | 1–100 chars. **Auto-generated when omitted** — see below. |
 | `tags` | string[] | | unique, non-empty |
 | `fileIds` | string[] | | Max 7. Upload first via `POST /api/files/upload`, send the returned ids. |
@@ -100,10 +105,18 @@ Content-Type: application/json
   "description": "Classic runner, everyday comfort.",
   "category": "footwear",
   "price": 45000,
+  "bargain": { "maxPrice": 60000 },
   "stock": 12,
   "fileIds": ["6f1a2b3c4d5e6f7a8b9c0d1e"]
 }
 ```
+
+> [!NOTE]
+> The window above is **stored but inert**. Bargaining only takes effect once the product's
+> `vectorisationEnabled` flag is on (`PATCH /api/vendor/products/:id/vectorisation`), which a
+> brand-new product never is — the response's `defaultVariant.bargainable` will be `false`.
+> That is expected, not an error: configure the window whenever it suits, and it starts
+> applying the moment vectorisation is enabled.
 
 ### Response — `201 Created`
 
@@ -237,7 +250,7 @@ One flat body edits both the product and its variant. Every field optional; at l
 
 | → Product | → its single variant |
 |---|---|
-| `title`, `description`, `category`, `tags`, `fileIds`, `seoTitle`, `seoDescription`, `freeDelivery`, `pickupLocation` | `price`, `compareAtPrice`, `stock`, `isInfiniteStock`, `lowStockThreshold`, `allowOversell`, `sku`, `weight`, `length`, `width`, `height` |
+| `title`, `description`, `category`, `tags`, `fileIds`, `seoTitle`, `seoDescription`, `freeDelivery`, `pickupLocation` | `price`, `compareAtPrice`, `bargain`, `stock`, `isInfiniteStock`, `lowStockThreshold`, `allowOversell`, `sku`, `weight`, `length`, `width`, `height` |
 
 ```json
 PATCH /api/vendor/products/507f1f77bcf86cd799439011/simple
@@ -245,6 +258,18 @@ PATCH /api/vendor/products/507f1f77bcf86cd799439011/simple
 ```
 
 Response shape is identical to create (`data` + `meta.activation`), status `200`.
+
+> [!IMPORTANT]
+> **A bare `price` edit also moves `bargain.minPrice`.** On a product with a bargain window,
+> `{ "price": 39000 }` writes the price *and* re-points `minPrice` at it, so a client that
+> knows nothing about bargaining cannot break the invariant. If the new price would exceed
+> the stored `maxPrice`, the whole PATCH is refused with
+> `422 CATALOG_VARIANT_BARGAIN_RANGE_INVALID` — send `{ "price": …, "bargain": { "maxPrice": … } }`
+> together to raise both. `"bargain": null` clears the window. Full rules:
+> [Bargainable pricing](./variants.md#bargainable-pricing).
+>
+> Because this schema is **strict**, a mistyped `"bargin"` is a `400` here — unlike
+> `PATCH /:productId/variants/:variantId`, which silently ignores unknown keys.
 
 > [!WARNING]
 > **`stock` is not written for an agency-warehoused product.** If this product's pickup
@@ -309,6 +334,10 @@ After converting, `PATCH /:id/simple` returns `409 CATALOG_PRODUCT_NOT_SIMPLE_MO
 
 `POST /products/:id/duplicate` on a simple product produces another **simple** product, variant included, with a freshly generated SKU. (Advanced products still duplicate without variants — the vendor recreates them.)
 
+Any **bargain window is carried over** — the price is copied verbatim, so `minPrice` still
+matches it. The copy is born with vectorisation off, so it arrives `bargainable: false`
+until the vendor opts the new product in.
+
 ---
 
 ## Error reference
@@ -326,6 +355,8 @@ After converting, `PATCH /:id/simple` returns `409 CATALOG_PRODUCT_NOT_SIMPLE_MO
 | 409 | `CATALOG_PRODUCT_VECTORISATION_PENDING` | Product is mid-vectorisation |
 | 422 | `CATALOG_PRODUCT_INVALID_PICKUP_LOCATION` | Explicit pickup location incompatible with the agency |
 | 422 | `CATALOG_PRODUCT_NO_DEFAULT_VARIANT` | Simple product lost its variant (should be unreachable — the guards prevent it) |
+| 422 | `CATALOG_VARIANT_BARGAIN_PRICE_MISMATCH` | `bargain.minPrice` disagrees with the effective price |
+| 422 | `CATALOG_VARIANT_BARGAIN_RANGE_INVALID` | `bargain.maxPrice` is below the effective price — including a bare `price` edit rising above the stored ceiling |
 
 ---
 

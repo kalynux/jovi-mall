@@ -1,0 +1,343 @@
+/**
+ * The storefront's read side — browse, search, product detail, categories and stores.
+ *
+ * ⚠️ **Everything this service returns is world-readable.** `/api/public/*` is the one mount
+ * with no auth guard anywhere above or below it, so there is no `req.auth` to scope by and
+ * no second gate downstream. Two rules follow, and both are load-bearing:
+ *
+ *   1. **Visibility is decided in exactly one place** — `domain/services/public-catalog.filter.ts`,
+ *      applied by every query in `PublicCatalogRepositoryMongo`. This service never re-decides
+ *      it and never widens it.
+ *   2. **Shape is decided in exactly one place** — the explicit projections in
+ *      `dto/public-product.dto.ts` and `store/dto/public-store.dto.ts`. This service never
+ *      returns a domain object or a repository row directly.
+ *
+ * ── Absent is 404, never 403 ────────────────────────────────────────────────
+ *
+ * A draft, archived, suspended or soft-deleted product returns
+ * `404 CATALOG_PRODUCT_NOT_FOUND` — the same answer as one that never existed. A 403 would
+ * confirm the id is real, which turns the endpoint into an oracle for a competitor
+ * enumerating a vendor's unreleased catalogue.
+ */
+import { createAppError } from '../../../core/errors';
+import { ERROR_CODES } from '../../../core/error-codes';
+import { getStorageProvider } from '../../../core/storage';
+import { FileRepositoryMongo } from '../repositories/mongo/file.repository.mongo';
+import { VariantRepositoryMongo } from '../repositories/mongo/variant.repository.mongo';
+import { OptionRepositoryMongo } from '../repositories/mongo/option.repository.mongo';
+import { OptionValueRepositoryMongo } from '../repositories/mongo/option-value.repository.mongo';
+import { ProductRepositoryMongo } from '../repositories/mongo/product.repository.mongo';
+import {
+    publicCatalogRepository,
+    PublicProductListRow,
+    PublicStoreListRow,
+} from '../repositories/mongo/public-catalog.repository.mongo';
+import { resolveFileDetails } from '../read-models/file-detail.resolver';
+import { productImageKey, resolveProductImages } from '../read-models/product-image.resolver';
+import { FileDetail } from '../read-models/product-detail.read-model';
+import {
+    PublicProductDetailDto,
+    PublicProductListItemDto,
+    toPublicCancellationPolicyDto,
+    toPublicProductDetailDto,
+    toPublicReturnPolicyDto,
+} from '../dto/public-product.dto';
+import { PublicStoreDto, toPublicStoreDto } from '../../store/dto/public-store.dto';
+import { PublicProductListQuery, PublicStoreListQuery } from '../validators/public-catalog.validator';
+
+/**
+ * The account currency.
+ *
+ * Matches the cart's and the order model's default. It is a constant rather than a per-
+ * product field because nothing in the catalogue stores one — a variant's `price` is a bare
+ * number, and every seeded plan, cart line and order is `XAF`. When multi-currency arrives
+ * this is where it stops being a constant.
+ */
+const DEFAULT_CURRENCY = 'XAF';
+
+/** The default language a vendor's catalogue text is assumed to be authored in. */
+const DEFAULT_CONTENT_LANGUAGE = 'fr';
+
+export interface PublicPage<T> {
+    data: T[];
+    meta: { total: number; page: number; limit: number; pages: number };
+}
+
+export class PublicCatalogService {
+    constructor(
+        private readonly repo = publicCatalogRepository,
+        private readonly fileRepo = new FileRepositoryMongo(),
+        private readonly productRepo = new ProductRepositoryMongo(),
+        private readonly variantRepo = new VariantRepositoryMongo(),
+        private readonly optionRepo = new OptionRepositoryMongo(),
+        private readonly optionValueRepo = new OptionValueRepositoryMongo(),
+    ) { }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Browse
+    // ─────────────────────────────────────────────────────────────────────────
+
+    async listProducts(query: PublicProductListQuery): Promise<PublicPage<PublicProductListItemDto>> {
+        const { rows, total } = await this.repo.search({
+            q: query.q,
+            category: query.category,
+            types: query.type,
+            storeSlug: query.storeSlug,
+            minPrice: query.minPrice,
+            maxPrice: query.maxPrice,
+            inStock: query.inStock,
+            sort: query.sort,
+            page: query.page,
+            limit: query.limit,
+        });
+
+        return {
+            data: await this.decorateRows(rows),
+            meta: {
+                total,
+                page: query.page,
+                limit: query.limit,
+                pages: Math.ceil(total / query.limit),
+            },
+        };
+    }
+
+    /**
+     * Attach thumbnails to a page of rows in **one** file query.
+     *
+     * Resolved through `resolveProductImages` against the **default variant**, not the raw
+     * product `fileIds`, so the picture matches the price: a row quotes the default variant's
+     * price, and that resolver's rule is that variant media *replaces* product media rather
+     * than merging with it. A red T-shirt row therefore shows the red one instead of whatever
+     * the product-level gallery leads with. Most variants carry no media of their own, in
+     * which case it falls back to the product's — identical to the naive approach in the
+     * common case, and correct in the one that matters.
+     *
+     * `[0]` is the thumbnail by convention (the resolver returns galleries thumbnail-first),
+     * and it drops non-images and soft-deleted files, so a product whose media was swept
+     * resolves to `null` rather than a broken URL.
+     */
+    private async decorateRows(rows: PublicProductListRow[]): Promise<PublicProductListItemDto[]> {
+        const storage = getStorageProvider();
+        const imagesByKey = await resolveProductImages(
+            rows.map((r) => ({ productId: r.id, variantId: r.defaultVariantId })),
+            this.fileRepo,
+            storage,
+        );
+
+        return rows.map((row) => {
+            const image = imagesByKey.get(productImageKey(row.id, row.defaultVariantId))?.[0] ?? null;
+
+            return {
+                id: row.id,
+                slug: row.slug,
+                title: row.title,
+                type: row.type,
+                category: row.category,
+                tags: row.tags ?? [],
+                price: row.price,
+                compareAtPrice: row.compareAtPrice,
+                currency: DEFAULT_CURRENCY,
+                ...(row.priceMin !== row.priceMax
+                    ? { priceRange: { min: row.priceMin, max: row.priceMax } }
+                    : {}),
+                inStock: row.inStock,
+                image,
+                store: {
+                    slug: row.storeSlug,
+                    name: row.storeName,
+                    isOpen: row.storeIsOpen,
+                },
+                freeDelivery: row.freeDelivery,
+                updatedAt: new Date(row.updatedAt).toISOString(),
+            };
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Detail
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** The deep-link route: `GET /api/public/products/:productId`. */
+    async getProductById(productId: string): Promise<PublicProductDetailDto> {
+        const hit = await this.repo.findPublishableId(productId);
+        if (!hit) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+        return this.buildDetail(hit.id, hit.vendorId);
+    }
+
+    /** The canonical route: `GET /api/public/stores/:storeSlug/products/:productSlug`. */
+    async getProductBySlugs(storeSlug: string, productSlug: string): Promise<PublicProductDetailDto> {
+        const hit = await this.repo.findPublishableBySlugs(storeSlug, productSlug);
+        if (!hit) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+        return this.buildDetail(hit.id, hit.vendorId);
+    }
+
+    /**
+     * Assemble the detail DTO once visibility has already been decided.
+     *
+     * Takes an id the repository has **already** confirmed publishable, and re-reads the
+     * product through the vendor-scoped `findById` — which is why `vendorId` is threaded
+     * through rather than re-derived. Re-reading unscoped here would mean the publishable
+     * check and the read could disagree if the product changed between them.
+     */
+    private async buildDetail(productId: string, vendorId: string): Promise<PublicProductDetailDto> {
+        const [product, storeRow] = await Promise.all([
+            this.productRepo.findById(productId, vendorId),
+            this.repo.findStoreForVendor(vendorId),
+        ]);
+        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+        // A product whose vendor has no store cannot be addressed by the storefront's own
+        // URL scheme (`/stores/:storeSlug/products/:productSlug`), so it is not publishable
+        // even though the product itself passed every check. Stores are auto-provisioned,
+        // so this is a should-never-happen that fails as a 404 rather than a broken page.
+        if (!storeRow) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+
+        const [variants, options] = await Promise.all([
+            this.variantRepo.findByProduct(productId),
+            this.optionRepo.findByProduct(productId),
+        ]);
+
+        const optionValues =
+            options.length > 0 ? await this.optionValueRepo.findByOptions(options.map((o) => o.id)) : [];
+
+        const storage = getStorageProvider();
+
+        // Product gallery and every variant's own media, resolved together: one File query
+        // for the whole page rather than one per variant.
+        const productFileIds = product.fileIds ?? [];
+        const variantFileIds = variants.flatMap((v) => v.fileIds ?? []);
+        const storeLogoId = storeRow.logoFileId;
+        const fileById = await resolveFileDetails(
+            [...productFileIds, ...variantFileIds, storeLogoId],
+            this.fileRepo,
+            storage,
+        );
+
+        const imagesOf = (ids: string[]): FileDetail[] =>
+            ids
+                .map((id) => fileById.get(id))
+                .filter((f): f is FileDetail => !!f && !!f.mimeType?.startsWith('image/'));
+
+        const variantImages = new Map<string, FileDetail[]>();
+        for (const variant of variants) {
+            const own = imagesOf(variant.fileIds ?? []);
+            if (own.length > 0) variantImages.set(variant.id, own);
+        }
+
+        return toPublicProductDetailDto({
+            product,
+            variants,
+            options: options.map((o) => ({ id: o.id, name: o.name, position: o.position })),
+            optionValues: optionValues.map((v) => ({ id: v.id, optionId: v.optionId, value: v.value })),
+            productImages: imagesOf(productFileIds),
+            variantImages,
+            currency: DEFAULT_CURRENCY,
+            contentLanguage: storeRow.vendorPreferredLanguage ?? DEFAULT_CONTENT_LANGUAGE,
+            store: {
+                slug: storeRow.slug,
+                name: storeRow.name,
+                logo: storeLogoId ? fileById.get(storeLogoId) ?? null : null,
+                isOpen: storeRow.isOpen,
+                verified: storeRow.vendorVerified,
+                city: storeRow.vendorCity,
+                country: storeRow.vendorCountry,
+                supportWhatsapp: storeRow.supportWhatsapp,
+                policies: {
+                    returnPolicy: toPublicReturnPolicyDto(
+                        storeRow.vendorPolicies?.return_policy as never,
+                    ),
+                    cancellationPolicy: toPublicCancellationPolicyDto(
+                        storeRow.vendorPolicies?.cancellation_policy as never,
+                    ),
+                },
+            },
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Categories
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * `Product.category` is a plain indexed string — there is no Category collection, model
+     * or taxonomy anywhere in the codebase — so the chip list can only be derived, and it is
+     * derived over exactly the browse filter. A category whose every product is a draft
+     * therefore does not appear, which is the behaviour a shopper expects: a chip that leads
+     * to an empty grid is worse than no chip.
+     */
+    async listCategories(): Promise<Array<{ name: string; productCount: number }>> {
+        return this.repo.listCategories();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  Stores
+    // ─────────────────────────────────────────────────────────────────────────
+
+    async listStores(query: PublicStoreListQuery): Promise<PublicPage<PublicStoreDto>> {
+        const { rows, total } = await this.repo.listStores(query);
+        return {
+            data: await this.decorateStores(rows),
+            meta: {
+                total,
+                page: query.page,
+                limit: query.limit,
+                pages: Math.ceil(total / query.limit),
+            },
+        };
+    }
+
+    async getStoreBySlug(slug: string): Promise<PublicStoreDto> {
+        const row = await this.repo.findStoreBySlug(slug);
+        if (!row) throw createAppError(ERROR_CODES.STORE_NOT_FOUND, 404);
+        const [dto] = await this.decorateStores([row]);
+        return dto;
+    }
+
+    /** Resolve every store's branding in one file query, then project. */
+    private async decorateStores(rows: PublicStoreListRow[]): Promise<PublicStoreDto[]> {
+        const storage = getStorageProvider();
+        const fileIds = rows.flatMap((r) => [r.logoFileId, r.bannerFileId]);
+        const fileById = await resolveFileDetails(fileIds, this.fileRepo, storage);
+
+        return rows.map((row) =>
+            toPublicStoreDto({
+                store: {
+                    slug: row.slug,
+                    name: row.name,
+                    description: row.description,
+                    is_open: row.isOpen,
+                    support_email: row.supportEmail,
+                    support_phone: row.supportPhone,
+                    support_whatsapp: row.supportWhatsapp,
+                    created_at: row.createdAt,
+                },
+                vendor: {
+                    status: row.vendorStatus,
+                    country: row.vendorCountry,
+                    verified: row.vendorVerified,
+                    city: row.vendorCity,
+                    preferredLanguage: row.vendorPreferredLanguage,
+                },
+                logo: row.logoFileId ? fileById.get(row.logoFileId) ?? null : null,
+                banner: row.bannerFileId ? fileById.get(row.bannerFileId) ?? null : null,
+                productCount: row.productCount,
+            }),
+        );
+    }
+
+    /** `GET /api/public/stores/:slug/products` — the store page's grid. */
+    async listStoreProducts(
+        slug: string,
+        query: Omit<PublicProductListQuery, 'storeSlug'>,
+    ): Promise<PublicPage<PublicProductListItemDto>> {
+        // 404 the whole request when the store itself is not public, rather than returning
+        // an empty grid — an empty grid says "this seller has nothing", which is a different
+        // and wrong statement about a suspended vendor.
+        const store = await this.repo.findStoreBySlug(slug);
+        if (!store) throw createAppError(ERROR_CODES.STORE_NOT_FOUND, 404);
+
+        return this.listProducts({ ...query, storeSlug: slug });
+    }
+}
+
+export const publicCatalogService = new PublicCatalogService();

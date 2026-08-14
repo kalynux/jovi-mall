@@ -102,6 +102,22 @@ transaction. A **cash_on_delivery** checkout requires no payment call — see
 | 422 | `COD_NOT_AVAILABLE_FOR_DIGITAL` | `paymentMethod: "cash_on_delivery"` on a digital cart. |
 | 422 | `COD_AGENCY_NOT_SUPPORTED` | A delivery agency on the order doesn't handle COD. `details.agencyName` names it. |
 | 422 | `COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | One vendor-order's total exceeds an agency's COD cap. `details: { agencyName, maxOrderAmount, orderTotal }`. |
+| 422 | `ORDER_DELIVERY_ADDRESS_REQUIRED` | **New.** A physical checkout resolved no geocoded drop-off. `details.reason` is `no_delivery_address` or `selected_address_not_geocoded`. |
+| 422 | `CATALOG_INSUFFICIENT_STOCK` | **New.** A line cannot be satisfied. `details: { variantId, sku, requested, available }`. |
+
+> **⚠️ Two new ways a physical checkout can fail, and both were previously silent successes.**
+>
+> **No usable address.** The address resolver fell through inline → named → default → `null`
+> and nothing rejected the null, so an order was created with `delivery_address: null` and no
+> drop-off; the failure surfaced much later as a shipment nobody could route. The subtle half
+> is worse: it reads `chosen.geo ?? null`, and `geo` is only populated by the address picker —
+> so **an address the customer explicitly selected still yielded null if they typed it by hand**
+> rather than picking it from `GET /api/geo/search`. Use
+> [`POST /api/customer/cart/quote`](./cart.md#post-apicustomercartquote) with the
+> `deliveryAddressId` to catch this before the pay button.
+>
+> **Not enough stock.** Checkout now holds every line for 30 minutes. Nothing in the order
+> path used to touch `variant.stock` at all, so overselling was unconstrained.
 
 ---
 
@@ -114,6 +130,16 @@ order that may contain several per-vendor orders. Paginated by group.
 
 - `page` *(int, default 1)*
 - `limit` *(int, default 20, max 100)*
+- `status` *(enum, optional)* — `pending` · `processing` · `partially_shipped` · `shipped` ·
+  `partially_delivered` · `delivered` · `fulfilled` · `cancelled` · `returned`
+- `paymentStatus` *(enum, optional)* — `pending` · `AWAITING_PAYMENT` · `partially_paid` ·
+  `paid` · `disputed` · `failed` · `refunded`
+- `from` / `to` *(ISO date, optional)* — created-at range
+- `q` *(string ≤ 200, optional)* — substring over the order number and the line titles
+
+> Filters are applied to the **orders**, then grouped — so a group appears with only the
+> orders that matched, and `meta.total` counts what you can actually see. An unknown enum
+> value is a `400 VALIDATION_ERROR` naming the field, not a silent empty page.
 
 ### Response
 
@@ -152,8 +178,15 @@ order that may contain several per-vendor orders. Paginated by group.
 
 The group-level `paymentStatus` is an aggregate of its orders: `paid` (all paid), `awaiting_payment`
 (none paid), `partially_paid` (some paid — including COD orders partway through their per-shipment
-cash collection), or `mixed`. Each order also carries its own `paymentMethod`
+cash collection), `refunded` / `failed` (all of them), `disputed` (any of them), `unknown` (an empty
+group), or `mixed`. Each order also carries its own `paymentMethod`
 (`"online"` | `"cash_on_delivery"`).
+
+> **Changed 2026-08-14.** `refunded`, `failed`, `disputed` and `unknown` are new. Previously
+> a fully refunded group reported `mixed` — a word that told the customer nothing while they
+> were looking for their refund — and an **empty** group reported `paid`, because
+> `[].every(...)` is `true` in JavaScript. That was the most reassuring possible answer to
+> "what happened to my money", derived from no data at all.
 
 ---
 
@@ -230,6 +263,108 @@ authenticated customer.
 | HTTP | Code | When |
 |---|---|---|
 | 404 | `ORDER_NOT_FOUND` | No orders for this `cartId` under the authenticated customer. |
+
+---
+
+## GET /api/customer/orders/:id
+
+**One per-vendor order.** Same body as one element of the group's `orders[]` above — the two
+are built from the same projection, so they cannot disagree about what an order is.
+
+This exists because the group read is the only per-order read there was: a customer holding a
+single `orderId` (from a push deep link, an email, or the `orderId` every notification
+carries) had no endpoint to open it with. They had to already know the `cartId`, which
+nothing had told them.
+
+`404 ORDER_NOT_FOUND` when the order does not exist **or** belongs to someone else — the two
+are indistinguishable on purpose.
+
+### What every order object now carries
+
+The projection was widened; all of this already existed on the model and simply was not sent.
+
+| Field | Notes |
+|---|---|
+| `cartId` | The checkout group. **Pay an unpaid order with `POST /api/payments/initiate { cartId }`** — this is what makes one resumable |
+| `store` | `{ slug, name }` — the seller's business identity. "Order from `507f1f77bcf86cd799439aaa`" is not a receipt |
+| `priceBreakdown` | `{ base, tax, discount, total }`. `tax`/`discount` are pinned zeros — see [cart quote](./cart.md#post-apicustomercartquote) |
+| `deliveryAddress` | Where it is going. `null` on digital orders |
+| `items[].image` | Live-resolved thumbnail (`FileDetail \| null`). Order history with no pictures is unreadable on a phone |
+| `items[].delivery` | `{ status, shipmentId }` — per-line delivery state, and the id the shipment endpoints need |
+| `updatedAt` | "Last updated" on the order card |
+
+> **Images are resolved live, not snapshotted.** Title, SKU and price are snapshotted because
+> they are terms of the sale and must not drift; an image is an aid to recognising the object,
+> so the *current* picture is the more useful one — and every existing order gets one with no
+> backfill.
+
+---
+
+## GET /api/customer/orders/:orderId/shipments
+
+**Where the customer's parcels are.**
+
+There was no customer-facing shipment endpoint of any kind, which left a dead end rather than
+a gap: both `…/shipments/:shipmentId/confirm-delivery` and `…/resend-delivery-code` need a
+`shipmentId`, and no customer response returned one except inside `codCollections` — which is
+`undefined` for every online-paid order. **A prepaid customer could never confirm a delivery.**
+
+```jsonc
+{
+  "success": true,
+  "data": [
+    {
+      "id": "507f1f77bcf86cd799439100",
+      "status": "shipped",
+      "trackingNumber": "FDO-260730-142309-K7Q2M",
+      "agencyName": "WiExpress",
+      "itemIds": ["507f1f77bcf86cd799439055"],
+      "statusHistory": [
+        { "status": "shipped", "at": "2026-07-30T10:00:00.000Z" },
+        { "status": "out_for_delivery", "at": "2026-07-30T14:00:00.000Z" }
+      ],
+      "estimatedDelivery": null,
+      "failedAttempts": 0
+    }
+  ]
+}
+```
+
+### The status vocabulary is five words, not eleven
+
+`ShipmentStatus` has eleven members and most describe the platform's dispatch machinery
+rather than the parcel's journey. What you get is the **same four the customer notification
+catalog already commits to**, plus one for "not moving yet" — so a customer who received
+"your order is on its way" sees the same word when they open the app.
+
+| Customer status | Internal statuses behind it |
+|---|---|
+| `preparing` | `pending`, `assigned`, `pending_agency_reassignment`, `rejected` |
+| `shipped` | `picked_up`, `in_transit`, `handing_over` |
+| `out_for_delivery` | `agent_delivered` |
+| `delivered` | `delivered` |
+| `delivery_failed` | `failed`, `returned` |
+
+`statusHistory` uses the same five words and **de-duplicates consecutive entries**, folding
+them to the moment the state was entered — `picked_up → in_transit` is one "shipped" line,
+not two. A failed-then-retried journey keeps both the failure and the eventual success.
+
+### Never published
+
+The agent's identity or contact details, and the free-text internal `note` on a failed
+delivery. `delivery_failures[].note` is written by an agent for their agency ("gate locked,
+dog") and `reason` is an internal enum; the notification copy already rephrases both
+deliberately. Only `failedAttempts` — the count — is surfaced.
+
+`estimatedDelivery` is always `null` today and is present rather than omitted: nothing in the
+platform estimates a delivery date. The key is stable so the row does not change shape the
+day estimates arrive.
+
+### Errors
+
+| HTTP | Code | When |
+|---|---|---|
+| 404 | `ORDER_NOT_FOUND` | Order does not exist, or is not this customer's. |
 
 ---
 

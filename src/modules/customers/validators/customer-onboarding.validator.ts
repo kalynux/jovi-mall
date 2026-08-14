@@ -62,6 +62,30 @@ export type UpdateCustomerProfileInput = z.infer<typeof UpdateCustomerProfileSch
 export const AddCustomerAddressSchema = SavedAddressSchema;
 export type AddCustomerAddressInput = z.infer<typeof AddCustomerAddressSchema>;
 
+// ─── Edit Address ─────────────────────────────────────────────────────────────
+
+/**
+ * `PATCH /api/customer/addresses/:id` — every field optional, only what is sent is written.
+ *
+ * Derived from `SavedAddressSchema` with `.partial()` rather than written out again, so a
+ * field added to an address is editable the day it is addable and the two cannot drift.
+ *
+ * **`is_default` is omitted on purpose.** It is a relationship *between* addresses — exactly
+ * one may hold it — not a property of one, so setting it means clearing every sibling.
+ * `PATCH /addresses/:id/default` owns that clear-then-set; accepting the flag here would be
+ * a second way to write it, and the one that forgets the other half.
+ *
+ * `country` loses its `'CM'` default here for the same reason a PATCH never defaults: an
+ * omitted key must leave the stored value alone, and a default would silently rewrite every
+ * non-Cameroonian address on an unrelated edit.
+ */
+export const UpdateCustomerAddressSchema = SavedAddressSchema
+    .omit({ is_default: true })
+    .partial()
+    .extend({ country: z.string().length(2).toUpperCase().optional() });
+
+export type UpdateCustomerAddressInput = z.infer<typeof UpdateCustomerAddressSchema>;
+
 // ─── Add Payment Method ───────────────────────────────────────────────────────
 
 export const AddCustomerPaymentMethodSchema = SavedPaymentMethodSchema;

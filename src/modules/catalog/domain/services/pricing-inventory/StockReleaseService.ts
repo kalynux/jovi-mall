@@ -1,3 +1,4 @@
+import { ClientSession } from 'mongoose';
 import { createAppError } from '../../../../../core/errors';
 import { ERROR_CODES } from '../../../../../core/error-codes';
 import { TransactionManager } from '../../../../../core/database/transaction.manager';
@@ -10,16 +11,33 @@ import { IAvailabilityRepository } from '../../../repositories/interfaces/availa
 export interface ReleaseStockCommand {
   reservationId: string;
   vendorId: string; // For vendor ownership check
+  /** Join the caller's transaction instead of opening one — see ReserveStockCommand. */
+  session?: ClientSession;
 }
 
 /**
- * StockReleaseService: Release reservation (payment failed, timeout, cancel)
- * 
- * Business Rules:
- * - IDEMPOTENT - if already released → no-op
- * - EXPLICIT vendor ownership check via product
- * - Restores stock/capacity/quota
- * - Transaction-safe
+ * StockReleaseService: give up a hold (payment failed, timeout, cancel).
+ *
+ * ⚠️ **It writes no stock, and that is the fix rather than an omission.**
+ *
+ * It used to `$inc` the quantity back onto `variant.stock`, because reservation used to
+ * `$inc` it off. Both halves are gone: `StockReservationService` now leaves the counter
+ * alone and only `StockCommitService` moves it. Releasing a hold therefore has nothing to
+ * restore — flipping the row to `released` is the whole operation, because availability is
+ * `stock − Σ active reservations` and a released row stops being active.
+ *
+ * The property that buys is the one the old design could not have: **expiry needs no
+ * compensating write.** The model TTL-deletes an expired row, and under the old semantics
+ * that silently destroyed the units it had decremented, since the release could never run
+ * on a row that no longer existed. Now a deleted row simply stops counting, and
+ * availability recovers on its own.
+ *
+ * Business rules:
+ * - IDEMPOTENT — already released or expired → no-op.
+ * - EXPLICIT vendor ownership check via the product.
+ * - A **committed** reservation cannot be released: the units are sold. Reversing that is
+ *   a refund or a return, which restock through their own paths.
+ * - Transaction-safe.
  */
 export class StockReleaseService {
   constructor(
@@ -32,7 +50,11 @@ export class StockReleaseService {
   ) { }
 
   async execute(command: ReleaseStockCommand): Promise<void> {
-    await this.transactionManager.runInTransaction(async (session) => {
+    const run = command.session
+      ? (fn: (s: ClientSession) => Promise<void>) => fn(command.session!)
+      : (fn: (s: ClientSession) => Promise<void>) => this.transactionManager.runInTransaction(fn);
+
+    await run(async (session) => {
       // 1. Load reservation
       const reservation = await this.reservationRepository.findByReservationId(command.reservationId, { session });
 
@@ -66,46 +88,13 @@ export class StockReleaseService {
         throw createAppError(ERROR_CODES.CATALOG_PRODUCT_ACCESS_DENIED, 403, 'Reservation does not belong to this vendor');
       }
 
-      // 3. Restore stock/capacity based on type
-      if (reservation.type === 'physical') {
-        await this.restorePhysicalStock(reservation.variantId, reservation.quantity, session);
-      } else if (reservation.type === 'digital') {
-        // Digital: No actual restoration needed, just mark as released
-        // (counts are based on active/committed reservations)
-      } else if (reservation.type === 'service') {
-        // Service: No actual capacity restoration in this simplified version
-        // (counts are based on active/committed reservations)
-      }
-
-      // 4. Update reservation status to released
+      // 3. Flip the row. That IS the release — for every reservation type.
+      //
+      // Physical needs no restore because the reservation never decremented (see the class
+      // header); digital and service were already counted from the rows themselves rather
+      // than from a counter. All three converge on the same one-line operation, which is
+      // what the corrected model buys.
       await this.reservationRepository.updateStatus(command.reservationId, 'released', { session });
     });
-  }
-
-  /**
-   * Restore physical stock - ATOMIC increment
-   */
-  private async restorePhysicalStock(
-    variantId: string,
-    quantity: number,
-    session: any
-  ): Promise<void> {
-    const variant = await this.variantRepository.findById(variantId, { session });
-
-    if (!variant) {
-      throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
-    }
-
-    // Skip restoration if infinite stock
-    if (variant.isInfiniteStock) {
-      return;
-    }
-
-    // ATOMIC: Increment stock back
-    await this.variantRepository.update(
-      variantId,
-      { stock: { $inc: quantity } as any }, // Atomic increment
-      { session }
-    );
   }
 }

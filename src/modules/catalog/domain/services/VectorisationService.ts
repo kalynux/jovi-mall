@@ -382,6 +382,12 @@ export class VectorisationService {
         name: v.name ?? null,
         price: v.price,
         compareAtPrice: v.compareAtPrice ?? null,
+        // The haggling window the negotiating agent bargains within. Null when the
+        // vendor configured none. No `bargainable` flag is sent: this payload is
+        // only built for products that passed `isEligible`, which already requires
+        // vectorisationEnabled === true, so a window reaching the indexer is
+        // effective by construction.
+        bargain: v.bargain ? { minPrice: v.bargain.minPrice, maxPrice: v.bargain.maxPrice } : null,
         stock: v.stock,
         isInfiniteStock: v.isInfiniteStock,
         weight: v.weight ?? null,

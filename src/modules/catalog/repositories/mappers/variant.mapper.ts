@@ -1,5 +1,6 @@
 import { IMapper } from '../../../../core/database/mapper.interface';
 import { IProductVariant } from '../../models';
+import { BargainRange } from '../../domain/services/bargain-price.rule';
 
 export interface Variant {
   id: string;
@@ -10,6 +11,16 @@ export interface Variant {
   optionSignature: string;
   price: number;
   compareAtPrice?: number;
+  /**
+   * The haggling window, where `minPrice === price` always (see
+   * `domain/services/bargain-price.rule.ts`). Absent = not bargainable.
+   *
+   * `null` is a WRITE-ONLY signal meaning "clear it" — the repository turns it
+   * into a `$unset`. `toDomain` never produces one, so a read yields only
+   * `undefined` or a complete pair. Mirrors how `serviceConfig.peakHours: null`
+   * already means "clear" on the patch schema.
+   */
+  bargain?: BargainRange | null;
   stock: number;
   isInfiniteStock: boolean;
   lowStockThreshold: number | null;
@@ -62,6 +73,10 @@ export class VariantMapper implements IMapper<Variant, IProductVariant> {
       optionSignature: doc.optionSignature,
       price: doc.price,
       compareAtPrice: doc.compareAtPrice,
+      // Normalised to `undefined` when absent: `null` is a write-only clear signal.
+      bargain: doc.bargain
+        ? { minPrice: doc.bargain.minPrice, maxPrice: doc.bargain.maxPrice }
+        : undefined,
       stock: doc.stock,
       isInfiniteStock: doc.isInfiniteStock,
       lowStockThreshold: doc.low_stock_threshold,

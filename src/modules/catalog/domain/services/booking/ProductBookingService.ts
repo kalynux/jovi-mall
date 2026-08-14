@@ -13,6 +13,7 @@ import { BookingPriceResolver, ResolvedPrice } from './BookingPriceResolver';
 import { SlotLockFacade } from './SlotLockFacade';
 import { createAppError } from '../../../../../core/errors';
 import { ERROR_CODES } from '../../../../../core/error-codes';
+import { isPublishableProduct } from '../public-catalog.filter';
 
 export interface BookProductResult {
   booking: IBooking;
@@ -68,6 +69,28 @@ export class ProductBookingService {
     // Step 1: Fetch and validate product
     const product = await this.productRepository.findByIdUnscoped(productId);
     if (!product) {
+      throw createAppError(ERROR_CODES.CATALOG_BOOKING_PRODUCT_NOT_FOUND, 404, undefined, { productId });
+    }
+
+    /**
+     * ⚠️ **This route is unauthenticated.**
+     *
+     * `GET /api/products/:productId/availability` carries no `requireAuth`, unlike its
+     * three siblings on the same router (`/slots/:slotId/lock`, `/book`,
+     * `/slots/:slotId/unlock`). Combined with `findByIdUnscoped` above and a check on
+     * `type` alone, a logged-out caller could read the booking calendar — every busy
+     * window, i.e. the vendor's whole appointment book — of a `draft`, `archived` or
+     * `suspended` product. A draft is a product its owner has not published; a suspended
+     * one is a product an administrator or an agency has taken down.
+     *
+     * The publishable predicate is the same one the storefront uses, so "bookable" and
+     * "visible in the catalogue" cannot drift apart.
+     *
+     * It answers `CATALOG_BOOKING_PRODUCT_NOT_FOUND` — the same 404 as an id that does not
+     * exist — deliberately: a 403 would confirm the product is real, which is exactly the
+     * fact a competitor enumerating ids is after.
+     */
+    if (!isPublishableProduct(product)) {
       throw createAppError(ERROR_CODES.CATALOG_BOOKING_PRODUCT_NOT_FOUND, 404, undefined, { productId });
     }
 

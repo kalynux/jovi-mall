@@ -4,7 +4,7 @@ import { CustomerProfileMapper, CustomerPaymentMethodDto, GetCustomerProfileResp
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { ICustomer } from '../customer.model';
-import { UpdateCustomerProfileInput, AddCustomerAddressInput, AddCustomerPaymentMethodInput } from '../validators/customer-onboarding.validator';
+import { UpdateCustomerProfileInput, AddCustomerAddressInput, UpdateCustomerAddressInput, AddCustomerPaymentMethodInput } from '../validators/customer-onboarding.validator';
 import { paymentMethodService } from '../../payment-methods/services/payment-method.service';
 import { toGeoAddress } from '../../../core/types/geo-address.types';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
@@ -113,6 +113,39 @@ export class CustomerProfileService {
 
         const updated = await this.customerRepo.addAddress(customerId, address);
         if (!updated) throw createAppError(ERROR_CODES.CUSTOMER_NOT_FOUND, 404);
+        return this.toProfileDto(updated);
+    }
+
+    /**
+     * Edit a saved address in place — the `_id` survives, so past orders that reference it
+     * through `deliveryAddressId` keep pointing at a real address.
+     *
+     * `geo` is normalised exactly as `addAddress` normalises it (server-assigned
+     * `resolved_at`, null-filled absent components), so an address edited through here is
+     * indistinguishable from one added through there. Passing `geo: null` explicitly clears
+     * it — which is a real intention (a customer replacing a picked address with a typed
+     * one) and one checkout will then refuse for physical orders, honestly and loudly.
+     */
+    async updateAddress(
+        customerId: string,
+        addressId: string,
+        input: UpdateCustomerAddressInput,
+    ): Promise<GetCustomerProfileResponseDto> {
+        const customer = await this.customerRepo.findById(customerId);
+        if (!customer) throw createAppError(ERROR_CODES.CUSTOMER_NOT_FOUND, 404);
+
+        const hasAddress = customer.saved_addresses.some((a) => a._id.toString() === addressId);
+        if (!hasAddress) throw createAppError(ERROR_CODES.CUSTOMER_ADDRESS_NOT_FOUND, 404);
+
+        const { geo, ...rest } = input;
+        const updates = {
+            ...rest,
+            // `undefined` (key omitted) leaves the stored value alone; `null` clears it.
+            ...(geo === undefined ? {} : { geo: geo ? toGeoAddress(geo) : null }),
+        } as Partial<ICustomer['saved_addresses'][number]>;
+
+        const updated = await this.customerRepo.updateAddress(customerId, addressId, updates);
+        if (!updated) throw createAppError(ERROR_CODES.CUSTOMER_ADDRESS_NOT_FOUND, 404);
         return this.toProfileDto(updated);
     }
 
