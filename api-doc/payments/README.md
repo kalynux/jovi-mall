@@ -7,6 +7,24 @@ payment, a whole multi-vendor cart in one charge, or a service booking.
 - **Response envelope**: standard `{ success, ... }` — see [../README.md](../README.md#the-response-envelope-read-this-first).
 - **Gateways**: `NOTCHPAY` and `MYCOOLPAY` (mobile money), `STRIPE` (cards).
 
+> ### 🚧 Only `STRIPE` is really wired up
+>
+> `NotchPayGateway` and `MyCoolPayGateway` are **placeholders**. `callNotchPayAPI` /
+> `callMyCoolPayAPI` contain a commented-out `fetch` and end in a `throw`, so:
+>
+> - **With an API key set** (`NOTCHPAY_API_KEY` / `MYCOOLPAY_API_KEY`), every call **throws** —
+>   `initiate` returns `status: "FAILED"`.
+> - **With no API key set**, they return a **mock success**: `initiate` answers `PENDING` with a
+>   hard-coded USSD code (`*126#` / `*155#`) and a synthetic reference
+>   (`NOTCH-<epoch>` / `MCOOL-<epoch>`). The response looks exactly like a real one and **no money
+>   moves**. The order will never settle, because no gateway will ever send a webhook for it.
+>
+> This is why `GET /api/internal/admin/system/integrations` reports both as
+> `configured: false` even with a key present — see [../admin/system.md](../admin/system.md).
+> Do not build a checkout on either gateway expecting it to take money. Everything else on this
+> page — the request shapes, the state machine, the webhooks, the envelope — is real and is what
+> the gateways will use once implemented.
+
 > **⚠️ Breaking change (2026-07-29): `GET /api/payments/:transactionId` now requires
 > authentication and returns only the caller's own transaction.** It previously accepted no
 > credentials at all, so any transaction was readable by id. A client polling it must now send the
@@ -177,6 +195,35 @@ repeatedly — settlement is idempotent.
 | `AUTH_MISSING_TOKEN` | 401 | No token and no refresh cookie |
 | `AUTH_TOKEN_EXPIRED` / `AUTH_SESSION_EXPIRED` | 401 | Expired, refresh unavailable — Bearer callers must re-login |
 | `PAYMENT_TRANSACTION_NOT_FOUND` | 404 | Unknown id, malformed id, **or the transaction is not yours** |
+
+---
+
+## Gateway webhooks (server-to-server — not client-callable)
+
+Documented here because they are what actually settles a payment; a frontend never calls them.
+
+| Path | Signature | Body parsing |
+|---|---|---|
+| `POST /api/webhooks/stripe` | **verified** — `stripe-signature` against `STRIPE_WEBHOOK_SECRET` | **raw** (`express.raw`, mounted before `express.json()`), with its own larger body limit |
+| `POST /api/webhooks/notchpay` | `x-notchpay-signature` header is read but **not verified yet** | JSON |
+| `POST /api/webhooks/mycoolpay` | `x-mycoolpay-signature` header is read but **not verified yet** | JSON |
+
+Properties worth knowing:
+
+- **The whole `/api/webhooks` prefix is exempt from rate limiting**, and stays reachable during a
+  maintenance window unless the operator set `blockWebhooks` on it. A 429 or a 503 to a gateway
+  loses a payment notification. See [../rate-limits.md](../rate-limits.md).
+- **Stripe answers `400` on a bad or missing signature** (so Stripe retries) and **`200` on a
+  processing failure after the signature verified** (so Stripe does *not* retry a poison event).
+  NotchPay and MyCoolPay always answer `200`, for the same reason.
+- **These bodies are provider-shaped, not the platform envelope.** They answer Stripe, not your
+  frontend.
+- Stripe routes by `metadata.purpose`: `plan_purchase` and `credit_topup` go to the billing
+  services and create **no** `PaymentTransaction`; everything else goes to the payment
+  orchestrator, which dedups on a payload hash. `charge.dispute.created`,
+  `charge.dispute.closed` and `charge.refunded` are handled separately — freeze on open, resume
+  on `won`, unwind on `lost` or a **full** refund (a partial `charge.refunded` is deliberately
+  not unwound).
 
 ---
 

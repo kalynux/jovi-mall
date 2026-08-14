@@ -10,71 +10,94 @@ Note: **Customers** do not have an onboarding flow (their `onboarding_step` is i
 
 For all role types, the frontend flow is dictated by checking the completion status of the current user.
 
-1. **Check Completion Status**: The frontend should call the respective `/profile/completion-status` endpoint for the active role after login.
+1. **Check Completion Status**: The frontend should call the respective `/profile/completion-status` or `/onboarding/status` endpoint for the active role after login.
 2. **Route to Step**: The response includes `onboardingStep` (the next step to complete) and `isComplete` (whether onboarding is finished). Route the user to the appropriate screen based on `onboardingStep`.
-3. **Submit Step Data**: Submit the required payload to the respective `/onboarding/step` endpoint.
-4. **Repeat**: After a successful step submission, repeat the `completion-status` check or rely on the updated step in the response to navigate to the next screen.
+3. **Submit Step Data**: Submit the required payload to that step's endpoint.
+4. **Repeat**: After a successful step submission, repeat the status check or rely on the updated `completionStatus` in the response to navigate to the next screen.
+
+> **⚠ The three roles do not share one endpoint shape.** Vendor and agency use a **`PUT` per
+> step**; only the **agent** has a single `PATCH …/onboarding/step` taking a `step` field. The
+> old `PATCH /api/vendor/onboarding/step` and `PATCH /api/agency/onboarding/step` were removed
+> and no longer exist.
 
 ---
 
 ## 1. Vendor Onboarding
 
-Vendors must complete basic setup and select a delivery agency before their profile is considered fully active. Branding and additional addresses can be skipped initially.
+Four steps, each its own `PUT`. Step 1 is mandatory; steps 2–4 are skippable. A completed step can
+be re-submitted to update its data without resetting progress.
+
+> [!IMPORTANT]
+> **[`vendor/onboarding.md`](../vendor/onboarding.md) is authoritative** for the vendor flow —
+> full field references, validation rules and error codes. The payloads below are a summary.
 
 ### Endpoints
-*   **Status Check**: `GET /api/vendor/profile/completion-status`
-*   **Submit Step**: `PATCH /api/vendor/onboarding/step`
+*   **Status Check**: `GET /api/vendor/onboarding/status` (rich) · `GET /api/vendor/profile/completion-status` (step + missing fields)
+*   **Submit Step**: `PUT /api/vendor/onboarding/{basic-setup|delivery-linking|branding|policy-setup}` (steps 1–4)
+
+Every step accepts an optional `version` integer for optimistic concurrency
+(`409 VENDOR_ONBOARDING_CONCURRENT_MODIFICATION` on a mismatch). Once `onboarding_step === 0`, all
+four answer `409 VENDOR_ONBOARDING_ALREADY_COMPLETED` — edit through `PATCH /api/vendor/profile`
+instead.
 
 ### Steps & Payloads
 
-#### **Step 1: Basic Setup (Mandatory)**
+#### **Step 1: Basic Setup (Mandatory)** — `PUT /api/vendor/onboarding/basic-setup`
 **Payload**:
-```json
+```jsonc
 {
-  "step": 1,
-  "country": "CM", // Valid ISO-2 code
-  "timezone": "Africa/Douala", // Required
-  "payout_details": {
-    "provider": "mtn_mobile_money",
-    "account_number": "number string",
-    "account_name": "name string",
-    "provider_meta": {} // Optional metadata
-  }
+  "country": "CM",              // Valid ISO-2 code; locks at onboarding completion
+  "timezone": "Africa/Douala",  // Required
+  "payout_details": [ /* ordered array, max 3 — see ../vendor/payout-methods.md */ ]
 }
 ```
 
-#### **Step 2: Delivery Linking (Mandatory)**
-**Payload**:
-```json
-{
-  "step": 2,
-  "default_delivery_agency_id": "agency_id_str" // Required
-}
-```
+#### **Step 2: Delivery Linking (Skippable)** — `PUT /api/vendor/onboarding/delivery-linking`
 
-#### **Step 3: Branding & Extras (Skippable)**
+**This step no longer selects an agency.** It is a plain step-advance. Choosing a delivery agency
+requires that agency's **consent**, so it happens through
+[Agency Connections](../vendor/agency-connections.md) instead — and
+`default_delivery_agency_id` is set **automatically** the first time any connection is approved.
+
+**Payload**: `{}` (or `{ "skip": true }`)
+
+#### **Step 3: Branding & Extras (Skippable)** — `PUT /api/vendor/onboarding/branding`
 **Payload**:
-```json
+```jsonc
 {
-  "step": 3,
   "skip": false, // Set to true to skip this step without providing branding data
-  "branding": { // Optional — ids of files uploaded via POST /api/files/upload
+  "branding": {  // Optional — ids of files uploaded via POST /api/files/upload.
+                 // Stored on the vendor's Store, not the profile.
     "logo_file_id": "507f1f77bcf86cd799439030",
     "cover_image_file_id": "507f1f77bcf86cd799439031"
   },
-  "business_addresses": [ // Optional
+  "business_addresses": [ // Optional — a FULL REPLACE of the array. Re-send the `_id`
+                          // you were given on read for an existing entry, or it is
+                          // treated as a removal (409 VENDOR_BUSINESS_ADDRESS_IN_USE if
+                          // a product's pickup location still points at it).
     {
-      "label": "string",
-      "address_line1": "string",
-      "address_line2": "string", // Optional
-      "city": "string",
-      "state": "string", // Optional
-      "location": { // Optional
-        "type": "Point",
-        "coordinates": [longitude, latitude]
-      }
+      "_id": "507f1f77bcf86cd799439040", // omit when adding a new address
+      "label": "Main Shop",
+      "address_line1": "123 Market St",
+      "address_line2": null,
+      "city": "Douala",
+      "state": "Littoral",
+      // Required on every new/edited entry; must resolve inside `country`.
+      "geo": { "...": "a selected GET /api/geo/search result — see ../vendor/onboarding.md" }
     }
   ]
+}
+```
+
+#### **Step 4: Policy Setup (Skippable)** — `PUT /api/vendor/onboarding/policy-setup`
+**Payload**:
+```jsonc
+{
+  "skip": false,
+  "return_policy": { /* … */ },
+  "cancellation_policy": { /* … */ },
+  "support_policy": { /* … */ }
+  // `policies.documents` takes URLs from POST /api/vendor/profile/policy-documents
 }
 ```
 

@@ -5,7 +5,6 @@ import { CustomerRepository } from '../../modules/customers/customer.repository'
 import { VendorRepository } from '../../modules/vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../modules/delivery/delivery-agency.repository';
 import { AgentRepository } from '../../modules/agents';
-import { AdminRepository } from '../../modules/admins/admin.repository';
 import { AUTH_COOKIE, accessCookieOptions } from '../../config/cookie.config';
 import { AuthService } from '../../modules/auth/auth.service';
 import { createAppError } from '../../core/errors';
@@ -13,6 +12,7 @@ import { ERROR_CODES } from '../../core/error-codes';
 import { stampContextActor } from '../../core/logging/request-context';
 import { identityRateLimiter } from '../rate-limit/rate-limit.middleware';
 import { getJwtSecret } from '../../config/secrets.config';
+import { isTokenPredatingPasswordChange } from '../../core/auth/password-epoch';
 
 // Module-level singletons
 const userRepo = new UserRepository();
@@ -20,12 +20,16 @@ const customerRepo = new CustomerRepository();
 const vendorRepo = new VendorRepository();
 const agencyRepo = new DeliveryAgencyRepository();
 const agentRepo = new AgentRepository();
-const adminRepo = new AdminRepository();
 const authService = new AuthService();
 
 export interface AuthUserPayload {
   userId: string;
   role: string;
+  /**
+   * Whole seconds, added by `jsonwebtoken` on every token this service signs. Read only to
+   * date the token against `User.password_changed_at` — see `core/auth/password-epoch.ts`.
+   */
+  iat?: number;
 }
 
 declare global {
@@ -138,7 +142,41 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
     );
   }
 
-  // Load Role Entity
+  /**
+   * A token minted before the password changed is refused, on every authenticated request.
+   *
+   * `rotateRefreshToken` carries the same check and is the one that actually evicts — the
+   * refresh cookie lives 30 days. This one closes the tail: access tokens are stateless and
+   * live 15 minutes, so gating the refresh alone leaves whoever the change was aimed at
+   * working for a further quarter of an hour, which is a long time to be inside an account
+   * whose owner has just been told they locked it. The user row is already loaded
+   * (`findById`, above), so this costs a comparison and no query — the same argument as the
+   * suspension check.
+   *
+   * 401 rather than the suspension's 403: re-authenticating is exactly the remedy here, and
+   * a browser client's silent refresh will meet this same verdict on the refresh path and
+   * stop, rather than loop.
+   */
+  if (isTokenPredatingPasswordChange(payload.iat, user.password_changed_at)) {
+    return next(createAppError(ERROR_CODES.AUTH_PASSWORD_CHANGED, 401));
+  }
+
+  /**
+   * Load Role Entity.
+   *
+   * There is no `'admin'` branch, and its absence is load-bearing rather than
+   * tidiness. Administrator identity belongs to the separate `wi-admin` database;
+   * the legacy version of it here was a second, weaker one — no MFA, no session
+   * revocation, no permission tier, no audit — and this was its last resolution
+   * point. Nothing mints a token carrying that role any more (`register`,
+   * `addRole`, `login` and `authMe` all refuse it), so a token presenting it is
+   * either forged or predates the closure; either way it now falls through to the
+   * 401 below with no entity.
+   *
+   * The wi-admin backend does NOT arrive here. It is authenticated by
+   * `requireAdminCaller`, which synthesises `req.auth` from headers with no
+   * database query — see `admin-caller.middleware.ts`.
+   */
   let entity = null;
   const role = payload.role;
 
@@ -146,7 +184,6 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
   else if (role === 'vendor') entity = await vendorRepo.findByUserId(user.id);
   else if (role === 'agency') entity = await agencyRepo.findByUserId(user.id);
   else if (role === 'agent') entity = await agentRepo.findByUserId(user.id);
-  else if (role === 'admin') entity = await adminRepo.findByUserId(user.id);
 
   if (!entity) {
     return next(createAppError(ERROR_CODES.AUTH_ROLE_PROFILE_NOT_FOUND, 401));

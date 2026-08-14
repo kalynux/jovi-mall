@@ -13,6 +13,35 @@ import {
 } from '../../core/validation/phone';
 
 /**
+ * The roles a person may authenticate AS on this service.
+ *
+ * Deliberately NOT `UserRole` from the user model: that union still carries
+ * `'admin'`, because the Mongoose enum describes what a legacy row may hold, not
+ * what may be signed in as. Administrator identity lives in the separate
+ * `wi-admin` database — an administrator holds no `users` row here at all, and
+ * reaches this service through `requireAdminCaller`, never through a token.
+ *
+ * One list, four schemas. It used to be written out at each of them, and that is
+ * exactly how `'admin'` came to be closed on register/add-role while staying open
+ * on login/auth-me — a second, weaker administrator identity surviving in parallel
+ * with the designed one. Derive from here; do not re-type the members.
+ */
+export const AUTHENTICATABLE_ROLES = ['customer', 'vendor', 'agency', 'agent'] as const;
+
+export type AuthenticatableRole = (typeof AUTHENTICATABLE_ROLES)[number];
+
+/**
+ * Runtime counterpart to the list above, for the paths where a role arrives from a
+ * stored `users.roles` array rather than from a parsed request body. Those are not
+ * covered by the Zod enums and are the reason this guard exists rather than a cast:
+ * a `roles: ['admin']` row auto-resolving to its single role would mint an admin
+ * token without any request ever having named the role.
+ */
+export function isAuthenticatableRole(role: string): role is AuthenticatableRole {
+  return (AUTHENTICATABLE_ROLES as readonly string[]).includes(role);
+}
+
+/**
  * Login accepts a phone number OR an email address in one field, so the rule is
  * "whichever one this is, it must be valid" rather than a laxer rule of its own.
  *
@@ -44,27 +73,34 @@ export const RegisterSchema = z.object({
   // accepting it here let anyone POST themselves a platform administrator and get a
   // signed admin token back in the same response. Administrators are created only by
   // the admin service's bootstrap CLI, in the separate `wi-admin` database.
-  role: z.enum(['customer', 'vendor', 'agency', 'agent']).default('vendor'),
+  role: z.enum(AUTHENTICATABLE_ROLES).default('vendor'),
   business_name: z.string().optional(), // For vendors
   agency_name: z.string().optional(), // For agencies
 });
 
+// 'admin' is NOT loggable-in-as, for the same reason it is not registerable. Both of
+// these mint a token pair, so leaving it here kept a second administrator identity
+// alive in parallel with the designed one — one with no MFA, no session revocation,
+// no permission tier and no audit trail, and honoured by 26 route guards.
 export const LoginSchema = z.object({
   identifier: LoginIdentifierSchema,
   password: z.string().min(1, "Password required"),
-  role: z.enum(['customer', 'vendor', 'agency', 'agent', 'admin']).optional(),
+  role: z.enum(AUTHENTICATABLE_ROLES).optional(),
 });
 
+// Same rule, and this one is the role SWITCHER — it re-issues the pair for another of
+// the caller's roles, so accepting 'admin' let any signed-in user ask to be handed an
+// admin token and be refused only by whether they happened to hold the role.
 export const AuthMeSchema = z.object({
   userId: z.string().min(1, "User ID required"),
-  role: z.enum(['customer', 'vendor', 'agency', 'agent', 'admin']),
+  role: z.enum(AUTHENTICATABLE_ROLES),
 });
 
 export const AddRoleSchema = z.object({
   // 'admin' is NOT addable — this route only requires `requireAuth`, so accepting it
   // let any signed-in customer promote themselves. An admin holds no other role at
   // all: admin identity lives in `wi-admin` and is not a role on a platform User.
-  role: z.enum(['customer', 'vendor', 'agency', 'agent']),
+  role: z.enum(AUTHENTICATABLE_ROLES),
   name: z.string().min(2, 'Name required').optional(),          // customer / agent
   business_name: z.string().optional(),                          // vendor
   agency_name: z.string().optional(),                            // agency

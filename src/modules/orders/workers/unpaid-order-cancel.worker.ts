@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { withWorkerLock, SWEEP_SKIPPED } from '../../../core/jobs/worker-lock';
 import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { OrderModel } from '../order.model';
 import { OrderService } from '../order.service';
@@ -32,7 +33,6 @@ export class UnpaidOrderCancelWorker implements ObservableWorker {
     return this.task !== null;
   }
 
-  /** Observation only — no overlap guard. See `ObservableWorker`. */
   get executing(): boolean {
     return this.sweeping;
   }
@@ -70,15 +70,25 @@ export class UnpaidOrderCancelWorker implements ObservableWorker {
     this.task = null;
   }
 
-  /** Run the sweep once. Safe to call manually (tests/ops). */
-  async runSweep(now: Date = new Date()): Promise<void> {
-    // Flag only — deliberately NOT an early return. See `ObservableWorker`.
-    this.sweeping = true;
-    try {
-      await this.sweepCandidates(now);
-    } finally {
-      this.sweeping = false;
-    }
+  /**
+   * Run the sweep once. Safe to call manually (tests/ops), and safe to call CONCURRENTLY — a
+   * second caller is refused rather than queued.
+   *
+   * `cancelOrder` no-ops on an already-cancelled order, so this is the one sweep where overlap was
+   * genuinely harmless at the data level. It takes the lock anyway: the no-op still costs a
+   * customer notification per pass, and a worker that is the exception to the rule is a worker
+   * somebody later "tidies" into the rule without checking why.
+   */
+  async runSweep(now: Date = new Date()): Promise<boolean> {
+    const outcome = await withWorkerLock('unpaid-order-cancel', async () => {
+      this.sweeping = true;
+      try {
+        await this.sweepCandidates(now);
+      } finally {
+        this.sweeping = false;
+      }
+    });
+    return outcome !== SWEEP_SKIPPED;
   }
 
   private async sweepCandidates(now: Date): Promise<void> {

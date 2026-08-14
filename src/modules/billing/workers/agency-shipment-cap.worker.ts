@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { withWorkerLock, SWEEP_SKIPPED } from '../../../core/jobs/worker-lock';
 import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { eventBus } from '../../../core/events/event-bus';
 import { SubscriberPlanRepository } from '../repositories/subscriber-plan.repository';
@@ -33,7 +34,6 @@ export class AgencyShipmentCapWorker implements ObservableWorker {
     return this.task !== null;
   }
 
-  /** Observation only — no overlap guard on this worker. See `ObservableWorker`. */
   get executing(): boolean {
     return this.sweeping;
   }
@@ -67,15 +67,25 @@ export class AgencyShipmentCapWorker implements ObservableWorker {
     this.task = null;
   }
 
-  /** Run the full sweep once. Safe to call manually (tests/ops). */
-  async runSweep(now: Date = new Date()): Promise<void> {
-    // Flag only — deliberately NOT an early return. See `ObservableWorker`.
-    this.sweeping = true;
-    try {
-      await this.sweepOwners(now);
-    } finally {
-      this.sweeping = false;
-    }
+  /**
+   * Run the full sweep once. Safe to call manually (tests/ops), and safe to call CONCURRENTLY —
+   * a second caller is refused rather than queued.
+   *
+   * The debounce this sweep relies on is read-then-write (`getShipmentCapAlertedAt`, then
+   * `setShipmentCapAlertedAt`) rather than a compare-and-set, so two overlapping passes both read
+   * "not yet alerted" and both publish `agency.shipment_cap.exceeded` — one crossing, two alerts
+   * to the same agency. The lock is what closes that, not the debounce.
+   */
+  async runSweep(now: Date = new Date()): Promise<boolean> {
+    const outcome = await withWorkerLock('agency-shipment-cap', async () => {
+      this.sweeping = true;
+      try {
+        await this.sweepOwners(now);
+      } finally {
+        this.sweeping = false;
+      }
+    });
+    return outcome !== SWEEP_SKIPPED;
   }
 
   private async sweepOwners(now: Date): Promise<void> {

@@ -462,9 +462,11 @@ Content-Type: application/json
 ```json
 {
   "success": true,
-  "message": "Password updated successfully. Please use your new password on next login."
+  "message": "Password updated successfully. All other sessions have been signed out."
 }
 ```
+
+Also sets fresh `access_token` and `refresh_token` cookies — see the session note below.
 
 #### Error Responses
 
@@ -501,7 +503,11 @@ Content-Type: application/json
 #### Notes
 
 - **Password Verification**: The old password must be correct before the new password is set.
-- **Session Invalidation**: Future implementation will invalidate all active sessions, requiring re-authentication with the new password.
+- **Session Invalidation**: **Implemented.** Every session issued under the old password ends
+  — any access or refresh token minted before the change is refused with
+  `401 AUTH_PASSWORD_CHANGED`. The caller's own pair is replaced via `Set-Cookie` on this
+  response, so this session survives and no other one does. Full description in
+  [me/password.md](../me/password.md).
 
 ---
 
@@ -944,11 +950,17 @@ if (vendor.plan === 'pro' || vendor.plan === 'enterprise') {
 
 ### Session Management
 
-Password change currently logs intent to invalidate sessions. Future implementation:
+A password change invalidates every session issued under the old password. There is **no**
+session store, and deliberately so: tokens here are stateless JWTs, so the revocation is a
+per-account instant (`password_changed_at`) written in the same update as the new hash, and
+both credential paths — every authenticated request and every refresh — refuse a token whose
+`iat` predates it with `401 AUTH_PASSWORD_CHANGED`.
 
-- Store sessions in Redis with `vendor:{vendorId}:sessions` key
-- On password change, delete all sessions
-- Force re-authentication on next request
+- No Redis key per vendor, no session list to delete, nothing to keep in step with the token.
+- Revocation is account-wide, not vendor-wide: the password lives on the **User**, so every
+  role the account holds is signed out together.
+- The caller performing the change receives a replacement cookie pair on the response and
+  keeps working.
 
 ---
 

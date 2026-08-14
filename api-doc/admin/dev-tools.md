@@ -14,9 +14,10 @@ The read-only half is [`system.md`](./system.md). The split is a mount, not a co
 >
 > **Every** manual run from `POST /workers/:workerKey/run` now records
 > `jovimall_worker_runs_total` / `_duration_seconds` / `_last_success_timestamp_seconds`. Those
-> five instruments were declared in Phase 14 and incremented by *nothing* until Phase 15. On the
-> **scheduled** path only three workers are instrumented so far — `tracking-dispatch`,
-> `assignment-sweep` and `earnings-release`; see `system.md`'s coverage caveat.
+> instruments were declared in Phase 14 and incremented by *nothing* until Phase 15. On the
+> **scheduled** path only four workers are instrumented so far — `tracking-dispatch`,
+> `assignment-sweep`, `earnings-release` and `analytics-aggregation`; see `system.md`'s coverage
+> caveat.
 
 ---
 
@@ -59,19 +60,40 @@ what happened — some of these sweeps are slow, and that is the caller's proble
 202 would give an administrator no way to know whether it worked.
 
 - `404 DEV_TOOLS_WORKER_UNKNOWN` — `details.known` lists the valid keys
-- `409 DEV_TOOLS_WORKER_BUSY` — already claimed
+- `409 DEV_TOOLS_WORKER_BUSY` — already claimed **on this instance**
 
-> ⚠ **The busy check is in-process only.** With several instances behind a load balancer, two
-> administrators hitting two instances both pass and the sweep runs twice concurrently against live
-> data. A real cross-instance lock needs Redis (`SET NX` with a TTL and a fencing token) and is a
-> named follow-up. Until then the mitigations are what they look like: tier-1 only, audited, and
-> the workers were built to tolerate overlapping scheduled runs.
+The response carries **`ran`**:
 
-**A manual run still works during a maintenance window.** The pause guard sits at each worker's
-*tick site*, not inside `runSweep()` — an operator explicitly running a worker mid-window is a
-deliberate act and the whole point of this surface.
+```jsonc
+{ "worker": "earnings-release", "durationMs": 8421, "ran": true,
+  "note": "Matured earnings released; missed splits recovered" }
 
-Eleven keys are triggerable. `inbound-calendar-sync` is not: its work splits across two horizons
+{ "worker": "earnings-release", "durationMs": 4, "ran": false,
+  "note": "Not run — this sweep was already in progress, here or on another instance. Nothing was changed. Try again once it finishes." }
+```
+
+> ⚠ **`409 DEV_TOOLS_WORKER_BUSY` is in-process only, and it is no longer the safety mechanism.**
+> With several instances behind a load balancer two administrators hitting two instances both pass
+> that check — but the second run is then refused by the shared overlap lock inside the worker
+> (F-19, `src/core/jobs/worker-lock.ts`), and comes back `200` with **`ran: false`**. Two different
+> answers for two different questions: the 409 says *this instance is already doing it for someone*,
+> `ran: false` says *the sweep is running somewhere and yours did nothing*.
+>
+> A refused trigger is **not** recorded as a success, so it cannot advance
+> `worker_last_success_timestamp_seconds` and mute the staleness alert for a worker that has not
+> actually run.
+
+**A manual run still works during a maintenance window, but it cannot force an overlap.** The two
+guards sit in deliberately different places: the maintenance pause is at each worker's *tick site*,
+so an operator can override it — that is the point of this surface. The overlap lock is *inside*
+the sweep, where a manual trigger cannot route around it. Maintenance is a policy an operator may
+override; overlap is a correctness constraint, and an operator's intent does not make two
+concurrent writes to the same earnings row safe.
+
+Twelve keys are triggerable — `plan-expiry`, `agency-shipment-cap`, `file-cleanup`,
+`earnings-release`, `unpaid-order-cancel`, `unpaid-booking-cancel`, `booking-reminder`,
+`cod-deposit-deadline`, `tracking-dispatch`, `agent-capacity-reconcile`, `assignment-sweep`,
+`analytics-aggregation`. `inbound-calendar-sync` is not: its work splits across two horizons
 behind private methods with per-instance state, so "run it once" has no single honest meaning. It
 still appears in `GET /system/workers` with the reason on the wire, because not being able to *see*
 a worker is a different problem from not being able to *run* it.

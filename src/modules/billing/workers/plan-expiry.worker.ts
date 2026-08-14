@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { withWorkerLock, SWEEP_SKIPPED } from '../../../core/jobs/worker-lock';
 import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { eventBus } from '../../../core/events/event-bus';
 import { SubscriberPlanRepository } from '../repositories/subscriber-plan.repository';
@@ -41,7 +42,6 @@ export class PlanExpiryWorker implements ObservableWorker {
     return this.task !== null;
   }
 
-  /** Observation only — this worker has no overlap guard. See `ObservableWorker`. */
   get executing(): boolean {
     return this.sweeping;
   }
@@ -75,20 +75,28 @@ export class PlanExpiryWorker implements ObservableWorker {
     this.task = null;
   }
 
-  /** Run the full sweep once. Safe to call manually (tests/ops). */
-  async runSweep(now: Date = new Date()): Promise<void> {
-    // Flag only — deliberately NOT an early return. Adding an overlap guard here would change
-    // scheduling behaviour on a live sweep; this phase makes the condition observable and
-    // leaves the fix to its own decision. See `ObservableWorker`.
-    this.sweeping = true;
-    try {
-      console.log('[PlanExpiryWorker] Starting plan-expiry sweep');
-      await this.processExpired(now);
-      await this.processExpiringSoon(now);
-      console.log('[PlanExpiryWorker] Plan-expiry sweep complete');
-    } finally {
-      this.sweeping = false;
-    }
+  /**
+   * Run the full sweep once. Safe to call manually (tests/ops), and safe to call CONCURRENTLY —
+   * a second caller is refused rather than queued.
+   *
+   * The class docstring's "idempotent: re-running the same day produces no duplicate transitions"
+   * is about a re-run, not a concurrent run: `activatePending`/`downgradeToFree` read the expired
+   * plan and then transition it, so two overlapping passes can both see the same `active` row and
+   * both hand it over — and `plan.expired` is published either way, so the owner is told twice.
+   */
+  async runSweep(now: Date = new Date()): Promise<boolean> {
+    const outcome = await withWorkerLock('plan-expiry', async () => {
+      this.sweeping = true;
+      try {
+        console.log('[PlanExpiryWorker] Starting plan-expiry sweep');
+        await this.processExpired(now);
+        await this.processExpiringSoon(now);
+        console.log('[PlanExpiryWorker] Plan-expiry sweep complete');
+      } finally {
+        this.sweeping = false;
+      }
+    });
+    return outcome !== SWEEP_SKIPPED;
   }
 
   private async processExpired(now: Date): Promise<void> {

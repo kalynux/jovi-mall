@@ -27,9 +27,47 @@ Authorization: Bearer <access_token>
 | POST | `/api/admin/plans` | Create a pricing plan (any role) |
 | PATCH | `/api/admin/plans/:id` | Update a pricing plan |
 | DELETE | `/api/admin/plans/:id` | Archive (soft-delete) a plan |
+| GET | `/api/admin/entitlements/:ownerType/:ownerId` | The limits this owner's plan grants |
 | POST | `/api/admin/vendors/:vendorId/plan` | Assign / queue a plan for a vendor |
 | POST | `/api/admin/agencies/:agencyId/plan` | Assign / queue a plan for an agency |
 | POST | `/api/admin/agents/:agentId/plan` | Assign / queue a plan for an agent |
+
+> **The same routes are mounted twice.** wi-admin reaches them over the service token at
+> `/api/internal/admin/billing/*` — so `/plans` becomes `/billing/plans` and
+> `/vendors/:id/plan` becomes `/billing/vendors/:id/plan`. One factory, two guard chains
+> (`src/modules/billing/routes/admin-billing.routes.ts`). The public URLs above are unchanged.
+
+---
+
+### GET /api/admin/entitlements/:ownerType/:ownerId
+
+**Description**: The limits the owner's **currently active** plan grants. Read-only.
+
+| Param | Validation |
+|---|---|
+| `ownerType` | `vendor` \| `agency` \| `agent` |
+| `ownerId` | 24-hex ObjectId |
+
+```json
+{
+  "success": true,
+  "data": {
+    "ownerType": "vendor",
+    "ownerId": "664ven...",
+    "planCode": "vendor_growth",
+    "maxActiveProducts": 500,
+    "maxStorageBytes": 5368709120,
+    "commissionPercent": 8,
+    "maxUnterminatedShipments": null,
+    "liveTrackingEnabled": true
+  }
+}
+```
+
+> **Every limit field is `null` when the owner has no active plan** — and this read
+> deliberately does **not** lazily create the free tier the way the owner-facing
+> `GET /api/{role}/plan` does. An administrator inspecting an account must not change it.
+> `planCode: null` is the flag to branch on.
 
 ---
 

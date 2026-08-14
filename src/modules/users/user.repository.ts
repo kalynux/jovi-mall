@@ -76,13 +76,25 @@ export class UserRepository {
   }
 
   /**
-   * Update user password
-   * 
+   * Update the password, and stamp the epoch that ends every session issued under the old one.
+   *
+   * The hash and the stamp go in ONE `$set` and are never written apart — the same rule the
+   * suspension stamp above follows, for a sharper reason: a hash that lands without its
+   * stamp leaves the new password live while every token minted under the old one keeps
+   * working, which is precisely the hole this stamp exists to close. See
+   * `core/auth/password-epoch.ts` for how it is read.
+   *
    * @param userId - User ID
    * @param passwordHash - New bcrypt hashed password
+   * @returns the epoch that was stamped, so the caller can reason about the tokens it is
+   *          about to re-issue
    */
-  async updatePassword(userId: string, passwordHash: string): Promise<void> {
-    await UserModel.findByIdAndUpdate(userId, { password_hash: passwordHash });
+  async updatePassword(userId: string, passwordHash: string): Promise<Date> {
+    const changedAt = new Date();
+    await UserModel.findByIdAndUpdate(userId, {
+      $set: { password_hash: passwordHash, password_changed_at: changedAt },
+    });
+    return changedAt;
   }
 
   async addRoleToUser(userId: string, role: string): Promise<IUser | null> {

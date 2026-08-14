@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { withWorkerLock, SWEEP_SKIPPED } from '../../../core/jobs/worker-lock';
 import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { AgentCapacityService, agentCapacityService } from '../domain/services/agent-capacity.service';
 
@@ -30,7 +31,6 @@ export class AgentCapacityReconcileWorker implements ObservableWorker {
     return this.task !== null;
   }
 
-  /** Observation only — no overlap guard. See `ObservableWorker`. */
   get executing(): boolean {
     return this.sweeping;
   }
@@ -58,18 +58,28 @@ export class AgentCapacityReconcileWorker implements ObservableWorker {
     this.task = null;
   }
 
-  /** Run once. Safe to call manually (ops/tests). */
-  async runSweep(): Promise<void> {
-    // Flag only — deliberately NOT an early return. See `ObservableWorker`.
-    this.sweeping = true;
-    try {
-      const { checked, corrected } = await this.capacity.reconcileAll();
-      console.log(`[AgentCapacityReconcileWorker] Reconciled ${checked} agent(s), corrected ${corrected}`);
-    } catch (error) {
-      console.error('[AgentCapacityReconcileWorker] Sweep failed:', error);
-    } finally {
-      this.sweeping = false;
-    }
+  /**
+   * Run once. Safe to call manually (ops/tests), and safe to call CONCURRENTLY — a second caller
+   * is refused rather than queued.
+   *
+   * This one is recount-then-correct against the admission-control counter, which is the counter
+   * an accepting agent compare-and-sets. Two passes racing each other write a count taken before
+   * the other's correction landed, so the reconciler that exists to remove drift is capable of
+   * introducing it.
+   */
+  async runSweep(): Promise<boolean> {
+    const outcome = await withWorkerLock('agent-capacity-reconcile', async () => {
+      this.sweeping = true;
+      try {
+        const { checked, corrected } = await this.capacity.reconcileAll();
+        console.log(`[AgentCapacityReconcileWorker] Reconciled ${checked} agent(s), corrected ${corrected}`);
+      } catch (error) {
+        console.error('[AgentCapacityReconcileWorker] Sweep failed:', error);
+      } finally {
+        this.sweeping = false;
+      }
+    });
+    return outcome !== SWEEP_SKIPPED;
   }
 }
 

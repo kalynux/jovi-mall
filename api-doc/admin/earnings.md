@@ -1,8 +1,8 @@
-# Admin — Platform Earnings
+# Admin — Platform Earnings & owner balances
 
 Read-only view of the **singleton platform earnings account** — the marketplace's accumulated
-commission — and its append-only ledger. This is the platform's own money account (the counterpart to
-vendor/agency earnings).
+commission — and its append-only ledger, plus the **per-owner balances** ("what do we owe this
+vendor / agency / agent").
 
 - **Base URL**: `http://localhost:8022/api`
 - **Auth**: Required (cookie or `Bearer`) — see [../auth/README.md](../auth/README.md)
@@ -18,6 +18,17 @@ vendor/agency earnings).
 |---|---|---|
 | `GET` | `/admin/earnings/platform` | Current platform balances |
 | `GET` | `/admin/earnings/platform/ledger` | Paginated platform earnings ledger |
+| `GET` | `/admin/earnings/accounts` | Every owner's balances, ranked by what is withdrawable |
+| `GET` | `/admin/earnings/balances/:ownerType/:ownerId` | One owner's four balances |
+
+> **The same four routes are also mounted at `/api/internal/admin/earnings/*`** behind the
+> service token, for wi-admin. Same paths, same shapes, different guard —
+> `src/modules/earnings/routes/admin-earnings.routes.ts` builds one factory and mounts it twice.
+
+> **`platform` is not a valid `:ownerType`.** The vocabulary on `/accounts` and `/balances` is
+> `vendor · agency · agent` only. The commission account has its own endpoint because it answers a
+> different question — what the marketplace *earned*, not what it *owes* — and putting it in a
+> ranking of liabilities would make the biggest row mean the opposite of the rest.
 
 ---
 
@@ -98,6 +109,80 @@ vendor/agency earnings).
 | `reason_code` | `order_split` \| `cod_split` \| `hold_release` \| `cod_rolling_reserve` \| `reserve_matured` \| `refund_reversal` |
 | `source_type` | Origin of the money movement, e.g. `order` \| `cod_collection` |
 | `pending_after` / `available_after` | Account balances immediately after this entry (running balance) |
+
+---
+
+## GET `/admin/earnings/accounts`
+
+**Purpose**: Every owner account the platform holds money for, **sorted by `available` descending**
+(ties broken by `_id`) — i.e. ranked by what is withdrawable right now.
+
+**Auth**: Required · **Permissions**: `admin`
+
+### Query parameters
+
+| Param | Type | Required | Validation |
+|---|---|---|---|
+| `ownerType` | string | ❌ | `vendor` \| `agency` \| `agent`. Omit for all three |
+| `page` | integer | ❌ | ≥ 1, default `1` |
+| `limit` | integer | ❌ | 1–100, default `20` |
+
+### Example success `200`
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "ownerType": "vendor",
+      "ownerId": "664ven...",
+      "pending": 34000,
+      "available": 210000,
+      "reserve": 0,
+      "requested": 0,
+      "currency": "XAF",
+      "updatedAt": "2026-08-11T09:12:00.000Z"
+    }
+  ],
+  "meta": { "total": 87, "page": 1, "limit": 20, "pages": 5 }
+}
+```
+
+---
+
+## GET `/admin/earnings/balances/:ownerType/:ownerId`
+
+**Purpose**: One owner's four balances.
+
+**Auth**: Required · **Permissions**: `admin`
+
+### Path parameters
+
+| Param | Validation |
+|---|---|
+| `ownerType` | `vendor` \| `agency` \| `agent` — anything else is `400 VALIDATION_ERROR` |
+| `ownerId` | 24-hex ObjectId |
+
+### Example success `200`
+
+```json
+{
+  "success": true,
+  "data": {
+    "ownerType": "agency",
+    "ownerId": "664agy...",
+    "pending": 12000,
+    "available": 45000,
+    "reserve": 3000,
+    "requested": 0,
+    "currency": "XAF"
+  }
+}
+```
+
+> **Zeroes, never a 404.** An owner with no account row has genuinely been allocated nothing, and
+> the read does not create one. 404ing would make "no earnings yet" indistinguishable from "no such
+> vendor" — and the caller already knows the owner exists, because it looked them up to get here.
 
 ## Business rules & notes
 

@@ -126,6 +126,23 @@ export const CACHE_FLUSH_POLICY: readonly CacheFlushPolicy[] = Object.freeze([
             'Every caller gets a fresh allowance for the current window. Nothing durable is lost. '
             + 'Low — and it is the intended remedy for a ceiling set too tight.',
     },
+    {
+        spec: specFor('WORKER_LOCK_DB'),
+        // The ONE destructive database that permits a whole-database flush, and the exception is
+        // the point rather than an oversight. A prefix-only rule would be useless here: an
+        // operator facing an orphaned lock does not know which worker owns it — that is the
+        // symptom — and the remedy is releasing whatever is stuck. The three prefix-only
+        // databases above are ones where the operator already knows the narrow key they mean.
+        wholeDbAllowed: true,
+        destructive: true,
+        blastRadius:
+            'DESTRUCTIVE. Releases every background-sweep lock, so a sweep already running on '
+            + 'another instance can be started a second time — the exact double-processing this '
+            + 'database exists to prevent, and it reaches the money sweeps (earnings release, COD '
+            + 'deposit deadlines). It is nevertheless the intended remedy for a lock orphaned by a '
+            + 'hard kill, which otherwise blocks its sweep until the TTL expires. Prefer waiting '
+            + 'out the TTL; flush when the wait costs more than one overlapping pass.',
+    },
 ]);
 
 /**

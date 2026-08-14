@@ -336,15 +336,28 @@ export function recordRateLimitStoreError(operation: string): void {
     rateLimitStoreErrorsTotal.inc({ operation });
 }
 
+/**
+ * `skipped` is the third outcome, added with the F-19 overlap lock.
+ *
+ * Two properties of it are load-bearing, and both are about not lying to an alert:
+ *
+ *  - it does **not** observe a duration — a refused pass took microseconds, and feeding that into
+ *    a histogram whose buckets reach 900s drags every percentile of a sweep that runs for minutes
+ *    toward zero;
+ *  - it does **not** advance `workerLastSuccess`. A worker skipping forever because a lock was
+ *    orphaned is a worker that is not doing its job, and the documented
+ *    `time() - last_success > 86400` alert must still fire for it. The lock makes overlap
+ *    impossible; it must not also make the failure invisible.
+ */
 export function recordWorkerRun(
     worker: string,
     trigger: 'scheduled' | 'manual',
-    outcome: 'success' | 'failure',
+    outcome: 'success' | 'failure' | 'skipped',
     durationSeconds: number,
     processed?: number,
 ): void {
     workerRunsTotal.inc({ worker, trigger, outcome });
-    workerDuration.observe({ worker }, durationSeconds);
+    if (outcome !== 'skipped') workerDuration.observe({ worker }, durationSeconds);
     if (outcome === 'success') workerLastSuccess.set({ worker }, Date.now() / 1000);
     if (typeof processed === 'number') workerProcessedTotal.inc({ worker }, processed);
 }

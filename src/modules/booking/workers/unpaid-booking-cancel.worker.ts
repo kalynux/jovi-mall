@@ -1,4 +1,5 @@
 import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { withWorkerLock, SWEEP_SKIPPED } from '../../../core/jobs/worker-lock';
 import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { Booking } from '../models/booking.model';
 import { BookingStatus } from '../types/booking.types';
@@ -84,11 +85,19 @@ export class UnpaidBookingCancelWorker implements ObservableWorker {
   }
 
   /**
-   * One pass. Guarded against overlapping runs so a slow pass cannot stack up
-   * behind the interval.
+   * One pass. Guarded against overlapping runs so a slow pass cannot stack up behind the
+   * interval — now across INSTANCES too (F-19).
+   *
+   * `null` on a skip, NOT `0` — the same distinction `runVoidSweep` draws in the registry. A `0`
+   * means "nothing was due", which is a different statement from "this pass did not run", and the
+   * trigger endpoint renders them differently.
    */
-  async sweep(): Promise<number> {
-    if (this.sweeping) return 0;
+  async sweep(): Promise<number | null> {
+    const cancelled = await withWorkerLock('unpaid-booking-cancel', () => this.sweepStale());
+    return cancelled === SWEEP_SKIPPED ? null : cancelled;
+  }
+
+  private async sweepStale(): Promise<number> {
     this.sweeping = true;
 
     try {

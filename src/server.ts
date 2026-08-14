@@ -7,6 +7,7 @@ import mongoose from 'mongoose';
 import { app } from './app';
 import { initLogging, enableLogPersistence, logger } from './core/logging';
 import { assertSigningSecrets } from './config/secrets.config';
+import { assertEnvironment } from './config/env';
 import { assertInternalAdminToken } from './config/internal-admin.config';
 import { assertExposedConfigSafe } from './modules/system/domain/exposed-config';
 import { initAggregationScheduler } from './core/jobs/aggregation-scheduler';
@@ -50,6 +51,11 @@ async function startServer() {
     // to the literal 'secret', so a misconfigured deploy booted fine and accepted
     // forged tokens. Fail here, loudly, instead of on the first request.
     assertSigningSecrets();
+    // Everything else about the environment, in one pass and reporting every problem at once.
+    // Runs AFTER the signing secrets so the most dangerous single variable still fails first
+    // and alone, and before the rest so a deploy learns about its ignored Cloudinary block,
+    // its unparseable interval and its empty CORS allowlist at boot rather than from a user.
+    assertEnvironment();
     // Optional until the admin service cuts over — but a token set to a placeholder is
     // worse than none, because the API is then open and looks configured.
     assertInternalAdminToken();

@@ -29,6 +29,7 @@ import { BLOG_LOCALES } from '../blog.types';
 // ─── Links ───────────────────────────────────────────────────────────────────
 
 /** `/fr/pricing`, `/en/faq`… — the mistake this rule exists to catch. */
+// eslint-disable-next-line no-restricted-syntax -- static pattern from the locale constant, no user input
 const LOCALE_PREFIXED = new RegExp(`^/(${BLOG_LOCALES.join('|')})(/|$)`);
 
 /**

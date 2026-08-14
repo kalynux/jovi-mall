@@ -28,13 +28,27 @@ export class UserService {
    * - Verifies old password before allowing change
    * - Validates new password strength (delegated to caller/validator)
    * - Hashes password with bcrypt cost factor 12
+   * - **Ends every session issued under the old password** (see below)
    * - Emits domain event for password change
    * - Logs audit trail
+   *
+   * ── Session invalidation ──────────────────────────────────────────────────
+   * A password change is the standard remedy after a compromise, so it has to evict the
+   * attacker rather than merely lock a door they are already inside. This service issues
+   * stateless JWTs and keeps no record of them, so there is no session list to clear: the
+   * revocation IS the `password_changed_at` stamp the repository writes alongside the hash,
+   * which `requireAuth` and `rotateRefreshToken` measure every token's `iat` against. See
+   * `core/auth/password-epoch.ts`.
+   *
+   * That includes the caller's own tokens. `UserController.updatePassword` re-issues a pair
+   * for them the moment this returns, so the person who changed their own password keeps
+   * working while every other session is signed out.
    * 
    * @param userId - User ID (from User model, not role entity)
    * @param oldPassword - Current password (plaintext)
    * @param newPassword - New password (plaintext, will be hashed)
    * @param context - Context about who is making the change
+   * @returns the instant existing sessions were cut off at
    * @throws NotFoundError if user not found
    * @throws ForbiddenError if old password is incorrect
    */
@@ -43,7 +57,7 @@ export class UserService {
     oldPassword: string,
     newPassword: string,
     context: { role: string; roleEntityId: string }
-  ): Promise<void> {
+  ): Promise<{ passwordChangedAt: Date }> {
     // 1. Load user
     const user = await this.userRepo.findById(userId);
     if (!user) {
@@ -59,8 +73,9 @@ export class UserService {
     // 3. Hash new password (bcrypt cost factor 12 for enterprise security)
     const passwordHash = await bcrypt.hash(newPassword, 12);
 
-    // 4. Update password in database
-    await this.userRepo.updatePassword(userId, passwordHash);
+    // 4. Update password in database — and, in the same write, stamp the epoch that ends
+    //    every session issued under the old password. One $set, never two.
+    const passwordChangedAt = await this.userRepo.updatePassword(userId, passwordHash);
 
     // 5. Emit domain event
     await eventBus.publish('user.password.changed', {
@@ -81,14 +96,12 @@ export class UserService {
       resource: { type: 'User', id: userId },
       metadata: {
         roleEntityId: context.roleEntityId,
+        passwordChangedAt,
       },
       timestamp: new Date(),
     });
 
-    // 7. TODO: Invalidate all user sessions
-    // This would force re-authentication with new password
-    // await sessionService.invalidateAllSessions(userId);
-    console.log(`[UserService] TODO: Invalidate sessions for user ${userId}`);
+    return { passwordChangedAt };
   }
 
   /**

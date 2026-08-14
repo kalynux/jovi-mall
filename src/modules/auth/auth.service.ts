@@ -6,16 +6,28 @@ import { CustomerRepository } from '../customers/customer.repository';
 import { VendorRepository } from '../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../delivery/delivery-agency.repository';
 import { AgentRepository } from '../agents';
-import { AdminRepository } from '../admins/admin.repository';
 import { StoreProvisioningService } from '../store/service/store-provisioning.service';
 import { MagazinProvisioningService } from '../magazin/service/magazin-provisioning.service';
-import { AddRoleInput, AuthMeInput, LoginInput, RegisterInput } from './auth.schemas';
+import {
+  AddRoleInput,
+  AuthMeInput,
+  isAuthenticatableRole,
+  LoginInput,
+  RegisterInput,
+} from './auth.schemas';
 import { IUser } from '../users/user.model';
 import { EMAIL_VERIFY_DB, getRedisClient } from '../../infra/redis/redis.factory';
 import { MailService } from '../mail/mail.service';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
-import { getJwtSecret, getJwtRefreshSecret } from '../../config/secrets.config';
+import { getJwtRefreshSecret } from '../../config/secrets.config';
+import { isTokenPredatingPasswordChange } from '../../core/auth/password-epoch';
+import {
+  AuthTokens,
+  generateAccessToken,
+  generateRefreshToken,
+  issueTokenPair,
+} from '../../core/auth/token.issuer';
 
 const EMAIL_VERIFY_EXPIRE = 86400; // 24 hours
 
@@ -24,14 +36,11 @@ const EMAIL_VERIFY_EXPIRE = 86400; // 24 hours
 // API_PUBLIC_URL in non-local environments. Trailing slashes are stripped.
 const API_PUBLIC_URL = (process.env.API_PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/+$/, '');
 
-// ─── Token TTLs (in seconds) ─────────────────────────────────────────────────
-const ACCESS_TOKEN_TTL_S = parseInt(process.env.AUTH_ACCESS_TOKEN_TTL || '900');     // 15 min
-const REFRESH_TOKEN_TTL_S = parseInt(process.env.AUTH_REFRESH_TOKEN_TTL || '2592000'); // 30 days
-
-export interface AuthTokens {
-  accessToken: string;
-  refreshToken: string;
-}
+// Token TTLs, the payload shapes and the signing itself moved to
+// `core/auth/token.issuer.ts`. The methods below stay as delegates so every existing caller
+// is untouched; what changed is that minting a pair no longer requires constructing this
+// service and everything it depends on.
+export type { AuthTokens } from '../../core/auth/token.issuer';
 
 export class AuthService {
   private userRepo: UserRepository;
@@ -39,7 +48,6 @@ export class AuthService {
   private vendorRepo: VendorRepository;
   private agencyRepo: DeliveryAgencyRepository;
   private agentRepo: AgentRepository;
-  private adminRepo: AdminRepository;
   private mailService: MailService;
   private storeProvisioning: StoreProvisioningService;
   private magazinProvisioning: MagazinProvisioningService;
@@ -51,7 +59,6 @@ export class AuthService {
     this.vendorRepo = new VendorRepository();
     this.agencyRepo = new DeliveryAgencyRepository();
     this.agentRepo = new AgentRepository();
-    this.adminRepo = new AdminRepository();
     this.mailService = new MailService();
     this.storeProvisioning = new StoreProvisioningService();
     this.magazinProvisioning = new MagazinProvisioningService();
@@ -60,26 +67,15 @@ export class AuthService {
   // ─── Token Generation ───────────────────────────────────────────────────────
 
   generateAccessToken(user: IUser, role: string): string {
-    return jwt.sign(
-      { userId: user._id, role },
-      getJwtSecret(),
-      { expiresIn: ACCESS_TOKEN_TTL_S }
-    );
+    return generateAccessToken(String(user._id), role);
   }
 
   generateRefreshToken(user: IUser, role: string): string {
-    return jwt.sign(
-      { userId: user._id, role, type: 'refresh' },
-      getJwtRefreshSecret(),
-      { expiresIn: REFRESH_TOKEN_TTL_S }
-    );
+    return generateRefreshToken(String(user._id), role);
   }
 
   issueTokenPair(user: IUser, role: string): AuthTokens {
-    return {
-      accessToken: this.generateAccessToken(user, role),
-      refreshToken: this.generateRefreshToken(user, role),
-    };
+    return issueTokenPair(String(user._id), role);
   }
 
   /**
@@ -87,7 +83,7 @@ export class AuthService {
    * Refresh token is NOT rotated (stateless, single-issue).
    */
   async rotateRefreshToken(refreshToken: string): Promise<{ accessToken: string; user: IUser; role: string }> {
-    let payload: { userId: string; role: string; type: string };
+    let payload: { userId: string; role: string; type: string; iat?: number };
 
     try {
       payload = jwt.verify(
@@ -114,6 +110,15 @@ export class AuthService {
     // "suspended" a label rather than a lock.
     if (user.status !== 'active') {
       throw createAppError(ERROR_CODES.AUTH_ACCOUNT_SUSPENDED, 403, 'This account is suspended');
+    }
+
+    // A refresh must not outlive the password it was issued under, and THIS is the check
+    // that makes changing a password a revocation rather than a gesture. Refresh tokens are
+    // stateless — there is no store to delete from — so a cookie minted under the old
+    // password would go on minting fresh access tokens for the rest of its 30 days, which
+    // is exactly the session an attacker keeps when the victim changes their password.
+    if (isTokenPredatingPasswordChange(payload.iat, user.password_changed_at)) {
+      throw createAppError(ERROR_CODES.AUTH_PASSWORD_CHANGED, 401);
     }
 
     const accessToken = this.generateAccessToken(user, payload.role);
@@ -209,23 +214,32 @@ export class AuthService {
 
     let role = input.role;
     if (!role) {
-      if (user.roles.length === 1) {
-        role = user.roles[0];
+      /**
+       * Filtered, not indexed. `roles` is typed by the Mongoose model, which still
+       * permits 'admin' on a legacy row — so `user.roles[0]` on an account holding it
+       * would resolve a role the schema above deliberately refuses to accept, and
+       * issue a token for it without the request ever having named it. The body's
+       * `role` is checked against `roles` below and cannot reach it either way.
+       */
+      const selectable = user.roles.filter(isAuthenticatableRole);
+      if (selectable.length === 1) {
+        role = selectable[0];
       } else {
         throw createAppError(ERROR_CODES.AUTH_ROLE_REQUIRED, 400);
       }
     } else {
-      if (!user.roles.includes(role as any)) {
+      if (!user.roles.includes(role)) {
         throw createAppError(ERROR_CODES.AUTH_ROLE_NOT_FOUND, 403, undefined, { role });
       }
     }
 
+    // No 'admin' branch, deliberately — see the note in register(). It resolved an
+    // `admins` role entity for a role that can no longer be authenticated as.
     let entity = null;
     if (role === 'customer') entity = await this.customerRepo.findByUserId(user.id);
     else if (role === 'vendor') entity = await this.vendorRepo.findByUserId(user.id);
     else if (role === 'agency') entity = await this.agencyRepo.findByUserId(user.id);
     else if (role === 'agent') entity = await this.agentRepo.findByUserId(user.id);
-    else if (role === 'admin') entity = await this.adminRepo.findByUserId(user.id);
 
     /**
      * A suspended vendor is refused at the door as well as on every later request.
@@ -256,23 +270,25 @@ export class AuthService {
 
     let role = input.role;
     if (!role) {
-      if (user.roles.length === 1) {
-        role = user.roles[0];
+      // Filtered rather than indexed, for the reason given in login().
+      const selectable = user.roles.filter(isAuthenticatableRole);
+      if (selectable.length === 1) {
+        role = selectable[0];
       } else {
         throw createAppError(ERROR_CODES.AUTH_ROLE_REQUIRED, 400);
       }
     } else {
-      if (!user.roles.includes(role as any)) {
+      if (!user.roles.includes(role)) {
         throw createAppError(ERROR_CODES.AUTH_ROLE_NOT_FOUND, 403, undefined, { role });
       }
     }
 
+    // No 'admin' branch — see login().
     let entity = null;
     if (role === 'customer') entity = await this.customerRepo.findByUserId(user.id);
     else if (role === 'vendor') entity = await this.vendorRepo.findByUserId(user.id);
     else if (role === 'agency') entity = await this.agencyRepo.findByUserId(user.id);
     else if (role === 'agent') entity = await this.agentRepo.findByUserId(user.id);
-    else if (role === 'admin') entity = await this.adminRepo.findByUserId(user.id);
 
     const tokens = this.issueTokenPair(user, role);
     return { user, role, role_entity: entity, ...tokens };
@@ -348,7 +364,6 @@ export class AuthService {
     else if (role === 'vendor') entity = await this.vendorRepo.findByUserId(userId);
     else if (role === 'agency') entity = await this.agencyRepo.findByUserId(userId);
     else if (role === 'agent') entity = await this.agentRepo.findByUserId(userId);
-    else if (role === 'admin') entity = await this.adminRepo.findByUserId(userId);
 
     if (!entity) throw createAppError(ERROR_CODES.AUTH_PROFILE_NOT_FOUND, 404, undefined, { role });
     if (entity.email_verified) throw createAppError(ERROR_CODES.AUTH_EMAIL_ALREADY_VERIFIED, 409);
@@ -411,7 +426,6 @@ export class AuthService {
     else if (role === 'vendor') entity = await this.vendorRepo.findByUserId(userId);
     else if (role === 'agency') entity = await this.agencyRepo.findByUserId(userId);
     else if (role === 'agent') entity = await this.agentRepo.findByUserId(userId);
-    else if (role === 'admin') entity = await this.adminRepo.findByUserId(userId);
 
     if (!entity) throw createAppError(ERROR_CODES.AUTH_PROFILE_NOT_FOUND, 404, undefined, { role });
     // if (!entity.phone) throw createAppError(ERROR_CODES.AUTH_PHONE_REQUIRED_FOR_WA, 422); // we don't need his phone number to verify his whatsapp number, he can setup the account with an email address

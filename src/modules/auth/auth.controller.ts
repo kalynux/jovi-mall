@@ -2,12 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { AuthService } from './auth.service';
 import { LoginSchema, RegisterSchema, AddRoleSchema, AuthMeSchema } from './auth.schemas';
-import {
-  AUTH_COOKIE,
-  accessCookieOptions,
-  refreshCookieOptions,
-  clearCookieOptions,
-} from '../../config/cookie.config';
+import { setAuthCookies, clearAuthCookies } from '../../config/cookie.config';
 import { asyncHandler } from '../../api/middlewares/async-handler';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
@@ -15,17 +10,9 @@ import { sendSuccess, sendCreated, sendMessage } from '../../core/responses';
 
 const authService = new AuthService();
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
-  res.cookie(AUTH_COOKIE.ACCESS, accessToken, accessCookieOptions);
-  res.cookie(AUTH_COOKIE.REFRESH, refreshToken, refreshCookieOptions);
-}
-
-function clearAuthCookies(res: Response) {
-  res.clearCookie(AUTH_COOKIE.ACCESS, clearCookieOptions);
-  res.clearCookie(AUTH_COOKIE.REFRESH, clearCookieOptions);
-}
+// `setAuthCookies` / `clearAuthCookies` moved to `config/cookie.config.ts` — a second
+// caller needed them (UserController.updatePassword re-issues the pair after a password
+// change) and the pairing rule belongs with the cookies, not with these routes.
 
 // ─── Controller ──────────────────────────────────────────────────────────────
 

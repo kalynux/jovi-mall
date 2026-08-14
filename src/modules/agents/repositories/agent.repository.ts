@@ -13,6 +13,7 @@ import { IGeoPoint } from '../../../core/types/geo.types';
 import { RoleActorRef, actorStamp } from '../../../core/types/actor-source.types';
 import { AgentOnboardingStep } from '../../../core/constants/onboarding-steps';
 import { normalizeEmailAddress } from '../../../core/validation/email';
+import { buildSearchRegex } from '../../../core/utils/regex.util';
 
 /** Mean Earth radius in km — converts a radius to radians for $centerSphere. */
 const EARTH_RADIUS_KM = 6378.1;
@@ -112,7 +113,7 @@ export class AgentRepository {
     }
 
     if (search && search.trim()) {
-      const searchRegex = new RegExp(search.trim(), 'i');
+      const searchRegex = buildSearchRegex(search);
       match.$or = [{ name: searchRegex }, { 'home_base.label': searchRegex }];
     }
 

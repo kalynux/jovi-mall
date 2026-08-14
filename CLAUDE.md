@@ -84,6 +84,10 @@ npm run test:payout-methods                    # the shared payout schema + swit
 npm run test:booking-availability               # booking windows/timezones/seats (54, no DB needed)
 npm run test:customer-notifications             # customer catalog + balance settlement (30, no DB needed)
 npm run test:blog                              # article blocks, slugs, DTO projection (100, no DB needed)
+npm run test:password-epoch                    # password-change revocation: the iat-vs-epoch
+                                               # predicate, the whole-second boundary that keeps the
+                                               # caller's own replacement token valid, and a source
+                                               # scan proving BOTH credential paths call it (25, no DB)
 npm run test:errors                            # Phase 16: the taxonomy, the exposure policy, the
                                                # envelope, the body-parser branch and the rate-limit
                                                # policy (69, no DB). Includes a CENSUS of all 1362
@@ -91,6 +95,14 @@ npm run test:errors                            # Phase 16: the taxonomy, the exp
                                                # raised at two statuses that disagree on category.
                                                # 25 pre-existing conflicts are baselined in the file
                                                # with the reasoning, and the baseline cannot go stale.
+npm run test:env                               # the environment contract (36, no DB) — a source CENSUS
+                                               # that re-derives every variable src/ reads, INCLUDING the
+                                               # ~120 that reach process.env through a config helper and
+                                               # are invisible to a `process.env.X` grep, then asserts
+                                               # .env.example documents each one. Fails in BOTH directions:
+                                               # an undocumented variable is a silently misconfigured
+                                               # deploy, a documented-but-unread one is the trap that had
+                                               # every storage credential under a name nothing read.
 npm run test:system                            # worker schedules, maintenance exemptions, cache-flush
                                                # policy, metric cardinality, plus Phase 15's scrubber,
                                                # ring buffer, console bridge, exposed-config whitelist,
@@ -216,7 +228,47 @@ Token resolution order: `access_token` httpOnly **cookie first**, then `Authoriz
 
 Suspension is written **only** through `/api/internal/admin/users` (wi-admin's `users.suspend`), as a compare-and-set on the current status, and it carries `suspended_at` / `suspended_reason` / a `suspended_by` actor stamp. It deliberately does **not** cascade into the role entities: `Vendor.status`, `DeliveryAgent.status` and the rest are a separate axis with their own meanings, and collapsing the two makes reinstatement guess which was true before. The account lock is complete on its own — a suspended user cannot authenticate at all, whatever their role entities say. Design record: `../admin/docs/ADR-007-USER-MANAGEMENT.md`.
 
+**A password change is now a revocation, and `iat` is what carries it.** Tokens here are stateless JWTs with no server-side store, so `changePassword` had nothing to delete and did nothing — a `console.log` where the session invalidation should be. Changing a password, the standard remedy after a compromise, evicted nobody: the attacker's refresh cookie stayed valid for its remaining 30 days and went on minting access tokens while the victim believed they had locked the door.
+
+The revocation list is one field. `UserRepository.updatePassword` stamps `User.password_changed_at` **in the same `$set` as the hash** — never apart, since a hash landing without its stamp is the whole defect — and `core/auth/password-epoch.ts` refuses any token whose `iat` predates it. Four things about it are load-bearing:
+
+- **Both credential paths check, not just one.** `rotateRefreshToken` is the eviction (the cookie lives 30 days); `requireAuth` is what closes the 15-minute tail, and it costs a comparison because the user row is already loaded. Gate only the refresh and whoever the change was aimed at keeps working for a quarter of an hour.
+- **The comparison is in whole SECONDS, with `<`.** `iat` is `floor(now/1000)` while the stamp is a millisecond instant, and the change and the caller's replacement pair happen in the same request — a millisecond comparison rejects the brand-new token about half the time. Don't "tighten" it.
+- **The caller is re-issued a pair** (`UserController.updatePassword` → `setAuthCookies`), so the person who changed their own password stays signed in and nobody else does. Cookies only, as everywhere else here.
+- **`null` means "never changed"** and accepts everything, which is why no backfill was needed.
+
+`401 AUTH_PASSWORD_CHANGED` on both paths — 401 rather than the suspensions' 403 because re-authenticating *is* the remedy, and a browser's silent refresh meets the same verdict on the refresh path and stops rather than loops. Covered DB-free by `npm run test:password-epoch` (25), which includes a source scan of both call sites: a predicate nobody calls protects nothing, and that is the state this feature was in.
+
 `JWT_SECRET` falls back to the literal string `'secret'` here, while geo-tracker fails closed on an empty secret. A misconfigured deploy therefore fails asymmetrically — treat the fallback as a known smell, not a default to rely on.
+
+### Configuration (`src/config/env.ts` + the module configs)
+
+Values live in ~15 module-level `*.config.ts` objects; **`config/env.ts` validates the
+environment those defaults are applied to** and is asserted at boot beside
+`assertSigningSecrets()`. That split is deliberate and is where this service diverges from
+wi-admin, whose `config/env.ts` *supplies* every value — moving all 254 variables into one
+schema would rewrite every module config plus ~40 inline sites to land where the defaults
+already are.
+
+What the validator buys is the property the module configs structurally cannot have. They all
+share the `intEnv(name, fallback)` shape, which **silently substitutes the fallback for a value
+it cannot parse** — so `COD_DEPOSIT_DEADLINE_DAYS=two` booted clean and ran on 2. A per-variable
+default cannot detect that; only a pass over the whole environment can. It reports **every**
+problem at once, and the error/warning split tracks blast radius, not tidiness: an `error`
+refuses the boot, a `warning` is for what this process genuinely cannot decide (is there a proxy
+in front of it?). A validator that fails a start over dead leftover config is one somebody
+switches off, after which it protects nothing.
+
+⚠ `agent.config.ts` throws at import if the trust weights don't sum to 100, and it is imported
+transitively by `app.ts` — so that check fires *before* `startServer()` reaches the validator.
+
+**`.env.example` documents all 254 variables**, grouped by subsystem, with provenance and effect
+for each. `npm run test:env` is what stops it drifting: an audit found 84 of 149 undocumented,
+and the real number was worse because that audit's own grep could not see the ~120 variables
+read through a config helper. The template's storage block additionally named variables
+**nothing read** (`CLOUDINARY_*` vs the actual `STORAGE_CLOUDINARY_*`), so an operator
+configured object storage and every upload went to a container disk wiped on restart —
+`RENAMED_VARS` in the validator now names each one.
 
 ### Startup composition (`src/server.ts`)
 Background workers/consumers register at boot, all after the Mongo connection: aggregation scheduler, plan-expiry worker + notification consumer, vendor / agency / **agent** notification consumers, file-cleanup, earnings-release, unpaid-order-cancel, COD deposit-deadline, and the tracking event subscriber + dispatch worker. A feature that needs periodic sweeps registers here; sub-minute cadences use `setInterval`, daily ones use `node-cron`.
@@ -290,7 +342,19 @@ ring buffer and a **capped** `system_logs` collection persisting warn+ — behin
   `console.*` call. `requireAdminCaller` stamps the administrator too, so wi-admin's audit
   `correlation_id` and a jovi-mall log line share one value.
 
-**Workers report three booleans, never one.** `scheduled` / `executing` / `manualClaim`, because three different things in this codebase were all called `running` and `GET /dev-tools/workers` reported the least useful of them — a scheduled sweep churning for ten minutes showed `running: false`. Schedules are **derived** from the value each worker schedules with (`core/jobs/worker-schedule.ts`); the old hand-typed strings were wrong for **eight of ten** workers. Two workers were missing entirely: `AssignmentSweepWorker` is now registered (it is the only thing advancing auto-assignment sessions, so a stalled sweep was invisible from every angle), and `InboundCalendarSyncWorker` appears in `WORKER_INVENTORY` but stays out of the triggerable `WORKER_REGISTRY` — "run it once" has no single meaning for it. ⚠ The seven cron workers still have **no overlap guard**; `executing` makes that visible and deliberately does not fix it.
+**Workers report three booleans, never one.** `scheduled` / `executing` / `manualClaim`, because three different things in this codebase were all called `running` and `GET /dev-tools/workers` reported the least useful of them — a scheduled sweep churning for ten minutes showed `running: false`. Schedules are **derived** from the value each worker schedules with (`core/jobs/worker-schedule.ts`); the old hand-typed strings were wrong for **eight of ten** workers. Two workers were missing entirely: `AssignmentSweepWorker` is now registered (it is the only thing advancing auto-assignment sessions, so a stalled sweep was invisible from every angle), and `InboundCalendarSyncWorker` appears in `WORKER_INVENTORY` but stays out of the triggerable `WORKER_REGISTRY` — "run it once" has no single meaning for it.
+
+**Overlap is now PREVENTED, by one mechanism, for all thirteen** (`core/jobs/worker-lock.ts` — audit finding F-19; design record `../admin/docs/ADR-014-SYSTEM-OPERATIONS.md` D-8-A). The old note here said "the seven cron workers"; it was **nine** — `analytics-aggregation` and both `inbound-calendar-sync` loops had the same unguarded shape and were simply not cron. That miscount is why the source scan in `test:system`, not a hand-kept list, is what enforces this: every `*.worker.ts` plus the scheduler must call `withWorkerLock(`.
+
+Five properties are load-bearing:
+
+- **Two layers, and only one can fail.** An in-process `Set` is unconditional and closes the single-instance case; a Redis key on `WORKER_LOCK_DB` (`SET NX PX`, renewed while the sweep runs, released by a token compare-and-delete) closes the multi-instance one.
+- **The Redis layer FAILS OPEN.** Failing closed would silently stop every sweep during a Redis outage, including the two that move money (`EarningsReleaseWorker`, `CodDepositDeadlineWorker`) — same argument as `FailOpenStore` in the rate limiter. `WORKER_LOCK_REDIS=false` disables that layer alone.
+- **Every Redis call is bounded at 2s, and that is what makes "fails open" true.** A dead host does *not* reject promptly — node-redis retries the initial connect, so `getRedisClient` hangs for minutes and the `catch` never runs. Unbounded, the fix parks every sweep on connect: strictly worse than the overlap. A timeout means *don't know* → run; never *held* → skip.
+- **The guard sits INSIDE the sweep, unlike the maintenance guard at the tick site.** Maintenance is a policy an operator may override (ADR-014 D-4); overlap is a correctness constraint, and an operator's intent does not make two concurrent writes to one earnings row safe. So a manual trigger beats a maintenance window and returns `200 { ran: false }` against a running sweep.
+- **A refused pass is visible.** It counts as `worker_runs_total{outcome="skipped"}` and deliberately does **not** advance `worker_last_success_timestamp_seconds`, so a worker wedged behind an orphaned lock still trips the staleness alert. `executing` keeps its old meaning and is **not** derived from the lock — "idle here but refused because another instance holds it" must stay reportable.
+
+⚠ Two entry-point signatures changed with it, and the `null` is the point: the counting sweeps return `number | null` and `analyticsAggregationWorker.runOnce()` returns `… | null`, where `null` means *refused*. A `0` means "nothing was due", which is a different statement.
 
 ### Notifications (`src/modules/notifications/`)
 **Four** parallel multi-channel stacks — vendor, agency, agent, and **customer** — each its own model + preference + repository + catalog + event-handler + consumer, all following the same rules (mandatory in-app record, always-on FCM push, at most one preference-gated secondary channel of email/telegram/whatsapp, catalog-driven copy localized in en/fr/pt/es/ar with a startup completeness assert). They are deliberately **not** DRY'd into one generic stack: the copy is written per-audience and the situations barely overlap. When adding a situation, add its `base` copy in **all five languages** or the consumer throws at boot.

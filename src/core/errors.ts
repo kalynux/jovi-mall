@@ -88,6 +88,7 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.AUTH_UNSUPPORTED_ROLE]: 'This role is not supported',
     [ERROR_CODES.AUTH_REFRESH_TOKEN_INVALID]: 'Invalid or expired refresh token',
     [ERROR_CODES.AUTH_SESSION_EXPIRED]: 'Session expired, please log in again',
+    [ERROR_CODES.AUTH_PASSWORD_CHANGED]: 'Your password was changed. Please sign in again',
     [ERROR_CODES.AUTH_USER_NOT_FOUND]: 'User not found',
     [ERROR_CODES.AUTH_ROLE_PROFILE_NOT_FOUND]: 'Role profile not found',
     [ERROR_CODES.AUTH_WA_PHONE_ID_REQUIRED]: 'wa_phone_id is required',

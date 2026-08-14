@@ -4,6 +4,7 @@ import { PaginationOptions, Page } from '../../core/repositories/base.repository
 import { VendorOnboardingStep } from '../../core/constants/onboarding-steps';
 import { ActorRef, actorStamp } from '../../core/types/actor-source.types';
 import { COLLECTIONS } from '../../core/database/collections';
+import { buildSearchRegex } from '../../core/utils/regex.util';
 
 /**
  * A vendor row joined to its Store's business name + logo. The public business
@@ -309,8 +310,8 @@ export class VendorRepository {
       status: { $ne: 'inactive' },
       onboarding_step: VendorOnboardingStep.COMPLETED,
     };
-    if (city && city.trim()) baseMatch['business_addresses.city'] = new RegExp(city.trim(), 'i');
-    if (state && state.trim()) baseMatch['business_addresses.state'] = new RegExp(state.trim(), 'i');
+    if (city && city.trim()) baseMatch['business_addresses.city'] = buildSearchRegex(city);
+    if (state && state.trim()) baseMatch['business_addresses.state'] = buildSearchRegex(state);
     if (return_eligible === true) baseMatch['policies.return_policy.return_eligible'] = true;
     if (cancellable === true) baseMatch['policies.cancellation_policy.cancellable'] = true;
 
@@ -323,7 +324,7 @@ export class VendorRepository {
     ];
 
     if (search && search.trim()) {
-      const searchRegex = new RegExp(search.trim(), 'i');
+      const searchRegex = buildSearchRegex(search);
       pipeline.push({
         $match: {
           $or: [

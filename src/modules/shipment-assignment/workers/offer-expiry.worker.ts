@@ -1,4 +1,5 @@
 import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { withWorkerLock, SWEEP_SKIPPED } from '../../../core/jobs/worker-lock';
 import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { recordWorkerRun } from '../../system/metrics/metrics';
 import { shipmentAssignmentService } from '../domain/services/shipment-assignment.service';
@@ -66,9 +67,23 @@ export class AssignmentSweepWorker implements ObservableWorker {
     this.timer = null;
   }
 
-  /** One sweep: advance due sessions, then expire due manual offers. */
-  async sweepOnce(): Promise<void> {
-    if (this.running) return;
+  /**
+   * One sweep: advance due sessions, then expire due manual offers.
+   *
+   * Already guarded in-process, which is why it was not in F-19; the shared lock adds the
+   * cross-instance half. This is the one worker documented as multi-instance-safe on its own
+   * (`advanceDueSessions` and `expireDueOffers` are guarded compare-and-sets), so the lock is a
+   * narrowing rather than the thing keeping it correct — the CAS stays, and must.
+   */
+  async sweepOnce(): Promise<boolean> {
+    const outcome = await withWorkerLock('assignment-sweep', () => this.sweep(), {
+      // A stranded lock must not stall the only thing advancing auto-assignment sessions.
+      ttlMs: Math.max(ASSIGNMENT_CONFIG.OFFER_EXPIRY_SWEEP_INTERVAL_MS * 5, 120_000),
+    });
+    return outcome !== SWEEP_SKIPPED;
+  }
+
+  private async sweep(): Promise<void> {
     this.running = true;
     /**
      * Phase 15 instrumentation, and this is the worker ADR-014 D-6 singles out: it is the only

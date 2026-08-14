@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { randomUUID } from 'crypto';
 import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { withWorkerLock, SWEEP_SKIPPED } from '../../../core/jobs/worker-lock';
 import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { getStorageProvider } from '../../../core/storage';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
@@ -51,7 +52,6 @@ export class FileCleanupWorker implements ObservableWorker {
     return this.task !== null;
   }
 
-  /** Observation only — no overlap guard. See `ObservableWorker`. */
   get executing(): boolean {
     return this.sweeping;
   }
@@ -137,20 +137,29 @@ export class FileCleanupWorker implements ObservableWorker {
     this.task = null;
   }
 
-  /** Run the full sweep once. Safe to call manually (tests/ops/verification). */
-  async runSweep(now: Date = new Date()): Promise<void> {
+  /**
+   * Run the full sweep once. Safe to call manually (tests/ops/verification), and safe to call
+   * CONCURRENTLY — a second caller is refused rather than queued.
+   *
+   * Overlap here deletes: two passes both list the same unreferenced blobs and both call the
+   * storage provider's delete, so the second gets a not-found it has to swallow — and a stage
+   * whose detach ran between the two listings could act on a file the other pass already removed.
+   */
+  async runSweep(now: Date = new Date()): Promise<boolean> {
     if (!this.config.enabled) {
       console.log('[FileCleanupWorker] Disabled; skipping sweep');
-      return;
+      return false;
     }
 
-    // Flag only — deliberately NOT an early return. See `ObservableWorker`.
-    this.sweeping = true;
-    try {
-      await this.runStages(now);
-    } finally {
-      this.sweeping = false;
-    }
+    const outcome = await withWorkerLock('file-cleanup', async () => {
+      this.sweeping = true;
+      try {
+        await this.runStages(now);
+      } finally {
+        this.sweeping = false;
+      }
+    });
+    return outcome !== SWEEP_SKIPPED;
   }
 
   private async runStages(now: Date): Promise<void> {

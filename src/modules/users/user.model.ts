@@ -31,6 +31,22 @@ export interface IUser extends Document {
   suspended_by_source: ActorSource;
   suspended_by_name: string | null;
 
+  /**
+   * When the password was last changed — the instant every token is measured against.
+   *
+   * This service issues stateless JWTs and keeps no record of them, so there is nothing to
+   * delete when a password changes. This field IS the revocation list: a token whose `iat`
+   * predates it was minted under the old password and is refused, on both the access and
+   * the refresh path. Without it, changing a password — the standard remedy after a
+   * compromise — evicts nobody, and an attacker's 30-day refresh cookie goes on minting
+   * fresh access tokens while the victim believes they have locked the door.
+   *
+   * `null` means "never changed since this column existed", which is the correct reading
+   * for every row that predates it: nothing to be behind, so no backfill is needed. See
+   * `core/auth/password-epoch.ts`.
+   */
+  password_changed_at: Date | null;
+
   created_at: Date;
   updated_at: Date;
 }
@@ -57,6 +73,11 @@ const UserSchema = new Schema<IUser>(
     suspended_reason: { type: String, default: null, trim: true, maxlength: 500 },
     suspended_by_user_id: { type: Schema.Types.ObjectId, default: null },
     ...actorStampFields('suspended_by'),
+
+    // Written by UserRepository.updatePassword in the same $set as the hash — never apart.
+    // A hash that lands without its stamp is the whole defect: the new password is live and
+    // every token issued under the old one still works.
+    password_changed_at: { type: Date, default: null },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } // snake_case timestamps

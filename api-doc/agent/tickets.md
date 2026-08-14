@@ -11,7 +11,8 @@ scoped to the caller.
 > **Shared reference.** Request/response payloads, enums (types, importance, status, entity types),
 > the follower system, priority locking and visibility rules are documented once in
 > [vendor/tickets.md](../vendor/tickets.md). The **authoritative enum values** are listed in
-> [agency/tickets.md](../agency/tickets.md) (some values in the vendor doc are stale placeholders).
+> [agency/tickets.md](../agency/tickets.md), and the full `TicketType` list as a flat file in
+> [ticket_types.txt](../ticket_types.txt).
 > This page lists the exact **agent** route set and the agent-specific differences.
 
 ## Endpoints

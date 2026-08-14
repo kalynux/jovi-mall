@@ -148,6 +148,62 @@ Returns whether the vendor has a connected calendar, the connected email, and th
 
 ---
 
+## Per-product calendar status
+
+```http
+GET /api/vendor/products/:id/service/calendar-status
+```
+
+The same connection, answered **in the context of one service product**, so a product editor can
+show "this service cannot take bookings until you connect a calendar" without a second lookup of
+which product it is talking about. Auth: `vendor`; the product must belong to the caller.
+
+**Response — connected:** `200 OK`
+
+```json
+{
+  "success": true,
+  "data": {
+    "connected": true,
+    "provider": "google",
+    "calendarEmail": "vendor@gmail.com",
+    "lastSyncAt": "2026-02-09T23:54:00.000Z",
+    "expiresAt": "2026-02-10T00:54:00.000Z",
+    "syncStatus": "connected"
+  }
+}
+```
+
+**Response — not connected:** `200 OK`
+
+```json
+{
+  "success": true,
+  "data": {
+    "connected": false,
+    "provider": null,
+    "email": null,
+    "lastSyncAt": null,
+    "expiresAt": null,
+    "syncStatus": "not_connected"
+  }
+}
+```
+
+> ⚠ **The two branches do not carry the same key.** Connected returns **`calendarEmail`**; not
+> connected returns **`email: null`**. There is no `calendarId` and no `permissions` here — read
+> `GET /api/vendor/calendar/status` above for those. The connection itself is per **vendor**, not
+> per product, so this endpoint's only product-specific behaviour is its two guards.
+
+**Errors:**
+
+| `error.code` | Status | When |
+|---|---|---|
+| `CATALOG_PRODUCT_NOT_FOUND` | 404 | Unknown product, or not this vendor's |
+| `CATALOG_BOOKING_INVALID_PRODUCT_TYPE` | 400 | The product's `type` is not `service` |
+
+---
+
 ## Disconnect Google Calendar
 
 ```http

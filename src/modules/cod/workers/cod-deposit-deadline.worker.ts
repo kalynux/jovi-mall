@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { withWorkerLock, SWEEP_SKIPPED } from '../../../core/jobs/worker-lock';
 import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { COD_CONFIG, daysAgo } from '../config/cod.config';
 import { CashCollectionModel } from '../models/cash-collection.model';
@@ -49,7 +50,6 @@ export class CodDepositDeadlineWorker implements ObservableWorker {
     return this.task !== null;
   }
 
-  /** Observation only — no overlap guard. See `ObservableWorker`. */
   get executing(): boolean {
     return this.sweeping;
   }
@@ -83,20 +83,30 @@ export class CodDepositDeadlineWorker implements ObservableWorker {
     this.task = null;
   }
 
-  /** Run the sweep once. Safe to call manually (tests/ops). */
-  async runSweep(now: Date = new Date()): Promise<void> {
-    // Flag only — deliberately NOT an early return. See `ObservableWorker`.
-    this.sweeping = true;
-    try {
-      console.log('[CodDepositDeadlineWorker] Starting deposit-deadline sweep');
-      const contracts = await this.flagLateContracts(now);
-      const agencies = await this.flagUnansweredDeclarations(now);
-      console.log(
-        `[CodDepositDeadlineWorker] Sweep complete — flagged ${contracts} contract(s), ${agencies} unanswered declaration(s)`
-      );
-    } finally {
-      this.sweeping = false;
-    }
+  /**
+   * Run the sweep once. Safe to call manually (tests/ops), and safe to call CONCURRENTLY — a
+   * second caller is refused rather than queued.
+   *
+   * The second of F-19's two money paths. Both stages apply a penalty to a real person's record —
+   * a `late_deposit` discrepancy plus the agent trust penalty, and a `deposit_not_confirmed`
+   * against an agency — so an overlapping pass is a double penalty for one bad week, which is the
+   * exact failure the per-contract flag was introduced to avoid in the first place.
+   */
+  async runSweep(now: Date = new Date()): Promise<boolean> {
+    const outcome = await withWorkerLock('cod-deposit-deadline', async () => {
+      this.sweeping = true;
+      try {
+        console.log('[CodDepositDeadlineWorker] Starting deposit-deadline sweep');
+        const contracts = await this.flagLateContracts(now);
+        const agencies = await this.flagUnansweredDeclarations(now);
+        console.log(
+          `[CodDepositDeadlineWorker] Sweep complete — flagged ${contracts} contract(s), ${agencies} unanswered declaration(s)`
+        );
+      } finally {
+        this.sweeping = false;
+      }
+    });
+    return outcome !== SWEEP_SKIPPED;
   }
 
   /**

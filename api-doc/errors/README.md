@@ -28,7 +28,7 @@ Whenever an API request fails (e.g., due to validation, business logic violation
 (jovi-mall, wi-admin and geo-tracker emit the same nine strings).
 
 It exists so a client can behave sensibly about an error it has **no specific handling
-for** — which is most of them, since the registry has 541 codes. Branch on `code` when you
+for** — which is most of them, since the registry has 547 codes. Branch on `code` when you
 have something particular to do; fall back to `category` for everything else.
 
 | `category` | Means | What a client should generally do |
@@ -193,10 +193,12 @@ Occurs when a bulk operation payload has too many rows.
 ```
 
 ### 7. File Upload Policy Violations
-**Code:** `UPLOAD_POLICY_VIOLATION` (Status `400`)
-Returned by `POST /api/files/upload` when one or more files fail the upload
-security/policy pipeline (MIME sniffing, size, duplicate detection, virus scan,
-etc.). Because several files are validated in one request, the `details.violations`
+**Code:** `UPLOAD_POLICY_VIOLATION` (Status `400`, or `413` for `FILE_TOO_LARGE`)
+Returned by `POST /api/files/upload` and `POST /api/files/upload/video` when one or more
+files fail the upload security/policy pipeline (MIME sniffing, size, duplicate detection,
+virus scan, etc.) **or one of the four cheap pre-pipeline gates** (no files, too many files,
+too large, unsupported claimed type). It is the **only** top-level code either route
+produces for a refusal. Because several files are validated in one request, the `details.violations`
 array can contain **multiple entries**, each scoped to a file via `fileIndex`.
 
 ```json
@@ -215,19 +217,22 @@ array can contain **multiple entries**, each scoped to a file via `fileIndex`.
 ```
 
 *Frontend usage:* Map each `violation.fileIndex` back to the corresponding file in
-your upload list and show the per-file reason inline. `violation.code` is one of:
-`FILE_TOO_LARGE`, `MIME_NOT_ALLOWED`, `TOO_MANY_FILES`, `QUOTA_EXCEEDED`,
+your upload list and show the per-file reason inline. `violation.code` is one of the eleven
+pipeline codes — `FILE_TOO_LARGE`, `MIME_NOT_ALLOWED`, `TOO_MANY_FILES`, `QUOTA_EXCEEDED`,
 `VIRUS_DETECTED`, `PERMISSION_DENIED`, `TOTAL_SIZE_EXCEEDED`, `DUPLICATE_FILE`,
-`MIME_TYPE_MISMATCH`, `POLYGLOT_DETECTED`, `UNDETECTABLE_TYPE`. See the
+`MIME_TYPE_MISMATCH`, `POLYGLOT_DETECTED`, `UNDETECTABLE_TYPE` — **or `NO_FILES_UPLOADED`**,
+which the controller's cheap pre-pipeline gate raises through the same shape. See the
 [File Management API](../vendor/file-management.md#post-apifilesupload) for the full
 per-code reference.
 
-Always read `details.violations[]`, never the top-level `message` — it is
-`"Upload policy permissions violated"` only when a `PERMISSION_DENIED` rule fired,
-and `"Upload policy violations found"` for everything else. `PERMISSION_DENIED` is
-not expected from `POST /api/files/upload`, which is open to every authenticated
-role; it belongs to the purpose-scoped upload routes (digital assets, delivery
-proof, system files).
+Always read `details.violations[]`, never the top-level `message` — it is the fixed string
+`"Upload policy violations found"` for **every** case, whichever rule fired, so it tells a
+caller nothing. (It used to vary; it no longer does.) `PERMISSION_DENIED` is not expected
+from `POST /api/files/upload`, which is open to every authenticated role; it belongs to the
+purpose-scoped upload routes (digital assets, delivery proof, system files).
+
+The **statusCode varies** on this code: `413` when the violation is `FILE_TOO_LARGE`,
+`400` otherwise. Branch on the violation, not on the status.
 
 ### 8. Other Contextual Domain Errors
 The backend frequently includes context variables inside the `details` object for general domain errors. For example:
@@ -447,7 +452,7 @@ The first three are reachable by a **logged-out visitor**, so their `message` is
 1. **Always default to parsing `error.code`.** Do not write business logic dependent on `statusCode` limits (e.g., `if (statusCode === 400)`) unless parsing a generic networking failure. Use `if (error.code === 'AUTH_TOKEN_EXPIRED') { triggerLogout(); }`.
 2. **Use `error.message` as a fallback.** If your application supports full i18n, map the backend `error.code` directly to a translation key. If the key is missing in your dictionary, display the backend's `error.message` directly to the user.
 3. **Use `error.category` as your default branch.** You will never have specific handling for
-   all 541 codes. The category tells you the four things that actually change client
+   all 547 codes. The category tells you the four things that actually change client
    behaviour: is it worth retrying, should the user re-authenticate, is it their input, or is
    it ours.
 4. **Log the `requestId`.** If the error is an unexpected `INTERNAL_SERVER_ERROR`, present the `requestId` in the UI to help the user report it: *"An unexpected error occurred. If you contact support, please provide this ID: req-1234abc"*.

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { withWorkerLock, SWEEP_SKIPPED } from '../../../core/jobs/worker-lock';
 import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { Booking } from '../models/booking.model';
 import { BookingStatus } from '../types/booking.types';
@@ -93,11 +94,23 @@ export class BookingReminderWorker implements ObservableWorker {
     /**
      * One pass. Returns how many reminders were sent.
      *
-     * Guarded against overlapping runs: a slow pass (many bookings × several
-     * channels each) must not stack up behind the interval.
+     * Guarded against overlapping runs — now across INSTANCES too (F-19). A slow pass (many
+     * bookings × several channels each) must not stack up behind the interval, and two instances
+     * must not both sweep the same window: consecutive passes tile exactly by design, so an
+     * overlapping pass covers a window another pass is already covering. The per-booking
+     * idempotency key is what makes that survivable rather than a second reminder; the lock is
+     * what stops it happening.
+     *
+     * `null` on a skip, NOT `0` — the same distinction `runVoidSweep` draws in the registry. A `0`
+     * means "nothing was due", which is a different statement from "this pass did not run", and
+     * the trigger endpoint renders them differently.
      */
-    async sweep(): Promise<number> {
-        if (this.sweeping) return 0;
+    async sweep(): Promise<number | null> {
+        const sent = await withWorkerLock('booking-reminder', () => this.sweepDue());
+        return sent === SWEEP_SKIPPED ? null : sent;
+    }
+
+    private async sweepDue(): Promise<number> {
         this.sweeping = true;
 
         try {

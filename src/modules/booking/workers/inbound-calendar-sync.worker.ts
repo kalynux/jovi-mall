@@ -1,4 +1,5 @@
 import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { withWorkerLock, DEFAULT_LOCK_TTL_MS } from '../../../core/jobs/worker-lock';
 import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { CalendarSyncConfig } from '../config/calendar-sync.config';
 import { InboundCalendarSyncService } from '../services/inbound-calendar-sync.service';
@@ -137,20 +138,45 @@ export class InboundCalendarSyncWorker implements ObservableWorker {
     }
 
     /**
-     * Execute near-future sync
+     * Execute near-future sync.
+     *
+     * ── F-19 note: this worker was NOT in the finding, and should have been ─────
+     * The audit named "seven cron workers"; these two loops are on `setInterval` and were not
+     * counted, but they had the same unguarded shape and the near-future one is the most likely
+     * of the thirteen to actually overrun — it polls Google for EVERY vendor with a connected
+     * calendar, on a ten-minute cadence, so the sweep's duration grows with the vendor roster
+     * while the interval does not.
+     *
+     * ── Two lock keys, never one ───────────────────────────────────────────────
+     * The near and far horizons are independent work. Sharing a key would let the ten-minute loop
+     * starve the daily one out of its window every time it happened to be running, which is a new
+     * bug in exchange for the old one.
      */
     private async runNearFutureSync(): Promise<void> {
+        await withWorkerLock(
+            'inbound-calendar-sync:near',
+            () => this.syncWindow('near', 0, CalendarSyncConfig.nearFutureWindowDays),
+            // Near the cadence: a lock stranded by a hard kill must not cost more than a
+            // handful of ten-minute passes.
+            { ttlMs: Math.max(CalendarSyncConfig.nearFutureIntervalMs * 3, 60_000) },
+        );
+    }
+
+    private async syncWindow(horizon: 'near' | 'far', fromOffsetDays: number, toOffsetDays: number): Promise<void> {
         const fromDate = new Date();
+        fromDate.setDate(fromDate.getDate() + fromOffsetDays);
         const toDate = new Date();
-        toDate.setDate(toDate.getDate() + CalendarSyncConfig.nearFutureWindowDays);
+        toDate.setDate(toDate.getDate() + toOffsetDays);
 
-        console.log(`[InboundCalendarSyncWorker] Running near-future sync: ${fromDate.toISOString()} → ${toDate.toISOString()}`);
+        const label = horizon === 'near' ? 'near-future' : 'far-future';
+        console.log(`[InboundCalendarSyncWorker] Running ${label} sync: ${fromDate.toISOString()} → ${toDate.toISOString()}`);
 
-        this.nearSyncing = true;
+        if (horizon === 'near') this.nearSyncing = true;
+        else this.farSyncing = true;
         try {
             const report = await this.syncService.syncAllVendors(fromDate, toDate);
 
-            console.log('[InboundCalendarSyncWorker] Near-future sync complete:', {
+            console.log(`[InboundCalendarSyncWorker] ${label} sync complete:`, {
                 vendors: report.vendorsProcessed,
                 events: report.totalEventsFetched,
                 upserted: report.totalBlocksUpserted,
@@ -159,41 +185,28 @@ export class InboundCalendarSyncWorker implements ObservableWorker {
                 failures: report.failures,
             });
         } catch (error: any) {
-            console.error('[InboundCalendarSyncWorker] Near-future sync failed:', error);
+            console.error(`[InboundCalendarSyncWorker] ${label} sync failed:`, error);
         } finally {
-            this.nearSyncing = false;
+            if (horizon === 'near') this.nearSyncing = false;
+            else this.farSyncing = false;
         }
     }
 
     /**
-     * Execute far-future sync
+     * Execute far-future sync. Its own lock key — see `runNearFutureSync`.
      */
     private async runFarFutureSync(): Promise<void> {
-        const fromDate = new Date();
-        fromDate.setDate(fromDate.getDate() + CalendarSyncConfig.nearFutureWindowDays);
-
-        const toDate = new Date();
-        toDate.setDate(toDate.getDate() + CalendarSyncConfig.farFutureWindowDays);
-
-        console.log(`[InboundCalendarSyncWorker] Running far-future sync: ${fromDate.toISOString()} → ${toDate.toISOString()}`);
-
-        this.farSyncing = true;
-        try {
-            const report = await this.syncService.syncAllVendors(fromDate, toDate);
-
-            console.log('[InboundCalendarSyncWorker] Far-future sync complete:', {
-                vendors: report.vendorsProcessed,
-                events: report.totalEventsFetched,
-                upserted: report.totalBlocksUpserted,
-                skipped: report.totalBlocksSkipped,
-                softDeleted: report.totalBlocksSoftDeleted,
-                failures: report.failures,
-            });
-        } catch (error: any) {
-            console.error('[InboundCalendarSyncWorker] Far-future sync failed:', error);
-        } finally {
-            this.farSyncing = false;
-        }
+        await withWorkerLock(
+            'inbound-calendar-sync:far',
+            () => this.syncWindow(
+                'far',
+                CalendarSyncConfig.nearFutureWindowDays,
+                CalendarSyncConfig.farFutureWindowDays,
+            ),
+            // Daily, and a full 30-60 day pull over every vendor. The default TTL is renewed
+            // while it runs, so this only bounds how long a crashed pass blocks the next one.
+            { ttlMs: DEFAULT_LOCK_TTL_MS },
+        );
     }
 
     /**

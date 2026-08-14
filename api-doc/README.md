@@ -38,6 +38,11 @@ Every jovi-mall endpoint returns one of exactly two shapes.
 - `meta` appears **only** on paginated/list responses (and may carry extra summary fields).
 - `message` is optional.
 
+> **Three list endpoints call the pagination block `pagination`, not `meta`** — `GET
+> /api/{role}/tickets` and the two `…/tickets/reference/{orders,products}` lookups. The block's
+> own fields (`total`, `page`, `limit`, `pages`) are identical; only the key differs. Read both
+> keys on those three, or key off the endpoint. See [vendor/tickets.md](./vendor/tickets.md).
+
 ### Error
 
 ```json
@@ -48,13 +53,21 @@ Every jovi-mall endpoint returns one of exactly two shapes.
     "code": "AUTH_INVALID_CREDENTIALS",
     "message": "Invalid credentials",
     "statusCode": 401,
+    "category": "authentication",
     "details": { "fields": [{ "path": "email", "message": "Required" }] }
   }
 }
 ```
 
 - Branch on `error.code` (stable string), not `error.message` (human copy, may change).
+- `error.category` is **always present** — one of nine values (`authentication · authorization ·
+  validation · not_found · conflict · business_rule · rate_limit · external_service · internal`),
+  and the same nine in all three backend services. Use it as your default branch when you have no
+  specific handling for a code. It is *derived* from `(code, statusCode)`, so one code can carry
+  different categories at different statuses.
 - `details.fields[]` is present for validation (`VALIDATION_ERROR`) failures — map each to its form field.
+- On `internal` and `external_service` the `message` is replaced with a generic sentence and
+  `details` is **omitted entirely**, in every environment — `requestId` is the only handle.
 - `requestId` also appears as the `X-Request-Id` response header; quote it in bug reports.
 
 > **⚠️ Breaking change (2026-07-17):** the whole API now uses this envelope uniformly. A handful of
@@ -110,6 +123,7 @@ Response `meta`:
 |---|---|---|
 | `AUTH_MISSING_TOKEN` | 401 | No token and no refresh cookie |
 | `AUTH_TOKEN_EXPIRED` / `AUTH_SESSION_EXPIRED` | 401 | Token expired, refresh unavailable/failed |
+| `AUTH_PASSWORD_CHANGED` | 401 | The token predates a password change. **Terminal — do not refresh**, the refresh cookie is refused too |
 | `AUTH_TOKEN_INVALID` | 401 | Tampered/invalid signature |
 | `AUTH_ROLE_NOT_FOUND` | 403 | Authenticated but wrong role for this endpoint |
 
@@ -141,7 +155,7 @@ Every route tree is guarded by role. `✅` = full access to that area's endpoint
 | Agency ⇄ vendor connections | — | — | ✅ | ✅ | — | — |
 | Agency ⇄ agent contracts | — | — | — | ✅ | ✅ | ✅ (transfer) |
 | Tickets (support) | — | ✅ | ✅ | ✅ | ✅ | ✅ (all) |
-| Notifications & preferences | — | — | ✅ (self) | ✅ (self) | ✅ (self) | — |
+| Notifications & preferences | — | ✅ (self)⁶ | ✅ (self) | ✅ (self) | ✅ (self) | — |
 | Saved payment methods (`/me/payment-methods`) | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Change password (`/me/password`) | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | File upload / management (`/files`) | — | ✅ | ✅ | ✅ | ✅ | ✅ (+ hard-delete/orphans) |
@@ -169,6 +183,9 @@ initiate/verify pair. It reads the plan catalog, the credit packs and the publis
 prices and prose the marketing site publishes — and nothing else. Read-only, no identity, no
 owner-scoped data; see [public/README.md](./public/README.md) and
 [public/articles.md](./public/articles.md).
+⁶ Customers have their own notification stack at `/api/customer/notifications` — inbox,
+`unread-count`, mark-one-read, mark-all-read and channel preferences. It is the fourth of the four
+stacks; see [customer/notifications.md](./customer/notifications.md).
 
 ---
 
@@ -176,7 +193,7 @@ owner-scoped data; see [public/README.md](./public/README.md) and
 
 `POST /api/files/upload` (multipart, field `files`, 1–10 files) and `POST /api/files/upload/video`
 (field `videos`) are shared by **all authenticated roles**, with per-role size limits
-(customer 100 MB · vendor 500 MB · agent 1 GB · admin 2 GB · video 70 MB). Manage with
+(customer 100 MB · agency 200 MB · vendor 500 MB · agent 1 GB · admin 2 GB · video 70 MB). Manage with
 `GET/PATCH/DELETE /api/files/:id`, `GET /api/files`, `GET /api/files/storage`. Uploaded files are
 referenced elsewhere by their returned `id` (e.g. product images, branding, KYC) — what a file is
 *for* is decided at that point, not at upload, so each upload is stored by its own detected media
@@ -229,7 +246,7 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Bookings](./vendor/bookings.md) · [Booking guide](./booking-implementation-guide.md) · [Calendar](./vendor/calendar.md) · [Availability rules](./vendor/availability-rules.md)
 - [Billing](./vendor/billing.md) · [Billing overview](./vendor/billing-overview.md) · [Earnings](./vendor/earnings.md) · [Transactions](./vendor/transactions.md) · [Stripe payments](./vendor/stripe-payments.md) · [Payment methods](./vendor/payment-methods.md) (pay *with*) · [**Payout methods**](./vendor/payout-methods.md) (get paid *to* — mobile money only right now; 🚧 bank + card switched off)
 - [Analytics](./vendor/analytics.md) · [Customer management](./vendor/customer-management.md) · [Storage](./vendor/storage.md) · [File management](./vendor/file-management.md)
-- [Notifications](./vendor/notifications.md) · [Notification channels](./vendor/notification-channels.md) · [Tickets](./vendor/tickets.md)
+- [Notifications](./vendor/notifications.md) · [Notification channels](./vendor/notification-channels.md) · [Tickets](./vendor/tickets.md) — the shared payload reference for every role's ticket surface; the `TicketType` list is [ticket_types.txt](./ticket_types.txt), and the picker gaps still open are in [tickets-reference-frontend-requirements.md](./vendor/tickets-reference-frontend-requirements.md)
 
 ### Agency
 - [Profile](./agency/profile.md) · [Profile schema](./agency/profile-schema.md) · [Onboarding](./agency/onboarding.md)
@@ -242,10 +259,10 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 
 ### Agent
 - **▶ [Shipment discovery — frontend integration guide](./agent-shipment-discovery-integration.md)** — search, earnings, addresses and the pickup→drop-off route. **Start here if you are integrating the agent app**; it carries the two breaking changes and the migration checklist.
-- [Profile, preferences & dispatch settings](./agent/profile.md) · [Onboarding](./agent/onboarding.md) · [Availability & device](./agent/availability-and-device.md) · [Agency membership](./agent/agency-membership.md) — applying, and [negotiating your terms](./agent/agency-membership.md#terms-negotiation)
+- [Profile, preferences & dispatch settings](./agent/profile.md) · [Vehicle colour & photo](./agent/vehicle-profile.md) · [Onboarding](./agent/onboarding.md) · [Availability & device](./agent/availability-and-device.md) · [Agency membership](./agent/agency-membership.md) — applying, and [negotiating your terms](./agent/agency-membership.md#terms-negotiation)
 - [Shipments](./agent/shipments.md) · [Offers](./agent/offers.md) · [Delivery proof](./agent/delivery-proof.md) · [COD cash](./agent/cod-cash.md) · [Earnings](./agent/earnings.md) · [Billing (plans & credit)](./agent/billing.md) · [Payment methods](./agent/payment-methods.md) (pay *with*) · [**Payout methods**](./agent/payout-methods.md) (get paid *to* — mobile money only right now; 🚧 bank + card switched off)
 - [File management](./agent/file-management.md) · [Storage](./agent/storage.md)
-- [Notifications](./agent/notifications.md) · [Push notifications (Flutter)](./agent/push-notifications.md) · [Tickets](./agent/tickets.md)
+- [Notifications](./agent/notifications.md) · [Push notifications (Flutter)](./agent/push-notifications.md) — includes offer quick actions, whose rationale record is [offer-quick-actions.md](./agent/offer-quick-actions.md) · [Tickets](./agent/tickets.md)
 
 ### Admin
 - [Profile](./admin/profile.md) · [Orders (dispute hold)](./admin/orders.md) · [Agents](./admin/agents.md)
@@ -253,8 +270,10 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Billing](./admin/billing.md) · [Billing overview](./admin/billing-overview.md) · [Catalogue vectorisation](./admin/catalogue-vectorisation.md)
 - [Payment methods](./admin/payment-methods.md) · [Tickets](./admin/tickets.md)
 - [**Blog editor**](./admin/articles.md) — articles + bylines; the write side of [public/articles.md](./public/articles.md)
-- [**System operations**](./admin/system.md) — dependency health · integration status · queue depth · cache status · background jobs · operational metrics. **Read-only, every route a GET**
-- [**Developer tools**](./admin/dev-tools.md) — the dangerous half: run a worker · replay the outbox · rebuild search vectors · **maintenance mode** · **cache flush**
+- [**System operations**](./admin/system.md) — dependency health · integration status · queue depth · cache status · background jobs · operational metrics · the error journal. **Read-only, every route a GET**
+- [**Developer tools**](./admin/dev-tools.md) — the dangerous half: run a worker · replay/prune the outbox · rebuild search vectors · **maintenance mode** · **cache flush**
+- [**The internal admin API**](./admin/internal-service-api.md) — `/api/internal/admin/*`, the service-to-service door wi-admin calls. **Not a frontend surface**; documented so the two mounts can be told apart
+- Internal-only surfaces with no dashboard twin: [Vendors](./admin/vendors.md) (`/api/internal/admin/vendors`) · [Shipments](./admin/shipments.md) (`/api/internal/admin/shipments`)
 
 ### Tracking (authorization; streaming is in geo-tracker)
 - [Live tracking](./tracking/live-tracking.md) · [Agent tracking policy](./tracking/agent-tracking-policy.md)

@@ -154,8 +154,7 @@ are normal agency notifications. See [Notifications](./notifications.md).
 
 | Code | HTTP | Where | Meaning |
 |---|---|---|---|
-| `UPLOAD_POLICY_VIOLATION` | 400 | upload | Wrapper; inspect `details.violations[]`. |
-| `QUOTA_EXCEEDED` (violation) | — | upload | Storage limit would be exceeded. |
-| `FILE_TOO_LARGE` | 413 | upload | A file exceeds the per-file cap. |
-| `CATALOG_FILE_STILL_REFERENCED` | 409 | delete | File is still attached; detach first. |
+| `UPLOAD_POLICY_VIOLATION` | 400 / 413 | upload | **The only top-level upload code.** Inspect `details.violations[]` — `QUOTA_EXCEEDED`, `FILE_TOO_LARGE`, `TOO_MANY_FILES`, `MIME_NOT_ALLOWED`, `NO_FILES_UPLOADED`, … |
+| `CATALOG_FILE_TOO_LARGE` | 413 | upload | The multer variant only (stream aborted mid-parse); carries no `details`. |
+| `CATALOG_FILE_STILL_REFERENCED` | 409 | delete | File is still attached; detach the entities in `details.usage` first. |
 | `AUTH_FORBIDDEN` | 403 | `/api/files/storage` | Role without an owner scope (admin). |

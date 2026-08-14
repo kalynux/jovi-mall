@@ -54,11 +54,17 @@ export type WorkerSchedule =
  * (The third, `manualClaim`, belongs to the registry rather than the worker — it is a property
  * of the trigger endpoint, not of the job.)
  *
- * ⚠ `executing` on the seven cron workers is an OBSERVATION, not a guard. Those workers have
- * no overlap protection at all — `cron.schedule` fires `void this.runSweep()` and a slow sweep
- * can overlap its own next tick. This interface makes that condition *visible*; making it
- * *impossible* changes scheduling behaviour on seven live sweeps and is deliberately a separate
- * decision. See `api-doc/admin/system.md`.
+ * ── `executing` is still an OBSERVATION, and it is no longer the only thing ────
+ * This interface made overlap *visible* and deliberately did not prevent it; the resulting defect
+ * was **F-19**, and nine of the thirteen workers turned out to be exposed rather than the seven
+ * the note here named (`analytics-aggregation` and both `inbound-calendar-sync` loops had the same
+ * shape). Overlap is now prevented by `core/jobs/worker-lock.ts`, which every worker's entry point
+ * goes through.
+ *
+ * `executing` keeps its meaning exactly: it answers "is a pass in flight", not "would a pass be
+ * allowed". Do NOT re-derive one from the other — a worker can be idle here and still refused,
+ * because another instance holds the lock, and collapsing the two would make that state
+ * unreportable. See `api-doc/admin/system.md`.
  */
 export interface ObservableWorker {
   readonly schedules: WorkerSchedule[];

@@ -5,6 +5,7 @@ import { VendorAnalyticsAggregationService } from '../../modules/vendors/service
 import { maintenanceBlocksWorkers } from '../../modules/system/services/maintenance.service';
 import { recordWorkerRun } from '../../modules/system/metrics/metrics';
 import { ObservableWorker, WorkerSchedule } from './worker-schedule';
+import { withWorkerLock, SWEEP_SKIPPED } from './worker-lock';
 
 /**
  * Daily vendor analytics aggregation.
@@ -81,8 +82,25 @@ class AnalyticsAggregationWorker implements ObservableWorker {
         this.task = null;
     }
 
-    /** One idempotent pass over every active vendor, for yesterday. */
-    async runOnce(): Promise<{ vendors: number; failures: number }> {
+    /**
+     * One idempotent pass over every active vendor, for yesterday.
+     *
+     * ── F-19 note: this worker was NOT in the finding, and should have been ─────
+     * The audit named "seven cron workers" from the `CLAUDE.md` line, which was written before
+     * this file became an `ObservableWorker` — so the thirteenth worker was missing from the
+     * defect for the same reason it was missing from every other surface. It is a cron worker
+     * setting `inFlight = true` with no early return, exactly like the seven.
+     *
+     * `null` on a skip, NOT `{ vendors: 0, failures: 0 }` — the same distinction `runVoidSweep`
+     * draws in the registry. Zero vendors aggregated is a different statement from "this pass did
+     * not run", and the trigger endpoint renders them differently.
+     */
+    async runOnce(): Promise<{ vendors: number; failures: number } | null> {
+        const outcome = await withWorkerLock('analytics-aggregation', () => this.aggregate());
+        return outcome === SWEEP_SKIPPED ? null : outcome;
+    }
+
+    private async aggregate(): Promise<{ vendors: number; failures: number }> {
         this.inFlight = true;
         const startedAt = Date.now();
         let vendors = 0;

@@ -1,12 +1,24 @@
 # WhatsApp API
 
-These are the core endpoints implemented in the WhatsApp module (`/api/whatsapp`).
+These are the core endpoints implemented in the WhatsApp module. The router is mounted at
+**`/api/webhooks/whatsapp`** (`src/api/index.ts`) — the module lives in
+`src/modules/whatsapp/`, but there is no `/api/whatsapp` prefix.
+
+| Endpoint | Auth |
+|---|---|
+| `POST /api/webhooks/whatsapp/` | none (public webhook) |
+| `GET /api/webhooks/whatsapp/link/status` | required |
+| `DELETE /api/webhooks/whatsapp/link` | required |
+
+Because it lives under `/api/webhooks`, the whole prefix — including the two authenticated link
+routes — is **exempt from rate limiting** ([rate-limits.md](../rate-limits.md)) and stays
+reachable during a maintenance window unless the operator set `blockWebhooks` on that window.
 
 ## 1. Webhook (Inbound Messages)
 
 This endpoint receives inbound messages sent to the Jovi Mall WhatsApp business number. It is intended to be called by an automation layer (like n8n) rather than directly by frontend applications.
 
-- **Endpoint:** `POST /api/whatsapp/`
+- **Endpoint:** `POST /api/webhooks/whatsapp/`
 - **Authentication:** None (Public)
 - **Role Requirements:** None
 - **Content-Type:** `application/json`
@@ -34,6 +46,9 @@ This endpoint receives inbound messages sent to the Jovi Mall WhatsApp business 
 ### Response `200`
 A dynamic result object returned by the internal CommandBus (or a generic success if no command was present).
 
+> ⚠ This endpoint answers the automation layer, not a frontend, so it is one of the deliberate
+> exceptions to the `{ success, data }` envelope — the body below is sent verbatim.
+
 ```json
 {
   "message": "Inbound recorded",
@@ -47,8 +62,8 @@ A dynamic result object returned by the internal CommandBus (or a generic succes
 
 Retrieves the current WhatsApp linking status for the authenticated user and their currently selected role.
 
-- **Endpoint:** `GET /api/whatsapp/link/status`
-- **Authentication:** Required (Bearer Token)
+- **Endpoint:** `GET /api/webhooks/whatsapp/link/status`
+- **Authentication:** Required (cookie or Bearer token)
 - **Role Requirements:** Any (`vendor`, `customer`, `agency`, `agent`)
 - **Content-Type:** `application/json`
 
@@ -56,10 +71,13 @@ Retrieves the current WhatsApp linking status for the authenticated user and the
 
 ```json
 {
-  "linked": true,
-  "wa_phone_id": "1234567890",
-  "name": "John Doe",
-  "bound_at": "2024-03-01T12:00:00.000Z"
+  "success": true,
+  "data": {
+    "linked": true,
+    "wa_phone_id": "1234567890",
+    "name": "John Doe",
+    "bound_at": "2024-03-01T12:00:00.000Z"
+  }
 }
 ```
 
@@ -67,7 +85,8 @@ Retrieves the current WhatsApp linking status for the authenticated user and the
 
 ```json
 {
-  "linked": false
+  "success": true,
+  "data": { "linked": false }
 }
 ```
 
@@ -77,8 +96,8 @@ Retrieves the current WhatsApp linking status for the authenticated user and the
 
 Unlinks the WhatsApp account from the authenticated user for their currently selected role. This acts on a _per-role_ basis, stopping only that specific role from utilizing the WhatsApp integration.
 
-- **Endpoint:** `DELETE /api/whatsapp/link`
-- **Authentication:** Required (Bearer Token)
+- **Endpoint:** `DELETE /api/webhooks/whatsapp/link`
+- **Authentication:** Required (cookie or Bearer token)
 - **Role Requirements:** Any string matched to a supported role
 - **Content-Type:** `application/json`
 
@@ -87,6 +106,7 @@ Unlinks the WhatsApp account from the authenticated user for their currently sel
 ```json
 {
   "success": true,
+  "data": null,
   "message": "WhatsApp account unlinked"
 }
 ```
@@ -102,7 +122,8 @@ Unlinks the WhatsApp account from the authenticated user for their currently sel
   "error": {
     "code": "WHATSAPP_NOT_LINKED",
     "message": "No WhatsApp account linked",
-    "statusCode": 404
+    "statusCode": 404,
+    "category": "not_found"
   }
 }
 ```
@@ -117,6 +138,7 @@ Unlinks the WhatsApp account from the authenticated user for their currently sel
     "code": "WHATSAPP_ROLE_NOT_SUPPORTED",
     "message": "This role does not support WhatsApp linking",
     "statusCode": 400,
+    "category": "validation",
     "details": {
       "role": "admin"
     }

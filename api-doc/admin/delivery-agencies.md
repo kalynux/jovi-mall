@@ -23,8 +23,36 @@ Authorization: Bearer <access_token>
 |---|---|---|
 | GET | `/api/admin/delivery-agencies` | List all agencies (any status), paginated |
 | GET | `/api/admin/delivery-agencies/:id` | Get one agency by id |
+| POST | `/api/admin/delivery-agencies/:id/verify` | Approve business verification — the exit from `pending_verification` |
 | PATCH | `/api/admin/delivery-agencies/:id/deactivate` | Deactivate an agency |
 | PATCH | `/api/admin/delivery-agencies/:id/reactivate` | Reactivate an agency |
+
+> **The same five routes are also mounted at `/api/internal/admin/agencies/*`** behind the
+> service token, for wi-admin. One factory, two guard chains; the paths after the prefix are
+> identical.
+
+---
+
+## POST `/api/admin/delivery-agencies/:id/verify`
+
+The **only** exit from `pending_verification`. Approving moves `status` and both
+`legit_verified` mirrors together in **one compare-and-set**, and stamps the approving actor
+onto the agency.
+
+**This is not `reactivate`.** `reactivate` was being used for first approvals and also runs the
+product-restore cascade — which a never-verified agency has nothing for. Use `verify` for the
+first approval and `reactivate` only to undo a `deactivate`.
+
+### Responses
+
+```json
+{ "success": true, "data": { "...": "the agency" }, "message": "Agency verified and activated." }
+```
+
+| `error.code` | Status | When |
+|---|---|---|
+| `DELIVERY_AGENCY_NOT_FOUND` | 404 | No agency with that id |
+| `DELIVERY_AGENCY_STATUS_CONFLICT` | 409 | The agency is not `pending_verification` — usually because another administrator approved it first. `details.currentStatus` carries the actual status. **Re-read before deciding**; do not resend |
 
 ---
 

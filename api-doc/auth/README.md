@@ -46,8 +46,10 @@ Every **success** response on this service uses:
 Every **error** response uses the mirror shape:
 
 ```json
-{ "success": false, "requestId": "req_abc", "error": { "code": "AUTH_INVALID_CREDENTIALS", "message": "Invalid credentials", "statusCode": 401, "details": {} } }
+{ "success": false, "requestId": "req_abc", "error": { "code": "AUTH_INVALID_CREDENTIALS", "message": "Invalid credentials", "statusCode": 401, "category": "authentication", "details": {} } }
 ```
+
+`error.category` is always present — one of nine values. See [errors/README.md](../errors/README.md).
 
 Read `data` for the body, `error.code` for programmatic handling. All examples below show the full envelope.
 
@@ -74,9 +76,9 @@ All POST endpoints require `Content-Type: application/json`.
 | Role | Has Onboarding? | Notes |
 |------|----------------|-------|
 | `customer` | ❌ No | `onboarding_step` is always `0` |
-| `vendor` | ✅ Yes — 3 steps | Must complete before accessing dashboard |
-| `agency` | ✅ Yes — 3 steps | Must complete before accessing dashboard |
-| `agent` | ✅ Yes — 2 steps | Must complete before accessing dashboard |
+| `vendor` | ✅ Yes — 4 steps (`PUT` per step) | Must complete before accessing dashboard |
+| `agency` | ✅ Yes — init + 4 steps (`PUT` per step) | Must complete before accessing dashboard |
+| `agent` | ✅ Yes — 2 steps (one `PATCH …/step`) | Must complete before accessing dashboard |
 | `admin` | ❌ No | `onboarding_step` is always `0` |
 
 A user can hold **multiple roles** and log in under any of them independently.
@@ -89,7 +91,6 @@ A user can hold **multiple roles** and log in under any of them independently.
 |--------|------|------|-------------|
 | `POST` | `/auth/register` | Public | Register a new account |
 | `POST` | `/auth/login` | Public | Log in and set auth cookies |
-| `POST` | `/auth/browser/refresh` | Public (cookie) | Explicitly issue a new access token from the refresh cookie |
 | `POST` | `/auth/logout` | Public | Clear both auth cookies |
 | `GET` | `/auth/me` | Required | Get current user (lightweight) |
 | `GET` | `/auth/auth-me/:role` | Required | Restore session + re-issue cookies |
@@ -97,6 +98,29 @@ A user can hold **multiple roles** and log in under any of them independently.
 | `POST` | `/auth/send-email-verification` | Required | Send email verification link |
 | `GET` | `/auth/verify-email` | Public | Confirm email via token link |
 | `POST` | `/auth/request-wa-verification` | Required | Start WhatsApp phone verification |
+| `POST` | `/auth/browser/login` | Public | Browser-namespace login (JSON only) — see below |
+| `POST` | `/auth/browser/refresh` | Public (cookie) | Explicitly issue a new access token from the refresh cookie |
+| `POST` | `/auth/browser/logout` | Public | Browser-namespace logout (JSON only) |
+
+There is **no** `POST /auth/refresh`, `/auth/forgot-password`, `/auth/reset-password` or
+`/auth/verify-code` on this service; the table above is the complete auth surface
+(`src/modules/auth/auth.routes.ts` + `src/modules/auth/routes/browser-auth.routes.ts`).
+
+> **The `/auth/browser/*` trio is a parallel namespace, not a different session model.** It
+> exists so OAuth redirect flows have a stable browser login URL; it issues the *same* two JWT
+> cookies as `/auth/login`. All three require `Content-Type: application/json`
+> (`requireJsonContent`, a CSRF mitigation) and answer `400 VALIDATION_ERROR —
+> "Bad Request: Only JSON content is accepted"` otherwise. `POST /auth/browser/login` takes the
+> same body as `/auth/login` and returns a **smaller** payload —
+> `{ user: { id, email, role } }` only, with no `role_entity`. Use `/auth/login` unless you are
+> specifically in an OAuth redirect flow.
+
+### Rate limiting
+
+The whole `/auth` prefix — both routers — sits behind the **credential bucket**: 20 requests per
+minute per IP, the strictest limit in the service, applied before authentication. It covers
+login, registration, verification-code resend and the browser namespace alike. See
+[rate-limits.md](../rate-limits.md).
 
 ---
 
@@ -508,139 +532,40 @@ onboarding_step  > 0  →  Route to onboarding screen for that step
 
 ## Onboarding Flow
 
-Onboarding is **field-presence driven**: every profile write recalculates `onboarding_step` from scratch. Steps do not have to be completed in order — the server always reports the next incomplete step.
+Onboarding is **field-presence driven**: every profile write recalculates `onboarding_step` from scratch. The server always reports the next incomplete step.
 
-### Vendor Onboarding
+> **The three roles do NOT share one shape.** Vendor and agency use a **`PUT` per step**; only
+> the agent has a single `PATCH …/onboarding/step` endpoint. The old
+> `PATCH /api/vendor/onboarding/step` and `PATCH /api/agency/onboarding/step` were removed and
+> no longer exist. This page is a summary — the field-by-field contracts are in
+> [vendor/onboarding.md](../vendor/onboarding.md), [agency/onboarding.md](../agency/onboarding.md)
+> and [agent/onboarding.md](../agent/onboarding.md).
 
-**Base**: `PATCH /api/vendor/onboarding/step`  
-**Auth**: Required (`vendor` role)
+### Vendor Onboarding — four `PUT` steps
 
-| Step | Value | Label | Required Fields |
-|------|-------|-------|-----------------|
-| `BASIC_SETUP` | `1` | Basic Setup | `country`, `timezone`, `payout_details` |
-| `DELIVERY_LINKING` | `2` | Delivery Linking | `default_delivery_agency_id` |
-| `BRANDING` | `3` | Branding (Optional) | `branding` (attached file ids), `business_addresses` — or `skip: true` |
-| `COMPLETED` | `0` | Done | — |
+**Auth**: Required (`vendor` role). Full contract: [vendor/onboarding.md](../vendor/onboarding.md).
 
-#### Step 1 — Basic Setup
+| Step | Value | Label | Endpoint | Required? |
+|------|-------|-------|----------|-----------|
+| `BASIC_SETUP` | `1` | Basic Setup | `PUT /api/vendor/onboarding/basic-setup` | ✅ |
+| `DELIVERY_LINKING` | `2` | Delivery Linking | `PUT /api/vendor/onboarding/delivery-linking` | skippable |
+| `BRANDING` | `3` | Branding | `PUT /api/vendor/onboarding/branding` | skippable |
+| `POLICY_SETUP` | `4` | Policy Setup | `PUT /api/vendor/onboarding/policy-setup` | skippable |
+| `COMPLETED` | `0` | Done | — | — |
 
-```json
-{
-  "step": 1,
-  "country": "CM",
-  "timezone": "Africa/Douala",
-  "payout_details": { "..." : "..." }
-}
-```
+Reads: `GET /api/vendor/onboarding/status` (rich: `steps[]`, `progressPercent`, `completedFields`,
+`warnings`) and `GET /api/vendor/profile/completion-status` (step + missing fields only).
 
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `country` | string | ✅ | ISO-2 country code (e.g. `"CM"`) |
-| `timezone` | string | ✅ | IANA timezone string (e.g. `"Africa/Douala"`) |
-| `payout_details` | object | ✅ | Payout configuration object |
+> **Step 2 no longer selects an agency.** It is a plain step-advance. A default delivery agency
+> requires the agency's consent and is set automatically when the first connection request is
+> approved — see [vendor/agency-connections.md](../vendor/agency-connections.md). To browse
+> agencies, use `GET /api/vendor/delivery-agencies` or
+> `GET /api/vendor/agency-connections/browse`; there is no `GET /api/agency` listing endpoint.
 
-#### Step 2 — Delivery Linking
-
-```json
-{
-  "step": 2,
-  "default_delivery_agency_id": "664abc..."
-}
-```
-
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `default_delivery_agency_id` | string | ✅ | MongoDB ObjectId of the delivery agency |
-
-> Use `GET /api/agency` to list available agencies.
-
-#### Step 3 — Branding (Optional / Skippable)
-
-Branding images are attached files, not raw URLs — upload the logo/cover image first via
-`POST /api/files/upload` (multipart, field name `files`), then submit the returned file `id`s below.
-See [Vendor Onboarding — Step 3: Branding](../vendor/onboarding.md#step-3-branding-optional--skippable).
-
-To provide branding data:
-
-```json
-{
-  "step": 3,
-  "branding": {
-    "logo_file_id": "507f1f77bcf86cd799439030",
-    "cover_image_file_id": "507f1f77bcf86cd799439031"
-  },
-  "business_addresses": [
-    {
-      "label": "Main Shop",
-      "address_line1": "123 Market St",
-      "city": "Douala",
-      "state": "Littoral"
-    }
-  ]
-}
-```
-
-To skip this step:
-
-```json
-{
-  "step": 3,
-  "skip": true
-}
-```
-
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `skip` | boolean | ❌ | Set `true` to skip branding and mark complete |
-| `branding.logo_file_id` | string (ObjectId) \| null | ❌ | Id of a file uploaded via `POST /api/files/upload` |
-| `branding.cover_image_file_id` | string (ObjectId) \| null | ❌ | Id of a file uploaded via `POST /api/files/upload` |
-| `business_addresses` | array | ❌ | List of business addresses |
-
-#### Onboarding Step Response
-
-All step requests return `{ success, data }`:
-
-```json
-{
-  "success": true,
-  "data": {
-    "profile": {
-      "_id": "...",
-      "business_name": "John's Shop",
-      "onboarding_step": 2,
-      "..."  : "..."
-    },
-    "completionStatus": {
-      "onboardingStep": 2,
-      "isComplete": false,
-      "missingFields": ["default_delivery_agency_id"],
-      "stepLabel": "Delivery Linking"
-    }
-  }
-}
-```
-
-Use `completionStatus.missingFields` to prompt the user for specific missing data.
-
-#### Check Onboarding Status
-
-```
-GET /api/vendor/profile/completion-status
-```
-
-Returns the current step and missing fields without mutating any data.
-
-```json
-{
-  "success": true,
-  "data": {
-    "onboardingStep": 1,
-    "isComplete": false,
-    "missingFields": ["payout_details"],
-    "stepLabel": "Basic Setup"
-  }
-}
-```
+Every `PUT` step accepts an optional `version` integer for optimistic concurrency
+(`409 VENDOR_ONBOARDING_CONCURRENT_MODIFICATION` on a mismatch), and every one returns
+`{ success, data: { profile, completionStatus } }`. Once `onboarding_step === 0`, all four
+answer `409 VENDOR_ONBOARDING_ALREADY_COMPLETED` — edit via `PATCH /api/vendor/profile` instead.
 
 ---
 
@@ -659,30 +584,36 @@ PATCH /api/customer/profile
 
 ---
 
-### Agency Onboarding
+### Agency Onboarding — an init call, then four `PUT` steps
 
-**Base**: `PATCH /api/agency/onboarding/step`  
-**Auth**: Required (`agency` role)
+**Auth**: Required (`agency` role). Full contract: [agency/onboarding.md](../agency/onboarding.md).
 
-| Step | Value | Label | Required Fields |
-|------|-------|-------|-----------------|
-| `LOGISTICS_SETUP` | `1` | Logistics Setup | `coverage_areas` (min 1), `headquarters_addresses` (min 1) |
-| `PAYOUT_SETUP` | `2` | Payout Setup | `payout_details` |
-| `BRANDING` | `3` | Branding (Optional) | `logo_file_id`, `timezone` — or `skip: true` |
-| `COMPLETED` | `0` | Done | — |
+| Step | Value | Label | Endpoint | Required? |
+|------|-------|-------|----------|-----------|
+| Init | — | Agency Initialization | `POST /api/agency` | ✅ |
+| `LOGISTICS_SETUP` | `1` | Logistics Setup | `PUT /api/agency/onboarding/logistics` | ✅ |
+| `PAYOUT_SETUP` | `2` | Payout Setup | `PUT /api/agency/onboarding/payout` | ✅ |
+| `BRANDING` | `3` | Branding | `PUT /api/agency/onboarding/branding` | skippable |
+| `POLICY_SETUP` | `4` | Policy Setup | `PUT /api/agency/onboarding/policies` | ✅ |
+| `COMPLETED` | `0` | Done | — | — |
+
+Read: `GET /api/agency/onboarding/status`. Same `version` concurrency field, raising
+`409 DELIVERY_ONBOARDING_CONCURRENT_MODIFICATION`.
 
 ---
 
-### Agent Onboarding
+### Agent Onboarding — one `PATCH`, two steps
 
-**Base**: `PATCH /api/agent/onboarding/step`  
-**Auth**: Required (`agent` role)
+**Base**: `PATCH /api/agent/onboarding/step` — the one role that still uses the single-endpoint
+shape. **Auth**: Required (`agent` role). Full contract: [agent/onboarding.md](../agent/onboarding.md).
 
-| Step | Value | Label | Required Fields |
-|------|-------|-------|-----------------|
-| `VEHICLE_SETUP` | `1` | Vehicle Setup | `vehicle_info` (`vehicle_type`, `color`) |
-| `IDENTITY_SETUP` | `2` | Identity (Optional) | `avatar_url`, `timezone` — or `skip: true` |
+| Step | Value | Label | Body |
+|------|-------|-------|------|
+| `VEHICLE_SETUP` | `1` | Vehicle Setup | `{ step: 1, vehicle_info: { vehicle_type, color, plate_number?, photo_file_id? } }` |
+| `IDENTITY_SETUP` | `2` | Identity (Optional) | `{ step: 2, skip?: true, avatar_url?, timezone? }` |
 | `COMPLETED` | `0` | Done | — |
+
+Read: `GET /api/agent/profile/completion-status`.
 
 ---
 
@@ -777,6 +708,29 @@ Below are the key fields returned in `role_entity` for each role. Some fields ar
 - Expiry: **30 days** (env: `AUTH_REFRESH_TOKEN_TTL`, in seconds)
 - Signing: `HS256` with `JWT_REFRESH_SECRET` (falls back to `JWT_SECRET`)
 
+### Revocation — `iat` is load-bearing
+
+Both tokens are **stateless**: the server keeps no list of issued tokens, so there is nothing
+to delete when a session must end. Changing the account password is what revokes them. The
+change stamps a per-account instant, and **both** credential paths refuse any token whose
+`iat` predates it:
+
+| Path | Refuses with |
+|---|---|
+| every authenticated request (`requireAuth`, access token) | `401 AUTH_PASSWORD_CHANGED` |
+| silent refresh and `POST /auth/browser/refresh` (refresh token) | `401 AUTH_PASSWORD_CHANGED` |
+
+Practical consequences for a client:
+
+- **Treat `AUTH_PASSWORD_CHANGED` as terminal.** Do not retry and do not attempt a refresh —
+  the refresh cookie is refused by the same rule. Clear local state and send the user to
+  sign-in. The message is worth surfacing verbatim: for someone who did *not* change their
+  password, it is the first sign that somebody else did.
+- The caller who performs the change **keeps their session** — `PATCH /api/me/password`
+  returns a fresh cookie pair in the same response. See [me/password.md](../me/password.md).
+- Everything else signs out on its next request: other browsers, other devices, and any
+  bearer token that was minted earlier.
+
 ---
 
 ## Environment Variables
@@ -802,14 +756,17 @@ AUTH_REFRESH_TOKEN_TTL=2592000           # 30 days in seconds
       → Returns { user, role_entity }
       → role_entity.onboarding_step === 1 → route to onboarding
 
-2. PATCH /api/vendor/onboarding/step  { step: 1, country, timezone, payout_details }
+2. PUT /api/vendor/onboarding/basic-setup       { country, timezone, payout_details }
       → Returns { profile, completionStatus }
       → completionStatus.onboardingStep → 2
 
-3. PATCH /api/vendor/onboarding/step  { step: 2, default_delivery_agency_id }
+3. PUT /api/vendor/onboarding/delivery-linking  { }        (a plain step-advance)
       → completionStatus.onboardingStep → 3
 
-4. PATCH /api/vendor/onboarding/step  { step: 3, skip: true }  OR  provide branding
+4. PUT /api/vendor/onboarding/branding          { skip: true }  OR provide branding
+      → completionStatus.onboardingStep → 4
+
+5. PUT /api/vendor/onboarding/policy-setup      { skip: true }  OR provide policies
       → completionStatus.isComplete === true → route to vendor dashboard
 ```
 

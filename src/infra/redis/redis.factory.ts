@@ -30,6 +30,7 @@ export const DOWNLOAD_TOKEN_DB = 8; // keep download tokens for digital delivery
 export const TELEGRAM_LINK_TOKEN_DB = 9; // keep tokens for Telegram account linking
 export const TELEGRAM_WINDOW_DB = 10; // keep window status for telegram (24 hours)
 export const RATE_LIMIT_DB = 11; // request counters for the rate limiter (Phase 16)
+export const WORKER_LOCK_DB = 12; // background-worker overlap locks (F-19)
 
 /**
  * What each logical database holds — the table three separate features needed.
@@ -117,6 +118,18 @@ export const REDIS_DB_CATALOG: readonly RedisDbSpec[] = Object.freeze([
     // this database is unreachable — see api/rate-limit/fail-open-store.ts.
     purpose: 'Per-caller request counters. Losing them re-opens one window of allowance.',
     ttlHint: 'seconds',
+  },
+  {
+    db: WORKER_LOCK_DB,
+    constant: 'WORKER_LOCK_DB',
+    label: 'Background worker locks',
+    // The second DB whose loss is survivable, and the only one where flushing is a documented
+    // REMEDY: a lock orphaned by a hard kill blocks its sweep until the TTL expires, and emptying
+    // this database releases every one of them. The cost of flushing while sweeps are genuinely
+    // running is that two instances may run the same sweep once — which is exactly the state the
+    // whole database exists to prevent, so do it deliberately. See core/jobs/worker-lock.ts.
+    purpose: 'One key per background sweep in flight. Losing them permits one overlapping pass.',
+    ttlHint: 'minutes (renewed while the sweep runs)',
   },
 ]);
 

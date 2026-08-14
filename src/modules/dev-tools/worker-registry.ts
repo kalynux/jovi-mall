@@ -41,9 +41,29 @@ import { maintenanceBlocksWorkers } from '../system/services/maintenance.service
  * These act on LIVE data and are idempotent only to the degree each sweep already was. That is
  * why the permission behind them (`developer_tools.workers.trigger`) is `destructive`, tier-1
  * only, and audited on every call.
+ *
+ * What it no longer means, since F-19: landing on top of a scheduled tick. Every `runOnce`
+ * adapter below calls its worker's ordinary entry point, and that entry point takes the shared
+ * overlap lock (`core/jobs/worker-lock.ts`) — so a trigger arriving mid-sweep is refused and
+ * returns having done nothing, rather than running a second concurrent pass. The refusal is
+ * reported (`ran: false`), not swallowed.
+ *
+ * Note the deliberate asymmetry with the maintenance guard, which sits at the *tick* site so an
+ * operator CAN run a worker inside a maintenance window (ADR-014 D-4). Maintenance is a policy an
+ * operator may override; overlap is a correctness constraint and an operator's intent does not
+ * make two concurrent writes to the same earnings row safe.
  */
 
 export interface WorkerRunResult {
+    /**
+     * Did the pass actually run?
+     *
+     * False when the shared overlap lock refused it — the sweep was already running here or on
+     * another instance (F-19). Without this field the endpoint would return "Expired plans
+     * processed" for a trigger that did nothing, which is the same class of lie as the schedule
+     * strings that were wrong for eight of ten workers.
+     */
+    ran: boolean;
     /** How many items the pass handled, when the worker reports one. */
     processed?: number;
     /** Anything worth showing the operator that a count cannot express. */
@@ -68,14 +88,31 @@ export interface WorkerInventoryEntry {
 }
 
 /**
- * `void`-returning sweeps report no count rather than a fake zero.
+ * The note every refused trigger carries. One string, so the endpoint's contract is one string.
+ */
+const SKIPPED_NOTE =
+    'Not run — this sweep was already in progress, here or on another instance. '
+    + 'Nothing was changed. Try again once it finishes.';
+
+/**
+ * Countless sweeps report no count rather than a fake zero.
  *
  * A `processed: 0` would read as "there was nothing to do", which is a different statement from
  * "this worker does not say". The endpoint renders the absence honestly.
+ *
+ * These now return a boolean rather than `void`: `true` ran, `false` was refused by the overlap
+ * lock. Same reasoning one level up — "refused" and "ran and found nothing" must not print the
+ * same sentence.
  */
-async function runVoidSweep(run: () => Promise<void>, note: string): Promise<WorkerRunResult> {
-    await run();
-    return { note };
+async function runVoidSweep(run: () => Promise<boolean>, note: string): Promise<WorkerRunResult> {
+    const ran = await run();
+    return ran ? { ran: true, note } : { ran: false, note: SKIPPED_NOTE };
+}
+
+/** The same, for the sweeps that report a count. `null` from one of them means refused. */
+async function runCountedSweep(run: () => Promise<number | null>): Promise<WorkerRunResult> {
+    const processed = await run();
+    return processed === null ? { ran: false, note: SKIPPED_NOTE } : { ran: true, processed };
 }
 
 /**
@@ -130,12 +167,12 @@ export const WORKER_REGISTRY = Object.freeze({
     'unpaid-booking-cancel': {
         label: 'Unpaid booking cancellation',
         worker: unpaidBookingCancelWorker,
-        runOnce: async () => ({ processed: await unpaidBookingCancelWorker.sweep() }),
+        runOnce: () => runCountedSweep(() => unpaidBookingCancelWorker.sweep()),
     },
     'booking-reminder': {
         label: 'Booking reminders',
         worker: bookingReminderWorker,
-        runOnce: async () => ({ processed: await bookingReminderWorker.sweep() }),
+        runOnce: () => runCountedSweep(() => bookingReminderWorker.sweep()),
     },
     'cod-deposit-deadline': {
         label: 'COD deposit deadlines',
@@ -162,10 +199,10 @@ export const WORKER_REGISTRY = Object.freeze({
         ),
     },
     /**
-     * Added this phase. `sweepOnce()` already has its own overlap guard and is exactly the shape
-     * `runOnce` wants — and crucially this is **the same singleton `initializeShipmentAssignment()`
-     * starts**, so `scheduled`/`executing` describe the running worker and a manual trigger goes
-     * through its guard rather than around it.
+     * Added this phase. `sweepOnce()` already had an overlap guard of its own — since F-19 it is
+     * the shared one — and crucially this is **the same singleton
+     * `initializeShipmentAssignment()` starts**, so `scheduled`/`executing` describe the running
+     * worker and a manual trigger goes through its guard rather than around it.
      */
     'assignment-sweep': {
         label: 'Assignment sweep (sessions + offer expiry)',
@@ -189,7 +226,9 @@ export const WORKER_REGISTRY = Object.freeze({
         worker: analyticsAggregationWorker,
         runOnce: async () => {
             const result = await analyticsAggregationWorker.runOnce();
+            if (result === null) return { ran: false, note: SKIPPED_NOTE };
             return {
+                ran: true,
                 processed: result.vendors,
                 note: `${result.vendors} vendor(s) aggregated, ${result.failures} failed`,
             };
@@ -274,15 +313,15 @@ export function describeWorkers(): WorkerReport[] {
 /**
  * Which workers an operator has triggered and that have not finished.
  *
- * ⚠ **In-process only.** With more than one jovi-mall instance behind a load balancer this does
- * NOT hold: two administrators hitting two instances both pass, and the sweep runs twice
- * concurrently against live data.
+ * ⚠ **In-process only, and it is not the safety mechanism.** With more than one jovi-mall
+ * instance behind a load balancer this claim does NOT hold: two administrators hitting two
+ * instances both pass it. That is fine now — the cross-instance guarantee moved to
+ * `core/jobs/worker-lock.ts` (the Redis `SET NX` this docstring used to list as a follow-up), and
+ * the second trigger is refused *by the worker* with `ran: false`.
  *
- * Written down rather than discovered. A real cross-instance lock needs Redis (`SET NX` with a
- * TTL and a fencing token), which is a worthwhile follow-up and not something to imply is
- * already here. Until then the practical mitigations are what they look like: the capability is
- * tier-1 only, every call is audited, and the workers themselves were built to tolerate
- * overlapping scheduled runs.
+ * What this set is still for is the UI: `manualClaim` tells an operator that somebody on this
+ * instance pressed the button and it has not come back. Keep the two separate — a claim is who
+ * asked, a lock is what is permitted, and collapsing them loses the first.
  *
  * Renamed from `runningWorkers()`. The old name was the third distinct meaning of "running" in
  * this codebase and the one `GET /dev-tools/workers` happened to report — so a scheduled sweep

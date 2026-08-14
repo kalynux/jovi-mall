@@ -97,7 +97,7 @@ de-duped once per month per band). Opt out via the `storageAlert` preference
 ## 5. Error reference
 | Code | HTTP | Meaning |
 |---|---|---|
-| `UPLOAD_POLICY_VIOLATION` / `QUOTA_EXCEEDED` | 400 | Storage limit would be exceeded. |
-| `FILE_TOO_LARGE` | 413 | A file exceeds its per-file cap. |
+| `UPLOAD_POLICY_VIOLATION` | 400 / 413 | **The only top-level upload code.** The reason is a per-file `details.violations[].code` — `QUOTA_EXCEEDED` (storage limit), `FILE_TOO_LARGE` (per-file cap), `TOO_MANY_FILES`, `MIME_NOT_ALLOWED`, `NO_FILES_UPLOADED`, … |
+| `CATALOG_FILE_TOO_LARGE` | 413 | The multer variant only (stream aborted mid-parse); carries no `details`. |
 | `CATALOG_FILE_STILL_REFERENCED` | 409 | File is still attached; detach first. |
 | `AUTH_FORBIDDEN` | 403 | `/api/files/storage` for a role without an owner scope. |

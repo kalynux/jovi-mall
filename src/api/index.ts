@@ -12,6 +12,25 @@ import { bookingPaymentRouter } from '../modules/booking/routes/booking-payment.
 import vendorBookingRoutes from '../modules/booking/routes/vendor-booking.routes';
 import customerBookingRoutes from '../modules/booking/routes/customer-booking.routes';
 
+/**
+ * ⚠ This import MUST stay at the top of the file, unlike almost every other one here.
+ *
+ * The rest of this module deliberately interleaves `import` with the `router.use` it feeds,
+ * which reads well and is harmless — as long as the import precedes its use. This one did
+ * not: it sat beside `fileRoutes` near the bottom while `router.use('/auth', authRateLimiter)`
+ * runs a few lines below, at the top.
+ *
+ * TypeScript's CommonJS emit does NOT hoist imports — it emits `const rate_limit_middleware_1
+ * = require(...)` exactly where the import appears — and `target` here is `es2020`, so the
+ * binding is a `const` in its temporal dead zone until then. The result was
+ * `ReferenceError: Cannot access 'rate_limit_middleware_1' before initialization`, thrown
+ * while loading this module: the whole API failed to boot. `tsc` cannot catch it, because it
+ * type-checks against ES semantics, where imports ARE hoisted.
+ *
+ * If you add an import that a `router.use` above it consumes, put it here.
+ */
+import { authRateLimiter } from './rate-limit/rate-limit.middleware';
+
 const router = express.Router();
 
 /**
@@ -330,7 +349,6 @@ router.use('/me', userAccountRoutes);
 // File upload and management routes
 import fileRoutes from './routes/file-upload.routes';
 import path from "path";
-import { authRateLimiter } from './rate-limit/rate-limit.middleware';
 router.use('/files', express.static(path.join(__dirname, '../..', 'storage')));
 router.use('/files', fileRoutes);
 

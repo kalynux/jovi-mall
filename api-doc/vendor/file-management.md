@@ -52,7 +52,7 @@ The **File Management Service** is an enterprise-grade, multi-tenant file storag
 First-class database entity representing a stored file with provider-agnostic metadata.
 
 **Key Properties:**
-- [id](file:///c:/Users/Fante/Desktop/projects/jovi-mall/src/core/storage/storage-provider.interface.ts#74-80): Unique identifier
+- [id](../../src/core/storage/storage-provider.interface.ts): Unique identifier
 - `key`: Provider-specific storage key (path or object ID)
 - `provider`: Storage backend type
 - `usageCount`: Reference count for safe cleanup
@@ -196,13 +196,26 @@ and it follows any conversion the pipeline applies — a `png` stored as `webp` 
 
 **Error Responses:**
 
+> **Every refusal on this route is `UPLOAD_POLICY_VIOLATION`, in the standard envelope.** The
+> three cheap gates below used to answer with hand-built `{ code, message }` bodies carrying
+> `NO_FILES_UPLOADED` / `TOO_MANY_FILES` / `FILE_TOO_LARGE` as `error.code`. They now raise the
+> same error the sniffing pipeline does, and those names appear as **per-file
+> `details.violations[].code`**. Drive your UI off `details.violations[]`, never the top-level
+> `message`.
+
 **400 - No Files Uploaded:**
 ```json
 {
   "success": false,
+  "requestId": "req_abc123",
   "error": {
-    "code": "NO_FILES_UPLOADED",
-    "message": "At least one file is required"
+    "code": "UPLOAD_POLICY_VIOLATION",
+    "message": "Upload policy violations found",
+    "statusCode": 400,
+    "category": "validation",
+    "details": { "violations": [
+      { "code": "NO_FILES_UPLOADED", "message": "At least one file is required" }
+    ] }
   }
 }
 ```
@@ -211,9 +224,15 @@ and it follows any conversion the pipeline applies — a `png` stored as `webp` 
 ```json
 {
   "success": false,
+  "requestId": "req_abc123",
   "error": {
-    "code": "TOO_MANY_FILES",
-    "message": "Maximum 10 files per request"
+    "code": "UPLOAD_POLICY_VIOLATION",
+    "message": "Upload policy violations found",
+    "statusCode": 400,
+    "category": "validation",
+    "details": { "violations": [
+      { "code": "TOO_MANY_FILES", "message": "Maximum 10 files per request" }
+    ] }
   }
 }
 ```
@@ -222,21 +241,25 @@ and it follows any conversion the pipeline applies — a `png` stored as `webp` 
 ```json
 {
   "success": false,
+  "requestId": "req_abc123",
   "error": {
-    "code": "FILE_TOO_LARGE",
-    "message": "File \"large-photo.jpg\" exceeds vendor limit of 500 MB"
+    "code": "UPLOAD_POLICY_VIOLATION",
+    "message": "Upload policy violations found",
+    "statusCode": 413,
+    "category": "validation",
+    "details": { "violations": [
+      { "code": "FILE_TOO_LARGE",
+        "message": "File \"large-photo.jpg\" exceeds vendor limit of 500 MB" }
+    ] }
   }
 }
 ```
 
-**400 - Upload Policy Violation:**
+**400 - Upload Policy Violation (from the pipeline):**
 
-Unlike the three errors above (which are returned directly by the controller with a
-minimal `{ code, message }` body), the policy-violation error flows through the
-**global error handler**, so it follows the [standard error envelope](../errors/README.md)
-— it includes `requestId`, `statusCode`, and a `details.violations` array that
-explains, **per file**, exactly what failed. Use `details.violations` to drive
-per-file UI messaging rather than the generic top-level `message`.
+Same code and same envelope as the three above — the difference is only *where* the check ran
+and that a pipeline refusal can report **several files at once**, each keyed by `fileIndex`. Use
+`details.violations` to drive per-file UI messaging rather than the generic top-level `message`.
 
 ```json
 {
@@ -377,52 +400,44 @@ client `Content-Type`):
 
 **Error Responses:**
 
-**400 - No Files Uploaded:**
+> Same rule as `POST /api/files/upload`: every refusal is `UPLOAD_POLICY_VIOLATION` in the
+> standard envelope, with the specific reason as `details.violations[].code`.
+
+**400 - No Files Uploaded** → `violations[0].code = "NO_FILES_UPLOADED"`,
+message `At least one video file is required (field name "videos")`.
+
+**400 - Too Many Files** (exceeds the per-actor count) → `violations[0].code = "TOO_MANY_FILES"`,
+message `Maximum 1 video(s) per request for customer`.
+
+**400 - Unsupported Type** (claimed type is not mp4/mov/webm) →
+`violations[0].code = "MIME_NOT_ALLOWED"` — **not** `FILE_TYPE_INVALID`, which no longer exists.
+It carries `metadata: { claimedMimeType, originalName }`.
+
 ```json
 {
   "success": false,
+  "requestId": "req_abc123",
   "error": {
-    "code": "NO_FILES_UPLOADED",
-    "message": "At least one video file is required (field name \"videos\")"
+    "code": "UPLOAD_POLICY_VIOLATION",
+    "message": "Upload policy violations found",
+    "statusCode": 400,
+    "category": "validation",
+    "details": { "violations": [
+      { "code": "MIME_NOT_ALLOWED",
+        "message": "File \"notes.pdf\" (application/pdf) is not a supported video. Allowed: mp4, mov, webm",
+        "metadata": { "claimedMimeType": "application/pdf", "originalName": "notes.pdf" } }
+    ] }
   }
 }
 ```
 
-**400 - Too Many Files** (exceeds the per-actor count):
-```json
-{
-  "success": false,
-  "error": {
-    "code": "TOO_MANY_FILES",
-    "message": "Maximum 1 video(s) per request for customer"
-  }
-}
-```
+**413 - File Too Large** (a video exceeds 70 MB) → `violations[0].code = "FILE_TOO_LARGE"`.
 
-**400 - Unsupported Type** (claimed type is not mp4/mov/webm):
-```json
-{
-  "success": false,
-  "error": {
-    "code": "FILE_TYPE_INVALID",
-    "message": "File \"notes.pdf\" (application/pdf) is not a supported video. Allowed: mp4, mov, webm"
-  }
-}
-```
-
-**413 - File Too Large** (a video exceeds 70 MB). Returned either directly by the
-controller or, when the stream is aborted mid-parse, normalised from a multer
-`LIMIT_FILE_SIZE` error by the global error handler (so this variant carries the
-standard `requestId`/`statusCode` envelope):
-```json
-{
-  "success": false,
-  "error": {
-    "code": "FILE_TOO_LARGE",
-    "message": "Video \"big.mp4\" exceeds the 70 MB limit"
-  }
-}
-```
+> ⚠ **The multer variant is the one exception, and it carries a different code.** When the stream
+> is aborted mid-parse, multer's `LIMIT_FILE_SIZE` is normalised by the global error handler into
+> **`413 CATALOG_FILE_TOO_LARGE`** with **no `details`** — a registry code, not a violation list.
+> Handle both: `UPLOAD_POLICY_VIOLATION` with a `FILE_TOO_LARGE` violation, and a bare
+> `CATALOG_FILE_TOO_LARGE`.
 
 **400 - Upload Policy Violation:** Identical shape and `details.violations[]`
 semantics as `POST /api/files/upload` — see that section above. A file that
@@ -585,7 +600,7 @@ Retrieve metadata for a single file by ID.
 **Authentication:** Required
 
 **Path Parameters:**
-- [id](file:///c:/Users/Fante/Desktop/projects/jovi-mall/src/core/storage/storage-provider.interface.ts#74-80): File ID (MongoDB ObjectId)
+- [id](../../src/core/storage/storage-provider.interface.ts): File ID (MongoDB ObjectId)
 
 **Success Response (200):**
 ```json
@@ -674,7 +689,7 @@ Update file metadata (only `originalName` is editable).
 **Authorization:** Owner or admin only
 
 **Path Parameters:**
-- [id](file:///c:/Users/Fante/Desktop/projects/jovi-mall/src/core/storage/storage-provider.interface.ts#74-80): File ID
+- [id](../../src/core/storage/storage-provider.interface.ts): File ID
 
 **Request Body:**
 ```json
@@ -721,7 +736,7 @@ Soft delete a file (mark for garbage collection).
 **Authorization:** Owner or admin only
 
 **Path Parameters:**
-- [id](file:///c:/Users/Fante/Desktop/projects/jovi-mall/src/core/storage/storage-provider.interface.ts#74-80): File ID
+- [id](../../src/core/storage/storage-provider.interface.ts): File ID
 
 **Success Response (200):**
 ```json
@@ -755,13 +770,17 @@ Soft delete a file (mark for garbage collection).
 }
 ```
 
-**409 - File In Use:**
+**409 - File still referenced:**
 ```json
 {
   "success": false,
+  "requestId": "req_abc123",
   "error": {
-    "code": "FILE_IN_USE",
-    "message": "Cannot delete file that is still in use (usageCount: 3)"
+    "code": "CATALOG_FILE_STILL_REFERENCED",
+    "message": "Cannot delete a file that is still referenced. Detach it from the listed entities first.",
+    "statusCode": 409,
+    "category": "conflict",
+    "details": { "usage": { "totalReferences": 3, "...": "the referencing entities" } }
   }
 }
 ```
@@ -786,7 +805,7 @@ Permanently delete a file (admin only).
 **Authorization:** Admin only
 
 **Path Parameters:**
-- [id](file:///c:/Users/Fante/Desktop/projects/jovi-mall/src/core/storage/storage-provider.interface.ts#74-80): File ID
+- [id](../../src/core/storage/storage-provider.interface.ts): File ID
 
 **Success Response (200):**
 ```json
@@ -928,7 +947,7 @@ List orphaned files for garbage collection (admin only).
 ### 3. Linking File to Domain Entities
 
 **Domain Services:**
-- [FileAttachService](file:///c:/Users/Fante/Desktop/projects/jovi-mall/src/modules/catalog/domain/services/media/FileAttachService.ts#27-149): Attach file to product or variant
+- [FileAttachService](../../src/modules/catalog/domain/services/media/FileAttachService.ts): Attach file to product or variant
 - `FileDetachService`: Detach file from product or variant (not shown in docs, but inferred)
 
 #### Attach Flow
@@ -1242,7 +1261,7 @@ interface Variant {
 ```
 
 **Linking Process:**
-1. Vendor uploads file → [File](file:///c:/Users/Fante/Desktop/projects/jovi-mall/src/modules/catalog/models/file.model.ts#21-35) created with `ownerType: 'vendor'`, `usageCount: 0`
+1. Vendor uploads file → [File](../../src/modules/catalog/models/file.model.ts) created with `ownerType: 'vendor'`, `usageCount: 0`
 2. Vendor attaches file to product → `product.fileIds.push(fileId)`, `file.usageCount++`
 3. Vendor detaches file → `product.fileIds.remove(fileId)`, `file.usageCount--`
 
@@ -1357,7 +1376,7 @@ STORAGE_PROVIDER=local  # local, s3, gcs, r2, firebase, cloudinary
 
 ### Provider Switching
 
-**Zero Code Changes:** Business logic uses [IStorageProvider](file:///c:/Users/Fante/Desktop/projects/jovi-mall/src/core/storage/storage-provider.interface.ts#28-81) interface.
+**Zero Code Changes:** Business logic uses [IStorageProvider](../../src/core/storage/storage-provider.interface.ts) interface.
 
 **Steps to Switch:**
 1. Update environment variable: `STORAGE_PROVIDER=s3`
@@ -1536,7 +1555,7 @@ async function reconcileStorage() {
 | Admin    | 2 GB          | System assets, bulk imports       |
 | Customer | 100 MB        | Profile pictures, ticket attachments |
 
-**Enforcement:** Pre-upload validation in [FileUploadController](file:///c:/Users/Fante/Desktop/projects/jovi-mall/src/api/controllers/file-upload.controller.ts#48-165)
+**Enforcement:** Pre-upload validation in [FileUploadController](../../src/api/controllers/file-upload.controller.ts)
 
 ### Who Can Read Files
 
@@ -1661,23 +1680,32 @@ const signedUrl = await api.getSignedUrl(fileId); // Short-lived
 
 ### Comprehensive Error Reference
 
-| Scenario                              | HTTP Status | Error Code                  | Message                                                    | Resolution                                |
-|---------------------------------------|-------------|-----------------------------|-------------------------------------------------------------|-------------------------------------------|
-| No files in upload request            | 400         | NO_FILES_UPLOADED           | At least one file is required                               | Include files in FormData                 |
-| More than 10 files uploaded           | 400         | TOO_MANY_FILES              | Maximum 10 files per request                                | Upload in batches                         |
-| File exceeds role limit               | 413         | FILE_TOO_LARGE              | File "X" exceeds ROLE limit of Y MB                         | Reduce file size or contact admin         |
-| Too many videos (`/upload/video`)     | 400         | TOO_MANY_FILES              | Maximum N video(s) per request for ROLE                    | Customers: 1 video; other actors: 3       |
-| Unsupported video type (`/upload/video`) | 400      | FILE_TYPE_INVALID           | File "X" is not a supported video. Allowed: mp4, mov, webm | Use mp4/mov/webm                          |
-| Video exceeds 70 MB (`/upload/video`) | 413         | FILE_TOO_LARGE              | Video "X" exceeds the 70 MB limit                          | Reduce video size                         |
-| Upload policy violation               | 400         | UPLOAD_POLICY_VIOLATION     | Upload policy violations found (see `details.violations[]`) | Read per-file `violations`; fix flagged file(s) |
-| File not found (GET)                  | 404         | NOT_FOUND                   | File not found                                              | Verify file ID is correct                 |
-| Access denied (non-owner)             | 403         | FORBIDDEN                   | You do not have access to this file                        | Request owner or admin to share           |
-| Update validation failed              | 400         | VALIDATION_ERROR            | Invalid input                                               | Check request body against schema         |
-| Delete file still in use              | 409         | FILE_IN_USE                 | Cannot delete file that is still in use (usageCount: X)    | Detach from all products/variants first   |
-| Hard delete (non-admin)               | 403         | FORBIDDEN                   | Admin access required                                       | Request admin assistance                  |
-| List orphans (non-admin)              | 403         | FORBIDDEN                   | Admin access required                                       | Request admin assistance                  |
-| Orphans query (olderThan < 24h)       | 400         | VALIDATION_ERROR            | olderThan must be at least 24 hours in the past            | Adjust olderThan parameter                |
-| Internal server error                 | 500         | INTERNAL_SERVER_ERROR       | An unexpected error occurred                                | Check logs (cite `requestId`), contact support |
+> **Every upload refusal is `UPLOAD_POLICY_VIOLATION` at the top level.** The four cheap
+> pre-pipeline gates (no files, too many files, too large, wrong claimed type) used to answer with
+> hand-built bodies carrying `NO_FILES_UPLOADED` / `TOO_MANY_FILES` / `FILE_TOO_LARGE` /
+> `FILE_TYPE_INVALID` as `error.code` — strings in no registry, in an envelope with no
+> `requestId`. They now raise the **same** `UPLOAD_POLICY_VIOLATION` as the sniffing pipeline,
+> and those names appear as **per-file `details.violations[].code`** instead. Read
+> `details.violations[]`, never the top-level `message`. `FILE_TYPE_INVALID` no longer exists at
+> all — the unsupported-video gate spells it `MIME_NOT_ALLOWED`, the same word the pipeline uses.
+
+| Scenario                              | HTTP Status | `error.code`                | `details.violations[].code` | Resolution                                |
+|---------------------------------------|-------------|-----------------------------|-----------------------------|-------------------------------------------|
+| No files in upload request            | 400         | UPLOAD_POLICY_VIOLATION     | `NO_FILES_UPLOADED`         | Include files in FormData                 |
+| More than 10 files uploaded           | 400         | UPLOAD_POLICY_VIOLATION     | `TOO_MANY_FILES`            | Upload in batches                         |
+| File exceeds role limit               | 413         | UPLOAD_POLICY_VIOLATION     | `FILE_TOO_LARGE`            | Reduce file size or contact admin         |
+| Too many videos (`/upload/video`)     | 400         | UPLOAD_POLICY_VIOLATION     | `TOO_MANY_FILES`            | Customers: 1 video; other actors: 3       |
+| Unsupported video type (`/upload/video`) | 400      | UPLOAD_POLICY_VIOLATION     | `MIME_NOT_ALLOWED`          | Use mp4/mov/webm                          |
+| Video exceeds 70 MB (`/upload/video`) | 413         | UPLOAD_POLICY_VIOLATION     | `FILE_TOO_LARGE`            | Reduce video size                         |
+| Pipeline policy violation             | 400         | UPLOAD_POLICY_VIOLATION     | any of the 11 codes         | Read per-file `violations`; fix flagged file(s) |
+| File not found (GET)                  | 404         | CATALOG_FILE_NOT_FOUND      | —                           | Verify file ID is correct                 |
+| Access denied (non-owner)             | 403         | AUTH_FORBIDDEN              | —                           | Request owner or admin to share           |
+| Update validation failed              | 400         | VALIDATION_ERROR            | —                           | Check request body against schema         |
+| Delete file still referenced          | 409         | CATALOG_FILE_STILL_REFERENCED | —                         | Detach from the entities in `details.usage` first |
+| Hard delete (non-admin)               | 403         | ADMIN_FORBIDDEN             | —                           | Request admin assistance                  |
+| List orphans (non-admin)              | 403         | ADMIN_FORBIDDEN             | —                           | Request admin assistance                  |
+| Orphans query (olderThan < 24h)       | 400         | VALIDATION_ERROR            | —                           | Adjust olderThan parameter                |
+| Internal server error                 | 500         | INTERNAL_SERVER_ERROR       | —                           | Message is masked; cite `requestId` to support |
 
 ### Edge Cases
 
@@ -1702,8 +1730,8 @@ const signedUrl = await api.getSignedUrl(fileId); // Short-lived
 **Scenario:** S3 is down, upload requested.
 
 **Behavior:**
-- Storage provider throws error during [put()](file:///c:/Users/Fante/Desktop/projects/jovi-mall/src/core/storage/storage-provider.interface.ts#29-36)
-- Error caught in [UploadIntakeService](file:///c:/Users/Fante/Desktop/projects/jovi-mall/src/core/uploads/upload-intake.service.ts#28-138)
+- Storage provider throws error during [put()](../../src/core/storage/storage-provider.interface.ts)
+- Error caught in [UploadIntakeService](../../src/core/uploads/upload-intake.service.ts)
 - No database record created
 - 500 response to client
 
@@ -1980,10 +2008,12 @@ async function attachVideoToTicket(ticketId: string, fileId: string) {
 }
 ```
 
-> Error handling is the same as the image/doc flow: a `413` means a video
-> exceeded 70 MB, a `400 TOO_MANY_FILES` / `FILE_TYPE_INVALID` is a count/type
-> rejection, and a `400 UPLOAD_POLICY_VIOLATION` carries per-file
-> `details.violations[]` (use `fileIndex` to map each back to its video).
+> Error handling is the same as the image/doc flow, and it is **one code**:
+> `UPLOAD_POLICY_VIOLATION`, at `413` when a video exceeded 70 MB and at `400` otherwise, with
+> the reason in `details.violations[]` (`FILE_TOO_LARGE`, `TOO_MANY_FILES`, `MIME_NOT_ALLOWED`,
+> `NO_FILES_UPLOADED`, …). Use `fileIndex` to map each violation back to its video. The one
+> exception is a stream aborted mid-parse, which arrives as `413 CATALOG_FILE_TOO_LARGE` with no
+> `details`.
 
 ### Progress Tracking
 

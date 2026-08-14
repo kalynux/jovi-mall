@@ -29,6 +29,24 @@ export default tseslint.config(
                     // a rule that teaches the other spelling.
                     "selector": "CallExpression[callee.property.name='json'] > ObjectExpression > Property[key.name='error']",
                     "message": "Use next(error) instead of res.status().json({ error: ... }). Let the global handler respond."
+                },
+                {
+                    // Every search path in this codebase is `$regex`-based, so a term the
+                    // user typed reaches a regex engine verbatim unless something escapes
+                    // it: `(a+)+$` pins a core, `.*` returns the whole collection.
+                    //
+                    // The helper was written to close exactly this, and was then omitted
+                    // at seven call sites anyway — a convention nothing enforces is a
+                    // convention that decays. The escaped form `new RegExp(escapeRegex(x))`
+                    // is allowed because it IS the fix; `buildSearchRegex(x)` is the
+                    // shorthand for the common `{ field: <regex> }` filter.
+                    //
+                    // A static pattern built from module constants (core/logging/scrub.ts,
+                    // blog/validators/article-body.validator.ts) is a legitimate exception
+                    // and disables this line-wise, with its reason written at the site —
+                    // never file-wide, which would take the two bans above down with it.
+                    "selector": "NewExpression[callee.name='RegExp']:not([arguments.0.callee.name='escapeRegex'])",
+                    "message": "Build search regexes with buildSearchRegex()/escapeRegex() from core/utils/regex.util. Unescaped user input in a RegExp is regex injection + ReDoS."
                 }
             ],
             "@typescript-eslint/no-explicit-any": "off",

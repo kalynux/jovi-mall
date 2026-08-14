@@ -40,9 +40,12 @@ admin), with per-role size limits. Uploaded files are referenced elsewhere by th
 | Role | Max size / file |
 |---|---|
 | Customer | 100 MB |
+| Agency | 200 MB |
 | Vendor | 500 MB |
 | Agent | 1 GB |
 | Admin | 2 GB |
+
+An unrecognised role falls back to the **customer** limit (100 MB).
 
 ### Example success `201` (representative shape)
 

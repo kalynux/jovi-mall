@@ -68,6 +68,21 @@ export const ERROR_CODES = Object.freeze({
     AUTH_UNSUPPORTED_ROLE: 'AUTH_UNSUPPORTED_ROLE',
     AUTH_REFRESH_TOKEN_INVALID: 'AUTH_REFRESH_TOKEN_INVALID',
     AUTH_SESSION_EXPIRED: 'AUTH_SESSION_EXPIRED',
+
+    /**
+     * The credential was minted before the account's password was changed.
+     *
+     * Its own code rather than `AUTH_SESSION_EXPIRED`, because the two ask the client for
+     * different things and one of them is a security message: "your session timed out" is a
+     * shrug, while "your password was changed" is what tells the person whose account was
+     * taken over that the eviction they asked for actually happened — or warns the one who
+     * did not ask for it. Raised at 401 on both credential paths, `requireAuth` (access) and
+     * `rotateRefreshToken` (refresh), which together are what makes a password change a
+     * revocation. See `core/auth/password-epoch.ts`.
+     *
+     * 401, not 403: unlike a suspension, re-authenticating is exactly the remedy.
+     */
+    AUTH_PASSWORD_CHANGED: 'AUTH_PASSWORD_CHANGED',
     AUTH_USER_NOT_FOUND: 'AUTH_USER_NOT_FOUND',
     AUTH_ROLE_PROFILE_NOT_FOUND: 'AUTH_ROLE_PROFILE_NOT_FOUND',
     AUTH_WA_PHONE_ID_REQUIRED: 'AUTH_WA_PHONE_ID_REQUIRED',
@@ -282,6 +297,10 @@ export const ERROR_CODES = Object.freeze({
     // label space that outgrew its cap, and a Redis database with no cache-flush policy row.
     CONFIG_METRICS_CARDINALITY_UNBOUNDED: 'CONFIG_METRICS_CARDINALITY_UNBOUNDED',
     CONFIG_CACHE_POLICY_MISSING: 'CONFIG_CACHE_POLICY_MISSING',
+    // The environment validator (`config/env.ts`). Startup-only, and it carries EVERY problem
+    // at once rather than the first — an operator fixes one list instead of restarting five
+    // times to discover five missing variables.
+    CONFIG_INVALID_ENV: 'CONFIG_INVALID_ENV',
     STORAGE_UPLOAD_FAILED: 'STORAGE_UPLOAD_FAILED',
     UPLOAD_POLICY_VIOLATION: 'UPLOAD_POLICY_VIOLATION',
 

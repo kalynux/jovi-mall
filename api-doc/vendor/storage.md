@@ -171,7 +171,10 @@ rejected** and nothing is stored.
 - Show "Storage full" with the `metadata` numbers, and a CTA to **delete unused media** or **upgrade the plan** (`POST /api/vendor/plans/:planId/purchase`, see [Billing](./billing.md)).
 - Proactively: call `GET /api/files/storage` before large uploads and block the picker when `remainingBytes` is too small.
 
-Other upload errors (per-file): `413 FILE_TOO_LARGE` (exceeds the per-file/role cap), `400 TOO_MANY_FILES`, `400 FILE_TYPE_INVALID` / `MIME_NOT_ALLOWED`.
+Other upload refusals arrive the **same way** — top-level `UPLOAD_POLICY_VIOLATION`, with the
+reason as a per-file `violations[].code`: `FILE_TOO_LARGE` (413, exceeds the per-file/role cap),
+`TOO_MANY_FILES` (400), `NO_FILES_UPLOADED` (400), `MIME_NOT_ALLOWED` (400, unsupported type —
+`FILE_TYPE_INVALID` no longer exists).
 
 ### Freeing space
 Delete unreferenced files via `DELETE /api/files/:id` (only allowed when the file
@@ -232,14 +235,17 @@ inactivity" in storage/help UI, and rely on `GET /api/files/storage` /
 
 | Code | HTTP | Where | Meaning |
 |---|---|---|---|
-| `UPLOAD_POLICY_VIOLATION` | 400 | upload | Wrapper; inspect `details.violations[]`. |
-| `QUOTA_EXCEEDED` (violation) | — | upload | Storage limit would be exceeded (in `violations[]`). |
-| `FILE_TOO_LARGE` | 413 | upload | A file exceeds the per-file / role cap. |
-| `TOO_MANY_FILES` | 400 | upload | More files than the per-request limit (10 / 3). |
-| `FILE_TYPE_INVALID` / `MIME_NOT_ALLOWED` | 400 | upload | Unsupported type. |
-| `CATALOG_FILE_STILL_REFERENCED` | 409 | delete | File is still attached; detach first. |
-| `AUTH_FORBIDDEN` | 403 | `/api/files/storage` | Role without an owner scope (e.g. admin). |
-| `UNAUTHORIZED` | 401 | all | Missing/invalid token. |
+| `UPLOAD_POLICY_VIOLATION` | 400 / 413 | upload | **The only top-level upload code.** Inspect `details.violations[]`. |
+| `CATALOG_FILE_TOO_LARGE` | 413 | upload | The multer variant only — the stream was aborted mid-parse, so there is no `details`. |
+| `CATALOG_FILE_STILL_REFERENCED` | 409 | delete | File is still attached; detach the entities in `details.usage` first. |
+| `CATALOG_FILE_NOT_FOUND` | 404 | read/update/delete | Unknown file id. |
+| `AUTH_FORBIDDEN` | 403 | `/api/files/storage`, non-owner reads | Role without an owner scope (e.g. admin). |
+| `AUTH_MISSING_TOKEN` / `AUTH_TOKEN_EXPIRED` | 401 | all | Missing/invalid token. |
+
+Per-file `violations[].code` values (inside `UPLOAD_POLICY_VIOLATION`): `NO_FILES_UPLOADED`,
+`TOO_MANY_FILES`, `FILE_TOO_LARGE`, `QUOTA_EXCEEDED`, `TOTAL_SIZE_EXCEEDED`, `MIME_NOT_ALLOWED`,
+`MIME_TYPE_MISMATCH`, `POLYGLOT_DETECTED`, `UNDETECTABLE_TYPE`, `DUPLICATE_FILE`,
+`VIRUS_DETECTED`, `PERMISSION_DENIED`.
 
 All errors use the standard envelope:
 ```json

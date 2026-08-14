@@ -126,10 +126,19 @@ export function buildAdminDevToolsRouter(guards: RequestHandler[]): Router {
              * "the single most useful worker signal" — was permanently empty and the documented
              * `time() - last_success > 86400` alert could never fire. This site already had
              * `startedAt` and a `try/finally`, so instrumenting it costs two lines.
+             *
+             * ⚠ Only on a pass that RAN. A trigger the overlap lock refused did no work, and
+             * recording it as a success here would advance `last_success` — muting the very alert
+             * above for a worker that has not run since. The refusal is already counted, by the
+             * lock itself, as `outcome="skipped"`; counting it again here would double it. The
+             * one imprecision worth knowing is that the lock labels it `trigger="scheduled"`,
+             * because it cannot see which door the call came through.
              */
-            recordWorkerRun(
-                workerKey, 'manual', 'success', (Date.now() - startedAt) / 1000, result.processed,
-            );
+            if (result.ran) {
+                recordWorkerRun(
+                    workerKey, 'manual', 'success', (Date.now() - startedAt) / 1000, result.processed,
+                );
+            }
             res.json({
                 success: true,
                 data: { worker: workerKey, durationMs: Date.now() - startedAt, ...result },

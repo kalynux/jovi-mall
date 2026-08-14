@@ -4,6 +4,7 @@ import { IAgencyHeadquartersAddress } from '../magazin/models/magazin.model';
 import { AgencyOnboardingStepValue } from '../../core/constants/onboarding-steps';
 import { COLLECTIONS } from '../../core/database/collections';
 import { ActorRef, actorStamp } from '../../core/types/actor-source.types';
+import { buildSearchRegex } from '../../core/utils/regex.util';
 
 /**
  * An agency row joined to its Magazin's business surface (name, logo, coverage
@@ -342,12 +343,12 @@ export class DeliveryAgencyRepository {
 
     // Coverage-region + HQ-city filters (on the joined Magazin).
     const magazinMatch: Record<string, unknown> = {};
-    if (region && region.trim()) magazinMatch['magazin.coverage_areas'] = new RegExp(region.trim(), 'i');
-    if (hq_city && hq_city.trim()) magazinMatch['magazin.headquarters_addresses.0.city'] = new RegExp(hq_city.trim(), 'i');
+    if (region && region.trim()) magazinMatch['magazin.coverage_areas'] = buildSearchRegex(region);
+    if (hq_city && hq_city.trim()) magazinMatch['magazin.headquarters_addresses.0.city'] = buildSearchRegex(hq_city);
     if (Object.keys(magazinMatch).length > 0) pipeline.push({ $match: magazinMatch });
 
     if (search && search.trim()) {
-      const searchRegex = new RegExp(search.trim(), 'i');
+      const searchRegex = buildSearchRegex(search);
       pipeline.push({
         $match: {
           $or: [

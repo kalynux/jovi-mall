@@ -178,7 +178,9 @@ number, and rendering 100% would be actively misleading.
 
 ## `GET /workers`
 
-All twelve workers, with **three distinct booleans** rather than one:
+All **thirteen** workers — the twelve triggerable ones in `WORKER_REGISTRY` plus
+`inbound-calendar-sync`, which is observable but not runnable — with **three distinct booleans**
+rather than one:
 
 | field | means |
 |---|---|
@@ -207,10 +209,25 @@ Other fields worth knowing:
 > ⚠ **All three booleans are PROCESS-LOCAL** (`scopeNote` says so on the wire). With several
 > instances behind a load balancer this describes the one that answered.
 
-> ⚠ **`executing` on the seven cron workers is an observation, not a guard.** Those workers have
-> no overlap protection at all — `cron.schedule` fires `void this.runSweep()` and a slow sweep can
-> overlap its own next tick. This phase makes that condition *visible*; making it *impossible*
-> changes scheduling behaviour on seven live sweeps and is deliberately a separate decision.
+> ⚠ **`executing` is an observation, not a guard — and it is no longer the only thing.** It answers
+> "is a pass in flight here", never "would a pass be allowed". Overlap itself is now *prevented*, by
+> the shared lock in `src/core/jobs/worker-lock.ts` that every worker's entry point goes through
+> (F-19). Keep the two apart when reading this endpoint: a worker can show `executing: false` and
+> still be refusing passes, because another instance holds its lock.
+>
+> The lock is two layers. An **in-process** set is unconditional and closes the single-instance
+> case. A **Redis** key on `WORKER_LOCK_DB` (`SET NX PX`, renewed while the sweep runs, released by
+> a token compare-and-delete) closes the multi-instance case and **fails open** — if Redis is
+> unreachable the sweep still runs, guarded in-process only, because a lock that fails closed would
+> silently stop every sweep on the platform including the two that move money. `WORKER_LOCK_REDIS=false`
+> turns the Redis layer off without disturbing the in-process one.
+>
+> **A refused pass is visible, not silent:** it increments
+> `jovimall_worker_runs_total{outcome="skipped"}` and deliberately does **not** advance
+> `jovimall_worker_last_success_timestamp_seconds`, so a worker stuck behind an orphaned lock still
+> trips the documented `time() - last_success > 86400` alert. If a lock is orphaned by a hard kill,
+> the remedy is either waiting out the TTL or flushing `WORKER_LOCK_DB` — the one destructive cache
+> database that permits a whole-database flush, for exactly this reason.
 
 `GET /dev-tools/workers` still exists with its original shape for compatibility (wi-admin calls it
 from two places). Its `schedule` is now accurate and its `running` is now `executing || manualClaim`
@@ -265,14 +282,17 @@ a published event nobody handles collapses to `unhandled`, which is itself a use
   > needs a global Mongoose plugin registered before the first `model()` call, which is a
   > bootstrap-ordering change across 182 models; it is a named debt in ADR-015, not done here.
 
-- `jovimall_worker_*` — **four of thirteen workers are instrumented**: every manual
-  `POST /dev-tools/workers/:key/run`, plus `tracking-dispatch`, `assignment-sweep` and
-  `earnings-release` on their scheduled path. Those three are the ones whose silent stall is most
-  expensive (a delivered shipment still broadcasting, shipments sitting on offer forever, and
-  money not released). The other nine report nothing yet, so
+- `jovimall_worker_*` — **four of thirteen workers are instrumented on their scheduled path**:
+  `tracking-dispatch`, `assignment-sweep`, `earnings-release` and `analytics-aggregation`. Every
+  manual `POST /dev-tools/workers/:key/run` is instrumented too, for any worker, so a manually
+  triggered sweep of the other nine does report. The first three are the ones whose silent stall
+  is most expensive (a delivered shipment still broadcasting, shipments sitting on offer forever,
+  and money not released); `analytics-aggregation` is instrumented because Phase 15 built its
+  scheduler. The other nine report nothing on their scheduled path, so
   `time() - jovimall_worker_last_success_timestamp_seconds > 86400` is a valid alert **for the
-  instrumented workers only**. These five instruments were declared in Phase 14 and incremented by
-  nothing at all until Phase 15.
+  instrumented workers only**. These instruments were declared in Phase 14 and incremented by
+  nothing at all until Phase 15. A pass refused by the overlap lock records
+  `outcome="skipped"` and deliberately does not advance the success timestamp.
 
 A counter that silently under-reports is worse than no counter, because somebody will read zero as
 "no errors".
@@ -382,6 +402,44 @@ background thread that falls behind exactly under load; TTL deletes generate opl
 churn on the platform's error path; and insertion order **is** time order, so the read is a
 `$natural` reverse scan needing no time index. The cost, stated: **a capped collection cannot be
 resized without dropping it** — treat `LOG_MONGO_CAP_BYTES` as a one-way door.
+
+---
+
+## `GET /errors` — Phase 16
+
+The error journal. A **sibling** of `/logs`, not a replacement: `/logs` answers *"what happened
+during this request"*, `/errors` answers *"what failed, of what kind"*. Both read the same capped
+`system_logs` collection through the same service, so there is one store, one cursor convention
+and one sink-state caveat.
+
+Every row is written by `error-handler.middleware.ts` under a single `httpError` key.
+
+| param | shape | note |
+|---|---|---|
+| `since` / `until` | ISO-8601 with offset | half-open `[since, until)` |
+| `requestId` | exact, ≤200 chars | **the cross-service join** — wi-admin's audit `correlation_id` is this value |
+| `category` | one of the nine | `authentication`, `authorization`, `validation`, `not_found`, `conflict`, `business_rule`, `rate_limit`, `external_service`, `internal` |
+| `code` | exact, ≤100 chars | e.g. `PAYMENT_INITIATION_FAILED` |
+| `source` | `ring` \| `persisted` | default `persisted` |
+| `limit` | 1..500 | default 100 |
+| `before` | 24-char ObjectId | a **cursor, not an offset** |
+
+There is no `level` param: the sink persists warn+ and every error the handler emits is warn or
+error, so a level filter would be a no-op. Unknown query keys are rejected (`.strict()`).
+
+> ⚠ **This returns the FULL record, unprojected** — `internalMessage`, unfiltered `details`, the
+> cause chain and the stack, i.e. exactly what the *client* was refused for `internal` and
+> `external_service`. That is deliberate: the route sits behind `requireAdminCaller`, whose token
+> is a full-privilege credential.
+>
+> **The developer → admin → support ladder is applied in wi-admin**, at
+> `GET /api/v1/system/errors`, because wi-admin is the only service that knows an administrator's
+> tier. `X-Actor-Tier` does reach this service and is **never read for a decision** — projecting
+> on a header the caller can set, authenticated by a token that already grants everything, would
+> be theatre. Do not add tier logic here.
+
+geo-tracker gained **no** equivalent door: its errors reach operators through logs and
+`geotracker_errors_total`.
 
 ---
 

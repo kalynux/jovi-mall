@@ -55,6 +55,7 @@ const FIELD_ALTERNATION = SCRUBBED_FIELD_NAMES.join('|');
  * bridge renders every `console.*` call in the process through here and most of them are
  * ordinary prose.
  */
+// eslint-disable-next-line no-restricted-syntax -- static pattern from module constants, no user input
 const TRIGGER = new RegExp(
     ['eyJ', 'Bearer', 'Basic', 'sk_', 'rk_', 'pk_', 'whsec_', '://', 'PRIVATE KEY', FIELD_ALTERNATION].join('|'),
     'i',
@@ -142,6 +143,7 @@ const RULES: readonly Rule[] = Object.freeze([
      * scheme too, or the engine simply retries without the optional group and matches anyway.
      */
     {
+        // eslint-disable-next-line no-restricted-syntax -- static pattern from module constants, no user input
         pattern: new RegExp(
             `\\b(${FIELD_ALTERNATION})(["']?\\s*[:=]\\s*["']?)(?!(?:Bearer|Basic)?\\s*\\[REDACTED)((?:Bearer|Basic)\\s+)?[^\\s"',;&}\\[\\]]+`,
             'gi',

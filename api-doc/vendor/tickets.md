@@ -37,12 +37,12 @@ Authorization: Bearer <access_token>
 **Request Body**:
 ```json
 {
-  "subject": "string (required, min 3, max 200 chars) - Ticket subject/title",
-  "description": "string (required, min 10, max 5000 chars) - Detailed description",
-  "type": "string (required) - Ticket type. Enum: technical, billing, feature_request, bug_report, other",
-  "importance": "string (required) - Importance level. Enum: low, medium, high, urgent",
-  "entityType": "string (required) - Related entity type. Enum: order, product, booking, account, other",
-  "entityId": "string (optional for `other`, required otherwise) - ID of the related entity (e.g., order ID). For `other`, defaults to the requester's own id.",
+  "subject": "string (required, min 1, max 200 chars) - Ticket subject/title",
+  "description": "string (required, min 1, max 700 chars) - Detailed description",
+  "type": "string (required) - Ticket type. One of the 44 UPPERCASE TicketType values — see ../ticket_types.txt",
+  "importance": "string (required) - Importance level. Enum: low, medium, high, critical",
+  "entityType": "string (required) - Related entity type. UPPERCASE. Enum: ORDER, PRODUCT, BOOKING, SHIPMENT, DELIVERY, USER, VENDOR, CUSTOMER, AGENT, AGENCY, OTHER",
+  "entityId": "string (optional for `OTHER`, required otherwise) - ID of the related entity (e.g., order ID). For `OTHER`, defaults to the requester's own id.",
   "trackingNumber": "string (optional, max 120) - Required only for ORDER tickets when the vendor's support policy lists `tracking_number`",
   "attachments": "string[] (optional, max 5) - File ids previously uploaded via POST /api/files/upload; required for ORDER/PRODUCT tickets when the vendor's support policy lists `product_photo_video`"
 }
@@ -160,7 +160,11 @@ item assigned to them, agent → orders with a shipment assigned to them).
       "fulfillmentStatus": "processing",
       "createdAt": "2026-02-09T23:54:00.000Z",
       "customerName": "Jane Doe",
-      "customerAvatarUrl": "https://...",
+      "customerAvatar": {
+        "id": "664file...", "key": "images/2026/07/664file....png",
+        "url": "https://.../avatar.png", "mimeType": "image/png",
+        "size": 24576, "originalName": "avatar.png"
+      },
       "shipments": [
         {
           "shipmentId": "507f1f77bcf86cd799439100",
@@ -177,7 +181,7 @@ item assigned to them, agent → orders with a shipment assigned to them).
 }
 ```
 
-> - `customerName` / `customerAvatarUrl` are the picker's primary row label and thumbnail; `null` when the customer profile cannot be resolved.
+> - `customerName` / `customerAvatar` are the picker's primary row label and thumbnail; both `null` when the customer profile cannot be resolved. **`customerAvatar` is a resolved FileDetail object** (`{ id, key, url, mimeType, size, originalName }`), never a URL string — the platform-wide convention.
 > - `shipments[].agencyName` labels each tracking number with the agency in charge of that shipment.
 > - `shipments[].trackingNumber` is `null` until the agency/agent records one (order not yet dispatched). An order split across agencies lists multiple shipments — each with its own agency + tracking number.
 
@@ -233,13 +237,13 @@ all products; customer/agency/agent → products appearing in the orders they ca
 
 **Query Parameters**:
 - `status` (string, optional) - Filter by status. Enum: `open`, `in_progress`, `waiting_on_admin`, `waiting_on_vendor`, `waiting_on_customer`, `waiting_on_agency`, `waiting_on_agent`, `resolved`, `closed`
-- `priority` (string, optional) - Filter by priority. Enum: `low`, `medium`, `high`, `critical`
-- `type` (string, optional) - Filter by type. Enum: `technical`, `billing`, `feature_request`, `bug_report`, `other`
-- `entityType` (string, optional) - Filter by entity type
+- `priority` (string, optional) - Filter by priority. Enum: `low`, `normal`, `high`, `urgent`
+- `type` (string, optional) - Filter by type. Any `TicketType` value (UPPERCASE) — see [../ticket_types.txt](../ticket_types.txt)
+- `entityType` (string, optional) - Filter by entity type. UPPERCASE: `ORDER`, `PRODUCT`, `BOOKING`, `SHIPMENT`, `DELIVERY`, `USER`, `VENDOR`, `CUSTOMER`, `AGENT`, `AGENCY`, `OTHER`
 - `q` (string, optional, max 100 chars) - Search query (subject, description)
 - `page` (integer, optional, default: 1) - Page number (1-indexed)
 - `limit` (integer, optional, default: 20, max: 100) - Items per page
-- `sortBy` (string, optional, default: `createdAt`) - Sort field. Enum: `createdAt`, `updatedAt`, `priority`
+- `sortBy` (string, optional, default: `createdAt`) - Sort field. Enum: `createdAt`, `updatedAt`, `priority`, `status`
 - `sortOrder` (string, optional, default: `desc`) - Sort order. Enum: `asc`, `desc`
 
 **Request Body**: None
@@ -407,10 +411,14 @@ Body:
 **Request Body**:
 ```json
 {
-  "subject": "string (optional, min 3, max 200 chars) - New subject",
-  "description": "string (optional, min 10, max 5000 chars) - New description"
+  "subject": "string (optional, min 1, max 200 chars) - New subject",
+  "description": "string (optional, min 1, max 10000 chars) - New description"
 }
 ```
+
+> ⚠ **The two description limits differ, in the code, and this is not a typo in the doc.**
+> Create caps `description` at **700** characters; this update endpoint caps it at **10000**.
+> At least one of `subject` / `description` must be present.
 
 **Success Response**:
 
@@ -502,7 +510,7 @@ Body:
 **Request Body**:
 ```json
 {
-  "targetRole": "string (required) - Role to assign to. Enum: admin, agent, vendor, customer",
+  "targetRole": "string (required) - Role to assign to. Enum: admin, vendor, customer, agency, agent",
   "targetUserId": "string (optional) - Specific user ID. Required for non-admin roles"
 }
 ```
@@ -549,7 +557,7 @@ Body:
 **Request Body**:
 ```json
 {
-  "priority": "string (required) - New priority. Enum: low, medium, high, critical"
+  "priority": "string (required) - New priority. Enum: low, normal, high, urgent"
 }
 ```
 
@@ -635,11 +643,16 @@ Body:
 **Request Body**:
 ```json
 {
-  "message": "string (required, min 1, max 2000 chars) - Note content",
-  "visibility": "string (optional, default: PUBLIC) - Enum: PUBLIC, PRIVATE",
-  "visibleToUserIds": "array of strings (optional) - User IDs who can see private note"
+  "content": "string (required, min 1, max 300 chars) - Note content",
+  "visibility": "string (optional, default: public) - Enum: public, private",
+  "visibleToUserIds": "array of strings (optional, default []) - User IDs who can see a private note"
 }
 ```
+
+> ⚠ **The field is `content`, not `message`**, and note visibility is **lowercase**
+> (`public` / `private`) — while **attachment** visibility on
+> `POST /api/vendor/tickets/:ticketId/attachments` is **UPPERCASE** (`PUBLIC` / `PRIVATE`).
+> The two validators genuinely disagree; send each exactly as written here.
 
 **Success Response**:
 

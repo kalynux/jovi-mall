@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { ObservableWorker, WorkerSchedule } from '../../../core/jobs/worker-schedule';
+import { withWorkerLock, SWEEP_SKIPPED } from '../../../core/jobs/worker-lock';
 import { maintenanceBlocksWorkers } from '../../system/services/maintenance.service';
 import { recordIntegrationCall } from '../../system/domain/integration-observations';
 import { outboxDispatchedTotal, recordWorkerRun } from '../../system/metrics/metrics';
@@ -75,9 +76,25 @@ export class TrackingDispatchWorker implements ObservableWorker {
     this.timer = null;
   }
 
-  /** Drain one batch. Guarded so ticks never overlap. Safe to call manually. */
-  async drainOnce(): Promise<void> {
-    if (this.running) return;
+  /**
+   * Drain one batch. Guarded so ticks never overlap — now across INSTANCES too (F-19).
+   *
+   * This worker already had the in-process half of the guard, which is why it was not in the
+   * finding. What it did not have is the other half: `findPending` is a plain read with no atomic
+   * claim on the rows it returns, so two instances draining concurrently both fetch the same
+   * outbox rows and both POST them. geo-tracker dedups on `eventId` so nothing breaks, but the
+   * webhook traffic doubles and a failure count is attributed twice.
+   *
+   * Short TTL, deliberately: at a 2-second cadence a lock stranded by a hard kill must not stall
+   * dispatch for the default ten minutes — a stalled dispatcher is the one whose silent death
+   * leaves geo-tracker broadcasting a delivered shipment's position.
+   */
+  async drainOnce(): Promise<boolean> {
+    const outcome = await withWorkerLock('tracking-dispatch', () => this.drain(), { ttlMs: 60_000 });
+    return outcome !== SWEEP_SKIPPED;
+  }
+
+  private async drain(): Promise<void> {
     this.running = true;
     // Phase 15: `worker_last_success_timestamp_seconds` was declared in Phase 14 and never set,
     // so the documented staleness alert could not fire for the one worker whose silent death
