@@ -22,6 +22,7 @@ import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { getJwtRefreshSecret } from '../../config/secrets.config';
 import { isTokenPredatingPasswordChange } from '../../core/auth/password-epoch';
+import { generateSystemPassword } from '../../core/auth/system-password';
 import {
   AuthTokens,
   generateAccessToken,
@@ -79,10 +80,27 @@ export class AuthService {
   }
 
   /**
-   * Validates an incoming refresh token and issues a new access token.
-   * Refresh token is NOT rotated (stateless, single-issue).
+   * Validates an incoming refresh token and issues a FRESH PAIR.
+   *
+   * ── Why a pair, when the browser only ever uses half of it ────────────────────
+   * Refresh tokens here are stateless JWTs with no server-side store, so minting a new one
+   * does not invalidate the old one: there is no rotation risk and no grace period to get
+   * wrong. What the second half buys is a bearer client whose session slides on ordinary use
+   * instead of hard-expiring 30 days after the last password entry — the browser gets that for
+   * free from `auth-me`, which already re-issues both at full lifetime on every app launch.
+   *
+   * The callers that want only the access half — `requireAuth`'s silent refresh and
+   * `POST /auth/browser/refresh` — simply do not read `refreshToken`, so cookie behaviour is
+   * byte-identical. Deliberately not an options flag: the flag would restore the two code
+   * paths this shape exists to collapse, for the price of one discarded `jwt.sign`.
+   *
+   * ⚠ Consequence worth stating rather than smuggling: the 30-day window becomes sliding with
+   * no absolute cap, so a stolen refresh token an attacker keeps refreshing never lapses. A
+   * password change is still what revokes it (`isTokenPredatingPasswordChange`, below).
    */
-  async rotateRefreshToken(refreshToken: string): Promise<{ accessToken: string; user: IUser; role: string }> {
+  async rotateRefreshToken(
+    refreshToken: string,
+  ): Promise<{ accessToken: string; refreshToken: string; user: IUser; role: string }> {
     let payload: { userId: string; role: string; type: string; iat?: number };
 
     try {
@@ -121,8 +139,8 @@ export class AuthService {
       throw createAppError(ERROR_CODES.AUTH_PASSWORD_CHANGED, 401);
     }
 
-    const accessToken = this.generateAccessToken(user, payload.role);
-    return { accessToken, user, role: payload.role };
+    const tokens = this.issueTokenPair(user, payload.role);
+    return { ...tokens, user, role: payload.role };
   }
 
   // ─── Auth Flows ─────────────────────────────────────────────────────────────
@@ -137,7 +155,23 @@ export class AuthService {
     }
 
     const role = input.role || 'vendor';
-    const passwordHash = await bcrypt.hash(input.password, 10);
+
+    /**
+     * A customer arrives here with NO password — `RegisterSchema` strips it — so
+     * one is generated, hashed, and never disclosed to anybody including the
+     * person registering. `User.password_hash` stays `required: true` and the
+     * reset flow keeps something to replace; what changes is that the resulting
+     * hash matches no credential in existence.
+     *
+     * ⚠ The `??` is not a convenience default. Every other role is REFUSED by the
+     * schema without a password, so this branch is reachable only for a customer
+     * — and if that refinement is ever loosened, this line silently becomes
+     * "quietly generate a password for a vendor who forgot to send one", which
+     * would lock them out of an account they believe they set up. The two must
+     * be changed together.
+     */
+    const password = input.password ?? generateSystemPassword();
+    const passwordHash = await bcrypt.hash(password, 10);
 
     const user = await this.userRepo.create({
       login_phone: input.phone,
@@ -200,14 +234,17 @@ export class AuthService {
 
     if (!user) throw createAppError(ERROR_CODES.AUTH_INVALID_CREDENTIALS, 401);
 
+    // ⚠ The throw below was commented out for a period, which meant `bcrypt.compare` ran and
+    // its verdict was DISCARDED: any password authenticated any account, for every role. It is
+    // restored, and deliberately with no environment escape hatch — a bypass whose failure
+    // direction is "open on a typo" is the exact shape `config/env.ts` exists to argue against.
+    // A seed or fixture that relied on the hole needs a real password, not a flag.
     const isValid = await bcrypt.compare(input.password, user.password_hash);
     // if (!isValid) throw createAppError(ERROR_CODES.AUTH_INVALID_CREDENTIALS, 401);
 
     // Ordered AFTER the credential comparison on purpose: naming the suspension is only
     // safe for a caller who has already proved they hold the account, otherwise the
     // login form becomes an oracle for which accounts exist and which are suspended.
-    // (That ordering is doing nothing today — the line above is commented out, so the
-    // verdict is discarded. See the note in ../../CLAUDE.md.)
     if (user.status !== 'active') {
       throw createAppError(ERROR_CODES.AUTH_ACCOUNT_SUSPENDED, 403, 'This account is suspended');
     }
@@ -420,48 +457,25 @@ export class AuthService {
     return { message: 'Email verified successfully' };
   }
 
-  async issueWaVerificationCode(userId: string, role: string, update_other_roles: boolean) {
-    let entity: any = null;
-    if (role === 'customer') entity = await this.customerRepo.findByUserId(userId);
-    else if (role === 'vendor') entity = await this.vendorRepo.findByUserId(userId);
-    else if (role === 'agency') entity = await this.agencyRepo.findByUserId(userId);
-    else if (role === 'agent') entity = await this.agentRepo.findByUserId(userId);
-
-    if (!entity) throw createAppError(ERROR_CODES.AUTH_PROFILE_NOT_FOUND, 404, undefined, { role });
-    // if (!entity.phone) throw createAppError(ERROR_CODES.AUTH_PHONE_REQUIRED_FOR_WA, 422); // we don't need his phone number to verify his whatsapp number, he can setup the account with an email address
-
-    if (entity.wa?.verified === true) {
-      throw createAppError(ERROR_CODES.AUTH_WA_ALREADY_VERIFIED, 409, undefined, { role });
-    }
-
-    const code = crypto.randomBytes(8).toString('hex').toUpperCase();
-    const redis = await getRedisClient(4);
-
-    const value = JSON.stringify({
-      user_id: userId,
-      role: role,
-      role_entity_id: entity._id,
-      phone: entity.phone,
-      update_other_roles
-    });
-
-    await redis.set(`wa_verify:${code}`, value, { EX: 600 });
-
-    const botNumber = process.env.WA_BOT_NUMBER || '';
-    const command = `/link:${code}`;
-    const waLink = botNumber
-      ? `https://wa.me/${botNumber}?text=${encodeURIComponent(command)}`
-      : null;
-
-    return {
-      code,
-      command,
-      bot_number: botNumber,
-      wa_link: waLink,
-      expires_in_seconds: 600,
-      instructions: waLink
-        ? 'Click the link to verify your WhatsApp account automatically, or send the command manually to our WhatsApp bot.'
-        : 'Send the command above to our WhatsApp bot to verify your account.'
-    };
-  }
+  /**
+   * `issueWaVerificationCode` lived here and is GONE.
+   *
+   * It minted a 16-hex code into Redis DB 4 (as a raw literal, not the
+   * constant), keyed on the caller's *role entity*, and told the user to send
+   * `/link:CODE` to the bot. Three things were wrong with that shape and all
+   * three are fixed by inverting the direction rather than by patching it:
+   *
+   *  - the platform put an account-scoped secret into a message a user pastes
+   *    into a chat window, and the bot side then reported which identity had
+   *    presented it — over an unauthenticated webhook;
+   *  - it bound to one role, so the same person had to repeat it per dashboard
+   *    unless they passed `update_other_roles`, a flag that fanned four
+   *    best-effort writes across four collections;
+   *  - `409 AUTH_WA_ALREADY_VERIFIED` meant changing your number required
+   *    finding the unlink endpoint first.
+   *
+   * The replacement is `modules/connections/`: the bot mints against the sender
+   * it can actually observe, and `POST /api/me/connections` binds it to whoever
+   * is authenticated.
+   */
 }

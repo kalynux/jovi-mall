@@ -133,11 +133,4 @@ export class AuthController {
     sendSuccess(res, result);
   });
 
-  static requestWaVerification = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-    const user = req.auth?.user;
-    const role = req.auth?.role;
-    const { update_other_roles } = req.body;
-    const result = await authService.issueWaVerificationCode((user as any).id, role!, update_other_roles);
-    sendSuccess(res, result);
-  });
 }

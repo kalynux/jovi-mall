@@ -1,6 +1,8 @@
 import express from 'express';
 import { authRouter } from '../modules/auth/auth.routes';
 import { browserAuthRoutes } from '../modules/auth/routes/browser-auth.routes';
+import { mobileAuthRoutes } from '../modules/auth/routes/mobile-auth.routes';
+import { messagingLoginRoutes } from '../modules/messaging-login/messaging-login.routes';
 import { createWhatsappRouter } from '../modules/whatsapp/whatsapp.routes';
 import { createTelegramRouter } from '../modules/telegram/telegram.routes';
 import { CommandBus } from '../modules/command-bus/command-bus';
@@ -17,8 +19,8 @@ import customerBookingRoutes from '../modules/booking/routes/customer-booking.ro
  *
  * The rest of this module deliberately interleaves `import` with the `router.use` it feeds,
  * which reads well and is harmless — as long as the import precedes its use. This one did
- * not: it sat beside `fileRoutes` near the bottom while `router.use('/auth', authRateLimiter)`
- * runs a few lines below, at the top.
+ * not: it sat beside `fileRoutes` near the bottom while
+ * `router.use('/auth', authBucketDispatcher)` runs a few lines below, at the top.
  *
  * TypeScript's CommonJS emit does NOT hoist imports — it emits `const rate_limit_middleware_1
  * = require(...)` exactly where the import appears — and `target` here is `es2020`, so the
@@ -29,7 +31,7 @@ import customerBookingRoutes from '../modules/booking/routes/customer-booking.ro
  *
  * If you add an import that a `router.use` above it consumes, put it here.
  */
-import { authRateLimiter, publicRateLimiter } from './rate-limit/rate-limit.middleware';
+import { authBucketDispatcher, publicRateLimiter } from './rate-limit/rate-limit.middleware';
 
 const router = express.Router();
 
@@ -72,24 +74,38 @@ export const commandBus = new CommandBus();
 register_all_commands(commandBus);
 
 /**
- * The credential bucket sits in front of BOTH auth mounts.
+ * One rate-limit mount in front of ALL THREE auth routers, choosing between two buckets.
  *
- * It is the only strict limit in the service — 20 per minute per IP, where everything else
- * is in the hundreds. The two are protecting against different things: the global ceilings
- * are a runaway-loop backstop, this is a security control. It bounds one source spraying a
- * common password across many accounts, which is precisely the attack an account-level
- * lockout cannot see, because every individual account sees only one or two attempts.
+ * The credential bucket is the only strict limit in the service — 20 per minute per IP, where
+ * everything else is in the hundreds. The two kinds of limit protect against different things:
+ * the global ceilings are a runaway-loop backstop, this is a security control. It bounds one
+ * source spraying a common password across many accounts, which is precisely the attack an
+ * account-level lockout cannot see, because every individual account sees only one or two
+ * attempts. jovi-mall had neither control until Phase 16; `PHASE-0-DISCOVERY` recorded it as
+ * finding A6, "No login throttling, lockout, or failed-attempt record."
  *
- * jovi-mall has had neither control until now. `PHASE-0-DISCOVERY` recorded it as finding
- * A6: "No login throttling, lockout, or failed-attempt record."
+ * `authBucketDispatcher` sends the paths that merely EXTEND a session — the two refresh
+ * routes, `/me`, both `auth-me`s — to a second, looser counter, so app-launch and token-renewal
+ * traffic can no longer exhaust the counter guarding the login form. Which paths, and why the
+ * list is an allowlist so a new route inherits the strict bucket, is in
+ * `rate-limit/auth-paths.ts`.
  *
  * Mounted here rather than inside each router so it covers registration, password reset and
  * verification-code resend as well as login — every path that takes a credential or sends
  * one out, including the ones added later.
  */
-router.use('/auth', authRateLimiter);
+router.use('/auth', authBucketDispatcher);
 router.use('/auth', authRouter);
 router.use('/auth/browser', browserAuthRoutes);  // Browser session auth
+router.use('/auth/mobile', mobileAuthRoutes);    // Bearer auth for WebView / native clients
+/**
+ * Passwordless sign-in redemption — the two credentials `/login` hands out in a chat.
+ *
+ * Under `/auth` on purpose: these present a bearer secret and mint a session, so they are
+ * credential endpoints and must inherit the strict 20/min bucket from the dispatcher above.
+ * `rate-limit/auth-paths.ts` is an allowlist, so not naming them there IS how they get it.
+ */
+router.use('/auth/magic', messagingLoginRoutes);
 router.use('/webhooks/whatsapp', createWhatsappRouter(commandBus));
 router.use('/webhooks/telegram', createTelegramRouter(commandBus));  // Telegram webhook
 router.use('/webhooks', paymentWebhookRouter);  // Payment gateway webhooks

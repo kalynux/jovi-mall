@@ -137,6 +137,11 @@ export const IDENTITY_POLICY: RateLimitPolicy = Object.freeze({
  *
  * `internal_service` is NOT exempt here. Nothing internal logs in, so an exemption would
  * only ever be usable by something that had already stolen the service token.
+ *
+ * ⚠ It no longer covers the whole `/api/auth` prefix. The paths that *extend* a session
+ * rather than open one moved to `AUTH_SESSION_POLICY` below, so that refresh and app-launch
+ * traffic can no longer exhaust the counter that guards the login form. This is the DEFAULT
+ * for anything under `/api/auth` — see `auth-paths.ts` for what was moved and why.
  */
 export const AUTH_POLICY: RateLimitPolicy = Object.freeze({
     key: 'auth',
@@ -150,6 +155,47 @@ export const AUTH_POLICY: RateLimitPolicy = Object.freeze({
         agent: envInt('RATE_LIMIT_AUTH_PER_MIN', 20),
         customer: envInt('RATE_LIMIT_AUTH_PER_MIN', 20),
         anonymous: envInt('RATE_LIMIT_AUTH_PER_MIN', 20),
+    }),
+});
+
+/**
+ * The session bucket — the half of `/api/auth` that extends a session rather than opening one.
+ *
+ * It exists because the 20 above is a security control aimed at password spraying, and it was
+ * being spent by traffic that presents no password: `/auth/me` on every dashboard poll,
+ * `/auth/auth-me` on every app launch, and both refresh routes on every token renewal. Which
+ * paths land here, and why the list is an allowlist rather than a denylist, is in
+ * `auth-paths.ts`. A route added under `/api/auth` later inherits `AUTH_POLICY`, not this.
+ *
+ * ── Where 300 comes from ──────────────────────────────────────────────────────
+ * The binding constraint is `/auth/me`, not refresh. Refresh at ~4/hour per active user
+ * saturates 300 at roughly 1200 users behind one address — far past any real office or
+ * carrier gateway. A dashboard polling `/auth/me` once a minute saturates **120** at 120
+ * concurrent users on one IP, which is reachable, and that is what ruled the lower number out.
+ *
+ * The ceiling can afford to be generous because it is not the only thing counting: both
+ * `me` and `auth-me` run `requireAuth`, so Layer B already bounds each *person* at 600-1200,
+ * and Layer A still bounds the address at 1200 on top of this. What is left for this counter
+ * is a narrow job — stop one client looping on refresh — so 300 (15x the credential bucket,
+ * still 4x stricter than Layer A) is a backstop rather than a budget, which is what the header
+ * of this file asks every number here to be.
+ *
+ * `internal_service` is NOT exempt, for `AUTH_POLICY`'s reason: nothing internal maintains a
+ * user session, so an exemption would only be usable by something that had already stolen the
+ * service token.
+ */
+export const AUTH_SESSION_POLICY: RateLimitPolicy = Object.freeze({
+    key: 'auth_session',
+    windowSeconds: 60,
+    scope: 'ip',
+    limits: Object.freeze({
+        internal_service: envInt('RATE_LIMIT_AUTH_SESSION_PER_MIN', 300),
+        admin: envInt('RATE_LIMIT_AUTH_SESSION_PER_MIN', 300),
+        vendor: envInt('RATE_LIMIT_AUTH_SESSION_PER_MIN', 300),
+        agency: envInt('RATE_LIMIT_AUTH_SESSION_PER_MIN', 300),
+        agent: envInt('RATE_LIMIT_AUTH_SESSION_PER_MIN', 300),
+        customer: envInt('RATE_LIMIT_AUTH_SESSION_PER_MIN', 300),
+        anonymous: envInt('RATE_LIMIT_AUTH_SESSION_PER_MIN', 300),
     }),
 });
 
@@ -196,12 +242,55 @@ export const PUBLIC_POLICY: RateLimitPolicy = Object.freeze({
     }),
 });
 
+/**
+ * The connection-code bucket — `POST /api/me/connections`, and the first Layer C policy.
+ *
+ * ── Why this endpoint gets its own counter, when "Layer C is deliberately unbuilt" ──
+ * Everything else here is a *volume* backstop. This one is a security control, for the
+ * same reason `AUTH_POLICY` is: it guards a secret that can be guessed. A connection code
+ * is six characters over a 32-symbol alphabet — 2^30, about a billion — which is a large
+ * number for a person and a small one for a loop.
+ *
+ * The per-account attempt counter in `connection-code.store.ts` (5 per 10 minutes) is the
+ * primary control and is the tighter of the two. This exists because that one is keyed on
+ * the **account**, and accounts are free: registering a hundred of them buys a hundred
+ * fresh attempt counters. Keying on the address is what makes that expensive, and it is
+ * the layer an attacker cannot mint their way around.
+ *
+ * ⚠ It is **IP-scoped even though the route runs behind `requireAuth`**, and that is the
+ * point rather than an oversight — an identity scope here would be the counter the
+ * attacker already controls. Layer B is already keyed on the identity; this is
+ * deliberately the other axis.
+ *
+ * 30/min sits between the credential bucket's 20 and ordinary traffic. A real person
+ * redeeming a code types it once, maybe twice; a shared office address doing that
+ * simultaneously is a handful. `internal_service` is NOT exempt: nothing internal redeems
+ * a connection code, so an exemption would only ever be usable by something that had
+ * already stolen the service token — the same reasoning `AUTH_POLICY` records.
+ */
+export const CONNECTION_CODE_POLICY: RateLimitPolicy = Object.freeze({
+    key: 'connection_code',
+    windowSeconds: 60,
+    scope: 'ip',
+    limits: Object.freeze({
+        internal_service: envInt('RATE_LIMIT_CONNECTION_CODE_PER_MIN', 30),
+        admin: envInt('RATE_LIMIT_CONNECTION_CODE_PER_MIN', 30),
+        vendor: envInt('RATE_LIMIT_CONNECTION_CODE_PER_MIN', 30),
+        agency: envInt('RATE_LIMIT_CONNECTION_CODE_PER_MIN', 30),
+        agent: envInt('RATE_LIMIT_CONNECTION_CODE_PER_MIN', 30),
+        customer: envInt('RATE_LIMIT_CONNECTION_CODE_PER_MIN', 30),
+        anonymous: envInt('RATE_LIMIT_CONNECTION_CODE_PER_MIN', 30),
+    }),
+});
+
 /** Every policy, for the tests and for the operations surface. */
 export const POLICIES: readonly RateLimitPolicy[] = Object.freeze([
     GLOBAL_POLICY,
     IDENTITY_POLICY,
     AUTH_POLICY,
+    AUTH_SESSION_POLICY,
     PUBLIC_POLICY,
+    CONNECTION_CODE_POLICY,
 ]);
 
 /**

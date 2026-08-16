@@ -127,6 +127,23 @@ const WEBHOOK_PREFIX = '/api/webhooks';
  */
 const DOWNLOAD_PREFIX = '/api/digital/download';
 
+/**
+ * Minting a fresh token pair from a refresh token a caller already holds.
+ *
+ * Same shape as the download exemption above, and here for the same reason: it is nominally a
+ * POST and it writes nothing — `jwt.verify`, one `findById`, two `jwt.sign`.
+ *
+ * What blocking it costs is asymmetric in a way that is easy to miss. A browser renews inside
+ * an ordinary GET, through `requireAuth`'s silent refresh, so it rides out a read-only window
+ * indefinitely; so does the Flutter agent app, whose fallback is a GET. A bearer client has
+ * neither — `requireAuth` deliberately refuses to refresh a bearer from an ambient cookie — so
+ * its ONLY renewal path is this route, and a 503 here signs out every native client fifteen
+ * minutes into a window that was supposed to leave reads working.
+ *
+ * Blocked in `down`, where refusing to extend anybody's session is the point of the window.
+ */
+const MOBILE_REFRESH_PREFIX = '/api/auth/mobile/refresh';
+
 export interface MaintenanceVerdict {
   allowed: boolean;
   mode: MaintenanceMode;
@@ -162,6 +179,10 @@ export function evaluateMaintenance(
 
   if (isUnder(path, DOWNLOAD_PREFIX) && mode === 'readonly') {
     return { allowed: true, mode, exemption: 'a download in flight must not lose its token' };
+  }
+
+  if (isUnder(path, MOBILE_REFRESH_PREFIX) && mode === 'readonly') {
+    return { allowed: true, mode, exemption: 'a bearer session must survive a read-only window' };
   }
 
   if (mode === 'readonly' && SAFE_METHODS.has(method.toUpperCase())) {

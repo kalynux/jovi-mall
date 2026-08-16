@@ -30,10 +30,6 @@ export interface GetCustomerProfileResponseDto {
     preferences: ICustomerPreferences;
     recentProductCode: string | null;
     savedPaymentMethods: CustomerPaymentMethodDto[];
-    wa: {
-        verified: boolean;
-        name?: string;
-    } | null;
     timezone: string;
     status: string;
     onboardingStep: number;
@@ -80,9 +76,6 @@ export class CustomerProfileMapper {
             preferences: customer.preferences,
             recentProductCode: customer.recent_product_code,
             savedPaymentMethods,
-            wa: customer.wa
-                ? { verified: customer.wa.verified, name: customer.wa.name }
-                : null,
             timezone: customer.timezone,
             status: customer.status,
             onboardingStep: customer.onboarding_step,

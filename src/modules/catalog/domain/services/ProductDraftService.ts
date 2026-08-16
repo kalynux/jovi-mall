@@ -1,5 +1,6 @@
 import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
+import type { RichDoc } from '../../../../core/richtext';
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
 import { Product } from '../../repositories/mappers/product.mapper';
 import { SlugService } from './SlugService';
@@ -11,6 +12,8 @@ export interface CreateProductInput {
   type: 'physical' | 'digital' | 'service';
   title: string;
   description?: string;
+  /** The structured description. Optional — a client may send only `description`. */
+  descriptionRich?: RichDoc | null;
   category: string;
   tags?: string[];
   seoTitle?: string;
@@ -53,6 +56,10 @@ export class ProductDraftService {
       status: 'draft',
       title: trimmedTitle,
       description: input.description ?? '',
+      // Stored verbatim beside its projection, never derived from it: a client
+      // with no formatting editor sends `description` alone and must not have a
+      // document invented for it.
+      descriptionRich: input.descriptionRich ?? null,
       slug,
       category: input.category,
       tags: input.tags ?? [],

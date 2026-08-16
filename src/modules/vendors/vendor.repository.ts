@@ -79,22 +79,6 @@ export class VendorRepository {
     );
   }
 
-  async updateWaVerified(userId: string, waData: { wa_phone_id: string; name?: string }): Promise<IVendor | null> {
-    return await VendorModel.findOneAndUpdate(
-      { user_id: userId },
-      {
-        $set: {
-          'wa.verified': true,
-          'wa.wa_phone_id': waData.wa_phone_id,
-          'wa.bound_at': new Date(),
-          'wa.last_seen_at': new Date(),
-          ...(waData.name ? { 'wa.name': waData.name } : {})
-        }
-      },
-      { new: true }
-    );
-  }
-
   /**
    * Move the vendor between statuses, but only from the status the caller believes it
    * is in — the vendor half of the compare-and-set every two-actor document on this
@@ -364,21 +348,5 @@ export class VendorRepository {
     const vendors = (result?.data ?? []) as VendorWithStore[];
     const total = result?.total?.[0]?.count ?? 0;
     return { vendors, total };
-  }
-
-  async unlinkWhatsApp(userId: string): Promise<IVendor | null> {
-    return await VendorModel.findOneAndUpdate(
-      { user_id: userId },
-      {
-        $set: {
-          'wa.verified': false,
-          'wa.wa_phone_id': null,
-          'wa.name': null,
-          'wa.bound_at': null,
-          'wa.last_seen_at': null
-        }
-      },
-      { new: true }
-    );
   }
 }

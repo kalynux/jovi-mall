@@ -1,6 +1,7 @@
 import { createAppError } from '../../../../../core/errors';
 import { ERROR_CODES } from '../../../../../core/error-codes';
 import { TransactionManager } from '../../../../../core/database/transaction.manager';
+import type { RichDoc } from '../../../../../core/richtext';
 import { IProductRepository } from '../../../repositories/interfaces/product.repository.interface';
 import { IVariantRepository } from '../../../repositories/interfaces/variant.repository.interface';
 import { Product } from '../../../repositories/mappers/product.mapper';
@@ -18,6 +19,8 @@ export interface CreateSimpleProductInput {
     vendorId: string;
     title: string;
     description: string;
+    /** The structured description `description` is the plain-text projection of. */
+    descriptionRich?: RichDoc | null;
     category: string;
     tags?: string[];
     fileIds?: string[];
@@ -145,6 +148,10 @@ export class SimpleProductCreateService {
                 status: 'draft',
                 title: input.title.trim(),
                 description: input.description,
+                // Persisted verbatim beside its projection. Never derived from
+                // `description` — the quick-add editor may be driven by a client
+                // that has no formatting editor at all.
+                descriptionRich: input.descriptionRich ?? null,
                 slug,
                 category: input.category,
                 tags: input.tags ?? [],

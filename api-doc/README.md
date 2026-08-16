@@ -71,7 +71,7 @@ Every jovi-mall endpoint returns one of exactly two shapes.
 - `requestId` also appears as the `X-Request-Id` response header; quote it in bug reports.
 
 > **⚠️ Breaking change (2026-07-17):** the whole API now uses this envelope uniformly. A handful of
-> endpoints (notably **auth**, WhatsApp/Telegram link status, vendor inventory history/reservations)
+> endpoints (notably **auth**, messaging link status, vendor inventory history/reservations)
 > previously returned bare payloads or a `pagination` object; they now return `{ success, data, meta }`.
 > See [FRONTEND-READINESS.md](../FRONTEND-READINESS.md) for the exact list. Provider **webhooks**
 > (`/webhooks/*`) are the deliberate exception — they answer Stripe/Meta/Telegram, not your frontend,
@@ -105,17 +105,27 @@ Response `meta`:
 
 ## Authentication
 
-**Cookie-first, Bearer-fallback JWT.** See [auth/README.md](./auth/README.md) for the full flow.
+**One JWT session model, two delivery modes, chosen by the route namespace — never by a
+header.** See [auth/README.md](./auth/README.md) for the full flow.
 
 - **Browser clients**: log in via `POST /api/auth/login`; the server sets `access_token` (15 min) and
   `refresh_token` (30 d) **HttpOnly** cookies. Send `credentials: 'include'` on every request.
   Expired access tokens are **silently refreshed** by the server from the refresh cookie — no client action.
-- **Mobile / service clients**: send `Authorization: Bearer <access_token>`. Bearer callers **cannot**
-  silently refresh — on `401` with an expired token, re-login.
+- **Native / WebView clients**: log in via `POST /api/auth/mobile/login`, which returns
+  `data.tokens` (`accessToken`, `refreshToken`, `accessExpiresIn`, `refreshExpiresIn`) and sets
+  **no cookie**. Send `Authorization: Bearer <accessToken>`; renew with
+  `POST /api/auth/mobile/refresh`, which returns a **fresh pair** and slides the 30-day window.
+  A bearer with an expired token is answered `401 AUTH_TOKEN_EXPIRED` and is **never** silently
+  refreshed from an ambient cookie.
+- **Service clients** (geo-tracker, wi-admin): a shared service token, not a user session — see
+  the internal route docs.
+- **When both are present**, the bearer wins. `Authorization` is read before the cookie, so a
+  stale cookie in a native HTTP layer's OS jar can never beat a freshly-refreshed bearer.
 - **Roles**: every account holds one or more of `customer · vendor · agency · agent · admin`. A JWT is
   scoped to **one active role**; switch roles by logging in again with `role`, or add a role via
-  `POST /api/auth/add-role`.
-- **Current identity**: `GET /api/auth/me` (or `GET /api/auth/auth-me/:role` on app launch to restore + refresh).
+  `POST /api/auth/add-role` (`/api/auth/mobile/add-role` for bearer clients).
+- **Current identity**: `GET /api/auth/me` (or `GET /api/auth/auth-me/:role`, `…/mobile/auth-me/:role`,
+  on app launch to restore + refresh).
 
 ### Common auth error codes
 
@@ -241,8 +251,9 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Uploads (role-neutral)](./uploads/README.md)
 - [**Health probes & metrics**](./health.md) — `/api/health` (frozen — geo-tracker's readiness depends on it), `/api/health/{live,ready}`, `/metrics`
 - [System uptime / status](./system-uptime-status.md) — ⚠ an **unserved** frontend spec; the operator surface is [admin/system.md](./admin/system.md)
-- [WhatsApp](./whatsapp/README.md) · [WhatsApp notification templates](./notifications/whatsapp-templates.md)
-- [Telegram linking & notifications](./telegram/README.md) · [Google Calendar (OAuth)](./integrations/google-calendar.md)
+- [**Messaging connections**](./connections/README.md) — connecting a WhatsApp or Telegram account, **any role**. One mechanism, one code box; replaces the two separate linking flows
+- [WhatsApp bot webhook](./whatsapp/README.md) · [WhatsApp notification templates](./notifications/whatsapp-templates.md)
+- [Telegram bot webhook & admin send](./telegram/README.md) · [Google Calendar (OAuth)](./integrations/google-calendar.md)
 
 ### Customer
 - [Profile & addresses](./customer/profile.md) · [Cart](./customer/cart.md) · [Orders](./customer/orders.md)

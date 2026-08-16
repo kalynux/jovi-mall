@@ -49,72 +49,48 @@ After this, `emailVerified` becomes `true` and the vendor can set `emailEnabled:
 
 ---
 
-## Telegram
+## Telegram & WhatsApp — one flow, not two
 
-Sets `telegramVerified: true` (backed by an **active** Telegram link).
+Both channels now connect through the **same** mechanism, fully documented in
+[../connections/README.md](../connections/README.md). The short version:
 
-### Step 1 — Get the bot deep-link
-`POST /api/webhooks/telegram/link-token`
+1. `GET /api/me/connections` → for each unconnected channel, `howToConnect` names the bot and
+   the command (`/connect`) and gives a `deepLink` to open the chat.
+2. The vendor sends `/connect` to the bot. The **bot** replies with a 6-character code.
+3. `POST /api/me/connections` with `{ "code": "A7K9P2" }` → connected.
 
-**Success** — `200 OK`:
-```json
-{
-  "bot_url": "https://t.me/<BotName>?start=<token>",
-  "expires_at": "2026-06-26T12:10:00.000Z"
-}
-```
-- Token is single-use, valid 10 minutes. Show `bot_url` as a button/QR for the vendor to open in Telegram.
+`telegramVerified` / `whatsappVerified` in the preferences payload flip to `true` once a
+connection exists, and the vendor can then set `telegramEnabled` / `whatsappEnabled`.
 
-### Step 2 — Vendor taps "Start" in Telegram
-The vendor opens `bot_url` and presses Start; Telegram sends `/start <token>` to the bot, which the backend consumes to create the link and replies with a confirmation message. No frontend call needed.
+To disconnect: `DELETE /api/me/connections/telegram` or `.../whatsapp`.
 
-### Status / manage
-- `GET /api/webhooks/telegram/status` →
-  ```json
-  { "linked": true, "isActive": true, "chatId": "...", "firstName": "...", "connectedAt": "..." }
-  ```
-- `POST /api/webhooks/telegram/toggle` → flips `isActive` (`{ "is_active": false }`). **Note:** when `isActive` is `false`, `telegramVerified` reports `false` and Telegram delivery stops, even if previously linked.
-- `POST /api/webhooks/telegram/disconnect` → removes the link.
+> The code is case-insensitive; `O`→`0` and `I`/`L`→`1`; spaces and hyphens are ignored. Send
+> exactly what the vendor typed.
 
-After linking (and `isActive: true`), `telegramVerified` becomes `true`; the vendor can set `telegramEnabled: true`.
+> **`/api/me/connections` is role-agnostic** — it binds to the user account, not the vendor
+> profile. A person who is both a vendor and a customer connects once.
 
----
+### What changed
 
-## WhatsApp
+| Gone | Replacement |
+|---|---|
+| `POST /api/auth/request-wa-verification` | `POST /api/me/connections` |
+| `GET /api/webhooks/whatsapp/link/status` | `GET /api/me/connections` |
+| `DELETE /api/webhooks/whatsapp/link` | `DELETE /api/me/connections/whatsapp` |
+| `POST /api/webhooks/telegram/link-token` | `GET /api/me/connections` |
+| `GET /api/webhooks/telegram/status` | `GET /api/me/connections` |
+| `POST /api/webhooks/telegram/toggle` | nothing — use `telegramEnabled` |
+| `POST /api/webhooks/telegram/disconnect` | `DELETE /api/me/connections/telegram` |
 
-Sets `whatsappVerified: true` (backed by the vendor's verified `wa` binding).
+⚠️ **The Telegram `toggle` endpoint is gone and this is a behaviour change worth reading.** It
+muted delivery *and* made `telegramVerified` report `false`, so a connected vendor's settings
+screen offered them "Connect" again as though they had never linked. `telegramVerified` now
+means only "a Telegram connection exists"; `telegramEnabled` is the single mute, exactly as
+WhatsApp has always worked.
 
-### Step 1 — Request a WhatsApp verification code
-`POST /api/auth/request-wa-verification`
-
-- Optional body: `{ "update_other_roles": true }` — also verify the same person's other roles (vendor/customer/agency/agent) in one go.
-
-**Success** — `200 OK`:
-```json
-{
-  "code": "A1B2C3D4E5F6G7H8",
-  "command": "/link:A1B2C3D4E5F6G7H8",
-  "bot_number": "<WA_BOT_NUMBER>",
-  "wa_link": "https://wa.me/<WA_BOT_NUMBER>?text=%2Flink%3AA1B2C3D4E5F6G7H8",
-  "expires_in_seconds": 600,
-  "instructions": "Click the link to verify your WhatsApp account automatically, or send the command manually to our WhatsApp bot."
-}
-```
-**Errors**:
-- `404 AUTH_PROFILE_NOT_FOUND`
-- `409 AUTH_WA_ALREADY_VERIFIED`
-
-### Step 2 — Vendor sends the command to the bot
-The vendor taps `wa_link` (opens WhatsApp pre-filled with `/link:CODE`) and sends it — or sends `/link:CODE` manually to `bot_number`. The backend matches the code, binds the sender's WhatsApp number, and marks it verified. No frontend call needed.
-
-### Status / manage
-- `GET /api/webhooks/whatsapp/link/status` →
-  ```json
-  { "linked": true, "wa_phone_id": "...", "name": "...", "bound_at": "..." }
-  ```
-- `DELETE /api/webhooks/whatsapp/link` → unlinks the WhatsApp account.
-
-After linking, `whatsappVerified` becomes `true`; the vendor can set `whatsappEnabled: true`.
+The direction of the handshake also flipped: the platform used to mint the secret and the
+vendor carried it to the bot. Now the bot mints it and the vendor carries it to the platform.
+There is nothing to poll — the vendor types the code and the response tells you it worked.
 
 ---
 
@@ -123,6 +99,15 @@ After linking, `whatsappVerified` becomes `true`; the vendor can set `whatsappEn
 For each channel card in the notification settings screen:
 
 1. Read `*Verified` from `GET /api/vendor/notification-preferences`.
-2. If **not verified** → show **Connect**, which starts the relevant Step 1 above (email: send link; telegram: open `bot_url`; whatsapp: open `wa_link`). Poll/refresh preferences to detect when `*Verified` turns `true`.
-3. If **verified** → show an **Enable** toggle that calls `PATCH /api/vendor/notification-preferences`. Remember enabling one secondary channel auto-disables the others (single-channel rule, priority telegram → email → whatsapp).
-4. Language is set separately on the profile (`preferred_language`) — see [notifications.md](./notifications.md#notification-language).
+2. If **not verified** → show **Connect**. For email, send the verification link (above). For
+   Telegram and WhatsApp, render `howToConnect` from `GET /api/me/connections` — the bot
+   button plus the `/connect` command — and a single code input that posts to
+   `POST /api/me/connections`.
+3. If **verified** → show an **Enable** toggle that calls `PATCH /api/vendor/notification-preferences`.
+   Remember enabling one secondary channel auto-disables the others (single-channel rule,
+   priority telegram → email → whatsapp).
+4. Language is set separately on the profile (`preferred_language`) — see
+   [notifications.md](./notifications.md#notification-language).
+
+> One code box serves both messaging channels — the code itself carries which channel it is
+> for, so do not ask the vendor to pick.

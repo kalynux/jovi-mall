@@ -10,7 +10,7 @@ import {
 } from '../repositories/customer-notification-preference.repository';
 import { ICustomerNotificationPreference } from '../models/customer-notification-preference.model';
 import { CustomerModel } from '../../customers/customer.model';
-import { TelegramRepository } from '../../telegram/telegram.repository';
+import { connectionService } from '../../channel-connections';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
@@ -32,14 +32,10 @@ interface CustomerChannelVerification {
  * CustomerNotificationEventHandler for the dispatch side.
  */
 export class CustomerNotificationService {
-    private telegramRepo: TelegramRepository;
-
     constructor(
         private readonly repo: CustomerNotificationRepository = new CustomerNotificationRepository(),
         private readonly preferenceRepo: CustomerNotificationPreferenceRepository = new CustomerNotificationPreferenceRepository()
-    ) {
-        this.telegramRepo = new TelegramRepository();
-    }
+    ) {}
 
     async listNotifications(
         customerId: string | mongoose.Types.ObjectId,
@@ -147,18 +143,27 @@ export class CustomerNotificationService {
         customerId: string | mongoose.Types.ObjectId
     ): Promise<CustomerChannelVerification> {
         const customer = await CustomerModel.findById(customerId).select(
-            'user_id email email_verified wa'
+            'user_id email email_verified'
         );
         if (!customer) {
             return { emailVerified: false, telegramVerified: false, whatsappVerified: false };
         }
 
-        const telegramLink = await this.telegramRepo.findByUserId(customer.user_id.toString());
+        /**
+         * Both channels from one query, against the single connections store.
+         *
+         * ⚠ `telegramVerified` now means "a Telegram connection exists" and
+         * nothing else. It used to be `link.isActive`, a second mute switch
+         * beside `telegramEnabled` below — so muting made a connected account
+         * read as unconnected and the UI offered "Connect" to somebody who
+         * already had. WhatsApp never had that flag; the two channels now agree.
+         */
+        const connections = await connectionService.getConnectionMap(customer.user_id);
 
         return {
             emailVerified: !!customer.email_verified && !!customer.email,
-            telegramVerified: !!telegramLink?.isActive,
-            whatsappVerified: !!customer.wa?.verified
+            telegramVerified: !!connections.telegram,
+            whatsappVerified: !!connections.whatsapp
         };
     }
 }

@@ -53,3 +53,35 @@ export function issueTokenPair(userId: string, role: string): AuthTokens {
         refreshToken: generateRefreshToken(userId, role),
     };
 }
+
+/**
+ * A token pair as it is handed to a client that has to hold it itself.
+ *
+ * The lifetimes are in SECONDS, matching every other TTL on the wire here.
+ */
+export interface DeliveredTokens extends AuthTokens {
+    accessExpiresIn: number;
+    refreshExpiresIn: number;
+}
+
+/**
+ * Wrap a freshly-minted pair with the lifetimes it was actually signed with.
+ *
+ * ── Why this lives HERE and not beside `setAuthCookies` ───────────────────────
+ * The two constants above are the arguments `jwt.sign` receives, so building the published
+ * numbers from them makes "the lifetime we tell the client" and "the lifetime we signed" the
+ * same expression rather than two readings of one environment variable that happen to agree.
+ * A cookie client never needed this — the browser enforces `maxAge` for it — but a bearer
+ * client refreshes on a timer it sets from these, so a drift of one is a client refreshing at
+ * the wrong moment, which surfaces as intermittent 401s and nothing else.
+ *
+ * `config/cookie.config.ts` imports the same two constants for its `maxAge`, so the cookie and
+ * the body cannot disagree either.
+ */
+export function tokenEnvelope(tokens: AuthTokens): DeliveredTokens {
+    return {
+        ...tokens,
+        accessExpiresIn: ACCESS_TOKEN_TTL_S,
+        refreshExpiresIn: REFRESH_TOKEN_TTL_S,
+    };
+}

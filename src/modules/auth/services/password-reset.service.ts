@@ -55,6 +55,9 @@ import { normalizePhoneNumber } from '../../../core/validation/phone';
  */
 const RESET_TOKEN_TTL_SECONDS = 30 * 60;
 
+/** The same number in the units every message quotes it in. Exported for the bot reply. */
+export const RESET_TOKEN_TTL_MINUTES = RESET_TOKEN_TTL_SECONDS / 60;
+
 /**
  * Reuses the email-verification database with its own key prefix.
  *
@@ -112,12 +115,51 @@ export class PasswordResetService {
             return;
         }
 
+        const token = await this.mintToken(String(user._id));
+        await this.deliver(user, token);
+    }
+
+    /**
+     * Mint a reset link and RETURN it, delivering nothing.
+     *
+     * ── Why this exists beside `requestReset` ───────────────────────────────────
+     * The bot commands (`/reset-password` on WhatsApp and Telegram) reply *in the chat the
+     * request came from*, so there is nothing to deliver — the automation layer relays the
+     * message, exactly as it does for `/connect` and `/login`. Sending an email as well would
+     * be a second delivery path with a second failure mode for a link the person is already
+     * looking at.
+     *
+     * ── The enumeration protection does NOT apply here, and that is not a weakening ──
+     * `requestReset` must answer identically for a real and an imaginary account because its
+     * caller is an anonymous HTTP client who can feed it a list of phone numbers. The bot
+     * caller has *already proved* they control the messaging account — WhatsApp's sender id is
+     * the number, and Telegram's contact is verified at signup — so telling them their own
+     * number is unrecognised discloses nothing they could not establish anyway. That is the
+     * same reasoning `/login` uses.
+     *
+     * **The caller owns the gating.** This method mints for the user it is handed; it does not
+     * re-check `status`, because its caller has just resolved and judged the account and would
+     * have to phrase the refusal for a chat window anyway. `resetPassword` re-checks at
+     * redemption regardless, which is the check that actually matters.
+     *
+     * ⚠ **No identity-scoped revocation, deliberately.** `/login`'s credentials revoke their
+     * predecessor because a 40-bit code's guessable population must stay flat. A reset token is
+     * 32 random bytes — 2^256 — so several live at once is not a guessing risk, they lapse in
+     * 30 minutes, and the email/WhatsApp path above has never revoked either. Adding it on one
+     * path only would make the two disagree for no gain.
+     */
+    async issueResetLinkFor(user: { _id: unknown }): Promise<string> {
+        const token = await this.mintToken(String(user._id));
+        return buildResetLink(token);
+    }
+
+    /** One token shape, one TTL, one key space — whoever asked for it. */
+    private async mintToken(userId: string): Promise<string> {
         const token = crypto.randomBytes(32).toString('hex');
         const redis = await getRedisClient(RESET_DB);
-        const payload: ResetTokenPayload = { userId: String(user._id) };
+        const payload: ResetTokenPayload = { userId };
         await redis.set(`${RESET_KEY_PREFIX}${token}`, JSON.stringify(payload), { EX: RESET_TOKEN_TTL_SECONDS });
-
-        await this.deliver(user, token);
+        return token;
     }
 
     /**
@@ -133,8 +175,8 @@ export class PasswordResetService {
      * real account slower or louder than an imaginary one.
      */
     private async deliver(user: { _id: unknown; login_email?: string | null; login_phone?: string | null }, token: string): Promise<void> {
-        const link = `${resetLinkBase()}/reset-password?token=${token}`;
-        const minutes = Math.round(RESET_TOKEN_TTL_SECONDS / 60);
+        const link = buildResetLink(token);
+        const minutes = RESET_TOKEN_TTL_MINUTES;
 
         if (user.login_email) {
             try {
@@ -224,6 +266,23 @@ export class PasswordResetService {
 function resetLinkBase(): string {
     const base = process.env.STOREFRONT_URL || process.env.API_PUBLIC_URL || '';
     return base.replace(/\/+$/, '');
+}
+
+/**
+ * The reset URL for a token. One builder, so the email, the WhatsApp message and the bot
+ * reply cannot drift on the path or the query parameter.
+ *
+ * ── Link previews are HARMLESS here, unlike the magic link's ────────────────
+ * WhatsApp and Telegram fetch URLs to build preview cards. That is fatal for a magic
+ * sign-in link, which is why `/login`'s points at a page that must POST — a crawler would
+ * otherwise spend the token before the user tapped.
+ *
+ * This link is safe because the token is spent by `POST /auth/reset-password`, which only
+ * runs when a human submits the new-password form. A crawler that fetches the page changes
+ * nothing. Previews are still worth disabling on the bot reply for tidiness, not for safety.
+ */
+export function buildResetLink(token: string): string {
+    return `${resetLinkBase()}/reset-password?token=${token}`;
 }
 
 export const passwordResetService = new PasswordResetService();

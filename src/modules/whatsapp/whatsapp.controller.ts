@@ -1,11 +1,7 @@
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response } from 'express';
 import { WhatsappService } from './whatsapp.service';
-import { WhatsAppLinkService } from './services/whatsapp-link.service';
 import { CommandBus } from '../command-bus/command-bus';
 import { asyncHandler } from '../../api/middlewares/async-handler';
-import { createAppError } from '../../core/errors';
-import { ERROR_CODES } from '../../core/error-codes';
-import { sendSuccess, sendMessage } from '../../core/responses';
 
 interface WhatsappWebhookPayload {
   reply_to: string;
@@ -16,17 +12,29 @@ interface WhatsappWebhookPayload {
   payload?: any;
 }
 
+/**
+ * WhatsApp bot ingress.
+ *
+ * Account linking is NOT here any more. `GET /link/status` and `DELETE /link`
+ * moved to `/api/me/connections`: they were role-scoped (answering a different
+ * question depending on which dashboard held the token) and, being routed under
+ * `/api/webhooks`, unthrottled. This controller keeps the webhook alone.
+ */
 export class WhatsappController {
   private waService: WhatsappService;
-  private linkService: WhatsAppLinkService;
   private commandBus: CommandBus;
 
   constructor(commandBus: CommandBus) {
     this.waService = new WhatsappService();
-    this.linkService = new WhatsAppLinkService();
     this.commandBus = commandBus;
   }
 
+  /**
+   * Inbound messages, relayed by the automation layer.
+   *
+   * Phase 4 registers `connect` on the bus; the context carries `wa_phone_id`,
+   * which IS the messaging identity the code will be minted against.
+   */
   handleWebhook = asyncHandler(async (req: Request, res: Response) => {
     const body: WhatsappWebhookPayload = req.body;
     const { reply_to, is_command, command, payload, user_id } = body;
@@ -41,29 +49,5 @@ export class WhatsappController {
     }
 
     res.status(200).json(result);
-  });
-
-  getStatus = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-    const userId = req.auth?.user?.id;
-    const role = req.auth?.role;
-
-    if (!userId || !role) {
-      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
-    }
-
-    const status = await this.linkService.getStatus(userId, role);
-    sendSuccess(res, status);
-  });
-
-  unlinkAccount = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-    const userId = req.auth?.user?.id;
-    const role = req.auth?.role;
-
-    if (!userId || !role) {
-      return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
-    }
-
-    await this.linkService.unlinkAccount(userId, role);
-    sendMessage(res, 'WhatsApp account unlinked');
   });
 }

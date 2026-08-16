@@ -41,7 +41,12 @@ const MOUNTED_PREFIXES: readonly string[] = Object.freeze([
     'customer/orders', 'customer/tickets',
     'digital', 'files', 'geo', 'integrations/google',
     'internal/admin', 'internal/agents',
-    'me', 'me/payment-methods',
+    // `me/connections` earns its own group for the same reason `me/payment-methods` does: it
+    // is a distinct surface with its own failure modes. Specifically it is the one route in
+    // the service carrying a per-endpoint rate limiter, so its 429 rate is a thing an
+    // operator watches on its own — folded into `/api/me` it would be invisible beside
+    // password changes.
+    'me', 'me/connections', 'me/payment-methods',
     'payments', 'products', 'public', 'tracking',
     // Mounted on the bare app rather than through `apiRouter`, but still under `/api` — see
     // `app.ts`. Deliberately labelled rather than dropped: silently excluding probe traffic

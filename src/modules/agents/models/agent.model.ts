@@ -365,13 +365,6 @@ export interface IDeliveryAgent extends Document {
   last_known_tracking_state: IAgentLastKnownTrackingState;
   preferences: IAgentPreferences;
   settings: IAgentSettings;
-  wa?: {
-    name?: string;
-    wa_phone_id?: string;
-    verified: boolean;
-    bound_at?: Date;
-    last_seen_at?: Date;
-  };
   timezone: string;
   /** Preferred language for notifications/messaging (ISO 639-1). */
   preferred_language: Language;
@@ -693,13 +686,6 @@ const DeliveryAgentSchema = new Schema<IDeliveryAgent>(
     },
     preferences: { type: PreferencesSchema, default: agentDefaults.preferences },
     settings: { type: SettingsSchema, default: agentDefaults.settings },
-    wa: {
-      name: String,
-      wa_phone_id: String,
-      verified: { type: Boolean, default: false },
-      bound_at: Date,
-      last_seen_at: Date,
-    },
     timezone: { type: String, default: 'Africa/Douala', required: true },
     preferred_language: { type: String, enum: SUPPORTED_LANGUAGES, default: 'en' },
     status: {

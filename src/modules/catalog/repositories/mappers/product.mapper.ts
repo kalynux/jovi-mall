@@ -2,6 +2,7 @@
 // import { IProduct } from '../models/product.model.ts';
 
 import { IMapper } from "../../../../core/database/mapper.interface";
+import type { RichDoc } from "../../../../core/richtext";
 import { IProduct } from "../../models";
 import { ProductMode, ProductStatus, ProductSuspensionReason, VectorisationStatus } from "../../models/product.model";
 
@@ -33,6 +34,19 @@ export interface Product {
   mode: ProductMode;
   title: string;
   description: string;
+  /**
+   * The structured description. `null` when the vendor stored no formatting.
+   *
+   * Carried on the domain type rather than resolved at the controller because
+   * `EnrichedProduct` is `Omit<Product, 'fileIds'>` — being here is what puts it
+   * on `GET /api/vendor/products/:id` and on every write response, which is
+   * where the edit form hydrates from. The trimmed LIST projection
+   * (`ProductListProjection`) deliberately does not carry it.
+   *
+   * ⚠️ The PUBLIC catalog DTOs are explicit projections and do NOT include it —
+   * the storefront renders `description`. Do not add it there by spreading.
+   */
+  descriptionRich: RichDoc | null;
   slug: string;
 
   category: string;
@@ -93,6 +107,12 @@ export class ProductMapper implements IMapper<Product, IProduct> {
       mode: doc.mode ?? 'advanced',
       title: doc.title,
       description: doc.description,
+      // Read back verbatim, NOT re-parsed through `richDocSchema`. The column is
+      // `Mixed`, so a row written by an older client can be anything — but a read
+      // is the wrong place to discard a vendor's stored work, and every consumer
+      // already has the correct fallback (`description`). Readers that must
+      // render it call `parseRichDoc` at their own boundary.
+      descriptionRich: (doc.descriptionRich as RichDoc | null | undefined) ?? null,
       slug: doc.slug,
       category: doc.category,
       tags: doc.tags || [],
@@ -146,6 +166,7 @@ export class ProductMapper implements IMapper<Product, IProduct> {
       mode: domain.mode,
       title: domain.title,
       description: domain.description,
+      descriptionRich: domain.descriptionRich ?? null,
       slug: domain.slug,
       seo: domain.seo,
       hasVariants: domain.hasVariants,

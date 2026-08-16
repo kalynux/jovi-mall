@@ -1,13 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
-import { TelegramService } from "./telegram.service";
-import { TelegramLinkService } from './services/telegram-link.service';
 import { TelegramNotificationService } from './services/telegram-notification.service';
 import { SendNotificationSchema } from './validators/telegram.validator';
 import { CommandBus } from '../command-bus/command-bus';
 import { asyncHandler } from '../../api/middlewares/async-handler';
-import { createAppError } from '../../core/errors';
+import { AppError, createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
-import { sendSuccess, sendMessage } from '../../core/responses';
+import { sendSuccess } from '../../core/responses';
 
 interface TelegramWebhookPayload {
     chat_id: string;
@@ -17,28 +15,35 @@ interface TelegramWebhookPayload {
     payload?: any;
 }
 
+/**
+ * Telegram bot ingress + the admin direct-send.
+ *
+ * Account linking is NOT here any more. `link-token`, `status`, `toggle` and
+ * `disconnect` moved to `/api/me/connections`, which binds to the User rather
+ * than issuing a deep-link token the user carries to the bot. This controller
+ * keeps only what genuinely belongs to Telegram: the webhook, and sending.
+ */
 export class TelegramController {
-    private telegramService: TelegramService;
-    private linkService: TelegramLinkService;
     private notificationService: TelegramNotificationService;
     private commandBus: CommandBus;
 
     constructor(commandBus: CommandBus) {
-        this.telegramService = new TelegramService();
-        this.linkService = new TelegramLinkService();
         this.notificationService = new TelegramNotificationService();
         this.commandBus = commandBus;
     }
 
     /**
-     * Handle webhook from n8n (Telegram bot messages)
+     * Inbound bot messages, relayed by the automation layer.
+     *
+     * Phase 4 registers `connect` on the bus; the context carries `chat_id`,
+     * which IS the messaging identity the code will be minted against. Phase
+     * `/login` adds `login` and `login_contact` on the same context.
      */
     handleWebhook = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
         try {
             const body: TelegramWebhookPayload = req.body;
             const { chat_id, is_command, command, payload, user_id } = body;
 
-            // 2. Handle Command via Bus
             let result: any = { message: 'Inbound recorded' };
             if (is_command && command) {
                 const context = {
@@ -55,78 +60,37 @@ export class TelegramController {
             res.status(200).json(result);
         } catch (error: any) {
             console.error('[Telegram-Webhook] Error:', error.message);
+
+            /**
+             * ⚠ An AppError is forwarded UNCHANGED. This catch used to flatten every
+             * failure into `INTERNAL_SERVER_ERROR` at 400, keeping only the message —
+             * so a command that raised a precise, deliberate code had it erased on the
+             * way out, and every Telegram webhook failure looked identical in the logs,
+             * in the metrics and to the automation layer.
+             *
+             * That became load-bearing with `login_contact`, whose contact-share guard
+             * raises `MAGIC_CONTACT_UNVERIFIED` — the one signal that distinguishes
+             * "tapped the wrong contact" from an attempted account takeover. Flattened,
+             * it was indistinguishable from a null-pointer bug.
+             *
+             * Non-AppError throws keep the old wrapping: they are genuinely unclassified,
+             * and the status stays 400 rather than 500 so the automation layer's existing
+             * branch is unchanged.
+             */
+            if (error instanceof AppError) return next(error);
+
             next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 400, error.message));
         }
     });
 
     /**
-     * Generate link token for authenticated user
-     */
-    generateLinkToken = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-        try {
-            const userId = req.auth?.user?.id;
-
-            if (!userId) {
-                return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
-            }
-
-            const result = await this.linkService.generateLinkToken(userId);
-            sendSuccess(res, result);
-        } catch (error: any) {
-            console.error('[Telegram] Error generating link token:', error.message);
-            next(createAppError(ERROR_CODES.TELEGRAM_LINK_FAILED, 500, 'Failed to generate link token'));
-        }
-    });
-
-    /**
-     * Get Telegram link status for authenticated user
-     */
-    getStatus = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-        try {
-            const userId = req.auth?.user?.id;
-
-            if (!userId) {
-                return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
-            }
-
-            const status = await this.linkService.getStatus(userId);
-            sendSuccess(res, status);
-        } catch (error: any) {
-            console.error('[Telegram] Error getting status:', error.message);
-            next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to get status'));
-        }
-    });
-
-    /**
-     * Toggle activation state for authenticated user
-     */
-    toggleActivation = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-        try {
-            const userId = req.auth?.user?.id;
-
-            if (!userId) {
-                return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
-            }
-
-            const result = await this.linkService.toggleActivation(userId);
-            sendSuccess(res, result);
-        } catch (error: any) {
-            console.error('[Telegram] Error toggling activation:', error.message);
-
-            if (error.message.includes('not found')) {
-                return next(createAppError(ERROR_CODES.TELEGRAM_NOT_LINKED, 404, 'No Telegram account linked'));
-            }
-
-            next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to toggle activation'));
-        }
-    });
-
-    /**
-     * Send notification (admin only)
+     * Send a Telegram message (admin only).
+     *
+     * Resolves `userId` through the connections module now — the `telegram_links`
+     * collection it used to read is gone.
      */
     sendNotification = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
         try {
-            // Validate request body
             const validatedData = SendNotificationSchema.parse(req.body);
 
             const result = await this.notificationService.send(validatedData);
@@ -144,30 +108,6 @@ export class TelegramController {
             }
 
             next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to send notification'));
-        }
-    });
-
-    /**
-     * Disconnect Telegram account for authenticated user
-     */
-    disconnectAccount = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-        try {
-            const userId = req.auth?.user?.id;
-
-            if (!userId) {
-                return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401, 'Unauthorized'));
-            }
-
-            await this.linkService.disconnectAccount(userId);
-            sendMessage(res, 'Account disconnected');
-        } catch (error: any) {
-            console.error('[Telegram] Error disconnecting account:', error.message);
-
-            if (error.message.includes('No Telegram account')) {
-                return next(createAppError(ERROR_CODES.TELEGRAM_NOT_LINKED, 404, 'No Telegram account linked'));
-            }
-
-            next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to disconnect account'));
         }
     });
 }

@@ -50,6 +50,7 @@
     "test:customer-notifications": "ts-node scripts/test/test-customer-notifications.ts",
     "test:blog": "ts-node scripts/test/test-blog.ts",
     "test:public-catalog": "ts-node scripts/test/test-public-catalog.ts",
+    "test:rich-description": "ts-node scripts/test/test-rich-description.ts",
     "test:storefront-checkout": "ts-node scripts/test/test-storefront-checkout.ts",
     "seed:tickets": "ts-node scripts/seed/seed-tickets.ts",
     "seed:tickets:clean": "ts-node scripts/seed/seed-tickets.ts --clean",
@@ -66,7 +67,12 @@
     "test:admin-audit": "ts-node scripts/test/test-admin-action-log.ts",
     "test:errors": "ts-node scripts/test/test-errors.ts",
     "test:env": "ts-node scripts/test/test-env.ts",
-    "test:password-epoch": "ts-node scripts/test/test-password-epoch.ts"
+    "test:password-epoch": "ts-node scripts/test/test-password-epoch.ts",
+    "test:connections": "ts-node scripts/test/test-connections.ts",
+    "verify:connections": "ts-node scripts/verify-connections-live.ts",
+    "test:mobile-auth": "ts-node scripts/test/test-mobile-auth.ts",
+    "test:messaging-login": "ts-node scripts/test/test-messaging-login.ts",
+    "verify:messaging-login": "ts-node scripts/verify-messaging-login-live.ts"
   },
   "keywords": [],
   "author": "",

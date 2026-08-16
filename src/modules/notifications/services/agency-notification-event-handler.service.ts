@@ -5,7 +5,7 @@ import { MagazinRepository } from '../../magazin/repositories/magazin.repository
 import { IDeliveryAgency } from '../../delivery/delivery-agency.model';
 import { AgentRepository } from '../../agents';
 import { COD_CONFIG } from '../../cod/config/cod.config';
-import { TelegramRepository } from '../../telegram/telegram.repository';
+import { connectionService } from '../../channel-connections';
 import { MailService } from '../../mail/mail.service';
 import { TelegramNotificationService } from '../../telegram/services/telegram-notification.service';
 import { getWhatsAppMessagingService } from '../../whatsapp/services/whatsapp-messaging.service';
@@ -34,7 +34,7 @@ import {
 import type { ContractTransition, StatusRequestState, TermsProposalState } from '../../agents';
 import { ChannelText } from '../catalog/notification-catalog';
 import { Language, resolveLanguage, META_LANGUAGE_CODE } from '../catalog/notification-i18n';
-import { RenderContext } from '../catalog/message-renderer';
+import { RenderContext, toTelegramNotificationBody } from '../catalog/message-renderer';
 import { DomainEvent } from '../../../core/events/event-bus';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -81,7 +81,6 @@ export class AgencyNotificationEventHandler {
     private agencyRepo: DeliveryAgencyRepository;
     private magazinRepo: MagazinRepository;
     private agentRepo: AgentRepository;
-    private telegramRepo: TelegramRepository;
     private mailService: MailService;
     private telegramService: TelegramNotificationService;
     private whatsappWindow: WhatsappService;
@@ -93,7 +92,6 @@ export class AgencyNotificationEventHandler {
         this.agencyRepo = new DeliveryAgencyRepository();
         this.magazinRepo = new MagazinRepository();
         this.agentRepo = new AgentRepository();
-        this.telegramRepo = new TelegramRepository();
         this.mailService = new MailService();
         this.telegramService = new TelegramNotificationService();
         this.whatsappWindow = new WhatsappService();
@@ -995,12 +993,15 @@ export class AgencyNotificationEventHandler {
     ): Promise<AgencyDeliveryChannel[]> {
         const channels: AgencyDeliveryChannel[] = ['in-app'];
 
-        if (prefs.telegramEnabled) {
-            const telegramLink = await this.telegramRepo.findByUserId(agency.user_id.toString());
-            if (telegramLink && telegramLink.isActive) {
-                channels.push('telegram');
-                return channels;
-            }
+        // Both channels resolved in ONE query, then reused by the branches
+        // below. Telegram is no longer gated on a second `isActive` flag:
+        // muting is `telegramEnabled` alone, exactly as WhatsApp already
+        // worked. See connections/services/connection.service.ts.
+        const connections = await connectionService.getConnectionMap(agency.user_id);
+
+        if (prefs.telegramEnabled && connections.telegram) {
+            channels.push('telegram');
+            return channels;
         }
 
         if (prefs.emailEnabled && agency.email_verified) {
@@ -1008,7 +1009,7 @@ export class AgencyNotificationEventHandler {
             return channels;
         }
 
-        if (prefs.whatsappEnabled && agency.wa?.verified) {
+        if (prefs.whatsappEnabled && connections.whatsapp) {
             channels.push('whatsapp');
             return channels;
         }
@@ -1127,12 +1128,15 @@ export class AgencyNotificationEventHandler {
         content: ChannelText,
         button: { label: string; url: string } | null
     ): Promise<void> {
-        const message = `*${content.subject}*\n\n${content.body}`;
+        // Escaped HTML, never the legacy Markdown this used to ride on — see
+        // toTelegramNotificationBody for the failure it closes.
+        const message = toTelegramNotificationBody(content.subject, content.body);
 
         const result = await this.telegramService.send({
             userId: agency.user_id.toString(),
             message,
-            button: button ?? undefined
+            button: button ?? undefined,
+            parseMode: 'HTML'
         });
 
         if (!result.success) {
@@ -1160,9 +1164,13 @@ export class AgencyNotificationEventHandler {
             return;
         }
 
-        if (!agency.wa?.verified || !agency.wa.wa_phone_id) return;
+        // The address comes from the connections store now, not from a `wa`
+        // sub-document on the role entity. One person, one WhatsApp number,
+        // whichever role this notification is for.
+        const connection = await connectionService.getConnection(agency.user_id, 'whatsapp');
+        if (!connection) return;
 
-        const waPhoneId = agency.wa.wa_phone_id;
+        const waPhoneId = connection.external_id;
         const to = waPhoneId.startsWith('+') ? waPhoneId : `+${waPhoneId}`;
 
         const withinWindow = await this.whatsappWindow.canSendFreeMessage(waPhoneId);

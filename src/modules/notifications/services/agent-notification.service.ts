@@ -6,7 +6,7 @@ import {
 } from '../repositories/agent-notification-preference.repository';
 import { IAgentNotificationPreference } from '../models/agent-notification-preference.model';
 import { AgentRepository } from '../../agents';
-import { TelegramRepository } from '../../telegram/telegram.repository';
+import { connectionService } from '../../channel-connections';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
@@ -28,14 +28,12 @@ interface AgentChannelVerification {
  */
 export class AgentNotificationService {
     private agentRepo: AgentRepository;
-    private telegramRepo: TelegramRepository;
 
     constructor(
         private readonly repo: AgentNotificationRepository = new AgentNotificationRepository(),
         private readonly preferenceRepo: AgentNotificationPreferenceRepository = new AgentNotificationPreferenceRepository()
     ) {
         this.agentRepo = new AgentRepository();
-        this.telegramRepo = new TelegramRepository();
     }
 
     async listNotifications(agentId: string | mongoose.Types.ObjectId, pagination: PaginationOptions) {
@@ -129,12 +127,21 @@ export class AgentNotificationService {
             return { emailVerified: false, telegramVerified: false, whatsappVerified: false };
         }
 
-        const telegramLink = await this.telegramRepo.findByUserId(agent.user_id.toString());
+        /**
+         * Both channels from one query, against the single connections store.
+         *
+         * ⚠ `telegramVerified` now means "a Telegram connection exists" and
+         * nothing else. It used to be `link.isActive`, a second mute switch
+         * beside `telegramEnabled` below — so muting made a connected account
+         * read as unconnected and the UI offered "Connect" to somebody who
+         * already had. WhatsApp never had that flag; the two channels now agree.
+         */
+        const connections = await connectionService.getConnectionMap(agent.user_id);
 
         return {
             emailVerified: !!agent.email_verified,
-            telegramVerified: !!(telegramLink && telegramLink.isActive),
-            whatsappVerified: !!agent.wa?.verified
+            telegramVerified: !!connections.telegram,
+            whatsappVerified: !!connections.whatsapp
         };
     }
 

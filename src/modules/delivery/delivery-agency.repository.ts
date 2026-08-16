@@ -144,24 +144,6 @@ export class DeliveryAgencyRepository {
     return query.exec();
   }
 
-  async updateWaVerified(userId: string, waData: { wa_phone_id: string; name?: string }, session?: ClientSession): Promise<IDeliveryAgency | null> {
-    const query = DeliveryAgencyModel.findOneAndUpdate(
-      { user_id: userId },
-      {
-        $set: {
-          'wa.verified': true,
-          'wa.wa_phone_id': waData.wa_phone_id,
-          'wa.bound_at': new Date(),
-          'wa.last_seen_at': new Date(),
-          ...(waData.name ? { 'wa.name': waData.name } : {}),
-        },
-      },
-      { new: true },
-    );
-    if (session) query.session(session);
-    return query.exec();
-  }
-
   async updateStatus(userId: string, status: string, session?: ClientSession): Promise<IDeliveryAgency | null> {
     const query = DeliveryAgencyModel.findOneAndUpdate({ user_id: userId }, { status }, { new: true });
     if (session) query.session(session);
@@ -263,24 +245,6 @@ export class DeliveryAgencyRepository {
     const query = DeliveryAgencyModel.findByIdAndUpdate(
       agencyId,
       { $inc: { policy_version: 1 } },
-      { new: true },
-    );
-    if (session) query.session(session);
-    return query.exec();
-  }
-
-  async unlinkWhatsApp(userId: string, session?: ClientSession): Promise<IDeliveryAgency | null> {
-    const query = DeliveryAgencyModel.findOneAndUpdate(
-      { user_id: userId },
-      {
-        $set: {
-          'wa.verified': false,
-          'wa.wa_phone_id': null,
-          'wa.name': null,
-          'wa.bound_at': null,
-          'wa.last_seen_at': null,
-        },
-      },
       { new: true },
     );
     if (session) query.session(session);

@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { clearable } from '../../../core/validation/zod.helpers';
+// One definition, shared with the two .strict() quick-add schemas — see the
+// header of that file for why all four have to accept the field together.
+import { descriptionRichSchema } from './rich-description.validator';
 
 // Product media. Full-array replacement; duplicates are rejected so the same image
 // can't be attached twice. Shared by create and update; kept in sync with the
@@ -46,6 +49,9 @@ export const CreateProductSchema = z.object({
         .max(200, 'Title must not exceed 200 characters')
         .trim(),
     description: z.string().min(1, 'Description cannot be empty'),
+    // The structured document `description` above is the plain-text projection
+    // of. Optional: a client with no formatting editor sends only `description`.
+    descriptionRich: descriptionRichSchema,
     fileIds: productFileIdsSchema.optional(),
 
     // Categorization
@@ -80,6 +86,8 @@ export const UpdateProductSchema = z.object({
         .trim()
         .optional(),
     description: z.string().min(1, 'Description cannot be empty').optional(),
+    // Explicit `null` clears the stored document; absent leaves it alone.
+    descriptionRich: descriptionRichSchema,
     fileIds: productFileIdsSchema.optional(),
 
     // Categorization

@@ -1,4 +1,5 @@
 import { CookieOptions, Response } from 'express';
+import { ACCESS_TOKEN_TTL_S, REFRESH_TOKEN_TTL_S } from '../core/auth/token.issuer';
 
 // ─── Cookie Names ────────────────────────────────────────────────────────────
 export const AUTH_COOKIE = {
@@ -24,16 +25,25 @@ const base: CookieOptions = {
         : undefined,
 };
 
+// ─── Cookie lifetimes ────────────────────────────────────────────────────────
+//
+// The two constants come from `core/auth/token.issuer`, which is also what `jwt.sign` is given
+// as `expiresIn`. They used to be a second, independent `parseInt` of the same two environment
+// variables here — agreeing only because the defaults matched, so a cookie could outlive or
+// predecease the token inside it and nothing would say so. One source, one number.
+// (No cycle: `token.issuer` reaches only `secrets.config` → `core/errors`, none of which
+// import this file.)
+
 // ─── Access Token Cookie (short-lived, default 15 min) ───────────────────────
 export const accessCookieOptions: CookieOptions = {
     ...base,
-    maxAge: parseInt(process.env.AUTH_ACCESS_TOKEN_TTL || '900') * 1000,
+    maxAge: ACCESS_TOKEN_TTL_S * 1000,
 };
 
 // ─── Refresh Token Cookie (long-lived, default 30 days) ──────────────────────
 export const refreshCookieOptions: CookieOptions = {
     ...base,
-    maxAge: parseInt(process.env.AUTH_REFRESH_TOKEN_TTL || '2592000') * 1000,
+    maxAge: REFRESH_TOKEN_TTL_S * 1000,
 };
 
 // ─── Clear Cookie Options (exact same attrs, no maxAge = browser clears) ─────

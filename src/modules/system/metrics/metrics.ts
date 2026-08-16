@@ -187,7 +187,9 @@ export const errorsTotal = new Counter({
  * non-zero for a class other than `anonymous`, either the guess was wrong or something is
  * looping, and the labels say which.
  *
- * 7 classes × 3 policies = 21 series.
+ * 7 classes × 6 policies (global, identity, auth, auth_session, public, connection_code)
+ * = 42 series. The policy set is closed and lives in `rate-limit/policy.ts`; keep this count
+ * in step with `POLICIES` rather than with memory — it has now been stale twice.
  */
 export const rateLimitedTotal = new Counter({
     name: `${PREFIX}rate_limited_total`,

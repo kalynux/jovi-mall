@@ -1,5 +1,6 @@
 import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
+import type { RichDoc } from '../../../../core/richtext';
 import { IProductRepository } from '../../repositories/interfaces/product.repository.interface';
 import { Product } from '../../repositories/mappers/product.mapper';
 import { SlugService } from './SlugService';
@@ -38,6 +39,13 @@ export interface UpdateDeliveryConfigDto {
 export interface UpdateProductCommand {
   title?: string;
   description?: string;
+  /**
+   * Three-valued, and the `null` is load-bearing: absent leaves the stored
+   * document alone, `null` clears it. Omitting the clear on an emptied
+   * description would leave the old document in place while `description` was
+   * replaced, and the next read would resurrect formatting the vendor deleted.
+   */
+  descriptionRich?: RichDoc | null;
   fileIds?: string[];            // Full array replacement for product media
   category?: string;
   tags?: string[];
@@ -100,6 +108,11 @@ export class ProductUpdateService {
     }
 
     if (command.description !== undefined) updates.description = command.description;
+    // `!== undefined` rather than a truthiness check, so an explicit `null`
+    // reaches the repository's `$set` and actually clears the column. A `!command`
+    // guard here would silently turn "the vendor deleted their formatting" into
+    // "leave it alone" — the one case this field exists to get right.
+    if (command.descriptionRich !== undefined) updates.descriptionRich = command.descriptionRich;
     if (command.category !== undefined) updates.category = command.category;
     if (command.tags !== undefined) updates.tags = command.tags;
 

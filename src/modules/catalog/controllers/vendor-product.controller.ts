@@ -163,6 +163,7 @@ export class VendorProductController {
             type: input.type,
             title: input.title,
             description: input.description,
+            descriptionRich: input.descriptionRich,
             category: input.category,
             tags: input.tags,
             seoTitle: input.seoTitle,
@@ -199,6 +200,7 @@ export class VendorProductController {
         const product = await productUpdateService.execute(id, vendorId, {
             title: input.title,
             description: input.description,
+            descriptionRich: input.descriptionRich,
             category: input.category,
             tags: input.tags,
             seoTitle: input.seoTitle,

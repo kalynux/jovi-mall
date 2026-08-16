@@ -21,22 +21,6 @@ export class CustomerRepository {
     );
   }
 
-  async updateWaVerified(userId: string, waData: { wa_phone_id: string; name?: string }): Promise<ICustomer | null> {
-    return await CustomerModel.findOneAndUpdate(
-      { user_id: userId },
-      {
-        $set: {
-          'wa.verified': true,
-          'wa.wa_phone_id': waData.wa_phone_id,
-          'wa.bound_at': new Date(),
-          'wa.last_seen_at': new Date(),
-          ...(waData.name ? { 'wa.name': waData.name } : {})
-        }
-      },
-      { new: true }
-    );
-  }
-
   async updateStatus(userId: string, status: string): Promise<ICustomer | null> {
     return await CustomerModel.findOneAndUpdate({ user_id: userId }, { status }, { new: true });
   }
@@ -143,22 +127,6 @@ export class CustomerRepository {
     return await CustomerModel.findByIdAndUpdate(
       customerId,
       { $pull: { saved_payment_methods: { _id: methodId } } },
-      { new: true }
-    );
-  }
-
-  async unlinkWhatsApp(userId: string): Promise<ICustomer | null> {
-    return await CustomerModel.findOneAndUpdate(
-      { user_id: userId },
-      {
-        $set: {
-          'wa.verified': false,
-          'wa.wa_phone_id': null,
-          'wa.name': null,
-          'wa.bound_at': null,
-          'wa.last_seen_at': null
-        }
-      },
       { new: true }
     );
   }

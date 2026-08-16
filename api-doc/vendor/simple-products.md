@@ -250,7 +250,13 @@ One flat body edits both the product and its variant. Every field optional; at l
 
 | → Product | → its single variant |
 |---|---|
-| `title`, `description`, `category`, `tags`, `fileIds`, `seoTitle`, `seoDescription`, `freeDelivery`, `pickupLocation` | `price`, `compareAtPrice`, `bargain`, `stock`, `isInfiniteStock`, `lowStockThreshold`, `allowOversell`, `sku`, `weight`, `length`, `width`, `height` |
+| `title`, `description`, `descriptionRich`, `category`, `tags`, `fileIds`, `seoTitle`, `seoDescription`, `freeDelivery`, `pickupLocation` | `price`, `compareAtPrice`, `bargain`, `stock`, `isInfiniteStock`, `lowStockThreshold`, `allowOversell`, `sku`, `weight`, `length`, `width`, `height` |
+
+> [!NOTE]
+> `descriptionRich` is three-valued on this endpoint: **absent** leaves the stored
+> document alone, an **object** replaces it, and **`null` clears it**. Send `null`
+> whenever the vendor emptied their description — omitting it would leave the old
+> formatting in place beside a replaced `description`.
 
 ```json
 PATCH /api/vendor/products/507f1f77bcf86cd799439011/simple

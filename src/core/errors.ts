@@ -83,16 +83,13 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.AUTH_EMAIL_MISSING]: 'No email address to verify',
     [ERROR_CODES.AUTH_VERIFY_TOKEN_INVALID]: 'Invalid or expired verification token',
     [ERROR_CODES.AUTH_RESET_TOKEN_INVALID]: 'This password reset link is invalid or has expired. Please request a new one.',
-    [ERROR_CODES.AUTH_WA_ALREADY_VERIFIED]: 'WhatsApp already verified for this role',
     [ERROR_CODES.AUTH_PROFILE_NOT_FOUND]: 'Role profile not found',
-    [ERROR_CODES.AUTH_PHONE_REQUIRED_FOR_WA]: 'A phone number is required to verify WhatsApp',
     [ERROR_CODES.AUTH_UNSUPPORTED_ROLE]: 'This role is not supported',
     [ERROR_CODES.AUTH_REFRESH_TOKEN_INVALID]: 'Invalid or expired refresh token',
     [ERROR_CODES.AUTH_SESSION_EXPIRED]: 'Session expired, please log in again',
     [ERROR_CODES.AUTH_PASSWORD_CHANGED]: 'Your password was changed. Please sign in again',
     [ERROR_CODES.AUTH_USER_NOT_FOUND]: 'User not found',
     [ERROR_CODES.AUTH_ROLE_PROFILE_NOT_FOUND]: 'Role profile not found',
-    [ERROR_CODES.AUTH_WA_PHONE_ID_REQUIRED]: 'wa_phone_id is required',
 
     [ERROR_CODES.EARNINGS_INVALID_SPLIT]: 'Order fees exceed the paid amount; cannot split earnings',
     [ERROR_CODES.EARNINGS_ALLOCATION_NOT_FOUND]: 'Earnings allocation not found',
@@ -150,12 +147,47 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.DIGITAL_DOWNLOAD_LIMIT_EXCEEDED]: 'Download limit exceeded',
     [ERROR_CODES.DIGITAL_TOKEN_INVALID]: 'Invalid, expired, or already used token',
 
-    [ERROR_CODES.WHATSAPP_ROLE_NOT_SUPPORTED]: 'This role does not support WhatsApp linking',
-    [ERROR_CODES.WHATSAPP_NOT_LINKED]: 'No WhatsApp account linked',
+    // One message for absent / expired / malformed / already-spent, deliberately:
+    // the response must not confirm whether a code was ever real. Same reasoning
+    // as AUTH_RESET_TOKEN_INVALID.
+    [ERROR_CODES.CONNECTION_CODE_INVALID]: 'That connection code is not valid',
+    [ERROR_CODES.CONNECTION_CODE_EXPIRED]:
+        'That connection code has expired. Send /connect to the bot again for a new one.',
+    [ERROR_CODES.CONNECTION_CODE_ATTEMPTS_EXCEEDED]:
+        'Too many connection attempts. Please wait a few minutes and try again.',
+    [ERROR_CODES.CONNECTION_CODE_GENERATION_FAILED]: 'Could not generate a connection code',
+    // Deliberately says nothing about WHICH account holds it — see the throw site.
+    [ERROR_CODES.MESSAGING_IDENTITY_ALREADY_LINKED]:
+        'That messaging account is already connected to a different account',
+    [ERROR_CODES.MESSAGING_CONNECTION_NOT_FOUND]: 'No account connected on this channel',
+    [ERROR_CODES.MESSAGING_IDENTITY_UNRESOLVED]:
+        'Could not determine which messaging account sent this message',
+    [ERROR_CODES.WEBHOOK_SECRET_INVALID]: 'Webhook authentication failed',
 
-    [ERROR_CODES.TELEGRAM_NOT_LINKED]: 'No Telegram account linked',
-    [ERROR_CODES.TELEGRAM_LINK_FAILED]: 'Failed to create or update Telegram link',
-    [ERROR_CODES.TELEGRAM_LINK_NOT_FOUND]: 'Telegram link not found',
+    // ── Passwordless sign-in ─────────────────────────────────────────────────
+    // Written for a person staring at a sign-in screen, so each names the remedy
+    // — which is always "get a new one from the bot", never "check your typing".
+    //
+    // EXPIRED and INVALID read differently on purpose, exactly as the connection
+    // codes do: expiry is the common failure (somebody read the message, got
+    // distracted, came back) and it is actionable. What is deliberately NOT
+    // differentiated is anything inside MAGIC_CODE_INVALID — see error-codes.ts.
+    [ERROR_CODES.MAGIC_LINK_INVALID]:
+        'This sign-in link is not valid. Send /login to the bot again for a new one.',
+    [ERROR_CODES.MAGIC_LINK_EXPIRED]:
+        'This sign-in link has expired. Send /login to the bot again for a new one.',
+    [ERROR_CODES.MAGIC_CODE_INVALID]:
+        'That sign-in code is not valid. Send /login to the bot again for a new one.',
+    [ERROR_CODES.MAGIC_CODE_EXPIRED]:
+        'That sign-in code has expired. Send /login to the bot again for a new one.',
+    [ERROR_CODES.MAGIC_ATTEMPTS_EXCEEDED]:
+        'Too many sign-in attempts. Please wait a few minutes and try again.',
+    // Reached only through the bot, so it is written for a chat window rather than
+    // a form. It must not sound like an accusation: the ordinary way to hit it is
+    // tapping the wrong contact, not an attempted takeover.
+    [ERROR_CODES.MAGIC_CONTACT_UNVERIFIED]:
+        'Please use the "Share my phone number" button so Telegram can confirm the number is yours.',
+    [ERROR_CODES.MAGIC_SESSION_GENERATION_FAILED]: 'Could not start a sign-in session',
 
     [ERROR_CODES.GOOGLE_MISSING_CLIENT_ID]: 'GOOGLE_CLIENT_ID is not configured',
     [ERROR_CODES.GOOGLE_MISSING_CLIENT_SECRET]: 'GOOGLE_CLIENT_SECRET is not configured',
@@ -364,7 +396,6 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.CATALOG_SHIPPING_ACCESS_DENIED]: 'catalog shipping access denied',
     [ERROR_CODES.COMMAND_ALREADY_REGISTERED]: 'command already registered',
     [ERROR_CODES.COMMAND_NOT_FOUND]: 'command not found',
-    [ERROR_CODES.WHATSAPP_LINK_FAILED]: 'whatsapp link failed',
     [ERROR_CODES.WHATSAPP_INVALID_PAYLOAD]: 'whatsapp invalid payload',
     [ERROR_CODES.WHATSAPP_POLICY_VIOLATION]: 'whatsapp policy violation',
     [ERROR_CODES.WHATSAPP_PROVIDER_REJECTED]: 'whatsapp provider rejected',

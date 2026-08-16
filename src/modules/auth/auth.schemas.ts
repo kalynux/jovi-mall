@@ -65,13 +65,42 @@ const LoginIdentifierSchema = z
     message: `Identifier must be a valid email address or phone number. ${EMAIL_FORMAT_MESSAGE}. ${PHONE_FORMAT_MESSAGE}`,
   });
 
+/**
+ * Registration.
+ *
+ * ── `password` IS NOT REQUIRED FOR A CUSTOMER, AND IS STRIPPED IF SENT ───────
+ * Customers are passwordless in practice: they sign in through `/login` on
+ * WhatsApp or Telegram (`modules/messaging-login/`), and `AuthService.register`
+ * gives them a random, hashed, never-disclosed one so `User.password_hash` stays
+ * `required: true` and the reset flow has something to replace. See
+ * `core/auth/system-password.ts`.
+ *
+ * Two properties are load-bearing and neither is the obvious implementation:
+ *
+ * **It is STRIPPED for a customer, not merely optional.** Accepting a
+ * caller-supplied password would create accounts whose password somebody else
+ * chose and knows — a storefront, an integration, whoever posted the form. A
+ * field that is ignored cannot quietly become a back door because a call site
+ * started forwarding it.
+ *
+ * **Every other role still requires it**, enforced in the `superRefine` below
+ * rather than by the field, because the rule depends on a sibling value. Note
+ * `role` carries `.default('vendor')`, so a body that omits both is a
+ * VENDOR registration missing its password — which is refused, exactly as
+ * before. Nothing about the non-customer paths changed.
+ *
+ * ⚠ Existing customer-registration clients that send a password keep working and
+ * get a 201; their password is simply no longer honoured, and
+ * `POST /auth/login` will not accept it. That is the intended behaviour change,
+ * and it is why the storefront must route customers to the messaging flow.
+ */
 export const RegisterSchema = z.object({
   // Required, and the account's unique key - so it is held to full E.164 here,
   // where the account is created, rather than being repaired later.
   phone: PhoneNumberSchema,
   email: OptionalEmailAddressSchema,
   name: z.string().min(2, "Name required"),
-  password: z.string().min(6, "Password must be at least 6 characters"),
+  password: z.string().min(6, "Password must be at least 6 characters").optional(),
   // 'admin' is NOT registerable. This endpoint is public (no auth middleware), so
   // accepting it here let anyone POST themselves a platform administrator and get a
   // signed admin token back in the same response. Administrators are created only by
@@ -79,7 +108,21 @@ export const RegisterSchema = z.object({
   role: z.enum(AUTHENTICATABLE_ROLES).default('vendor'),
   business_name: z.string().optional(), // For vendors
   agency_name: z.string().optional(), // For agencies
-});
+})
+  .superRefine((value, ctx) => {
+    if (value.role !== 'customer' && !value.password) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['password'],
+        message: 'Password required',
+      });
+    }
+  })
+  // Runs AFTER the refinement, so a customer's password is dropped rather than
+  // validated-then-honoured. `AuthService.register` sees `undefined` and mints one.
+  .transform((value) =>
+    value.role === 'customer' ? { ...value, password: undefined } : value
+  );
 
 // 'admin' is NOT loggable-in-as, for the same reason it is not registerable. Both of
 // these mint a token pair, so leaving it here kept a second administrator identity
@@ -141,6 +184,22 @@ export const AddRoleSchema = z.object({
   name: z.string().min(2, 'Name required').optional(),          // customer / agent
   business_name: z.string().optional(),                          // vendor
   agency_name: z.string().optional(),                            // agency
+});
+
+/**
+ * `POST /auth/mobile/refresh`.
+ *
+ * The bearer twin of the refresh cookie. Shape only — every real check (signature, the
+ * `type: 'refresh'` claim, the account status, the password epoch) belongs to
+ * `AuthService.rotateRefreshToken`, which the cookie path also goes through, so the two
+ * cannot drift on what counts as a valid session.
+ *
+ * An absent or blank token is raised as `AUTH_MISSING_TOKEN 401` in the controller rather
+ * than left to Zod's 400 — it matches `POST /auth/browser/refresh`, and a client's branch is
+ * the same in both cases (sign out), so one "no session" code family is what it should read.
+ */
+export const MobileRefreshSchema = z.object({
+  refreshToken: z.string().min(1, 'Refresh token required'),
 });
 
 export type RegisterInput = z.infer<typeof RegisterSchema>;

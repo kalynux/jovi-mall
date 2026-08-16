@@ -124,13 +124,6 @@ export interface ICustomer extends Document {
   preferences: ICustomerPreferences;
   recent_product_code: string | null;
   saved_payment_methods: ICustomerSavedPaymentMethod[];
-  wa?: {
-    name?: string;
-    wa_phone_id?: string;
-    verified: boolean;
-    bound_at?: Date;
-    last_seen_at?: Date;
-  };
   timezone: string;
   status: 'active' | 'pending_verification' | 'inactive';
   /**
@@ -170,13 +163,6 @@ const CustomerSchema = new Schema<ICustomer>(
     },
     recent_product_code: { type: String, default: null },
     saved_payment_methods: { type: [SavedPaymentMethodSchema], default: [] },
-    wa: {
-      name: String,
-      wa_phone_id: String,
-      verified: { type: Boolean, default: false },
-      bound_at: Date,
-      last_seen_at: Date,
-    },
     timezone: { type: String, default: 'Africa/Douala', required: true },
     status: {
       type: String,

@@ -331,13 +331,6 @@ export interface IVendor extends Document {
    */
   policy_version: number;
   default_delivery_agency_id?: mongoose.Types.ObjectId | null;
-  wa?: {
-    verified: boolean;
-    wa_phone_id?: string;
-    name?: string;
-    bound_at?: Date;
-    last_seen_at?: Date;
-  };
   notification_preferences: {
     email: boolean;
     whatsapp: boolean;
@@ -412,13 +405,6 @@ const VendorSchema = new Schema<IVendor>(
     policies: { type: VendorPoliciesSchema, default: null },
     policy_version: { type: Number, default: 0 },
     default_delivery_agency_id: { type: Schema.Types.ObjectId, ref: MODELS.DELIVERY_AGENCY, default: null },
-    wa: {
-      verified: { type: Boolean, default: false },
-      wa_phone_id: { type: String },
-      name: { type: String },
-      bound_at: { type: Date },
-      last_seen_at: { type: Date },
-    },
     notification_preferences: {
       email: { type: Boolean, default: true },
       whatsapp: { type: Boolean, default: false },

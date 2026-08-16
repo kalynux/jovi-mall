@@ -4,6 +4,10 @@ import { productFileIdsSchema, pickupLocationSchema } from './product.validator'
 // two editors cannot disagree about what a bargain window is. Both schemas here
 // are .strict(), so omitting it would 400 the field rather than ignore it.
 import { BargainRangeSchema } from './variant.validator';
+// Likewise one definition, shared with the layered schemas. Both schemas below
+// are .strict(), so omitting it here would 400 the whole save rather than ignore
+// the field — see the header of rich-description.validator.ts.
+import { descriptionRichSchema } from './rich-description.validator';
 
 /**
  * Simple-mode product schemas.
@@ -43,6 +47,8 @@ export const CreateSimpleProductSchema = z.object({
     // draft creation: an empty description is an activation blocker, and this
     // endpoint's whole purpose is to come out the other side publishable.
     description: z.string().min(1, 'Description cannot be empty'),
+    // The structured document `description` above is the plain-text projection of.
+    descriptionRich: descriptionRichSchema,
     category: z.string().min(1, 'Category cannot be empty'),
     tags: tagsSchema.optional(),
     fileIds: productFileIdsSchema.optional(),
@@ -87,6 +93,8 @@ export const UpdateSimpleProductSchema = z.object({
     // ─── Product ──────────────────────────────────────────────────────────────
     title: z.string().min(3).max(200).trim().optional(),
     description: z.string().min(1, 'Description cannot be empty').optional(),
+    // Explicit `null` clears the stored document; absent leaves it alone.
+    descriptionRich: descriptionRichSchema,
     category: z.string().min(1, 'Category cannot be empty').optional(),
     tags: tagsSchema.optional(),
     fileIds: productFileIdsSchema.optional(),

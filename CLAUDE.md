@@ -88,6 +88,14 @@ npm run test:payout-methods                    # the shared payout schema + swit
 npm run test:booking-availability               # booking windows/timezones/seats (54, no DB needed)
 npm run test:customer-notifications             # customer catalog + balance settlement (30, no DB needed)
 npm run test:blog                              # article blocks, slugs, DTO projection (100, no DB needed)
+npm run test:rich-description                  # structured descriptions (149, no DB) — the WhatsApp and
+                                               # Telegram formatters asserted against the vendor
+                                               # dashboard's OWN fixtures byte-for-byte (two repos, no
+                                               # shared package), the href scheme allowlist, the
+                                               # null-clears semantics against a fake repository, and
+                                               # source scans proving the field reaches all four write
+                                               # endpoints while staying OUT of the $text index, the
+                                               # vectoriser payload and every public DTO
 npm run test:public-catalog                    # the storefront's visibility rules and projections
                                                # (86, no DB). Its core is a set of LEAK assertions:
                                                # DTOs are built from documents carrying vendorId,
@@ -108,10 +116,65 @@ npm run test:bargain-price                     # bargainable pricing (145, no DB
                                                # operators, and a SOURCE SCAN proving the rule is called
                                                # BEFORE the stock gate and the file reconcile, and that
                                                # cart/orders/earnings/cod/shipments never mention it
+npm run test:connections                       # the unified messaging-connection domain (100, no DB) —
+                                               # the 6-char code's alphabet and unbiased sampling, the
+                                               # normalizer's FIXED-POINT property (a generated code can
+                                               # never contain a glyph it rewrites, so it cannot collapse
+                                               # two live codes), a LEAK assertion that no DTO ever emits
+                                               # an external_id, and three SOURCE SCANS: the redeem route
+                                               # is under /api/me and NOT the rate-limit-exempt
+                                               # /api/webhooks, the store claims with SET NX and spends
+                                               # with an atomic Lua script, and no `wa` sub-document /
+                                               # telegram_links / wa_verify reference survives anywhere.
+                                               # Its scans strip COMMENTS first — the tombstones that
+                                               # explain what was deleted are the most useful thing in
+                                               # that diff, and a scan that forces their removal has made
+                                               # the codebase worse
 npm run test:password-epoch                    # password-change revocation: the iat-vs-epoch
                                                # predicate, the whole-second boundary that keeps the
                                                # caller's own replacement token valid, and a source
                                                # scan proving BOTH credential paths call it (25, no DB)
+npm run test:mobile-auth                       # bearer auth for cookie-less clients (103, no DB) —
+                                               # the /auth/mobile/* namespace, the token envelope,
+                                               # the two /api/auth rate-limit buckets, and the
+                                               # Capacitor origin rule. Three of its groups are
+                                               # SOURCE SCANS, because the invariants are structural
+                                               # and a regression is invisible elsewhere: the mobile
+                                               # controller must set no cookie, the credential bucket
+                                               # must stay the DEFAULT under /api/auth, and — the
+                                               # load-bearing one — requireAuth's silent refresh must
+                                               # stay ASYMMETRIC. It fires on a cookie or on no
+                                               # credential at all (the ordinary browser path past 15
+                                               # minutes, and the Flutter agent app's fallback) and
+                                               # never on an expired bearer. Tidying those two
+                                               # branches into symmetry signs out every browser.
+npm run test:messaging-login                   # bot sign-in + reset (158, no DB) — the 8-char code,
+                                               # the opaque link token, and the whole store driven
+                                               # against a FAKE REDIS, so mutual-kill and expiry are
+                                               # real assertions rather than source scans. Its two
+                                               # highest-value cases: the Telegram contact guard with
+                                               # a forwarded-contact fixture asserted REFUSED, and a
+                                               # BARE-DIGITS wa_phone_id resolving an account stored
+                                               # as +237… — the silent failure that reports "no
+                                               # account" to everybody while every other test passes.
+                                               # Plus LEAK assertions (no credential in a result
+                                               # field, a key name or a log line) and SOURCE SCANS
+                                               # (routes under /api/auth, identity from the context,
+                                               # link from STOREFRONT_URL). Also covers
+                                               # /reset-password: that it serves vendor, agency and
+                                               # agent where /login refuses them, and that it mints
+                                               # through the EXISTING PasswordResetService rather
+                                               # than a second token store
+npm run verify:messaging-login                 # the same feature against real infrastructure (37) —
+                                               # NEEDS Redis + Mongo. Boots the app in-process and
+                                               # redeems over real HTTP, so the cookies are proven
+                                               # rather than asserted. This is what caught KEEPTTL
+                                               # being unavailable on Redis 3.0, exactly as
+                                               # verify:connections caught GETDEL. Its reset half
+                                               # proves a bot-minted token really changes a VENDOR's
+                                               # password, that the old one stops working, and that
+                                               # a Telegram contact-share completes the RESET rather
+                                               # than signing the person in
 npm run test:errors                            # Phase 16: the taxonomy, the exposure policy, the
                                                # envelope, the body-parser branch and the rate-limit
                                                # policy (69, no DB). Includes a CENSUS of all 1362
@@ -135,6 +198,15 @@ npm run test:system                            # worker schedules, maintenance e
 npm run verify:logs                            # the logging sink against real Mongo (18) — proves the
                                                # collection is genuinely CAPPED, $collStats is permitted
                                                # here, and the warn+ level floor is enforced. NEEDS Mongo
+npm run verify:connections                     # messaging connections against real infrastructure (23) —
+                                               # NEEDS Redis + Mongo. Proves the two UNIQUE indexes
+                                               # actually BUILD (autoIndex fails silently, and without
+                                               # them "one account per messaging identity" is enforced by
+                                               # nothing), that two concurrent redemptions of one code
+                                               # yield exactly one winner, and that a second /connect
+                                               # revokes the first code. This is what caught GETDEL being
+                                               # unavailable on Redis 3.0. Writes then deletes its own
+                                               # `verify-conn-*` fixtures, pass or fail
 npm run verify:live-parity                     # agent↔agency smoke test — NEEDS Mongo
 npm run verify:blog                            # blog lifecycle + index builds + route order — NEEDS Mongo
 npm run verify:storefront                      # the storefront against real Mongo (28) — proves the
@@ -226,7 +298,9 @@ Three layers. **Layer A** (`globalRateLimiter`, mounted in `app.ts`) is IP-scope
 
 **Never classify a caller from an unverified JWT.** Selecting a *more generous* bucket from an attacker-chosen claim hands a forger the biggest one — that is the entire reason for the two-layer split rather than one clever limiter.
 
-Ceilings are backstops, not budgets (agent/admin 1200, vendor/agency 900, customer 600, anonymous 600/IP; **auth endpoints 20/IP**, the one strict number and the one security control). Redis DB 11. **The store fails OPEN** — `rate-limit-redis` rejects when Redis is down and express-rate-limit turns that into a 500 on *every* request, so `FailOpenStore` is not garnish: without it, wiring Redis in adds a single point of failure in front of every route. `/api/health*`, `/metrics` and `/api/webhooks/*` are exempt, with a written reason each.
+Ceilings are backstops, not budgets (agent/admin 1200, vendor/agency 900, customer 600, anonymous 600/IP; **credential endpoints 20/IP**, the one strict number and the one security control). Redis DB 11.
+
+**`/api/auth` is TWO buckets now, split by purpose and chosen by `authBucketDispatcher`.** The 20 is aimed at password spraying, and it was being spent by traffic that presents no password — `/auth/me` on every dashboard poll, `/auth/auth-me` on every app launch, `/auth/browser/refresh` on every renewal (the Flutter agent app calls that one every time). Behind a NAT the failure mode was the bad one: a refused refresh signs a user out, and their retry at the login form is refused too, by their neighbours. Session maintenance moved to `auth_session` (300/IP, `RATE_LIMIT_AUTH_SESSION_PER_MIN`); everything else stays at 20. Three properties: the list in `rate-limit/auth-paths.ts` is an **allowlist**, so a route added later inherits the strict bucket; it is a **dispatcher**, not two mounts, so a request is counted once and its `RateLimit` headers describe the counter that actually bound it; and it classifies on **`req.baseUrl + req.path`**, because inside a `use`-mounted layer Express has already stripped the prefix and a bare `req.path` would match nothing — silently, in the safe direction. **The store fails OPEN** — `rate-limit-redis` rejects when Redis is down and express-rate-limit turns that into a 500 on *every* request, so `FailOpenStore` is not garnish: without it, wiring Redis in adds a single point of failure in front of every route. `/api/health*`, `/metrics` and `/api/webhooks/*` are exempt, with a written reason each.
 
 `app.set('trust proxy')` and `express.json({ limit })` are load-bearing companions — the first because `req.ip` is the limiter's key, the second because `REQUEST_BODY_TOO_LARGE` is unreachable without a named ceiling.
 
@@ -258,7 +332,15 @@ Suspension is written **only** through `/api/internal/admin/vendors` as a compar
 **The deprecated top-level `Vendor.legit_verified` is gone**, and it was worse than dead: its schema path was commented out, so Mongoose strict mode silently stripped it from `setLegitVerified`'s `$set` — half that method never did anything — while `requireLegitBusiness` read it and would therefore have denied *every* vendor the day anybody attached it. The single source of truth is `kyc_details`, which now carries a three-valued `status` (`pending|verified|rejected`) beside the boolean, plus `verified_at`, `rejection_reason` and a reviewer stamp. `legit_verified` stays as the boolean projection because `agency-vendor-browse.dto.ts` renders `kycVerified` from it; the two are written in one `$set` and never apart.
 Vendor-scoped queries extract `req.auth!.role_entity._id.toString()` as `vendorId` and pass it to repositories, which enforce scoping at the query level.
 
-Token resolution order: `access_token` httpOnly **cookie first**, then `Authorization: Bearer`. On expiry `requireAuth` performs a **silent refresh** from the refresh cookie and transparently re-issues the access cookie — so bearer-only callers (e.g. geo-tracker forwarding a viewer's token) get no refresh and simply fail closed on expiry.
+**Token resolution: the BEARER first, then the `access_token` cookie — and `extractToken` reports which.** The order was reversed when the mobile namespace landed. No browser sets `Authorization` (none of the four dashboards does; the only place one is built points at geo-tracker), so preferring it is provably a no-op for cookie clients, and it closes a bug that is near-undiagnosable from the client side: a WebView routed through a native HTTP layer inherits the OS cookie jar, and a stale cookie beating a freshly-refreshed bearer produces 401s that look impossible.
+
+**The silent refresh is asymmetric, and the asymmetry is load-bearing.** `requireAuth` still refreshes from the refresh cookie when the caller presented **no credential at all** — that branch is the ordinary browser path once the 15-minute access cookie expires and is deleted, *and* the Flutter agent app's second refresh path, which sends `GET /auth/auth-me/agent` with a hand-built `Cookie: refresh_token=…` and no `Authorization`. It now refuses to refresh a caller who presented an **expired bearer**, answering `401 AUTH_TOKEN_EXPIRED`: refreshing from an ambient cookie there would authenticate the request as whoever that cookie belongs to while the client went on sending its own token. Tidying the two branches into symmetry signs out every browser session older than fifteen minutes; `test:mobile-auth` scans for it.
+
+**Bearer clients now have a way to obtain and renew a token: `/api/auth/mobile/*`.** A third namespace beside `/auth/browser/*`, same session model and same `AuthService` — only delivery differs. `login` · `register` · `refresh` · `auth-me/:role` · `add-role` return the pair as `data.tokens` (with `accessExpiresIn` / `refreshExpiresIn` in seconds) and **set no cookie**; `mobile-auth.controller.ts` contains no `setAuthCookies` and no `res.cookie`, asserted by a source scan. **The namespace is the switch — there is deliberately no `X-Client-Type` header.** A route separation makes "browser behaviour is unchanged" true by construction rather than by a check, costs no preflight on a non-safelisted header, and — the part that reaches across the boundary — avoids editing geo-tracker's closed CORS header list, so this stayed a one-sided change.
+
+`AuthService.rotateRefreshToken` now returns a **pair**; the cookie callers (`requireAuth`'s silent refresh, `POST /auth/browser/refresh`) simply do not read the refresh half, so cookie behaviour is byte-identical. Deliberately not an options flag — the flag restores the two code paths this collapses, for one discarded `jwt.sign`. ⚠ The consequence is real and is stated in `api-doc/auth/README.md` rather than smuggled: a bearer session's 30-day window becomes **sliding with no absolute cap**, so a stolen refresh token an attacker keeps refreshing never lapses. That is not new (`auth-me` has always re-issued both at full lifetime and every client calls it on launch); a password change remains the only early revocation.
+
+Cookie `maxAge` and JWT `expiresIn` now come from **one** pair of constants (`ACCESS_TOKEN_TTL_S` / `REFRESH_TOKEN_TTL_S` in `core/auth/token.issuer.ts`, which `cookie.config.ts` imports). They used to be two independent `parseInt`s of the same variables, agreeing only because the defaults matched — harmless while nothing published a lifetime, and a client refreshing at the wrong moment once `tokenEnvelope` started to.
 
 **`User.status` is now enforced, and on three paths rather than one.** It used to be written by nothing and read by nothing — `requireActiveUser` had zero call sites, `login` never looked at it, `rotateRefreshToken` never looked at it, and `UserRepository.updateStatus` had no callers. A suspended account was a label. `login`, `rotateRefreshToken` **and `requireAuth`** now refuse a non-`active` account with `403 AUTH_ACCOUNT_SUSPENDED`. The third is the load-bearing one: access tokens are stateless and 15 minutes long while the refresh cookie is 30 days, so a check at login alone would let a suspended person keep working and then silently refresh back in. `requireAuth` already loads the user row, so it costs a comparison and no query. **Consequence:** any `users` row already sitting at `suspended` loses access the moment this deploys, and there is no way for the person to get back in without an administrator — which is the correct meaning of the column, but check the count before rolling out.
 
@@ -275,7 +357,9 @@ The revocation list is one field. `UserRepository.updatePassword` stamps `User.p
 
 `401 AUTH_PASSWORD_CHANGED` on both paths — 401 rather than the suspensions' 403 because re-authenticating *is* the remedy, and a browser's silent refresh meets the same verdict on the refresh path and stops rather than loops. Covered DB-free by `npm run test:password-epoch` (25), which includes a source scan of both call sites: a predicate nobody calls protects nothing, and that is the state this feature was in.
 
-`JWT_SECRET` falls back to the literal string `'secret'` here, while geo-tracker fails closed on an empty secret. A misconfigured deploy therefore fails asymmetrically — treat the fallback as a known smell, not a default to rely on.
+**`JWT_SECRET` fails closed here too, and this note used to say otherwise.** `getJwtSecret()` (`config/secrets.config.ts`) throws `CONFIG_MISSING_JWT_SECRET` when unset and additionally refuses a value under 16 characters or a known placeholder in production, with `assertSigningSecrets()` running at boot — so a deploy without it does not start, exactly as geo-tracker's does not. The old `|| 'secret'` fallback is gone; the claim survived here long enough to be quoted back at us in a frontend spec, which is the argument for [verify-docs-against-code].
+
+**`POST /auth/login` checks the password.** For a period `bcrypt.compare`'s verdict was computed and discarded — any password authenticated any account, for every role. Restored, with **no environment escape hatch**: a bypass whose failure direction is "open on a typo" is what `config/env.ts`'s own header argues against, and a seed that relied on the hole needs a real password rather than a flag. `test:mobile-auth` asserts both the check and the absence of any variable that could disable it.
 
 ### Configuration (`src/config/env.ts` + the module configs)
 
@@ -866,6 +950,69 @@ Covered DB-free by `npm run test:bargain-price` (145). Contract in
 `api-doc/FRONTEND-CHANGELOG-bargainable-pricing.md`. **This phase is configuration only** — there
 is no offer/counter-offer flow and no path by which a bargained price reaches a cart or an order.
 
+### Structured product descriptions (`src/core/richtext/`)
+
+A product carries **two** descriptions and they are one value in two forms.
+`description` is plain text; `descriptionRich` is the typed block document the
+vendor authored in the dashboard's formatting editor. They always travel
+together — the client sends the pair — and **the server never derives one from
+the other**, because a client with no formatting editor sends `description`
+alone and must not have a document invented for it.
+
+**`description` stays authoritative for everything except chat formatting.** It
+is the only one of the two the storefront renders, `product_storefront_text`
+tokenises and the vectoriser embeds. Three rules follow and none is optional:
+`descriptionRich` is **not** in the `$text` index (a `$text` index on a nested
+document tokenises its structural keys and every `href`, handing a vendor free
+relevance for words no customer typed), **not** in the vectoriser payload, and
+**not** in any public DTO. The activation gate still reads `description`, so an
+emptied document produces an empty projection and `CATALOG_PRODUCT_NO_DESCRIPTION`
+still fires.
+
+Four properties are load-bearing:
+
+- **All four write endpoints accept it, and they had to land together.** The two
+  `/simple` schemas are top-level `.strict()`, so an unknown key there is a
+  `400` on the *entire* save rather than a stripped field, while the two layered
+  ones merely strip it. Adding it to only some would make the advanced wizard
+  appear to work while quick-add 400s on every save. One shared fragment
+  (`validators/rich-description.validator.ts`) is wired onto all four.
+- **`null` clears; absent leaves alone.** Every hop reads it with
+  `!== undefined`, never a truthiness check. A `!command.descriptionRich` guard
+  turns "the vendor deleted their formatting" into "leave it alone", and the
+  next read resurrects formatting they removed on purpose.
+- **The `href` scheme allowlist is enforced at PARSE time** (`https`/`http`/
+  `mailto`/`tel`), not at render time. A `javascript:` href caught only by a
+  renderer is one missed call site away from being live. The column is
+  Mongoose `Mixed`, so that Zod schema is the *only* shape check there is —
+  the same position `article-body.validator.ts` holds for the blog.
+- **Formatted output is fitted by trimming the DOCUMENT, never the string.**
+  Cutting WhatsApp output can sever a `*` and the client renders the rest as one
+  bold run; cutting Telegram HTML severs a `</b>` and the Bot API rejects the
+  whole send. `fitFormatted` trims the document, measures, and feeds the marker
+  overhead back as a smaller budget.
+
+`core/richtext/` is a **file-for-file mirror** of the dashboard's
+`src/lib/richtext/` — there is no shared package, so `test:rich-description`
+(149, no DB) asserts this side's WhatsApp and Telegram output against the
+dashboard's own fixtures byte-for-byte. A vocabulary change is a two-repo change.
+
+⚠️ **`telegram-bot.service.ts` no longer hardcodes `parse_mode: 'Markdown'`**,
+and that was a live defect rather than preparation. Every message this service
+sends interpolates user-authored text, and any `_`, `*`, `[` or backtick in it
+made the Bot API answer `400 can't parse entities`, `sendMessage` return `false`,
+and the notification vanish with only a log line — a vendor trading as
+"Chez L_Artisan" was simply never told anything. `parseMode` is now an explicit
+option **defaulting to `'none'`** (an unformatted message always arrives; a
+malformed formatted one arrives not at all), all four notification stacks compose
+their body through `toTelegramNotificationBody` (escaped HTML), and MarkdownV2 is
+deliberately not offered — eighteen escape characters that commerce prose collides
+with constantly, where one miss drops the message rather than degrading it.
+
+Contract: `api-doc/vendor/product-description-rich.md`; the dashboard hand-off is
+`api-doc/FRONTEND-CHANGELOG-rich-descriptions.md`. **No product-share send path
+exists yet** — the formatters are ready and nothing calls them.
+
 ### Blog / editorial (`src/modules/blog/`)
 
 The marketing site's article pages, in two halves that never touch: a **public reader**
@@ -1030,7 +1177,9 @@ Services never enter the cart; they are booked. Availability → 15-min Redis ho
 **Customers are notified now** — see the notifications section. `BookingReminderWorker` fires ~24h before `startAt`, which the platform owed them: it records `no-show` against people it had never once reminded. Each sweep covers `[now+lead, now+lead+interval)` so consecutive passes tile exactly, and the idempotency key makes a replay harmless.
 
 ### Redis (`src/infra/redis/redis.factory.ts`)
-Uses dedicated DB indices (3–10) per feature (email tokens, WhatsApp codes, booking slot locks, download tokens, etc.). Connects lazily — **never at boot**, which is why the readiness probe treats it as non-required (see System operations above).
+Uses dedicated DB indices per feature (email tokens, booking slot locks, download tokens, connection codes, etc.). Connects lazily — **never at boot**, which is why the readiness probe treats it as non-required (see System operations above).
+
+⚠ **4 and 9 are RETIRED, not free.** They held `wa_verify:{CODE}` and `tlgt:{token}` for the two account-linking mechanisms that `CONNECTION_CODE_DB` (13) replaced. They are left unassigned so a stale key from a pre-cutover deployment cannot be read back by whatever claims the number next.
 
 `REDIS_DB_CATALOG` is the table three separate features needed (`/system/dependencies`, `/system/cache`, the flush allowlist) and which previously existed only as trailing comments on the eight constants. The constants stay exported, so no call site changed.
 
@@ -1057,10 +1206,158 @@ Inert when `GEO_TRACKER_BASE_URL` is unset — the outbox still fills, nothing d
 
 **Caveat worth knowing:** the outbox is *not* transactional with the state change it describes. `ShipmentService._emitTrackingStatusChanged` fires after `runInTransaction` returns, fire-and-forget, and the subscriber enqueues asynchronously — so a crash between commit and enqueue loses the event, despite the model's docstring claiming crash-durability. A true outbox writes in the same transaction as the state change.
 
+### Messaging connections (`src/modules/channel-connections/`)
+
+**One mechanism connects any messaging channel to an account, and the code travels bot → user → platform.** It replaced two flows that shared nothing: WhatsApp minted a 16-hex code into a `wa` sub-document duplicated on **four** role models (with an `update_other_roles` flag to fan it out, and no uniqueness index anywhere, so two accounts could claim one number), while Telegram minted a deep-link token into a user-scoped `telegram_links` collection. Both had the *platform* mint the secret.
+
+Now the **bot** mints. A user sends `/connect`, the bot answers with a 6-character code stored against the *messaging identity* it can actually observe, and `POST /api/me/connections` binds that identity to whoever is authenticated. Neither half is told something it cannot verify.
+
+Five things are load-bearing:
+
+- **It binds to the User, never a role entity.** One person has one WhatsApp number. `channel_connections` carries two unique compound indexes: `(user_id, channel)` — one connection per channel per account — and `(channel, external_id)` — one account per messaging identity, which is the constraint WhatsApp never had. `autoIndex` fails *silently*, so `npm run verify:connections` is the only place they are proven to build.
+- **Six characters is 2^30, which is NOT enough on its own.** Four guards make it safe: `issue()` revokes the identity's previous code so the guessable set never accumulates; `consume()` is atomic so a code cannot be spent twice; a per-account attempt counter (5 per 10 min) bounds guessing; and `CONNECTION_CODE_POLICY` — the service's **first Layer C limiter** — bounds it again at 30/min per **IP**. The last two key on different axes deliberately: accounts are free to mint, so an account-scoped limit alone bounds nothing. Remove one and the code length becomes the whole defence.
+- **The bot webhooks are authenticated now, and `/connect` is why.** They were open — no secret, no signature, unlike geo-tracker's HMAC and the payment gateways' — which was tolerable while they only *redeemed* a code somebody already held. `/connect` makes them **mint** one for whatever identity the request names, so an open endpoint lets anyone mint a code against a stranger's number and attach it to their own account. `BOT_WEBHOOK_SECRET` + `X-Webhook-Secret`, timing-safe; **unset refuses in production and warns in development**, and `reportBotWebhookGuard` prints the state at boot. Setting it means setting it on the automation layer too.
+- **`/connect` reads the sender from the CONTEXT, never the payload.** The controller puts `wa_phone_id` / `chat_id` there from the webhook's own fields; the payload is caller-supplied and carries cosmetic name/handle only. The deleted `link` command read `payload.wa_data.wa_phone_id`, which is the same trust mistake one layer down. Source-scanned.
+- **The reply is RETURNED, not sent.** The command result carries `message` and the automation layer relays it. Sending from here would mean two outbound APIs, two failure modes, and a code minted whether or not anyone received it. It is also the one piece of outbound copy in this service that is **English only** — localisation reads `preferred_language` off a role entity, and at `/connect` time there is no account to read.
+- **`CONNECTION_CODE_EXPIRED` and `CONNECTION_CODE_INVALID` are different answers**, and the key TTL is what buys that: it is validity **plus a grace window**, with `expiresAt` in the record deciding redeemability. A store whose TTL *is* its validity can only ever say "invalid", which is the wrong thing to tell the common failure (a slow user). The bounded cost is a small oracle, accepted here because the code names no account — contrast `AUTH_RESET_TOKEN_INVALID`, which stays undifferentiated because a reset token does.
+- **The consume is a Lua script, not `GETDEL`.** `GETDEL` needs Redis 6.2 and the dev Redis here is **3.0**, where it is an unknown command — caught by `verify:connections`, invisible to any source scan. A script is atomic from 2.6 and is the shape `core/jobs/worker-lock.ts` already uses. It must never become a `get` then a `del`: that is exactly what made the old Telegram token redeemable twice while its docstring called it single-use.
+- **The alphabet excludes I, L, O and U**, and `normalizeConnectionCode` maps `O→0`, `I/L→1` on both the mint and the redeem side. Because no *generated* code can contain those glyphs, normalization only ever rescues a mistyping user and can never collapse two live codes — `test:connections` asserts every generated code is a fixed point of it.
+- **The endpoints are under `/api/me`, deliberately not `/api/webhooks`.** That prefix is exempt from rate limiting and from maintenance windows, and both predecessors had inherited those exemptions purely by being routed next to a webhook. Under `/api/me` the redeem endpoint gets Layer B on top of its own attempt counter. `test:connections` source-scans for it.
+
+`external_id` **never leaves the service** — `domain/identity-mask.ts` renders `••••1234` or `@handle`, and the DTO has no expanded variant. Telegram's old `isActive` toggle is gone with the rest: it muted delivery *and* made `telegramVerified` report `false`, so a connected user was offered "Connect" again.
+
+**The linking rules are a closed table** (`ConnectionService.redeemCode`): unconnected → bind; already this account → **idempotent success**, no second row; another account → `409 MESSAGING_IDENTITY_ALREADY_LINKED`, never a silent transfer, and the refusal names no account because the caller already knows the *identity* and must not learn who else holds it. A code is spent by the attempt, so even a refusal means "send `/connect` again".
+
+Contract: `api-doc/connections/README.md`. Covered by `npm run test:connections` (100, no DB) and `npm run verify:connections` (23, NEEDS Redis + Mongo).
+
+### Messaging login (`src/modules/messaging-login/`)
+
+The module owns **bot-initiated account access**: resolving a messaging identity to an account,
+the Telegram contact-share handshake, and the two credentials that follow — `/login` (a
+customer session) and `/reset-password` (a password-reset link, any role).
+
+**A customer sends `/login` to the bot and gets two credentials for ONE session** — a magic
+link and an 8-character code. Either signs them in, using one kills the other, both die in ten
+minutes. It shares `/connect`'s webhook, command bus and code alphabet and **nothing else**,
+which is why it is a separate module: `/connect` mints a credential for a messaging identity
+nobody owns yet, this mints one that **grants a session on an existing account**. Folding them
+together would put a passwordless login path inside the module every notification service
+imports, and make one blast radius look like the other.
+
+**The session is always `customer`.** The role is a literal in `MessagingLoginService`, never
+read from a request or from the stored record, and a customer role is **never auto-provisioned**
+— a vendor who messages the bot is told to use their password.
+
+- **Identity resolution is a three-step ladder** (`identity-resolver.service.ts`), and it reads
+  `channel_connections` rather than a new column: that collection already *is* the
+  `(user, channel, external_id)` mapping, with unique indexes both ways, and a second one would
+  drift. (1) the identity is already bound — instant, both channels. (2) **WhatsApp only:**
+  `wa_phone_id` IS the sender's number, so it matches `login_phone` directly; the connection is
+  persisted so step 1 serves every later `/login`. (3) **Telegram only:** a `chat_id` matches no
+  column anywhere, so the bot asks for a verified contact.
+- ⚠ **`wa_phone_id` arrives as BARE DIGITS and `login_phone` is strict E.164**, and the shared
+  helpers do not bridge that gap — `toE164('237600123456')` is `null`. A naive
+  `findByPhone(wa_phone_id)` therefore matches **nothing, for every user**, while looking
+  perfectly implemented. `messagingPhoneToE164` prepends the `+` when the value is all digits;
+  Telegram's `contact.phone_number` has the same inconsistency and goes through the same
+  function. Both suites carry a bare-digits fixture — it is the single easiest way to ship this
+  broken.
+- ⚠ **The Telegram contact guard is the whole security of that path.** A user can share somebody
+  else's contact card and it arrives in the same shape, so only a contact whose `user_id` is the
+  sender's own is accepted; missing or mismatched is refused outright (`400
+  MAGIC_CONTACT_UNVERIFIED`), never treated as a hint. The comparand is the **context's**
+  `chat_id`, not a payload `from.id` — in a private chat they are the same number, and taking
+  both sides from the payload would make the guard forgeable by anyone reaching the webhook.
+- **One record, several pointers, on `LOGIN_CODE_DB` (14).** `login:session:{id}` holds the
+  record; the link, the code and the messaging identity are keys pointing at it. Spending is one
+  atomic delete of the **record**, which is what makes "using either kills the other" true
+  without a second source of truth. It stores **ids, never a snapshot** — every gate
+  (status, role, customer profile) is re-checked at **redemption**, so a suspension inside the
+  ten minutes is seen.
+- ⚠ **The grace window is on the credential pointers too, not only the record.** A pointer
+  expiring at plain TTL could never resolve to its record, so `MAGIC_*_EXPIRED` would be
+  unreachable and every late user would be told INVALID. The *identity* pointer keeps the
+  validity alone — an expired session needs no revoking.
+- **Key names are hashed; values are not.** `/system/cache/keys` lists key names and offers no
+  value read, so a raw token there is a live session credential on the ops surface and a raw
+  phone number is personal data in a listing. `digestForKey` covers the token, the code, the
+  identity and the attempt counter. This goes further than `channel-connections`, deliberately.
+- ⚠ **`MAGIC_CODE_INVALID` is ONE code for four situations** — wrong code, unknown identifier,
+  expired-and-swept, and a code/identifier mismatch. Splitting any of them makes the endpoint a
+  registration oracle answering "is this phone a customer here?" for any number, with no account.
+  `MAGIC_CODE_EXPIRED` is reached only *after* the code is matched to the record's own account.
+- ⚠ **The magic link points at `STOREFRONT_URL`, never `API_PUBLIC_URL`, and the page POSTs the
+  token.** WhatsApp and Telegram *fetch* URLs to build preview cards, so a `GET` that signed you
+  in would be spent by the crawler before the user tapped — a dead link, every time.
+- **The redeem routes sit under `/api/auth`** so they inherit the 20/min credential bucket;
+  `rate-limit/auth-paths.ts` is an allowlist, so *not* naming them there is how they get it.
+
+**`/reset-password` is the same ladder with a different gate, and it serves EVERY role.**
+`resolveForReset` runs steps 1–3 exactly as `/login` does and then checks only that the account
+is active — no customer role, no customer profile. A password belongs to the `users` row, so
+gating it on the customer role would lock out precisely the people most likely to have one to
+forget (customers largely do not have a password at all). It is therefore the only self-service
+recovery a vendor or agency has from a chat, **and** the route by which a passwordless customer
+acquires a real password.
+
+- **It is a new ENTRANCE, not a second reset mechanism.** `PasswordResetService.issueResetLinkFor`
+  shares `mintToken` and `buildResetLink` with the email/WhatsApp path, so the token, its 30
+  minutes, its `password_reset:` key space and its redemption at `POST /auth/reset-password`
+  are the existing ones — including the `password_changed_at` stamp that makes a reset revoke
+  every live session. A second store is how the two entrances drift on single-use or on
+  expiry; `test:messaging-login` asserts there is exactly one `randomBytes(32)` and one
+  `/reset-password?token=` in that file.
+- **It may say "no account" where `POST /auth/forgot-password` may not.** That endpoint must
+  answer identically for a real and an imaginary account because an anonymous caller chooses
+  the identifier; a bot caller has already proved they control the number, so the oracle does
+  not exist. Same reasoning as `/login`.
+- **No identity-scoped revocation, deliberately** — unlike `/login`'s credentials. A reset
+  token is 2^256, so several live at once is not a guessing risk, and the email path has never
+  revoked either; adding it on one path only would make the two disagree for no gain.
+- **Link previews are harmless here**, unlike the magic sign-in link: this URL is a page whose
+  token is spent by the form's POST, so a crawler fetching it changes nothing.
+
+⚠ **The Telegram contact-share now serves TWO commands, so it needed state.** Both commands hit
+the same wall on an unknown chat and answer it with the same keyboard, but the contact that
+comes back says nothing about which was asked. `pending-intent.store.ts` records it when the
+prompt is rendered and `login_contact` reads it. The original design note said no Redis state
+was needed there — true while there was one intent. Three properties: the state is **ours, not
+n8n's** (a workflow we do not version or test must not hold security-relevant state, and a
+third command would mean re-editing it); it is **a hint, never an authorisation** — the contact
+guard, the ladder and the refusal table all run identically, so a lost key degrades to the
+default; and **the default is `login`**, the lesser outcome, because defaulting to `reset` would
+hand a reset credential to somebody who never asked.
+
+**Customers are passwordless in practice, and that changed registration.** `RegisterSchema` no
+longer requires `password` for `role: 'customer'` and **strips one if sent** — honouring a
+caller-supplied password would create accounts whose password somebody else chose and knows.
+`AuthService.register` mints a random one (`core/auth/system-password.ts`, 32 bytes base64url,
+under bcrypt's 72-byte truncation limit) so `password_hash` stays `required: true` and the reset
+flow has something to replace. Every other role is unchanged, and `role` still defaults to
+`vendor`, so an old body with neither field is refused exactly as before. Consequence:
+**`POST /auth/login` always fails for a customer who has never reset**, so the storefront must
+route them to the messaging flow rather than showing a password field that cannot work.
+
+⚠ `telegram.controller.ts` used to flatten **every** webhook error into `INTERNAL_SERVER_ERROR`,
+keeping only the message — so a command raising a deliberate code had it erased. An `AppError` is
+now forwarded unchanged; that is what lets `MAGIC_CONTACT_UNVERIFIED` be distinguishable from a
+null-pointer bug.
+
+**The feature is inert without n8n work** (outside this repo): map `/login` **and
+`/reset-password` → `reset_password`**, relay `message` verbatim, render a `request_contact`
+keyboard on `requestContact: true` (**both** commands can return it), post an inbound `contact`
+as `login_contact` **with `user_id`** (one mapping serves both — this service decides which it
+completes), relay `error.message` on a 400, and disable link previews.
+
+Contract: `api-doc/auth/magic-login.md`. Covered by `npm run test:messaging-login` (158, no DB —
+it drives the real store against a fake Redis) and `npm run verify:messaging-login` (37, NEEDS
+Redis + Mongo — it boots the app in-process, redeems over real HTTP, and proves a bot-minted
+reset token really changes a **vendor's** password and that the old one stops working).
+
 ### Key external integrations
 - **Google Calendar** — OAuth 2.0 with encrypted token vault (`src/modules/integrations/calendar/`)
-- **WhatsApp** — Meta Cloud API v18.0 (`src/modules/whatsapp/`)
-- **Telegram** — Bot notifications and account linking (`src/modules/telegram/`)
+- **WhatsApp** — Meta Cloud API v18.0 (`src/modules/whatsapp/`) — outbound messaging + the bot webhook. Account connection is **not** here (see above)
+- **Telegram** — Bot API sends + the bot webhook (`src/modules/telegram/`). Account connection is **not** here (see above)
 - **Email** — SMTP (Nodemailer + Handlebars templates) or console provider (`src/modules/mail/`)
 
 ## Critical Files
@@ -1081,6 +1378,8 @@ Inert when `GEO_TRACKER_BASE_URL` is unset — the outbox still fills, nothing d
 | Error code registry | `src/core/error-codes.ts` |
 | Base repository | `src/core/repositories/base.repository.ts` |
 | Auth middleware | `src/api/middlewares/auth.middleware.ts` |
+| Passwordless `/login` identity ladder (D-1, the E.164 repair) | `src/modules/messaging-login/services/identity-resolver.service.ts` |
+| The Telegram contact-share guard | `src/modules/messaging-login/commands/login-contact.command.ts` |
 | Storage factory/singleton | `src/core/storage/storage.factory.ts` |
 | Geocoding provider abstraction | `src/core/geocoding/` (factory, `getGeocodingProvider()`, Nominatim adapter) |
 | GeoAddress value object (all address sites) | `src/core/types/geo-address.types.ts` |

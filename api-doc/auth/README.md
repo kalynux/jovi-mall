@@ -14,33 +14,48 @@ http://localhost:8022/api
 
 The auth system handles user registration, login, token management, and account verification. Authentication is **role-based** — every user has one or more roles (`vendor`, `customer`, `agency`, `agent`, `admin`), and all JWTs are scoped to a **single active role** at a time.
 
-> ## 🚨 KNOWN HOLE — `POST /auth/login` does not check the password
+> ## ✅ Closed (2026-08-14) — `POST /auth/login` checks the password again
 >
-> `auth.service.ts:203-204` computes `bcrypt.compare(...)` and **throws the result away** —
-> the `if (!isValid) throw` line is commented out. **Any password authenticates any account**,
-> for every role.
+> For a period `auth.service.ts` computed `bcrypt.compare(...)` and **threw the result
+> away**: any password authenticated any account, for every role. The throw is restored,
+> deliberately with **no environment escape hatch** — a bypass whose failure direction is
+> "open on a typo" is what the environment validator exists to argue against.
 >
-> This is recorded here rather than fixed because it was explicitly scoped out of the
-> storefront work (2026-08-14), and because password reset was built on this same path in the
-> same change: the reset flow itself is correct, but the login it protects is not, so **the
-> reset does not currently reduce anyone's exposure**. Everything downstream — the
-> password-epoch revocation, the suspension checks, the credential rate limit — is sound and
-> is simply being bypassed at the front door.
+> Everything downstream was always sound — the password-epoch revocation, the suspension
+> checks, the credential rate limit — and was simply being bypassed at the front door.
 >
-> Fixing it is one line. The caveat worth knowing before flipping it: any dev, seed or test
-> flow that relies on "any password works" breaks immediately, and seeded accounts will need
-> their real passwords.
+> **If a seed, fixture or dev account relied on "any password works", it needs a real
+> password now.** `npm run test:mobile-auth` asserts the check is enforced and that no
+> environment variable can disable it.
 
-### Session Strategy: Two-Cookie JWT
+### Session Strategy: two delivery modes, one session model
 
-On every successful login or registration, the server sets **two HttpOnly cookies**:
+The tokens are the same everywhere — same claims, same lifetimes, same secrets, same
+revocation. Only **delivery** differs, and it is chosen by the route namespace, never by a
+header:
+
+| Namespace | Delivery | For |
+|---|---|---|
+| `/auth/*` | two **HttpOnly cookies** | browsers |
+| `/auth/browser/*` | the same two cookies | OAuth redirect flows needing a stable login URL |
+| `/auth/mobile/*` | a **`tokens` object in the response body** | native / WebView clients that cannot use a cookie |
+
+See [Mobile namespace](#mobile-namespace--bearer-clients) below.
+
+On every successful login or registration **through the cookie namespaces**, the server sets
+**two HttpOnly cookies**:
 
 | Cookie | TTL | Purpose |
 |--------|-----|---------|
 | `access_token` | 15 min | Authenticates requests |
 | `refresh_token` | 30 days | Issues new access tokens without re-login |
 
-Both cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` in production. **Tokens are not returned in the response body.**
+Both cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` in production. **On `/auth/*` and
+`/auth/browser/*`, tokens are never returned in the response body** — only `/auth/mobile/*`
+returns them, and it sets no cookie at all.
+
+The cookie `max-age` and the token's own `exp` are derived from the *same* two constants
+(`core/auth/token.issuer.ts`), so a cookie can never outlive or predecease the token inside it.
 
 ---
 
@@ -114,16 +129,54 @@ A user can hold **multiple roles** and log in under any of them independently.
 | `POST` | `/auth/add-role` | Required | Add a second role to an existing account |
 | `POST` | `/auth/send-email-verification` | Required | Send email verification link |
 | `GET` | `/auth/verify-email` | Public | Confirm email via token link |
-| `POST` | `/auth/request-wa-verification` | Required | Start WhatsApp phone verification |
 | `POST` | `/auth/forgot-password` | Public | Start a password reset. **Always answers 200** |
 | `POST` | `/auth/reset-password` | Public | Redeem a reset token and set a new password |
 | `POST` | `/auth/browser/login` | Public | Browser-namespace login (JSON only) — see below |
 | `POST` | `/auth/browser/refresh` | Public (cookie) | Explicitly issue a new access token from the refresh cookie |
 | `POST` | `/auth/browser/logout` | Public | Browser-namespace logout (JSON only) |
+| `POST` | `/auth/mobile/login` | Public | Log in, **tokens in the body**, no cookies |
+| `POST` | `/auth/mobile/register` | Public | Register, tokens in the body |
+| `POST` | `/auth/mobile/refresh` | Public (body) | Exchange a refresh token for a **fresh pair** |
+| `GET` | `/auth/mobile/auth-me/:role` | Required | Restore session + a fresh pair |
+| `POST` | `/auth/mobile/add-role` | Required | Add a role + a pair scoped to it |
+| `POST` | `/auth/magic/link` | Public | Redeem a magic link — **passwordless customer sign-in** |
+| `POST` | `/auth/magic/code` | Public | Redeem an 8-character sign-in code with a phone or email |
 
-There is **no** `POST /auth/refresh` or `/auth/verify-code` on this service; the table above is
-the complete auth surface (`src/modules/auth/auth.routes.ts` +
-`src/modules/auth/routes/browser-auth.routes.ts`).
+There is **no** `POST /auth/refresh` or `/auth/verify-code` on this service, and no
+`/auth/mobile/logout`; the table above is the complete auth surface
+(`src/modules/auth/auth.routes.ts` + `routes/browser-auth.routes.ts` +
+`routes/mobile-auth.routes.ts` + `modules/messaging-login/messaging-login.routes.ts`).
+
+> ### ⚠ Customers sign in through the bot, not through this form
+>
+> `/auth/magic/*` redeems the two credentials a customer gets by sending **`/login`** to the
+> WhatsApp or Telegram bot. It is not a convenience — it is the **primary customer sign-in
+> path**, because customers are registered with a system-generated password that is never
+> disclosed to them.
+>
+> So `POST /auth/login` will **always fail for a customer who has never run a password reset**,
+> and `POST /auth/register` no longer requires `password` for `role: "customer"` (and ignores
+> one if sent). Every other role is unchanged.
+>
+> Full contract, including the Telegram contact-share step and the deliberately
+> undifferentiated error codes: **[magic-login.md](./magic-login.md)**.
+
+> ### Password reset has a bot entrance too, for EVERY role
+>
+> Sending **`/reset-password`** to the WhatsApp or Telegram bot replies with the same link
+> `POST /auth/forgot-password` sends by email and WhatsApp — same token, same 30 minutes, same
+> single use, redeemed by the same `POST /auth/reset-password`. It is a new *entrance*, not a
+> second mechanism.
+>
+> Unlike `/login`, it serves **vendors, agencies and agents as well as customers**: a password
+> belongs to the account, not to a role. It is therefore the only self-service recovery a vendor
+> or agency has from a chat, and the way a passwordless customer acquires a real password.
+> See [magic-login.md](./magic-login.md#reset-password--a-reset-link-from-a-chat-any-role).
+
+> **`POST /auth/request-wa-verification` was removed.** It minted a code the user carried to
+> the WhatsApp bot. Connecting a messaging account is no longer an auth concern at all — it is
+> `POST /api/me/connections`, the bot mints the code, and it covers Telegram too. See
+> [../connections/README.md](../connections/README.md).
 
 ---
 
@@ -212,10 +265,28 @@ Both endpoints inherit the credential bucket below (20/min/IP).
 
 ### Rate limiting
 
-The whole `/auth` prefix — both routers — sits behind the **credential bucket**: 20 requests per
-minute per IP, the strictest limit in the service, applied before authentication. It covers
-login, registration, verification-code resend and the browser namespace alike. See
-[rate-limits.md](../rate-limits.md).
+The `/auth` prefix — all three routers — sits behind **two** IP-scoped buckets, chosen per path
+and applied before authentication:
+
+| Bucket | Limit | Paths |
+|---|---|---|
+| **credential** | **20/min/IP** | everything that presents a credential: `login`, `register`, `forgot-password`, `reset-password`, `add-role`, the verification routes, and the `browser`/`mobile` login + register twins. **The default** — a route added here later inherits it |
+| **session** | **300/min/IP** | everything that merely extends a session you already hold: `/auth/me`, `/auth/auth-me/:role`, `/auth/mobile/auth-me/:role`, `/auth/browser/refresh`, `/auth/mobile/refresh` |
+
+Exactly one of the two applies per request. The credential number is the strictest in the
+service and is a security control, not a backstop; the session number is a backstop, and
+Layer A (1200/IP) plus Layer B (600–1200/user) still apply on top of both.
+
+> ⚠ **On an *authenticated* route, `RateLimit: remaining=…` describes Layer B, not the bucket
+> above.** Layer B is attached at the tail of `requireAuth`, so it writes its headers last and
+> overwrites whatever ran before it. On `GET /auth/me` as a customer you will therefore read
+> `RateLimit-Policy: 600;w=60` — the per-*user* ceiling — even though the 300/IP session bucket
+> also counted the request. This is not new to the split (Layer A has always been overwritten
+> the same way); it is worth knowing because the header you can read is the per-user one, and it
+> is usually the one you would want. On an unauthenticated route (`login`, `mobile/refresh`) the
+> header is the IP bucket, because Layer B never runs.
+
+See [rate-limits.md](../rate-limits.md).
 
 ---
 
@@ -242,14 +313,32 @@ Creates a new user and a role profile in one step. Sets both auth cookies on suc
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | `phone` | string | ✅ | **E.164, with the `+` and country code** (`+2348012345678`). Used as login identifier. Must be unique. Stored canonicalised — formatting you send (spaces, dashes, parentheses) is stripped. See [Contact formats](../README.md#contact-formats-phone--email). |
-| `password` | string | ✅ | Min 6 characters. |
+| `password` | string | **conditionally** | Min 6 characters. **Required for every role EXCEPT `customer`** — see the note below. |
 | `name` | string | ✅ | Min 2 characters. Used for all roles. |
 | `role` | string | ✅ | One of: `customer`, `vendor`, `agency`, `agent`. Defaults to `vendor`. |
 | `email` | string | ❌ | Required for `vendor`. Must be unique. Validated and **lowercased** — see [Contact formats](../README.md#contact-formats-phone--email). |
 | `business_name` | string | ❌ | For `vendor` role. Falls back to `name`. |
 | `agency_name` | string | ❌ | For `agency` role. Falls back to `name`. |
 
-> **Customer registration**: only `phone`, `password`, `name`, and `role: "customer"` are needed.
+> **Customer registration**: only `phone`, `name`, and `role: "customer"` are needed.
+
+> ### ⚠ A customer's `password` is not required, and is IGNORED if sent
+>
+> Customers are passwordless in practice — they sign in through **`/login`** on WhatsApp or
+> Telegram ([magic-login.md](./magic-login.md)). The account is created with a
+> system-generated password that is hashed and disclosed to nobody, so `User.password_hash`
+> stays satisfied and the reset flow has something to replace.
+>
+> The field is **stripped**, not merely optional: honouring a caller-supplied password would
+> create accounts whose password somebody else chose and knows. A client that still sends one
+> gets a normal `201` — it simply will not work at `POST /auth/login`.
+>
+> **Nothing changed for `vendor`, `agency` or `agent`**: a body omitting `password` for any of
+> them is still a `400`, and `role` still defaults to `vendor`, so an old body with no `role`
+> and no `password` is refused exactly as before.
+>
+> A customer who wants a real password uses `POST /auth/forgot-password`, which delivers over
+> email **and** WhatsApp.
 
 ### Response `201`
 
@@ -387,12 +476,24 @@ None.
 
 Issues a new `access_token` cookie using the `refresh_token` cookie.
 
-> **Note:** There is **no** `POST /auth/refresh` on the main auth router. Two refresh paths exist:
-> 1. **Automatic (recommended):** `requireAuth` performs a *silent refresh* from the `refresh_token`
->    cookie whenever the access token is missing/expired, transparently re-issuing the access cookie —
->    so browser clients rarely need to refresh explicitly.
-> 2. **Explicit:** `POST /auth/browser/refresh` (this endpoint), for clients that want to refresh
->    proactively. Bearer-only callers (mobile/service) cannot silently refresh — they must re-login on expiry.
+> **Note:** There is **no** `POST /auth/refresh` on the main auth router. Three refresh paths exist:
+> 1. **Automatic (recommended for cookie clients):** `requireAuth` performs a *silent refresh*
+>    from the `refresh_token` **cookie** whenever the access token is missing or expired,
+>    transparently re-issuing the access cookie — so browser clients rarely refresh explicitly.
+>    It fires on a **cookie** or on no credential at all; it deliberately will **not** fire for a
+>    caller who presented an expired `Authorization: Bearer` (see below).
+> 2. **Explicit, cookie:** `POST /auth/browser/refresh` (this endpoint), for clients that want to
+>    refresh proactively. Re-issues the **access cookie only**.
+> 3. **Explicit, bearer:** [`POST /auth/mobile/refresh`](#post-authmobilerefresh), which takes the
+>    refresh token in the body and returns a **fresh pair**.
+
+> ⚠️ **A bearer caller with an expired access token gets `401 AUTH_TOKEN_EXPIRED`, never a
+> silent refresh** — even if a `refresh_token` cookie happens to be attached. Refreshing from an
+> ambient cookie would authenticate the request as whoever that cookie belongs to while the
+> client kept sending its own expired token, which is a bug that is close to undiagnosable from
+> the client side. Bearer clients refresh explicitly, through path 3. (Earlier revisions of this
+> page said bearer callers "must re-login on expiry"; that stopped being true when
+> `/auth/mobile/refresh` shipped.)
 
 **Auth**: Public (uses `refresh_token` cookie automatically)
 
@@ -417,6 +518,142 @@ Sets a new `access_token` cookie.
 | Status | Message | Cause |
 |--------|---------|-------|
 | `401` | `Invalid or expired refresh token` | Token missing or expired |
+
+---
+
+## Mobile namespace — bearer clients
+
+`/auth/mobile/*` exists for clients that **cannot hold a cookie**. Two things are true of a
+Capacitor / React Native WebView at once, and neither is fixable client-side:
+
+1. Its origin is `capacitor://localhost` (iOS) or `https://localhost` (Android), so a cookie
+   for the API host is a **third-party cookie** and is blocked by default.
+2. `Set-Cookie` is a **forbidden response-header name** in the Fetch standard — stripped from
+   every `Response.headers` object in every engine — so it cannot scrape the token out of the
+   response the way a native HTTP client (the agent app's Dio stack) can.
+
+**There is no client-type header.** The namespace *is* the switch. Nothing about your request
+selects a mode, so a browser's behaviour cannot change by accident and there is no extra header
+to add to a CORS allow-list.
+
+### What is the same
+
+Everything except delivery. Same `AuthService`, same claims, same secrets, same 15-minute /
+30-day lifetimes, same error codes, same password-epoch revocation, same suspension checks. A
+rule added to login or role resolution applies to both namespaces without anyone remembering to.
+
+### What is different
+
+- The pair comes back as `data.tokens`.
+- **No cookie is set.** Not a smaller one, not a redundant one — none.
+- `Content-Type: application/json` is **not** required (the browser namespace's
+  `requireJsonContent` is a CSRF mitigation, and there is no ambient credential here to forge
+  with). Send JSON anyway; the body parser expects it.
+- There is **no `/auth/mobile/logout`**. Discard the tokens locally. `POST /auth/logout` also
+  works and is a harmless no-op for you.
+
+### The `tokens` object
+
+```jsonc
+{
+  "success": true,
+  "data": {
+    "user":        { "...": "identical to the cookie endpoint" },
+    "role":        "agency",
+    "role_entity": { "...": "identical to the cookie endpoint" },
+    "tokens": {
+      "accessToken":      "eyJhbGciOi...",
+      "refreshToken":     "eyJhbGciOi...",
+      "accessExpiresIn":  900,
+      "refreshExpiresIn": 2592000
+    }
+  }
+}
+```
+
+`accessExpiresIn` / `refreshExpiresIn` are **seconds**, and they are the exact values passed to
+`jwt.sign` as `expiresIn` — not a second reading of the same configuration. Refresh
+**proactively** off them (≈60s before `accessExpiresIn` elapses) rather than waiting for a 401;
+it costs fewer requests against the rate limiter and avoids a user-visible stall.
+
+### Storage
+
+Store both in the **iOS Keychain / Android Keystore**, never plain preferences. Refresh tokens
+are stateless JWTs with no revocation store, so a stolen one stays valid until it expires or
+the account's password changes. See [Known limitation](#known-limitation) below.
+
+---
+
+### POST `/auth/mobile/login`
+
+Same body as [`POST /auth/login`](#post-authlogin). **`200`** with `tokens` added, no cookies.
+
+### POST `/auth/mobile/register`
+
+Same body as [`POST /auth/register`](#post-authregister). **`201`** with `tokens` added.
+
+### GET `/auth/mobile/auth-me/:role`
+
+**Auth**: Required (bearer). Same payload as [`GET /auth/auth-me/:role`](#get-authauth-merole),
+plus `tokens`.
+
+> **Do not skip this one.** It is the only endpoint that re-issues **both** tokens for an
+> already-signed-in caller, which is what restarts the 30-day window on app launch. Without it,
+> `refreshExpiresIn` counts down from the last password entry regardless of how much the app is
+> used. `POST /auth/mobile/refresh` also slides the window, so calling either is enough — but
+> `auth-me` is the one that also returns fresh profile state.
+
+### POST `/auth/mobile/add-role`
+
+**Auth**: Required (bearer). Same body as [`POST /auth/add-role`](#post-authadd-role).
+**`201`**, and the returned pair is scoped to the **newly added** role — replace your stored
+tokens with it or the next request is still scoped to the old role.
+
+### POST `/auth/mobile/refresh`
+
+**Auth**: Public — the refresh token *is* the credential.
+
+```jsonc
+{ "refreshToken": "eyJhbGciOi..." }
+```
+
+**Response `200`**
+
+```jsonc
+{ "success": true, "data": { "tokens": { "accessToken": "...", "refreshToken": "...",
+                                         "accessExpiresIn": 900, "refreshExpiresIn": 2592000 } } }
+```
+
+**It returns a fresh pair, not just an access token** — unlike `/auth/browser/refresh`. Because
+refresh tokens are stateless with no server-side store, minting a new one does not invalidate
+the old one, so there is no rotation window to get wrong. Every refresh therefore **slides the
+30-day window**, and an actively-used session never hard-expires.
+
+**Replace both stored tokens on every refresh.** Keeping the old refresh token still works
+(the old one is not invalidated), but you lose the sliding window, which is the point.
+
+> ⚠ **A JWT's `iat` is in whole seconds**, so two mints in the same second for the same
+> `{userId, role}` are **byte-identical**. Log in and immediately refresh, and the "new" access
+> token can equal the old string. It is a correct, valid token either way — but never use "did
+> the token string change?" as the signal that a refresh succeeded. Use the HTTP status.
+
+#### Errors — the client behaves differently for each
+
+| `error.code` | Status | What it means | Do |
+|---|---|---|---|
+| `AUTH_MISSING_TOKEN` | 401 | No `refreshToken` in the body | Sign out |
+| `AUTH_REFRESH_TOKEN_INVALID` | 401 | Malformed, wrong signature, **or an *access* token posted here** (the `type: "refresh"` claim is checked) | Sign out. If you see this in development, check you are not sending the wrong half of the pair |
+| `AUTH_SESSION_EXPIRED` | 401 | The refresh token's own 30 days elapsed | Sign out, prompt login |
+| `AUTH_PASSWORD_CHANGED` | 401 | The account's password changed after this token was minted | Sign out **immediately, and do not retry** — every token you hold is refused by the same rule. Worth surfacing verbatim: for someone who did not change their password, it is the first sign that somebody else did |
+| `AUTH_ACCOUNT_SUSPENDED` | 403 | The account was suspended | Sign out, show the reason |
+| `AUTH_USER_NOT_FOUND` | 401 | The account no longer exists | Sign out |
+
+#### Maintenance windows
+
+This route is **exempt from `readonly` maintenance** and blocked in `down`. It mints a token
+and writes nothing, and it is a bearer client's only renewal path — a cookie client renews
+inside an ordinary GET, so without the exemption a read-only window would sign out every native
+client fifteen minutes in while browsers carried on.
 
 ---
 
@@ -891,16 +1128,45 @@ AUTH_REFRESH_TOKEN_TTL=2592000           # 30 days in seconds
       → Check role_entity.onboarding_step for routing
 ```
 
-### Flow E — Expired Access Token (Silent Refresh)
+### Flow E — Expired Access Token
 
 ```
-Browser clients (cookie auth):
+Cookie clients (browsers, and any native client sending a refresh COOKIE):
   Refresh is AUTOMATIC — requireAuth silently refreshes from the refresh_token
   cookie and re-issues the access cookie. No explicit call needed.
-  (To refresh proactively: POST /api/auth/browser/refresh)
+  (To refresh proactively: POST /api/auth/browser/refresh — access token only)
 
-Bearer-only clients (mobile/service):
-  Cannot silently refresh. On 401 → re-login.
+Bearer clients (/auth/mobile/*):
+  NO silent refresh — an expired bearer is answered 401 AUTH_TOKEN_EXPIRED even
+  if a refresh cookie happens to be attached. Refresh explicitly:
+
+    POST /api/auth/mobile/refresh   { refreshToken }
+      → { tokens: { accessToken, refreshToken, accessExpiresIn, refreshExpiresIn } }
+      → replace BOTH stored tokens; the 30-day window slides
+      → 401 AUTH_SESSION_EXPIRED | AUTH_REFRESH_TOKEN_INVALID | AUTH_PASSWORD_CHANGED
+        or 403 AUTH_ACCOUNT_SUSPENDED  → sign out
+
+  Better: refresh PROACTIVELY, ~60s before accessExpiresIn elapses, and never
+  see this flow at all.
+```
+
+### Flow E′ — Mobile app lifecycle, end to end
+
+```
+1. POST /api/auth/mobile/login  { identifier, password, role }
+      → { user, role, role_entity, tokens }
+      → store tokens in Keychain / Keystore
+
+2. every request:  Authorization: Bearer <accessToken>
+      (a stale cookie can no longer beat it — the bearer is read first)
+
+3. ~60s before accessExpiresIn:  POST /api/auth/mobile/refresh { refreshToken }
+      → replace both tokens
+
+4. on app launch:  GET /api/auth/mobile/auth-me/:role
+      → fresh profile state AND a fresh pair (restarts the 30-day window)
+
+5. logout: discard the tokens. No server call is required.
 ```
 
 ### Flow F — Multi-Role Login / Role Switch
@@ -930,4 +1196,32 @@ Bearer-only clients (mobile/service):
       → Clears both cookies
       → Returns { success: true, data: null, message: "Logged out successfully" }
       → Redirect to login page
+
+   Bearer clients: discard the tokens locally. Calling this is harmless but does
+   nothing for you — there are no cookies to clear, and see below for why there
+   is no server-side revocation to invoke.
 ```
+
+---
+
+## Known limitation
+
+Tokens here are **stateless JWTs with no revocation store**, so there is nothing to delete when
+a session must end. Consequences, stated plainly rather than left to be discovered:
+
+- **A stolen refresh token stays valid until it expires.** Logging out does not revoke it —
+  logging out only discards your own copy.
+- **A password change is the only thing that kills one early**, via the `iat` epoch above. It
+  is the correct remedy after a compromise, and it evicts every session on every device except
+  the one performing the change.
+- **For bearer clients the 30-day window is *sliding*, with no absolute cap.** Every
+  `/auth/mobile/refresh` and every `auth-me` re-issues the refresh token at full lifetime, so
+  an actively-used session never hard-expires — and neither does an actively-abused one. This
+  is not new behaviour (`auth-me` has always re-issued both, and every client calls it on
+  launch); the mobile namespace only makes it explicit. It is stated here so the trade is a
+  shared decision rather than an assumption.
+
+The mitigation that is in force is client-side: **store tokens in the iOS Keychain / Android
+Keystore, never plain preferences.** If a server-side revocation store is wanted later, the
+cheapest hook is `AuthService.rotateRefreshToken`, which already loads the user row on every
+refresh — a `token_version` compared there would cost no extra query.

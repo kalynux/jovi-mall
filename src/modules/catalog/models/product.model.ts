@@ -1,6 +1,7 @@
 import { Schema, model, Types } from 'mongoose';
 import { IBaseDocument, BaseSchemaFields, BaseSchemaOptions } from '../../../core/base.schema';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import type { RichDoc } from '../../../core/richtext';
 
 export type ProductType = 'physical' | 'digital' | 'service';
 export type ProductStatus = 'draft' | 'active' | 'archived' | 'pending_review' | 'suspended';
@@ -143,6 +144,22 @@ export interface IProduct extends IBaseDocument {
 
   title: string;
   description: string;
+  /**
+   * The structured description a vendor authored in the formatting editor, and
+   * the source of truth for how this product reads when it is shared into
+   * WhatsApp or Telegram.
+   *
+   * `description` above is its plain-text projection and stays authoritative for
+   * everything else — it is the only one of the two that the storefront renders,
+   * that `product_storefront_text` tokenises, and that the vectoriser embeds.
+   * The two always travel together; the client sends the pair, and the server
+   * never derives one from the other.
+   *
+   * `null` means the vendor has no formatting stored (or deleted it), which is
+   * indistinguishable from never having used the editor and deliberately so.
+   * See `core/richtext/` and `api-doc/vendor/product-description-rich.md`.
+   */
+  descriptionRich?: RichDoc | null;
   slug: string;
 
   category: string;
@@ -213,6 +230,16 @@ const ProductSchema = new Schema<IProduct>({
 
   title: { type: String, required: true },
   description: { type: String, default: '' },
+  // Structured description. `description` above remains its plain-text
+  // projection, and stays the ONLY one of the two that is indexed and vectorised
+  // — deliberately absent from `product_storefront_text` below.
+  //
+  // `Mixed` rather than a nested sub-schema: the shape is a recursive union that
+  // Mongoose sub-schemas express badly, and a parallel copy of it here is how the
+  // two definitions drift. It is validated by Zod at the request boundary
+  // (`core/richtext/schema.ts`), which is where validation belongs — the same
+  // trade `blog.article.body` already makes.
+  descriptionRich: { type: Schema.Types.Mixed, default: null },
   slug: { type: String, required: true }, // Composite index with vendorId below
 
   category: { type: String, required: true, index: true },
@@ -377,6 +404,12 @@ ProductSchema.index({ status: 1, deletedAt: 1, category: 1 });
  *
  * ⚠️ `$text` matches whole words, not substrings: "dres" will not match "dress".
  * That is the trade for an indexed, ranked search — the public list documents it.
+ *
+ * ⚠️ `descriptionRich` is deliberately NOT here, and must not be added. It is a
+ * nested document, so `$text` would tokenise its structural keys (`paragraph`,
+ * `list`, `bold`, every `href`) alongside the prose and hand a vendor free
+ * relevance for words no customer typed. `description` is its plain-text
+ * projection and already carries every word it contains.
  */
 ProductSchema.index(
   { title: 'text', tags: 'text', description: 'text' },

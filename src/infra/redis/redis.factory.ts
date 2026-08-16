@@ -22,15 +22,24 @@ import { createClient, RedisClientType } from 'redis';
  */
 
 export const EMAIL_VERIFY_DB = 3; // keep token for email verification
-export const WA_VERIFY_DB = 4; // keep token for whatsapp verification
 export const WA_IDEMPOTENCY_DB = 5; // keep idempotency keys for whatsapp (24-72 hours)
 export const WA_WINDOW_DB = 6; // keep window status for whatsapp (24 hours)
 export const SLOT_LOCK_DB = 7; // keep slot locks for booking
 export const DOWNLOAD_TOKEN_DB = 8; // keep download tokens for digital delivery
-export const TELEGRAM_LINK_TOKEN_DB = 9; // keep tokens for Telegram account linking
 export const TELEGRAM_WINDOW_DB = 10; // keep window status for telegram (24 hours)
 export const RATE_LIMIT_DB = 11; // request counters for the rate limiter (Phase 16)
 export const WORKER_LOCK_DB = 12; // background-worker overlap locks (F-19)
+export const CONNECTION_CODE_DB = 13; // unified messaging connection codes (Phase 2/3)
+export const LOGIN_CODE_DB = 14; // passwordless /login sessions — link token + code
+
+/**
+ * ⚠ 4 and 9 are RETIRED, not free.
+ *
+ * They held `wa_verify:{CODE}` and `tlgt:{token}` for the two account-linking
+ * mechanisms the unified connection domain replaced. Both are gone; the numbers
+ * are left unassigned so a stale key from a pre-cutover deployment can never be
+ * read back by a feature that has since claimed the database.
+ */
 
 /**
  * What each logical database holds — the table three separate features needed.
@@ -61,13 +70,6 @@ export const REDIS_DB_CATALOG: readonly RedisDbSpec[] = Object.freeze([
     ttlHint: 'hours',
   },
   {
-    db: WA_VERIFY_DB,
-    constant: 'WA_VERIFY_DB',
-    label: 'WhatsApp verification codes',
-    purpose: 'One-time codes proving a user controls a phone number',
-    ttlHint: 'minutes',
-  },
-  {
     db: WA_IDEMPOTENCY_DB,
     constant: 'WA_IDEMPOTENCY_DB',
     label: 'WhatsApp idempotency keys',
@@ -94,13 +96,6 @@ export const REDIS_DB_CATALOG: readonly RedisDbSpec[] = Object.freeze([
     label: 'Digital download tokens',
     purpose: 'Live download links issued to customers who have paid',
     ttlHint: 'minutes to hours',
-  },
-  {
-    db: TELEGRAM_LINK_TOKEN_DB,
-    constant: 'TELEGRAM_LINK_TOKEN_DB',
-    label: 'Telegram link tokens',
-    purpose: 'One-time tokens binding a Telegram chat to a platform account',
-    ttlHint: 'minutes',
   },
   {
     db: TELEGRAM_WINDOW_DB,
@@ -130,6 +125,34 @@ export const REDIS_DB_CATALOG: readonly RedisDbSpec[] = Object.freeze([
     // whole database exists to prevent, so do it deliberately. See core/jobs/worker-lock.ts.
     purpose: 'One key per background sweep in flight. Losing them permits one overlapping pass.',
     ttlHint: 'minutes (renewed while the sweep runs)',
+  },
+  {
+    db: CONNECTION_CODE_DB,
+    constant: 'CONNECTION_CODE_DB',
+    label: 'Messaging connection codes',
+    // Replaces WA_VERIFY_DB and TELEGRAM_LINK_TOKEN_DB, which held the two
+    // predecessor mechanisms. Note the direction is INVERTED from those: the
+    // bot mints the code and this database holds the messaging identity waiting
+    // to be claimed, so a key here names a person's WhatsApp or Telegram
+    // account and no platform account at all.
+    purpose: 'Codes minted by a bot on /connect, holding an unclaimed messaging identity',
+    ttlHint: '10 minutes',
+  },
+  {
+    db: LOGIN_CODE_DB,
+    constant: 'LOGIN_CODE_DB',
+    label: 'Passwordless sign-in sessions',
+    // A SEPARATE database from 13 rather than a key prefix on it, and the reason is
+    // this `purpose` line: the flush policy states consequences per database, and
+    // "in-flight sign-ins fail" is not "in-flight connections fail". Sharing the
+    // number would make one blast-radius note have to cover two.
+    //
+    // What a key here stands for is also categorically different from 13's. A
+    // connection code holds a messaging identity nobody owns yet; a record here
+    // points at an EXISTING account and redeeming it grants a customer session.
+    // Same ten minutes, very different thing to leak.
+    purpose: 'Magic-link tokens and /login codes. Losing them fails every sign-in in flight.',
+    ttlHint: '10 minutes',
   },
 ]);
 

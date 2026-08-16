@@ -1,3 +1,5 @@
+import { escapeTelegramHtml } from '../../../core/richtext';
+
 /**
  * Message Renderer
  *
@@ -37,4 +39,26 @@ export function renderTemplate(template: string, ctx: RenderContext): string {
         .replace(SPACE_BEFORE_PUNCTUATION, '$1')
         .replace(REPEATED_SPACES, ' ')
         .trim();
+}
+
+/**
+ * Compose a rendered catalog subject + body into a Telegram message.
+ *
+ * Sent with `parse_mode: 'HTML'`, which is why both halves are escaped rather
+ * than interpolated raw. This is the ONE shared thing across the four otherwise
+ * deliberately-separate notification stacks, and it is shared precisely because
+ * it is a correctness boundary rather than copy: all four build the identical
+ * `<b>subject</b>\n\nbody` shape, and a fifth stack added later must not have to
+ * rediscover the escaping.
+ *
+ * WHY IT MATTERS: this used to emit legacy Markdown (`*subject*`), and every
+ * template here interpolates user-authored values — product titles, vendor and
+ * agency names, order references, agent notes. A single `_`, `*`, `[` or
+ * backtick in any of them made the Bot API answer `400 can't parse entities`,
+ * `sendMessage` return `false`, and the notification vanish with only a log
+ * line. A vendor whose shop is called "Chez L_Artisan" was simply never told
+ * anything, and nothing in the system said so.
+ */
+export function toTelegramNotificationBody(subject: string, body: string): string {
+    return `<b>${escapeTelegramHtml(subject)}</b>\n\n${escapeTelegramHtml(body)}`;
 }

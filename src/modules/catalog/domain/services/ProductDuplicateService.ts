@@ -43,6 +43,11 @@ export class ProductDuplicateService {
             status: 'draft',
             title: newTitle,
             description: originalProduct.description || '',
+            // Copied with its projection, never dropped: the two are one value in
+            // two representations, and a clone that kept the prose but lost the
+            // formatting would silently downgrade the vendor's work at exactly the
+            // moment they expected an identical starting point.
+            descriptionRich: originalProduct.descriptionRich ?? null,
             slug: newSlug,
             category: originalProduct.category,
             tags: [...(originalProduct.tags ?? [])],

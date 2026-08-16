@@ -286,13 +286,6 @@ export interface IDeliveryAgency extends Document {
   policy_version: number;
   /** @deprecated Use kyc_details.legit_verified. Kept for backward compat. */
   legit_verified: boolean;
-  wa?: {
-    name?: string;
-    wa_phone_id?: string;
-    verified: boolean;
-    bound_at?: Date;
-    last_seen_at?: Date;
-  };
   timezone: string;
   /** Preferred language for notifications/messaging (ISO 639-1). */
   preferred_language: Language;
@@ -341,13 +334,6 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
     policy_version: { type: Number, default: 0 },
     /** @deprecated */
     legit_verified: { type: Boolean, default: false },
-    wa: {
-      name: String,
-      wa_phone_id: String,
-      verified: { type: Boolean, default: false },
-      bound_at: Date,
-      last_seen_at: Date,
-    },
     timezone: { type: String, default: 'Africa/Douala', required: true },
     preferred_language: { type: String, enum: SUPPORTED_LANGUAGES, default: 'en' },
     status: {

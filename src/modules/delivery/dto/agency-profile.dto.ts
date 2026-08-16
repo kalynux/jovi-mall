@@ -76,7 +76,6 @@ export interface GetAgencyProfileResponseDto {
     payoutDetails: AgencyPayoutMethodSanitized[];
     kycVerified: boolean;
     policies: IAgencyPolicies | null;
-    wa: { verified: boolean; name?: string } | null;
     timezone: string;
     preferredLanguage: string;
     status: string;
@@ -235,7 +234,6 @@ export class AgencyProfileMapper {
             payoutDetails: sanitizePayoutList(agency.payout_details),
             kycVerified: agency.kyc_details?.legit_verified ?? false,
             policies: agency.policies ?? null,
-            wa: agency.wa ? { verified: agency.wa.verified, name: agency.wa.name } : null,
             timezone: agency.timezone,
             preferredLanguage: agency.preferred_language,
             status: agency.status,

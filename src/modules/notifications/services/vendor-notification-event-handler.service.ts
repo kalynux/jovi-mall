@@ -5,7 +5,7 @@ import { FcmPushService } from './fcm-push.service';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { StoreRepository } from '../../store/repositories/store.repository';
 import { IVendor } from '../../vendors/vendor.model';
-import { TelegramRepository } from '../../telegram/telegram.repository';
+import { connectionService } from '../../channel-connections';
 import { MailService } from '../../mail/mail.service';
 import { TelegramNotificationService } from '../../telegram/services/telegram-notification.service';
 import { getWhatsAppMessagingService } from '../../whatsapp/services/whatsapp-messaging.service';
@@ -29,7 +29,7 @@ import {
     ChannelText
 } from '../catalog/notification-catalog';
 import { Language, resolveLanguage, META_LANGUAGE_CODE } from '../catalog/notification-i18n';
-import { RenderContext } from '../catalog/message-renderer';
+import { RenderContext, toTelegramNotificationBody } from '../catalog/message-renderer';
 import { DomainEvent } from '../../../core/events/event-bus';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -68,7 +68,6 @@ export class VendorNotificationEventHandler {
     private preferenceRepo: VendorNotificationPreferenceRepository;
     private vendorRepo: VendorRepository;
     private storeRepo: StoreRepository;
-    private telegramRepo: TelegramRepository;
     private mailService: MailService;
     private telegramService: TelegramNotificationService;
     private whatsappWindow: WhatsappService;
@@ -79,7 +78,6 @@ export class VendorNotificationEventHandler {
         this.preferenceRepo = new VendorNotificationPreferenceRepository();
         this.vendorRepo = new VendorRepository();
         this.storeRepo = new StoreRepository();
-        this.telegramRepo = new TelegramRepository();
         this.mailService = new MailService();
         this.telegramService = new TelegramNotificationService();
         this.whatsappWindow = new WhatsappService();
@@ -795,12 +793,15 @@ export class VendorNotificationEventHandler {
 
         // Priority order: telegram > email > whatsapp. Pick the first that is
         // both enabled and verified.
-        if (prefs.telegramEnabled) {
-            const telegramLink = await this.telegramRepo.findByUserId(vendor.user_id.toString());
-            if (telegramLink && telegramLink.isActive) {
-                channels.push('telegram');
-                return channels;
-            }
+        // Both channels resolved in ONE query, then reused by the branches
+        // below. Telegram is no longer gated on a second `isActive` flag:
+        // muting is `telegramEnabled` alone, exactly as WhatsApp already
+        // worked. See connections/services/connection.service.ts.
+        const connections = await connectionService.getConnectionMap(vendor.user_id);
+
+        if (prefs.telegramEnabled && connections.telegram) {
+            channels.push('telegram');
+            return channels;
         }
 
         if (prefs.emailEnabled && vendor.email_verified) {
@@ -808,7 +809,7 @@ export class VendorNotificationEventHandler {
             return channels;
         }
 
-        if (prefs.whatsappEnabled && vendor.wa?.verified) {
+        if (prefs.whatsappEnabled && connections.whatsapp) {
             channels.push('whatsapp');
             return channels;
         }
@@ -950,12 +951,16 @@ export class VendorNotificationEventHandler {
         content: ChannelText,
         button: { label: string; url: string } | null
     ): Promise<void> {
-        const message = `*${content.subject}*\n\n${content.body}`;
+        // Escaped HTML, never the legacy Markdown this used to ride on — the
+        // catalog copy interpolates vendor-authored values, and one stray `_` in
+        // a store or product name used to drop the whole notification.
+        const message = toTelegramNotificationBody(content.subject, content.body);
 
         const result = await this.telegramService.send({
             userId: vendor.user_id.toString(),
             message,
-            button: button ?? undefined
+            button: button ?? undefined,
+            parseMode: 'HTML'
         });
 
         if (!result.success) {
@@ -988,9 +993,13 @@ export class VendorNotificationEventHandler {
             return;
         }
 
-        if (!vendor.wa?.verified || !vendor.wa.wa_phone_id) return;
+        // The address comes from the connections store now, not from a `wa`
+        // sub-document on the role entity. One person, one WhatsApp number,
+        // whichever role this notification is for.
+        const connection = await connectionService.getConnection(vendor.user_id, 'whatsapp');
+        if (!connection) return;
 
-        const waPhoneId = vendor.wa.wa_phone_id;
+        const waPhoneId = connection.external_id;
         const to = waPhoneId.startsWith('+') ? waPhoneId : `+${waPhoneId}`;
 
         const withinWindow = await this.whatsappWindow.canSendFreeMessage(waPhoneId);

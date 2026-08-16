@@ -156,7 +156,8 @@ const INTEGER_VARS: readonly string[] = Object.freeze([
     // Rate limiting
     'RATE_LIMIT_GLOBAL_PER_MIN', 'RATE_LIMIT_ADMIN_PER_MIN', 'RATE_LIMIT_AGENT_PER_MIN',
     'RATE_LIMIT_VENDOR_PER_MIN', 'RATE_LIMIT_AGENCY_PER_MIN', 'RATE_LIMIT_CUSTOMER_PER_MIN',
-    'RATE_LIMIT_ANON_PER_MIN', 'RATE_LIMIT_AUTH_PER_MIN', 'RATE_LIMIT_PUBLIC_PER_MIN',
+    'RATE_LIMIT_ANON_PER_MIN', 'RATE_LIMIT_AUTH_PER_MIN', 'RATE_LIMIT_AUTH_SESSION_PER_MIN',
+    'RATE_LIMIT_PUBLIC_PER_MIN',
     // Orders
     'UNPAID_ORDER_CANCEL_BATCH_SIZE',
 ]);
@@ -352,8 +353,13 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
         else warn('ALLOWED_ORIGINS', message);
     } else {
         for (const origin of (get('ALLOWED_ORIGINS') ?? '').split(',').map((o) => o.trim()).filter(Boolean)) {
-            if (!/^https?:\/\/[^/]+$/.test(origin)) {
-                err('ALLOWED_ORIGINS', `contains "${origin}", which is not a bare scheme://host[:port] origin. Matching is exact, so a trailing path or slash never matches anything.`);
+            // The scheme set is CLOSED, deliberately — not a generic `\w+://`. This rule exists to
+            // catch a typo that would silently never match anything, and "some scheme-shaped
+            // string" is not that. `capacitor://` is the iOS Capacitor WebView's own origin; the
+            // Android one is `https://localhost`, which the http(s) branch already admits. Adding
+            // a scheme here is a decision, which is the point.
+            if (!/^(https?|capacitor):\/\/[^/]+$/.test(origin)) {
+                err('ALLOWED_ORIGINS', `contains "${origin}", which is not a bare scheme://host[:port] origin. Matching is exact, so a trailing path or slash never matches anything. Recognised schemes: http, https, capacitor.`);
             } else if (isProduction && origin.startsWith('http://') && !/^http:\/\/(localhost|127\.0\.0\.1)(:|$)/.test(origin)) {
                 warn('ALLOWED_ORIGINS', `contains the plain-http origin "${origin}". This API is credentialed; cookies sent to it would cross the network in clear text.`);
             }

@@ -49,23 +49,55 @@ anonymous caller is bounded by Layer A only.
 | B — identity | Vendor | user | 900 | `RATE_LIMIT_VENDOR_PER_MIN` |
 | B — identity | Agency | user | 900 | `RATE_LIMIT_AGENCY_PER_MIN` |
 | B — identity | Customer | user | 600 | `RATE_LIMIT_CUSTOMER_PER_MIN` |
-| credential | **the whole `/api/auth` prefix** | IP address | **20** | `RATE_LIMIT_AUTH_PER_MIN` |
+| credential | `/api/auth` paths that **present** a credential | IP address | **20** | `RATE_LIMIT_AUTH_PER_MIN` |
+| session | `/api/auth` paths that **extend** a session | IP address | 300 | `RATE_LIMIT_AUTH_SESSION_PER_MIN` |
+| C — connection code | `POST /api/me/connections` | IP address | **30** | `RATE_LIMIT_CONNECTION_CODE_PER_MIN` |
 
-Three things to read out of that table:
+Four things to read out of that table:
 
 - **Not signed in ⇒ 1200 per IP, and nothing else.** Layer B never sees an unauthenticated
   request, so there is no separate anonymous identity ceiling in force.
 - **Authenticated callers are counted per user *as well as* per address.** An office, a school
   or a mobile carrier's NAT puts many people behind one IP; once you are signed in, Layer B is
   what actually bounds you, and their traffic is not yours.
-- **The auth bucket is the strict one, and it is strict on purpose.** It bounds one source
+- **The credential bucket is the strict one, and it is strict on purpose.** It bounds one source
   trying many passwords across many accounts. If you are legitimately hitting 20
   sign-in attempts a minute from one address, you are doing something the API should be
   told about rather than tuned around.
+- **The connection-code bucket is the second security control, and it stacks with a third.**
+  `POST /api/me/connections` takes a 6-character code, which is guessable in a way a password
+  is not. It is bounded per IP here (30/min, `RATE_LIMIT_EXCEEDED`) *and* per account by a
+  separate attempt counter — 5 tries per 10 minutes, answering
+  `CONNECTION_CODE_ATTEMPTS_EXCEEDED`. The two key on different axes on purpose: accounts are
+  free to create, so an account-scoped limit alone bounds nothing. Expect either code, and do
+  not retry in a loop on either.
 
-> ⚠ It is keyed on the **path prefix `/api/auth`**, not on "endpoints that take a password".
-> Everything under it shares one 20/min IP bucket — including `/auth/me`, `/auth/auth-me/:role`
-> and the `/auth/browser/*` trio. There are no password-reset endpoints on this service.
+### The two `/api/auth` buckets
+
+They are split by **what the request does**, not by which router serves it. Exactly one applies
+per request, so `RateLimit: remaining=…` always describes the counter that is binding you.
+
+| Bucket | Paths |
+|---|---|
+| **credential**, 20/min/IP | `login` · `register` · `forgot-password` · `reset-password` · `add-role` · `send-email-verification` · `request-wa-verification` · `verify-email` · `logout` · `browser/login` · `browser/logout` · `mobile/login` · `mobile/register` · `mobile/add-role` |
+| **session**, 300/min/IP | `me` · `auth-me/:role` · `mobile/auth-me/:role` · `browser/refresh` · `mobile/refresh` |
+
+> ⚠ **The credential bucket is the DEFAULT.** Anything added under `/api/auth` later lands in
+> it unless it is named on the session list — the safe direction, since the mistake it prevents
+> is a new credential endpoint silently inheriting 300/min.
+
+This split exists because the two kinds of traffic were sharing one counter and the failure
+mode was bad: a user whose refresh was refused got signed out, tried to sign back in, and found
+the sign-in refused too — by their neighbours' traffic behind the same NAT. Renewing a session
+you already hold presents an unguessable signed token, never a password, so the
+password-spraying argument that justifies the 20 does not apply to it.
+
+**Where 300 comes from.** Not from refresh — at roughly four renewals an hour per active user,
+300 covers about 1200 users behind one address. It is set from `/auth/me`, which a dashboard
+polls: at once a minute, a 120 ceiling would bind at 120 concurrent users on one office IP,
+which is reachable. Both `me` and `auth-me` sit behind authentication, so Layer B already bounds
+each *person* and Layer A still bounds the address; this counter's remaining job is only to stop
+one client looping on refresh.
 
 **Internal service callers are exempt** from Layers A and B (resolved from the
 `INTERNAL_SERVICE_TOKEN` / `INTERNAL_ADMIN_SERVICE_TOKEN` shared secret, not from a JWT), but

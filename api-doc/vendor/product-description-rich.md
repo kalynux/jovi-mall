@@ -12,11 +12,11 @@ The structured description a vendor writes in the dashboard's formatting editor,
 > data.
 
 > [!NOTE]
-> **Implementation status.** The frontend produces and consumes this field today.
-> Backend persistence is specified in
-> [`docs_requirement.md`](../../docs_requirement.md); until it ships, the field is
-> stripped by the layered endpoints and must not be sent to the `.strict()`
-> simple endpoints. See [Rollout](#rollout).
+> **Implementation status: shipped.** The field is accepted on all four product
+> write endpoints — including the two `.strict()` quick-add ones — persisted,
+> and returned on every vendor-facing product read. The frontend gate
+> (`RICH_DESCRIPTION_WIRE_ENABLED`) can be flipped to `true`. See
+> [Rollout](#rollout).
 
 ## Table of contents
 
@@ -105,11 +105,12 @@ The matching `description` sent in the same request:
 
 It is returned by `GET /api/vendor/products/:id` and by the write responses. It is **not** included in the trimmed `GET /api/vendor/products` list response.
 
-> [!WARNING]
-> The two `/simple` schemas are `.strict()`. Sending an unknown key to them
-> returns `400 VALIDATION_ERROR` and rejects the **whole** request — not just the
-> field. Until the backend accepts `descriptionRich` there, clients must not send
-> it on those two routes.
+> [!NOTE]
+> The two `/simple` schemas are `.strict()`, so an unknown key there returns
+> `400 VALIDATION_ERROR` and rejects the **whole** request rather than stripping
+> the field. `descriptionRich` is now a known key on all four, so it is safe to
+> send everywhere. Any *other* unknown key on the two `/simple` routes still
+> behaves this way.
 
 ### Example request — `PATCH /api/vendor/products/:id`
 
@@ -202,9 +203,9 @@ Full algorithms, including truncation rules and test vectors, are in
 
 ## Rollout
 
-The frontend gates the field behind a single constant
-(`RICH_DESCRIPTION_WIRE_ENABLED`, `src/lib/richtext/wire.ts`), currently `false`,
-because of the `.strict()` asymmetry above. While it is off:
+**The backend half is live.** The frontend still gates the field behind a single
+constant (`RICH_DESCRIPTION_WIRE_ENABLED`, `src/lib/richtext/wire.ts`), and
+flipping it to `true` is the only frontend change needed. While it stays `false`:
 
 - The editor is fully functional and `description` persists as always.
 - Paragraphs, lists, line breaks, emoji and URLs survive a reload — the frontend
@@ -212,7 +213,23 @@ because of the `.strict()` asymmetry above. While it is off:
 - Inline marks (bold / italic / strikethrough) and link labels do not survive,
   because by design they leave no trace in the projection.
 
-Flipping the constant is the only frontend change needed once the backend ships.
+The rollout is order-independent: the backend accepts the field from clients that
+send it and stores `null` for clients that do not, so the two sides can deploy in
+either order and no product is left in a broken state by the gap.
+
+### Server-side formatting
+
+The document model, its validator and both channel formatters live in
+`src/core/richtext/` — a deliberate mirror of the dashboard's
+`src/lib/richtext/`, file for file, since there is no shared package between the
+two repositories. `npm run test:rich-description` (149 assertions, no DB) asserts
+the backend's WhatsApp and Telegram output against the dashboard's own fixtures
+byte-for-byte, so a change on either side surfaces as a diff rather than as a
+badly-rendered customer message.
+
+Exported from `core/richtext`: `toPlainText`, `toWhatsApp`, `toTelegramHtml`,
+`toTelegramPlain`, `escapeTelegramHtml`, `truncateDoc`, `richDocSchema`,
+`parseRichDoc`.
 
 ---
 
@@ -220,8 +237,13 @@ Flipping the constant is the only frontend change needed once the backend ships.
 
 | `error.code` | Status | When |
 |---|---|---|
-| `VALIDATION_ERROR` | 400 | Malformed document, unknown `version`, disallowed `href` scheme, too many blocks — or the field sent to a `.strict()` endpoint that does not yet accept it |
+| `VALIDATION_ERROR` | 400 | Malformed document, unknown `version`, disallowed `href` scheme, or more than 200 blocks |
+| `REQUEST_BODY_TOO_LARGE` | 413 | The whole request exceeded the body-size ceiling. The 200-block cap bounds the document's shape; this bounds its bytes |
 | `CATALOG_PRODUCT_NO_DESCRIPTION` | 422 | `description` is empty at activation — unchanged by this field |
+
+Field-level errors for description *content* are reported against
+`error.details.fields[].path === 'description'`, never `descriptionRich`, so the
+dashboard's existing error projection onto the editor keeps working.
 
 ## Related
 

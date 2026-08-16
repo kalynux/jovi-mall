@@ -1,5 +1,6 @@
 import { createAppError } from '../../../../../core/errors';
 import { ERROR_CODES } from '../../../../../core/error-codes';
+import type { RichDoc } from '../../../../../core/richtext';
 import { IProductRepository } from '../../../repositories/interfaces/product.repository.interface';
 import { IVariantRepository } from '../../../repositories/interfaces/variant.repository.interface';
 import { Product } from '../../../repositories/mappers/product.mapper';
@@ -16,6 +17,8 @@ import { BargainInput, resolveBargainWrite } from '../bargain-price.rule';
 export interface UpdateSimpleProductInput {
     title?: string;
     description?: string;
+    /** Absent leaves the stored document alone; `null` clears it. */
+    descriptionRich?: RichDoc | null;
     category?: string;
     tags?: string[];
     fileIds?: string[];
@@ -136,6 +139,9 @@ export class SimpleProductUpdateService {
         const updatedProduct = await this.productUpdateService.execute(productId, vendorId, {
             title: input.title,
             description: input.description,
+            // Passed through as-is, `null` included: ProductUpdateService reads it
+            // with `!== undefined`, so the clear survives this hop.
+            descriptionRich: input.descriptionRich,
             category: input.category,
             tags: input.tags,
             fileIds: input.fileIds,

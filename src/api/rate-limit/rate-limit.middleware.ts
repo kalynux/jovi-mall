@@ -7,19 +7,24 @@ import { ERROR_CODES } from '../../core/error-codes';
 import { logger } from '../../core/logging';
 import { getRedisClient, RATE_LIMIT_DB } from '../../infra/redis/redis.factory';
 import { recordRateLimited } from '../../modules/system/metrics/metrics';
+import { isAuthSessionPathname } from './auth-paths';
 import { resolveCallerClass, rateLimitKey } from './caller-class';
 import { isExemptPath } from './exempt-paths';
 import { FailOpenStore } from './fail-open-store';
-import { AUTH_POLICY, ceilingFor, GLOBAL_POLICY, IDENTITY_POLICY, PUBLIC_POLICY, RateLimitPolicy } from './policy';
+import { AUTH_POLICY, AUTH_SESSION_POLICY, ceilingFor, CONNECTION_CODE_POLICY, GLOBAL_POLICY, IDENTITY_POLICY, PUBLIC_POLICY, RateLimitPolicy } from './policy';
 
 /**
  * The rate limiters (Phase 16). jovi-mall had none of any kind before this.
  *
- * Three handlers, from one builder:
+ * Five handlers, from one builder:
  *
- *   `globalRateLimiter`    Layer A — IP-scoped, mounted in `app.ts` before the routers.
- *   `identityRateLimiter`  Layer B — per-user, mounted at the TAIL of `requireAuth`.
- *   `authRateLimiter`      the credential bucket, on `/api/auth/*`.
+ *   `globalRateLimiter`       Layer A — IP-scoped, mounted in `app.ts` before the routers.
+ *   `identityRateLimiter`     Layer B — per-user, mounted at the TAIL of `requireAuth`.
+ *   `authRateLimiter`         the credential bucket, the default under `/api/auth/*`.
+ *   `authSessionRateLimiter`  the session bucket, for the named session-maintenance paths.
+ *   `publicRateLimiter`       the storefront bucket, on `/api/public/*`.
+ *
+ * The two `/auth` buckets are selected by `authBucketDispatcher`, at the bottom of this file.
  *
  * Why two layers rather than one, and why Layer A cannot simply read the caller's role, is
  * explained in `caller-class.ts` — briefly: classifying from an unverified JWT would hand a
@@ -157,8 +162,38 @@ export const globalRateLimiter: RequestHandler = delegate(GLOBAL_POLICY);
 /** Layer B — mounted at the tail of `requireAuth`. Identity-scoped, per role. */
 export const identityRateLimiter: RequestHandler = delegate(IDENTITY_POLICY);
 
-/** The credential bucket — `/api/auth/*`. Strict, and the only strict one. */
+/** The credential bucket — the DEFAULT under `/api/auth/*`. Strict, and the only strict one. */
 export const authRateLimiter: RequestHandler = delegate(AUTH_POLICY);
+
+/** The session bucket — the named session-maintenance paths under `/api/auth/*`. */
+export const authSessionRateLimiter: RequestHandler = delegate(AUTH_SESSION_POLICY);
+
+/**
+ * Chooses between the two `/api/auth` buckets. Mounted where `authRateLimiter` used to be.
+ *
+ * A dispatcher rather than two stacked mounts, because both would match the same prefix: a
+ * session request would then be counted twice, and the second limiter's `RateLimit` headers
+ * would overwrite the first's, so a client reading `remaining` would be told about a bucket
+ * that was not the one binding it. Exactly one runs, so a request is counted once and the
+ * headers describe the counter that actually applied.
+ *
+ * ⚠ `req.baseUrl + req.path`, never `req.path` alone. This is mounted with
+ * `router.use('/auth', …)`, and inside a `use`-mounted layer Express has stripped the matched
+ * prefix off `req.url`; `req.path` is a getter over it and reads `/mobile/refresh`. `req.path`
+ * also never carries the query string, which reproduces `exempt-paths.ts`'s rule that a
+ * caller-controlled query can never talk its way into a different bucket. Express matches
+ * routes against the raw, un-decoded pathname, so `/api/auth/%6Dobile/refresh` misses the
+ * router and this allowlist alike — the two agree by construction.
+ *
+ * (`isExemptPath`, inside `build()`, reads the relative `req.path` and has the same quirk. It
+ * is harmless — no exempt prefix lives under `/auth` or `/public` — and must be left alone:
+ * switching it to an absolute path would change what Layer A exempts.)
+ */
+export const authBucketDispatcher: RequestHandler = (req, res, next) => {
+    const pathname = `${req.baseUrl}${req.path}`;
+    const handler = isAuthSessionPathname(pathname) ? authSessionRateLimiter : authRateLimiter;
+    return handler(req, res, next);
+};
 
 /**
  * The storefront bucket — `/api/public/*`, mounted ahead of the public routers.
@@ -168,3 +203,13 @@ export const authRateLimiter: RequestHandler = delegate(AUTH_POLICY);
  * Layer A still applies on top; see `PUBLIC_POLICY` for why that is deliberate.
  */
 export const publicRateLimiter: RequestHandler = delegate(PUBLIC_POLICY);
+
+/**
+ * The connection-code bucket — attached to `POST /api/me/connections` alone. Layer C.
+ *
+ * The first per-endpoint limiter in the service, and it is one because that endpoint takes
+ * a guessable secret. IP-scoped **on purpose**, even behind `requireAuth`: the per-account
+ * attempt counter is already the tighter control, and accounts are free to mint, so the
+ * address is the axis an attacker cannot buy their way around. See `CONNECTION_CODE_POLICY`.
+ */
+export const connectionCodeRateLimiter: RequestHandler = delegate(CONNECTION_CODE_POLICY);

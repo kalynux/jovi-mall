@@ -72,9 +72,7 @@ export const ERROR_CODES = Object.freeze({
      * flows land on different pages.
      */
     AUTH_RESET_TOKEN_INVALID: 'AUTH_RESET_TOKEN_INVALID',
-    AUTH_WA_ALREADY_VERIFIED: 'AUTH_WA_ALREADY_VERIFIED',
     AUTH_PROFILE_NOT_FOUND: 'AUTH_PROFILE_NOT_FOUND',
-    AUTH_PHONE_REQUIRED_FOR_WA: 'AUTH_PHONE_REQUIRED_FOR_WA',
     AUTH_UNSUPPORTED_ROLE: 'AUTH_UNSUPPORTED_ROLE',
     AUTH_REFRESH_TOKEN_INVALID: 'AUTH_REFRESH_TOKEN_INVALID',
     AUTH_SESSION_EXPIRED: 'AUTH_SESSION_EXPIRED',
@@ -95,7 +93,6 @@ export const ERROR_CODES = Object.freeze({
     AUTH_PASSWORD_CHANGED: 'AUTH_PASSWORD_CHANGED',
     AUTH_USER_NOT_FOUND: 'AUTH_USER_NOT_FOUND',
     AUTH_ROLE_PROFILE_NOT_FOUND: 'AUTH_ROLE_PROFILE_NOT_FOUND',
-    AUTH_WA_PHONE_ID_REQUIRED: 'AUTH_WA_PHONE_ID_REQUIRED',
     AUTH_FORBIDDEN: 'AUTH_FORBIDDEN',
 
     /**
@@ -202,14 +199,49 @@ export const ERROR_CODES = Object.freeze({
     DIGITAL_DOWNLOAD_LIMIT_EXCEEDED: 'DIGITAL_DOWNLOAD_LIMIT_EXCEEDED',
     DIGITAL_TOKEN_INVALID: 'DIGITAL_TOKEN_INVALID',
 
-    // ── WHATSAPP ──────────────────────────────────────────────────────────────
-    WHATSAPP_ROLE_NOT_SUPPORTED: 'WHATSAPP_ROLE_NOT_SUPPORTED',
-    WHATSAPP_NOT_LINKED: 'WHATSAPP_NOT_LINKED',
+    // ── MESSAGING CHANNEL CONNECTIONS ─────────────────────────────────────────
+    // Replaces the WHATSAPP_*_LINKED / TELEGRAM_LINK_* pairs the two predecessor
+    // mechanisms raised. Each is raised at exactly ONE status — `test:errors`
+    // censuses every createAppError site and fails if a code appears at two
+    // statuses that disagree on category.
+    //
+    // ⚠ `CONNECTION_CODE_*` here is about a messaging CODE. The bare
+    // `CONNECTION_*` family further down (`CONNECTION_NOT_FOUND`,
+    // `CONNECTION_ALREADY_EXISTS`, …) belongs to the vendor↔agency consensual
+    // linking domain in `modules/agency-connections` — an entirely different
+    // thing that happens to share the English word. The two do not overlap, and
+    // this module's non-code errors are `MESSAGING_*`-prefixed to keep it that
+    // way.
+    CONNECTION_CODE_INVALID: 'CONNECTION_CODE_INVALID',
+    CONNECTION_CODE_EXPIRED: 'CONNECTION_CODE_EXPIRED',
+    CONNECTION_CODE_ATTEMPTS_EXCEEDED: 'CONNECTION_CODE_ATTEMPTS_EXCEEDED',
+    CONNECTION_CODE_GENERATION_FAILED: 'CONNECTION_CODE_GENERATION_FAILED',
+    MESSAGING_IDENTITY_ALREADY_LINKED: 'MESSAGING_IDENTITY_ALREADY_LINKED',
+    MESSAGING_CONNECTION_NOT_FOUND: 'MESSAGING_CONNECTION_NOT_FOUND',
+    MESSAGING_IDENTITY_UNRESOLVED: 'MESSAGING_IDENTITY_UNRESOLVED',
+    WEBHOOK_SECRET_INVALID: 'WEBHOOK_SECRET_INVALID',
 
-    // ── TELEGRAM ──────────────────────────────────────────────────────────────
-    TELEGRAM_NOT_LINKED: 'TELEGRAM_NOT_LINKED',
-    TELEGRAM_LINK_FAILED: 'TELEGRAM_LINK_FAILED',
-    TELEGRAM_LINK_NOT_FOUND: 'TELEGRAM_LINK_NOT_FOUND',
+    // ── PASSWORDLESS SIGN-IN (`/login` from a bot) ────────────────────────────
+    // The credentials a `/login` bot command hands out: a magic LINK (an opaque
+    // token) and an 8-character CODE, both for one session, both single-use.
+    //
+    // ⚠ These are 401s, not 400s, and the difference is deliberate: they are
+    // CREDENTIALS, and the remedy is to obtain another one rather than to fix a
+    // field. A client that files them as validation errors will highlight an
+    // input box when what the user needs is to send /login again.
+    //
+    // ⚠ `MAGIC_CODE_INVALID` is ONE code for four distinct situations — wrong
+    // code, unknown identifier, expired-and-swept, and a code/identifier
+    // mismatch. Splitting it would turn the redeem endpoint into a registration
+    // oracle answering "is this phone a customer here?" for any number anybody
+    // cares to type. See `messaging-login.service.ts`.
+    MAGIC_LINK_INVALID: 'MAGIC_LINK_INVALID',
+    MAGIC_LINK_EXPIRED: 'MAGIC_LINK_EXPIRED',
+    MAGIC_CODE_INVALID: 'MAGIC_CODE_INVALID',
+    MAGIC_CODE_EXPIRED: 'MAGIC_CODE_EXPIRED',
+    MAGIC_ATTEMPTS_EXCEEDED: 'MAGIC_ATTEMPTS_EXCEEDED',
+    MAGIC_CONTACT_UNVERIFIED: 'MAGIC_CONTACT_UNVERIFIED',
+    MAGIC_SESSION_GENERATION_FAILED: 'MAGIC_SESSION_GENERATION_FAILED',
 
     // ── GOOGLE / INTEGRATIONS ─────────────────────────────────────────────────
     GOOGLE_MISSING_CLIENT_ID: 'GOOGLE_MISSING_CLIENT_ID',
@@ -889,7 +921,6 @@ export const ERROR_CODES = Object.freeze({
     COMMAND_NOT_FOUND: 'COMMAND_NOT_FOUND',
 
     // ── WHATSAPP EXTENDED ─────────────────────────────────────────────────────
-    WHATSAPP_LINK_FAILED: 'WHATSAPP_LINK_FAILED',
     WHATSAPP_INVALID_PAYLOAD: 'WHATSAPP_INVALID_PAYLOAD',
     WHATSAPP_POLICY_VIOLATION: 'WHATSAPP_POLICY_VIOLATION',
     WHATSAPP_PROVIDER_REJECTED: 'WHATSAPP_PROVIDER_REJECTED',

@@ -31,6 +31,12 @@ router.get('/me', requireAuth, AuthController.me);
 router.get('/auth-me/:role', requireAuth, AuthController.authMe);
 router.post('/add-role', requireAuth, AuthController.addRole);
 router.post('/send-email-verification', requireAuth, AuthController.sendEmailVerification);
-router.post('/request-wa-verification', requireAuth, AuthController.requestWaVerification);
+
+/**
+ * `POST /request-wa-verification` is GONE. It minted a code the user carried to
+ * the WhatsApp bot; the direction is now inverted (the bot mints, the user
+ * redeems) and the surface lives at `POST /api/me/connections`, which is
+ * role-agnostic and rate-limited. See `modules/connections/`.
+ */
 
 export { router as authRouter };

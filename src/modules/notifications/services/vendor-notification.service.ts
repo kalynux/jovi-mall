@@ -12,7 +12,7 @@ import {
 import { IVendorNotification } from '../models/vendor-notification.model';
 import { IVendorNotificationPreference } from '../models/vendor-notification-preference.model';
 import { VendorRepository } from '../../vendors/vendor.repository';
-import { TelegramRepository } from '../../telegram/telegram.repository';
+import { connectionService } from '../../channel-connections';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
@@ -49,13 +49,11 @@ export class VendorNotificationService {
     private notificationRepo: VendorNotificationRepository;
     private preferenceRepo: VendorNotificationPreferenceRepository;
     private vendorRepo: VendorRepository;
-    private telegramRepo: TelegramRepository;
 
     constructor() {
         this.notificationRepo = new VendorNotificationRepository();
         this.preferenceRepo = new VendorNotificationPreferenceRepository();
         this.vendorRepo = new VendorRepository();
-        this.telegramRepo = new TelegramRepository();
     }
 
     /**
@@ -202,12 +200,21 @@ export class VendorNotificationService {
             return { emailVerified: false, telegramVerified: false, whatsappVerified: false };
         }
 
-        const telegramLink = await this.telegramRepo.findByUserId(vendor.user_id.toString());
+        /**
+         * Both channels from one query, against the single connections store.
+         *
+         * ⚠ `telegramVerified` now means "a Telegram connection exists" and
+         * nothing else. It used to be `link.isActive`, a second mute switch
+         * beside `telegramEnabled` below — so muting made a connected account
+         * read as unconnected and the UI offered "Connect" to somebody who
+         * already had. WhatsApp never had that flag; the two channels now agree.
+         */
+        const connections = await connectionService.getConnectionMap(vendor.user_id);
 
         return {
             emailVerified: !!vendor.email_verified,
-            telegramVerified: !!(telegramLink && telegramLink.isActive),
-            whatsappVerified: !!vendor.wa?.verified
+            telegramVerified: !!connections.telegram,
+            whatsappVerified: !!connections.whatsapp
         };
     }
 

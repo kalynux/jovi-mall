@@ -10,6 +10,7 @@ import { assertSigningSecrets } from './config/secrets.config';
 import { assertEnvironment } from './config/env';
 import { assertInternalAdminToken } from './config/internal-admin.config';
 import { assertExposedConfigSafe } from './modules/system/domain/exposed-config';
+import { reportBotWebhookGuard } from './api/middlewares/bot-webhook.middleware';
 import { initAggregationScheduler } from './core/jobs/aggregation-scheduler';
 import { initializeMetrics, installOutboxDepthProvider, recordMongoError } from './modules/system/metrics/metrics';
 import { outboxDepthForMetrics } from './modules/system/services/queue-depth.service';
@@ -63,6 +64,12 @@ async function startServer() {
     // process rather than serve it once. Pure function of code, so it belongs beside the other
     // two and before anything can accept a request.
     assertExposedConfigSafe();
+    // Reports rather than asserts, because the guard's unset behaviour differs by
+    // environment: production refuses every bot webhook, development leaves them open.
+    // Either way an operator should read it in the boot log rather than discover it —
+    // `/connect` mints a credential, so "are the bot webhooks authenticated?" is now a
+    // question with a security answer. See api/middlewares/bot-webhook.middleware.ts.
+    reportBotWebhookGuard((message) => console.log(message));
 
     // Database Connection
     await mongoose.connect(MONGO_URI);

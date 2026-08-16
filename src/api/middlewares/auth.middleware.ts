@@ -48,31 +48,58 @@ declare global {
   }
 }
 
-/**
- * Resolves a JWT access token from:
- *   1. `access_token` httpOnly cookie (preferred, for browser clients)
- *   2. `Authorization: Bearer <token>` header (fallback, for API / mobile clients)
- */
-function extractToken(req: Request): string | null {
-  const cookieToken = req.cookies?.[AUTH_COOKIE.ACCESS];
-  if (cookieToken) return cookieToken;
+/** Where the access token came from. The silent refresh below branches on it. */
+type TokenSource = 'bearer' | 'cookie';
 
+/**
+ * Resolves a JWT access token, and reports which door it came through.
+ *
+ * ── The BEARER is preferred, and that reversal is deliberate ──────────────────
+ * This used to read the `access_token` cookie first and fall back to the header. A browser
+ * never sets `Authorization` — none of the four dashboards does, and the only one that
+ * builds the header at all points it at geo-tracker — so preferring the bearer is provably a
+ * no-op for every cookie client, while it closes a genuinely hard-to-diagnose bug for native
+ * ones: a WebView routed through a native HTTP layer inherits the OS cookie jar, and a stale
+ * cookie beating a freshly-refreshed bearer produces 401s that look impossible from the
+ * client side.
+ *
+ * An empty `Authorization: Bearer ` reports **no token at all**, not an empty one. The old
+ * `split(' ')[1]` yielded `''`, which `if (!token)` routed to the no-credential branch; an
+ * object-returning form that reported `{ token: '' }` would instead land in the verify branch
+ * and answer `AUTH_TOKEN_INVALID`. Same extraction shape as `service-token.middleware.ts`.
+ */
+function extractToken(req: Request): { token: string; source: TokenSource } | null {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ')) {
-    return authHeader.split(' ')[1];
+    const bearer = authHeader.slice('Bearer '.length).trim();
+    if (bearer) return { token: bearer, source: 'bearer' };
   }
+
+  const cookieToken = req.cookies?.[AUTH_COOKIE.ACCESS];
+  if (cookieToken) return { token: cookieToken, source: 'cookie' };
 
   return null;
 }
 
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
-  const token = extractToken(req);
+  const extracted = extractToken(req);
+  const token = extracted?.token ?? null;
 
   let payload: AuthUserPayload;
 
   if (!token) {
     // Access token cookie was deleted by the browser after expiry.
     // Attempt a silent refresh before rejecting the request.
+    //
+    // ⚠ This block is deliberately NOT gated on the token source, and the asymmetry with the
+    // expired-token branch below is load-bearing rather than an oversight. Two live callers
+    // depend on it, and both present a refresh cookie with no `Authorization` header at all:
+    //   • every browser, once the 15-minute access cookie has expired and been deleted — this
+    //     IS the ordinary browser path, not an edge case;
+    //   • the Flutter agent app's second refresh path, which sends
+    //     `GET /auth/auth-me/agent` with a hand-built `Cookie: refresh_token=…` and nothing
+    //     else (`agent_app/…/auth/data/datasources/agent_token_refresher.dart`).
+    // Tidying the two branches into symmetry signs both of them out.
     const refreshToken = req.cookies?.[AUTH_COOKIE.REFRESH];
 
     // Never log the token itself — it is a long-lived credential, and this line
@@ -95,6 +122,16 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
     } catch (err: any) {
       // Access token is present but expired — attempt a silent, transparent refresh
       if (err.name === 'TokenExpiredError') {
+        // …unless the caller presented a BEARER. A bearer client cannot read the cookie we
+        // would set, so refreshing from an ambient cookie here would authenticate the request
+        // as whoever that cookie belongs to while the client goes on sending its own expired
+        // token — the same 401-that-looks-impossible the extraction order above exists to
+        // prevent, one layer down. Fail closed; the client refreshes explicitly through
+        // `POST /api/auth/mobile/refresh`.
+        if (extracted?.source === 'bearer') {
+          return next(createAppError(ERROR_CODES.AUTH_TOKEN_EXPIRED, 401));
+        }
+
         const refreshToken = req.cookies?.[AUTH_COOKIE.REFRESH];
 
         if (!refreshToken) {

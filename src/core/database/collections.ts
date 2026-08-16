@@ -136,7 +136,7 @@ export const MODELS = Object.freeze({
 
   // Integrations
   CONNECTED_CALENDAR_ACCOUNT: 'ConnectedCalendarAccount',
-  TELEGRAM_LINK: 'TelegramLink',
+  CHANNEL_CONNECTION: 'ChannelConnection',
 
   // Billing (pricing plans & credit wallet)
   PRICING_PLAN: 'PricingPlan',
@@ -271,7 +271,7 @@ export const COLLECTIONS = Object.freeze({
 
   // Integrations
   CONNECTED_CALENDAR_ACCOUNT: 'connected_calendar_accounts',
-  TELEGRAM_LINK: 'telegram_links',
+  CHANNEL_CONNECTION: 'channel_connections',
 
   // Billing (pricing plans & credit wallet)
   PRICING_PLAN: 'pricing_plans',

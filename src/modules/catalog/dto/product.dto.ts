@@ -1,3 +1,4 @@
+import type { RichDoc } from '../../../core/richtext';
 import { ProductType, ProductStatus, DigitalConfig } from '../models/product.model';
 
 /**
@@ -7,6 +8,8 @@ export interface CreateProductDto {
     type: ProductType;
     title: string;
     description?: string;
+    /** The structured description `description` is the plain-text projection of. */
+    descriptionRich?: RichDoc | null;
     images?: string[];
 
     // SEO
@@ -24,6 +27,8 @@ export interface CreateProductDto {
 export interface UpdateProductDto {
     title?: string;
     description?: string;
+    /** Absent leaves the stored document alone; `null` clears it. */
+    descriptionRich?: RichDoc | null;
     images?: string[]; // Full replacement, not partial
 
     // SEO

@@ -62,12 +62,6 @@ export const CACHE_FLUSH_POLICY: readonly CacheFlushPolicy[] = Object.freeze([
         blastRadius: 'In-flight email verification links stop working. Users request a new one. Low.',
     },
     {
-        spec: specFor('WA_VERIFY_DB'),
-        wholeDbAllowed: true,
-        destructive: false,
-        blastRadius: 'In-flight WhatsApp verification codes stop working. Users request a new one. Low.',
-    },
-    {
         spec: specFor('WA_IDEMPOTENCY_DB'),
         wholeDbAllowed: false,
         destructive: true,
@@ -103,12 +97,6 @@ export const CACHE_FLUSH_POLICY: readonly CacheFlushPolicy[] = Object.freeze([
             + 'gets a dead URL and must re-mint from their library. Recoverable, visible, annoying.',
     },
     {
-        spec: specFor('TELEGRAM_LINK_TOKEN_DB'),
-        wholeDbAllowed: true,
-        destructive: false,
-        blastRadius: 'In-flight Telegram linking tokens stop working. Users restart linking. Low.',
-    },
-    {
         spec: specFor('TELEGRAM_WINDOW_DB'),
         wholeDbAllowed: true,
         destructive: false,
@@ -142,6 +130,29 @@ export const CACHE_FLUSH_POLICY: readonly CacheFlushPolicy[] = Object.freeze([
             + 'deposit deadlines). It is nevertheless the intended remedy for a lock orphaned by a '
             + 'hard kill, which otherwise blocks its sweep until the TTL expires. Prefer waiting '
             + 'out the TTL; flush when the wait costs more than one overlapping pass.',
+    },
+    {
+        spec: specFor('CONNECTION_CODE_DB'),
+        wholeDbAllowed: true,
+        destructive: false,
+        blastRadius:
+            'In-flight connection codes stop working. Nothing durable is lost — a connection '
+            + 'already bound lives in Mongo, not here. Users send /connect again. Low.',
+    },
+    {
+        spec: specFor('LOGIN_CODE_DB'),
+        wholeDbAllowed: true,
+        // Not `destructive` by this file's definition — nothing is duplicated and no
+        // customer work is lost. A session already ISSUED is a stateless JWT and is
+        // untouched; only credentials that have not been redeemed yet die.
+        destructive: false,
+        blastRadius:
+            'Every magic link and /login code in flight stops working, and sessions already '
+            + 'issued are unaffected. Nothing durable is lost — users send /login again. '
+            + 'Rated higher than CONNECTION_CODE_DB despite the identical mechanics: /login is '
+            + "the PRIMARY customer sign-in path (customers hold a generated password they have "
+            + 'never been told), so everyone signing in at that moment fails and has no password '
+            + 'to fall back on. Moderate, and worst during exactly the incident that tempts it.',
     },
 ]);
 

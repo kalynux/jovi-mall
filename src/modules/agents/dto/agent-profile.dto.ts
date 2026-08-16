@@ -93,7 +93,6 @@ export interface GetAgentProfileResponseDto {
      * can show "3 of 20" but must not offer a control for it.
      */
     capacity: AgentCapacityDto;
-    wa: { verified: boolean; name?: string } | null;
     timezone: string;
     preferredLanguage: string;
     status: string;
@@ -166,7 +165,6 @@ export class AgentProfileMapper {
             preferences: agent.preferences,
             settings: agent.settings,
             capacity: AgentProfileMapper.toCapacityDto(agent),
-            wa: agent.wa ? { verified: agent.wa.verified, name: agent.wa.name } : null,
             timezone: agent.timezone,
             preferredLanguage: agent.preferred_language,
             status: agent.status,

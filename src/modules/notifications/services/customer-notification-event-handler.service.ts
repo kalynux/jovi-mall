@@ -3,7 +3,7 @@ import { formatInTimeZone } from 'date-fns-tz';
 import { CustomerNotificationRepository } from '../repositories/customer-notification.repository';
 import { CustomerNotificationPreferenceRepository } from '../repositories/customer-notification-preference.repository';
 import { CustomerModel, ICustomer } from '../../customers/customer.model';
-import { TelegramRepository } from '../../telegram/telegram.repository';
+import { connectionService } from '../../channel-connections';
 import { MailService } from '../../mail/mail.service';
 import { TelegramNotificationService } from '../../telegram/services/telegram-notification.service';
 import { getWhatsAppMessagingService } from '../../whatsapp/services/whatsapp-messaging.service';
@@ -31,7 +31,7 @@ import {
 import type { ShipmentFailureReason } from '../../shipments/shipment.model';
 import { ChannelText } from '../catalog/notification-catalog';
 import { Language, resolveLanguage, META_LANGUAGE_CODE, DEFAULT_LANGUAGE } from '../catalog/notification-i18n';
-import { RenderContext } from '../catalog/message-renderer';
+import { RenderContext, toTelegramNotificationBody } from '../catalog/message-renderer';
 import { DomainEvent } from '../../../core/events/event-bus';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -90,7 +90,6 @@ interface DispatchParams {
 export class CustomerNotificationEventHandler {
     private notificationRepo: CustomerNotificationRepository;
     private preferenceRepo: CustomerNotificationPreferenceRepository;
-    private telegramRepo: TelegramRepository;
     private mailService: MailService;
     private telegramService: TelegramNotificationService;
     private whatsappWindow: WhatsappService;
@@ -99,7 +98,6 @@ export class CustomerNotificationEventHandler {
     constructor() {
         this.notificationRepo = new CustomerNotificationRepository();
         this.preferenceRepo = new CustomerNotificationPreferenceRepository();
-        this.telegramRepo = new TelegramRepository();
         this.mailService = new MailService();
         this.telegramService = new TelegramNotificationService();
         this.whatsappWindow = new WhatsappService();
@@ -824,12 +822,15 @@ export class CustomerNotificationEventHandler {
     ): Promise<CustomerDeliveryChannel[]> {
         const channels: CustomerDeliveryChannel[] = ['in-app'];
 
-        if (prefs.telegramEnabled) {
-            const telegramLink = await this.telegramRepo.findByUserId(customer.user_id.toString());
-            if (telegramLink && telegramLink.isActive) {
-                channels.push('telegram');
-                return channels;
-            }
+        // Both channels resolved in ONE query, then reused by the branches
+        // below. Telegram is no longer gated on a second `isActive` flag:
+        // muting is `telegramEnabled` alone, exactly as WhatsApp already
+        // worked. See connections/services/connection.service.ts.
+        const connections = await connectionService.getConnectionMap(customer.user_id);
+
+        if (prefs.telegramEnabled && connections.telegram) {
+            channels.push('telegram');
+            return channels;
         }
 
         if (prefs.emailEnabled && customer.email_verified && customer.email) {
@@ -837,7 +838,7 @@ export class CustomerNotificationEventHandler {
             return channels;
         }
 
-        if (prefs.whatsappEnabled && customer.wa?.verified) {
+        if (prefs.whatsappEnabled && connections.whatsapp) {
             channels.push('whatsapp');
             return channels;
         }
@@ -955,12 +956,15 @@ export class CustomerNotificationEventHandler {
         content: ChannelText,
         button: { label: string; url: string } | null
     ): Promise<void> {
-        const message = `*${content.subject}*\n\n${content.body}`;
+        // Escaped HTML, never the legacy Markdown this used to ride on — see
+        // toTelegramNotificationBody for the failure it closes.
+        const message = toTelegramNotificationBody(content.subject, content.body);
 
         const result = await this.telegramService.send({
             userId: customer.user_id.toString(),
             message,
-            button: button ?? undefined
+            button: button ?? undefined,
+            parseMode: 'HTML'
         });
 
         if (!result.success) {
@@ -988,9 +992,13 @@ export class CustomerNotificationEventHandler {
             return;
         }
 
-        if (!customer.wa?.verified || !customer.wa.wa_phone_id) return;
+        // The address comes from the connections store now, not from a `wa`
+        // sub-document on the role entity. One person, one WhatsApp number,
+        // whichever role this notification is for.
+        const connection = await connectionService.getConnection(customer.user_id, 'whatsapp');
+        if (!connection) return;
 
-        const waPhoneId = customer.wa.wa_phone_id;
+        const waPhoneId = connection.external_id;
         const to = waPhoneId.startsWith('+') ? waPhoneId : `+${waPhoneId}`;
 
         const withinWindow = await this.whatsappWindow.canSendFreeMessage(waPhoneId);
