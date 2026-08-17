@@ -12,6 +12,8 @@ import { buildAdminEarningsRouter } from '../../modules/earnings/routes/admin-ea
 import { buildAdminPayoutRequestsRouter } from '../../modules/earnings/routes/admin-payout-requests.routes';
 import { buildAdminDevToolsRouter } from '../../modules/dev-tools/admin-dev-tools.routes';
 import { buildAdminSystemRouter } from '../../modules/system/admin-system.routes';
+import { buildAdminTicketRouter } from '../../modules/tickets';
+import { buildAdminFileRouter } from '../../modules/catalog/routes/admin-file.routes';
 
 /**
  * `/api/internal/admin/*` — the service-to-service surface the **wi-admin** backend calls.
@@ -36,8 +38,9 @@ import { buildAdminSystemRouter } from '../../modules/system/admin-system.routes
  * proving the transport against. `/users` follows with the user-management phase, and
  * `/agents` + `/agencies` with the delivery network at Phase 9, and `/orders` +
  * `/shipments` with the commerce phase at Phase 10. Phase 11 added `/billing`,
- * `/earnings` and `/payout-requests`. Still to come, by repeating the same factory
- * pattern per router: tickets, blog, files, telegram.
+ * `/earnings` and `/payout-requests`, and the dashboard-request round added `/files`.
+ * Still to come, by repeating the same factory pattern per router: tickets, blog,
+ * telegram.
  *
  * The public `/api/admin/*` mounts stay live alongside these until cutover (Phase 8), so
  * the dashboard keeps working while endpoints migrate one at a time. `/users` is the
@@ -165,8 +168,44 @@ router.use('/shipments', buildAdminShipmentRouter([requireAdminCaller]));
  * under a guarded compare-and-set, resolves a ticket and emits `payout.paid`. A second
  * writer would reproduce the balance move and miss all of it.
  */
+/**
+ * Support tickets (Phase 17) — the first mount here with **no public twin**.
+ *
+ * Every other router on this file runs beside a live `/api/admin/*` mount that keeps the
+ * legacy dashboard working until cutover. Tickets could not: the old mount's only admin
+ * access control was the `assigned_admin_id` exclusivity lock — auto-set on an
+ * administrator's first action, then 403 to everybody else including Developers — and that
+ * lock is deleted. Keeping the mount without it would leave a second admin ticket surface
+ * with no access rules, and it could not be given the new ones either, because the tier
+ * matrix needs a tier and a legacy `admin` is a platform user without one.
+ *
+ * Delegated rather than written directly by wi-admin for the ordinary reason (ADR-004 D-2),
+ * and here the reason is unusually concrete: jovi-mall creates tickets in-process from the
+ * payout, dispute and booking-refund paths, and every ticket write publishes on the
+ * in-process event bus (`ticket.created`, `ticket.assigned`, `ticket.status_changed`,
+ * `ticket.priority_changed`). A second writer would move the row and notify nobody.
+ */
+router.use('/tickets', buildAdminTicketRouter([requireAdminCaller]));
+
 router.use('/billing', buildAdminBillingRouter([requireAdminCaller]));
 router.use('/earnings', buildAdminEarningsRouter([requireAdminCaller]));
 router.use('/payout-requests', buildAdminPayoutRequestsRouter([requireAdminCaller]));
+
+/**
+ * Files — one route, and the only reason it exists is that a URL cannot cross the
+ * service boundary as an id.
+ *
+ * wi-admin ships `logoFileId` / `avatarFileId` / `bannerFileId` / `deliveryProofFileId`
+ * as opaque ids and states that it "resolves no file URLs" (ADR-009 D-6), which is the
+ * right call — building one means `storage.getPublicUrl(key)`, and that means a second
+ * copy of `STORAGE_PROVIDER` in a second deployment. But its contract then told the
+ * dashboard to resolve them "against jovi-mall", and the dashboard talks to wi-admin
+ * and to nothing else. So every avatar and logo on the admin surface rendered as a
+ * placeholder. This is the door that was missing, on the side that owns the provider.
+ *
+ * Batch and bounded at 100, matching wi-admin's page ceiling. It resolves ids the
+ * caller already holds; it does not enumerate.
+ */
+router.use('/files', buildAdminFileRouter([requireAdminCaller]));
 
 export default router;

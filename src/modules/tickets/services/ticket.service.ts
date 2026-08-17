@@ -4,6 +4,7 @@ import { TicketNoteService } from './ticket-note.service';
 import { TicketAttachmentService } from './ticket-attachment.service';
 import { TicketStatus, TicketPriority, ActorRole, EntityType, TicketImportance, isWaitingStatus, WAITING_STATUS_TARGET_ROLE } from '../types/ticket.types';
 import { ITicket } from '../models/ticket.model';
+import { IAdminSnapshot } from '../../../core/types/admin-snapshot.types';
 import { AppError, createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
@@ -58,61 +59,6 @@ export class TicketService {
      */
 
     /**
-     * Validate admin has permission to act on ticket
-     * Throws ForbiddenError if active admin is set and doesn't match current admin
-     * 
-     * @param ticket - Ticket object (passed to optimize DB calls)
-     * @param adminUserId - Current admin user ID
-     * @param role - Current user role
-     */
-    private validateActiveAdminPermission(
-        ticket: ITicket,
-        adminUserId: string,
-        role: ActorRole
-    ): void {
-        // Non-admins use normal permission checks
-        if (role !== ActorRole.ADMIN) {
-            return;
-        }
-
-        // If active admin is set and doesn't match current admin, block
-        if (ticket.assigned_admin_id) {
-            const activeAdminId = ticket.assigned_admin_id.toString();
-            if (activeAdminId !== adminUserId) {
-                throw createAppError(
-                    ERROR_CODES.TICKET_ACCESS_DENIED,
-                    403,
-                    'This ticket is locked to another admin. Only they can perform actions.'
-                );
-            }
-        }
-
-        // If no active admin OR user matches active admin, allow action
-    }
-
-    /**
-     * Set active admin if not already set (first action locks ticket)
-     * 
-     * @param ticket - Ticket object (passed to optimize DB calls)
-     * @param adminUserId - Admin user ID to set as active
-     */
-    private async setActiveAdminIfNotSet(ticket: ITicket, adminUserId: string): Promise<void> {
-        // Only set if not already set
-        if (!ticket.assigned_admin_id) {
-            await this.ticketRepo.setActiveAdmin(ticket.id, adminUserId);
-        }
-    }
-
-    /**
-     * Clear active admin (auto-unlock on close/resolve)
-     * 
-     * @param ticketId - Ticket ID
-     */
-    private async clearActiveAdmin(ticketId: string): Promise<void> {
-        await this.ticketRepo.clearActiveAdmin(ticketId);
-    }
-
-    /**
      * Create a new ticket
      * 
      * @param input - Ticket creation data
@@ -129,6 +75,8 @@ export class TicketService {
         createdByUserId: string;
         createdByRole: ActorRole;
         createdByEntityId: string;
+        /** Set only when an administrator opened it — see `Ticket.created_by_admin`. */
+        createdByAdmin?: IAdminSnapshot | null;
     }): Promise<ITicket> {
         // Polymorphic entity validation → also resolves the vendor behind the entity.
         const vendorId = await this.validateEntityReference(input.entityType, input.entityId);
@@ -150,6 +98,7 @@ export class TicketService {
             tracking_number: input.trackingNumber ?? null,
             created_by_role: input.createdByRole,
             created_by_user_id: new mongoose.Types.ObjectId(input.createdByUserId),
+            created_by_admin: input.createdByAdmin ?? null,
             updated_by: [new mongoose.Types.ObjectId(input.createdByUserId)]
         });
 
@@ -214,9 +163,6 @@ export class TicketService {
             throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
         }
 
-        // Validate active admin permission (exclusive locking)
-        this.validateActiveAdminPermission(ticket, userId, role);
-
         // Validate user has permission (must be follower or admin)
         if (role !== ActorRole.ADMIN) {
             const isFollower = await this.followerService.isFollower(ticketId, userId);
@@ -239,21 +185,11 @@ export class TicketService {
             throw new AppError(ERROR_CODES.TICKET_UPDATE_FAILED, 500, ERROR_CODES.TICKET_UPDATE_FAILED, false);
         }
 
-        // Set active admin if admin is acting (exclusive lock on first action)
-        if (role === ActorRole.ADMIN) {
-            await this.setActiveAdminIfNotSet(ticket, userId);
-        }
-
         // Create system note
         await this.noteService.createSystemNote(
             ticketId,
             `Status changed from "${oldStatus}" to "${newStatus}"`
         );
-
-        // Auto-unlock on close or resolve
-        if (newStatus === TicketStatus.CLOSED || newStatus === TicketStatus.RESOLVED) {
-            await this.clearActiveAdmin(ticketId);
-        }
 
         // Emit event
         await eventBus.publish('ticket.status_changed', {
@@ -277,8 +213,11 @@ export class TicketService {
      * 
      * ASSIGNMENT RULES:
      * - If targetRole = ADMIN and targetUserId = null → admin pool
-     * - If targetRole = ADMIN and targetUserId provided → specific admin (exclusivity)
      * - If targetRole ≠ ADMIN → targetUserId is mandatory
+     *
+     * ⚠ This assigns to a PLATFORM actor, or to the admin pool. Assigning to a named
+     * administrator goes through `assignToAdministrator` instead — administrators live in
+     * the wi-admin database and cannot be named by a `users` id here.
      * 
      * @param ticketId - Ticket ID
      * @param targetRole - Role to assign to
@@ -299,13 +238,10 @@ export class TicketService {
             throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
         }
 
-        // Validate active admin permission (exclusive locking)
-        this.validateActiveAdminPermission(ticket, assignerUserId, assignerRole);
-
         // Validate assignment rules
         if (targetRole === ActorRole.ADMIN) {
-            // Admin assignment: userId optional (pool assignment)
-            // If userId provided, enables exclusivity
+            // Admin assignment: userId is always null here — the pool. A named administrator
+            // is not a `users` id, so `assignToAdministrator` handles that case.
         } else {
             // Non-admin assignment: userId mandatory
             if (!targetUserId) {
@@ -324,18 +260,10 @@ export class TicketService {
             );
         }
 
-        // For admin exclusivity: set assigned_admin_id if specific admin
-        const adminId = (targetRole === ActorRole.ADMIN && targetUserId) ? targetUserId : null;
-
         // Perform assignment
-        const updatedTicket = await this.ticketRepo.assign(ticketId, targetRole, targetUserId, adminId);
+        const updatedTicket = await this.ticketRepo.assign(ticketId, targetRole, targetUserId);
         if (!updatedTicket) {
             throw new AppError(ERROR_CODES.TICKET_ASSIGN_FAILED, 500, ERROR_CODES.TICKET_ASSIGN_FAILED, false);
-        }
-
-        // Set active admin if admin is acting (exclusive lock on first action)
-        if (assignerRole === ActorRole.ADMIN) {
-            await this.setActiveAdminIfNotSet(ticket, assignerUserId);
         }
 
         // Create system note
@@ -352,7 +280,6 @@ export class TicketService {
                 ticketId,
                 targetRole,
                 targetUserId,
-                adminExclusivity: adminId !== null,
                 assignedBy: assignerUserId
             },
             occurredAt: new Date()
@@ -362,11 +289,89 @@ export class TicketService {
     }
 
     /**
+     * Hand a ticket to a named administrator, or claim it from the pool.
+     *
+     * ── Why this is not `assignTicket` ────────────────────────────────────────
+     * That method assigns to a **platform actor** and names them by a `users` id.
+     * Administrators have no `users` row — they live in the wi-admin database — so there is
+     * no id here to name them by. What lands instead is a profile SNAPSHOT, because a
+     * cross-database join does not exist and every ticket reader would otherwise see a blank
+     * where the person handling their ticket should be.
+     *
+     * ── This service enforces nothing about WHO may do it ─────────────────────
+     * The tier rules — who may hold a ticket, who may hand one to whom — are wi-admin's, and
+     * are resolved there before this is called, against the administrator records only it
+     * has. That is the same single-sided trust `requireAdminCaller` already documents: the
+     * service token is a full-privilege credential, so a second opinion computed here would
+     * be theatre. What this method owns is that the write is *recorded* correctly.
+     *
+     * `assignedBy: null` means the ticket was CLAIMED from the pool rather than handed over —
+     * a real distinction, since the tier rules key on who assigned it.
+     */
+    async assignToAdministrator(
+        ticketId: string,
+        admin: IAdminSnapshot,
+        assignedBy: IAdminSnapshot | null
+    ): Promise<ITicket> {
+        const ticket = await this.ticketRepo.findById(ticketId);
+        if (!ticket) {
+            throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
+        }
+
+        const updatedTicket = await this.ticketRepo.setAdminAssignment(ticketId, {
+            admin,
+            assigned_by: assignedBy,
+            assigned_at: new Date(),
+        });
+        if (!updatedTicket) {
+            throw new AppError(ERROR_CODES.TICKET_ASSIGN_FAILED, 500, ERROR_CODES.TICKET_ASSIGN_FAILED, false);
+        }
+
+        await this.noteService.createSystemNote(
+            ticketId,
+            assignedBy
+                ? `Assigned to ${admin.name} by ${assignedBy.name}`
+                : `Claimed by ${admin.name}`
+        );
+
+        await eventBus.publish('ticket.assigned', {
+            eventType: 'ticket.assigned',
+            aggregateId: ticketId,
+            payload: {
+                ticketId,
+                targetRole: ActorRole.ADMIN,
+                targetUserId: null,
+                administratorId: admin.id,
+                assignedBy: assignedBy?.id ?? null
+            },
+            occurredAt: new Date()
+        });
+
+        return updatedTicket;
+    }
+
+    /**
+     * Re-stamp the assignee's profile from wi-admin's current record.
+     *
+     * The snapshot is a copy of a row in another database, so it goes stale the moment that
+     * row changes — and unlike an audit stamp, this block answers "who is handling my ticket
+     * **now**", where a stale answer is simply wrong rather than historical. wi-admin sends
+     * the current profile on every delegated write (it has already read the administrator to
+     * decide whether the write is allowed), so keeping it fresh costs nothing here.
+     *
+     * A no-op when the ticket is unassigned or held by somebody else: this refreshes a
+     * snapshot, and must never quietly become a way to reassign one.
+     */
+    async refreshAdminSnapshot(ticketId: string, admin: IAdminSnapshot): Promise<void> {
+        await this.ticketRepo.refreshAdminSnapshot(ticketId, admin);
+    }
+
+    /**
      * Update ticket priority
-     * 
-     * If requester is admin, priority gets locked forever.
-     * Active admin can re-update locked priority.
-     * 
+     *
+     * If requester is admin, priority gets locked forever. Which administrators may change
+     * it afterwards is wi-admin's tier decision, not a lock on this row.
+     *
      * @param ticketId - Ticket ID
      * @param newPriority - New priority
      * @param userId - User making the change
@@ -389,17 +394,13 @@ export class TicketService {
             throw createAppError(ERROR_CODES.TICKET_CLOSED, 409, 'Cannot update priority of a closed ticket');
         }
 
-        // Validate active admin permission FIRST (exclusive locking)
-        this.validateActiveAdminPermission(ticket, userId, role);
-
-        // Check if priority is locked
+        // Check if priority is locked. Once an administrator has set it, only an
+        // administrator may change it again — which administrator is wi-admin's decision
+        // (`resolveScope('tickets')` plus the tier matrix), not a lock on this row.
         if (ticket.priority_locked) {
-            // If locked, only active admin can update
             if (role !== ActorRole.ADMIN) {
                 throw createAppError(ERROR_CODES.TICKET_PRIORITY_LOCKED, 403, 'Priority is locked by admin and cannot be modified');
             }
-            // At this point, admin has passed validateActiveAdminPermission
-            // So they ARE the active admin and can update
         }
 
         const oldPriority = ticket.priority;
@@ -414,11 +415,6 @@ export class TicketService {
         );
         if (!updatedTicket) {
             throw new AppError(ERROR_CODES.TICKET_PRIORITY_UPDATE_FAILED, 500, ERROR_CODES.TICKET_PRIORITY_UPDATE_FAILED, false);
-        }
-
-        // Set active admin if admin is acting (exclusive lock on first action)
-        if (role === ActorRole.ADMIN) {
-            await this.setActiveAdminIfNotSet(ticket, userId);
         }
 
         // Create system note
@@ -458,9 +454,6 @@ export class TicketService {
             throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
         }
 
-        // Validate active admin permission (exclusive locking)
-        this.validateActiveAdminPermission(ticket, userId, role);
-
         // Validate only creator or admin can close
         if (role !== ActorRole.ADMIN && ticket.created_by_user_id.toString() !== userId) {
             throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Only ticket creator or admin can close ticket');
@@ -470,14 +463,6 @@ export class TicketService {
         if (!updatedTicket) {
             throw new AppError(ERROR_CODES.TICKET_CLOSE_FAILED, 500, ERROR_CODES.TICKET_CLOSE_FAILED, false);
         }
-
-        // Set active admin if admin is acting (exclusive lock on first action)
-        if (role === ActorRole.ADMIN) {
-            await this.setActiveAdminIfNotSet(ticket, userId);
-        }
-
-        // Auto-unlock on close
-        await this.clearActiveAdmin(ticketId);
 
         await this.noteService.createSystemNote(ticketId, 'Ticket closed');
 
@@ -502,9 +487,6 @@ export class TicketService {
             throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
         }
 
-        // Note: No active admin validation needed - reopening is allowed by any admin
-        // since ticket was previously closed and unlocked
-
         if (ticket.status !== TicketStatus.CLOSED) {
             throw createAppError(ERROR_CODES.TICKET_INVALID_STATUS_TRANSITION, 400, 'Only closed tickets can be reopened');
         }
@@ -513,9 +495,6 @@ export class TicketService {
         if (!updatedTicket) {
             throw new AppError(ERROR_CODES.TICKET_REOPEN_FAILED, 500, ERROR_CODES.TICKET_REOPEN_FAILED, false);
         }
-
-        // Set active admin (admin who reopens becomes active)
-        await this.setActiveAdminIfNotSet(ticket, userId);
 
         // Create system note
         await this.noteService.createSystemNote(ticketId, 'Ticket reopened by admin');
@@ -538,9 +517,6 @@ export class TicketService {
             throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
         }
 
-        // Validate active admin permission (exclusive locking)
-        this.validateActiveAdminPermission(ticket, userId, role);
-
         // Validate permission
         if (role !== ActorRole.ADMIN) {
             const isFollower = await this.followerService.isFollower(ticketId, userId);
@@ -553,11 +529,6 @@ export class TicketService {
         const updatedTicket = await this.ticketRepo.update(ticketId, updates, userId);
         if (!updatedTicket) {
             throw new AppError(ERROR_CODES.TICKET_GENERAL_UPDATE_FAILED, 500, ERROR_CODES.TICKET_GENERAL_UPDATE_FAILED, false);
-        }
-
-        // Set active admin if admin is acting (exclusive lock on first action)
-        if (role === ActorRole.ADMIN) {
-            await this.setActiveAdminIfNotSet(ticket, userId);
         }
 
         return updatedTicket;

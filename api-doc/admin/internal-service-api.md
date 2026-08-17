@@ -67,19 +67,19 @@ Most routers are **one factory mounted twice** — once publicly under `/api/adm
 case the paths after the prefix are identical and the linked public doc is authoritative for
 request and response shapes.
 
-82 routes in twelve groups.
+88 routes in thirteen groups.
 
 | Group | Routes | Public twin | Documented in |
 |---|---|---|---|
 | `/cod/*` | 13 | `/api/admin/cod/*` | [cod.md](./cod.md) |
-| `/agents/*` | 11 | `/api/admin/agents/*` | [agents.md](./agents.md) |
+| `/agents/*` | 14 | `/api/admin/agents/*` | [agents.md](./agents.md) |
 | `/agencies/*` | 5 | `/api/admin/delivery-agencies/*` | [delivery-agencies.md](./delivery-agencies.md) |
 | `/billing/*` | 8 | `/api/admin/{plans,entitlements,vendors,agencies,agents}/…` | [billing.md](./billing.md) |
 | `/earnings/*` | 4 | `/api/admin/earnings/*` | [earnings.md](./earnings.md) |
 | `/payout-requests/*` | 4 | `/api/admin/payout-requests/*` | [payout-requests.md](./payout-requests.md) |
 | `/orders/*` | 6 | **partial** — only `GET /disputes` and `POST /:id/dispute/resolve` have one | [orders.md](./orders.md) |
-| `/vendors/*` | 7 | **none** | — see below |
-| `/users/*` | 3 | **none** | — see below |
+| `/vendors/*` | 8 | **none** | — see below |
+| `/users/*` | 5 | **none** | — see below |
 | `/shipments/*` | 2 | **none** | — see below |
 | `/system/*` | 12 | **none, deliberately** | [system.md](./system.md) |
 | `/dev-tools/*` | 7 | **none, deliberately** | [dev-tools.md](./dev-tools.md) |
@@ -134,10 +134,56 @@ GET    /orders/:orderId/refund-eligibility     ← internal only
 POST   /orders/:orderId/refund                 ← internal only
 ```
 
+### Added in the dashboard-request round
+
+**`/files/*`** — one route, and a group of its own.
+
+```
+POST   /files/resolve      body { fileIds: string[] } (1..100) → { files: FileDetail[] }
+```
+
+wi-admin ships every file reference as an opaque id and states that it resolves no file URLs —
+correctly, because a URL is `storage.getPublicUrl(key)` and duplicating `STORAGE_PROVIDER` across
+two deployments is the drift the service split exists to prevent. But its contract then told the
+dashboard to resolve them *"against jovi-mall"*, and the dashboard talks to wi-admin alone. This
+is the door that was missing, on the side that owns the provider.
+
+⚠️ **It resolves; it must never enumerate.** Explicit id set in, matching files out. Ids that
+resolve to nothing are **absent** from the result rather than present-and-null — a record
+legitimately outlives a file the cleanup job swept.
+
+**`GET /vendors/:vendorId/products/:productId`** — the one READ on the vendor router, and the
+only read anywhere on this surface that is not a verdict. It is here because projecting a product
+needs two things wi-admin may not own: the storage provider, to turn `fileIds` into URLs, and
+`storage-fee.calculator.ts`, to quote what the agency charges to shelve it. A record whose
+*projection* needs local machinery is delegated — a corollary of ADR-009 D-6, not an exception to
+D-1.
+
+**`POST /agents/contracts/:contractId/{suspend,reinstate,deactivate}`** — administrative
+intervention on one agent↔agency contract. Each resolves the contract's own `agency_id` and then
+runs the ordinary agency-scoped transition, so the authority matrix, the legal `from` states, the
+status-request row and the membership-event history are all the same code an agency desk runs.
+`deactivate` still needs the counterparty and the §4 cash conditions and answers
+`{ request, contract, blockers }` with `contract: null` when they are not met — **there is no
+administrative override**, because ending a relationship that still owes an agent money is how
+that money stops being anybody's responsibility.
+
+**`POST /users/:userId/{password-reset-link,login-link}`** — send a platform party a way back
+into their own account, over `email`, `whatsapp` or `telegram`.
+
+Both mint through machinery that already existed: `PasswordResetService.issueResetLinkFor` (the
+same 32-byte token, 30 minutes, single use, and the `password_changed_at` stamp that evicts every
+live session) and `MessagingLoginService` (the same ten-minute session the bot `/login` flow
+mints, **customer-only** by a literal in that service). A third entrance, not a second mechanism.
+
+⚠️ **The destination is not in the request and the token is not in the response.** The address is
+read from the party's own record; a caller who could name one could mail themselves a working
+credential for another person's account. Rate-limited per party *and* per administrator.
+
 ### Still to come
 
-Tickets, blog, files and telegram have **no** internal mount yet — wi-admin reaches those through
-the public `/api/admin/*` surface. Adding one is a matter of repeating the same factory pattern per
+Tickets, blog and telegram have **no** internal mount yet — wi-admin reaches those through the
+public `/api/admin/*` surface. Adding one is a matter of repeating the same factory pattern per
 router.
 
 ---

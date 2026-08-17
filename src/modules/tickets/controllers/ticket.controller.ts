@@ -7,10 +7,14 @@ import {
     UpdateTicketSchema,
     UpdateStatusSchema,
     AssignTicketSchema,
+    AssignToAdministratorSchema,
+    RefreshAdminSnapshotSchema,
     UpdatePrioritySchema,
     ListTicketsQuerySchema
 } from '../validators/ticket.validator';
 import { ActorRole, EntityType, TicketImportance, TicketPriority, TicketStatus } from '../types/ticket.types';
+import { IAdminSnapshot } from '../../../core/types/admin-snapshot.types';
+import { adminCallerActor } from '../../../api/middlewares/admin-caller.middleware';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -42,7 +46,11 @@ export class TicketController {
             attachments: validated.attachments,
             createdByUserId: userId,
             createdByRole: role,
-            createdByEntityId: req.auth!.role_entity._id.toString()
+            createdByEntityId: req.auth!.role_entity._id.toString(),
+            // Present only on the internal admin API, where wi-admin sends the profile of the
+            // administrator opening the ticket. `role` is `admin` there by mount, so the two
+            // cannot disagree.
+            createdByAdmin: (validated.admin as IAdminSnapshot | undefined) ?? null
         });
 
         const enriched = await enrichmentService.enrichTicket(ticket);
@@ -94,12 +102,6 @@ export class TicketController {
             }
         }
 
-        if (ticket.assigned_admin_id && role === ActorRole.ADMIN) {
-            if (ticket.assigned_admin_id.toString() !== req.auth!.role_entity.id) {
-                return next(createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'This ticket is assigned to a specific admin'));
-            }
-        }
-
         const enriched = await enrichmentService.enrichTicket(ticket);
         res.status(200).json({ success: true, data: enriched });
     });
@@ -141,6 +143,55 @@ export class TicketController {
         );
 
         res.status(200).json({ success: true, data: updatedTicket });
+    });
+
+    /**
+     * Hand a ticket to a named administrator, or claim it from the pool.
+     *
+     * Only reachable through `/api/internal/admin/tickets`, so the caller is wi-admin and the
+     * body carries what only wi-admin can know: the TARGET administrator's profile, read from
+     * its own `admin_accounts`. The caller's own identity comes from the `X-Actor-*` headers
+     * instead, via `adminCallerActor` — headers describe who is calling, the body describes
+     * who they are assigning.
+     *
+     * `assignedBy` is null when an administrator claims a ticket for themselves, which is a
+     * real distinction rather than a missing value: the tier rules key on who assigned it.
+     */
+    static assignToAdministrator = asyncHandler(async (req: Request, res: Response) => {
+        const ticketId = req.params.id;
+        const validated = AssignToAdministratorSchema.parse(req.body);
+
+        const caller = adminCallerActor(req);
+        const admin = validated.admin as IAdminSnapshot;
+
+        // Claiming — the caller IS the assignee — records no assigner. Compared on the id
+        // rather than trusting a flag in the body, so the two cannot disagree.
+        const assignedBy: IAdminSnapshot | null =
+            caller && caller.id !== admin.id && validated.assignedBy
+                ? validated.assignedBy as IAdminSnapshot
+                : null;
+
+        const updatedTicket = await ticketService.assignToAdministrator(ticketId, admin, assignedBy);
+
+        res.status(200).json({ success: true, data: updatedTicket });
+    });
+
+    /**
+     * Re-stamp the assignee's profile, without touching who the assignee is.
+     *
+     * Its own route rather than a shape of `/assign`, because the difference is not cosmetic:
+     * `/assign` with a bare `admin` means "this administrator now holds it, claimed", so
+     * routing a refresh through it would reassign the ticket on every edit and clear
+     * `assigned_by` — the field the tier rules depend on. The service no-ops when the id does
+     * not match the current holder, so a refresh racing a reassignment cannot win.
+     */
+    static refreshAdminSnapshot = asyncHandler(async (req: Request, res: Response) => {
+        const ticketId = req.params.id;
+        const validated = RefreshAdminSnapshotSchema.parse(req.body);
+
+        await ticketService.refreshAdminSnapshot(ticketId, validated.admin as IAdminSnapshot);
+
+        res.status(204).send();
     });
 
     static updatePriority = asyncHandler(async (req: Request, res: Response) => {

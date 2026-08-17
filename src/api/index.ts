@@ -268,15 +268,20 @@ import adminOrderRoutes from '../modules/orders/admin-order.routes';
 router.use('/admin/orders', adminOrderRoutes);
 
 // Ticketing Module Routes
+//
+// ⚠ There is deliberately NO `/admin/tickets` mount. The admin ticket surface moved to
+// wi-admin (Phase 17) and is reachable only at `/api/internal/admin/tickets`, behind the
+// service token. Unlike the other ported domains this one kept no public twin: the old
+// mount's only access control was the `assigned_admin_id` exclusivity lock, which is gone,
+// and it could not enforce the tier rules that replaced it — a legacy `admin` is a platform
+// user and carries no tier. See `modules/tickets/routes/admin-ticket.routes.ts`.
 import {
-    adminTicketRoutes,
     vendorTicketRoutes,
     customerTicketRoutes,
     agencyTicketRoutes,
     agentTicketRoutes
 } from '../modules/tickets';
 
-router.use('/admin/tickets', adminTicketRoutes);
 router.use('/vendor/tickets', vendorTicketRoutes);
 router.use('/customer/tickets', customerTicketRoutes);
 router.use('/agency/tickets', agencyTicketRoutes);

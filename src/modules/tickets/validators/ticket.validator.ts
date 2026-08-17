@@ -11,9 +11,34 @@ import {
 
 /**
  * Ticket API Validators
- * 
+ *
  * Zod schemas for request validation.
  */
+
+/**
+ * One administrator, as wi-admin sends them on the internal admin API.
+ *
+ * This schema is the CONTRACT for the profile snapshot stored on a ticket — the only thing
+ * between wi-admin's payload and a block rendered to a customer, and `tier` in particular
+ * decides who may later see the ticket. `.strict()` so an unrecognised key is a 400 rather
+ * than a silently stripped field: a caller sending `jobTitle` and getting a 200 back would
+ * reasonably believe it had been stored.
+ *
+ * Declared here, above its first use, because these are `const` bindings — referencing it
+ * from `CreateTicketSchema` below while it sat further down the file would be a
+ * temporal-dead-zone crash at module load, not a compile error.
+ */
+const AdminSnapshotSchema = z.object({
+    id: z.string().min(1),
+    // Only ever `'admin'` on this path. Present because the stored shape carries it, and
+    // omitting it here would mean the schema and the model disagreed about the block.
+    source: z.literal('admin').default('admin'),
+    name: z.string().min(1).max(200),
+    tier: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    job_title: z.string().max(120).nullable().default(null),
+    department: z.string().max(120).nullable().default(null),
+    avatar_url: z.string().max(2048).nullable().default(null)
+}).strict();
 
 // Create ticket
 export const CreateTicketSchema = z.object({
@@ -33,7 +58,13 @@ export const CreateTicketSchema = z.object({
     entityId: z.string().min(1).optional(),
     // Optional supporting info — required ones are enforced per vendor support policy.
     trackingNumber: z.string().trim().min(1).max(120).optional(),
-    attachments: z.array(z.string().trim().min(1)).max(5).optional()
+    attachments: z.array(z.string().trim().min(1)).max(5).optional(),
+    /**
+     * The administrator opening this ticket on somebody's behalf. Sent only by wi-admin on
+     * the internal admin API; absent on every role-facing route, where the creator is a
+     * platform user who resolves in this database.
+     */
+    admin: AdminSnapshotSchema.optional()
 }).superRefine((data, ctx) => {
     if (data.entityType !== EntityType.OTHER && !data.entityId) {
         ctx.addIssue({
@@ -74,6 +105,33 @@ export const AssignTicketSchema = z.object({
 });
 
 export type AssignTicketDto = z.infer<typeof AssignTicketSchema>;
+
+/**
+ * Assign a ticket to an administrator (internal admin API only).
+ *
+ * `assignedBy` is optional because CLAIMING has no assigner. The controller decides which it
+ * is by comparing ids rather than trusting its presence.
+ */
+export const AssignToAdministratorSchema = z.object({
+    admin: AdminSnapshotSchema,
+    assignedBy: AdminSnapshotSchema.optional()
+}).strict();
+
+export type AssignToAdministratorDto = z.infer<typeof AssignToAdministratorSchema>;
+
+/**
+ * Re-stamp the assignee's profile (internal admin API only).
+ *
+ * Deliberately a DIFFERENT schema and a different route from `AssignToAdministrator`, even
+ * though the payload is a subset. Sending `{ admin }` to `/assign` means "this administrator
+ * now holds the ticket, claimed" — it would reassign on every edit and clear `assigned_by`.
+ * A refresh must be unable to express that, so it cannot share the endpoint.
+ */
+export const RefreshAdminSnapshotSchema = z.object({
+    admin: AdminSnapshotSchema
+}).strict();
+
+export type RefreshAdminSnapshotDto = z.infer<typeof RefreshAdminSnapshotSchema>;
 
 // Update priority
 export const UpdatePrioritySchema = z.object({

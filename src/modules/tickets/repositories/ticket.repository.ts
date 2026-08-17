@@ -1,4 +1,5 @@
-import { TicketModel, ITicket } from '../models/ticket.model';
+import { TicketModel, ITicket, IAdminAssignment } from '../models/ticket.model';
+import { IAdminSnapshot } from '../../../core/types/admin-snapshot.types';
 import { TicketStatus, TicketPriority, ActorRole, EntityType, isTerminalStatus } from '../types/ticket.types';
 import mongoose from 'mongoose';
 import { COLLECTIONS } from '../../../core/database/collections';
@@ -12,11 +13,12 @@ import { COLLECTIONS } from '../../../core/database/collections';
  * - By type, status, priority, importance
  * - By creator ID, assignee ID
  * - By entity type + entity ID (polymorphic)
- * - By assigned admin (for exclusivity)
- * 
+ *
  * VISIBILITY ENFORCEMENT:
- * - Admin queries: See all tickets (unless exclusivity active)
  * - Non-admin queries: See only tickets they follow (enforced at service layer)
+ * - There is no admin query here any more. Administrators reach tickets through wi-admin,
+ *   which reads this collection directly and folds its own tier scope into the query —
+ *   filtering by `admin_assignment` is therefore its job, not this repository's.
  */
 
 export interface TicketFilters {
@@ -28,7 +30,6 @@ export interface TicketFilters {
     created_by_user_id?: string;
     assigned_to_role?: ActorRole;
     assigned_to_user_id?: string;
-    assigned_admin_id?: string;
 }
 
 export interface PaginationOptions {
@@ -123,7 +124,6 @@ export class TicketRepository {
         if (filters.created_by_user_id) query.created_by_user_id = filters.created_by_user_id;
         if (filters.assigned_to_role) query.assigned_to_role = filters.assigned_to_role;
         if (filters.assigned_to_user_id) query.assigned_to_user_id = filters.assigned_to_user_id;
-        if (filters.assigned_admin_id) query.assigned_admin_id = filters.assigned_admin_id;
 
         // Count total matching documents
         const total = await TicketModel.countDocuments(query);
@@ -184,11 +184,6 @@ export class TicketRepository {
         if (filters.created_by_user_id) matchStage.created_by_user_id = new mongoose.Types.ObjectId(filters.created_by_user_id);
         if (filters.assigned_to_role) matchStage.assigned_to_role = filters.assigned_to_role;
         if (filters.assigned_to_user_id) matchStage.assigned_to_user_id = new mongoose.Types.ObjectId(filters.assigned_to_user_id);
-
-        // Admin exclusivity filter
-        if (role === ActorRole.ADMIN && filters.assigned_admin_id) {
-            matchStage.assigned_admin_id = new mongoose.Types.ObjectId(filters.assigned_admin_id);
-        }
 
         // Build aggregation pipeline
         const pipeline: any[] = [
@@ -292,20 +287,16 @@ export class TicketRepository {
     }
 
     /**
-     * Assign ticket to a user/role
-     * 
-     * @param adminId - If provided, enables admin exclusivity mode
+     * Assign ticket to a platform actor, or to the admin pool (`userId: null`).
      */
     async assign(
         ticketId: string,
         role: ActorRole,
-        userId: string | null,
-        adminId: string | null
+        userId: string | null
     ): Promise<ITicket | null> {
         const update: any = {
             assigned_to_role: role,
-            assigned_to_user_id: userId,
-            assigned_admin_id: adminId
+            assigned_to_user_id: userId
         };
 
         return await TicketModel.findByIdAndUpdate(ticketId, update, { new: true });
@@ -346,23 +337,35 @@ export class TicketRepository {
     }
 
     /**
-     * Set active admin (exclusive lock)
+     * Set — or clear, with `null` — which wi-admin administrator holds this ticket.
      */
-    async setActiveAdmin(ticketId: string, adminUserId: string): Promise<ITicket | null> {
+    async setAdminAssignment(
+        ticketId: string,
+        assignment: IAdminAssignment | null
+    ): Promise<ITicket | null> {
         return await TicketModel.findByIdAndUpdate(
             ticketId,
-            { assigned_admin_id: new mongoose.Types.ObjectId(adminUserId) },
+            { admin_assignment: assignment },
             { new: true }
         );
     }
 
     /**
-     * Clear active admin (unlock)
+     * Re-stamp the assignee's profile, and ONLY if it is still that administrator.
+     *
+     * The id predicate is the whole safety of this method. Without it a refresh racing a
+     * reassignment would write the previous holder's profile back over the new one — and
+     * because the block also carries `tier`, that is not a cosmetic slip: wi-admin's read
+     * scope filters on that field, so the ticket would become visible to the wrong tier.
+     * Folding the guard into the query rather than checking first also makes it atomic.
+     *
+     * `assigned_by` is deliberately untouched: who handed the ticket over is a historical
+     * fact, and refreshing a live profile must not rewrite it.
      */
-    async clearActiveAdmin(ticketId: string): Promise<ITicket | null> {
-        return await TicketModel.findByIdAndUpdate(
-            ticketId,
-            { $unset: { assigned_admin_id: 1 } },
+    async refreshAdminSnapshot(ticketId: string, admin: IAdminSnapshot): Promise<ITicket | null> {
+        return await TicketModel.findOneAndUpdate(
+            { _id: ticketId, 'admin_assignment.admin.id': admin.id },
+            { $set: { 'admin_assignment.admin': admin } },
             { new: true }
         );
     }

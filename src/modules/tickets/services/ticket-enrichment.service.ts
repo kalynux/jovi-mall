@@ -3,6 +3,7 @@ import { ITicket } from '../models/ticket.model';
 import { ITicketNote } from '../models/ticket-note.model';
 import { ITicketAttachment } from '../models/ticket-attachment.model';
 import { ActorRole } from '../types/ticket.types';
+import { publicAdminSnapshot } from '../../../core/types/admin-snapshot.types';
 import { AdminModel } from '../../admins/admin.model';
 import { VendorModel } from '../../vendors/vendor.model';
 import { StoreModel } from '../../store/models/store.model';
@@ -82,7 +83,6 @@ export class TicketEnrichmentService {
 
         // ── Collect every reference to resolve in one pass ──
         const actorRefs: ActorRef[] = [];
-        const adminIds: string[] = [];
         const entityRefs: Array<{ type: string; id: string }> = [];
 
         for (const ticket of tickets) {
@@ -91,9 +91,6 @@ export class TicketEnrichmentService {
             }
             if (ticket.assigned_to_user_id && ticket.assigned_to_role) {
                 actorRefs.push({ userId: ticket.assigned_to_user_id.toString(), role: ticket.assigned_to_role });
-            }
-            if (ticket.assigned_admin_id) {
-                adminIds.push(ticket.assigned_admin_id.toString());
             }
             if (ticket.entity_type && ticket.entity_id) {
                 entityRefs.push({ type: ticket.entity_type, id: ticket.entity_id });
@@ -119,26 +116,57 @@ export class TicketEnrichmentService {
 
         // ── Resolve everything in batch ──
         const actorMap = await this.resolveActors(actorRefs);
-        const adminMap = await this.resolveAdmins(adminIds);
         const entityMap = await this.resolveEntities(entityRefs);
 
         // ── Assemble enriched payloads ──
         return tickets.map(ticket => {
             const obj = (ticket as any).toObject ? (ticket as any).toObject({ virtuals: true }) : { ...ticket };
 
-            obj.created_by = ticket.created_by_user_id
-                ? actorMap.get(this.actorKey(ticket.created_by_user_id.toString(), ticket.created_by_role))
-                  ?? this.fallbackActor(ticket.created_by_user_id.toString(), ticket.created_by_role)
+            /**
+             * The creator — from the snapshot when an administrator opened the ticket, since
+             * their id resolves in wi-admin's database and not this one. Without this branch
+             * "opened by" renders a role placeholder to the customer the ticket was opened
+             * FOR, which is the same defect `assigned_admin` had below.
+             *
+             * The ActorSummary shape is kept rather than swapped for the snapshot, so a client
+             * reads one shape whoever the creator was. `avatar` is null because a FileDetail
+             * cannot be synthesised from the snapshot's URL — clients wanting the picture read
+             * `created_by_admin` beside it.
+             */
+            const creatorSnapshot = ticket.created_by_role === ActorRole.ADMIN
+                ? ticket.created_by_admin
                 : null;
+
+            obj.created_by = creatorSnapshot
+                ? { user_id: creatorSnapshot.id, role: ActorRole.ADMIN, name: creatorSnapshot.name, avatar: null }
+                : ticket.created_by_user_id
+                    ? actorMap.get(this.actorKey(ticket.created_by_user_id.toString(), ticket.created_by_role))
+                      ?? this.fallbackActor(ticket.created_by_user_id.toString(), ticket.created_by_role)
+                    : null;
+
+            obj.created_by_admin = publicAdminSnapshot(creatorSnapshot);
 
             obj.assigned_to = ticket.assigned_to_user_id && ticket.assigned_to_role
                 ? actorMap.get(this.actorKey(ticket.assigned_to_user_id.toString(), ticket.assigned_to_role))
                   ?? this.fallbackActor(ticket.assigned_to_user_id.toString(), ticket.assigned_to_role)
                 : null;
 
-            obj.assigned_admin = ticket.assigned_admin_id
-                ? adminMap.get(ticket.assigned_admin_id.toString()) ?? null
-                : null;
+            /**
+             * The administrator handling this ticket, read from the SNAPSHOT on the row
+             * rather than looked up.
+             *
+             * This used to query the `admins` collection here, and that stopped being able to
+             * work when administrator identity moved to wi-admin: the id on the ticket is an
+             * `admin_accounts._id` from a different database, so the lookup matched nothing
+             * and every ticket rendered `assigned_admin: null` for the very readers the field
+             * exists for.
+             *
+             * `publicAdminSnapshot` is the disclosure boundary, and it is applied HERE
+             * because this service serves the customer, vendor, agency and agent views. The
+             * internal block carries `tier` — which decides who may see the ticket — and that
+             * must not travel to a ticket follower.
+             */
+            obj.assigned_admin = publicAdminSnapshot(ticket.admin_assignment?.admin);
 
             obj.entity = ticket.entity_type && ticket.entity_id
                 ? entityMap.get(this.entityKey(ticket.entity_type, ticket.entity_id))
@@ -336,36 +364,6 @@ export class TicketEnrichmentService {
         return result;
     }
 
-    /**
-     * Resolve assigned_admin_id values. The id may be a User id (active-admin
-     * lock) or an Admin document id (assignment), so both are matched.
-     */
-    private async resolveAdmins(ids: string[]): Promise<Map<string, ActorSummary>> {
-        const result = new Map<string, ActorSummary>();
-        if (ids.length === 0) return result;
-
-        const objectIds = [...new Set(ids)].map(id => new mongoose.Types.ObjectId(id));
-        const docs = await AdminModel.find({
-            $or: [{ user_id: { $in: objectIds } }, { _id: { $in: objectIds } }]
-        }).select('user_id name avatar_file_id avatar_url').lean();
-
-        const avatarByFileId = await this.resolveActorFiles(
-            docs.map(d => d.avatar_file_id?.toString()).filter((id): id is string => !!id),
-        );
-
-        for (const d of docs) {
-            const fileId = d.avatar_file_id?.toString();
-            const summary: ActorSummary = {
-                user_id: d.user_id.toString(), role: ActorRole.ADMIN, name: d.name,
-                avatar: (fileId ? avatarByFileId.get(fileId) : undefined) ?? null
-            };
-            // Index by both possible reference forms so lookup by either id hits.
-            result.set(d._id.toString(), summary);
-            result.set(d.user_id.toString(), summary);
-        }
-
-        return result;
-    }
 
     /**
      * Resolve (entity_type, entity_id) pairs into entity summaries. Groups ids by
