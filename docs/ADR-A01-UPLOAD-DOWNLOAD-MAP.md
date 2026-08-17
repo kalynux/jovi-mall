@@ -1,0 +1,107 @@
+# ADR-A01 — Who can download whose uploads, and what gets scanned
+
+**Date:** 2026-08-18 (evidence gathered 2026-08-17)
+**Status:** Accepted — decided; implemented in Phase 4.A.4
+**Scope:** jovi-mall
+**Answers:** [Q-5](../../PRODUCTION-READINESS/11-DECISIONS-REGISTER.md#q-5--who-can-download-whose-uploads)
+of the Phase D register · closes **S-2** and **F-25**
+
+---
+
+## Why `docs/`, and why the `ADR-A0n` prefix
+
+jovi-mall keeps its design records as top-level topic files (`AGENT-CONTRACT-REFACTOR.md`,
+`MESSAGING-LOGIN.md`, `SHIPMENT-ASSIGNMENT.md`) — narratives about a subsystem, not decisions
+about a question. Decisions get a directory. The `A` prefix keeps them from being read as part of
+wi-admin's numbered ADR corpus, which they are not.
+
+---
+
+## Context
+
+The `TODO` in `core/uploads/scanners/clamav-scanner.ts` survived because the question it depends
+on had never been answered: **who can download whose uploads**. Writing that map answered it, and
+surfaced the transport underneath it.
+
+### The map
+
+| Tree | Uploaded by | Reached by | How |
+|---|---|---|---|
+| `storage/images` · `products` · `videos` | vendor, agency, agent, customer | **anyone with the URL** | `express.static`; the URL is in every public product DTO |
+| `storage/digital` | vendor | the buyer via `GET /api/digital/download/:token` — **and anyone with the raw URL** | the token path enforces single-use, a download counter and revocation; the static path enforces nothing |
+| `storage/shipments` (delivery-proof photos) | agent | agency, vendor and customer through their own shipment reads — **and anyone with the URL** | `modules/shipments/delivery-proof.service.ts` |
+| `storage/ticket-attachments` | any party to a ticket, and support | the other party, plus wi-admin's support module | wi-admin serves `support.tickets.attachments.*` |
+
+**Uploaded bytes reach a second party on every surface.** Under Q-5's own test — *"if a customer
+downloads a vendor's digital product, or an agency views an agent's proof photo, the risk is not
+low"* — that settles the scanning question.
+
+### The transport, verified
+
+- `router.use('/files', express.static(path.join(__dirname, '../..', 'storage')))` —
+  `src/api/index.ts:395`, mounted **before** `fileRoutes`, with no guard in front of it. The
+  comment at `api/index.ts:61` already says so: *"`/files` also serves `express.static` and public
+  reads"*.
+- `baseUrl: process.env.STORAGE_LOCAL_URL || 'http://localhost:8022/api/files'` —
+  `core/storage/storage.instance.ts:38`. So a stored file's `url` — the one every `FileDetail`
+  carries — **is** that unauthenticated path.
+- Filenames are `<uuidv4>_<originalName>`; `express.static` does not list directories. This is
+  **capability-URL** access, not an open index. A URL, once seen, works forever and is shareable.
+
+### The scanning, verified
+
+Nothing is scanned, and the configuration that appears to control it is inert.
+`UPLOAD_VIRUS_SCAN_ENABLED` defaults to on (`core/uploads/upload-config.ts:420`), but every call
+site constructs a **`NoOpVirusScanner` returning `{ clean: true }`** — defined twice, at
+`src/api/controllers/file-upload.controller.ts:92` and
+`src/modules/shipments/delivery-proof.service.ts:34`. The ClamAV stub is wired nowhere and would
+return `clean: true` as well. MIME sniffing is real
+(`core/uploads/processors/file-sniffing.processor.ts`).
+
+---
+
+## D-1 · Scan on ingest, every surface
+
+Implement `ClamAVScanner` against the existing `IVirusScanner` seam, or point that interface at a
+hosted scanner. Both `NoOpVirusScanner` definitions become deletions — **both**, or the surface
+that keeps one is the surface that is not scanned, and nothing in the config will say so. Keep
+`blockOnFailure` on.
+
+The seam is already correct: `VirusScanValidator` runs inside the upload pipeline, records a
+violation per file, and the policy engine refuses the upload. What was missing is an
+implementation on the other side of the interface.
+
+## D-2 · The three private trees move off the static mount
+
+`digital/`, `shipments/` and `ticket-attachments/` are served through authorized routes.
+`digital/` already has one — `GET /api/digital/download/:token` — and gains nothing until the
+second door closes. Public product imagery stays on `express.static`; that is what it is for.
+
+**This is the larger half of the decision and the reason it is not just a scanner ticket.** While
+the raw path is reachable, the download token's single-use consumption, its download counter and
+its revocation are advisory: a buyer who shares the URL bypasses all three, permanently, and no
+audit anywhere records that it happened. The same URL in a proof photo is a delivery address and
+a timestamped location.
+
+Implementation notes for 4.A.4:
+
+- `STORAGE_LOCAL_URL` and the `FileDetail.url` resolver must stop emitting a public path for the
+  three private trees; a `FileDetail` for a private file should carry an id the authorized route
+  accepts, not a URL any client can fetch.
+- The existing 73 files keep working only if the authorized routes read from the same tree —
+  they do; this is a routing change, not a migration.
+- ⚠ **Interaction with Phase 2 (ADR-019 D-1a).** Uploaded bytes are also moving off the container
+  filesystem. Do these in a known order: whichever lands second must not silently reinstate a
+  public URL for a private tree — an object-storage provider that returns a public CDN URL would
+  undo D-2 without touching this repository.
+
+---
+
+## Consequences
+
+- Two of the four surfaces stop being publicly fetchable, which is a **client-visible change** for
+  anything that was rendering a proof photo or a support attachment from a raw URL. Check the
+  agency and agent dashboards before shipping.
+- The `UPLOAD_VIRUS_SCAN_*` variables become live for the first time; `.env.example`'s entries
+  should say so, and `test:env` will keep them documented.
+- Scanning adds latency and a daemon to the deployment (ADR-019). Sizing is a Phase 2 concern.
