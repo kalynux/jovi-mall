@@ -49,6 +49,7 @@
     "test:booking-availability": "ts-node scripts/test/test-booking-availability.ts",
     "test:customer-notifications": "ts-node scripts/test/test-customer-notifications.ts",
     "test:blog": "ts-node scripts/test/test-blog.ts",
+    "test:admin-tickets": "ts-node scripts/test/test-admin-tickets.ts",
     "test:public-catalog": "ts-node scripts/test/test-public-catalog.ts",
     "test:rich-description": "ts-node scripts/test/test-rich-description.ts",
     "test:storefront-checkout": "ts-node scripts/test/test-storefront-checkout.ts",
