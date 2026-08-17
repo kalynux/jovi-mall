@@ -243,6 +243,24 @@ export const ERROR_CODES = Object.freeze({
     MAGIC_CONTACT_UNVERIFIED: 'MAGIC_CONTACT_UNVERIFIED',
     MAGIC_SESSION_GENERATION_FAILED: 'MAGIC_SESSION_GENERATION_FAILED',
 
+    // ── ADMINISTRATOR-INITIATED ACCOUNT RECOVERY ──────────────────────────────
+    // An operator asking the platform to send a party a way back into their own
+    // account. See `messaging-login/services/admin-credential-delivery.service.ts`.
+    //
+    // ⚠ There is no `USER_CHANNEL_UNVERIFIED` and that is a decision, not a gap:
+    // `IUser` carries no `email_verified`. Verification flags live on the ROLE
+    // entities, a user may hold several roles, and `login_email` is already the
+    // address `POST /auth/forgot-password` mails a live reset token to with no
+    // check at all.
+    /** The party has no address on the requested channel. */
+    USER_CHANNEL_UNAVAILABLE: 'USER_CHANNEL_UNAVAILABLE',
+    /** Rate limit — per party OR per administrator; `details.scope` says which. */
+    USER_CREDENTIAL_LINK_THROTTLED: 'USER_CREDENTIAL_LINK_THROTTLED',
+    /** A sign-in link was asked for on an account that is not a customer. */
+    USER_LOGIN_LINK_ROLE_UNSUPPORTED: 'USER_LOGIN_LINK_ROLE_UNSUPPORTED',
+    /** The channel accepted the request and did not deliver. A 502, not a 400. */
+    MESSAGING_DELIVERY_FAILED: 'MESSAGING_DELIVERY_FAILED',
+
     // ── GOOGLE / INTEGRATIONS ─────────────────────────────────────────────────
     GOOGLE_MISSING_CLIENT_ID: 'GOOGLE_MISSING_CLIENT_ID',
     GOOGLE_MISSING_CLIENT_SECRET: 'GOOGLE_MISSING_CLIENT_SECRET',

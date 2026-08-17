@@ -115,7 +115,26 @@ return value`;
 const sessionKey = (sessionId: string): string => `login:session:${sessionId}`;
 const tokenKey = (token: string): string => `login:token:${digestForKey(token)}`;
 const codeKey = (code: string): string => `login:code:${digestForKey(code)}`;
-const identityKey = (channel: MessagingChannel, externalId: string): string =>
+/**
+ * Where a sign-in credential came from.
+ *
+ * `whatsapp` / `telegram` are messaging identities the sender PROVED they control, and
+ * `externalIdentity` is that identity. `admin` is the third origin: an administrator
+ * issued the link on somebody else's behalf, so there is no messaging identity to name
+ * and `externalIdentity` is the target **user id** instead.
+ *
+ * Widened here rather than in `channel-connections`: that module's `MessagingChannel` is
+ * the set of channels an account can be BOUND to, and nobody binds an account to an
+ * administrator. What this type names is the origin of one credential, which is a
+ * different question that happens to share two of its answers.
+ *
+ * Making `admin` a member of the identity namespace is what gives the administrative
+ * path the same single-live-credential property the bot path has: re-issuing for the
+ * same user revokes the previous link, because both land on the same identity key.
+ */
+export type LoginSessionChannel = MessagingChannel | 'admin';
+
+const identityKey = (channel: LoginSessionChannel, externalId: string): string =>
   `login:identity:${channel}:${digestForKey(externalId)}`;
 const attemptKey = (identifier: string): string =>
   `login:attempts:${digestForKey(identifier)}`;
@@ -137,8 +156,11 @@ export interface LoginSessionRecord {
   sessionId: string;
   userId: string;
   customerId: string;
-  channel: MessagingChannel;
-  /** The messaging account this was minted for. Used to revoke on re-issue. */
+  channel: LoginSessionChannel;
+  /**
+   * The identity this was minted for — a messaging account on the bot paths, the target
+   * user id on the administrative one. Used to revoke on re-issue.
+   */
   externalIdentity: string;
   /** `••••3456` / `@handle`, for the "signed in from WhatsApp ••••3456" line. */
   identityHint: string | null;
@@ -179,7 +201,7 @@ export type ConsumeLoginResult =
 export interface IssueLoginSessionInput {
   userId: string;
   customerId: string;
-  channel: MessagingChannel;
+  channel: LoginSessionChannel;
   externalIdentity: string;
   identityHint: string | null;
 }
@@ -379,9 +401,9 @@ export class LoginSessionStore {
     ]);
   }
 
-  /** Drop whatever live session this messaging identity currently owns, if any. */
+  /** Drop whatever live session this identity currently owns, if any. */
   private async revokeForIdentity(
-    channel: MessagingChannel,
+    channel: LoginSessionChannel,
     externalId: string
   ): Promise<void> {
     const redis = await getRedisClient(LOGIN_CODE_DB);

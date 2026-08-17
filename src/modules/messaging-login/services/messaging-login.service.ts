@@ -61,6 +61,41 @@ export class MessagingLoginService {
   }
 
   /**
+   * The same session, issued by an administrator on somebody else's behalf.
+   *
+   * ── What is identical, and that is the point ────────────────────────────────
+   * The record, the ten minutes, the two credentials, the single-use semantics and the
+   * `customer` literal are all `mint`'s. The gates are re-run at redemption here exactly
+   * as they are there, so a suspension between issue and use is still seen. This method
+   * exists to name a different ORIGIN, not a different mechanism.
+   *
+   * ── Why `channel: 'admin'` and `externalIdentity: userId` ───────────────────
+   * The bot paths key the identity on a messaging account the sender proved they control.
+   * There is no such account here — the operator proved nothing about the party's phone,
+   * and the link may go out over email. Keying on the target user id is what preserves
+   * the property that actually matters: re-issuing revokes the previous link, so an
+   * operator who clicks twice leaves ONE live credential rather than two.
+   *
+   * ⚠ The identity is deliberately NOT the administrator's. Two operators helping the
+   * same customer must not each leave a live session credential behind.
+   *
+   * `identityHint` is null: "signed in from WhatsApp ••••3456" would be a lie about where
+   * this came from, and there is no honest short form of "an operator sent it to you".
+   */
+  async mintForAdministrator(account: {
+    userId: string;
+    customerId: string;
+  }): Promise<IssuedLoginSession> {
+    return this.store.issue({
+      userId: account.userId,
+      customerId: account.customerId,
+      channel: 'admin',
+      externalIdentity: account.userId,
+      identityHint: null,
+    });
+  }
+
+  /**
    * `POST /api/auth/magic/link` — redeem the magic link.
    *
    * No attempt counter, and none is missing: the token is 32 random bytes, and

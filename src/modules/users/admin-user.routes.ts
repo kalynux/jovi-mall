@@ -35,6 +35,25 @@ function attachRoutes(router: Router): Router {
     /** POST /:userId/restore — lift a suspension. 409 when it is not suspended. */
     router.post('/:userId/restore', AdminUserController.restore);
 
+    /**
+     * POST /:userId/password-reset-link  · POST /:userId/login-link
+     * Body: `{ channel: 'email' | 'whatsapp' | 'telegram' }`.
+     *
+     * Account recovery an operator can initiate on somebody's behalf. Both mint through
+     * the machinery that already exists — `PasswordResetService.issueResetLinkFor` and
+     * `MessagingLoginService.mintForAdministrator` — so the token, its lifetime and its
+     * single-use semantics are the ones the self-service and bot paths already have.
+     *
+     * ⚠ The DESTINATION IS NOT IN THE BODY, and must never be. It is read from the
+     * party's own record; a caller who could name it could mail themselves a working
+     * credential for another person's account. The response carries a masked destination
+     * and no token.
+     *
+     * The sign-in link is customers only. See the controller.
+     */
+    router.post('/:userId/password-reset-link', AdminUserController.sendPasswordResetLink);
+    router.post('/:userId/login-link', AdminUserController.sendLoginLink);
+
     return router;
 }
 

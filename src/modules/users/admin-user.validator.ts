@@ -48,5 +48,23 @@ export const AdminSuspendUserSchema = z
   })
   .strict();
 
+/**
+ * Which channel to send an account-recovery credential over.
+ *
+ * A pinned enum, so an unrecognised value is a 400 rather than a silent fallback to
+ * email. A fallback here would mail a credential to an address the operator did not
+ * choose, which is precisely the confusion this endpoint is shaped to avoid.
+ *
+ * ⚠ There is deliberately **no destination field**. The address is read from the party's
+ * own record. An operator who could type one could mail a working credential for
+ * somebody else's account to themselves.
+ */
+export const AdminSendCredentialSchema = z
+  .object({
+    channel: z.enum(['email', 'whatsapp', 'telegram']),
+  })
+  .strict();
+
 export type AdminUpdateUserContactInput = z.infer<typeof AdminUpdateUserContactSchema>;
 export type AdminSuspendUserInput = z.infer<typeof AdminSuspendUserSchema>;
+export type AdminSendCredentialInput = z.infer<typeof AdminSendCredentialSchema>;
