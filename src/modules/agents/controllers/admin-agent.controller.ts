@@ -20,6 +20,9 @@ import {
   SetKycStatusSchema,
   SetPlatformBanSchema,
   SetAgentThresholdSchema,
+  ContractIdParamSchema,
+  AdminContractInterventionSchema,
+  AdminContractReinstateSchema,
 } from '../validators/agent.validator';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -156,6 +159,75 @@ export class AdminAgentController {
         to: AgentMembershipMapper.toDto(result.to),
       },
       message: 'Agent transferred.',
+    });
+  });
+
+  /**
+   * POST /contracts/:contractId/suspend — body `{ reason }`.
+   *
+   * Freezes one agent↔agency relationship. Runs the agency's own `suspend` path with the
+   * contract's own agency resolved from the row, so the authority matrix, the legal
+   * `from` states and the membership-event history are all unchanged — an administrator
+   * gets a different door, not different rules.
+   */
+  static suspendContract = asyncHandler(async (req: Request, res: Response) => {
+    const { contractId } = ContractIdParamSchema.parse(req.params);
+    const { reason } = AdminContractInterventionSchema.parse(req.body);
+
+    const contract = await agentContractService.adminSuspend(contractId, reason, actorOf(req));
+
+    res.json({
+      success: true,
+      data: AgentMembershipMapper.toDto(contract),
+      message: 'Contract suspended.',
+    });
+  });
+
+  /** POST /contracts/:contractId/reinstate — back to `active` from `paused` or `suspended`. */
+  static reinstateContract = asyncHandler(async (req: Request, res: Response) => {
+    const { contractId } = ContractIdParamSchema.parse(req.params);
+    AdminContractReinstateSchema.parse(req.body ?? {});
+
+    const contract = await agentContractService.adminReinstate(contractId, actorOf(req));
+
+    res.json({
+      success: true,
+      data: AgentMembershipMapper.toDto(contract),
+      message: 'Contract reinstated.',
+    });
+  });
+
+  /**
+   * POST /contracts/:contractId/deactivate — body `{ reason }`.
+   *
+   * ⚠ **This proposes termination; it does not perform one.** `deactivate` needs the
+   * counterparty's agreement AND the §4 cash conditions — the agent's outstanding COD
+   * settled and what the agency owes them paid. `contract` is `null` whenever those are
+   * not met, and `blockers` says which.
+   *
+   * There is no administrative override, deliberately: ending a relationship while it
+   * still owes an agent money is how that money stops being anybody's responsibility.
+   */
+  static deactivateContract = asyncHandler(async (req: Request, res: Response) => {
+    const { contractId } = ContractIdParamSchema.parse(req.params);
+    const { reason } = AdminContractInterventionSchema.parse(req.body);
+
+    const result = await agentContractService.adminRequestDeactivation(
+      contractId,
+      reason,
+      actorOf(req)
+    );
+
+    res.json({
+      success: true,
+      data: {
+        contract: result.contract ? AgentMembershipMapper.toDto(result.contract) : null,
+        pendingRequest: result.contract ? null : { id: String(result.request._id) },
+        blockers: result.blockers,
+      },
+      message: result.contract
+        ? 'Contract deactivated.'
+        : 'Termination requested — it completes once the counterparty agrees and the outstanding balances are clear.',
     });
   });
 

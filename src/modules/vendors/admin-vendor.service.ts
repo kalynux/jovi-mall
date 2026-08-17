@@ -13,6 +13,10 @@ import { VendorSettingsRepository } from './repositories/vendor-settings.reposit
 import { IVendor, VendorStatus } from './vendor.model';
 import { VendorRepository } from './vendor.repository';
 import { AdminUpdateVendorSettingsInput } from './admin-vendor.validator';
+import {
+  AdminProductDetailDto,
+  AdminProductDetailResolver,
+} from './read-models/admin-product-detail.resolver';
 
 /**
  * Vendor administration — the write half of wi-admin's vendor domain.
@@ -47,12 +51,31 @@ export class AdminVendorService {
       new VariantRepositoryMongo(),
     ),
     private readonly txManager: TransactionManager = transactionManager,
+    private readonly productDetail: AdminProductDetailResolver = new AdminProductDetailResolver(),
   ) { }
 
   private async getById(vendorId: string, session?: ClientSession): Promise<IVendor> {
     const vendor = await this.vendorRepo.findById(vendorId, session);
     if (!vendor) throw createAppError(ERROR_CODES.VENDOR_NOT_FOUND, 404, 'Vendor not found');
     return vendor;
+  }
+
+  /**
+   * One listing, in full — the one READ on this surface.
+   *
+   * Every other read in this module is deliberately absent because wi-admin can query
+   * `vendors`, `stores` and `products` itself. This one cannot be: it resolves file ids
+   * to URLs through the storage provider and quotes the agency's storage rate through
+   * `storage-fee.calculator.ts`, and neither may be duplicated in a second service. See
+   * the header of `admin-product-detail.resolver.ts`.
+   *
+   * The vendor is checked FIRST so that "no such vendor" and "not this vendor's product"
+   * are both 404s at the right moment — the ownership is the authorisation, and a caller
+   * who guessed a product id must not learn it exists under somebody else.
+   */
+  async getProductDetail(vendorId: string, productId: string): Promise<AdminProductDetailDto> {
+    await this.getById(vendorId);
+    return this.productDetail.resolve(vendorId, productId);
   }
 
   /**

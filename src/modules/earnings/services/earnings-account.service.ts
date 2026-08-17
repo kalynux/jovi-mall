@@ -261,6 +261,13 @@ export class EarningsAccountService {
    * service's transactions move, and a second reader deriving them elsewhere would
    * be a second opinion about how much money exists. The platform singleton is
    * excluded by the repository — see `listForAdmin`.
+   *
+   * ── `totals` answers a question the page cannot ────────────────────────────
+   * A client can sum the twenty rows it was handed; it cannot sum the other four
+   * hundred, so "how much do we owe in total" is unanswerable from a page. The
+   * totals are computed here over the SAME filtered population, one entry per
+   * currency, and carry **no sum across the four balances** — see
+   * `EarningsAccountRepository.totalsForAdmin` for why that sum must not exist.
    */
   async listAccountsForAdmin(
     ownerType: EarningsOwnerType | null,
@@ -278,8 +285,18 @@ export class EarningsAccountService {
       updatedAt: string;
     }>;
     total: number;
+    totals: Array<{
+      currency: string;
+      pending: number;
+      available: number;
+      reserve: number;
+      requested: number;
+    }>;
   }> {
-    const { data, total } = await this.accountRepo.listForAdmin(ownerType, page, limit);
+    const [{ data, total }, totals] = await Promise.all([
+      this.accountRepo.listForAdmin(ownerType, page, limit),
+      this.accountRepo.totalsForAdmin(ownerType),
+    ]);
     return {
       data: data.map((account) => ({
         ownerType: account.owner_type,
@@ -292,6 +309,7 @@ export class EarningsAccountService {
         updatedAt: account.updated_at.toISOString(),
       })),
       total,
+      totals,
     };
   }
 

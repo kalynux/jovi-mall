@@ -5,7 +5,12 @@ import {
   AgentContractRepository,
   agentContractRepository,
 } from '../../repositories/agent-contract.repository';
-import { IDeliveryAgent, IAgentLastKnownTrackingState, AgentTrackingStateStatus } from '../../models/agent.model';
+import {
+  IDeliveryAgent,
+  IAgentLastKnownTrackingState,
+  IAgentLastKnownPlace,
+  AgentTrackingStateStatus,
+} from '../../models/agent.model';
 import { AGENT_CONFIG } from '../../config/agent.config';
 import { IGeoPoint } from '../../../../core/types/geo.types';
 import { eventBus } from '../../../../core/events/event-bus';
@@ -190,6 +195,13 @@ export class AgentTrackingPolicyService {
       position?: IGeoPoint | null;
       reportedAt?: Date | null;
       source?: string;
+      /**
+       * A resolved name for `position`. `undefined` leaves whatever is stored alone;
+       * `null` clears it. Resolved by the CALLER, never here — see
+       * `AgentStateReceiverService`, which decides whether the position moved far
+       * enough to be worth a geocoder call at all.
+       */
+      place?: IAgentLastKnownPlace | null;
     }
   ): Promise<IDeliveryAgent> {
     const agent = await this.agents.findById(agentId);
@@ -201,6 +213,7 @@ export class AgentTrackingPolicyService {
       last_reported_at: input.reportedAt ?? new Date(),
     };
     if (input.position !== undefined) state.last_position = input.position;
+    if (input.place !== undefined) state.last_place = input.place;
 
     const updated = await this.agents.updateLastKnownTrackingState(agentId, state);
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);

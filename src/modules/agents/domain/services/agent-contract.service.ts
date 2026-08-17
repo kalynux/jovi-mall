@@ -1159,6 +1159,94 @@ export class AgentContractService {
     return await this.requestTransition(contractId, 'deactivate', 'agency', actor, { reason });
   }
 
+  // ─── Administrative intervention ──────────────────────────────────────────
+  //
+  // Three wrappers, and what they have in common is what matters: each resolves the
+  // contract's OWN `agency_id` and then runs the ordinary agency-scoped path. The
+  // authority matrix, the legal `from` states, the §4 deactivation conditions, the
+  // status-request row and the membership-event history are therefore all the same code
+  // an agency desk runs — an administrator gets a different *door*, never different
+  // *rules*.
+  //
+  // ── Why these three and not the other four ──────────────────────────────────
+  // An administrator may freeze or end a relationship. They may not invent its terms.
+  // `approve` binds an agent to a fee split that, on a `terms_proposed_by: null`
+  // contract, nobody has stated — a default that pays zero. `updateTerms` rewrites a
+  // number the two parties agreed while the contract is pricing deliveries against it.
+  // Both stay refused, and the argument for refusing them is not the argument for
+  // refusing these: "do not let an administrator impose terms" and "do not let an
+  // administrator stop an abusive relationship" are different claims.
+  //
+  // The COD slice is refused on a third ground: `cod.threshold` is this contract's share
+  // of a pool bounded across every allocating contract, and the arithmetic that bounds it
+  // is `AgentCodThresholdService`'s. It has its own endpoint and its own guard.
+
+  /**
+   * Freeze a contract. Stops new assignments; touches no terms and no money.
+   *
+   * `suspend` is `unilateral` for the agency, so this clears immediately rather than
+   * waiting on the agent — which is the point. Deliberately NOT gated on outstanding
+   * COD: an agency suspending an agent over a cash shortfall is precisely the situation
+   * a COD gate would block.
+   */
+  async adminSuspend(contractId: string, reason: string | null, actor: Actor): Promise<IAgentAgencyContract> {
+    const contract = await this.loadForAdmin(contractId);
+    return await this.suspend(contract.agency_id.toString(), contractId, reason, actor);
+  }
+
+  /** Unfreeze it. `reactivate` from `paused` or `suspended`, back to `active`. */
+  async adminReinstate(contractId: string, actor: Actor): Promise<IAgentAgencyContract> {
+    const contract = await this.loadForAdmin(contractId);
+    return await this.reinstate(contract.agency_id.toString(), contractId, actor);
+  }
+
+  /**
+   * Propose termination — and it may well not terminate.
+   *
+   * ⚠ **This returns a REQUEST, and `contract` may be `null`.** `deactivate` is
+   * `requires_counterparty` for both parties AND carries the §4 conditions: the contract
+   * moves only once the agent's COD is settled and what the agency owes them is paid.
+   * An administrator does not get to bypass that, and giving them a "force" flag would
+   * mean an administrator could strand an agent's money by ending the relationship it is
+   * owed under.
+   *
+   * So the caller must render the two outcomes differently, which is why `blockers` comes
+   * back with the request rather than being left for a second call.
+   */
+  async adminRequestDeactivation(
+    contractId: string,
+    reason: string | null,
+    actor: Actor,
+  ): Promise<{
+    request: IContractStatusRequest;
+    contract: IAgentAgencyContract | null;
+    blockers: DeactivationBlockers;
+  }> {
+    const contract = await this.loadForAdmin(contractId);
+    const blockers = await this.evaluateDeactivationBlockers(contract);
+    const result = await this.requestDeactivation(
+      contract.agency_id.toString(),
+      contractId,
+      reason,
+      actor,
+    );
+    return { ...result, blockers };
+  }
+
+  /**
+   * Load a contract with no party scoping.
+   *
+   * The 404-not-403 rule the two party loaders enforce exists so an agency cannot probe
+   * whether an agent works for a rival. An administrator's reach is the whole platform by
+   * definition, so there is nothing to withhold and no oracle to close — the only failure
+   * left is "no such contract".
+   */
+  private async loadForAdmin(contractId: string): Promise<IAgentAgencyContract> {
+    const contract = await this.contracts.findById(contractId);
+    if (!contract) throw createAppError(ERROR_CODES.CONTRACT_NOT_FOUND, 404);
+    return contract;
+  }
+
   /** Update employment terms. Thin wrapper over `updateTerms`, kept for its route. */
   async updateEmployment(
     agencyId: string,

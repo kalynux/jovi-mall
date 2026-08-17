@@ -48,6 +48,15 @@ function attachRoutes(router: Router): Router {
     router.post('/:vendorId/kyc/reject', AdminVendorController.rejectKyc);
 
     /**
+     * GET /:vendorId/products/:productId
+     *
+     * The one read on this router. Everything else about a vendor is queryable straight
+     * out of the shared database by the caller; this is not, because it resolves file ids
+     * to URLs and quotes the agency's storage rate — see the controller's header.
+     */
+    router.get('/:vendorId/products/:productId', AdminVendorController.getProduct);
+
+    /**
      * POST /:vendorId/products/:productId/suspend
      * Body: `{ note }`. Platform oversight on ONE listing — its own suspension reason, so
      * reinstating the vendor can never republish it.

@@ -45,19 +45,30 @@ export class AdminEarningsController {
    * Net-new: `EarningsAccountRepository` could find ONE account or every account over
    * the auto-payout threshold, and nothing in between — so "who are we holding money
    * for" had no answer at any scale between one and all.
+   *
+   * `meta.totals` is an ARRAY, one entry per currency present in the filtered set. A
+   * single object would force a currency choice the data does not support, and a
+   * caller that saw one would reasonably assume every row shared it. It respects the
+   * active `ownerType`, so it can never disagree with the table it sits under.
+   *
+   * `sendSuccess` rather than `sendPaginated`: `PaginationMeta`'s index signature is
+   * scalar-only, and `totals` is a list of objects.
    */
   static listAccounts = asyncHandler(async (req: Request, res: Response) => {
     const { ownerType, page, limit } = ListEarningsAccountsQuerySchema.parse(req.query);
-    const { data, total } = await earningsAccountService.listAccountsForAdmin(
+    const { data, total, totals } = await earningsAccountService.listAccountsForAdmin(
       ownerType ?? null,
       page,
       limit
     );
-    sendPaginated(res, data, {
-      total,
-      page,
-      limit,
-      pages: Math.ceil(total / limit),
+    sendSuccess(res, data, {
+      meta: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit),
+        totals,
+      },
     });
   });
 

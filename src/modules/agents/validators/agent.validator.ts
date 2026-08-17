@@ -492,6 +492,34 @@ export const TransferAgentSchema = z.object({
 });
 export type TransferAgentInput = z.infer<typeof TransferAgentSchema>;
 
+// ─── Administrative intervention on ONE contract ──────────────────────────────
+//
+// Freezing or ending a relationship, never rewriting one. See
+// `AgentContractService.adminSuspend` for why those are different claims and why only
+// the first is offered.
+
+export const ContractIdParamSchema = z.object({
+    contractId: ObjectIdSchema,
+});
+export type ContractIdParam = z.infer<typeof ContractIdParamSchema>;
+
+/**
+ * `reason` is required, not `clearable`, because this is somebody outside the
+ * relationship acting on it. The agency's own suspension can be wordless — they know why.
+ * A platform intervention has to be explicable to BOTH parties afterwards, and it is
+ * stored on the contract rather than only in wi-admin's audit trail, because this service
+ * cannot read that database and the two parties have to be able to be told.
+ */
+export const AdminContractInterventionSchema = z.object({
+    reason: z.string().trim().min(3).max(500),
+});
+export type AdminContractInterventionInput = z.infer<typeof AdminContractInterventionSchema>;
+
+/** Reinstatement stores no reason — there is no field for one, and the act is the safe direction. */
+export const AdminContractReinstateSchema = z.object({
+    reason: clearable(z.string().max(500).trim()).default(null),
+});
+
 // ─── Tracking allow (admin / agency) ──────────────────────────────────────────
 
 export const SetTrackingAllowedSchema = z.object({

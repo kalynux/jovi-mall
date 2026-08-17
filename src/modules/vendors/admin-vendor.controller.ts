@@ -14,10 +14,15 @@ import {
 /**
  * Vendor administration, for the wi-admin backend.
  *
- * Reads are deliberately absent: wi-admin queries `vendors`, `stores` and `products`
+ * Reads are almost entirely absent: wi-admin queries `vendors`, `stores` and `products`
  * directly, because a read protects no invariant and routing it through here would put an
- * HTTP hop in front of a `find()`. Only the writes live here — the operations whose
- * meaning is bound up with this service's own transactions and cascades.
+ * HTTP hop in front of a `find()`. Mostly what lives here are the writes — the operations
+ * whose meaning is bound up with this service's own transactions and cascades.
+ *
+ * **`getProduct` is the one exception, and it is argued rather than assumed.** Projecting
+ * a listing needs two things this service owns and the other must not copy: the storage
+ * provider that turns a `fileId` into a URL, and the storage-fee calculator. See
+ * `read-models/admin-product-detail.resolver.ts`.
  */
 
 const adminVendorService = new AdminVendorService();
@@ -92,6 +97,22 @@ export class AdminVendorController {
     );
 
     sendSuccess(res, toAdminVendorDto(vendor), { message: 'Vendor verification rejected' });
+  });
+
+  /**
+   * GET /vendors/:vendorId/products/:productId — one listing, in full.
+   *
+   * Image URLs, price, counted stock, the responsible agency by name, and what its
+   * storage rate comes to for this listing. 404 covers both "no such vendor" and "not
+   * this vendor's product".
+   */
+  static getProduct = asyncHandler(async (req: Request, res: Response) => {
+    const product = await adminVendorService.getProductDetail(
+      req.params.vendorId,
+      req.params.productId
+    );
+
+    sendSuccess(res, product);
   });
 
   /** POST /vendors/:vendorId/products/:productId/suspend — body `{ note }`. */

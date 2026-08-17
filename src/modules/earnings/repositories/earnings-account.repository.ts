@@ -194,9 +194,7 @@ export class EarningsAccountRepository {
     page: number,
     limit: number
   ): Promise<{ data: IEarningsAccount[]; total: number }> {
-    const query: Record<string, unknown> = ownerType
-      ? { owner_type: ownerType }
-      : { owner_type: { $in: ['vendor', 'agency', 'agent'] } };
+    const query = adminScopeFilter(ownerType);
 
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([
@@ -204,6 +202,60 @@ export class EarningsAccountRepository {
       EarningsAccountModel.countDocuments(query),
     ]);
     return { data, total };
+  }
+
+  /**
+   * The four balances summed **down each column, across every owner in scope** —
+   * one row per currency.
+   *
+   * ── Why this is not the sum `EarningsAccountDto` forbids ────────────────────
+   * There is a sum that must never exist: `pending + available + reserve + requested`
+   * for one owner. Those are stages of one pipeline, not four pots — `requested` is a
+   * claim already staked against `available`, so adding them double-counts. Nothing
+   * here does that, and nothing here should.
+   *
+   * This is the other axis: one field, one currency, across owners. Same unit, same
+   * direction (`owed_to_owner`), and **only this service can compute it honestly**,
+   * because it is the only party that can see past page 1 of the caller's list.
+   *
+   * Grouped by currency rather than coerced into one, because an account carries its
+   * own `currency` and picking a single one would be inventing an exchange rate.
+   *
+   * ⚠ It MUST share `adminScopeFilter` with `listForAdmin`. A total computed over a
+   * different population than the table above it is worse than no total at all — it
+   * disagrees with the rows the operator can see and there is no way to tell from the
+   * screen which of the two is wrong.
+   */
+  async totalsForAdmin(
+    ownerType: EarningsOwnerType | null
+  ): Promise<Array<{ currency: string; pending: number; available: number; reserve: number; requested: number }>> {
+    const rows = await EarningsAccountModel.aggregate<{
+      _id: string;
+      pending: number;
+      available: number;
+      reserve: number;
+      requested: number;
+    }>([
+      { $match: adminScopeFilter(ownerType) },
+      {
+        $group: {
+          _id: '$currency',
+          pending: { $sum: '$pending_balance' },
+          available: { $sum: '$available_balance' },
+          reserve: { $sum: '$reserve_balance' },
+          requested: { $sum: '$requested_balance' },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+
+    return rows.map((row) => ({
+      currency: row._id,
+      pending: row.pending,
+      available: row.available,
+      reserve: row.reserve,
+      requested: row.requested,
+    }));
   }
 
   /**
@@ -258,4 +310,16 @@ export class EarningsAccountRepository {
       { new: true, session: session ?? null }
     );
   }
+}
+
+/**
+ * The population the administrative reads work over — the page AND its totals.
+ *
+ * Extracted so the two cannot drift. The platform singleton is excluded here rather
+ * than at each call site, because it is the marketplace's own commission: it pays
+ * itself nothing, and folding it into "what we owe people" makes the largest number
+ * on the screen mean the opposite of every other row.
+ */
+function adminScopeFilter(ownerType: EarningsOwnerType | null): Record<string, unknown> {
+  return ownerType ? { owner_type: ownerType } : { owner_type: { $in: ['vendor', 'agency', 'agent'] } };
 }

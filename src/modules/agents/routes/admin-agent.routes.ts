@@ -33,6 +33,24 @@ function attachRoutes(router: Router): Router {
      */
     router.post('/transfer', AdminAgentController.transfer);
 
+    /**
+     * POST /contracts/:contractId/{suspend,reinstate,deactivate}
+     *
+     * Administrative intervention on ONE agent↔agency contract. Declared before
+     * `/:agentId` so "contracts" is not read as an agent id.
+     *
+     * ── The line these three sit on ─────────────────────────────────────────────
+     * An administrator may FREEZE or END a relationship. They may not APPROVE a pending
+     * one or REWRITE its terms — a `terms_proposed_by: null` contract exists precisely
+     * because nobody has stated terms, and approving it would bind an agent to a default
+     * that pays zero. Those two stay refused; see `AgentContractService.adminSuspend`'s
+     * header for the full argument, and note that `deactivate` still requires the
+     * counterparty and the §4 cash conditions — there is no override.
+     */
+    router.post('/contracts/:contractId/suspend', AdminAgentController.suspendContract);
+    router.post('/contracts/:contractId/reinstate', AdminAgentController.reinstateContract);
+    router.post('/contracts/:contractId/deactivate', AdminAgentController.deactivateContract);
+
     /** GET /:agentId — profile + every membership. */
     router.get('/:agentId', AdminAgentController.getAgent);
 

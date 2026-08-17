@@ -162,6 +162,30 @@ export interface IAgentLastKnownTrackingState {
   last_reported_at: Date | null;
   /** Which component reported this. Only geo-tracker writes it today. */
   source: string | null;
+  /**
+   * A human-readable name for `last_position` — "Bonapriso, Douala".
+   *
+   * Resolved ONCE per position, on the way in, and cached against the rounded
+   * coordinate. Not on the way out: reverse-geocoding per read would be a bill per
+   * operator who opens a screen, and would hand the same person's coordinates to a
+   * geocoding provider once per viewer rather than once per position.
+   *
+   * `null` when nothing resolved — never `''`, and never a coordinate pair dressed up
+   * as a name. `source` is an open string so a future "nearest landmark" or "agency
+   * coverage region" resolution is additive; readers render it and must not `switch`.
+   *
+   * ⚠ It inherits the position's disclosure. A coordinate pair needs a tool to read;
+   * "Bonapriso, Douala" does not. Anything that decides whether to show the position
+   * decides the same thing about this.
+   */
+  last_place: IAgentLastKnownPlace | null;
+}
+
+/** A resolved name for a position, with the provenance and age of the resolution. */
+export interface IAgentLastKnownPlace {
+  label: string;
+  source: string;
+  resolved_at: Date;
 }
 
 /**
@@ -516,6 +540,21 @@ const DeviceCapabilitiesSchema = new Schema(
   { _id: false }
 );
 
+/**
+ * The resolved name of a position. `_id: false` like every other embedded block here.
+ *
+ * `label` and `source` are both required: a place with no name is `last_place: null`,
+ * not a row with an empty label, and a name with no provenance cannot be judged.
+ */
+const LastKnownPlaceSchema = new Schema(
+  {
+    label: { type: String, required: true, trim: true },
+    source: { type: String, required: true },
+    resolved_at: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const LastKnownTrackingStateSchema = new Schema(
   {
     status: {
@@ -527,6 +566,7 @@ const LastKnownTrackingStateSchema = new Schema(
     last_position: { type: GeoPointSchema, default: null },
     last_reported_at: { type: Date, default: null },
     source: { type: String, default: null },
+    last_place: { type: LastKnownPlaceSchema, default: null },
   },
   { _id: false }
 );
@@ -577,6 +617,7 @@ export const agentDefaults = {
     last_position: null,
     last_reported_at: null,
     source: null,
+    last_place: null,
   }),
   preferences: (): IAgentPreferences => ({
     navigation_app: 'google_maps',
