@@ -10,6 +10,7 @@ import {
     VendorOnboardingStep3Schema,
     UpdateVendorProfileSchema,
 } from '../../src/modules/vendor/validators/vendor-onboarding.validator';
+import { isPayoutMethodEnabled } from '../../src/core/types/payout.types';
 
 let passed = 0;
 let failed = 0;
@@ -42,29 +43,30 @@ assert('Step 1 passes valid mobile_money payout', () => {
     const result = VendorOnboardingStep1Schema.parse({
         country: 'CM',
         timezone: 'Africa/Douala',
-        payout_details: {
+        // An ORDERED ARRAY since the payout refactor — 1 to 3 entries, index 0 preferred.
+        payout_details: [{
             method: 'mobile_money',
             mobile_money: { provider: 'MTN', phone_number: '+237670000000', account_name: 'John Doe' },
-        },
+        }],
     });
-    return result.country === 'CM' && result.payout_details.method === 'mobile_money';
+    return result.country === 'CM' && result.payout_details[0].method === 'mobile_money';
 });
 
 assert('Step 1 normalizes country to uppercase', () => {
     const result = VendorOnboardingStep1Schema.parse({
         country: 'cm',
         timezone: 'Africa/Douala',
-        payout_details: {
+        payout_details: [{
             method: 'mobile_money',
             mobile_money: { provider: 'MTN', phone_number: '+237670000000', account_name: 'John' },
-        },
+        }],
     });
     return result.country === 'CM';
 });
 
 assertZodFails('Step 1 rejects missing country', VendorOnboardingStep1Schema, {
     timezone: 'Africa/Douala',
-    payout_details: { method: 'mobile_money', mobile_money: { provider: 'MTN', phone_number: '+237670000000', account_name: 'John' } },
+    payout_details: [{ method: 'mobile_money', mobile_money: { provider: 'MTN', phone_number: '+237670000000', account_name: 'John' } }],
 });
 
 assertZodFails('Step 1 rejects missing payout_details', VendorOnboardingStep1Schema, {
@@ -75,18 +77,24 @@ assertZodFails('Step 1 rejects missing payout_details', VendorOnboardingStep1Sch
 assertZodFails('Step 1 rejects wrong country length', VendorOnboardingStep1Schema, {
     country: 'CMR',
     timezone: 'Africa/Douala',
-    payout_details: { method: 'mobile_money', mobile_money: { provider: 'MTN', phone_number: '+237670000000', account_name: 'John' } },
+    payout_details: [{ method: 'mobile_money', mobile_money: { provider: 'MTN', phone_number: '+237670000000', account_name: 'John' } }],
 });
 
 console.log('\n── Vendor Onboarding Step 2 ──────────────────────────────────────────────');
 
-assert('Step 2 passes valid agency id', () => {
-    const result = VendorOnboardingStep2Schema.parse({ default_delivery_agency_id: 'abc123' });
-    return result.default_delivery_agency_id === 'abc123';
+// Step 2 no longer carries `default_delivery_agency_id`, and that is deliberate: agency
+// selection happens exclusively through the agency-connections endpoints, and the vendor's
+// default agency is set automatically the first time a connection is approved. The step
+// survives as a pure step-advance with a deprecated `skip`, kept so existing frontend calls
+// do not break. These two assertions used to test the removed field.
+assert('Step 2 is a pure step-advance — skip defaults to false', () => {
+    const result = VendorOnboardingStep2Schema.parse({});
+    return result.skip === false;
 });
 
-assertZodFails('Step 2 rejects empty agency id', VendorOnboardingStep2Schema, {
-    default_delivery_agency_id: '',
+assert('Step 2 accepts the deprecated skip flag', () => {
+    const result = VendorOnboardingStep2Schema.parse({ skip: true });
+    return result.skip === true;
 });
 
 console.log('\n── Vendor Onboarding Step 3 ──────────────────────────────────────────────');
@@ -126,22 +134,33 @@ assertZodFails('Profile update rejects bad email', UpdateVendorProfileSchema, {
 
 console.log('\n── Payout: Bank branch ──────────────────────────────────────────────────');
 
-assert('Step 1 passes valid bank payout', () => {
-    const result = VendorOnboardingStep1Schema.parse({
+// ⚠ A bank payout is REFUSED on every write path today, and that is a switch rather than a
+// bug: ENABLED_PAYOUT_METHODS is ['mobile_money'], and PayoutMethodZodSchema pipes that
+// switch in front of the shape check so a client posting a half-filled bank form hears "not
+// available right now" instead of "bank_name is required". Reads, the payout pipeline and
+// the Mongoose enum all ignore the switch on purpose, so a disabled kind never strands
+// money already addressed to one.
+//
+// This assertion therefore follows the SETTING rather than hardcoding an outcome — the same
+// thing test:payout-methods does. It used to assert that a bank payout parsed, which is the
+// shape of the failure carried as T-2 in the production-readiness register.
+assert('Step 1 refuses a bank payout while the switch is mobile_money-only', () => {
+    if (isPayoutMethodEnabled('bank')) return true; // re-enabled: nothing to assert here
+    const parsed = VendorOnboardingStep1Schema.safeParse({
         country: 'CM',
         timezone: 'Africa/Douala',
-        payout_details: {
+        payout_details: [{
             method: 'bank',
             bank: { bank_name: 'Afriland First Bank', account_number: '123456789', account_name: 'John Doe', country: 'CM' },
-        },
+        }],
     });
-    return result.payout_details.method === 'bank';
+    return parsed.success === false;
 });
 
 assertZodFails('Step 1 rejects bank method without bank data', VendorOnboardingStep1Schema, {
     country: 'CM',
     timezone: 'Africa/Douala',
-    payout_details: { method: 'bank', bank: null },
+    payout_details: [{ method: 'bank', bank: null }],
 });
 
 console.log(`\n─────────────────────────────────────────────────────────────────────────`);

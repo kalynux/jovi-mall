@@ -10,10 +10,18 @@
  *   npm run aggregate:analytics -- --vendorId=507f1f77bcf86cd799439011 --from=2026-02-01 --to=2026-02-10 --force
  */
 
+import 'dotenv/config'; // load .env (MONGO_URI etc.) before anything reads it
+import mongoose from 'mongoose';
 import { VendorAnalyticsAggregationService } from '../src/modules/vendors/services/vendor-analytics-aggregation.service';
 import { VendorModel } from '../src/modules/vendors/vendor.model';
-import { connectDatabase } from '../src/core/database/connection';
+import { StoreRepository } from '../src/modules/store/repositories/store.repository';
 import { eachDayOfInterval, parseISO } from 'date-fns';
+
+// `core/database/connection` does not exist — every other script here connects mongoose
+// directly, and this one had been importing a module that was never there. It could not
+// have run since, and nothing reported it because scripts/ was outside every tsconfig
+// until plan step 0.C.
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/jovi-mall';
 
 interface CLIArgs {
     vendorId?: string;
@@ -52,7 +60,7 @@ async function main() {
 
     try {
         // Connect to database
-        await connectDatabase();
+        await mongoose.connect(MONGO_URI);
         console.log('[Script] Connected to database');
 
         // Fetch vendor
@@ -63,7 +71,11 @@ async function main() {
         }
 
         const timezone = vendor.timezone || 'Africa/Douala';
-        console.log(`[Script] Found vendor: ${vendor.business_name} (timezone: ${timezone})`);
+        // The business name lives on the Store, never on the vendor profile — the vendor
+        // holds display_name + avatar only. Resolved through the repository rather than
+        // read off `vendor`, which no longer carries `business_name`.
+        const store = await new StoreRepository().findByVendorIdOrNull(String(vendor._id));
+        console.log(`[Script] Found vendor: ${store?.name ?? String(vendor._id)} (timezone: ${timezone})`);
 
         // Parse date range
         const fromDate = parseISO(args.from!);

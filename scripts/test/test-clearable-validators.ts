@@ -133,9 +133,13 @@ function assert(condition: boolean, label: string): void {
 // ─── Vendor profile (PATCH /api/vendor/profile) ───────────────────────────────
 
 {
-  const cleared = UpdateVendorProfileSchema.safeParse({ version: 1, businessDescription: '' });
-  assert(cleared.success && cleared.data.businessDescription === null,
-    "vendor profile: businessDescription '' → null");
+  // `businessDescription` is gone from the vendor profile: the business identity —
+  // name, logo, description — lives on the STORE, and the vendor profile holds
+  // display_name + avatar only. The clearable case moved with it, and is asserted
+  // against UpdateStoreProfileSchema.description in the store block above.
+  const clearedStoreDescription = UpdateStoreProfileSchema.safeParse({ version: 1, description: '' });
+  assert(clearedStoreDescription.success && clearedStoreDescription.data.description === null,
+    "store: description '' → null (the vendor's old businessDescription)");
 
   const socials = UpdateVendorProfileSchema.safeParse({
     version: 1,

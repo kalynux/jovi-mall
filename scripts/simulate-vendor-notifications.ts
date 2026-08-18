@@ -42,6 +42,7 @@ import mongoose from 'mongoose';
 import { eventBus, DomainEvent } from '../src/core/events/event-bus';
 import { initializeVendorNotificationEventConsumers } from '../src/modules/notifications/vendor-notification-event-consumer';
 import { VendorRepository } from '../src/modules/vendors/vendor.repository';
+import { StoreRepository } from '../src/modules/store/repositories/store.repository';
 import { DeviceTokenRepository } from '../src/modules/notifications/repositories/device-token.repository';
 import { VendorNotificationModel } from '../src/modules/notifications/models/vendor-notification.model';
 import { isFcmConfigured } from '../src/config/fcm.config';
@@ -193,7 +194,10 @@ async function main(): Promise<void> {
             `but NO push will be sent (the handler only pushes when the vendor exists).`
         );
     } else {
-        console.log(`\nVendor found: "${vendor.business_name}" (user_id: ${vendor.user_id})`);
+        // The business name lives on the Store, not the vendor profile. Read through the
+        // repository; a vendor whose store is not provisioned yet prints its id.
+        const store = await new StoreRepository().findByVendorIdOrNull(vendorId);
+        console.log(`\nVendor found: "${store?.name ?? vendorId}" (user_id: ${vendor.user_id})`);
 
         if (token) {
             await deviceRepo.upsertToken(vendor.user_id.toString(), token, 'web', {

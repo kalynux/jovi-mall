@@ -1,0 +1,24 @@
+{
+  "//": [
+    "Type-checking config for the scripts/ tree — every test, migration, backfill and seed.",
+    "",
+    "It exists as a SECOND config rather than a widening of tsconfig.json for one reason:",
+    "the build config has `rootDir: ./src` and emits to dist/, so adding scripts/**/* there",
+    "would put the whole test corpus into the published build output.",
+    "",
+    "`rootDir` is widened to the project root because scripts/ sits beside src/, and",
+    "`noEmit` is set because nothing here is ever built — this config only ever answers",
+    "'does it compile'. src/**/* stays included so scripts type-check against the same",
+    "declarations tsc uses for the build, including the `declare global` blocks that no",
+    "single script's import graph necessarily reaches.",
+    "",
+    "Run via `npm run typecheck:scripts`. See PRODUCTION-READINESS plan step 0.C."
+  ],
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["scripts/**/*", "src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
