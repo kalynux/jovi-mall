@@ -38,7 +38,7 @@ let passed = 0;
 let failed = 0;
 
 function assert(name: string, fn: () => boolean): void {
-    let ok = false;
+    let ok: boolean;
     try {
         ok = fn();
     } catch (err) {
@@ -431,7 +431,7 @@ function main(): void {
         rejection_reason: null,
         created_at: new Date('2026-08-01T00:00:00.000Z'),
         updated_at: new Date('2026-08-02T00:00:00.000Z'),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
     }) as any;
 
     const momoDto = toAdminPayoutRequestDto(payoutRow(momo({ phone_number: MSISDN })), 'Jovi Express');

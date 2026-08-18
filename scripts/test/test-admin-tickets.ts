@@ -44,7 +44,7 @@ let passed = 0;
 let failed = 0;
 
 function assert(name: string, fn: () => boolean): void {
-    let ok = false;
+    let ok: boolean;
     try {
         ok = fn();
     } catch (err) {

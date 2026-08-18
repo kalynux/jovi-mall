@@ -28,7 +28,7 @@ import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, relative } from 'path';
 import { validateEnv, formatEnvProblems, EnvProblem } from '../../src/config/env';
 
-/* eslint-disable no-console */
+ 
 const originalConsole = { log: console.log.bind(console), error: console.error.bind(console) };
 
 let passed = 0;

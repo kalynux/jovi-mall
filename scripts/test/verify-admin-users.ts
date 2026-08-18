@@ -36,7 +36,7 @@ const HEADERS = {
 let pass = 0, fail = 0;
 const check = (name: string, ok: boolean, extra = '') => {
     console.log(`${ok ? '  ✅' : '  ❌ FAIL:'} ${name}${ok ? '' : ` — ${extra}`}`);
-    ok ? pass++ : fail++;
+    if (ok) pass++; else fail++;
 };
 
 async function call(method: string, path: string, body?: unknown) {

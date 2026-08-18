@@ -140,7 +140,7 @@ async function main(): Promise<void> {
     };
 
     const routes: string[] = [];
-    /* eslint-disable @typescript-eslint/no-explicit-any */
+     
     const walk = (stack: any[], prefix: string): void => {
         for (const layer of stack) {
             if (layer.route) {
@@ -157,7 +157,7 @@ async function main(): Promise<void> {
             }
         }
     };
-    /* eslint-enable @typescript-eslint/no-explicit-any */
+     
     walk(app._router.stack as any[], '');
 
     const has = (r: string): boolean => routes.includes(r);

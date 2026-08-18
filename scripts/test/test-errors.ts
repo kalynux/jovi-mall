@@ -87,7 +87,7 @@ let passed = 0;
 let failed = 0;
 
 function assert(name: string, fn: () => boolean): void {
-    let ok = false;
+    let ok: boolean;
     try {
         ok = fn();
     } catch (err) {
@@ -146,7 +146,7 @@ function render(err: unknown, overrides: Record<string, unknown> = {}): Captured
         originalUrl: '/api/orders',
         ...overrides,
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     errorHandlerMiddleware(err, req as any, res as any, (() => undefined) as any);
     return captured as Captured;
 }

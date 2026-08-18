@@ -107,7 +107,7 @@ let failed = 0;
  * what happened the first time this ran.
  */
 function assert(name: string, fn: () => boolean): void {
-    let ok = false;
+    let ok: boolean;
     try {
         ok = fn();
     } catch (err) {

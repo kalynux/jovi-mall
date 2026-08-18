@@ -35,7 +35,6 @@ dotenv.config();
 process.env.JWT_SECRET ||= 'verify-secret-for-messaging-login-suite';
 process.env.JWT_REFRESH_SECRET ||= 'verify-refresh-secret-for-messaging-login-suite';
 
-/* eslint-disable import/first */
 import { app } from '../src/app';
 import { UserModel } from '../src/modules/users/user.model';
 import { CustomerModel } from '../src/modules/customers/customer.model';
@@ -60,7 +59,6 @@ import {
   LOGIN_CODE_DB,
   EMAIL_VERIFY_DB,
 } from '../src/infra/redis/redis.factory';
-/* eslint-enable import/first */
 
 let passed = 0;
 let failed = 0;

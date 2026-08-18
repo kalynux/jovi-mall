@@ -48,7 +48,7 @@ let passed = 0;
 let failed = 0;
 
 function assert(name: string, fn: () => boolean): void {
-  let ok = false;
+  let ok: boolean;
   try {
     ok = fn();
   } catch (err) {
@@ -73,7 +73,7 @@ function assert(name: string, fn: () => boolean): void {
  * through here instead.
  */
 async function assertAsync(name: string, fn: () => Promise<boolean>): Promise<void> {
-  let ok = false;
+  let ok: boolean;
   try {
     ok = await fn();
   } catch (err) {

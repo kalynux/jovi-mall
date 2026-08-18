@@ -129,10 +129,9 @@ class FakeRedis {
 }
 
 const fakeRedis = new FakeRedis();
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 (redisFactory as any).getRedisClient = async () => fakeRedis;
 
-/* eslint-disable import/first */
 import {
   LOGIN_CODE_LENGTH,
   LOGIN_CODE_PATTERN,
@@ -173,13 +172,12 @@ import {
 import { RESET_TOKEN_TTL_MINUTES } from '../../src/modules/auth/services/password-reset.service';
 import { SYSTEM_PASSWORD_BYTES, generateSystemPassword } from '../../src/core/auth/system-password';
 import { AUTH_SESSION_PATHS, isAuthSessionPathname } from '../../src/api/rate-limit/auth-paths';
-/* eslint-enable import/first */
 
 let passed = 0;
 let failed = 0;
 
 function assert(name: string, fn: () => boolean): void {
-  let ok = false;
+  let ok: boolean;
   try {
     ok = fn();
   } catch (err) {
@@ -201,7 +199,7 @@ function assert(name: string, fn: () => boolean): void {
  * helper receives a Promise, which is truthy whatever it settles to.
  */
 async function assertAsync(name: string, fn: () => Promise<boolean>): Promise<void> {
-  let ok = false;
+  let ok: boolean;
   try {
     ok = await fn();
   } catch (err) {
@@ -286,20 +284,20 @@ function resolverWith(options: {
       options.onBind?.(userId.toString(), data);
       return data;
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any;
 
   const userRepo = {
     findById: async (id: string) => users.find((u) => u.id === id) ?? null,
     findByPhone: async (phone: string) => users.find((u) => u.login_phone === phone) ?? null,
     findByEmail: async (email: string) => users.find((u) => u.login_email === email) ?? null,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any;
 
   const customerRepo = {
     findByUserId: async () =>
       options.customerExists === false ? null : { _id: CUSTOMER_ID },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any;
 
   return {
@@ -313,12 +311,12 @@ function serviceWith(users: FakeUser[], customerExists = true) {
     findById: async (id: string) => users.find((u) => u.id === id) ?? null,
     findByPhone: async (phone: string) => users.find((u) => u.login_phone === phone) ?? null,
     findByEmail: async (email: string) => users.find((u) => u.login_email === email) ?? null,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any;
 
   const customerRepo = {
     findByUserId: async () => (customerExists ? { _id: CUSTOMER_ID } : null),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any;
 
   const store = new LoginSessionStore();
@@ -420,7 +418,12 @@ async function main(): Promise<void> {
   assert('toE164 alone would REJECT a bare-digits wa_phone_id (the trap is real)', () => {
     // Re-derived here rather than asserted from memory: if the shared helper ever starts
     // prepending, this test is what says the repair below is now redundant.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+     
+    // Deliberate lazy require: it keeps this assertion's dependency LOCAL to it. A
+    // top-level import of the shared helper would read as "this suite tests toE164",
+    // which is the opposite of the point — the suite tests the repair that exists
+    // BECAUSE toE164 rejects a bare-digits wa_phone_id.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { toE164 } = require('../../src/core/validation/phone');
     return toE164(WA_PHONE_ID) === null;
   });
@@ -556,7 +559,7 @@ async function main(): Promise<void> {
         loginContactSchema.parse({
           contact: { phone_number: STORED_PHONE, user_id: '999999999', first_name: 'Victim' },
         }),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         tgContext as any
       ));
     return code === 'MAGIC_CONTACT_UNVERIFIED';
@@ -568,7 +571,7 @@ async function main(): Promise<void> {
         loginContactSchema.parse({
           contact: { phone_number: STORED_PHONE, first_name: 'Address Book Entry' },
         }),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         tgContext as any
       ));
     return code === 'MAGIC_CONTACT_UNVERIFIED';
@@ -580,7 +583,7 @@ async function main(): Promise<void> {
         loginContactSchema.parse({
           contact: { phone_number: STORED_PHONE, user_id: null },
         }),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         tgContext as any
       ));
     return code === 'MAGIC_CONTACT_UNVERIFIED';
@@ -593,7 +596,7 @@ async function main(): Promise<void> {
           contact: { phone_number: STORED_PHONE, user_id: TG_CHAT_ID },
           from: { id: '999999999' },
         }),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         tgContext as any
       ));
     return code === 'MAGIC_CONTACT_UNVERIFIED';
@@ -638,7 +641,7 @@ async function main(): Promise<void> {
     const code = keys.find((k) => k.startsWith('login:code:'));
     if (!session || !token || !code) return false;
     const expected = (LOGIN_SESSION_TTL_SECONDS + LOGIN_SESSION_GRACE_SECONDS) * 1000;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const ttlOf = (k: string) => (fakeRedis as any).store.get(k).expiresAtMs - Date.now();
     return [session, token, code].every((k) => ttlOf(k) > expected - 5000);
   });
@@ -646,7 +649,7 @@ async function main(): Promise<void> {
   assert('the IDENTITY pointer carries the validity only, not the grace', () => {
     const key = fakeRedis.keys().find((k) => k.startsWith('login:identity:'));
     if (!key) return false;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const ttl = (fakeRedis as any).store.get(key).expiresAtMs - Date.now();
     return ttl <= LOGIN_SESSION_TTL_SECONDS * 1000 + 1000;
   });
@@ -702,7 +705,7 @@ async function main(): Promise<void> {
   await assertAsync('an expired-but-in-grace credential answers EXPIRED, not missing', async () => {
     const s = await store.issue({ ...ACCOUNT });
     const sessionKey = fakeRedis.keys().find((k) => k.startsWith('login:session:'))!;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const entry = (fakeRedis as any).store.get(sessionKey);
     const record = JSON.parse(entry.value);
     record.expiresAt = new Date(Date.now() - 60_000).toISOString();
@@ -762,9 +765,9 @@ async function main(): Promise<void> {
   const logLines: string[] = [];
   const realLog = console.log;
   const realError = console.error;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   console.log = (...args: any[]) => { logLines.push(args.join(' ')); };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   console.error = (...args: any[]) => { logLines.push(args.join(' ')); };
 
   let reply: unknown;
@@ -912,7 +915,7 @@ async function main(): Promise<void> {
     const { service, store: s } = serviceWith([makeUser()]);
     const minted = await s.issue({ ...ACCOUNT });
     const sessionKey = fakeRedis.keys().find((k) => k.startsWith('login:session:'))!;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const entry = (fakeRedis as any).store.get(sessionKey);
     const record = JSON.parse(entry.value);
     record.expiresAt = new Date(Date.now() - 60_000).toISOString();
@@ -925,7 +928,7 @@ async function main(): Promise<void> {
     const { service, store: s } = serviceWith([makeUser()]);
     const minted = await s.issue({ ...ACCOUNT });
     const sessionKey = fakeRedis.keys().find((k) => k.startsWith('login:session:'))!;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const entry = (fakeRedis as any).store.get(sessionKey);
     const record = JSON.parse(entry.value);
     record.expiresAt = new Date(Date.now() - 60_000).toISOString();
@@ -1205,9 +1208,9 @@ async function main(): Promise<void> {
   const resetLogLines: string[] = [];
   const realLog2 = console.log;
   const realError2 = console.error;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   console.log = (...args: any[]) => { resetLogLines.push(args.join(' ')); };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   console.error = (...args: any[]) => { resetLogLines.push(args.join(' ')); };
 
   let resetReply: unknown;

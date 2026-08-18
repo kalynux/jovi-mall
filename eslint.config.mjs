@@ -65,5 +65,37 @@ export default tseslint.config(
             "no-restricted-syntax": "off",
             "@typescript-eslint/no-var-requires": "off"
         }
+    },
+    {
+        // ── scripts/ — tests, migrations, backfills and seeds ────────────────────
+        //
+        // This tree entered the linter in plan step 0.C, having been checked by nothing.
+        // One of the three bans does not apply here, and it is switched off DELIBERATELY
+        // rather than by widening the ignore list — the other two stay on.
+        //
+        // `throw new Error()` is correct in a script. The ban exists because a throw in
+        // `src/` bypasses the error system: no code, no category, no requestId, and a 500
+        // where the caller needed a 422. A migration that aborts has no HTTP response to
+        // shape and no envelope to fill — `createAppError` in a CLI would be ceremony that
+        // makes the failure LESS legible, not more.
+        //
+        // The other two selectors are re-stated rather than dropped: `res.json({ error })`
+        // cannot occur here today but would be just as wrong if a script ever built a
+        // response, and the RegExp ban costs nothing (no script trips it) while still
+        // covering one that later regexes something a user typed.
+        files: ["scripts/**/*.ts"],
+        rules: {
+            "no-restricted-syntax": [
+                "error",
+                {
+                    "selector": "CallExpression[callee.property.name='json'] > ObjectExpression > Property[key.name='error']",
+                    "message": "Use next(error) instead of res.status().json({ error: ... }). Let the global handler respond."
+                },
+                {
+                    "selector": "NewExpression[callee.name='RegExp']:not([arguments.0.callee.name='escapeRegex'])",
+                    "message": "Build search regexes with buildSearchRegex()/escapeRegex() from core/utils/regex.util. Unescaped user input in a RegExp is regex injection + ReDoS."
+                }
+            ]
+        }
     }
 );

@@ -296,7 +296,7 @@ async function main(): Promise<void> {
   const app = (await import('../../src/app')).app as unknown as { _router: { stack: unknown[] } };
 
   const routes: string[] = [];
-  /* eslint-disable @typescript-eslint/no-explicit-any */
+   
   const walk = (stack: any[], prefix: string): void => {
     for (const layer of stack) {
       if (layer.route) {
@@ -313,7 +313,7 @@ async function main(): Promise<void> {
       }
     }
   };
-  /* eslint-enable @typescript-eslint/no-explicit-any */
+   
   walk(app._router.stack as any[], '');
 
   const idxOf = (r: string): number => routes.indexOf(r);
