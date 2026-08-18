@@ -1,14 +1,21 @@
 import Stripe from 'stripe';
 import {
   PaymentGateway,
+  PaymentGatewayName,
   PaymentInitPayload,
   PaymentInitResult,
   PaymentVerifyPayload,
   PaymentVerifyResult,
   RefundPayload,
   RefundResult,
-  PaymentGatewayStatus
+  PaymentGatewayStatus,
+  WebhookVerifyInput
 } from './gateway.interface';
+import {
+  WebhookVerification,
+  NormalizedWebhookEvent,
+  headerValue
+} from '../domain/webhook-verification';
 import { getStripeClient, toStripeCharge, fromMinorUnit } from './stripe.client';
 import { recordIntegrationCall } from '../../system/domain/integration-observations';
 
@@ -37,6 +44,8 @@ import { recordIntegrationCall } from '../../system/domain/integration-observati
  * API DOCS: https://stripe.com/docs/payments/payment-intents
  */
 export class StripeGateway implements PaymentGateway {
+  readonly name: PaymentGatewayName = 'STRIPE';
+
   /**
    * Initiate card payment (create PaymentIntent).
    */
@@ -138,7 +147,12 @@ export class StripeGateway implements PaymentGateway {
   async refundPayment(payload: RefundPayload): Promise<RefundResult> {
     try {
       const stripe = getStripeClient();
-      const { amount } = toStripeCharge(payload.amount, payload.metadata?.currency ?? 'xaf');
+      // `payload.currency` is now a required field on RefundPayload. It used to
+      // be absent and this line read `payload.metadata?.currency ?? 'xaf'` — a
+      // default that is right for this platform today and silently wrong the
+      // first time anything else is charged, in the one operation where being
+      // wrong means refunding the incorrect amount.
+      const { amount } = toStripeCharge(payload.amount, payload.currency);
 
       const refund = await stripe.refunds.create(
         {
@@ -163,6 +177,85 @@ export class StripeGateway implements PaymentGateway {
         rawResponse: { error: error?.message },
       };
     }
+  }
+
+  // ── Webhook ───────────────────────────────────────────────────────────────
+
+  /**
+   * Verify a Stripe webhook.
+   *
+   * This is the behaviour that already lived inline in `webhook.routes.ts:26-51`
+   * and it is unchanged — `constructEvent` against the raw bytes, with a 400 on
+   * a missing secret or a missing header. It moved onto the gateway so the
+   * three routes share one policy rather than one route having a policy and the
+   * other two having none.
+   */
+  verifyWebhook(input: WebhookVerifyInput): WebhookVerification {
+    const secret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!secret) return { ok: false, reason: 'missing_secret' };
+
+    if (!Buffer.isBuffer(input.rawBody)) {
+      return {
+        ok: false,
+        reason: 'unparsable',
+        detail: 'raw body unavailable — express.raw is not mounted for this path',
+      };
+    }
+
+    const signature = headerValue(input.headers, ['stripe-signature']);
+    if (!signature) return { ok: false, reason: 'missing_signature' };
+
+    try {
+      const event = getStripeClient().webhooks.constructEvent(input.rawBody, signature, secret);
+      return {
+        ok: true,
+        payload: event as unknown as Record<string, unknown>,
+        rawBody: input.rawBody,
+      };
+    } catch (error: any) {
+      return { ok: false, reason: 'bad_signature', detail: error?.message };
+    }
+  }
+
+  parseWebhookEvent(payload: Record<string, unknown>): NormalizedWebhookEvent | null {
+    const event = payload as unknown as Stripe.Event;
+    const object = event.data?.object as
+      | { id?: string; amount?: number; currency?: string; metadata?: Record<string, string> }
+      | undefined;
+
+    const gatewayRef = String(object?.id ?? event.id ?? '');
+    if (!gatewayRef) return null;
+
+    // Only the three PaymentIntent outcomes are mapped. Everything else maps to
+    // PENDING and the orchestrator leaves the transaction alone — the previous
+    // code defaulted every unrelated event to PENDING and WROTE it, so an
+    // unrelated `charge.updated` could walk a SUCCEEDED transaction backwards.
+    const statusByType: Record<string, PaymentGatewayStatus> = {
+      'payment_intent.succeeded': 'SUCCEEDED',
+      'payment_intent.payment_failed': 'FAILED',
+      'payment_intent.canceled': 'CANCELLED',
+    };
+
+    // The cross-check compares against our own `amountSnapshot`, which is XAF —
+    // but `object.amount` is in the PRESENTMENT currency (USD), converted at
+    // charge time. Reporting the Stripe figure here would make every card
+    // payment look like a mismatch. `source_amount`/`source_currency` are
+    // stamped into the intent's metadata at creation for exactly this reason.
+    const sourceAmount = object?.metadata?.source_amount;
+    const sourceCurrency = object?.metadata?.source_currency;
+
+    return {
+      // Stripe mints a real event id, stable across redeliveries — the ideal
+      // dedup key, and the reason its own docs tell integrators to key on it.
+      eventId: event.id,
+      eventType: event.type,
+      gatewayRef,
+      merchantRef: object?.metadata?.merchantRef ?? null,
+      status: statusByType[event.type] ?? 'PENDING',
+      amount: sourceAmount !== undefined ? Number(sourceAmount) : null,
+      currency: sourceCurrency ?? null,
+      raw: payload,
+    };
   }
 
   /**

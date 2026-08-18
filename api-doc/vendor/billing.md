@@ -189,7 +189,11 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
   "message": "Plan purchase initiated"
 }
 ```
-`instructions` is gateway-specific and may be `null` (mobile money: `{ ussdCode?, message?, expiresAt? }`; **Stripe**: `{ clientSecret?, chargedAmount?, chargedCurrency?, message? }` — note Stripe charges in **USD** while `price`/`currency` stay XAF; see [stripe-payments.md](./stripe-payments.md)). If the gateway confirms at initiation, the plan is applied immediately and `purchase.status` is `paid`.
+`instructions` is gateway-specific and may be `null` (mobile money: `{ ussdCode?, requiresOtp?, message?, expiresAt? }`; **Stripe**: `{ clientSecret?, chargedAmount?, chargedCurrency?, message? }` — note Stripe charges in **USD** while `price`/`currency` stay XAF; see [stripe-payments.md](./stripe-payments.md)).
+
+> **My-CoolPay Orange Money answers `requiresOtp: true` and no `ussdCode`.** The customer receives an SMS code that must be relayed before anything is charged. A plan purchase and a credit top-up both reach this branch, and they settle through the shared payments surface — see [../payments/README.md](../payments/README.md#post-paymentstransactionidauthorize).
+
+> **A mobile-money purchase now settles from the gateway callback**, not only from your `/verify` poll. It used to be poll-only: these rows create no `PaymentTransaction`, so a NotchPay or My-CoolPay callback found nothing and answered success, and a vendor who closed the tab after paying never got their plan. Keep polling while the customer is watching; you no longer have to. If the gateway confirms at initiation, the plan is applied immediately and `purchase.status` is `paid`.
 
 **Error Responses**:
 - `400 VALIDATION_ERROR` — bad `gateway`/`channel`.

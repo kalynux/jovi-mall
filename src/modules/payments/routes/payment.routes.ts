@@ -6,7 +6,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { requireAuth } from '../../../api/middlewares/auth.middleware';
-import { InitiatePaymentSchema, VerifyPaymentSchema } from '../validators/payment.validators';
+import { InitiatePaymentSchema, VerifyPaymentSchema, AuthorizePaymentSchema } from '../validators/payment.validators';
 
 const router = Router();
 const paymentOrchestrator = new PaymentOrchestratorService();
@@ -84,6 +84,42 @@ router.post('/verify', asyncHandler(async (req: Request, res: Response) => {
   const result = await paymentOrchestrator.verifyPayment(transactionId);
 
   res.status(200).json({ success: result.status === 'SUCCEEDED', ...result });
+}));
+
+/**
+ * POST /payments/:transactionId/authorize
+ *
+ * Submit the one-time code for a mobile-money charge whose `initiate` reported
+ * `instructions.requiresOtp` — My-CoolPay's Orange Money flow. Without this
+ * step that payment can never complete: the operator SMSes a code and takes no
+ * money until it comes back.
+ *
+ * ── UNAUTHENTICATED, LIKE ITS TWO NEIGHBOURS ─────────────────────────────────
+ * `initiate` and `verify` take no credentials by design — payment links are
+ * shareable, and the person paying is often not the person who ordered (see
+ * `api-doc/payments/README.md`). An authenticated authorize would break the
+ * same flow those two exist to serve.
+ *
+ * What bounds it instead: Layer A's IP rate limit (this path is NOT under the
+ * rate-limit-exempt `/api/webhooks` prefix), and a per-transaction attempt
+ * counter enforced in the orchestrator. Exhausting the counter FAILS the
+ * payment rather than throttling it — waiting does not make a wrong code right.
+ *
+ * RESPONSE:
+ * {
+ *   success: boolean,
+ *   transactionId: string,
+ *   status: string,
+ *   instructions?: { ussdCode?: string, message?: string },
+ *   message: string
+ * }
+ */
+router.post('/:transactionId/authorize', asyncHandler(async (req: Request, res: Response) => {
+  const { code } = AuthorizePaymentSchema.parse(req.body);
+
+  const result = await paymentOrchestrator.authorizePayment(req.params.transactionId, code);
+
+  res.status(200).json({ success: true, ...result });
 }));
 
 /**

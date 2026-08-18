@@ -6,10 +6,13 @@ import {
   PaymentStatus,
   PaymentGatewayType
 } from '../models/payment-transaction.model';
-import { PaymentGateway, PaymentChannelInfo } from '../gateways/gateway.interface';
-import { NotchPayGateway } from '../gateways/notchpay.gateway';
-import { MyCoolPayGateway } from '../gateways/mycoolpay.gateway';
-import { StripeGateway } from '../gateways/stripe.gateway';
+import { PaymentChannelInfo } from '../gateways/gateway.interface';
+import { getPaymentGateway } from '../gateways/registry';
+import { mintMerchantRef } from '../domain/merchant-reference';
+import { NormalizedWebhookEvent } from '../domain/webhook-verification';
+import { WebhookOutcome } from '../domain/webhook-response';
+import { amountsEqual, currenciesEqual } from '../domain/money';
+import { PAYMENTS_CONFIG } from '../config/payments.config';
 import { OrderRepository } from '../../orders/order.repository';
 import { OrderService } from '../../orders/order.service';
 import { OrderModel } from '../../orders/order.model';
@@ -59,18 +62,14 @@ export class PaymentOrchestratorService {
   private orderRepo: OrderRepository;
   private orderService: OrderService;
   private calendarSync: BookingCalendarSyncService;
-  private gateways: Map<PaymentGatewayType, PaymentGateway>;
 
   constructor() {
     this.orderRepo = new OrderRepository();
     this.orderService = new OrderService();
     this.calendarSync = new BookingCalendarSyncService();
-
-    // Initialize gateways
-    this.gateways = new Map();
-    this.gateways.set('NOTCHPAY', new NotchPayGateway());
-    this.gateways.set('MYCOOLPAY', new MyCoolPayGateway());
-    this.gateways.set('STRIPE', new StripeGateway());
+    // Gateways come from the shared registry (`gateways/registry.ts`). This
+    // class used to build its own three-entry Map, and so did CreditTopupService
+    // and PlanPurchaseService — three copies of one lookup table, free to drift.
   }
 
   /**
@@ -163,10 +162,7 @@ export class PaymentOrchestratorService {
     }
 
     // 4. CREATE NEW PAYMENT TRANSACTION
-    const gatewayInstance = this.gateways.get(gateway);
-    if (!gatewayInstance) {
-      throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, undefined, { gateway });
-    }
+    const gatewayInstance = getPaymentGateway(gateway);
 
     // Determine payment method
     const method = gateway === 'STRIPE' ? 'CARD' : 'MOBILE';
@@ -182,6 +178,7 @@ export class PaymentOrchestratorService {
       amountSnapshot: order.total_amount,
       currencySnapshot: order.currency,
       idempotencyKey,
+      merchantRef: mintMerchantRef('pt'),
       rawGatewayPayloads: []
     });
 
@@ -193,7 +190,8 @@ export class PaymentOrchestratorService {
         amount: order.total_amount,
         currency: order.currency,
         channel,
-        metadata: { idempotencyKey }
+        merchantRef: transaction.merchantRef!,
+        metadata: { idempotencyKey, merchantRef: transaction.merchantRef }
       });
 
       // 6. UPDATE TRANSACTION WITH GATEWAY RESPONSE
@@ -326,10 +324,7 @@ export class PaymentOrchestratorService {
     }
 
     // 4. CREATE NEW PAYMENT TRANSACTION (group)
-    const gatewayInstance = this.gateways.get(gateway);
-    if (!gatewayInstance) {
-      throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, undefined, { gateway });
-    }
+    const gatewayInstance = getPaymentGateway(gateway);
 
     const method = gateway === 'STRIPE' ? 'CARD' : 'MOBILE';
 
@@ -344,6 +339,7 @@ export class PaymentOrchestratorService {
       amountSnapshot: groupTotal,
       currencySnapshot: currency,
       idempotencyKey,
+      merchantRef: mintMerchantRef('pt'),
       rawGatewayPayloads: []
     });
 
@@ -355,7 +351,8 @@ export class PaymentOrchestratorService {
         amount: groupTotal,
         currency,
         channel,
-        metadata: { idempotencyKey, cartId }
+        merchantRef: transaction.merchantRef!,
+        metadata: { idempotencyKey, cartId, merchantRef: transaction.merchantRef }
       });
 
       transaction.gatewayRef = gatewayResult.gatewayRef;
@@ -468,9 +465,14 @@ export class PaymentOrchestratorService {
       });
     }
 
-    // 3. Resolve the gateway adapter; not all support refunds yet.
-    const gatewayInstance = this.gateways.get(paymentTx.gateway);
-    if (!gatewayInstance || typeof gatewayInstance.refundPayment !== 'function') {
+    // 3. Resolve the gateway adapter. Not all providers have a refund API, and
+    //    the ABSENCE of the method is how that is expressed — see the header of
+    //    `MyCoolPayGateway`. This guard was previously dead: both mobile
+    //    gateways defined a `refundPayment` that always failed, so the code
+    //    actually raised was `REFUND_GATEWAY_FAILED` while the api-doc and
+    //    `AdminRefundService` both promised `REFUND_GATEWAY_NOT_SUPPORTED`.
+    const gatewayInstance = getPaymentGateway(paymentTx.gateway);
+    if (typeof gatewayInstance.refundPayment !== 'function') {
       throw createAppError(ERROR_CODES.REFUND_GATEWAY_NOT_SUPPORTED, 400, undefined, {
         gateway: paymentTx.gateway
       });
@@ -497,6 +499,11 @@ export class PaymentOrchestratorService {
     const gatewayResult = await gatewayInstance.refundPayment({
       gatewayRef: paymentTx.gatewayRef,
       amount,
+      // The currency the original charge was recorded in. It used to travel
+      // inside `metadata` and Stripe read it as `metadata.currency ?? 'xaf'`,
+      // which is a default in the one operation where a wrong currency means a
+      // wrong refund amount.
+      currency: paymentTx.currencySnapshot,
       reason,
       metadata: {
         [isBooking ? 'bookingId' : 'orderId']: sourceId,
@@ -508,6 +515,19 @@ export class PaymentOrchestratorService {
     if (!gatewayResult.success) {
       refund.status = 'failed';
       await refund.save();
+
+      // A provider that WON'T refund is a different answer from one that
+      // COULDN'T. `REFUND_GATEWAY_NOT_SUPPORTED` is categorised `business_rule`
+      // and is documented as an expected outcome, so `BookingRefundService`
+      // routes it to the manual-payout ticket instead of treating it as an
+      // outage — which is where this money genuinely has to go.
+      if (gatewayResult.unsupported) {
+        throw createAppError(ERROR_CODES.REFUND_GATEWAY_NOT_SUPPORTED, 400, undefined, {
+          gateway: paymentTx.gateway,
+          reason: gatewayResult.error
+        });
+      }
+
       throw createAppError(ERROR_CODES.REFUND_GATEWAY_FAILED, 502, undefined, {
         error: gatewayResult.error
       });
@@ -763,10 +783,7 @@ export class PaymentOrchestratorService {
     }
 
     // 5. CREATE NEW PAYMENT TRANSACTION
-    const gatewayInstance = this.gateways.get(gateway);
-    if (!gatewayInstance) {
-      throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, undefined, { gateway });
-    }
+    const gatewayInstance = getPaymentGateway(gateway);
 
     // Determine payment method
     const method = gateway === 'STRIPE' ? 'CARD' : 'MOBILE';
@@ -782,6 +799,7 @@ export class PaymentOrchestratorService {
       amountSnapshot: booking.priceSnapshot,
       currencySnapshot: booking.currency,
       idempotencyKey,
+      merchantRef: mintMerchantRef('pt'),
       rawGatewayPayloads: []
     });
 
@@ -793,7 +811,8 @@ export class PaymentOrchestratorService {
         amount: booking.priceSnapshot,
         currency: booking.currency,
         channel,
-        metadata: { idempotencyKey, bookingId }
+        merchantRef: transaction.merchantRef!,
+        metadata: { idempotencyKey, bookingId, merchantRef: transaction.merchantRef }
       });
 
       // 7. UPDATE TRANSACTION WITH GATEWAY RESPONSE
@@ -932,10 +951,7 @@ export class PaymentOrchestratorService {
       // Failed/cancelled — fall through and retry with a new transaction.
     }
 
-    const gatewayInstance = this.gateways.get(gateway);
-    if (!gatewayInstance) {
-      throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, undefined, { gateway });
-    }
+    const gatewayInstance = getPaymentGateway(gateway);
 
     const transaction = await PaymentTransactionModel.create({
       bookingId: new Types.ObjectId(bookingId),
@@ -948,6 +964,7 @@ export class PaymentOrchestratorService {
       amountSnapshot: outstanding,
       currencySnapshot: booking.currency,
       idempotencyKey,
+      merchantRef: mintMerchantRef('pt'),
       rawGatewayPayloads: []
     });
 
@@ -958,7 +975,8 @@ export class PaymentOrchestratorService {
         amount: outstanding,
         currency: booking.currency,
         channel,
-        metadata: { idempotencyKey, bookingId, purpose: 'booking_balance' }
+        merchantRef: transaction.merchantRef!,
+        metadata: { idempotencyKey, bookingId, purpose: 'booking_balance', merchantRef: transaction.merchantRef }
       });
 
       transaction.gatewayRef = gatewayResult.gatewayRef;
@@ -1031,10 +1049,7 @@ export class PaymentOrchestratorService {
     }
 
     // Call gateway to verify
-    const gatewayInstance = this.gateways.get(transaction.gateway);
-    if (!gatewayInstance) {
-      throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, undefined, { gateway: transaction.gateway });
-    }
+    const gatewayInstance = getPaymentGateway(transaction.gateway);
 
     try {
       const verifyResult = await gatewayInstance.verifyPayment({
@@ -1081,97 +1096,189 @@ export class PaymentOrchestratorService {
    * @param signature - Webhook signature for verification
    * @returns Success indicator
    */
-  async handleWebhook(
+  async applyWebhookEvent(
     gateway: PaymentGatewayType,
-    payload: any,
-    signature?: string
-  ): Promise<{ success: boolean; message: string }> {
-    try {
-      // 1. VERIFY SIGNATURE (gateway-specific)
-      // TODO: Implement signature verification for each gateway
-      // For now, we skip this in development
+    event: NormalizedWebhookEvent
+  ): Promise<WebhookOutcome> {
+    // 1. LOCATE THE TRANSACTION.
+    //
+    //    `merchantRef` first — it is the reference WE minted and the gateway
+    //    echoed back, so it identifies the row without depending on our having
+    //    already stored the provider's id. That matters: a mobile-money
+    //    callback can arrive before `initiatePayment` has written `gatewayRef`,
+    //    in which case the old `(gateway, gatewayRef)` lookup found nothing and
+    //    the confirmation was dropped as "unknown transaction".
+    const transaction = await this.findTransactionForEvent(gateway, event);
 
-      // 2. EXTRACT GATEWAY REFERENCE
-      let gatewayRef: string;
-      let eventType: string;
-      let newStatus: PaymentStatus;
-
-      // Gateway-specific payload parsing
-      if (gateway === 'STRIPE') {
-        gatewayRef = payload.data?.object?.id || payload.id;
-        eventType = payload.type;
-
-        // Map Stripe events to our status
-        if (eventType === 'payment_intent.succeeded') {
-          newStatus = 'SUCCEEDED';
-        } else if (eventType === 'payment_intent.payment_failed') {
-          newStatus = 'FAILED';
-        } else if (eventType === 'payment_intent.canceled') {
-          newStatus = 'CANCELLED';
-        } else {
-          newStatus = 'PENDING';
-        }
-      } else if (gateway === 'NOTCHPAY') {
-        gatewayRef = payload.transaction?.reference || payload.reference;
-        eventType = payload.event || payload.status;
-        newStatus = this.mapNotchPayStatus(payload.status);
-      } else if (gateway === 'MYCOOLPAY') {
-        gatewayRef = payload.payment_id;
-        eventType = payload.event;
-        newStatus = this.mapMyCoolPayStatus(payload.status);
-      } else {
-        throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, undefined, { gateway });
-      }
-
-      if (!gatewayRef) {
-        throw createAppError(ERROR_CODES.PAYMENT_WEBHOOK_INVALID_PAYLOAD, 400);
-      }
-
-      // 3. FIND TRANSACTION
-      const transaction = await PaymentTransactionModel.findOne({
-        gateway,
-        gatewayRef
-      });
-
-      if (!transaction) {
-        console.warn(`[PaymentOrchestrator] Webhook for unknown transaction: ${gatewayRef}`);
-        return { success: true, message: 'Transaction not found (may be from different system)' };
-      }
-
-      // 4. CHECK PAYLOAD HASH (IDEMPOTENCY)
-      const payloadHash = this.hashPayload(payload);
-
-      if (transaction.gatewayPayloadHash === payloadHash) {
-        console.log(`[PaymentOrchestrator] Duplicate webhook detected for transaction ${transaction._id}`);
-        return { success: true, message: 'Webhook already processed (duplicate)' };
-      }
-
-      // 5. UPDATE TRANSACTION
-      const previousStatus = transaction.status;
-      transaction.status = newStatus;
-      transaction.gatewayPayloadHash = payloadHash;
-      transaction.rawGatewayPayloads.push({
-        timestamp: new Date(),
-        type: 'webhook',
-        event: eventType,
-        ...payload
-      });
-
-      await transaction.save();
-
-      // 6. TRIGGER FULFILLMENT IF PAYMENT SUCCEEDED
-      if (newStatus === 'SUCCEEDED' && previousStatus !== 'SUCCEEDED') {
-        await this.handlePaymentSuccess(transaction);
-      }
-
-      console.log(`[PaymentOrchestrator] Webhook processed for transaction ${transaction._id}: ${previousStatus} → ${newStatus}`);
-
-      return { success: true, message: 'Webhook processed successfully' };
-
-    } catch (error: any) {
-      console.error('[PaymentOrchestrator] Webhook processing error:', error);
-      return { success: false, message: error.message };
+    if (!transaction) {
+      console.warn(
+        `[PaymentOrchestrator] Webhook for unknown transaction: ${event.gatewayRef} (merchantRef=${event.merchantRef ?? 'none'})`
+      );
+      return { kind: 'unknown_transaction' };
     }
+
+    // 2. CROSS-CHECK THE MONEY.
+    //
+    //    The signature has already passed, so this is not about forgery in the
+    //    ordinary sense — it is about never settling on the provider's figure
+    //    rather than our own. It is ALSO the compensating control for
+    //    My-CoolPay's MD5 signature: an attacker who defeated that construction
+    //    still cannot choose what the payment is worth.
+    if (event.amount !== null && !amountsEqual(event.amount, transaction.amountSnapshot)) {
+      console.error(
+        `[PaymentOrchestrator] AMOUNT MISMATCH on ${transaction._id}: gateway reported ${event.amount}, recorded ${transaction.amountSnapshot}`
+      );
+      return {
+        kind: 'amount_mismatch',
+        detail: `reported ${event.amount}, recorded ${transaction.amountSnapshot}`,
+      };
+    }
+    if (event.currency !== null && !currenciesEqual(event.currency, transaction.currencySnapshot)) {
+      console.error(
+        `[PaymentOrchestrator] CURRENCY MISMATCH on ${transaction._id}: gateway reported ${event.currency}, recorded ${transaction.currencySnapshot}`
+      );
+      return {
+        kind: 'amount_mismatch',
+        detail: `reported ${event.currency}, recorded ${transaction.currencySnapshot}`,
+      };
+    }
+
+    const previousStatus = transaction.status;
+    const newStatus = event.status as PaymentStatus;
+
+    // 3. NEVER WALK A TERMINAL TRANSACTION BACKWARDS.
+    //
+    //    Both gateways map an unrecognised status word to PENDING, and Stripe
+    //    sends dozens of event types we do not model. The previous code wrote
+    //    whatever it computed, so an unrelated `charge.updated` on a settled
+    //    PaymentIntent rewrote a SUCCEEDED transaction to PENDING — leaving a
+    //    fulfilled, split, delivered order whose payment record says it is
+    //    still waiting.
+    const isTerminal = (s: PaymentStatus) => s === 'SUCCEEDED' || s === 'REFUNDED';
+    if (isTerminal(previousStatus) && newStatus !== previousStatus) {
+      return {
+        kind: 'ignored',
+        detail: `transaction is already ${previousStatus}; ignoring ${event.eventType}`,
+      };
+    }
+    if (newStatus === previousStatus) {
+      return { kind: 'ignored', detail: `no status change (${previousStatus})` };
+    }
+
+    // 4. APPLY.
+    transaction.status = newStatus;
+    transaction.rawGatewayPayloads.push({
+      timestamp: new Date(),
+      type: 'webhook',
+      event: event.eventType,
+      eventId: event.eventId,
+      ...(event.raw as Record<string, unknown>),
+    });
+    await transaction.save();
+
+    // 5. FULFIL.
+    //
+    //    The `previousStatus !== 'SUCCEEDED'` guard is kept even though step 3
+    //    now makes it unreachable: this is the line standing between one
+    //    payment and two earnings splits, and a guard on money is worth having
+    //    twice.
+    if (newStatus === 'SUCCEEDED' && previousStatus !== 'SUCCEEDED') {
+      await this.handlePaymentSuccess(transaction);
+    }
+
+    console.log(
+      `[PaymentOrchestrator] Webhook applied to ${transaction._id}: ${previousStatus} → ${newStatus}`
+    );
+    return { kind: 'processed', detail: `${previousStatus} → ${newStatus}` };
+  }
+
+  /**
+   * Resolve the transaction a callback belongs to.
+   *
+   * Two keys, tried in order of reliability. `merchantRef` is ours and is
+   * written before the charge is opened; `gatewayRef` is theirs and is written
+   * only once their response comes back, which may be after their callback.
+   */
+  private async findTransactionForEvent(
+    gateway: PaymentGatewayType,
+    event: NormalizedWebhookEvent
+  ): Promise<IPaymentTransaction | null> {
+    if (event.merchantRef) {
+      const byMerchant = await PaymentTransactionModel.findOne({ merchantRef: event.merchantRef });
+      if (byMerchant) return byMerchant;
+    }
+    if (!event.gatewayRef) return null;
+    return PaymentTransactionModel.findOne({ gateway, gatewayRef: event.gatewayRef });
+  }
+
+  /**
+   * Submit the one-time code for a mobile-money charge that reported
+   * `requiresOtp` (My-CoolPay Orange Money).
+   *
+   * The endpoint in front of this is unauthenticated, like `initiate` and
+   * `verify` beside it, so the attempt counter is the only thing bounding a
+   * six-digit guess. It lives on the transaction — the object being attacked —
+   * and exhausting it fails the payment rather than throttling it, because
+   * waiting would not make a wrong code right.
+   */
+  async authorizePayment(
+    transactionId: string,
+    code: string
+  ): Promise<{ transactionId: string; status: PaymentStatus; instructions?: any; message: string }> {
+    if (!Types.ObjectId.isValid(transactionId)) {
+      throw createAppError(ERROR_CODES.PAYMENT_TRANSACTION_NOT_FOUND, 404);
+    }
+    const transaction = await PaymentTransactionModel.findById(transactionId);
+    if (!transaction) {
+      throw createAppError(ERROR_CODES.PAYMENT_TRANSACTION_NOT_FOUND, 404);
+    }
+
+    const gatewayInstance = getPaymentGateway(transaction.gateway);
+    if (typeof gatewayInstance.authorizePayment !== 'function') {
+      throw createAppError(ERROR_CODES.PAYMENT_OTP_NOT_REQUIRED, 422, undefined, {
+        gateway: transaction.gateway,
+      });
+    }
+    if (transaction.status !== 'PENDING' && transaction.status !== 'INITIATED') {
+      throw createAppError(ERROR_CODES.PAYMENT_OTP_NOT_REQUIRED, 422, undefined, {
+        status: transaction.status,
+      });
+    }
+
+    // Counted BEFORE the call, so an attacker cannot spend attempts for free by
+    // aborting the request while the gateway is still thinking.
+    transaction.otpAttempts = (transaction.otpAttempts ?? 0) + 1;
+    if (transaction.otpAttempts > PAYMENTS_CONFIG.OTP_MAX_ATTEMPTS) {
+      transaction.status = 'FAILED';
+      await transaction.save();
+      throw createAppError(ERROR_CODES.PAYMENT_OTP_ATTEMPTS_EXCEEDED, 422);
+    }
+    await transaction.save();
+
+    const result = await gatewayInstance.authorizePayment({
+      gatewayRef: transaction.gatewayRef,
+      code,
+    });
+
+    if (!result.success) {
+      throw createAppError(ERROR_CODES.PAYMENT_OTP_INVALID, 422, undefined, {
+        attemptsRemaining: Math.max(0, PAYMENTS_CONFIG.OTP_MAX_ATTEMPTS - transaction.otpAttempts),
+      });
+    }
+
+    transaction.rawGatewayPayloads.push({
+      timestamp: new Date(),
+      type: 'authorize',
+      ...(result.rawResponse ?? {}),
+    });
+    await transaction.save();
+
+    return {
+      transactionId: transaction._id.toString(),
+      status: transaction.status,
+      instructions: result.instructions,
+      message: 'Code accepted. Confirm the payment prompt on your phone.',
+    };
   }
 
   /**
@@ -1359,35 +1466,13 @@ export class PaymentOrchestratorService {
     return crypto.createHash('sha256').update(normalized).digest('hex');
   }
 
-  /**
-   * Map NotchPay status to our status
-   */
-  private mapNotchPayStatus(status: string): PaymentStatus {
-    const map: Record<string, PaymentStatus> = {
-      'pending': 'PENDING',
-      'complete': 'SUCCEEDED',
-      'completed': 'SUCCEEDED',
-      'success': 'SUCCEEDED',
-      'failed': 'FAILED',
-      'cancelled': 'CANCELLED'
-    };
-    return map[status?.toLowerCase()] || 'FAILED';
-  }
-
-  /**
-   * Map MyCoolPay status to our status
-   */
-  private mapMyCoolPayStatus(status: string): PaymentStatus {
-    const map: Record<string, PaymentStatus> = {
-      'pending': 'PENDING',
-      'processing': 'PENDING',
-      'success': 'SUCCEEDED',
-      'completed': 'SUCCEEDED',
-      'failed': 'FAILED',
-      'cancelled': 'CANCELLED'
-    };
-    return map[status?.toLowerCase()] || 'FAILED';
-  }
+  // The per-gateway status tables used to be duplicated here — a second, SMALLER
+  // copy of the maps each gateway already owned, read by the webhook path while
+  // the verify path read the gateway's. They disagreed: `error` and the
+  // single-l `canceled` NotchPay actually sends were absent here and fell
+  // through to the default, so one word meant CANCELLED on one path and FAILED
+  // on the other for the same transaction. There is now one table per gateway,
+  // on the gateway.
 
   /**
    * Emit payment event (partial or full)

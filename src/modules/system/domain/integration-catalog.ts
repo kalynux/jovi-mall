@@ -138,36 +138,42 @@ export const INTEGRATION_CATALOG: readonly IntegrationSpec[] = Object.freeze([
             + 'instead: the operationally useful fact, and it leaks nothing',
     },
     /**
-     * ⚠ Both mobile-money gateways are **placeholders**, and that is the single most useful
-     * thing this endpoint can say about them.
+     * Both mobile-money gateways are real now, and the prohibition that used to sit here is
+     * lifted — deliberately, and in the same change that made it untrue.
      *
-     * `callNotchPayAPI` and `callMyCoolPayAPI` contain a commented-out `fetch` and end in a
-     * throw ("API integration not implemented"). With no API key they return a MOCK success —
-     * so a checkout appears to start, hands the customer a fake USSD code, and no money ever
-     * moves. With a key, every call throws.
+     * What it said: `callNotchPayAPI` and `callMyCoolPayAPI` made no HTTP call at all
+     * (unkeyed they returned a MOCK success with a fabricated USSD code, keyed they threw),
+     * so they must NOT be wired to `recordIntegrationCall` — reporting "NotchPay: ok, 30
+     * seconds ago" on the strength of a mock is worse than reporting nothing.
      *
-     * The consequence for this surface is specific: they must NOT be wired to
-     * `recordIntegrationCall`. Instrumenting a placeholder would report "NotchPay: ok, 30
-     * seconds ago" on the strength of a mock, which is worse than reporting nothing — it is
-     * the operations surface actively vouching for something that does not work.
+     * That reasoning was right and its conclusion has expired. Both adapters now make real
+     * calls and report through `recordIntegrationCall` in a `finally`, so `passive` here is
+     * the honest mode: mobile money is the platform's primary rail, so real traffic is
+     * frequent and a probe would only duplicate it.
+     *
+     * ⚠ The rule the old comment embodied still stands and is worth restating: never
+     * instrument a path that cannot fail. An adapter that swallows its own errors makes this
+     * page vouch for something that does not work.
      */
     {
         key: 'notchpay',
         label: 'NotchPay (mobile money)',
-        impact: 'NOT IMPLEMENTED — the gateway is a placeholder; no mobile-money payment completes through it',
-        reachability: 'never',
+        impact: 'Mobile-money collection and refunds stop; card payments are unaffected',
+        reachability: 'passive',
         reachabilityNote:
-            'The gateway makes no HTTP call at all: unkeyed it returns a mock success, keyed it '
-            + 'throws. Deliberately not instrumented — recording a mock as a successful call '
-            + 'would make this page vouch for a payment path that does not exist.',
+            'Reports what real traffic last learned. Not probed: mobile money is the primary '
+            + 'rail here, so genuine calls are frequent enough that a synthetic one would add '
+            + 'nothing but load on a live merchant account.',
     },
     {
         key: 'mycoolpay',
-        label: 'MyCoolPay (mobile money)',
-        impact: 'NOT IMPLEMENTED — the gateway is a placeholder; no mobile-money payment completes through it',
-        reachability: 'never',
+        label: 'My-CoolPay (mobile money)',
+        impact: 'Mobile-money collection stops. Refunds are unaffected because this provider has no refund API — they go through the manual-payout ticket either way',
+        reachability: 'passive',
         reachabilityNote:
-            'Same shape as NotchPay: no HTTP call, a mock success when unkeyed, a throw when keyed.',
+            'Same as NotchPay. Note `configured` requires the PRIVATE key as well as the '
+            + 'public one: the private key is what verifies the callback, and a gateway that '
+            + 'can charge but cannot authenticate the confirmation settles nothing.',
     },
     {
         key: 'google_calendar',

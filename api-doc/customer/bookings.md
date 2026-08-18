@@ -80,7 +80,7 @@ GET /api/customer/bookings/:id/balance
 **Cancelling and your money.** If the booking was paid, cancelling refunds it:
 
 - Where the payment gateway supports refunds, the money is returned automatically and `paymentStatus` becomes `refunded`.
-- Otherwise — **cash bookings, and mobile money, whose gateway refund APIs are not implemented yet** — `paymentStatus` becomes `refund_pending` and a support ticket is raised for manual payout. The cancellation still succeeds either way; a refund problem never keeps the appointment on the books.
+- Otherwise — **cash bookings, and My-CoolPay, whose API has no refund endpoint** — `paymentStatus` becomes `refund_pending` and a support ticket is raised for manual payout. The cancellation still succeeds either way; a refund problem never keeps the appointment on the books.
 
 **Cancellation can be refused.** The vendor sets the policy, and `422 CANCELLATION_NOT_ALLOWED` means their window has passed (its `details` carry `cancellable` and `deadline`). A `completed` or `no-show` booking returns `409 BOOKING_NOT_CANCELLABLE`.
 

@@ -85,3 +85,24 @@ export const VerifyPaymentSchema = z.object({
 });
 
 export type VerifyPaymentInput = z.infer<typeof VerifyPaymentSchema>;
+
+/**
+ * POST /payments/:transactionId/authorize
+ *
+ * The one-time code for a mobile-money charge that reported
+ * `instructions.requiresOtp` — My-CoolPay's Orange Money flow, which answers
+ * `REQUIRE_OTP` and takes no money until the code is relayed back.
+ *
+ * Digits only, 4–8 of them: the operators send a numeric code, and accepting
+ * arbitrary text here would forward whatever was typed to the gateway as a
+ * guess. The attempt counter lives on the transaction (`otpAttempts`), not
+ * here — a schema cannot count.
+ */
+export const AuthorizePaymentSchema = z.object({
+  code: z
+    .string()
+    .trim()
+    .regex(/^\d{4,8}$/, 'code must be the 4-8 digit confirmation code sent to your phone'),
+});
+
+export type AuthorizePaymentInput = z.infer<typeof AuthorizePaymentSchema>;

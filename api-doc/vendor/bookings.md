@@ -368,7 +368,7 @@ POST /api/vendor/bookings/:id/cancel
 
 Cancel a booking with an optional reason. Deletes the calendar event and emits a cancellation event.
 
-> **Cancelling a PAID booking refunds the customer.** Where the gateway supports it the money is returned automatically and `paymentStatus` becomes `refunded`. Otherwise — cash, and mobile money, whose gateway refund APIs are not implemented yet — `paymentStatus` becomes `refund_pending` and a HIGH-importance support ticket is raised for manual payout. Your escrowed earnings for the booking are reversed in **both** cases: you are not paid for a service that was cancelled.
+> **Cancelling a PAID booking refunds the customer.** Where the gateway supports it the money is returned automatically and `paymentStatus` becomes `refunded`. Otherwise — cash, and My-CoolPay, whose API has no refund endpoint — `paymentStatus` becomes `refund_pending` and a HIGH-importance support ticket is raised for manual payout. Your escrowed earnings for the booking are reversed in **both** cases: you are not paid for a service that was cancelled.
 >
 > A refund problem never blocks the cancellation — the appointment is released regardless.
 

@@ -91,9 +91,45 @@ export interface IPaymentTransaction extends Document {
   // Idempotency
   idempotencyKey: string;           // hash(orderId + userId + amount) - prevents duplicate payments
 
+  /**
+   * OUR reference, handed to the gateway and echoed back on its callback.
+   *
+   * Distinct from `idempotencyKey` on purpose. That key is
+   * `sha256(orderId:userId:amount)` — deterministic, which is exactly what an
+   * initiate-dedup key should be, and exactly what a gateway-facing identifier
+   * must not be: all three inputs are knowable. `merchantRef` is 128 random
+   * bits and carries a routing prefix so a mobile-money callback for a plan
+   * purchase or a credit top-up (neither of which creates a row in THIS
+   * collection) can find its way home. See `domain/merchant-reference.ts`.
+   *
+   * Optional because every row written before this field existed has none;
+   * the webhook lookup falls back to `(gateway, gatewayRef)`.
+   */
+  merchantRef?: string;
+
+  /**
+   * Wrong OTP submissions on this transaction.
+   *
+   * My-CoolPay's Orange Money flow answers `REQUIRE_OTP`, and the endpoint
+   * that accepts the code is unauthenticated — it sits beside `initiate` and
+   * `verify`, which are open by design for shareable payment links. A
+   * six-digit code with unlimited attempts is not a secret, so the counter
+   * lives here, on the object being attacked.
+   */
+  otpAttempts: number;
+
   // Gateway payload tracking
   rawGatewayPayloads: any[];        // Array of all gateway responses (multi-step flows)
-  gatewayPayloadHash?: string;      // Hash of last webhook payload (detect duplicates/replay attacks)
+  /**
+   * Hash of the last webhook payload.
+   *
+   * ⚠ **No longer replay protection**, and it never really was: a single slot
+   * shared with the initiate and verify paths cannot answer "have I seen this
+   * event". Dedup moved to `payment_webhook_events`, keyed on the provider's
+   * own event id. This field survives as a debugging aid only — do not gate
+   * anything on it.
+   */
+  gatewayPayloadHash?: string;
 
   // Refund tracking
   totalRefunded: number;            // Sum of all completed refunds (from RefundTransaction)
@@ -184,6 +220,21 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
     required: true,
     unique: true,  // CRITICAL: Prevents duplicate payments
     index: true
+  },
+
+  // Our gateway-facing reference. `sparse` because legacy rows have none — a
+  // plain unique index would refuse the second null and every write would fail.
+  merchantRef: {
+    type: String,
+    unique: true,
+    sparse: true,
+    index: true
+  },
+
+  otpAttempts: {
+    type: Number,
+    default: 0,
+    min: 0
   },
 
   // Gateway payload tracking

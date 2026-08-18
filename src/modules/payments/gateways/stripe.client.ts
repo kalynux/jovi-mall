@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import { toMinorUnit, fromMinorUnit } from '../domain/money';
 
 /**
  * Shared Stripe SDK client + money/FX helpers.
@@ -19,7 +20,6 @@ export function getStripeClient(): Stripe {
   if (client) return client;
 
   const key = process.env.STRIPE_SECRET_KEY;
-  console.log({key});
   if (!key) {
     throw createAppError(
       ERROR_CODES.PAYMENT_GATEWAY_NOT_IMPLEMENTED,
@@ -36,27 +36,11 @@ export function getStripeClient(): Stripe {
 }
 
 /**
- * Currencies Stripe treats as zero-decimal: the `amount` is the value itself,
- * with no multiplication by 100. (Subset of https://stripe.com/docs/currencies)
+ * The zero-decimal table and the two unit converters moved to
+ * `../domain/money` when the mobile-money gateways became real and needed them
+ * too. Re-exported here so no existing call site changed.
  */
-const ZERO_DECIMAL_CURRENCIES = new Set<string>([
-  'bif', 'clp', 'djf', 'gnf', 'jpy', 'kmf', 'krw', 'mga', 'pyg', 'rwf',
-  'ugx', 'vnd', 'vuv', 'xaf', 'xof', 'xpf',
-]);
-
-/** Convert a major-unit amount to Stripe's minor unit for the given currency. */
-export function toMinorUnit(amount: number, currency: string): number {
-  const code = currency.toLowerCase();
-  if (ZERO_DECIMAL_CURRENCIES.has(code)) return Math.round(amount);
-  return Math.round(amount * 100);
-}
-
-/** Convert a Stripe minor-unit amount back to its major unit. */
-export function fromMinorUnit(amount: number, currency: string): number {
-  const code = currency.toLowerCase();
-  if (ZERO_DECIMAL_CURRENCIES.has(code)) return amount;
-  return amount / 100;
-}
+export { toMinorUnit, fromMinorUnit };
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;

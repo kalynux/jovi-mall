@@ -9,6 +9,7 @@ import {
     findSuccessfulPaymentForOrder,
 } from '../vendor/service/vendor-refund.service';
 import { PaymentOrchestratorService } from '../payments/services/payment-orchestrator.service';
+import { gatewaySupportsRefund } from '../payments/gateways/registry';
 import { PaymentGatewayType } from '../payments/models/payment-transaction.model';
 import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
@@ -65,8 +66,12 @@ export interface AdminRefundEligibilityDto {
     reasonCode?: string;
     gateway: PaymentGatewayType | null;
     /**
-     * Whether that gateway can actually refund. Only Stripe implements one; NotchPay and
-     * MyCoolPay are explicit placeholders that raise `REFUND_GATEWAY_NOT_SUPPORTED`.
+     * Whether that gateway can actually refund. Stripe and NotchPay can; My-CoolPay's
+     * API has no refund endpoint at all, so it raises `REFUND_GATEWAY_NOT_SUPPORTED`
+     * and the money goes back through the manual-payout ticket instead.
+     *
+     * **Derived from the gateway registry**, never from a list kept beside it — see the
+     * note above `AdminRefundService`.
      *
      * Reported UP FRONT on purpose. Discovering it after the button is pressed leaves a
      * `pending` RefundTransaction behind and an operator who thinks money moved.
@@ -101,7 +106,16 @@ export interface AdminRefundResultDto {
     overrides: VendorPolicyOverride[];
 }
 
-const NON_REFUNDABLE_GATEWAYS: PaymentGatewayType[] = ['NOTCHPAY', 'MYCOOLPAY'];
+// The hardcoded `NON_REFUNDABLE_GATEWAYS = ['NOTCHPAY','MYCOOLPAY']` that used to
+// live here is gone. It answered the same question as the guard in
+// `PaymentOrchestratorService.refundPayment` from a different file, and the two
+// disagreed: both mobile gateways DEFINED a `refundPayment` that always failed, so
+// that guard never fired and the code actually raised was `REFUND_GATEWAY_FAILED`
+// while this list — and the api-doc — promised `REFUND_GATEWAY_NOT_SUPPORTED`.
+//
+// `gatewaySupportsRefund` derives the answer from the registry, so the up-front
+// verdict and the enforcement cannot drift. NotchPay now has a real refund API;
+// My-CoolPay has no refund endpoint at all and deliberately omits the method.
 
 export class AdminRefundService {
     private vendorRepo = new VendorRepository();
@@ -300,7 +314,7 @@ export class AdminRefundService {
             currency,
             reasonCode: moneyReason,
             gateway,
-            gatewayRefundSupported: gateway !== null && !NON_REFUNDABLE_GATEWAYS.includes(gateway),
+            gatewayRefundSupported: gateway !== null && gatewaySupportsRefund(gateway),
             isCod,
             vendorPolicy,
             overrides,

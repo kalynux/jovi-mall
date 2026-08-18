@@ -247,6 +247,7 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Error catalog](./errors/README.md)
 - [Geospatial addresses & address search](./geo/README.md)
 - [Gateway payments (role-neutral)](./payments/README.md) — initiate · verify · read a transaction
+- [**Phase D · 0 · 1 — what the readiness phases changed**](./phase-d-0-1/README.md) — one document per audience ([admin](./phase-d-0-1/admin-dashboard.md) · [vendor & agency dashboards](./phase-d-0-1/vendor-agency-dashboard.md) · [customer app](./phase-d-0-1/customer-app.md) · [agency & agent app](./phase-d-0-1/agency-agent-app.md)). Real mobile money, the one-time-code step, callback settlement, refund verdicts, and the ten decisions with their build status
 - **Payout methods** — where you get paid *to* (mobile money · bank · **card**), one schema documented per role: [vendor](./vendor/payout-methods.md) · [agency](./agency/payout-methods.md) · [agent](./agent/payout-methods.md). Distinct from *payment* methods, which are what you pay *with*
 - [Uploads (role-neutral)](./uploads/README.md)
 - [**Health probes & metrics**](./health.md) — `/api/health` (frozen — geo-tracker's readiness depends on it), `/api/health/{live,ready}`, `/metrics`

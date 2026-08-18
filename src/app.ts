@@ -106,13 +106,33 @@ app.use(helmet());
 // direction for a security control, and a loud one.
 app.use(cors(buildCorsOptions()));
 
-// Stripe webhook signature verification needs the raw request bytes, so this
-// path must bypass the JSON body parser. Mounted BEFORE express.json().
+// Gateway webhook signature verification needs the raw request bytes, so these
+// paths must bypass the JSON body parser. Mounted BEFORE express.json().
 //
-// Its own limit is deliberately larger than the global one: a Stripe event with
-// a big expanded object is legitimate traffic we cannot ask the sender to
+// Their own limit is deliberately larger than the global one: a gateway event
+// with a big expanded object is legitimate traffic we cannot ask the sender to
 // shrink, and a 413 here loses a payment notification.
-app.use('/api/webhooks/stripe', express.raw({ type: 'application/json', limit: WEBHOOK_BODY_LIMIT }));
+//
+// ⚠ Three explicit paths, NOT the `/api/webhooks` prefix. That prefix also
+// carries the WhatsApp and Telegram bot routers (`api/index.ts`), which read a
+// parsed JSON body — widening this mount would hand them a Buffer and break
+// every bot command silently.
+//
+// `type: () => true` — every content type, not just `application/json`. A
+// gateway posting `x-www-form-urlencoded` would otherwise fall through to
+// `express.json`, arrive parsed, and destroy the exact bytes the HMAC is
+// computed over. The verifier would then compare against re-serialised JSON and
+// refuse every genuine callback — a failure that looks like a wrong secret and
+// is not.
+//
+// The predicate form rather than the equivalent `'*/*'` string is deliberate:
+// that literal contains the character sequence that ENDS a block comment, so it
+// silently breaks any comment-stripping source scanner reading this file —
+// including `test:payments`' own, which is what caught it.
+app.use(
+    ['/api/webhooks/stripe', '/api/webhooks/notchpay', '/api/webhooks/mycoolpay'],
+    express.raw({ type: () => true, limit: WEBHOOK_BODY_LIMIT })
+);
 
 // ─── Body parsing, with a ceiling ────────────────────────────────────────────
 //

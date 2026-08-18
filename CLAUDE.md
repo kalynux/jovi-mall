@@ -67,6 +67,16 @@ npm run migrate:storefront-indexes       # build the public-catalog indexes, inc
                                          # index in this codebase. autoIndex builds them too, but
                                          # silently — a failed build leaves every storefront request
                                          # scanning the collection (idempotent, --dry-run)
+npm run migrate:payment-indexes          # build the Phase 1 payment indexes: the UNIQUE
+                                         # (gateway, eventId) webhook dedup + its 45-day TTL, and
+                                         # the sparse-unique merchant_ref on payment_transactions,
+                                         # plan_purchases and credit_topups. Same autoIndex-fails-
+                                         # silently argument as above, except here the silent
+                                         # failure disables replay protection entirely
+                                         # (idempotent, --dry-run)
+npm run audit:stuck-payments             # READ-ONLY: how much money sits in payments that never
+                                         # closed — the backlog from before the reconciliation
+                                         # worker. Fixes nothing, deliberately [-- --days=90 --json]
 npm run seed:tickets [-- --clean]        # also: seed:plans, seed:cod [-- --clean]
 npm run seed:blog                        # the house byline ONLY — no articles, deliberately
 npm run seed:cod-shipments [-- --clean]  # 7 COD shipments across the lifecycle, on the
@@ -464,7 +474,7 @@ ring buffer and a **capped** `system_logs` collection persisting warn+ — behin
 
 **Workers report three booleans, never one.** `scheduled` / `executing` / `manualClaim`, because three different things in this codebase were all called `running` and `GET /dev-tools/workers` reported the least useful of them — a scheduled sweep churning for ten minutes showed `running: false`. Schedules are **derived** from the value each worker schedules with (`core/jobs/worker-schedule.ts`); the old hand-typed strings were wrong for **eight of ten** workers. Two workers were missing entirely: `AssignmentSweepWorker` is now registered (it is the only thing advancing auto-assignment sessions, so a stalled sweep was invisible from every angle), and `InboundCalendarSyncWorker` appears in `WORKER_INVENTORY` but stays out of the triggerable `WORKER_REGISTRY` — "run it once" has no single meaning for it.
 
-**Overlap is now PREVENTED, by one mechanism, for all thirteen** (`core/jobs/worker-lock.ts` — audit finding F-19; design record `../admin/docs/ADR-014-SYSTEM-OPERATIONS.md` D-8-A). The old note here said "the seven cron workers"; it was **nine** — `analytics-aggregation` and both `inbound-calendar-sync` loops had the same unguarded shape and were simply not cron. That miscount is why the source scan in `test:system`, not a hand-kept list, is what enforces this: every `*.worker.ts` plus the scheduler must call `withWorkerLock(`.
+**Overlap is now PREVENTED, by one mechanism, for all fourteen** (`core/jobs/worker-lock.ts` — audit finding F-19; design record `../admin/docs/ADR-014-SYSTEM-OPERATIONS.md` D-8-A). The old note here said "the seven cron workers"; it was **nine** — `analytics-aggregation` and both `inbound-calendar-sync` loops had the same unguarded shape and were simply not cron. That miscount is why the source scan in `test:system`, not a hand-kept list, is what enforces this: every `*.worker.ts` plus the scheduler must call `withWorkerLock(`.
 
 Five properties are load-bearing:
 
@@ -1144,9 +1154,89 @@ invariant "reserve writes no stock · commit writes it once · release writes no
 and a regression there is invisible to every other test — stock would just quietly drain.
 
 ### Payments (`src/modules/payments/`)
-Gateway-agnostic orchestrator (`PaymentOrchestratorService`) supports Stripe (cards), NotchPay, and MyCoolPay (mobile money). Each gateway implements `PaymentGateway` interface. Webhook payloads are deduplicated via hash before processing.
 
-**`refundPayment` serves BOTH payable things** — orders and bookings — via a `RefundSource` discriminated union. Only four points branch (the payment lookup, the `RefundTransaction` foreign key, the source-status write, the earnings reversal); the money invariants in between are shared *on purpose*, so a second implementation cannot drift on refundable balance or escrow. Only **Stripe** implements a real gateway refund; NotchPay's and MyCoolPay's are explicitly `PLACEHOLDER` and raise `REFUND_GATEWAY_NOT_SUPPORTED` — callers must handle that as an expected outcome, not a bug.
+Gateway-agnostic orchestrator (`PaymentOrchestratorService`) over Stripe (cards), NotchPay and
+My-CoolPay (mobile money). **All three are real** as of Phase 1; the two mobile adapters used to
+make no HTTP call at all, fabricating a `PENDING` response with a hardcoded USSD code when
+unkeyed. Contract: `api-doc/payments/README.md`. Covered DB-free by `npm run test:payments` (92).
+
+**One registry, one lookup table.** `gateways/registry.ts` is the only place a gateway is
+constructed. There used to be three identical `Map`s — the orchestrator, `CreditTopupService` and
+`PlanPurchaseService` — with the orchestrator itself instantiated twice at import, so five
+gateway instances each read `process.env` in a constructor. `test:payments` enumerates that
+registry and asserts every member implements `verifyWebhook` and `parseWebhookEvent`, which is
+what stops a fourth gateway shipping with an unverified endpoint.
+
+**Webhook verification is on the interface, and refusing is not optional.** Both mobile routes
+previously read a signature header into a variable and passed it to a method whose first act was
+a comment saying it skips verification — on endpoints that are rate-limit-exempt and
+maintenance-exempt, reaching `handlePaymentSuccess`. Four rules hold now:
+
+- **An unconfigured gateway refuses its own callback.** Never "skip verification when
+  unconfigured" — that is the shape of the original bug, and it means forgetting one environment
+  variable silently reopens the hole. `config/env.ts` refuses the boot for the same reason.
+- **The status code is the contract.** `domain/webhook-response.ts` holds the whole table, pure
+  and testable. Every branch of both mobile routes used to answer `200`, including the catch —
+  so a confirmation lost to a restart was acknowledged as delivered and never resent. A
+  **transient** failure now answers 5xx so the gateway retries; a permanent one answers 2xx.
+  Stripe's written justification for its own 200-after-verification does **not** generalise, and
+  the split is on the error's status, not on the gateway.
+- **A verified callback is cross-checked against `amountSnapshot`/`currencySnapshot`** before
+  anything settles. This is the real compensation for My-CoolPay's MD5 signature: defeating that
+  construction still does not let an attacker choose the amount.
+- **Replay protection is `payment_webhook_events`**, unique on `(gateway, eventId)`,
+  insert-first-wins. `gatewayPayloadHash` remembered only the *last* payload and was shared with
+  the initiate/verify paths, so `SUCCEEDED → FAILED → SUCCEEDED` reprocessed.
+
+**`merchantRef` is ours; `gatewayRef` is theirs.** A random 128-bit reference minted per attempt,
+sent as NotchPay's `reference` and My-CoolPay's `app_transaction_ref`, and echoed back on the
+callback. It replaced sending `idempotencyKey` — `sha256(orderId:userId:amount)`, whose
+determinism is right for initiate-dedup and wrong for a gateway-facing identifier. Its typed
+prefix (`jm_pt_` / `jm_pp_` / `jm_ct_`) is what lets a mobile-money **plan purchase or credit
+top-up** settle from a callback at all; those create no `PaymentTransaction`, so before this they
+reached an orchestrator that found nothing and answered success, and only client polling ever
+completed one. ⚠ The random part is **hex, not base64url**: base64url contains `_`, the parser
+split on `_`, and roughly half of all references would have failed to route intermittently.
+
+**`refundPayment` serves BOTH payable things** — orders and bookings — via a `RefundSource`
+discriminated union. Only four points branch (the payment lookup, the `RefundTransaction`
+foreign key, the source-status write, the earnings reversal); the money invariants in between are
+shared *on purpose*, so a second implementation cannot drift on refundable balance or escrow.
+
+**Refunds ask TWO questions, and conflating them puts a dead button in front of an operator.**
+
+*Does the provider have a refund API?* — `gatewayImplementsRefund()`, answered by the method's
+presence. My-CoolPay's API has none (verified against their documentation and their official
+SDK), so `MyCoolPayGateway` **omits the method** rather than stubbing it, and the ABSENCE is the
+contract: the orchestrator's `typeof … !== 'function'` guard raises
+`REFUND_GATEWAY_NOT_SUPPORTED`. That guard used to be dead — both mobile gateways defined a
+`refundPayment` that always failed, so the code actually raised was `REFUND_GATEWAY_FAILED`
+while the api-doc and a hardcoded `NON_REFUNDABLE_GATEWAYS` list both promised otherwise.
+
+*May our account use it?* — `refundAvailable()`, an account-level gate. ⚠ **NotchPay implements
+refunds and this merchant account may not use them**: verified live 2026-08-18, `GET /refunds`
+answers 200 with our credentials and `POST /refunds` answers a bare 403 for every body shape
+tried. So `NOTCHPAY_REFUNDS_ENABLED` defaults to **false** and NotchPay refunds degrade to the
+manual-payout ticket exactly as My-CoolPay's do. Flip the flag when NotchPay enables it; no code
+changes with it.
+
+`gatewaySupportsRefund()` reads both, and both `AdminRefundService`'s up-front verdict and the
+enforcement in `refundPayment` read *it* — so the verdict and the enforcement cannot disagree.
+
+**A provider that WON'T is not a provider that COULDN'T.** `RefundResult.unsupported` carries
+that distinction, and it decides where the money goes: `REFUND_GATEWAY_FAILED` is a 502 that
+`VendorRefundService` has **no fallback for**, so a vendor would see an outage for a policy
+refusal. `REFUND_GATEWAY_NOT_SUPPORTED` is a documented `business_rule` outcome that
+`BookingRefundService` already routes to `refund_pending` + earnings reversal + a HIGH ticket.
+
+**`PaymentReconciliationWorker` is the safety net** (the 14th worker). A mobile-money confirmation
+arrives minutes after the request that opened it, by which time the customer has closed the page —
+so the callback is the settlement path, not a supplement to polling. Nothing swept
+`payment_transaction` before this. It re-verifies through `verifyPayment`, never infers: an
+unreachable provider leaves the row alone, because "could not ask" is not "failed". For the same
+reason an unknown gateway status maps to `PENDING` rather than `FAILED` — only a `PENDING` row is
+swept again, so calling a live payment dead strands the money. `npm run audit:stuck-payments`
+measures the pre-existing backlog and deliberately fixes nothing.
 
 ### Bookings (`src/modules/booking/`) — service products
 

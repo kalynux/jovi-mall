@@ -139,16 +139,18 @@ Read-only. **Never throws on ineligibility** — it answers with a verdict.
   "remaining": 45000,
   "currency": "XAF",
   "gateway": "STRIPE",
-  "gatewayRefundSupported": true,    // only Stripe implements one
+  "gatewayRefundSupported": true,    // Stripe and NotchPay do; My-CoolPay has no refund API
   "isCod": false,
   "vendorPolicy": { /* what the VENDOR's own policy would allow — reported, not enforced */ },
   "overrides": ["return_window_expired"]   // which vendor gates a refund would cross
 }
 ```
 
-`gatewayRefundSupported` is reported **up front** on purpose: NotchPay and MyCoolPay are
-explicit placeholders, and discovering that after the button is pressed leaves a `pending`
-`RefundTransaction` behind and an operator who believes money moved.
+`gatewayRefundSupported` is reported **up front** on purpose: My-CoolPay has no refund endpoint
+at all, and discovering that after the button is pressed leaves a `pending` `RefundTransaction`
+behind and an operator who believes money moved. It is **derived from the gateway registry**
+(does the adapter implement `refundPayment`?) rather than from a list kept beside it, so this
+verdict and the guard that enforces it cannot drift apart.
 
 ---
 

@@ -18,6 +18,23 @@ export class PlanPurchaseRepository {
     return PlanPurchaseModel.findOne({ gateway_ref: gatewayRef });
   }
 
+  /** Locate a purchase by the reference WE minted and the gateway echoed back. */
+  async findByMerchantRef(merchantRef: string): Promise<IPlanPurchase | null> {
+    return PlanPurchaseModel.findOne({ merchant_ref: merchantRef });
+  }
+
+  /**
+   * Mark a still-pending purchase failed, as a compare-and-set.
+   *
+   * Guarded on `pending` so a late terminal callback cannot un-settle a
+   * purchase that a verify poll already applied — the plan is granted and the
+   * row must not contradict it.
+   */
+  async failIfPending(id: string): Promise<void> {
+    if (!Types.ObjectId.isValid(id)) return;
+    await PlanPurchaseModel.updateOne({ _id: id, status: 'pending' }, { $set: { status: 'failed' } });
+  }
+
   async setStatus(
     id: Types.ObjectId,
     status: PlanPurchaseStatus,

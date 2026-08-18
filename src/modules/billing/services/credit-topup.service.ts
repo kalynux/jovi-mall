@@ -8,10 +8,9 @@ import { findCreditPack } from '../config/credit.config';
 import { ICreditTopup, CreditTopupGateway } from '../models/credit-topup.model';
 import { CreditTopupModel } from '../models/credit-topup.model';
 import { BillingOwnerType } from '../billing.types';
-import { PaymentGateway, PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
-import { NotchPayGateway } from '../../payments/gateways/notchpay.gateway';
-import { MyCoolPayGateway } from '../../payments/gateways/mycoolpay.gateway';
-import { StripeGateway } from '../../payments/gateways/stripe.gateway';
+import { PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
+import { getPaymentGateway } from '../../payments/gateways/registry';
+import { mintMerchantRef } from '../../payments/domain/merchant-reference';
 
 /**
  * CreditTopupService - an owner's (vendor/agency/agent) purchase of credit packs.
@@ -23,18 +22,10 @@ import { StripeGateway } from '../../payments/gateways/stripe.gateway';
  * needs no owner argument.
  */
 export class CreditTopupService {
-  private readonly gateways: Map<CreditTopupGateway, PaymentGateway>;
-
   constructor(
     private readonly repo: CreditTopupRepository = new CreditTopupRepository(),
     private readonly wallet: CreditWalletService = creditWalletService
-  ) {
-    this.gateways = new Map<CreditTopupGateway, PaymentGateway>([
-      ['NOTCHPAY', new NotchPayGateway()],
-      ['MYCOOLPAY', new MyCoolPayGateway()],
-      ['STRIPE', new StripeGateway()],
-    ]);
-  }
+  ) {}
 
   /** Start a top-up: create a pending record and open a gateway charge. */
   async initiateTopup(
@@ -48,10 +39,12 @@ export class CreditTopupService {
     if (!pack) {
       throw createAppError(ERROR_CODES.BILLING_TOPUP_PACK_NOT_FOUND, 404, `Unknown credit pack '${packCode}'`);
     }
-    const adapter = this.gateways.get(gateway);
-    if (!adapter) {
-      throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, `Unsupported gateway '${gateway}'`);
-    }
+    const adapter = getPaymentGateway(gateway);
+
+    // Minted BEFORE the charge and stored on the row, because the callback may
+    // arrive before `initiatePayment` has even returned — mobile-money
+    // confirmations are not ordered relative to the request that started them.
+    const merchantRef = mintMerchantRef('ct');
 
     const topup = await this.repo.create({
       owner_type: ownerType,
@@ -62,6 +55,7 @@ export class CreditTopupService {
       currency: pack.currency,
       status: 'pending',
       gateway,
+      merchant_ref: merchantRef,
     });
 
     const result = await adapter.initiatePayment({
@@ -70,7 +64,15 @@ export class CreditTopupService {
       amount: pack.price,
       currency: pack.currency,
       channel,
-      metadata: { purpose: 'credit_topup', topupId: topup._id.toString(), ownerType },
+      merchantRef,
+      metadata: {
+        purpose: 'credit_topup',
+        topupId: topup._id.toString(),
+        ownerType,
+        // Stripe stamps this into the PaymentIntent's metadata, which is how
+        // its callback reports a merchant reference at all.
+        merchantRef,
+      },
     });
 
     if (!result.success) {
@@ -105,7 +107,7 @@ export class CreditTopupService {
       throw createAppError(ERROR_CODES.BILLING_TOPUP_INVALID_STATE, 409, 'Top-up has no gateway reference yet');
     }
 
-    const adapter = this.gateways.get(topup.gateway)!;
+    const adapter = getPaymentGateway(topup.gateway);
     const verification = await adapter.verifyPayment({ gatewayRef: topup.gateway_ref });
 
     if (verification.status === 'SUCCEEDED') {
@@ -182,6 +184,27 @@ export class CreditTopupService {
     const topup = await CreditTopupModel.findOne({ gateway_ref: gatewayRef });
     if (!topup) return null;
     return this.reverseTopup(topup._id.toString(), reason);
+  }
+
+  /**
+   * Find a top-up by the reference WE minted, so a mobile-money callback can
+   * settle one.
+   *
+   * The `gateway_ref` fallback matters: the callback may beat
+   * `initiateTopup`'s own `setStatus`, and it may also be for a row created
+   * before `merchant_ref` existed.
+   */
+  async findByReference(merchantRef: string | null, gatewayRef: string): Promise<ICreditTopup | null> {
+    if (merchantRef) {
+      const byMerchant = await CreditTopupModel.findOne({ merchant_ref: merchantRef });
+      if (byMerchant) return byMerchant;
+    }
+    return CreditTopupModel.findOne({ gateway_ref: gatewayRef });
+  }
+
+  /** Mark failed from a terminal callback. Never touches a row that already settled. */
+  async failTopup(topupId: string): Promise<void> {
+    await CreditTopupModel.updateOne({ _id: topupId, status: 'pending' }, { $set: { status: 'failed' } });
   }
 }
 

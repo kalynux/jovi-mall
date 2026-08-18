@@ -10,6 +10,13 @@ import {
     TRACKING_INTEGRATION_CONFIG,
     trackingIntegrationEnabled,
 } from '../../tracking-integration/config/tracking-integration.config';
+import {
+    NOTCHPAY_CONFIG,
+    MYCOOLPAY_CONFIG,
+    notchPayEnabled,
+    myCoolPayEnabled,
+} from '../../payments/config/payments.config';
+import { gatewaySupportsRefund } from '../../payments/gateways/registry';
 import { ConnectedCalendarAccount } from '../../integrations/calendar/google/connected-account.model';
 import { SYSTEM_CONFIG } from '../config/system.config';
 import {
@@ -224,33 +231,52 @@ function configurationOf(key: IntegrationKey): {
         }
 
         /**
-         * `configured: false` even with a key present, and that is not a bug.
+         * Both gateways are real now, so `configured` finally means what an operator reads
+         * it as: this payment path works.
          *
-         * Both gateways are placeholders — see `integration-catalog.ts`. "Configured" here has
-         * to mean "this payment path works", because that is what an operator reads it as. A
-         * green row next to an API key, for a gateway whose HTTP call is commented out and whose
-         * method ends in a throw, is exactly the kind of confidently wrong signal this whole
+         * It used to be a hardcoded `false` even with a key present — correct at the time,
+         * because the adapters made no HTTP call at all. The bar has not moved, only the
+         * code has: "configured" still means the whole path works, which is why it requires
+         * the CALLBACK credential and not just the calling one. A gateway that can take
+         * money and cannot authenticate the confirmation charges customers and settles
+         * nothing, and reporting that as configured is the confidently-wrong signal this
          * surface exists to eliminate.
+         *
+         * The predicates live on `payments/config/payments.config.ts` so this page and the
+         * gateways cannot disagree about what "configured" means.
          */
         case 'notchpay':
             return {
-                configured: false,
+                configured: notchPayEnabled(),
                 detail: {
-                    implemented: false,
-                    apiKeySet: Boolean(process.env.NOTCHPAY_API_KEY),
-                    baseUrl: process.env.NOTCHPAY_BASE_URL || null,
-                    webhookSecretSet: Boolean(process.env.NOTCHPAY_WEBHOOK_SECRET),
+                    implemented: true,
+                    // Three distinct keys with three distinct jobs — see the config module.
+                    publicKeySet: Boolean(NOTCHPAY_CONFIG.PUBLIC_KEY),
+                    // X-Grant. Refunds refuse without it; collection is unaffected, which is
+                    // why it is reported separately rather than folded into `configured`.
+                    privateKeySet: Boolean(NOTCHPAY_CONFIG.PRIVATE_KEY),
+                    webhookSecretSet: Boolean(NOTCHPAY_CONFIG.WEBHOOK_SECRET),
+                    baseUrl: NOTCHPAY_CONFIG.BASE_URL,
+                    refundSupported: gatewaySupportsRefund('NOTCHPAY'),
                 },
             };
 
         case 'mycoolpay':
             return {
-                configured: false,
+                configured: myCoolPayEnabled(),
                 detail: {
-                    implemented: false,
-                    apiKeySet: Boolean(process.env.MYCOOLPAY_API_KEY),
-                    baseUrl: process.env.MYCOOLPAY_BASE_URL || null,
-                    webhookSecretSet: Boolean(process.env.MYCOOLPAY_WEBHOOK_SECRET),
+                    implemented: true,
+                    publicKeySet: Boolean(MYCOOLPAY_CONFIG.PUBLIC_KEY),
+                    // Double duty: it signs the callback AND authorises payout/balance.
+                    // There is no separate webhook secret — the provider has no such
+                    // credential.
+                    privateKeySet: Boolean(MYCOOLPAY_CONFIG.PRIVATE_KEY),
+                    baseUrl: MYCOOLPAY_CONFIG.BASE_URL,
+                    callbackIpPinned: MYCOOLPAY_CONFIG.VERIFY_CALLBACK_IP,
+                    // Reported because it is a real product limitation an operator will be
+                    // asked about: My-CoolPay's API has no refund endpoint, so those
+                    // refunds go out through the manual-payout ticket.
+                    refundSupported: gatewaySupportsRefund('MYCOOLPAY'),
                 },
             };
 

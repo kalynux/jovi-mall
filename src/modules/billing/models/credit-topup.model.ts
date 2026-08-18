@@ -26,6 +26,17 @@ export interface ICreditTopup extends Document {
   /** Gateway used to charge this top-up, and its transaction reference. */
   gateway: CreditTopupGateway | null;
   gateway_ref: string | null;
+  /**
+   * OUR reference, echoed back by the gateway on its callback.
+   *
+   * This is what makes a mobile-money top-up settle from a webhook at all. A
+   * top-up creates no `PaymentTransaction`, and the mobile gateways echo only a
+   * reference string -- no metadata -- so before this field a NotchPay or
+   * My-CoolPay callback reached an orchestrator that looked the reference up in
+   * `payment_transaction`, found nothing, and answered success. Only a client
+   * that stayed on the page and polled `/verify` ever completed one.
+   */
+  merchant_ref: string | null;
   payment_transaction_id: mongoose.Types.ObjectId | null;
   created_at: Date;
   updated_at: Date;
@@ -42,6 +53,9 @@ const CreditTopupSchema = new Schema<ICreditTopup>(
     status: { type: String, enum: ['pending', 'paid', 'failed', 'reversed'], default: 'pending' },
     gateway: { type: String, enum: ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'], default: null },
     gateway_ref: { type: String, default: null },
+    // Sparse: every row written before this field existed has none, and a plain
+    // unique index refuses the second null.
+    merchant_ref: { type: String, default: null, unique: true, sparse: true, index: true },
     payment_transaction_id: { type: Schema.Types.ObjectId, ref: MODELS.PAYMENT_TRANSACTION, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }

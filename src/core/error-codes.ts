@@ -41,6 +41,13 @@ type DomainPrefix =
     | 'NOT'           // NOT_FOUND — router-level only
     | 'REQUEST'       // body-parser rejections — global handler only (Phase 16)
     | 'RATE'          // RATE_LIMIT_EXCEEDED — rate-limit middleware only (Phase 16)
+    // Per-gateway prefixes. These are also the `INTEGRATION_PREFIXES` in
+    // `error-category.ts`, so any of them raised at 5xx is `external_service` and has its
+    // message and details replaced at the boundary — which is what a third party's
+    // diagnostics should get. `STRIPE` was in use before it was ever listed here.
+    | 'STRIPE'
+    | 'NOTCHPAY'
+    | 'MYCOOLPAY'
     | 'VALIDATION';   // VALIDATION_ERROR — ZodError catch in global handler only
 
 // Compile-time check: every key must start with a known domain prefix.
@@ -142,6 +149,58 @@ export const ERROR_CODES = Object.freeze({
     PAYMENT_REFERENCE_REQUIRED: 'PAYMENT_REFERENCE_REQUIRED',
     PAYMENT_ORDER_IS_COD: 'PAYMENT_ORDER_IS_COD',
     STRIPE_WEBHOOK_SIGNATURE_INVALID: 'STRIPE_WEBHOOK_SIGNATURE_INVALID',
+    /**
+     * A mobile-money charge could not be routed to MTN or Orange.
+     *
+     * NotchPay's direct charge takes an explicit `channel`, so the operator has to be
+     * known before the call. The client did not declare one and the number's prefix is
+     * outside the published Cameroon ranges (Nexttel, Camtel, a ported number, a typo).
+     * Raised rather than guessed: charging `cm.mtn` for an Orange number fails at the
+     * provider and reaches the customer as "payment declined", which is a worse
+     * conversation than "which network is this number on?".
+     */
+    PAYMENT_OPERATOR_UNDETERMINED: 'PAYMENT_OPERATOR_UNDETERMINED',
+    /**
+     * A currency with a minor unit was sent to a mobile-money gateway.
+     *
+     * Both mobile rails settle in XAF and take a plain whole number. Passing a
+     * two-decimal currency through unconverted charges 1/100th of the price, and
+     * converting it invents an exchange rate nobody configured.
+     */
+    PAYMENT_CURRENCY_NOT_SUPPORTED: 'PAYMENT_CURRENCY_NOT_SUPPORTED',
+    /**
+     * A verified callback reported an amount or currency that is not what we recorded.
+     *
+     * The signature passed, so this is not a forgery in the ordinary sense — it is a
+     * mismatch between what the provider says was paid and what the order costs, and
+     * settling on the provider's figure is how a one-franc payment buys a phone. It is
+     * ALSO the compensating control for My-CoolPay's MD5 signature: an attacker who
+     * defeated that construction still cannot choose the amount.
+     */
+    PAYMENT_WEBHOOK_AMOUNT_MISMATCH: 'PAYMENT_WEBHOOK_AMOUNT_MISMATCH',
+    /** The submitted mobile-money OTP was wrong. */
+    PAYMENT_OTP_INVALID: 'PAYMENT_OTP_INVALID',
+    /** `POST /payments/:id/authorize` on a transaction that is not awaiting an OTP. */
+    PAYMENT_OTP_NOT_REQUIRED: 'PAYMENT_OTP_NOT_REQUIRED',
+    /**
+     * Too many wrong OTP submissions; the transaction is failed.
+     *
+     * 422 rather than 429: nothing is throttled and waiting changes nothing. The payment
+     * is over and the customer must start a new one.
+     */
+    PAYMENT_OTP_ATTEMPTS_EXCEEDED: 'PAYMENT_OTP_ATTEMPTS_EXCEEDED',
+
+    // ── NOTCHPAY / MYCOOLPAY ──────────────────────────────────────────────────
+    // Raised at 5xx only, so `INTEGRATION_PREFIXES` files them as `external_service`
+    // and the boundary replaces the message and drops `details`. That is deliberate:
+    // the diagnostics are for our logs, and a provider's own error text is not
+    // something to relay to a shopper.
+    /** The provider answered, and answered non-2xx. */
+    NOTCHPAY_REQUEST_FAILED: 'NOTCHPAY_REQUEST_FAILED',
+    /** The provider did not answer at all — timeout, DNS, connection refused. */
+    NOTCHPAY_UNREACHABLE: 'NOTCHPAY_UNREACHABLE',
+    MYCOOLPAY_REQUEST_FAILED: 'MYCOOLPAY_REQUEST_FAILED',
+    MYCOOLPAY_UNREACHABLE: 'MYCOOLPAY_UNREACHABLE',
 
     // ── REFUND ────────────────────────────────────────────────────────────────
     REFUND_NOT_ELIGIBLE: 'REFUND_NOT_ELIGIBLE',

@@ -8,10 +8,9 @@ import { SubscriberPlanService, subscriberPlanService } from './subscriber-plan.
 import { IPlanPurchase, PlanPurchaseGateway } from '../models/plan-purchase.model';
 import { ISubscriberPlan } from '../models/subscriber-plan.model';
 import { BillingOwnerType } from '../billing.types';
-import { PaymentGateway, PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
-import { NotchPayGateway } from '../../payments/gateways/notchpay.gateway';
-import { MyCoolPayGateway } from '../../payments/gateways/mycoolpay.gateway';
-import { StripeGateway } from '../../payments/gateways/stripe.gateway';
+import { PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
+import { getPaymentGateway } from '../../payments/gateways/registry';
+import { mintMerchantRef } from '../../payments/domain/merchant-reference';
 
 /**
  * PlanPurchaseService - owner SELF-SERVE plan purchase (vendor/agency/agent).
@@ -23,20 +22,12 @@ import { StripeGateway } from '../../payments/gateways/stripe.gateway';
  * row, so completion (verify poll or webhook) needs no owner argument.
  */
 export class PlanPurchaseService {
-  private readonly gateways: Map<PlanPurchaseGateway, PaymentGateway>;
-
   constructor(
     private readonly repo: PlanPurchaseRepository = new PlanPurchaseRepository(),
     private readonly planRepo: PricingPlanRepository = new PricingPlanRepository(),
     private readonly subscriberPlanRepo: SubscriberPlanRepository = new SubscriberPlanRepository(),
     private readonly plans: SubscriberPlanService = subscriberPlanService
-  ) {
-    this.gateways = new Map<PlanPurchaseGateway, PaymentGateway>([
-      ['NOTCHPAY', new NotchPayGateway()],
-      ['MYCOOLPAY', new MyCoolPayGateway()],
-      ['STRIPE', new StripeGateway()],
-    ]);
-  }
+  ) {}
 
   /** Start a plan purchase: validate, create a pending record, open a gateway charge. */
   async initiatePurchase(
@@ -64,10 +55,7 @@ export class PlanPurchaseService {
       );
     }
 
-    const adapter = this.gateways.get(gateway);
-    if (!adapter) {
-      throw createAppError(ERROR_CODES.PAYMENT_GATEWAY_NOT_SUPPORTED, 400, `Unsupported gateway '${gateway}'`);
-    }
+    const adapter = getPaymentGateway(gateway);
 
     // Don't take money we can't apply: only one pending plan may be queued at a time.
     const existingPending = await this.subscriberPlanRepo.findByOwnerAndStatus(
@@ -83,6 +71,10 @@ export class PlanPurchaseService {
       );
     }
 
+    // Minted BEFORE the charge and stored on the row: a mobile-money callback
+    // can arrive before `initiatePayment` returns, and it must find something.
+    const merchantRef = mintMerchantRef('pp');
+
     const purchase = await this.repo.create({
       owner_type: ownerType,
       owner_id: new Types.ObjectId(ownerId),
@@ -92,6 +84,7 @@ export class PlanPurchaseService {
       currency: plan.currency,
       status: 'pending',
       gateway,
+      merchant_ref: merchantRef,
     });
 
     const result = await adapter.initiatePayment({
@@ -100,11 +93,15 @@ export class PlanPurchaseService {
       amount: plan.price,
       currency: plan.currency,
       channel,
+      merchantRef,
       metadata: {
         purpose: 'plan_purchase',
         planId: plan._id.toString(),
         purchaseId: purchase._id.toString(),
         ownerType,
+        // Stripe stamps this into the PaymentIntent's metadata, which is how
+        // its callback reports a merchant reference at all.
+        merchantRef,
       },
     });
 
@@ -141,7 +138,7 @@ export class PlanPurchaseService {
       throw createAppError(ERROR_CODES.BILLING_PURCHASE_INVALID_STATE, 409, 'Purchase has no gateway reference yet');
     }
 
-    const adapter = this.gateways.get(purchase.gateway)!;
+    const adapter = getPaymentGateway(purchase.gateway);
     const verification = await adapter.verifyPayment({ gatewayRef: purchase.gateway_ref });
 
     if (verification.status === 'SUCCEEDED') {
@@ -222,6 +219,27 @@ export class PlanPurchaseService {
     const reversed = (await this.repo.setStatus(purchase._id, 'reversed')) ?? purchase;
     console.log(`[PlanPurchase] Reversed purchase ${purchase._id} (${gatewayRef}); ${purchase.owner_type} downgraded to free`);
     return reversed;
+  }
+
+  /**
+   * Find a purchase by the reference WE minted, so a mobile-money callback can
+   * settle one.
+   *
+   * The `gateway_ref` fallback matters: the callback may beat
+   * `initiatePurchase`'s own `setStatus`, and it may also be for a row created
+   * before `merchant_ref` existed.
+   */
+  async findByReference(merchantRef: string | null, gatewayRef: string): Promise<IPlanPurchase | null> {
+    if (merchantRef) {
+      const byMerchant = await this.repo.findByMerchantRef(merchantRef);
+      if (byMerchant) return byMerchant;
+    }
+    return this.repo.findByGatewayRef(gatewayRef);
+  }
+
+  /** Mark failed from a terminal callback. Never touches a row that already settled. */
+  async failPurchase(purchaseId: string): Promise<void> {
+    await this.repo.failIfPending(purchaseId);
   }
 }
 

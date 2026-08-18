@@ -29,6 +29,7 @@ import { unpaidBookingCancelWorker } from './modules/booking/workers/unpaid-book
 import { bookingReminderWorker } from './modules/booking/workers/booking-reminder.worker';
 import { inboundCalendarSyncWorker } from './modules/booking/workers/inbound-calendar-sync.worker';
 import { codDepositDeadlineWorker } from './modules/cod/workers/cod-deposit-deadline.worker';
+import { paymentReconciliationWorker } from './modules/payments/workers/payment-reconciliation.worker';
 import { registerTrackingEventSubscriber } from './modules/tracking-integration/services/tracking-event-subscriber';
 import { trackingDispatchWorker } from './modules/tracking-integration/workers/tracking-dispatch.worker';
 import { initializeAgentDomain } from './modules/agents';
@@ -185,6 +186,12 @@ async function startServer() {
 
     // COD: daily flagging of agents holding cash past the deposit deadline
     codDepositDeadlineWorker.start();
+
+    // Payments: re-verify mobile-money transactions whose callback never arrived.
+    // A USSD confirmation lands minutes after the request that opened it, by which
+    // time the customer has closed the page — so the callback IS the settlement
+    // path, and a dropped one is money taken for an order that stays unpaid.
+    paymentReconciliationWorker.start();
 
     // Live tracking: write shipment-lifecycle events to the outbox and stream
     // them to the geo-tracker service so it can revoke tracking on completion.

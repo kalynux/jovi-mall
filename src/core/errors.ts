@@ -120,6 +120,22 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.PAYMENT_GATEWAY_NOT_IMPLEMENTED]: 'Payment gateway not yet implemented',
     [ERROR_CODES.PAYMENT_CARD_DECLINED]: 'Card was declined',
     [ERROR_CODES.STRIPE_WEBHOOK_SIGNATURE_INVALID]: 'Stripe webhook signature verification failed',
+    [ERROR_CODES.PAYMENT_OPERATOR_UNDETERMINED]:
+        'We could not tell which mobile network this number belongs to. Please choose MTN or Orange.',
+    [ERROR_CODES.PAYMENT_CURRENCY_NOT_SUPPORTED]: 'This currency cannot be charged by mobile money',
+    [ERROR_CODES.PAYMENT_WEBHOOK_AMOUNT_MISMATCH]:
+        'The confirmed amount does not match the amount recorded for this payment',
+    [ERROR_CODES.PAYMENT_OTP_INVALID]: 'That confirmation code is not correct',
+    [ERROR_CODES.PAYMENT_OTP_NOT_REQUIRED]: 'This payment is not waiting for a confirmation code',
+    [ERROR_CODES.PAYMENT_OTP_ATTEMPTS_EXCEEDED]:
+        'Too many incorrect confirmation codes. Please start the payment again.',
+
+    // The four below are `external_service`, so THESE strings are what the client
+    // receives — the thrown message and `details` are dropped at the boundary.
+    [ERROR_CODES.NOTCHPAY_REQUEST_FAILED]: 'The mobile money provider rejected this request',
+    [ERROR_CODES.NOTCHPAY_UNREACHABLE]: 'The mobile money provider could not be reached',
+    [ERROR_CODES.MYCOOLPAY_REQUEST_FAILED]: 'The mobile money provider rejected this request',
+    [ERROR_CODES.MYCOOLPAY_UNREACHABLE]: 'The mobile money provider could not be reached',
 
     [ERROR_CODES.BOOKING_NOT_FOUND]: 'Booking not found',
     [ERROR_CODES.BOOKING_INVALID_STATUS_TRANSITION]: 'Invalid status transition',

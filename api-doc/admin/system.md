@@ -116,16 +116,25 @@ with no side effect, which is better than a probe could have told them.
 | WhatsApp | `never` | Sending is a message to a real person and costs money |
 | FCM | `never` | A probe mints an OAuth token against Google |
 | Google Calendar | `never` | No service-level probe exists — authorization is per vendor. Reports two free Mongo counts instead: connected vendors, and vendors whose token last failed to refresh |
-| NotchPay / MyCoolPay | `never` | **Not implemented** — see below |
+| NotchPay / My-CoolPay | `passive` | Reports what real traffic last learned. Not probed: mobile money is the primary rail here, so genuine calls are frequent and a synthetic one would only add load to a live merchant account |
 
-> ⚠ **NotchPay and MyCoolPay report `configured: false` even with an API key set, and that is
-> deliberate.** Both gateways are placeholders: `callNotchPayAPI` / `callMyCoolPayAPI` contain a
-> commented-out `fetch` and end in a throw. Unkeyed they return a **mock success**, so a checkout
-> appears to start and hands the customer a fake USSD code while no money moves; keyed, every call
-> throws. `configured` has to mean "this payment path works", because that is what an operator
-> reads it as. They are also deliberately **not** wired to the passive-observation recorder —
-> recording a mock as a successful call would make this page vouch for a payment path that does
-> not exist.
+> ⚠ **`configured` requires the CALLBACK credential, not just the calling one.**
+>
+> Both gateways were placeholders until Phase 1 and reported a hardcoded `configured: false` even
+> with a key present — correct at the time, because the adapters made no HTTP call at all. They
+> are real now, and the bar has not moved: `configured` still means "this payment path works",
+> because that is what an operator reads it as.
+>
+> So NotchPay needs its **Hash Key** (`NOTCHPAY_WEBHOOK_SECRET`) as well as its public key, and
+> My-CoolPay needs its **private key** as well as its public one. A gateway that can take money
+> and cannot authenticate the confirmation charges customers and settles nothing — reporting that
+> as configured is the confidently-wrong signal this surface exists to eliminate. `env.ts`
+> refuses the boot on either combination for the same reason.
+>
+> `detail` reports the credentials separately, so a half-configured gateway is diagnosable:
+> `privateKeySet: false` on NotchPay means collection works and refunds will refuse.
+> `refundSupported: false` on My-CoolPay is not a misconfiguration — that provider has no refund
+> endpoint at all.
 
 ---
 
@@ -178,9 +187,14 @@ number, and rendering 100% would be actively misleading.
 
 ## `GET /workers`
 
-All **thirteen** workers — the twelve triggerable ones in `WORKER_REGISTRY` plus
+All **fourteen** workers — the thirteen triggerable ones in `WORKER_REGISTRY` plus
 `inbound-calendar-sync`, which is observable but not runnable — with **three distinct booleans**
 rather than one:
+
+> The fourteenth is **`payment-reconciliation`**, added in Phase 1: it re-verifies mobile-money
+> transactions (and pending plan purchases and credit top-ups) whose gateway callback never
+> arrived. Its `runOnce` returns a **count**, and `null` from it means the pass was *refused by
+> the worker lock* — a different statement from `0`, which means nothing was due.
 
 | field | means |
 |---|---|
@@ -282,13 +296,14 @@ a published event nobody handles collapses to `unhandled`, which is itself a use
   > needs a global Mongoose plugin registered before the first `model()` call, which is a
   > bootstrap-ordering change across 182 models; it is a named debt in ADR-015, not done here.
 
-- `jovimall_worker_*` — **four of thirteen workers are instrumented on their scheduled path**:
+- `jovimall_worker_*` — **four of fourteen workers are instrumented on their scheduled path**:
   `tracking-dispatch`, `assignment-sweep`, `earnings-release` and `analytics-aggregation`. Every
   manual `POST /dev-tools/workers/:key/run` is instrumented too, for any worker, so a manually
-  triggered sweep of the other nine does report. The first three are the ones whose silent stall
+  triggered sweep of the other ten does report. The first three are the ones whose silent stall
   is most expensive (a delivered shipment still broadcasting, shipments sitting on offer forever,
   and money not released); `analytics-aggregation` is instrumented because Phase 15 built its
-  scheduler. The other nine report nothing on their scheduled path, so
+  scheduler. The other ten — `payment-reconciliation` among them — report nothing on their
+  scheduled path, so
   `time() - jovimall_worker_last_success_timestamp_seconds > 86400` is a valid alert **for the
   instrumented workers only**. These instruments were declared in Phase 14 and incremented by
   nothing at all until Phase 15. A pass refused by the overlap lock records

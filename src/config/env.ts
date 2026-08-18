@@ -160,6 +160,10 @@ const INTEGER_VARS: readonly string[] = Object.freeze([
     'RATE_LIMIT_PUBLIC_PER_MIN',
     // Orders
     'UNPAID_ORDER_CANCEL_BATCH_SIZE',
+    // Payments
+    'NOTCHPAY_REQUEST_TIMEOUT_MS', 'MYCOOLPAY_REQUEST_TIMEOUT_MS',
+    'PAYMENT_RECONCILE_MIN_AGE_MINUTES', 'PAYMENT_RECONCILE_MAX_AGE_HOURS',
+    'PAYMENT_RECONCILE_BATCH_SIZE', 'PAYMENT_OTP_MAX_ATTEMPTS',
 ]);
 
 /** Variables read as a float (weights, scores, distances). */
@@ -197,6 +201,7 @@ const BOOLEAN_VARS: readonly string[] = Object.freeze([
     'UPLOAD_OBSERVABILITY_ENABLED',
     'HEALTH_READY_REQUIRE_REDIS', 'METRICS_ENABLED',
     'LOG_CONSOLE_BRIDGE', 'LOG_STDOUT', 'LOG_HTTP_ACCESS', 'LOG_PERSIST_ENABLED',
+    'MYCOOLPAY_VERIFY_CALLBACK_IP', 'NOTCHPAY_REFUNDS_ENABLED',
 ]);
 
 const BOOLEAN_LITERALS = new Set(['true', 'false', '1', '0']);
@@ -255,6 +260,16 @@ const RENAMED_VARS: Readonly<Record<string, string>> = Object.freeze({
     // the `/system/config` wiring probe, so setting it alone yields a clean boot against
     // localhost — the emptiest possible production database.
     MONGODB_URI: 'MONGO_URI',
+    // The mobile-money gateways each carry more than one key now, so a single
+    // `*_API_KEY` cannot say which. NotchPay's is the public key (`Authorization`);
+    // My-CoolPay's goes in the URL path.
+    NOTCHPAY_API_KEY: 'NOTCHPAY_PUBLIC_KEY',
+    MYCOOLPAY_API_KEY: 'MYCOOLPAY_PUBLIC_KEY',
+    // My-CoolPay has no separate webhook credential: its callback signature is MD5
+    // keyed by the PRIVATE key. This name was documented for a while and read by
+    // nothing, which is exactly the trap `test:env`'s two-directional census exists
+    // to catch.
+    MYCOOLPAY_WEBHOOK_SECRET: 'MYCOOLPAY_PRIVATE_KEY',
 });
 
 /**
@@ -426,10 +441,27 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
     if (isProduction && get('STRIPE_SECRET_KEY')?.startsWith('sk_test_')) {
         warn('STRIPE_SECRET_KEY', 'is a test-mode key in production. No card will actually be charged.');
     }
-    for (const gateway of ['NOTCHPAY', 'MYCOOLPAY'] as const) {
-        if (has(`${gateway}_API_KEY`) && !has(`${gateway}_WEBHOOK_SECRET`)) {
-            warn(`${gateway}_WEBHOOK_SECRET`, `is not set while ${gateway}_API_KEY is. Signature verification on that gateway's webhook is commented out in webhook.routes.ts, so the callback is currently accepted unverified.`);
-        }
+    // NotchPay carries THREE distinct keys with three distinct jobs. The public key
+    // authenticates our calls, the private key is the X-Grant credential refunds need,
+    // and the Hash Key verifies inbound callbacks. They are not interchangeable, and the
+    // wrong one in the wrong variable fails in a way that reads as a network fault.
+    //
+    // This used to be a `warn`, on the honest grounds that verification was commented out
+    // and the callback was accepted unverified either way. It is now an `err`, matching
+    // STRIPE_WEBHOOK_SECRET above: with verification in place, a gateway configured to
+    // take money whose callbacks we cannot authenticate is a gateway that charges
+    // customers and settles nothing.
+    if (has('NOTCHPAY_PUBLIC_KEY') && !has('NOTCHPAY_WEBHOOK_SECRET')) {
+        err('NOTCHPAY_WEBHOOK_SECRET', 'is required whenever NOTCHPAY_PUBLIC_KEY is set. It is the dashboard\'s Hash Key (hsk_…), NOT the private key. Without it every NotchPay callback is refused, so customers are charged and their orders stay unpaid.');
+    }
+    if (has('NOTCHPAY_PUBLIC_KEY') && !has('NOTCHPAY_PRIVATE_KEY')) {
+        warn('NOTCHPAY_PRIVATE_KEY', 'is not set while NOTCHPAY_PUBLIC_KEY is. Collection works; the X-Grant header it supplies is only needed for refunds, which will refuse until it is set.');
+    }
+    // My-CoolPay signs its callbacks with the PRIVATE key — there is no separate webhook
+    // secret, which is why MYCOOLPAY_WEBHOOK_SECRET was documented for a while and read by
+    // nothing. It is listed in RENAMED_VARS so an operator who set it is told.
+    if (has('MYCOOLPAY_PUBLIC_KEY') && !has('MYCOOLPAY_PRIVATE_KEY')) {
+        err('MYCOOLPAY_PRIVATE_KEY', 'is required whenever MYCOOLPAY_PUBLIC_KEY is set. It signs the callback (MD5 over six concatenated fields), so without it every My-CoolPay callback is refused and no mobile-money payment through that gateway ever settles.');
     }
 
     // ── geo-tracker ──────────────────────────────────────────────────────────

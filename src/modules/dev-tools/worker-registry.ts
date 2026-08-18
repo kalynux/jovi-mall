@@ -7,6 +7,7 @@ import { unpaidOrderCancelWorker } from '../orders/workers/unpaid-order-cancel.w
 import { unpaidBookingCancelWorker } from '../booking/workers/unpaid-booking-cancel.worker';
 import { bookingReminderWorker } from '../booking/workers/booking-reminder.worker';
 import { inboundCalendarSyncWorker } from '../booking/workers/inbound-calendar-sync.worker';
+import { paymentReconciliationWorker } from '../payments/workers/payment-reconciliation.worker';
 import { codDepositDeadlineWorker } from '../cod/workers/cod-deposit-deadline.worker';
 import { trackingDispatchWorker } from '../tracking-integration/workers/tracking-dispatch.worker';
 import { agentCapacityReconcileWorker } from '../agents/workers/agent-capacity-reconcile.worker';
@@ -168,6 +169,13 @@ export const WORKER_REGISTRY = Object.freeze({
         label: 'Unpaid booking cancellation',
         worker: unpaidBookingCancelWorker,
         runOnce: () => runCountedSweep(() => unpaidBookingCancelWorker.sweep()),
+    },
+    'payment-reconciliation': {
+        label: 'Payment reconciliation',
+        worker: paymentReconciliationWorker,
+        // Counted, and the `null` matters: it means the pass was REFUSED by the
+        // lock, which is a different statement from `0` ("nothing was due").
+        runOnce: () => runCountedSweep(() => paymentReconciliationWorker.runSweep()),
     },
     'booking-reminder': {
         label: 'Booking reminders',

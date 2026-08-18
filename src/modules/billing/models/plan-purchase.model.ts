@@ -25,6 +25,8 @@ export interface IPlanPurchase extends Document {
   status: PlanPurchaseStatus;
   gateway: PlanPurchaseGateway | null;
   gateway_ref: string | null;
+  /** OUR reference, echoed back on the callback. See the note on ICreditTopup.merchant_ref. */
+  merchant_ref: string | null;
   /** The SubscriberPlan created when this purchase was applied (null until paid+applied). */
   subscriber_plan_id: mongoose.Types.ObjectId | null;
   created_at: Date;
@@ -42,6 +44,7 @@ const PlanPurchaseSchema = new Schema<IPlanPurchase>(
     status: { type: String, enum: ['pending', 'paid', 'failed', 'reversed'], default: 'pending' },
     gateway: { type: String, enum: ['NOTCHPAY', 'MYCOOLPAY', 'STRIPE'], default: null },
     gateway_ref: { type: String, default: null },
+    merchant_ref: { type: String, default: null, unique: true, sparse: true, index: true },
     subscriber_plan_id: { type: Schema.Types.ObjectId, ref: MODELS.SUBSCRIBER_PLAN, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }

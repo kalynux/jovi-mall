@@ -1199,7 +1199,11 @@ assert('the limit is clamped to the ceiling', () => {
 
 section('Worker inventory — the thirteenth worker was invisible to every surface');
 
-assert('the inventory now holds 13 workers', () => WORKER_INVENTORY.length === 13);
+// 14 since Phase 1 added PaymentReconciliationWorker — the sweep that closes a
+// mobile-money payment whose callback never arrived. The count is hardcoded on
+// purpose: a worker added without an inventory entry is invisible to every
+// operations surface, which is the defect this section was written about.
+assert('the inventory now holds 14 workers', () => WORKER_INVENTORY.length === 14);
 
 assert('analytics-aggregation is registered AND triggerable', () =>
     WORKER_KEYS.includes('analytics-aggregation' as never)
@@ -1238,8 +1242,8 @@ const WORKER_SOURCES = [
         readFileSync(join(SRC, 'core', 'jobs', 'aggregation-scheduler.ts'), 'utf8')) },
 ];
 
-assert('the scan sees every worker file — 12 module workers plus the scheduler', () =>
-    WORKER_SOURCES.length === 13);
+assert('the scan sees every worker file — 13 module workers plus the scheduler', () =>
+    WORKER_SOURCES.length === 14);
 
 assert('EVERY worker routes its pass through withWorkerLock', () => {
     const missing = WORKER_SOURCES.filter(({ code }) => !code.includes('withWorkerLock('));
