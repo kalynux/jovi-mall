@@ -1279,6 +1279,100 @@ assert('no worker derives `executing` from the lock', () =>
     WORKER_SOURCES.every(({ code }) =>
         !/get executing[\s\S]{0,120}(locksHeldInProcess|withWorkerLock)/.test(code)));
 
+// ═══ Graceful shutdown (plan step 2.A) ════════════════════════════════════════
+
+/**
+ * The drain stops workers by ITERATING the inventory, so what has to be asserted is that the
+ * inventory is COMPLETE — not that some stop list is.
+ *
+ * `ObservableWorker` now declares `stop()`, so "every inventoried worker can be stopped" is a
+ * compile error the moment it stops being true and needs no test here. The gap the type system
+ * cannot see is a worker that EXISTS and was never inventoried — and that is not hypothetical:
+ * `AssignmentSweepWorker` sat in exactly that state for a phase, because the registry was
+ * written from `server.ts`'s import block and that worker starts indirectly through
+ * `initializeShipmentAssignment()`.
+ *
+ * Uninventoried now means unstopped, and an unstopped sweep outlives the drain — holding a
+ * Redis lock, writing to a connection that is closing.
+ */
+section('Graceful shutdown — the inventory IS the stop list, so it must be complete');
+
+assert('every worker source file has an inventory entry — the counts are coupled', () =>
+    WORKER_SOURCES.length === WORKER_INVENTORY.length);
+
+/**
+ * And by name, not only by count: two workers added and one entry deleted keeps the numbers
+ * equal while leaving one of them unstopped.
+ */
+assert('the registry imports a singleton from every worker source file', () => {
+    const registry = readFileSync(join(SRC, 'modules', 'dev-tools', 'worker-registry.ts'), 'utf8');
+    const orphans = WORKER_SOURCES.filter(({ code }) => {
+        const singletons = [...code.matchAll(/export const (\w*[Ww]orker)\b/g)].map((m) => m[1]);
+        return singletons.length > 0 && !singletons.some((name) => registry.includes(name));
+    });
+    if (orphans.length > 0) {
+        originalConsole.log('    not reachable from the registry:', orphans.map((o) => o.file));
+    }
+    return orphans.length === 0;
+});
+
+/**
+ * The drain's ORDER, asserted from source because getting it wrong is invisible in a passing
+ * boot. A timer that fires after Mongo closes throws inside a callback with no handler above
+ * it, which takes the process down MID-DRAIN — turning the clean shutdown into the abrupt one
+ * it exists to prevent.
+ */
+const LIFECYCLE_SRC = stripComments(readFileSync(join(SRC, 'lifecycle.ts'), 'utf8'));
+
+assert('drain() stops the workers BEFORE it disconnects Mongo', () => {
+    const stop = LIFECYCLE_SRC.indexOf('stopAllWorkers(');
+    const disconnect = LIFECYCLE_SRC.indexOf('mongoose.disconnect(');
+    return stop > -1 && disconnect > -1 && stop < disconnect;
+});
+
+assert('drain() flushes the log sink BEFORE Mongo closes — that sink writes to Mongo', () => {
+    const flush = LIFECYCLE_SRC.indexOf('logMongoSink.flush(');
+    const disconnect = LIFECYCLE_SRC.indexOf('mongoose.disconnect(');
+    return flush > -1 && disconnect > -1 && flush < disconnect;
+});
+
+/**
+ * `server.close()` alone waits for every open socket, and a keep-alive socket idling between
+ * requests never closes on its own — so without this the drain reliably hits its deadline and
+ * force-exits, which is the abrupt termination again, arrived at slowly.
+ */
+assert('the listener is closed with closeIdleConnections()', () =>
+    LIFECYCLE_SRC.includes('closeIdleConnections('));
+
+assert('the keep-alive headers timeout EXCEEDS the keep-alive timeout', () => {
+    const keepAlive = /keepAliveTimeout\s*=\s*([\d_]+)/.exec(LIFECYCLE_SRC);
+    const headers = /headersTimeout\s*=\s*([\d_]+)/.exec(LIFECYCLE_SRC);
+    if (!keepAlive || !headers) return false;
+    return Number(headers[1].replace(/_/g, '')) > Number(keepAlive[1].replace(/_/g, ''));
+});
+
+/**
+ * Exactly one place in `src/` handles a signal.
+ *
+ * Two partial handlers used to exist — the log sink's `SIGTERM` flush and the calendar
+ * worker's self-stop. Once a real drain exists those are not a partial version of it but a
+ * RACE against it: both fire concurrently, and the first lands a Mongo write on the connection
+ * the drain is closing.
+ *
+ * `beforeExit` is deliberately not scanned. It cannot fire on a signal or on `process.exit()`,
+ * so it covers the one way out that `lifecycle.ts` never sees.
+ */
+assert('lifecycle.ts is the ONLY signal handler in src/', () => {
+    const offenders = readSources(SRC).filter(({ file, code }) =>
+        !file.endsWith('lifecycle.ts')
+        && /process\.(on|once)\(\s*['"]SIG(TERM|INT)['"]/.test(code));
+    if (offenders.length > 0) {
+        originalConsole.log('    competing handler:', offenders.map((o) => o.file));
+    }
+    return offenders.length === 0;
+});
+
+
 void (async () => {
     // The in-process floor, proven without a Redis to talk to. See `redisLayerEnabled`.
     process.env.WORKER_LOCK_REDIS = 'false';

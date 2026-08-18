@@ -89,4 +89,21 @@ export const SYSTEM_CONFIG = Object.freeze({
   /** How long a scraped outbox-depth aggregation may be reused. See `metrics.ts`. */
   METRICS_COLLECT_CACHE_MS: intEnv('METRICS_COLLECT_CACHE_MS', 10_000),
   METRICS_COLLECT_TIMEOUT_MS: intEnv('METRICS_COLLECT_TIMEOUT_MS', 2000),
+
+  /**
+   * Hard deadline on the whole drain, after which the process exits non-zero regardless.
+   *
+   * A shutdown that can hang is not a graceful one — an orchestrator waiting on a stuck
+   * `server.close()` eventually SIGKILLs, which is the abrupt termination the drain exists to
+   * avoid, arrived at slowly. The budget covers every stage: stopping fourteen workers,
+   * draining in-flight requests, waiting for a sweep's Redis lock, flushing the log sink and
+   * closing both databases.
+   *
+   * 10 s matches wi-admin's `SHUTDOWN_TIMEOUT_MS` and sits inside Docker's default 10 s
+   * `stop_grace_period` — raise BOTH together or the orchestrator's kill lands first and the
+   * larger number buys nothing. `EARNINGS_RELEASE` and `COD_DEPOSIT_DEADLINE` sweeps can run
+   * longer than this; that is what the Redis `PX` backstop in `worker-lock.ts` is for, and
+   * the drain says which keys it left held.
+   */
+  SHUTDOWN_TIMEOUT_MS: intEnv('SHUTDOWN_TIMEOUT_MS', 10_000),
 });

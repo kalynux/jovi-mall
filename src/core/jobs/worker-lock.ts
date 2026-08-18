@@ -137,6 +137,43 @@ export function locksHeldInProcess(): string[] {
     return [...heldInProcess].sort();
 }
 
+/**
+ * Wait, bounded, for every in-flight sweep in this process to finish. Called by the drain.
+ *
+ * ── Why this is a WAIT and not a release ─────────────────────────────────────
+ * The obvious shutdown fix is "release the locks we hold". It is the wrong one here, twice
+ * over. `withWorkerLock` keeps its Redis token in a closure and exposes no release-by-key, so
+ * a release path means a module-level token map — and a map is releasable by a caller that is
+ * not the holder, which is precisely what the Lua compare-and-swap in this file exists to
+ * prevent. Worse, releasing a lock whose sweep is still running invites the next instance to
+ * start a second concurrent pass over the same earnings rows, which is F-19 reintroduced by
+ * the code that was meant to be tidying up after it.
+ *
+ * So the drain waits instead, and the sweep's own `finally` does the compare-and-delete it
+ * already does. Nothing new can start — `stopAllWorkers()` has already run, so there are no
+ * timers left to fire.
+ *
+ * ── The timeout is not a failure path ────────────────────────────────────────
+ * Returning `false` means a sweep outlasted the budget, and the Redis `PX` is the backstop
+ * for exactly that: the key expires and the next instance proceeds. The cost is a delay
+ * bounded by the TTL, not a stuck lock. The caller logs which keys were still held, because
+ * "shut down while earnings-release was mid-pass" is the sentence somebody needs when they
+ * read the next instance's skip.
+ *
+ * @returns true if everything finished within the budget.
+ */
+export async function awaitWorkerLocksReleased(timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (heldInProcess.size > 0) {
+        if (Date.now() >= deadline) return false;
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
+    return true;
+}
+
+/** Poll cadence for the drain's wait. Short enough not to add meaningfully to a clean shutdown. */
+const POLL_INTERVAL_MS = 100;
+
 function markRedisDown(context: string, error: unknown): void {
     const wasUp = redisUnavailableUntil === 0;
     redisUnavailableUntil = Date.now() + REDIS_BACKOFF_MS;

@@ -350,3 +350,39 @@ export function releaseWorker(key: WorkerKey): void {
 export function manuallyClaimedWorkers(): WorkerKey[] {
     return [...claimed];
 }
+
+/**
+ * Stop every worker this process started, for `lifecycle.ts`'s drain.
+ *
+ * ── Why it iterates the inventory rather than naming fourteen singletons ──────
+ * Because the list has already been wrong. `AssignmentSweepWorker` was absent from the
+ * registry for a whole phase — the list was written from `server.ts`'s import block and that
+ * worker starts indirectly, through `initializeShipmentAssignment()` — so the only thing
+ * advancing auto-assignment sessions was invisible from every angle. A hand-written stop list
+ * would reproduce that failure with a worse consequence: a sweep that outlives its process,
+ * holding a `withWorkerLock` claim, writing to a Mongo connection the drain is closing.
+ *
+ * Since `ObservableWorker` now declares `stop()`, this is a loop and a fifteenth worker is
+ * covered the moment it is inventoried. `test:system` asserts that every `*.worker.ts` and both
+ * schedulers ARE inventoried, which is the other half of the guarantee.
+ *
+ * ── `allSettled`, not `all` ──────────────────────────────────────────────────
+ * One worker throwing out of `stop()` must not leave the other thirteen running. Every
+ * rejection is reported and the drain continues; there is nothing useful to do with a failed
+ * stop except say so, and the process is about to exit regardless.
+ */
+export async function stopAllWorkers(): Promise<{ stopped: number; failed: string[] }> {
+    const results = await Promise.allSettled(
+        WORKER_INVENTORY.map(async (entry) => {
+            await entry.worker.stop();
+            return entry.key;
+        }),
+    );
+
+    const failed: string[] = [];
+    results.forEach((result, index) => {
+        if (result.status === 'rejected') failed.push(WORKER_INVENTORY[index].key);
+    });
+
+    return { stopped: results.length - failed.length, failed };
+}

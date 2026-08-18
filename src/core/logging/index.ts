@@ -70,16 +70,26 @@ export async function enableLogPersistence(): Promise<void> {
     await logMongoSink.enable();
 
     /**
-     * The log subsystem flushes its OWN buffer on the way out. It is deliberately not a
-     * graceful-shutdown path: nothing here stops the listener, the thirteen timers, or Mongo.
-     * Wiring those is its own change with its own ordering argument (ADR-015, debts).
+     * The backstop flush, for the ways out that do NOT go through `drain()`.
+     *
+     * `lifecycle.ts` now owns the ordered shutdown and flushes this sink itself — after the
+     * workers stop and **before** `mongoose.disconnect()`, because this sink writes to Mongo
+     * and a flush issued after the connection closes discards the buffer it was called to save.
+     *
+     * There used to be a `process.once('SIGTERM', …)` here as well, from when nothing else
+     * handled the signal. It is gone: with a real drain in place a second SIGTERM listener is
+     * not a safety net, it is a race — it fires concurrently with the drain and lands on a
+     * connection the drain is closing, which is the one outcome both are trying to avoid.
+     *
+     * `beforeExit` stays. It does not fire on a signal or on `process.exit()`, so it cannot
+     * race the drain; it fires when the event loop empties on its own, which is a path
+     * `lifecycle.ts` never sees.
      */
     const onExit = (): void => {
         void logMongoSink.flush().catch(() => {
             /* best effort, by definition */
         });
     };
-    process.once('SIGTERM', onExit);
     process.once('beforeExit', onExit);
 
     const facts = logMongoSink.describe();

@@ -72,6 +72,25 @@ export interface ObservableWorker {
   readonly executing: boolean;
   /** False when a config switch turns this worker off entirely — never confuse with "idle". */
   readonly enabled: boolean;
+  /**
+   * Halt the timer or cron task. Idempotent — a second call on a stopped worker does nothing.
+   *
+   * ── Why this is on the INTERFACE and not a list somewhere ─────────────────
+   * Every worker already had one. What did not exist was anywhere that said so, so
+   * "every worker can be stopped" was true by accident, and `lifecycle.ts`'s drain would
+   * have had to keep a hand-written list of fourteen — the exact shape of duplicated fact
+   * this file's header objects to about `schedule` strings, and the shape that let
+   * `AssignmentSweepWorker` go missing from the registry for a whole phase.
+   *
+   * Declared here, `stopAllWorkers()` is a loop over `WORKER_INVENTORY` and a worker that
+   * loses its `stop()` is a compile error rather than a sweep that outlives its process.
+   *
+   * The return type is a union because `InboundCalendarSyncWorker` awaits an in-flight sync
+   * pass before clearing its two intervals; the other thirteen clear a handle synchronously.
+   * Callers must `await` regardless — a `void` is trivially awaitable and pretending
+   * otherwise would make the one asynchronous stop silently non-blocking.
+   */
+  stop(): void | Promise<void>;
 }
 
 const CRON_FIELD_NAMES = ['minute', 'hour', 'day-of-month', 'month', 'day-of-week'] as const;

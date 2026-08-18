@@ -164,6 +164,8 @@ const INTEGER_VARS: readonly string[] = Object.freeze([
     'NOTCHPAY_REQUEST_TIMEOUT_MS', 'MYCOOLPAY_REQUEST_TIMEOUT_MS',
     'PAYMENT_RECONCILE_MIN_AGE_MINUTES', 'PAYMENT_RECONCILE_MAX_AGE_HOURS',
     'PAYMENT_RECONCILE_BATCH_SIZE', 'PAYMENT_OTP_MAX_ATTEMPTS',
+    // Lifecycle
+    'SHUTDOWN_TIMEOUT_MS',
 ]);
 
 /** Variables read as a float (weights, scores, distances). */

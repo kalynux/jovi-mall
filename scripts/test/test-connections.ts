@@ -569,9 +569,12 @@ async function main(): Promise<void> {
     /if \(!expected\)[\s\S]*NODE_ENV === 'production'[\s\S]*WEBHOOK_SECRET_INVALID/.test(guard));
   assert('development stays open, so the guard is not something people disable', () =>
     /return next\(\);\s*\r?\n\s*\}/.test(guard));
+  // `lifecycle.ts`, not `server.ts`: plan step 2.A moved the boot sequence out so the drain
+  // could be exported and called directly (Windows delivers no SIGTERM to a child process).
+  // `server.ts` is now a three-line entrypoint.
   assert('the guard state is reported at boot', () => {
-    const server = read('server.ts');
-    return server.includes('reportBotWebhookGuard');
+    const boot = read('lifecycle.ts');
+    return boot.includes('reportBotWebhookGuard');
   });
 
   // ─────────────────────────────────────────────────────────────────────────

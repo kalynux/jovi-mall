@@ -205,6 +205,14 @@ npm run test:system                            # worker schedules, maintenance e
                                                # ring buffer, console bridge, exposed-config whitelist,
                                                # index-drift diff, prune policy and the safe-execution
                                                # source scan (175, no DB needed)
+npm run verify:shutdown                        # the graceful drain against a real boot (13) — NEEDS
+                                               # Mongo. Boots a full instance on its OWN port (8922,
+                                               # SHUTDOWN_VERIFY_PORT) so it runs while `npm run dev`
+                                               # is up, holds a request open ACROSS the drain and
+                                               # asserts it completed rather than being truncated —
+                                               # the one thing test:system's source scan cannot see.
+                                               # It calls drain() directly because Windows cannot
+                                               # deliver a SIGTERM to a child process at all
 npm run verify:logs                            # the logging sink against real Mongo (18) — proves the
                                                # collection is genuinely CAPPED, $collStats is permitted
                                                # here, and the warn+ level floor is enforced. NEEDS Mongo
@@ -400,12 +408,53 @@ read through a config helper. The template's storage block additionally named va
 configured object storage and every upload went to a container disk wiped on restart —
 `RENAMED_VARS` in the validator now names each one.
 
-### Startup composition (`src/server.ts`)
-Background workers/consumers register at boot, all after the Mongo connection: aggregation scheduler, plan-expiry worker + notification consumer, vendor / agency / **agent** notification consumers, file-cleanup, earnings-release, unpaid-order-cancel, COD deposit-deadline, and the tracking event subscriber + dispatch worker. A feature that needs periodic sweeps registers here; sub-minute cadences use `setInterval`, daily ones use `node-cron`.
+### Startup composition and shutdown (`src/lifecycle.ts`)
 
-Two things now run **before the listener opens**: `initializeMetrics()` (the private Prometheus registry, plus the Redis error sink) and `primeMaintenanceState()`. The second is load-bearing — an instance starting during a maintenance window must come up already closed, or a rolling deploy serves one full cache window of writes against a platform that is supposed to be shut.
+⚠ **Boot lives in `src/lifecycle.ts`, not `server.ts`.** `server.ts` is now a three-line
+entrypoint whose only jobs are to evaluate `dotenv/config` above the module graph and to register
+the signal handlers before the boot begins.
 
-**Register the singleton, never `new` a worker inline.** `server.ts` used to do `new InboundCalendarSyncWorker().start()`, which left the running worker unreachable by anything else: the operations surface could not report on it even in principle, and `stop()` could never reach the instance that was actually scheduled. Every worker now exports a singleton and `server.ts` starts that.
+Background workers/consumers register at boot, all after the Mongo connection: aggregation scheduler, plan-expiry worker + notification consumer, vendor / agency / **agent** notification consumers, file-cleanup, earnings-release, unpaid-order-cancel, COD deposit-deadline, payment reconciliation, and the tracking event subscriber + dispatch worker. A feature that needs periodic sweeps registers in `startBackgroundWork()`; sub-minute cadences use `setInterval`, daily ones use `node-cron`.
+
+Two things run **before the listener opens**: `initializeMetrics()` (the private Prometheus registry, plus the Redis error sink) and `primeMaintenanceState()`. The second is load-bearing — an instance starting during a maintenance window must come up already closed, or a rolling deploy serves one full cache window of writes against a platform that is supposed to be shut.
+
+**Register the singleton, never `new` a worker inline.** The boot used to do `new InboundCalendarSyncWorker().start()`, which left the running worker unreachable by anything else: the operations surface could not report on it even in principle, and `stop()` could never reach the instance that was actually scheduled. Every worker now exports a singleton and `startBackgroundWork()` starts that.
+
+**`drain()` is the ordered shutdown, and it is EXPORTED for a reason.** Windows cannot deliver a
+real `SIGTERM` to a child process — Node maps `child.kill('SIGTERM')` onto `TerminateProcess`, an
+uncatchable hard kill — so a shutdown reachable only through a signal handler would be untestable
+on the development machine and first exercised in production. `npm run verify:shutdown` calls it
+directly (13 assertions, NEEDS Mongo), including the one no source scan can make: that a request
+in flight when the drain starts **completes** rather than being truncated.
+
+The order is load-bearing, and `test:system` asserts it from source:
+
+1. **`stopAllWorkers()` first, before Mongo closes.** A tick in flight when the connection goes
+   away throws inside a timer callback — the one place with no handler above it — so an unhandled
+   rejection there takes the process down MID-DRAIN.
+2. **`server.close()` + `closeIdleConnections()`.** Without the second, `close()` waits on every
+   idle keep-alive socket and the drain reliably hits its deadline.
+3. **Wait for in-flight sweeps** (`awaitWorkerLocksReleased`) — a bounded WAIT, deliberately not a
+   lock release. `withWorkerLock` holds its token in a closure, and a release-by-key would let a
+   caller that is not the holder free a lock whose sweep is still writing. The Redis `PX` is the
+   backstop, and the drain logs which keys it left held.
+4. **Flush the log sink**, which writes to Mongo, so it must precede the disconnect.
+5. **Mongo, then Redis.**
+
+`stopAllWorkers()` **iterates `WORKER_INVENTORY`** rather than naming fourteen singletons —
+`ObservableWorker` declares `stop()`, so a worker that loses one is a compile error, and
+`test:system` couples the inventory's size to the count of `*.worker.ts` files so an
+uninventoried worker fails rather than silently outliving the process. That is the same defect
+`AssignmentSweepWorker` already had once.
+
+⚠ **`lifecycle.ts` is the ONLY place in `src/` that may handle a signal**, and `test:system`
+scans for it. Two partial handlers used to exist — the log sink's `SIGTERM` flush and the calendar
+worker's self-stop — and once a real drain exists those are not a partial version of it but a
+**race** against it: both fire concurrently, and the first lands a Mongo write on the connection
+the drain is closing. `beforeExit` is exempt (it cannot fire on a signal or on `process.exit()`).
+
+`SHUTDOWN_TIMEOUT_MS` (default 10 000) is the hard deadline, and it must be raised together with
+Docker's `stop_grace_period` or the orchestrator's SIGKILL lands first.
 
 ### System operations (`src/modules/system/`)
 The operator surface, split across two mounts by what it does rather than by convention:
@@ -1245,7 +1294,7 @@ Services never enter the cart; they are booked. Availability → 15-min Redis ho
 **The booking rows are the authority on a product's own occupancy, not Google Calendar.** This is the load-bearing rule. Availability previously derived busy time from the calendar alone, so a `manual` booking — which writes no calendar event until the vendor accepts it — never blocked its own slot and the same hour could be sold without limit. `ProductBookingService.getAvailability` now subtracts `fullWindows(bookedWindows, seats)` for **every** mode; the calendar only ever *adds* the vendor's other commitments on top. Consequences that follow, and must not be "simplified" back:
 
 - Calendar writes are **best-effort everywhere** (create, reschedule, capacity). A Google outage can no longer reject or lose a confirmed sale, and a vendor with no calendar connected still sells correctly. Safe *only* because of the rule above.
-- `AvailabilityService` **unions** persisted `ExternalCalendarBlock` rows with a live query rather than choosing one. Subtracting an interval twice is idempotent, so a union only ever over-blocks (self-healing on the next sync) and never under-blocks. `InboundCalendarSyncWorker` is registered in `server.ts` and keeps that cache warm.
+- `AvailabilityService` **unions** persisted `ExternalCalendarBlock` rows with a live query rather than choosing one. Subtracting an interval twice is idempotent, so a union only ever over-blocks (self-healing on the next sync) and never under-blocks. `InboundCalendarSyncWorker` is registered in `lifecycle.ts` and keeps that cache warm.
 - `createBooking` re-checks overlap and inserts **inside one transaction** (`BOOKING_SLOT_UNAVAILABLE`, 409). The Redis hold is the first line of defence; it evaporates if Redis restarts, so the CAS is what actually guarantees single occupancy.
 
 **Wall-clock times resolve in the VENDOR's timezone.** `Vendor.timezone` (required, defaults `Africa/Douala`) is the source of truth; `AvailabilityRule.timezone` is now an optional per-rule override, not a `'UTC'` default nobody read. Both availability windows and the peak-hours surcharge go through `booking/utils/availability-timezone.util.ts` — never `setHours`/`getHours`, which resolved against the *server's* clock and shifted every vendor's day when the server moved. `npm run migrate:booking-rule-timezones` (idempotent, `--dry-run`, reports every rule whose hours would move) clears legacy `'UTC'` rows to inherit.
@@ -1474,3 +1523,4 @@ reset token really changes a **vendor's** password and that the old one stops wo
 | Geocoding provider abstraction | `src/core/geocoding/` (factory, `getGeocodingProvider()`, Nominatim adapter) |
 | GeoAddress value object (all address sites) | `src/core/types/geo-address.types.ts` |
 | Transaction manager | `src/core/database/transaction.manager.ts` |
+| Boot sequence + the ordered drain | `src/lifecycle.ts` |

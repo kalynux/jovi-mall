@@ -79,7 +79,8 @@
     "verify:connections": "ts-node scripts/verify-connections-live.ts",
     "test:mobile-auth": "ts-node scripts/test/test-mobile-auth.ts",
     "test:messaging-login": "ts-node scripts/test/test-messaging-login.ts",
-    "verify:messaging-login": "ts-node scripts/verify-messaging-login-live.ts"
+    "verify:messaging-login": "ts-node scripts/verify-messaging-login-live.ts",
+    "verify:shutdown": "ts-node scripts/test/verify-shutdown-live.ts"
   },
   "keywords": [],
   "author": "",

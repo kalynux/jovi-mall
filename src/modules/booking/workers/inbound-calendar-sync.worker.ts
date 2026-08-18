@@ -15,8 +15,14 @@ import { InboundCalendarSyncService } from '../services/inbound-calendar-sync.se
  * 
  * LIFECYCLE:
  * - start(): Begins both sync loops
- * - stop(): Gracefully stops all intervals
- * - Handles SIGTERM for graceful shutdown
+ * - stop(): Gracefully stops all intervals — awaited, because a sync pass may be in flight
+ *
+ * This worker used to register its OWN `process.on('SIGTERM'|'SIGINT')` inside `start()`,
+ * back when it was the only one of fourteen that handled a signal at all. That is gone:
+ * `lifecycle.ts` owns the ordered shutdown and `stopAllWorkers()` calls this `stop()` along
+ * with the other thirteen. A private handler would have run concurrently WITH the drain
+ * rather than in the drain's order — and registering a listener inside `start()` is also how
+ * a process quietly accumulates them.
  */
 
 export class InboundCalendarSyncWorker implements ObservableWorker {
@@ -89,10 +95,6 @@ export class InboundCalendarSyncWorker implements ObservableWorker {
 
         // Far-future sync (low frequency)
         this.startFarFutureSync();
-
-        // Graceful shutdown
-        process.on('SIGTERM', () => this.stop());
-        process.on('SIGINT', () => this.stop());
     }
 
     /**
