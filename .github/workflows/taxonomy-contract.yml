@@ -1,0 +1,138 @@
+# The three-service error-taxonomy contract
+#
+# ── What this exists for ────────────────────────────────────────────────────────
+# Phase 16 made the error system one system across jovi-mall, wi-admin and geo-tracker:
+# nine categories — authentication · authorization · validation · not_found · conflict ·
+# business_rule · rate_limit · external_service · internal.
+#
+# There is NO SHARED PACKAGE. The only thing holding the three taxonomies together is
+# that each service's own test spells the nine names out against a hardcoded literal.
+# Those assertions ARE the contract copy, and until this workflow existed **nothing ran
+# all three**. A rename in one repository went green in that repository, and the drift
+# surfaced later as a client branching on a category the other service had stopped
+# sending.
+#
+# ⚠ Two of the three copies existed when this was written. wi-admin defined
+# ERROR_CATEGORY_VALUES and asserted nothing about it — the one copy free to drift in
+# silence, despite ADR-016 describing all three as asserted. The missing assertion was
+# added to `test:foundation` §3b in the same change as this file.
+#
+# See PRODUCTION-READINESS 06 · X-3 and plan steps 0.D.3 and 3.D.1.
+name: Error taxonomy contract
+
+on:
+  schedule:
+    # Weekly. This guards a constant that changes rarely and breaks expensively; a
+    # per-push run across three checkouts would cost more than it catches.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+  push:
+    # …and immediately whenever this repository's copy is touched.
+    paths:
+      - 'src/core/error-category.ts'
+      - 'src/core/errors.ts'
+      - 'scripts/test/test-errors.ts'
+      - '.github/workflows/taxonomy-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: assert all three copies agree
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Checking out three repositories ──────────────────────────────────────
+      # These are three separate GitHub repositories, so the two siblings need a token
+      # with read access to them. Create a fine-grained PAT with `contents: read` on
+      # kalynux/backend-admin and kalynux/geo-tracker, and store it as the repository
+      # secret CROSS_REPO_TOKEN.
+      #
+      # If it is absent this job FAILS rather than skips. A contract job that passes by
+      # not running is worse than no contract job: it reports green while enforcing
+      # nothing, which is precisely the state this file was written to end.
+      # The secret is mapped to an env var and tested in the shell rather than in an
+      # `if:` expression — `secrets` is not dependably available in a step conditional,
+      # and a condition that silently evaluates to false would skip the guard whose whole
+      # job is to refuse to be skipped.
+      - name: Require the cross-repo token
+        env:
+          CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          if [ -z "${CROSS_REPO_TOKEN}" ]; then
+            echo "::error::CROSS_REPO_TOKEN is not set, so the sibling repositories cannot be"
+            echo "::error::checked out and the taxonomy contract cannot be enforced."
+            exit 1
+          fi
+
+      - name: Check out jovi-mall
+        uses: actions/checkout@v4
+        with:
+          path: jovi-mall
+
+      - name: Check out wi-admin
+        uses: actions/checkout@v4
+        with:
+          repository: kalynux/backend-admin
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          path: admin
+
+      - name: Check out geo-tracker
+        uses: actions/checkout@v4
+        with:
+          repository: kalynux/geo-tracker
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          path: geo-tracker
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      # ── Copy 1 — jovi-mall ───────────────────────────────────────────────────
+      # test:errors §1 asserts the nine sorted names. The rest of that suite is the
+      # exposure policy, the envelope and the census of every createAppError site, which
+      # is worth running here too: a code raised at two statuses that disagree on
+      # category is the same class of drift, one layer down.
+      - name: jovi-mall — test:errors
+        working-directory: jovi-mall
+        run: |
+          npm ci
+          cp .env.example .env
+          echo "WHATSAPP_ACCESS_TOKEN=ci-placeholder-not-a-real-token" >> .env
+          echo "WHATSAPP_PHONE_NUMBER_ID=ci-placeholder-phone-number-id" >> .env
+          npm run test:errors
+
+      # ── Copy 2 — wi-admin ────────────────────────────────────────────────────
+      - name: wi-admin — test:foundation and test:contract
+        working-directory: admin
+        run: |
+          npm ci
+          npm run test:foundation
+          npm run test:contract
+
+      # ── Copy 3 — geo-tracker ─────────────────────────────────────────────────
+      - name: geo-tracker — apperror package
+        working-directory: geo-tracker
+        run: go test ./internal/platform/apperror/...
+
+      # ── The fourth repository, which is not in this workspace ────────────────
+      # `npm run test:rich-description` asserts jovi-mall's WhatsApp and Telegram
+      # formatter output BYTE-FOR-BYTE against the vendor dashboard's own fixtures —
+      # another two-repo contract with no shared package, and the dashboard is not
+      # checked out here. It runs in this repository's ordinary CI (its fixtures are
+      # vendored), so a change on THIS side is caught; a change on the DASHBOARD side is
+      # not, and cannot be until that repository is added to this job.
+      #
+      # Same shape, same absence of enforcement: the blog block-type Zod union, which
+      # `ArticleBody.tsx` in the marketing site switches over exhaustively.
+      #
+      # Both are on the two-repo release checklist (plan step 2.F.3) until then.
+      - name: Note the unenforced fourth-repo contracts
+        run: |
+          echo "::notice::test:rich-description and the blog block-type union are two-repo"
+          echo "::notice::contracts whose OTHER side is not checked out here. See plan 3.D.2."

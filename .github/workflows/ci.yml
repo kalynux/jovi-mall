@@ -1,0 +1,130 @@
+# jovi-mall CI
+#
+# The first automated check this repository has ever had. Everything it runs already
+# existed; nothing here was runnable automatically, which is how `scripts/` came to hold
+# a test that had not compiled in months without anybody knowing.
+#
+# See PRODUCTION-READINESS plan step 0.D.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # ADR-019 D-1 pins the runtime in three places: `engines`, the Dockerfile and here.
+  NODE_VERSION: '22'
+
+jobs:
+  check:
+    name: typecheck · lint · DB-free suites · audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      # ── The environment ──────────────────────────────────────────────────────
+      # `.env.example` IS the deployment contract (258 documented variables), so CI
+      # uses it directly rather than keeping a second list that would drift from it.
+      # This also means a broken template breaks the build, which is the right way
+      # round.
+      #
+      # Two variables are appended because they are read at MODULE IMPORT time rather
+      # than at boot — `cod/services/delivery-code.service.ts` constructs a
+      # WhatsAppServiceMessenger at import, so any suite whose import graph reaches it
+      # throws CONFIG_MISSING_WA_ACCESS_TOKEN before a single assertion runs. They are
+      # placeholders; nothing here sends a message.
+      - name: Compose a CI environment from the documented contract
+        run: |
+          cp .env.example .env
+          {
+            echo "WHATSAPP_ACCESS_TOKEN=ci-placeholder-not-a-real-token"
+            echo "WHATSAPP_PHONE_NUMBER_ID=ci-placeholder-phone-number-id"
+          } >> .env
+
+      - name: Type-check src
+        run: npm run typecheck
+
+      # scripts/ entered the type checker in plan step 0.C. It is a separate config
+      # because the build config emits to dist/ and would otherwise ship the corpus.
+      - name: Type-check scripts
+        run: npm run typecheck:scripts
+
+      - name: Lint (src + scripts)
+        run: npm run lint
+
+      # ── The suites ───────────────────────────────────────────────────────────
+      # DISCOVERED from package.json rather than listed here, so a suite added next
+      # month runs without its author touching this file — the same argument
+      # test:system makes for scanning `*.worker.ts` instead of keeping a list of
+      # workers. `verify:*` is excluded on purpose: those need a real database and
+      # belong to the job Phase 2.B.4 makes possible.
+      #
+      # The two baselined suites are excluded here and asserted below by exact count.
+      - name: DB-free suites
+        run: |
+          set -euo pipefail
+          BASELINED="test:mobile-auth test:contact-validation"
+          SUITES=$(node -p "Object.keys(require('./package.json').scripts).filter(k => k.startsWith('test:')).join(' ')")
+          failed=""
+          for suite in $SUITES; do
+            case " $BASELINED " in *" $suite "*) echo "── $suite — baselined, asserted separately"; continue;; esac
+            echo "── $suite"
+            npm run --silent "$suite" || failed="$failed $suite"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::failing suites:$failed"
+            exit 1
+          fi
+
+      # ── The two known-red suites, declared rather than tolerated ─────────────
+      # A pipeline that is red from its first run trains people to ignore it, which is
+      # the exact failure this whole workflow exists to prevent. So the two suites that
+      # fail today are asserted at their EXACT counts and the build fails if either
+      # number moves IN EITHER DIRECTION — a new failure is still caught, and a fix is
+      # noticed rather than silently absorbed.
+      #
+      #   test:mobile-auth       101/2  — the commented `if (!isValid) throw` in
+      #                                   auth.service.ts, excluded by owner instruction.
+      #                                   If it is ever re-enabled, this number moves and
+      #                                   this file must move with it.
+      #   test:contact-validation 73/1  — T-2: a payout BANK entry asserted against the
+      #                                   mobile_money-only ENABLED_PAYOUT_METHODS switch.
+      #                                   Resolved in plan step 4.A.2, not here.
+      - name: Baselined suites (exact counts)
+        run: |
+          set -uo pipefail
+          assert_counts() {
+            suite="$1"; want_pass="$2"; want_fail="$3"
+            out=$(npm run --silent "$suite" 2>&1 || true)
+            got=$(echo "$out" | grep -oE '[0-9]+ passed, [0-9]+ failed' | tail -1)
+            want="$want_pass passed, $want_fail failed"
+            if [ "$got" != "$want" ]; then
+              echo "$out"
+              echo "::error::$suite — baseline is '$want', got '${got:-no count line}'."
+              echo "::error::If this is a FIX, update the baseline in .github/workflows/ci.yml."
+              return 1
+            fi
+            echo "✔ $suite — $got (baseline held)"
+          }
+          rc=0
+          assert_counts test:mobile-auth 101 2 || rc=1
+          assert_counts test:contact-validation 73 1 || rc=1
+          exit $rc
+
+      # Reporting-only for now (plan step 2.D.5: warning gate first, error gate once the
+      # backlog is clear). 49 vulnerabilities / 4 critical at the time of writing, all in
+      # transitive dependencies — see plan step 2.D.
+      - name: npm audit (production dependencies)
+        run: npm audit --omit=dev
+        continue-on-error: true
