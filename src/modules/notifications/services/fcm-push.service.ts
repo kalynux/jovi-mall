@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import type { messaging } from 'firebase-admin';
+import type { AndroidConfig, ApnsConfig } from 'firebase-admin/messaging';
 import { getFcmMessaging } from '../providers/fcm.client';
 import { DeviceTokenRepository } from '../repositories/device-token.repository';
 import { recordIntegrationCall } from '../../system/domain/integration-observations';
@@ -226,7 +226,7 @@ export class FcmPushService {
      * normal priority will not start the app's background handler under Doze, so
      * nothing would be drawn at all.
      */
-    private androidConfig(payload: PushPayload): messaging.AndroidConfig {
+    private androidConfig(payload: PushPayload): AndroidConfig {
         const high = (payload.urgency ?? 'high') === 'high';
 
         return {
@@ -253,7 +253,7 @@ export class FcmPushService {
      * The alert payload is sent even when `dataOnly` is set — `dataOnly` is an
      * Android-only lever. Stripping it here would leave iOS showing nothing.
      */
-    private apnsConfig(payload: PushPayload): messaging.ApnsConfig {
+    private apnsConfig(payload: PushPayload): ApnsConfig {
         const high = (payload.urgency ?? 'high') === 'high';
 
         return {

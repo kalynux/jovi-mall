@@ -122,9 +122,26 @@ jobs:
           assert_counts test:contact-validation 73 1 || rc=1
           exit $rc
 
-      # Reporting-only for now (plan step 2.D.5: warning gate first, error gate once the
-      # backlog is clear). 49 vulnerabilities / 4 critical at the time of writing, all in
-      # transitive dependencies — see plan step 2.D.
+      # ── A REAL gate now, at high+ (plan step 2.D.5) ──────────────────────────
+      # Was reporting-only at 49 vulnerabilities / 4 critical. Part 2.D took production to
+      # **6, all moderate, all one advisory**, so the gate is hard — a permanently-yellow
+      # step is one people stop reading, which is the failure this whole workflow exists
+      # to prevent.
+      #
+      # `--audit-level=high` rather than the default, and the residual is named rather than
+      # waved at: all six are `uuid@9.0.1` reached through
+      # firebase-admin -> @google-cloud/storage -> teeny-request/retry-request
+      # ("Missing buffer bounds check in v3/v5/v6 when buf is provided", fixed in 11.1.1).
+      #
+      # Three facts decide the threshold:
+      #   1. OUR direct `uuid` is 13.0.2 and is not affected. Only the Google SDK's copy is.
+      #   2. npm's suggested "fix" is firebase-admin@10.3.0 — a DOWNGRADE from 14 that would
+      #      reintroduce every critical this part just cleared. It is not a fix.
+      #   3. An `overrides` entry forcing uuid@11+ into a Google SDK internal would land in
+      #      the Firebase Storage path, which is inactive here (STORAGE_PROVIDER=local) and
+      #      therefore unverifiable. A residual that is understood beats an unverified
+      #      override.
+      #
+      # Lower this to the default the moment @google-cloud/storage ships a bumped uuid.
       - name: npm audit (production dependencies)
-        run: npm audit --omit=dev
-        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high

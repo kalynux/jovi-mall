@@ -1,5 +1,6 @@
 import * as crypto from 'crypto';
-import * as admin from 'firebase-admin';
+import { getApps, initializeApp, cert } from 'firebase-admin/app';
+import { getStorage } from 'firebase-admin/storage';
 import { Bucket } from '@google-cloud/storage';
 import { IStorageProvider, StoragePutOptions, StoragePutResult } from '../storage-provider.interface';
 import { FirebaseStorageConfig } from '../storage.config';
@@ -40,9 +41,9 @@ export class FirebaseStorageProvider implements IStorageProvider {
 
     // Initialize Firebase Admin SDK
     // Check if already initialized to avoid errors
-    if (!admin.apps.length) {
-      admin.initializeApp({
-        credential: admin.credential.cert({
+    if (!getApps().length) {
+      initializeApp({
+        credential: cert({
           projectId: this.config.projectId,
           clientEmail: this.config.clientEmail,
           privateKey: this.config.privateKey.replace(/\\n/g, '\n'), // Handle escaped newlines
@@ -51,7 +52,7 @@ export class FirebaseStorageProvider implements IStorageProvider {
       });
     }
 
-    this.bucket = admin.storage().bucket(this.config.bucket);
+    this.bucket = getStorage().bucket(this.config.bucket);
     this.initialized = true;
   }
 
