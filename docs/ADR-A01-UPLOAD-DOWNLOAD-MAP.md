@@ -244,3 +244,54 @@ for existing attachments. That is its own decision, not a line in this step.
 **R-3 stands.** The agency dashboard and the agent app may be rendering a proof photo from a raw
 URL; this repository cannot check that, and the changelog is a notice rather than a
 verification. Check both before the window opens.
+
+---
+
+## D-1 finished at plan step 4.A.4c (2026-08-19)
+
+**D-1 was not closed by 4.A.4a.** Two things surfaced afterwards, and together they are the
+same question: *which configuration decides whether bytes are scanned, and which paths reach
+the pipeline that asks?*
+
+### The scanner reached one of the four sites it was wired to
+
+`resolveVirusScanner(config)` reads `config.virusScan.provider`, and **only
+`loadUploadConfig()` read `UPLOAD_VIRUS_SCAN_PROVIDER`** — the other four factories hardcoded
+`provider: 'mock'`. So in development the **digital-products path**, the tree this ADR's
+correction exists for, was still unscanned *after the step that fixed it*; and in production
+`resolveVirusScanner` refuses `mock`, so video, digital-asset and delivery-proof uploads would
+all have failed outright.
+
+⚠ **The boot guard could not see it.** `assertUploadScannerSafe` is handed
+`loadUploadConfig()` — the one config that was already correct — so the boot passed and the
+failure waited for the first upload. That is exactly the failure mode the guard exists to
+prevent, one level up. **A guard is only as wide as the thing it is pointed at**, and this ADR
+has now produced that lesson twice.
+
+`resolveVirusScanConfig()` is the fix, spread by all six configs, with a source scan forbidding
+a `provider:` literal in any factory.
+
+### Two upload surfaces were never in the map
+
+`POST /api/{vendor,agency}/profile/policy-documents` call `storageProvider.put` **directly** —
+no scan, no sniffing, no fingerprint, no quota, and a gate on the **client-claimed** MIME type.
+This ADR's map has four rows and these are a fifth: PDFs from a vendor or agency, returned as a
+public URL the owner republishes into `policies.documents`, where counterparties read them.
+
+They were invisible to 4.A.4a's source scan because they construct no scanner — they reach no
+pipeline to need one. **A scan for the wrong thing being done finds nothing when the thing is
+not done at all.**
+
+Both now route through `PolicyDocumentUploadService`. `{ urls }` is unchanged, so this half is
+not client-visible.
+
+⚠ **And it could not be a one-liner, for a reason worth carrying forward.** A file that reaches
+`UploadIntakeService` gets a `File` record, and `LonelyFileDeletionService` permanently deletes
+a File with no live reference — its clock "falls back to `createdAt` for files that were
+uploaded but never attached". Policy documents survive that sweep today only because they are
+*not* File records. Creating the record without referencing it would have traded an unscanned
+upload for **the loss of every vendor's policy PDFs**, with `policies.documents` still pointing
+at them. The reference is therefore written at upload; the cost is that a document uploaded and
+never submitted is retained rather than reclaimed, which is the correct direction to err.
+
+**The map above should be read as five surfaces, not four.**
