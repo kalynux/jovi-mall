@@ -45,6 +45,7 @@ import { IShipmentAssignmentSession, ISessionCandidate } from '../../models/ship
 import { ASSIGNMENT_CONFIG } from '../../config/assignment.config';
 import { AssignmentCandidateService, assignmentCandidateService, RankedCandidate } from './assignment-candidate.service';
 import { agentAssignmentAuditService } from '../../services/assignment-audit.service';
+import { trackingOutboxEmitter } from '../../../tracking-integration/services/tracking-outbox.emitter';
 
 /**
  * Who is placing an offer. `system` for auto-assignment, `agency` for a manual pick,
@@ -508,6 +509,27 @@ export class ShipmentAssignmentService {
       if (offer.session_id) {
         await this.sessions.markAssigned(offer.session_id.toString(), agentId, session);
       }
+
+      /**
+       * ── THE SESSION-OPENING EVENT, AND IT IS THE MOST IMPORTANT ONE (plan step 3.A.1) ──
+       *
+       * This is the moment `agent_id` is bound, so this is the row that makes geo-tracker
+       * OPEN the shipment's tracking session. Lose it and the agent streams while nobody can
+       * watch — X-1's cost table, row `shipmentTrackable: true` — and it self-heals only on
+       * the next event for that shipment, which on a clean delivery may be the terminal one.
+       *
+       * It belongs in this transaction for the same reason as the eight sites in
+       * `ShipmentService` and `CashCollectionService`, and `...WithRetry` is already the
+       * right primitive here: `bindAgentIfUnassigned` is the serialisation point, so a losing
+       * concurrent accept aborts and takes its outbox row with it.
+       */
+      await trackingOutboxEmitter.emitShipmentStatusChanged({
+        shipmentId,
+        agentId,
+        agencyId: bound.agency_id.toString(),
+        customerId: order.customer_id?.toString() ?? null,
+        status: bound.status,
+      }, session);
     });
 
     // ── Post-commit, best-effort, off the critical path ─────────────────────
@@ -1134,6 +1156,16 @@ export class ShipmentAssignmentService {
       .catch((err) => console.error('[ShipmentAssignmentService] no_agent_available emit failed:', err));
   }
 
+  /**
+   * ⚠ BUS-ONLY. This no longer feeds geo-tracker — the outbox row for an accepted offer is
+   * written inside `accept`'s transaction (plan step 3.A.1). The method keeps its name and its
+   * publish because two in-process consumers need the event: the customer notification stack
+   * and `assignment-event-subscriber.ts`.
+   *
+   * Do not re-add a tracking consumer here. If a new status-changing path is added to this
+   * service, it needs its own `trackingOutboxEmitter` call inside its own transaction —
+   * publishing this event is not enough and has not been since step 3.A.1b.
+   */
   private emitTrackingStatusChanged(shipment: IShipment, customerId: string | null): void {
     void eventBus
       .publish('shipment.status_changed', {

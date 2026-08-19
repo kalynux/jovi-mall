@@ -499,7 +499,7 @@ The moment it has two, ORDER becomes a fact somebody must declare and the honest
 entrypoint whose only jobs are to evaluate `dotenv/config` above the module graph and to register
 the signal handlers before the boot begins.
 
-Background workers/consumers register at boot, all after the Mongo connection: aggregation scheduler, plan-expiry worker + notification consumer, vendor / agency / **agent** notification consumers, file-cleanup, earnings-release, unpaid-order-cancel, COD deposit-deadline, payment reconciliation, and the tracking event subscriber + dispatch worker. A feature that needs periodic sweeps registers in `startBackgroundWork()`; sub-minute cadences use `setInterval`, daily ones use `node-cron`.
+Background workers/consumers register at boot, all after the Mongo connection: aggregation scheduler, plan-expiry worker + notification consumer, vendor / agency / **agent** notification consumers, file-cleanup, earnings-release, unpaid-order-cancel, COD deposit-deadline, payment reconciliation, and the tracking **dispatch worker** (there is no tracking event subscriber any more — plan step 3.A.1 moved the outbox write into the producing transaction and deleted it). A feature that needs periodic sweeps registers in `startBackgroundWork()`; sub-minute cadences use `setInterval`, daily ones use `node-cron`.
 
 Two things run **before the listener opens**: `initializeMetrics()` (the private Prometheus registry, plus the Redis error sink) and `primeMaintenanceState()`. The second is load-bearing — an instance starting during a maintenance window must come up already closed, or a rolling deploy serves one full cache window of writes against a platform that is supposed to be shut.
 
@@ -638,7 +638,7 @@ Five properties are load-bearing:
 
 **Derive the Mongoose enum from the type union — never hand-maintain both.** Each stack exports a `*_NOTIFICATION_TYPES` array that the schema `enum` spreads. This is not tidiness: the agent stack kept two copies and they drifted, leaving all eight `agent_contract.*` situations in the union and absent from the enum, so every contract notification threw a `ValidationError` and the agent was simply never told. The same applied to its `aggregateType: 'contract'`. Covered by `npm run test:customer-notifications`, which asserts catalog↔enum agreement for **both** stacks.
 
-**`shipment.status_changed` now carries descriptive fields, and that is NOT a geo-tracker change.** `trackingNumber`, `failureReason` and `failureNote` were added for the customer stack's "on its way / attempt failed" copy. `TrackingEventSubscriber` reads *named* fields into a fixed outbox row, so anything it does not name never reaches geo-tracker — this was a one-sided change. They are taken from the shipment the CAS returned, not re-read: `delivery_failures` is append-only and `failed → in_transit → failed` is an allowed cycle, so a later read would describe the wrong attempt. Three subscribers share this event (tracking, assignment, customer notifications); none branches on the new fields.
+**`shipment.status_changed` carries descriptive fields, and that is NOT a geo-tracker change.** `trackingNumber`, `failureReason` and `failureNote` were added for the customer stack's "on its way / attempt failed" copy. Since plan step 3.A.1 the reason is stronger than it was: this event **no longer reaches the outbox at all**, so nothing added to its payload can reach geo-tracker even in principle — the row is built from named fields by `TrackingOutboxEmitter`, in the transaction. They are taken from the shipment the CAS returned, not re-read: `delivery_failures` is append-only and `failed → in_transit → failed` is an allowed cycle, so a later read would describe the wrong attempt. **Two** subscribers share this event now (assignment, customer notifications) — the tracking one is gone; neither branches on the new fields.
 
 **`renderTemplate` tidies whitespace after substitution.** Several situations end in an optional sentence (`{{codLine}}`, `{{reasonLine}}`), and an empty one otherwise leaves a trailing or doubled space that reaches push and email un-trimmed — only the in-app copy passes a `trim: true` Mongoose path. Runs of *spaces/tabs* are collapsed, never newlines: no catalog template contains one today, but a multi-paragraph email body added later must not be flattened.
 
@@ -647,7 +647,9 @@ Five properties are load-bearing:
 ### Domain events (`src/core/events/event-bus.ts`)
 In-memory, **per-process**, no persistence and no retry — a `Map<eventType, handler[]>` where `publish` awaits handlers in sequence and swallows their errors. Anything that must survive a crash or cross a process boundary needs its own durable buffer on top (this is exactly why the geo-tracker integration has an outbox).
 
-Emission convention is **post-commit and fire-and-forget** (`void eventBus.publish(...).catch(log)`), so an event is never inside the transaction that caused it. See the caveat under `tracking-integration` below.
+Emission convention is **post-commit and fire-and-forget** (`void eventBus.publish(...).catch(log)`), so an event is never inside the transaction that caused it.
+
+⚠ **That convention is exactly why the bus may not carry anything across a service boundary**, and since plan step 3.A.1 nothing does. The tracking outbox used to be reached through it and is now written inside the transaction (see `tracking-integration` below) — a census of all 73 publish sites confirms **no subscriber reaches the outbox**. Two properties make the bus structurally unfit for it: it cannot carry a Mongo `ClientSession`, and `publish` swallows handler errors, so a failed write is silent. **Before adding a subscriber that writes durable state, ask whether the state must survive a crash; if it must, the write belongs in the producer's transaction, not here.**
 
 ### Agent vs agency actions (important)
 Shipment status transitions are **driven by either the agency or the agent** — two doors onto one state machine. `PATCH /api/agency/shipments/:id/status` → `ShipmentService.updateStatus(agencyId, …)` and `POST /api/agent/shipments/:id/status` → `ShipmentService.updateStatusByAgent(agentId, …)`. Both are thin ownership-scoping wrappers over a shared private `_transitionStatus`; the actor is a discriminated union, and only three things differ:
@@ -901,7 +903,7 @@ Consume the domain through the barrel (`src/modules/agents/index.ts`) — **exce
 
 **Tracking split:** jovi-mall owns whether tracking is *allowed*; geo-tracker owns *execution*. `agent.last_known_tracking_state` is a business mirror, stale by construction — never serve it as a live position, and no assignment rule reads it.
 
-**The admin tracking flag now actually reaches geo-tracker (Phase 9).** `agent.tracking_allow_changed` was published from the day the flag existed and **nothing subscribed to it**, so disabling tracking refused new dispatch (`assertEligible`) and changed nothing else — the agent kept streaming and kept being broadcast. `TrackingEventSubscriber` now enqueues an `agent.tracking_allow_changed` outbox row carrying `trackingAllowed` and **no shipment verdicts** (it says nothing about any shipment), the dispatcher POSTs it to `/webhooks/node`, and geo-tracker suppresses the live position. **This changed the outbox event shape, so it was a two-repo change** — `webhook/domain/entity.go` gained `TrackingAllowed *bool` in the same commit. Note what it still does not do: `visible-agents` does not consult the flag, so a watcher is not revoked — they stay subscribed and receive nothing.
+**The admin tracking flag now actually reaches geo-tracker (Phase 9).** `agent.tracking_allow_changed` was published from the day the flag existed and **nothing subscribed to it**, so disabling tracking refused new dispatch (`assertEligible`) and changed nothing else — the agent kept streaming and kept being broadcast. `setTrackingAllowed` now writes an `agent.tracking_allow_changed` outbox row carrying `trackingAllowed` and **no shipment verdicts** (it says nothing about any shipment), the dispatcher POSTs it to `/webhooks/node`, and geo-tracker suppresses the live position. ⚠ Since plan step 3.A.1 that write is **inside a transaction with the flag itself** — the method had none, and this is the one event with no reconciliation path on geo-tracker's side, so a row lost between the flag write and its enqueue meant an administrator was shown success while the agent went on broadcasting indefinitely. `TrackingAllowReconcileWorker` is the second line. **This changed the outbox event shape, so it was a two-repo change** — `webhook/domain/entity.go` gained `TrackingAllowed *bool` in the same commit. Note what it still does not do: `visible-agents` does not consult the flag, so a watcher is not revoked — they stay subscribed and receive nothing.
 
 Because `assertEligible` requires tracking-allowed before dispatch, geo-tracker **refuses** an agent's attempt to switch Tracking Allow off while they hold an active shipment (it would strand a delivery assigned on that promise). Note what Tracking Allow is *for* on geo-tracker's side: it is the permission to read an agent's **live position at all** — including an agent with no shipment, which is exactly the read that finds the one nearest a pickup. It is not what starts a tracking session; only a shipment is.
 
@@ -1423,7 +1425,7 @@ Uses dedicated DB indices per feature (email tokens, booking slot locks, downloa
 Two accessors, and they are not interchangeable: `getRedisClient(db)` connects if needed (real work, and the cache flush); `peekRedisClient(db)` returns an already-open client or null and **never connects** (every diagnostics read). `redisClientSnapshot()` hands out data rather than handles — exporting the `clients` map would let a caller `quit()` a client out from under a live request.
 
 ### Live tracking integration (`src/modules/tracking-integration/`)
-The whole jovi-mall half of the geo-tracker contract: the durable outbox (`models/tracking-outbox.model.ts` + repository), `services/tracking-event-subscriber.ts` (subscribes to `shipment.status_changed`, `cod.collection.recorded`, and `shipment.agent_released`), `services/visible-agents.service.ts` (**the tracking authorization policy** — admin=all, agent=self, agency=agents on approved+active shipments, customer=agents on active orders, vendor=none), `workers/tracking-dispatch.worker.ts` (drains every 2s, HMAC-SHA256, POSTs), and `GET /api/tracking/visible-agents`.
+The whole jovi-mall half of the geo-tracker contract: the durable outbox (`models/tracking-outbox.model.ts` + repository), `services/tracking-outbox.emitter.ts` (**the only writer** — called by the nine producing transactions listed below, never from the event bus), `services/visible-agents.service.ts` (**the tracking authorization policy** — admin=all, agent=self, agency=agents on approved+active shipments, customer=agents on active orders, vendor=none), `workers/tracking-dispatch.worker.ts` (drains every 2s, HMAC-SHA256, POSTs), and `GET /api/tracking/visible-agents`.
 
 `shipment.agent_released` is the reassignment release: it carries the **old** agent's id with a forced `shipmentTrackable=false, shipmentTerminal=null` verdict (a *release*, independent of the shipment's resulting `assigned`/`handing_over` status), so geo-tracker closes that agent's session and drops the agency/customer's visibility of them — without terminating the shipment, which a fresh session resumes when the replacement accepts.
 
@@ -1441,7 +1443,63 @@ The whole jovi-mall half of the geo-tracker contract: the durable outbox (`model
 
 Inert when `GEO_TRACKER_BASE_URL` is unset — the outbox still fills, nothing dispatches. That is the intended local default.
 
-**Caveat worth knowing:** the outbox is *not* transactional with the state change it describes. `ShipmentService._emitTrackingStatusChanged` fires after `runInTransaction` returns, fire-and-forget, and the subscriber enqueues asynchronously — so a crash between commit and enqueue loses the event, despite the model's docstring claiming crash-durability. A true outbox writes in the same transaction as the state change.
+**The outbox IS transactional now, and it was not until plan step 3.A.1 (X-1).** Every row is
+written by `services/tracking-outbox.emitter.ts` **inside the transaction that made the change it
+describes**, so a crash can no longer lose an event. `TrackingEventSubscriber` is **deleted** — the
+event bus was the wrong transport for two reasons that cannot be worked around: it carries no Mongo
+session, so a row reached through it is necessarily written after the state change has already
+committed; and `publish` catches and logs every handler error, so the one hop with no retry was
+also the one hop with no alarm.
+
+**Nine write sites, and each one awaits its emit inside its own transaction:**
+
+| Site | Emitter call |
+|---|---|
+| `ShipmentService` shared transition core | `emitShipmentStatusChanged` |
+| `ShipmentService.reject` | `emitShipmentStatusChanged` (`rejected` — a release, not a terminal) |
+| `ShipmentService._applyDeliveryConfirmation` | `emitShipmentStatusChanged` (`delivered`) |
+| `ShipmentService.reassignAgent` | `emitAgentReleased` |
+| `ShipmentService.releaseForAgentCancel` | `emitAgentReleased` |
+| `CashCollectionService.collect` | `emitCodCollectionRecorded` |
+| `CashCollectionService.autoCollectWithoutCode` | `emitCodCollectionRecorded` |
+| `ShipmentAssignmentService.accept` | `emitShipmentStatusChanged` — **the session-OPENING row** |
+| `AgentTrackingPolicyService.setTrackingAllowed` | `emitTrackingAllowChanged` (this method **gained** a transaction; it had none) |
+
+Plus `agentActionAuditService.emitShipmentTransition(doc, role, session)` at the first two.
+
+⚠ **`_emitTrackingStatusChanged` (and the identically-named method on `ShipmentAssignmentService`)
+is now BUS-ONLY.** Both keep their names and their `eventBus.publish` because in-process consumers
+need the event — the customer notification stack and `assignment-event-subscriber.ts` — but neither
+reaches geo-tracker any more. **A new status-changing path needs its own emitter call inside its own
+transaction; publishing the event is not enough.** Both docstrings say so in their first lines.
+
+**One status write deliberately emits nothing:** `assignPendingByOrderId` (`pending → assigned`, at
+checkout). The shipment has no `agent_id` yet — agents bind at `accept` — and geo-tracker's webhook
+no-ops on an empty agent id, so there is nobody to track. It publishes `shipment.assigned`, which is
+a different event with different consumers, and it never fed the outbox.
+
+**The boundary this establishes, and it is worth stating as a rule:** *nothing that crosses a
+service boundary rides the event bus.* The bus is in-process only, and after step 3.A.1 it has no
+cross-service consumer at all. A census (73 publish sites, 84 distinct event names, 54 subscribed)
+confirms **no subscriber anywhere reaches `TrackingOutboxRepository`, `trackingOutboxEmitter` or
+`agentActionAuditService`**. Keep it that way: a durable, ordered, retryable delivery needs a
+transaction, and the bus cannot offer one.
+
+**What the bus's lossiness still costs (R-2), stated rather than implied.** 32 of the 84 published
+names have **no subscriber** and collapse to `eventBusPublishedTotal{event_type="unhandled"}` —
+mostly deliberate audit/future-consumer hooks (`ticket.*`, `store.*`, `agent.*`, `earnings.*`,
+`cod.remittance.*`). Two are worth knowing: `vendor.order.${newStatus}` in `vendor-order.service.ts`
+builds its name by interpolation and nothing subscribes to any of them, and
+`cod.collection.recorded` became unhandled at step 3.A.1b — deliberately, since its publish is a
+documented future-consumer hook and its outbox row now comes from the transaction instead. **No
+event is subscribed-but-never-published**; there are no dead handlers.
+
+Of the handled ones, only the two money splits have a recovery sweep when a handler fails
+(`recoverMissedCodSplits`, `recoverMissedDeliverySplits` in `EarningsReleaseWorker`). **The four
+notification stacks have none** — a handler that throws leaves a log line and nothing else, and the
+customer is simply never told. That asymmetry is R-2's remaining cost. The durable replacement (J8)
+is deferred, and ADR-013 D-2 argues against building a Redis hop as a bandage; agreed, and it means
+this stays open rather than fixed.
 
 ### Messaging connections (`src/modules/channel-connections/`)
 
