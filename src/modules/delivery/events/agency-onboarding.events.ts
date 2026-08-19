@@ -5,6 +5,7 @@
  * Published via the central EventBus singleton.
  */
 import { eventBus, DomainEvent } from '../../../core/events/event-bus';
+import { logger } from '../../../core/logging';
 
 // ─── Event Type Constants ─────────────────────────────────────────────────────
 
@@ -48,25 +49,43 @@ export interface AgencyInitializedPayload {
  * Call this once during application bootstrap.
  */
 export function registerAgencyOnboardingEventHandlers(): void {
-    eventBus.subscribe(AGENCY_ONBOARDING_EVENTS.STEP_COMPLETED, (event: DomainEvent) => {
-        console.log(`[AgencyOnboarding] Step completed for agency ${event.aggregateId}:`, {
-            stepCompleted: event.payload.stepCompleted,
-            newStep: event.payload.newStep,
-        });
-        // Future: send notification to agency admin, update analytics, etc.
-    });
+    eventBus.subscribe(
+        AGENCY_ONBOARDING_EVENTS.STEP_COMPLETED,
+        (event: DomainEvent) => {
+            logger().info(
+                {
+                    agencyId: event.aggregateId,
+                    stepCompleted: event.payload.stepCompleted,
+                    newStep: event.payload.newStep,
+                },
+                'agency onboarding: step completed',
+            );
+            // Future: send notification to agency admin, update analytics, etc.
+        },
+        'AgencyOnboarding.onStepCompleted',
+    );
 
-    eventBus.subscribe(AGENCY_ONBOARDING_EVENTS.COMPLETED, (event: DomainEvent) => {
-        console.log(`[AgencyOnboarding] Onboarding completed for agency ${event.aggregateId}:`, {
-            agencyName: event.payload.agencyName,
-        });
-        // Future: send congratulations email, trigger KYC review workflow, etc.
-    });
+    eventBus.subscribe(
+        AGENCY_ONBOARDING_EVENTS.COMPLETED,
+        (event: DomainEvent) => {
+            logger().info(
+                { agencyId: event.aggregateId, agencyName: event.payload.agencyName },
+                'agency onboarding: completed',
+            );
+            // Future: send congratulations email, trigger KYC review workflow, etc.
+        },
+        'AgencyOnboarding.onCompleted',
+    );
 
-    eventBus.subscribe(AGENCY_ONBOARDING_EVENTS.AGENCY_INITIALIZED, (event: DomainEvent) => {
-        console.log(`[AgencyOnboarding] Agency initialized: ${event.aggregateId}`, {
-            agencyName: event.payload.agencyName,
-        });
-        // Future: send welcome email, create default config entries, etc.
-    });
+    eventBus.subscribe(
+        AGENCY_ONBOARDING_EVENTS.AGENCY_INITIALIZED,
+        (event: DomainEvent) => {
+            logger().info(
+                { agencyId: event.aggregateId, agencyName: event.payload.agencyName },
+                'agency onboarding: agency initialized',
+            );
+            // Future: send welcome email, create default config entries, etc.
+        },
+        'AgencyOnboarding.onAgencyInitialized',
+    );
 }

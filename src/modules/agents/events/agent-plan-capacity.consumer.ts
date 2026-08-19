@@ -1,4 +1,5 @@
 import { eventBus, DomainEvent } from '../../../core/events/event-bus';
+import { logger } from '../../../core/logging';
 import { AgentRepository } from '../repositories/agent.repository';
 import { AGENT_CONFIG } from '../config/agent.config';
 
@@ -16,14 +17,20 @@ import { AGENT_CONFIG } from '../config/agent.config';
 export function registerAgentPlanCapacityConsumer(
   agentRepo: AgentRepository = new AgentRepository()
 ): void {
-  eventBus.subscribe('plan.activated', async (event: DomainEvent) => {
-    const ownerType = event.payload.ownerType as string;
-    if (ownerType !== 'agent') return;
-    const ownerId = event.payload.ownerId as string;
-    const cap = event.payload.maxUnterminatedShipments as number | null;
-    const max = cap ?? AGENT_CONFIG.MAX_ACTIVE_SHIPMENTS_MAX;
-    await agentRepo.setMaxActiveShipments(ownerId, max);
-    console.log(`[AgentPlanCapacity] Synced agent ${ownerId} max_active_shipments → ${max}`);
-  });
-  console.log('[AgentPlanCapacity] Agent plan-capacity sync consumer registered');
+  eventBus.subscribe(
+    'plan.activated',
+    async (event: DomainEvent) => {
+      const ownerType = event.payload.ownerType as string;
+      if (ownerType !== 'agent') return;
+      const ownerId = event.payload.ownerId as string;
+      const cap = event.payload.maxUnterminatedShipments as number | null;
+      const max = cap ?? AGENT_CONFIG.MAX_ACTIVE_SHIPMENTS_MAX;
+      await agentRepo.setMaxActiveShipments(ownerId, max);
+      logger().info({ agentId: ownerId, maxActiveShipments: max }, 'agent plan capacity: synced');
+    },
+    // Named because the bus cannot infer one from an inline arrow, and this handler WRITES —
+    // a plan renewal whose cap silently failed to land is not visible anywhere else.
+    'AgentPlanCapacityConsumer.onPlanActivated',
+  );
+  logger().info('agent plan-capacity sync consumer registered');
 }

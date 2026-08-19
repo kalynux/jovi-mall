@@ -1,4 +1,5 @@
 import { eventBus, DomainEvent } from '../../../core/events/event-bus';
+import { logger } from '../../../core/logging';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
 import { shipmentAssignmentService } from '../domain/services/shipment-assignment.service';
 
@@ -28,9 +29,19 @@ export class AssignmentEventSubscriber {
   constructor(private readonly agencies: DeliveryAgencyRepository = new DeliveryAgencyRepository()) {}
 
   register(): void {
-    eventBus.subscribe('shipment.assigned', (e) => this.onShipmentAssigned(e));
-    eventBus.subscribe('shipment.status_changed', (e) => this.onShipmentStatusChanged(e));
-    console.log('[AssignmentEventSubscriber] Registered shipment.assigned + status_changed handlers (auto-assignment)');
+    // The third argument is this handler's identity in the bus's failure log. An inline arrow
+    // carries no `name` of its own, so without it a throw here is reported as `anonymous#0`.
+    eventBus.subscribe(
+      'shipment.assigned',
+      (e) => this.onShipmentAssigned(e),
+      'AssignmentEventSubscriber.onShipmentAssigned',
+    );
+    eventBus.subscribe(
+      'shipment.status_changed',
+      (e) => this.onShipmentStatusChanged(e),
+      'AssignmentEventSubscriber.onShipmentStatusChanged',
+    );
+    logger().info('assignment: shipment.assigned + status_changed handlers registered (auto-assignment)');
   }
 
   /** Dispose the ranking once its shipment is finished (or has left this agency). */
