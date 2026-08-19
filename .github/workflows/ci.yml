@@ -94,10 +94,15 @@ jobs:
       # number moves IN EITHER DIRECTION — a new failure is still caught, and a fix is
       # noticed rather than silently absorbed.
       #
-      #   test:mobile-auth       101/2  — the commented `if (!isValid) throw` in
+      #   test:mobile-auth       102/2  — the FAILURE count is what is baselined: the
+      #                                   commented `if (!isValid) throw` in
       #                                   auth.service.ts, excluded by owner instruction.
-      #                                   If it is ever re-enabled, this number moves and
-      #                                   this file must move with it.
+      #                                   If it is ever re-enabled, the 2 moves and this
+      #                                   file must move with it. The PASS count moves
+      #                                   whenever the suite grows — 101 → 102 in plan
+      #                                   step 2.E.3, which added the assertion that
+      #                                   .env.example's ALLOWED_ORIGINS VALUE, not just
+      #                                   its comment, carries the Capacitor origins.
       #   test:contact-validation 73/1  — T-2: a payout BANK entry asserted against the
       #                                   mobile_money-only ENABLED_PAYOUT_METHODS switch.
       #                                   Resolved in plan step 4.A.2, not here.
@@ -118,7 +123,7 @@ jobs:
             echo "✔ $suite — $got (baseline held)"
           }
           rc=0
-          assert_counts test:mobile-auth 101 2 || rc=1
+          assert_counts test:mobile-auth 102 2 || rc=1
           assert_counts test:contact-validation 73 1 || rc=1
           exit $rc
 

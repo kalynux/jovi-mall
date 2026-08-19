@@ -41,19 +41,62 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 npm run dev          # Start dev server with hot reload (ts-node-dev) — :8022 by default
-npm run build        # Compile TypeScript → dist/
+npm run build        # tsc → dist/, THEN copy-build-assets.ts. Both halves are required
 npm run start        # Run compiled server (production)
 npm run lint         # ESLint with zero warnings allowed
 ```
 
+⚠ **`npm run build` is `tsc` plus an asset copy, and the second half is not decoration.**
+`tsc` emits `.js` and — via `resolveJsonModule` — imported `.json`, and **nothing else**. So
+anything read off disk at runtime through a `__dirname`-relative path lives in `src/` and never
+reaches `dist/`, which makes the two run paths silently disagree: `npm run dev` resolves it,
+`npm start` and every container image do not.
+
+That was not hypothetical. `mail.service.ts` reads `__dirname/templates/<name>.hbs` and the six
+Handlebars templates were **never** in `dist/` — welcome, verify-email, reset-password and the
+three notification digests all threw `MAIL_TEMPLATE_NOT_FOUND` in any deployment running the
+compiled output. It survived because development never runs the build and CI type-checks without
+ever building; containerising the service is what surfaced it.
+
+`scripts/copy-build-assets.ts` copies them from an **explicit manifest** (a glob was rejected —
+`src/` also holds READMEs and a test PDF, none of which belong in a runtime image), and
+`test:system` scans `src/` for asset extensions and fails if one is neither in the manifest nor
+in its ignore list. Adding a `.hbs`/`.sql`/`.yaml` under `src/` means adding it there.
+
+### Containers
+
+`Dockerfile` has three targets — `builder` · `toolbox` · `runtime` — on `node:22-bookworm-slim`.
+Node 22 is pinned in **three** places that must agree (`engines`, the Dockerfile `FROM`, CI's
+`NODE_VERSION`); `firebase-admin@14` requires `>=22`, so it is a runtime constraint and not only
+policy. Read the Dockerfile's header before editing it — every rule in it has a reason written out.
+
+**`toolbox` is the only image that can run a migration**, and it exists because the runtime one
+structurally cannot: `scripts/` is never compiled and `ts-node` is a devDependency, so
+`npm ci --omit=dev` produces an image with no way to run any of the fifteen. Migrations go
+`docker compose run --rm jovi-mall-toolbox npm run migrate:up`.
+
+⚠ **`node_modules` and `storage/` are in `.dockerignore`, and both are correctness.** `bcrypt`
+and `sharp` resolve platform binaries at install time, so a `node_modules/` built on this Windows
+machine carries `@img/sharp-win32-x64` and produces a container that installs cleanly then throws
+at the first hash or resize — `npm ci` runs inside the image for exactly that reason. `storage/`
+is 112 MB of real uploads that belong in a named volume (D-6), never an image layer.
+
 Data/ops scripts (all `ts-node scripts/…`, and `src/scripts/**` is ESLint-ignored):
 
+**Run migrations through the runner, not the individual bindings.** `npm run migrate:status` and
+`npm run migrate:up` are the front door; the fifteen bindings below still work and are what the
+runner spawns, but only the runner writes the ledger. See "The migration ledger" below.
+
 ```bash
+npm run migrate:status                   # each of the 15: applied / not applied / applied-but-changed
+npm run migrate:up                       # apply everything unapplied, in the declared order, ledgered
+npm run migrate:up -- --dry-run          # rehearse all 15; write nothing, ledger nothing
+npm run migrate:up -- --only migrate:storefront-indexes
 npm run aggregate:analytics              # Populate vendor analytics data
-npm run backfill:last-ordered            # Backfill last-ordered-at
-npm run backfill:pickup-locations        # Backfill pickup locations
+npm run backfill:last-ordered            # Backfill last-ordered-at (idempotent, --dry-run)
+npm run backfill:pickup-locations        # Backfill pickup locations (idempotent, --dry-run)
 npm run backfill:shipment-tracking-numbers  # Stamp legacy shipments (idempotent, --dry-run)
-npm run migrate:customer-payment-methods
+npm run migrate:customer-payment-methods # → user_payment_methods (idempotent, --dry-run)
 npm run migrate:agent-memberships        # agency_id → memberships (idempotent, --dry-run)
 npm run migrate:agent-deposits           # backfill deposit status/recipient (idempotent, --dry-run)
 npm run migrate:contract-terms           # terms_proposed_by/terms_version (idempotent, --dry-run)
@@ -204,7 +247,9 @@ npm run test:system                            # worker schedules, maintenance e
                                                # policy, metric cardinality, plus Phase 15's scrubber,
                                                # ring buffer, console bridge, exposed-config whitelist,
                                                # index-drift diff, prune policy and the safe-execution
-                                               # source scan (175, no DB needed)
+                                               # source scan — plus the frozen /api/health contract,
+                                               # the build-assets manifest, and the migration ledger's
+                                               # four status states + closed registry (225, no DB needed)
 npm run verify:shutdown                        # the graceful drain against a real boot (13) — NEEDS
                                                # Mongo. Boots a full instance on its OWN port (8922,
                                                # SHUTDOWN_VERIFY_PORT) so it runs while `npm run dev`
@@ -250,7 +295,8 @@ documents, pass or fail.
 
 `verify:live-parity` is the other script here that requires a database, and it exists because the
 DB-free suites structurally cannot cover four things: that the schema **indexes actually build**
-against real data (`autoIndex` is on, so a failed 2dsphere fails *silently* at boot), that the
+against real data (a failed 2dsphere fails *silently* at boot, and in production `autoIndex` is
+off so it is not attempted at all), that the
 directory **aggregation pipeline runs** (Mongo validates pipelines at execution time, not compile
 time), that the contract lists page and return terminal rows, and that the **Express route table**
 resolves literals before `:id` params. It is read-only. Run it after any change to the agent
@@ -408,6 +454,45 @@ read through a config helper. The template's storage block additionally named va
 configured object storage and every upload went to a container disk wiped on restart —
 `RENAMED_VARS` in the validator now names each one.
 
+### The migration ledger (`src/core/database/schema-migration.model.ts` + `scripts/migrate.ts`)
+
+Fifteen idempotent migration programs existed with good headers, npm bindings and **no record of
+what had been applied where**. `schema_migrations` is that record, with geo-tracker's semantics
+(`internal/platform/postgres/migrate.go`): **forward-only, no down migrations, one version table**.
+
+- **`checksum` is what makes it useful**, and it is the one field the Go version does not need —
+  its migrations are embedded SQL that never changes after it ships, while these fifteen are
+  TypeScript programs somebody may still edit. Without it the ledger answers "this migration ran";
+  with it, "*this version of* this migration ran", and an edit since the last run reports as
+  **`applied-but-changed`** instead of hiding inside `applied`. It is normalised for line endings
+  — developed on Windows, deployed on Linux, and a CRLF checkout would otherwise report all fifteen
+  as changed on their first run in a container.
+- **The collection is APPEND-ONLY and has no unique key.** A failed attempt is worth more than a
+  successful one during an incident, so a run never overwrites its predecessor; status is "the
+  newest row for this name in this environment". A uniqueness claim would force either an upsert
+  (destroying the history) or a failure on the second run of an idempotent script, which is the
+  normal case.
+- **The runner SHELLS OUT to the existing npm bindings.** Each of the fifteen has its own
+  `dotenv.config()`, its own `mongoose.connect` and its own `process.exit`; importing them into one
+  process is a rewrite of all fifteen, and they are the part that already works. The migration
+  under test is byte-identical to the one that runs, and this file cannot break a migration.
+- **Order is DECLARED, in `MIGRATIONS`.** `migrate:agent-memberships` first (the whole agent domain
+  reads memberships), and every index build last (three claim uniqueness, and a unique build fails
+  outright against data a later migration has not yet cleaned up). A failure **stops** the run.
+- **The registry is CLOSED.** `assertRegistryCovers()` diffs `MIGRATIONS` against every
+  `migrate:*`/`backfill:*` binding in `package.json` and refuses to run on any difference — a
+  sixteenth migration added without a row would otherwise be one the ledger silently does not
+  track, which is the exact failure this exists to end. `test:system` asserts it too.
+- **`--dry-run` ledgers nothing.** A rehearsal is not an application.
+- ⚠ **`scripts/migrate.ts` guards its own `main()` behind `require.main === module`**, because
+  `test:system` imports it for the registry. Without that, a DB-free unit test would apply every
+  migration. `admin/scripts/ensure-indexes.ts` carries the same guard for the same reason.
+
+**wi-admin has a ledger, not a runner** (`admin_schema_migrations`): it has one migration-shaped
+script, `ensure:indexes`, which records its own row and is read back by `npm run migrate:status`.
+The moment it has two, ORDER becomes a fact somebody must declare and the honest move is to port
+`scripts/migrate.ts` rather than grow that file.
+
 ### Startup composition and shutdown (`src/lifecycle.ts`)
 
 ⚠ **Boot lives in `src/lifecycle.ts`, not `server.ts`.** `server.ts` is now a three-line
@@ -417,6 +502,10 @@ the signal handlers before the boot begins.
 Background workers/consumers register at boot, all after the Mongo connection: aggregation scheduler, plan-expiry worker + notification consumer, vendor / agency / **agent** notification consumers, file-cleanup, earnings-release, unpaid-order-cancel, COD deposit-deadline, payment reconciliation, and the tracking event subscriber + dispatch worker. A feature that needs periodic sweeps registers in `startBackgroundWork()`; sub-minute cadences use `setInterval`, daily ones use `node-cron`.
 
 Two things run **before the listener opens**: `initializeMetrics()` (the private Prometheus registry, plus the Redis error sink) and `primeMaintenanceState()`. The second is load-bearing — an instance starting during a maintenance window must come up already closed, or a rolling deploy serves one full cache window of writes against a platform that is supposed to be shut.
+
+**`autoIndex` is OFF in production** (`mongoose.connect(MONGO_URI, { autoIndex: NODE_ENV !== 'production' })`), matching wi-admin, which has had that line since Phase 4 with a comment naming this service as the counter-example. An index build triggered by a boot is an unannounced load spike timed to a deploy, and a failed one fails *silently* — the promise rejects into a listener nobody attached and the process comes up healthy. Index creation is an explicit, ledgered migration step now: `npm run migrate:up`.
+
+Turning it off trades a silent-SLOW failure for a silent-MISSING one, so it is paired with **`reportIndexDrift()`**, which runs `inspectDatabase(null)` once **after the listener opens** and logs anything declared-but-absent at `warn`. Three properties: it is **not awaited** (the sweep walks the whole collection registry under a wall-clock budget and none of it is a precondition for serving a request), it **never builds** anything (that is what `autoIndex` was turned off to stop), and it **never fails readiness** — a fresh database has every index legitimately missing until the first migration runs, so gating readiness on drift deadlocks a cold start at the worst possible moment. Development keeps `autoIndex` on: a developer who has just written a schema should not have to run a migration to use it.
 
 **Register the singleton, never `new` a worker inline.** The boot used to do `new InboundCalendarSyncWorker().start()`, which left the running worker unreachable by anything else: the operations surface could not report on it even in principle, and `stop()` could never reach the instance that was actually scheduled. Every worker now exports a singleton and `startBackgroundWork()` starts that.
 
@@ -485,9 +574,18 @@ dangerous one). Design record: `../admin/docs/ADR-015-DEVELOPER-TOOLS.md`. Four 
   verification codes and WhatsApp idempotency keys. Every Redis command goes through the closed
   allowlist in `domain/redis-command-policy.ts` — *the allowlist is the cap*, the same argument
   `route-group.ts` makes about metric labels.
-- **`/system/database` reports index drift and never repairs it.** `autoIndex` is on and a failed
-  build fails *silently* at boot, so `missing` is the actionable bucket. Building or dropping an
-  index is a migration, not a button.
+- **`/system/database` reports index drift and never repairs it.** `missing` is the actionable
+  bucket, and it stayed actionable when `autoIndex` went off in production (plan step 2.C.4): a
+  failed build used to fail *silently* at boot, and now an unbuilt index is silently *absent*
+  instead — same blind spot, different cause, which is why `lifecycle.ts` also logs the drift at
+  boot. Building or dropping an index is a migration, not a button.
+
+  ⚠ A `$text` index is DECLARED as `{title:'text',…}` and REPORTED as the sentinel
+  `{_fts:'text',_ftsx:1}` with the real fields in an alphabetised `weights` document, so comparing
+  the two verbatim produced a permanent false `missing` **and** a false `extra` on `products` —
+  the one collection here carrying one. `index-diff.ts` canonicalises both sides now. Sorting the
+  key is correct **there and nowhere else**: a text index has no prefix semantics, while for a
+  compound index key order *is* the identity.
 - **`outbox/prune` accepts `status: 'sent'` and nothing else.** Pruning `failed` destroys what
   `outbox/replay` acts on; pruning `pending` destroys undelivered events. `confirm` repeats the
   *age*, because the age is what decides the blast radius.
@@ -1523,4 +1621,6 @@ reset token really changes a **vendor's** password and that the old one stops wo
 | Geocoding provider abstraction | `src/core/geocoding/` (factory, `getGeocodingProvider()`, Nominatim adapter) |
 | GeoAddress value object (all address sites) | `src/core/types/geo-address.types.ts` |
 | Transaction manager | `src/core/database/transaction.manager.ts` |
+| The migration ledger (model + the four status states) | `src/core/database/schema-migration.model.ts` |
+| The migration runner (declared order, closed registry) | `scripts/migrate.ts` |
 | Boot sequence + the ordered drain | `src/lifecycle.ts` |

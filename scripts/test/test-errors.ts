@@ -628,6 +628,25 @@ function census(): Map<string, CensusRow> {
     assert('metrics and gateway webhooks are exempt', () =>
         isExemptPathname('/metrics') && isExemptPathname('/api/webhooks/stripe'));
 
+    // The two CROSS-SERVICE surfaces, exempt for the same reason the maintenance middleware
+    // exempts them (`test:system`): they are geo-tracker asking this service for a verdict,
+    // and refusing them turns a jovi-mall load spike into a geo-tracker outage. Both are
+    // behind `requireServiceToken` — one authenticated peer, not a population.
+    assert('the geo-tracker service surfaces are exempt', () =>
+        isExemptPathname('/api/internal/agents')
+        && isExemptPathname('/api/internal/agents/abc/eligibility')
+        && isExemptPathname('/api/tracking/agent-state'));
+
+    // ⚠ THE NARROWING IS THE POINT, and it is the one place this list and the maintenance
+    // list deliberately DISAGREE. Maintenance exempts all of `/api/tracking/*`; the rate
+    // limiter exempts only `/agent-state`. `GET /visible-agents` sits behind `requireAuth`
+    // and carries a real user identity that geo-tracker forwards, so exempting it would hand
+    // every authenticated caller an unlimited DB-touching endpoint — to spare a re-check that
+    // geo-tracker already caches and fires by webhook rather than on a timer. If somebody
+    // "harmonises" the two lists, this is what they will have removed.
+    assert('…but /api/tracking/visible-agents is NOT exempt — it carries a USER identity', () =>
+        !isExemptPathname('/api/tracking/visible-agents'));
+
     assert('the exemption is anchored — a lookalike path does NOT inherit it', () =>
         !isExemptPathname('/api/healthcheck-bypass') && !isExemptPathname('/api/webhooksX'));
 

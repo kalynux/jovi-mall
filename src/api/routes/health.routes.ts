@@ -29,8 +29,15 @@ import { SYSTEM_CONFIG } from '../../modules/system/config/system.config';
  *     the result on wi-admin's `/health/ready` and `/api/v1/system/health`. Less severe, but a
  *     second contract on the same path.
  *
- * `npm run test:system` asserts the path and the body keys, so a future edit fails the suite
- * rather than the fleet.
+ * `npm run test:system` asserts the registered path, the unconditional 200, the exact key set
+ * `{status, timestamp}` and the absence of the house `{success, data}` envelope — by invoking
+ * this handler off the router's own layer stack, so a future edit fails the suite rather than
+ * the fleet. `npm run test:errors` asserts the rate-limit exemption on the same path.
+ *
+ * ⚠ Until plan step 2.B.6 that sentence was a LIE: this comment claimed the assertions existed
+ * and what `test:system` actually covered was the MAINTENANCE exemption, a different property.
+ * The claim is what stopped anyone writing the test. Both assertions were negative-tested when
+ * they landed — adding a body key and returning 503 each fail the suite.
  *
  * ═══ The other two ════════════════════════════════════════════════════════════
  *

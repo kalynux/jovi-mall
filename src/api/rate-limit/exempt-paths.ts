@@ -40,6 +40,28 @@ export const EXEMPT_PATHS: readonly Exemption[] = Object.freeze([
             + 'it loses a payment notification or a delivery receipt. These are signature-authenticated '
             + 'and bounded by their own body limits; volume is not the threat here.',
     },
+    {
+        prefix: '/api/internal/agents',
+        reason:
+            'geo-tracker asking for a verdict, as a SERVICE — every route under here is behind '
+            + 'requireServiceToken and no user session is involved, so the caller is one authenticated '
+            + 'peer rather than a population. A 429 breaks the tracking pipe in both directions: an '
+            + 'unanswered eligibility or tracking-policy read fails geo-tracker\'s authorization, and '
+            + 'a refused tracking-state report is dropped silently, because that channel is '
+            + 'best-effort by design. Same reasoning as the maintenance exemption on this prefix — '
+            + 'blocking it turns a jovi-mall load spike into a geo-tracker outage.',
+    },
+    {
+        prefix: '/api/tracking/agent-state',
+        reason:
+            'The reverse channel, also requireServiceToken: geo-tracker pushing an agent\'s tracking '
+            + 'state and last fix. Named PRECISELY rather than exempting /api/tracking, because the '
+            + 'other route under that mount — GET /visible-agents — runs behind requireAuth and '
+            + 'carries a real USER identity forwarded by geo-tracker. Exempting that one would hand '
+            + 'any authenticated caller an unlimited DB-touching endpoint, to spare a re-check that '
+            + 'is already cached in geo-tracker (PERMISSION_CACHE_TTL) and fired by webhook rather '
+            + 'than on a timer. Layer B is doing its job there and should keep it.',
+    },
 ]);
 
 /** Prefix set, precomputed — this runs on every request. */

@@ -80,7 +80,7 @@ import { runWithRequestContext } from '../../src/core/logging/request-context';
 import { logMongoSink } from '../../src/core/logging/mongo-sink';
 import { initLogging } from '../../src/core/logging';
 import { readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { join, relative, sep } from 'path';
 import {
     EXPOSED_CONFIG_KEYS,
     FORBIDDEN_CONFIG_TOKEN,
@@ -93,6 +93,16 @@ import { REDIS_READ_COMMANDS, isRedisReadCommand } from '../../src/modules/syste
 import { diffIndexes, normaliseIndex } from '../../src/modules/system/domain/index-diff';
 import { resolvePrunePlan } from '../../src/modules/system/domain/outbox-prune-policy';
 import { DatabaseInspectQuerySchema, LogQuerySchema } from '../../src/modules/system/validators/system.validator';
+import { healthRoutes } from '../../src/api/routes/health.routes';
+import { isExemptPathname } from '../../src/api/rate-limit/exempt-paths';
+import {
+    resolveMigrationStatus,
+    needsApplying,
+} from '../../src/core/database/schema-migration.model';
+// Safe to import: `scripts/migrate.ts` guards its own `main()` behind `require.main === module`,
+// so this reaches the registry without applying anything. See that file's tail.
+import { MIGRATIONS, assertRegistryCovers } from '../migrate';
+type RequestHandlerLike = (req: never, res: never, next: never) => void;
 
 let passed = 0;
 let failed = 0;
@@ -941,7 +951,10 @@ assert('the Redis allowlist contains no write command', () => {
 
 section('Index drift — driven from literals, so the normaliser itself is pinned');
 
-const idx = (key: Record<string, number>, options: Record<string, unknown> = {}) =>
+// `number | string`, not `number`: a direction may be `'text'` or `'2dsphere'`, and the
+// narrower signature this used to carry made the whole `$text` case inexpressible here —
+// which is part of why a permanent false positive on `products` went unnoticed.
+const idx = (key: Record<string, number | string>, options: Record<string, unknown> = {}) =>
     normaliseIndex(key, options);
 
 assert('a declared index absent from the database is `missing` — the actionable bucket', () => {
@@ -991,6 +1004,52 @@ assert('_id_ is never reported — it would be one false positive per collection
     const drift = diffIndexes([], [idx({ _id: 1 }, { name: '_id_' })]);
     return drift.extra.length === 0;
 });
+
+/**
+ * A `$text` index is declared in one shape and REPORTED in another, and comparing them
+ * verbatim produced a permanent false `missing` + false `extra` on `products` — the one
+ * collection in this codebase carrying one, and one `verify:storefront` proves exists.
+ *
+ * It went unnoticed while the diff was a page somebody opened. Plan step 2.C.4 put it on
+ * the boot path at `warn`, so it became a warning printed on every start telling operators
+ * to run a migration that would not fix it. The fixture below is the exact shape
+ * `listIndexes()` returns for `product_storefront_text`, taken off the dev database.
+ */
+assert('a $text index is not permanent drift — the live sentinel expands from weights', () => {
+    const drift = diffIndexes(
+        [idx({ title: 'text', tags: 'text', description: 'text' },
+            { name: 'product_storefront_text', weights: { title: 10, tags: 4, description: 1 } })],
+        [idx({ _fts: 'text', _ftsx: 1 },
+            { name: 'product_storefront_text', weights: { description: 1, tags: 4, title: 10 }, textIndexVersion: 3 })],
+    );
+    return drift.missing.length === 0 && drift.extra.length === 0 && drift.mismatched.length === 0;
+});
+
+// Sorting is safe HERE and nowhere else: a text index has no prefix semantics, so field
+// order carries no meaning — unlike the compound case asserted above, where it is the identity.
+assert('…and declaration ORDER of text fields does not matter', () => {
+    const drift = diffIndexes(
+        [idx({ description: 'text', title: 'text' }, { weights: { description: 1, title: 10 } })],
+        [idx({ _fts: 'text', _ftsx: 1 }, { weights: { title: 10, description: 1 } })],
+    );
+    return drift.missing.length === 0 && drift.extra.length === 0;
+});
+
+// A text index that genuinely covers different fields must still report. Widening the
+// canonicalisation until nothing text-shaped ever drifts would trade one false positive
+// for a false negative on the only $text index this service has.
+assert('a $text index over DIFFERENT fields still reports as drift', () => {
+    const drift = diffIndexes(
+        [idx({ title: 'text', tags: 'text' }, { weights: { title: 10, tags: 4 } })],
+        [idx({ _fts: 'text', _ftsx: 1 }, { weights: { title: 10 } })],
+    );
+    return drift.missing.length === 1 && drift.extra.length === 1;
+});
+
+// Belt and braces: a live text index whose `weights` the driver did not return cannot be
+// expanded, and must be left alone rather than guessed at.
+assert('a live text sentinel with no weights is passed through untouched', () =>
+    JSON.stringify(normaliseIndex({ _fts: 'text', _ftsx: 1 }, {}).key) === '{"_fts":"text","_ftsx":1}');
 
 assert('a name-only difference is NOT drift — MongoDB generates names', () => {
     const drift = diffIndexes(
@@ -1372,6 +1431,265 @@ assert('lifecycle.ts is the ONLY signal handler in src/', () => {
     return offenders.length === 0;
 });
 
+
+/**
+ * ── Runtime assets `tsc` does not emit ───────────────────────────────────────
+ *
+ * `tsc` emits `.js` and, via `resolveJsonModule`, any imported `.json`. Nothing else.
+ * So a file read off disk at runtime through a `__dirname`-relative path lives in
+ * `src/` and never reaches `dist/`, and the two run paths silently disagree:
+ * `npm run dev` resolves it, `npm start` — and every container image — does not.
+ *
+ * The six Handlebars mail templates were in exactly that state until plan step 2.B.1:
+ * `mail.service.ts` reads `__dirname/templates/<name>.hbs`, `dist/modules/mail/` had no
+ * `templates/`, and every templated email threw MAIL_TEMPLATE_NOT_FOUND in any deploy
+ * that ran the build. `npm run typecheck` passes on it, because it is not a type error.
+ *
+ * `scripts/copy-build-assets.ts` now copies them, from an explicit manifest. This scan
+ * is what keeps the manifest honest: a NEW asset extension appearing under `src/` must
+ * either be covered by the manifest or be added to the ignore list below with a reason.
+ * A glob-everything copy was rejected — `src/` also holds READMEs and a stray test PDF,
+ * and none of that belongs in a runtime image.
+ */
+const BUILD_ASSETS_SRC = readFileSync(join(__dirname, '..', 'copy-build-assets.ts'), 'utf8');
+
+/** Extensions that are documentation or fixtures, never read by the running service. */
+const NON_RUNTIME_EXTENSIONS = new Set(['.md', '.pdf']);
+
+/** `tsc` emits these itself, so they need no manifest entry. */
+const EMITTED_BY_TSC = new Set(['.ts', '.json']);
+
+function collectAssetFiles(dir: string, out: string[] = []): string[] {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        // `src/scripts/` is gitignored one-off tooling, excluded from the build and from
+        // test:env's census for the same reason. It is not part of the shipped service.
+        if (entry.isDirectory()) {
+            if (entry.name !== 'scripts' || dir !== SRC) collectAssetFiles(full, out);
+            continue;
+        }
+        const dot = entry.name.lastIndexOf('.');
+        const ext = dot === -1 ? '' : entry.name.slice(dot);
+        if (EMITTED_BY_TSC.has(ext) || NON_RUNTIME_EXTENSIONS.has(ext)) continue;
+        out.push(full);
+    }
+    return out;
+}
+
+assert('every non-emitted asset under src/ is covered by the build-assets manifest', () => {
+    const uncovered = collectAssetFiles(SRC)
+        // `src/storage-test/` is an upload fixture, not a runtime asset.
+        .filter((file) => !file.includes(`${sep}storage-test${sep}`))
+        .filter((file) => {
+            const rel = relative(SRC, file).split(sep).join('/');
+            const dir = rel.slice(0, rel.lastIndexOf('/'));
+            return !BUILD_ASSETS_SRC.includes(`'${dir}'`);
+        });
+    if (uncovered.length > 0) {
+        originalConsole.log('    not copied into dist/:', uncovered.map((f) => relative(SRC, f)));
+    }
+    return uncovered.length === 0;
+});
+
+assert('the mail templates specifically are in the manifest — they are the known case', () =>
+    BUILD_ASSETS_SRC.includes("'modules/mail/templates'"));
+
+/**
+ * ── `GET /api/health` IS FROZEN, AND THIS IS WHAT FREEZES IT ─────────────────
+ *
+ * `health.routes.ts`'s header has claimed for some time that "`npm run test:system`
+ * asserts the path and the body keys". It did not. What existed was the MAINTENANCE
+ * exemption for that path, above — a different property entirely. A comment asserting
+ * the existence of a test that does not exist is worse than no comment: it is the
+ * reason somebody skips writing the test. (Plan step 2.B.6; correction #2.)
+ *
+ * Three consumers depend on the exact shape, and one of them turns a change here into
+ * an outage somewhere else:
+ *
+ *   • geo-tracker's `NodeAPIChecker` GETs this path via NODE_API_HEALTH_PATH and is
+ *     registered as a READINESS checker on its own /readyz. Its client treats any
+ *     status >= 300 as an error and never parses the body, so ONLY the status code is
+ *     load-bearing there — and readiness semantics on this path mean a jovi-mall Redis
+ *     wobble depools geo-tracker and kills every live WebSocket tracking session.
+ *   • wi-admin's `pingPlatform()` surfaces it on /health/ready and /api/v1/system/health.
+ *   • Docker's HEALTHCHECK in the two images, and the compose stack.
+ *
+ * The handler is invoked DIRECTLY off the router's own layer stack rather than over
+ * HTTP: it proves the registered PATH and the handler together, with no server and no
+ * database. `/ready` is deliberately not invoked here — it probes Mongo and Redis.
+ */
+const healthLayers = (healthRoutes as unknown as {
+    stack: Array<{ route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: RequestHandlerLike }> } }>;
+}).stack.filter((layer) => layer.route);
+
+function invokeHealthRoute(path: string): { status: number; body: Record<string, unknown> } {
+    const layer = healthLayers.find((l) => l.route!.path === path);
+    if (!layer) throw new Error(`no route registered at ${path}`);
+
+    let status = 200;
+    const res = {
+        status(code: number) { status = code; return this; },
+        json(payload: Record<string, unknown>) { this.__body = payload; return this; },
+        __body: {} as Record<string, unknown>,
+    };
+    layer.route!.stack[0].handle({} as never, res as never, (() => undefined) as never);
+    return { status, body: res.__body };
+}
+
+assert('the frozen path is registered at exactly `/` on the health router', () =>
+    healthLayers.some((l) => l.route!.path === '/' && l.route!.methods.get === true));
+
+assert('GET /api/health answers 200 UNCONDITIONALLY — it touches no dependency', () =>
+    invokeHealthRoute('/').status === 200);
+
+assert('…with exactly the keys {status, timestamp} and status "ok"', () => {
+    const { body } = invokeHealthRoute('/');
+    const keys = Object.keys(body).sort();
+    return keys.length === 2
+        && keys[0] === 'status' && keys[1] === 'timestamp'
+        && body.status === 'ok'
+        && typeof body.timestamp === 'string'
+        && !Number.isNaN(Date.parse(body.timestamp as string));
+});
+
+// The body is NOT wrapped in the house `{success, data}` envelope, and that is the
+// contract rather than an oversight — geo-tracker and wi-admin parse this shape.
+assert('the frozen body is UNWRAPPED — no success/data envelope', () => {
+    const { body } = invokeHealthRoute('/');
+    return !('success' in body) && !('data' in body);
+});
+
+// The liveness probe is a SEPARATE endpoint, and both images' HEALTHCHECK points at it
+// rather than at the frozen path — one fewer consumer on a contract three services
+// already depend on.
+assert('/live exists beside it and reports the service by name', () => {
+    const { status, body } = invokeHealthRoute('/live');
+    return status === 200 && body.status === 'alive' && body.service === 'jovi-mall';
+});
+
+assert('/ready is registered — readiness lives HERE, never on the frozen path', () =>
+    healthLayers.some((l) => l.route!.path === '/ready'));
+
+// The rate-limit half is asserted in `test:errors`, which owns that module. This one
+// line couples the two: the frozen path being exempt is a property of THIS contract,
+// and a reader of health.routes.ts should find it proven from here too.
+assert('the frozen path is exempt from rate limiting — a 429 is a >= 300 to geo-tracker', () =>
+    isExemptPathname('/api/health') && isExemptPathname('/api/health/ready'));
+
+/**
+ * ── The migration ledger (plan step 2.C) ─────────────────────────────────────
+ *
+ * Fifteen idempotent migration programs existed with no record of what had been applied
+ * where. Two properties are asserted here, and each closes one half of that.
+ *
+ * **The registry is closed.** `assertRegistryCovers()` diffs `MIGRATIONS` against every
+ * `migrate:*` / `backfill:*` binding in package.json. Run from the suite rather than only
+ * from whoever happens to type `migrate:status` next, because a sixteenth migration added
+ * without a row is a migration the ledger silently does not track — which is precisely the
+ * state this part was written to end.
+ *
+ * **`changed` is not `applied`.** The checksum is the whole reason the ledger stores one,
+ * and the exit criterion for the part is written in terms of it: a migration edited since
+ * it ran must report as such. `resolveMigrationStatus` is pure and lives in `src/`, so it
+ * is driven here from literals.
+ */
+section('Migration ledger — the registry is closed, and an edit is not an application');
+
+assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has a file', () => {
+    assertRegistryCovers();   // throws with the drift named
+    return true;
+});
+
+assert('all fifteen are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 15);
+
+// Two ordering rules, from the runner's own header. Both are correctness, not taste:
+// the agent domain reads memberships, and a unique index build fails outright against
+// data a later migration has not yet cleaned up.
+assert('migrate:agent-memberships is FIRST — the agent domain reads memberships', () =>
+    MIGRATIONS[0].name === 'migrate:agent-memberships');
+
+// Classified on the FILE, not the binding: `migrate:admin-action-log` builds indexes
+// (including a TTL) and its binding name does not say so, while its file —
+// `migrate-admin-action-log-indexes.ts` — does. The file is what runs.
+assert('every index migration runs after every data migration', () => {
+    const isIndexBuild = (m: { file: string }): boolean => m.file.includes('index');
+    const firstIndex = MIGRATIONS.findIndex(isIndexBuild);
+    const lastData = MIGRATIONS.map(isIndexBuild).lastIndexOf(false);
+    return firstIndex > -1 && firstIndex > lastData;
+});
+
+// Correction #4 to the plan: three of the fifteen had no --dry-run at all, so "a dry run is
+// a safe read of current state" was not available for them. All fifteen have one now, and
+// the runner's `dryRun` flag is what `migrate:up -- --dry-run` reads to decide whether it may
+// rehearse a script or must skip it.
+assert('every migration declares --dry-run, and every script actually accepts one', () => {
+    const missing = MIGRATIONS.filter((m) => {
+        if (!m.dryRun) return true;
+        return !readFileSync(join(__dirname, '..', '..', m.file), 'utf8').includes('--dry-run');
+    });
+    if (missing.length > 0) {
+        originalConsole.log('    no --dry-run:', missing.map((m) => m.name));
+    }
+    return missing.length === 0;
+});
+
+const ledgerRow = (checksum: string, outcome: 'success' | 'failed', at: string) =>
+    ({ checksum, outcome, appliedAt: new Date(at) });
+
+assert('no rows at all reads as not_applied', () =>
+    resolveMigrationStatus([], 'aaa') === 'not_applied');
+
+assert('a success at the current checksum reads as applied', () =>
+    resolveMigrationStatus([ledgerRow('aaa', 'success', '2026-01-01')], 'aaa') === 'applied');
+
+// THE exit criterion for plan part 2.C.
+assert('a success at a DIFFERENT checksum reads as changed, never as applied', () =>
+    resolveMigrationStatus([ledgerRow('aaa', 'success', '2026-01-01')], 'bbb') === 'changed');
+
+assert('a failure with no success reads as failed, NOT as not_applied', () =>
+    resolveMigrationStatus([ledgerRow('aaa', 'failed', '2026-01-01')], 'aaa') === 'failed');
+
+// The two orderings that a naive "newest row wins" or "any success wins" gets wrong.
+assert('a failure AFTER a success at the same checksum reads as failed', () =>
+    resolveMigrationStatus([
+        ledgerRow('aaa', 'success', '2026-01-01'),
+        ledgerRow('aaa', 'failed', '2026-02-01'),
+    ], 'aaa') === 'failed');
+
+assert('a success AFTER a failure at the same checksum reads as applied', () =>
+    resolveMigrationStatus([
+        ledgerRow('aaa', 'failed', '2026-01-01'),
+        ledgerRow('aaa', 'success', '2026-02-01'),
+    ], 'aaa') === 'applied');
+
+// Edited, run, failed, then reverted: the version on disk DID succeed once, so it is applied.
+assert('a failure at a checksum nobody is on any more does not mask an applied version', () =>
+    resolveMigrationStatus([
+        ledgerRow('aaa', 'success', '2026-01-01'),
+        ledgerRow('bbb', 'failed', '2026-02-01'),
+    ], 'aaa') === 'applied');
+
+assert('applied is the ONLY state migrate:up skips', () =>
+    !needsApplying('applied')
+    && (['not_applied', 'changed', 'failed'] as const).every((s) => needsApplying(s)));
+
+/**
+ * `autoIndex` is off in production now, and that trades a silent-SLOW failure for a
+ * silent-MISSING one. Both halves of 2.C.4 are asserted from source: without the second,
+ * a declared index nobody built simply is not there and nothing says so.
+ */
+assert('mongoose.connect sets autoIndex off in production', () =>
+    /autoIndex:\s*process\.env\.NODE_ENV\s*!==\s*'production'/.test(LIFECYCLE_SRC));
+
+assert('boot reports index drift — the other half of turning autoIndex off', () =>
+    LIFECYCLE_SRC.includes('reportIndexDrift(') && LIFECYCLE_SRC.includes('inspectDatabase('));
+
+// It must not be awaited: `inspectDatabase` walks the whole collection registry under a
+// wall-clock budget, and none of it is a precondition for serving a request. Awaiting it
+// would add that budget to every boot and every rolling-deploy step.
+assert('the drift report is fired off, not awaited', () =>
+    LIFECYCLE_SRC.includes('void reportIndexDrift()'));
 
 void (async () => {
     // The in-process floor, proven without a Redis to talk to. See `redisLayerEnabled`.

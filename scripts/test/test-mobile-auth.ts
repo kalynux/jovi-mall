@@ -426,6 +426,17 @@ function main(): void {
     assert('…with the production caveat about https://localhost stated', () =>
         /https:\/\/localhost.{0,400}loopback/s.test(envExample));
 
+    // The two above read the PROSE, and prose is what let this gap survive: both
+    // origins were described here in full while the assignment below carried
+    // neither. `ci.yml` literally does `cp .env.example .env`, so every
+    // environment built from the template CORS-refused the WebView client this
+    // whole namespace exists for — while the running `.env`, hand-edited, worked.
+    // A test that reads the comment cannot see that. Assert the VALUE.
+    assert('…and the ALLOWED_ORIGINS VALUE carries both, not just the comment', () => {
+        const line = envExample.split('\n').find((l) => /^ALLOWED_ORIGINS\s*=/.test(l)) ?? '';
+        return line.includes('capacitor://localhost') && line.includes('https://localhost');
+    });
+
     console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
     if (failed > 0) process.exit(1);
 }
