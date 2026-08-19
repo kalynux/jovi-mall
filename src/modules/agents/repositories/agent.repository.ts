@@ -363,11 +363,19 @@ export class AgentRepository {
 
   // ─── Tracking allow (the business flag geo-tracker enforces) ──────────────
 
+  /**
+   * `session` (plan step 3.A.1): this write and the `agent.tracking_allow_changed` outbox row
+   * it produces must commit together. Tracking Allow is the one event with no reconciliation
+   * path in geo-tracker at all, so a row lost between this write and its enqueue meant an
+   * administrator's revocation never arrived and the agent went on streaming a live position
+   * after being told they may not be tracked.
+   */
   async setTrackingAllowed(
     agentId: string,
     allowed: boolean,
     reason: string | null,
-    actor: RoleActorRef
+    actor: RoleActorRef,
+    session?: ClientSession
   ): Promise<IDeliveryAgent | null> {
     return await DeliveryAgentModel.findByIdAndUpdate(
       agentId,
@@ -383,7 +391,7 @@ export class AgentRepository {
           ...actorStamp('tracking.changed_by', actor),
         },
       },
-      { new: true }
+      { new: true, session }
     );
   }
 

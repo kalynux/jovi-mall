@@ -13,7 +13,8 @@ import {
 } from '../../models/agent.model';
 import { AGENT_CONFIG } from '../../config/agent.config';
 import { IGeoPoint } from '../../../../core/types/geo.types';
-import { eventBus } from '../../../../core/events/event-bus';
+import { transactionManager } from '../../../../core/database/transaction.manager';
+import { trackingOutboxEmitter } from '../../../tracking-integration/services/tracking-outbox.emitter';
 import { RoleActorRef } from '../../../../core/types/actor-source.types';
 
 /**
@@ -133,9 +134,29 @@ export class AgentTrackingPolicyService {
   // ─── Flag management (admin / agency) ─────────────────────────────────────
 
   /**
-   * Flip the tracking flag. Emits a business event so the integration layer can
-   * push the change to geo-tracker rather than wait for a cache to expire —
-   * revoking tracking is time-critical in exactly the way granting it is not.
+   * Flip the tracking flag, and push the change to geo-tracker rather than wait for a cache to
+   * expire — revoking tracking is time-critical in exactly the way granting it is not.
+   *
+   * ── WHY THIS GAINED A TRANSACTION (plan step 3.A.1, X-1) ────────────────────────────────
+   * It had none. The flag was written, and then an outbox row was enqueued separately, through
+   * a fire-and-forget event-bus publish — so a crash in between lost the revocation
+   * permanently, with nothing to notice or replay it.
+   *
+   * That was the worst instance of X-1 in the service, and not because it was the likeliest.
+   * The shipment events have a backstop: geo-tracker's `agentHasActiveShipment` aggregate
+   * eventually corrects a session the per-shipment verdict failed to close. **Tracking Allow
+   * had none at all** — `visible-agents` does not consult the flag either, so even
+   * geo-tracker's revocation sweep would keep every watcher. A lost row meant an administrator
+   * pressed "disable tracking", was shown success, and the agent went on broadcasting a live
+   * position indefinitely.
+   *
+   * The flag write and its outbox row now commit together, and `TrackingAllowReconcileWorker`
+   * (step 3.A.3) is the second line: it re-pushes revocations periodically, covering the case
+   * where the row commits but delivery never succeeds.
+   *
+   * ⚠ geo-tracker is NOT on this critical path, and must not be. The outbox row is a local
+   * Mongo write in the same transaction as the flag; a geo-tracker outage delays delivery and
+   * changes nothing here.
    */
   async setTrackingAllowed(
     agentId: string,
@@ -147,23 +168,26 @@ export class AgentTrackingPolicyService {
     if (!agent) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 
     const previous = agent.tracking?.allowed ?? null;
-    // Unlike KYC and the ban, this stamp is never cleared: `tracking.allowed` has no
-    // "nobody decided" state — it is true or false, and either way somebody chose it.
-    const updated = await this.agents.setTrackingAllowed(agentId, allowed, reason, actor);
-    if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
+    let updated: IDeliveryAgent | null = null;
 
-    if (previous !== allowed) {
-      void eventBus
-        .publish('agent.tracking_allow_changed', {
-          eventType: 'agent.tracking_allow_changed',
-          aggregateId: agentId,
-          occurredAt: new Date(),
-          payload: { agentId, from: previous, to: allowed, reason, actorRole: actor.role },
-        })
-        .catch((err) => console.error('[AgentTrackingPolicyService] tracking emit failed:', err));
-    }
+    await transactionManager.runInTransaction(async (session) => {
+      // Unlike KYC and the ban, this stamp is never cleared: `tracking.allowed` has no
+      // "nobody decided" state — it is true or false, and either way somebody chose it.
+      updated = await this.agents.setTrackingAllowed(agentId, allowed, reason, actor, session);
+      if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 
-    return updated;
+      // Only on a real change: a repeated write of the same value must not enqueue. The
+      // reconcile worker is the one deliberate exception to that rule — re-delivering an
+      // unchanged value is its entire job.
+      if (previous !== allowed) {
+        await trackingOutboxEmitter.emitTrackingAllowChanged(
+          { agentId, allowed, reason, actorRole: actor.role },
+          session
+        );
+      }
+    });
+
+    return updated!;
   }
 
   async requireTrackingAllowed(agentId: string): Promise<AgentTrackingPolicy> {

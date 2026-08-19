@@ -31,7 +31,6 @@ import { bookingReminderWorker } from './modules/booking/workers/booking-reminde
 import { inboundCalendarSyncWorker } from './modules/booking/workers/inbound-calendar-sync.worker';
 import { codDepositDeadlineWorker } from './modules/cod/workers/cod-deposit-deadline.worker';
 import { paymentReconciliationWorker } from './modules/payments/workers/payment-reconciliation.worker';
-import { registerTrackingEventSubscriber } from './modules/tracking-integration/services/tracking-event-subscriber';
 import { trackingDispatchWorker } from './modules/tracking-integration/workers/tracking-dispatch.worker';
 import { initializeAgentDomain } from './modules/agents';
 import { initializeShipmentAssignment } from './modules/shipment-assignment';
@@ -356,9 +355,11 @@ function startBackgroundWork(): void {
     // path, and a dropped one is money taken for an order that stays unpaid.
     paymentReconciliationWorker.start();
 
-    // Live tracking: write shipment-lifecycle events to the outbox and stream
-    // them to the geo-tracker service so it can revoke tracking on completion.
-    registerTrackingEventSubscriber();
+    // Live tracking: stream the outbox to the geo-tracker service so it can revoke tracking on
+    // completion. There is no subscriber to register any more — the outbox row is written by
+    // `TrackingOutboxEmitter` inside the transaction that changed the shipment (plan step
+    // 3.A.1, X-1), because the event bus can carry no session and swallows the failure when a
+    // post-commit enqueue is lost.
     trackingDispatchWorker.start();
 
     // Agent-acceptance workflow: auto-assignment subscriber (shipment.assigned →

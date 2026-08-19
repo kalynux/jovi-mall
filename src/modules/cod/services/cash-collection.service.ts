@@ -26,6 +26,7 @@ import { IShipment, ShipmentModel } from '../../shipments/shipment.model';
 import { ShipmentRepository } from '../../shipments/shipment.repository';
 import { CustomerModel } from '../../customers/customer.model';
 import { resolveLanguage } from '../../notifications/catalog/notification-i18n';
+import { trackingOutboxEmitter } from '../../tracking-integration/services/tracking-outbox.emitter';
 
 export interface CollectInput {
   code: string;
@@ -322,6 +323,31 @@ export class CashCollectionService {
       await this.recomputeCodPaymentStatusInSession(orderId, session);
 
       await this.creditCashLiabilitiesInSession(claimed, session);
+
+      /**
+       * The outbox row, in the settlement transaction (plan step 3.A.1, X-1).
+       *
+       * This is the COD "finish": the verified code delivered the shipment three writes
+       * above, so this row is TERMINAL and is what closes the shipment's tracking session.
+       * It used to be enqueued post-commit via `emitPostCollectionEvents` → the event bus →
+       * `TrackingEventSubscriber`, so a crash after the cash was recorded and before the
+       * enqueue left geo-tracker broadcasting the position of a delivered shipment.
+       *
+       * The emitter reads the status back rather than being told it, and passing the session
+       * is what makes that correct: inside the transaction the read sees the `delivered` this
+       * collection just caused. Session-less it would see the pre-collection status and report
+       * a finished delivery as still in flight.
+       *
+       * `customerId: null` matches what this event has always carried — the
+       * `cod.collection.recorded` payload never had a customer id, so the old row's was null
+       * too. Not an omission to fix here; changing it is an event-shape decision.
+       */
+      await trackingOutboxEmitter.emitCodCollectionRecorded({
+        shipmentId,
+        agentId,
+        agencyId: collection.agency_id.toString(),
+        customerId: null,
+      }, session);
     });
 
     // 4. Post-commit side effects (each best-effort, all idempotent).
@@ -453,6 +479,17 @@ export class CashCollectionService {
       await this.aggregationService.recomputeFulfillmentStatus(orderId, session);
       await this.recomputeCodPaymentStatusInSession(orderId, session);
       await this.creditCashLiabilitiesInSession(claim, session);
+
+      // The terminal outbox row, in the transaction — see `collect()` for the reasoning.
+      // Identical here on purpose: "the downstream money mechanics must not be able to tell
+      // the two apart" applies to the tracking lifecycle too. This is also the COD half of the
+      // auto-confirm sweep, whose PREPAID half was emitting nothing at all until step 3.A.1b.
+      await trackingOutboxEmitter.emitCodCollectionRecorded({
+        shipmentId,
+        agentId: claim.agent_id.toString(),
+        agencyId: claim.agency_id.toString(),
+        customerId: null,
+      }, session);
 
       claimed = claim;
     });

@@ -46,6 +46,7 @@ import { earningsSplitService } from '../earnings/services/earnings-split.servic
 import { orderStockService } from '../orders/services/order-stock.service';
 import { cashCollectionService, CodShipmentSummary } from '../cod/services/cash-collection.service';
 import { eventBus } from '../../core/events/event-bus';
+import { trackingOutboxEmitter } from '../tracking-integration/services/tracking-outbox.emitter';
 import { agentActionAuditService } from '../tracking-integration/services/agent-action-audit.service';
 import { shipmentAssignmentOfferRepository } from '../shipment-assignment/repositories/shipment-assignment-offer.repository';
 import { geoRoutingClient } from '../shipment-assignment/services/geo-routing.client';
@@ -1211,6 +1212,43 @@ export class ShipmentService {
             if (isCod && newStatus === 'returned') {
                 await cashCollectionService.handleShipmentReturnedInSession(shipmentId, orderId, session);
             }
+
+            /**
+             * ── THE OUTBOX ROW, INSIDE THE TRANSACTION (plan step 3.A.1, X-1) ─────────────
+             *
+             * It used to be written post-commit, two hops away: this method published on the
+             * in-memory event bus and `TrackingEventSubscriber` enqueued the row. A crash in
+             * that window lost the event permanently — despite the outbox model's docstring
+             * promising crash-durability — and because `EventBus.publish` swallows handler
+             * errors, the one hop with no retry was also the one hop with no alarm.
+             *
+             * `committed` is used rather than a re-read, for the reason its own declaration
+             * gives: it is the authoritative post-state of THIS transition, so a concurrent
+             * transition can never make this row carry verdicts for a status it did not set.
+             * `newStatus` is passed rather than read back for the same reason — a burst of
+             * transitions must produce one honest verdict each.
+             *
+             * ⚠ AWAITED, not fire-and-forget. That is the trade atomicity buys: a failure here
+             * now aborts the transition instead of being logged and dropped. It is the correct
+             * trade — this is a local Mongo write in a transaction that is already writing to
+             * Mongo, so the only thing that fails it is Mongo being broken, and `...WithRetry`
+             * re-runs a transient conflict. **geo-tracker is still nowhere near this path**: a
+             * geo-tracker outage delays dispatch and cannot affect a delivery.
+             */
+            await trackingOutboxEmitter.emitShipmentStatusChanged({
+                shipmentId,
+                agentId: committed.agent_id ? committed.agent_id.toString() : null,
+                agencyId: committed.agency_id.toString(),
+                customerId: order.customer_id?.toString() ?? null,
+                status: newStatus,
+            }, session);
+
+            // Phase 6: the agent-action audit for a pickup/delivery/return/cancel transition
+            // (a no-op for other statuses or when the shipment carries no agent). `actor.role`
+            // is the audit's actorRole — geo-tracker stores it as free text and already
+            // receives 'agent' from the COD collect path, so agent-driven transitions need no
+            // change there. In the transaction for the same reason as the row above.
+            await agentActionAuditService.emitShipmentTransition(committed, actor.role, session);
         });
 
         // Only notify when a code was actually minted here; a collection that
@@ -1251,15 +1289,6 @@ export class ShipmentService {
                 .restockForShipment(order._id.toString(), updated!)
                 .catch((err) => console.error('[ShipmentService] returned-shipment restock failed:', err));
         }
-        // Phase 6: record the agent-action audit for a pickup/delivery/return/
-        // cancel transition (fire-and-forget; a no-op for other statuses or when
-        // the shipment carries no agent). `actor.role` is the audit's actorRole —
-        // geo-tracker stores it as free text and already receives 'agent' from
-        // the COD collect path, so agent-driven transitions need no change there.
-        void agentActionAuditService
-            .emitShipmentTransition(updated!, actor.role)
-            .catch((err) => console.error('[ShipmentService] agent-action audit emit failed:', err));
-
         // Tell the agency its agent moved the shipment. Agent-driven only — an
         // agency does not need to be notified of its own dashboard action — and
         // only for the outcomes worth pushing (in_transit is a routine progress
@@ -1329,17 +1358,24 @@ export class ShipmentService {
     /**
      * Fire-and-forget announcement that a shipment's status changed.
      *
-     * TWO AUDIENCES, and the method name predates the second:
+     * ⚠ ── THIS NO LONGER FEEDS geo-tracker (plan step 3.A.1, X-1) ────────────
      *
-     * 1. **The live-tracking integration** (geo-tracker, via the outbox) — so an
-     *    agency/customer that can no longer track its agent loses access
-     *    immediately. Terminal statuses are what actually revoke; other
-     *    transitions are re-checked and kept if still valid on the geo-tracker side.
-     * 2. **The customer notification stack** — which turns four of these statuses
-     *    into "on its way" / "out for delivery" / "delivered" / "attempt failed".
+     * It used to have TWO audiences, and the live-tracking one was the reason the method is
+     * named as it is. That audience has moved: the outbox row is now written by
+     * `trackingOutboxEmitter.emitShipmentStatusChanged` **inside the transaction that made the
+     * transition**, because a post-commit fire-and-forget hop cannot be crash-durable and the
+     * event bus swallows the failure when it isn't.
      *
-     * Best-effort: a failure here never affects the delivery flow (mirrors the
-     * codebase's post-commit event emission pattern).
+     * So do NOT reinstate a tracking consumer here, and do not assume a status change reaches
+     * geo-tracker because this fired. What remains is one audience:
+     *
+     * - **The customer notification stack** — which turns four of these statuses into "on its
+     *   way" / "out for delivery" / "delivered" / "attempt failed". Genuinely best-effort: a
+     *   failure never affects the delivery flow.
+     *
+     * `shipment-assignment/assignment-event-subscriber.ts` also listens. Both are in-process
+     * and neither crosses a service boundary, which is exactly why the bus is still the right
+     * transport for them and was the wrong one for the outbox.
      *
      * ── Why the descriptive fields are on the payload, not re-read ────────────
      *
@@ -1350,9 +1386,10 @@ export class ShipmentService {
      * allowed cycle, so a consumer re-reading it later could describe the wrong
      * attempt. Both are already in hand at every call site; this costs no query.
      *
-     * NOTE: adding fields here does NOT change what reaches geo-tracker.
-     * `TrackingEventSubscriber` reads named fields into a fixed outbox row, so
-     * anything it does not name is invisible to the other service.
+     * NOTE: adding fields here does NOT change what reaches geo-tracker — now for a stronger
+     * reason than before. This payload no longer reaches the outbox at all; the row is built
+     * from named fields by `TrackingOutboxEmitter`, in the transaction. An event-shape change
+     * for geo-tracker is a change there and in `webhook/domain/entity.go`, together.
      */
     private _emitTrackingStatusChanged(shipment: IShipment, customerId: string | null): void {
         // The attempt THIS event is about: the newest entry matching the status
@@ -1381,34 +1418,28 @@ export class ShipmentService {
     }
 
     /**
-     * Fire-and-forget notify the live-tracking integration that a specific agent
-     * was RELEASED from a shipment (an agent → agent reassignment), so geo-tracker
-     * closes that agent's tracking session and the agency/customer immediately
-     * lose visibility of them for this shipment. Unlike a terminal status this is
-     * a *release* — the shipment is not over, so no outcome is stamped and a fresh
-     * session opens the moment the replacement agent accepts. Carries the RELEASED
-     * agent's id (not the shipment's current `agent_id`, which is now null).
+     * ── `_emitAgentReleased` WAS HERE, AND IT WAS DELETED (plan step 3.A.1b) ────────────────
+     *
+     * It published `shipment.agent_released` on the event bus, and `TrackingEventSubscriber`
+     * turned that into the outbox row that releases the old agent's tracking session. The row
+     * is now written by `trackingOutboxEmitter.emitAgentReleased` inside the transaction that
+     * detaches the agent — `reassignAgent` and `releaseForAgentCancel`.
+     *
+     * The publish was not kept, unlike `shipment.status_changed`'s. That one has two other
+     * in-process consumers (customer notifications, assignment); this one had exactly ONE
+     * subscriber and it was the outbox. Left in place it would emit into the void on every
+     * reassignment and every agent cancel, and `eventBusPublishedTotal{event_type="unhandled"}`
+     * would say so — correctly, which is the argument for deleting it rather than keeping it.
+     *
+     * `shipment.reassigned` below is the business-audit event and is unaffected; it is what a
+     * future dashboard consumer should subscribe to.
      */
-    private _emitAgentReleased(shipment: IShipment, releasedAgentId: string, customerId: string | null): void {
-        void eventBus.publish('shipment.agent_released', {
-            eventType: 'shipment.agent_released',
-            aggregateId: shipment._id.toString(),
-            occurredAt: new Date(),
-            payload: {
-                shipmentId: shipment._id.toString(),
-                orderId: shipment.order_id.toString(),
-                agencyId: shipment.agency_id.toString(),
-                agentId: releasedAgentId,
-                customerId,
-            },
-        }).catch((err) => console.error('[ShipmentService] agent_released emit failed:', err));
-    }
 
     /**
      * Fire-and-forget business audit of an agent → agent reassignment (for
      * dashboards / future consumers). Purely observational — the tracking release
-     * rides `_emitAgentReleased`, and the durable record is the shipment's
-     * `status_history` + the assignment offer rows.
+     * is an outbox row written in `reassignAgent`'s transaction, and the durable
+     * record is the shipment's `status_history` + the assignment offer rows.
      */
     private _emitReassigned(shipment: IShipment, previousAgentId: string, previousStatus: ShipmentStatus, reason: string, orderNumber: string | null): void {
         void eventBus.publish('shipment.reassigned', {
@@ -1479,6 +1510,23 @@ export class ShipmentService {
             // whole shipment for reassignment, so an outstanding offer must not
             // remain acceptable on a shipment that has left this agency.
             await shipmentAssignmentOfferRepository.cancelPendingForShipment(shipmentId, session);
+
+            // The outbox row, in the transaction (plan step 3.A.1). `rejected` is the CAS
+            // result, so the verdicts describe THIS rejection. Note `rejected` is NOT a
+            // terminal status — the shipment is not over, it has left this agency — so
+            // `shipmentTrackability` returns trackable:false with no outcome, and geo-tracker
+            // releases the session rather than closing it with a stamp.
+            await trackingOutboxEmitter.emitShipmentStatusChanged({
+                shipmentId,
+                agentId: rejected.agent_id ? rejected.agent_id.toString() : null,
+                agencyId: rejected.agency_id.toString(),
+                customerId: null,
+                status: 'rejected',
+            }, session);
+
+            // Phase 6: a rejection is an audited 'cancel' action for the agent on the
+            // shipment (no-op if it was never assigned to one).
+            await agentActionAuditService.emitShipmentTransition(rejected, 'agency', session);
         });
 
         const updated = await this.shipmentRepo.findById(shipmentId);
@@ -1486,11 +1534,6 @@ export class ShipmentService {
         // If an agent had already accepted (agent_id set while still 'assigned'),
         // free the capacity slot they reserved — the shipment is leaving them.
         this._releaseAgentCapacity(updated, 'rejected');
-        // Phase 6: a rejection is an audited 'cancel' action for the agent on the
-        // shipment (no-op if it was never assigned to one).
-        void agentActionAuditService
-            .emitShipmentTransition(updated!, 'agency')
-            .catch((err) => console.error('[ShipmentService] agent-action audit emit failed:', err));
         // Tell the vendor their delivery was declined so they can reassign — the
         // reason + note live on the order view (this only alerts + deep-links).
         void this._emitShipmentRejected(updated!, reason, note ?? null)
@@ -1635,12 +1678,23 @@ export class ShipmentService {
             // Defensive: a bound agent has no pending offer, but cancel any stray one
             // so nothing can be accepted onto a shipment that just changed hands.
             await shipmentAssignmentOfferRepository.cancelPendingForShipment(shipmentId, session);
+
+            // Release (not terminate) the OLD agent's tracking session, in the transaction
+            // that detached them (plan step 3.A.1). Losing this row was the reassignment case
+            // in X-1's cost table: the old agent's session stays open, and only
+            // `ActivateShipment`'s belt-and-suspenders guard — which closes a session for the
+            // same shipment held by a different agent — eventually covers it. That guard
+            // exists precisely because this event could go missing. It still should.
+            await trackingOutboxEmitter.emitAgentReleased({
+                shipmentId,
+                agentId: previousAgentId,
+                agencyId: detached.agency_id.toString(),
+                customerId: order?.customer_id?.toString() ?? null,
+            }, session);
         });
 
         // ── post-commit, best-effort teardown of the OLD agent ──────────────────
-        // Release (not terminate) the old agent's tracking session and drop the
-        // agency/customer's visibility of them for this shipment.
-        this._emitAgentReleased(detached!, previousAgentId, order?.customer_id?.toString() ?? null);
+        // (The tracking release is NOT here any more — it committed with the detach above.)
         // Give back the capacity slot the old agent reserved on acceptance — UNLESS
         // the shipment was `returned`, which already released it (double-release
         // would only trip the drift warning).
@@ -1732,10 +1786,20 @@ export class ShipmentService {
             }
             // Deliberately does NOT cancel the OTHER agents' standing offers: those
             // ignored offers stay acceptable, and the broadcast resumes from cursor.
+
+            // The tracking release, in the transaction that detached them (plan step 3.A.1).
+            // Same shape as the reassignment path above — a release, not a terminal: the
+            // shipment is not over, it is no longer this agent's.
+            await trackingOutboxEmitter.emitAgentReleased({
+                shipmentId,
+                agentId,
+                agencyId: detached.agency_id.toString(),
+                customerId: order?.customer_id?.toString() ?? null,
+            }, session);
         });
 
         // ── post-commit teardown of the cancelling agent ────────────────────────
-        this._emitAgentReleased(detached!, agentId, order?.customer_id?.toString() ?? null);
+        // (The tracking release is NOT here any more — it committed with the detach above.)
         void agentCapacityService
             .release(agentId, 'cancelled')
             .catch((err) => console.error('[ShipmentService] agent-cancel capacity release failed:', err));
@@ -1897,6 +1961,9 @@ export class ShipmentService {
         auto: boolean
     ): Promise<{ order: IOrder | null; applied: boolean }> {
         let applied = false;
+        // Read once, before the transaction, purely to stamp the outbox row below. Cheap: this
+        // method already does two full `findById` on the same order.
+        const orderCustomer = await OrderModel.findById(orderId).select('customer_id').lean();
 
         await transactionManager.runInTransaction(async (session) => {
             // Guarded on status: the sweep and a customer can land together, and
@@ -1912,6 +1979,37 @@ export class ShipmentService {
 
             await this.orderRepo.setItemDeliveryStatusByShipment(shipmentId, 'delivered', session);
             await this.aggregationService.recomputeFulfillmentStatus(orderId, session);
+
+            /**
+             * ── THE TERMINAL EVENT, AND IT USED TO BE MISSING ON ONE OF TWO PATHS ─────────
+             *
+             * `delivered` is terminal, so this row is what CLOSES the shipment's tracking
+             * session in geo-tracker and starts its GPS trail's retention clock.
+             *
+             * Putting it here rather than at the callers fixes a defect found while doing
+             * plan step 3.A.1b: this method has two callers, and only ONE of them emitted.
+             * `confirmDeliveryByCustomer` did, post-commit; `autoConfirmStaleDeliveries` — the
+             * sweep that confirms a prepaid delivery the customer never confirmed — did not,
+             * ever. So an auto-confirmed shipment reached `delivered` and geo-tracker was
+             * never told: the session stayed open until `TRACKING_SESSION_TTL` or until some
+             * later `agentHasActiveShipment: false` reconciled it away.
+             *
+             * That was NOT a lost event. It was an event nobody emitted, on the path taken by
+             * exactly those deliveries whose customer is least engaged — so it would have been
+             * invisible in testing and routine in production. It is X-1's consequence table
+             * (row `shipmentTerminal`) arrived at by a different road.
+             *
+             * ⚠ The COD half of that sweep is unaffected: it routes through
+             * `CashCollectionService.autoCollectWithoutCode`, which has always emitted its own
+             * `cod.collection.recorded`. Prepaid was the gap.
+             */
+            await trackingOutboxEmitter.emitShipmentStatusChanged({
+                shipmentId,
+                agentId: confirmed.agent_id ? confirmed.agent_id.toString() : null,
+                agencyId: confirmed.agency_id.toString(),
+                customerId: orderCustomer?.customer_id?.toString() ?? null,
+                status: 'delivered',
+            }, session);
         });
 
         if (!applied) return { order: await OrderModel.findById(orderId), applied: false };
