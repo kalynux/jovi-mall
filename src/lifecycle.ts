@@ -35,6 +35,7 @@ import { trackingDispatchWorker } from './modules/tracking-integration/workers/t
 import { initializeAgentDomain } from './modules/agents';
 import { initializeShipmentAssignment } from './modules/shipment-assignment';
 import { agentCapacityReconcileWorker } from './modules/agents/workers/agent-capacity-reconcile.worker';
+import { trackingAllowReconcileWorker } from './modules/agents/workers/tracking-allow-reconcile.worker';
 import { initRateLimiters } from './api/rate-limit/rate-limit.middleware';
 
 /**
@@ -361,6 +362,10 @@ function startBackgroundWork(): void {
     // 3.A.1, X-1), because the event bus can carry no session and swallows the failure when a
     // post-commit enqueue is lost.
     trackingDispatchWorker.start();
+    // …and the backstop for the one event with no recovery path on geo-tracker's side: a
+    // tracking REVOCATION the dispatcher has already parked as `failed` is re-pushed until it
+    // lands, because nothing else ever corrects it (plan step 3.A.3).
+    trackingAllowReconcileWorker.start();
 
     // Agent-acceptance workflow: auto-assignment subscriber (shipment.assigned →
     // offer top candidate when the agency opts in) + the offer-expiry sweep.

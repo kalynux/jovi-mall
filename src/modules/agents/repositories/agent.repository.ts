@@ -364,6 +364,39 @@ export class AgentRepository {
   // ─── Tracking allow (the business flag geo-tracker enforces) ──────────────
 
   /**
+   * Agents whose tracking an administrator has REVOKED — the input to
+   * `TrackingAllowReconcileWorker` (plan step 3.A.3).
+   *
+   * ── Why only `false`, and why that is not an oversight ─────────────────────
+   * The sweep re-pushes a revocation that may never have reached geo-tracker. A lost
+   * *revocation* leaves an agent broadcasting a live position after being told they may not be
+   * tracked; a lost *grant* leaves them un-locatable, which self-heals the moment anybody looks
+   * and is the safe direction to fail. Re-pushing every `true` as well would put the entire
+   * roster through the dispatcher on a timer for no gain.
+   *
+   * `$ne: true` rather than `false` deliberately: the field is a Mongoose default and older
+   * rows may hold `null` or be absent entirely, all of which mean "not allowed" to
+   * `buildPolicy` (`agent.tracking?.allowed !== true`). Matching only the literal `false` would
+   * silently skip exactly the rows most likely to be stale.
+   *
+   * Bounded by `limit` and ordered oldest-decision-first, so a large revoked population is
+   * covered across passes rather than flooding one.
+   */
+  async listTrackingRevoked(limit: number): Promise<Array<{ id: string; reason: string | null }>> {
+    const rows = await DeliveryAgentModel.find(
+      { 'tracking.allowed': { $ne: true }, deletedAt: null },
+      { _id: 1, 'tracking.reason': 1 }
+    )
+      .sort({ 'tracking.changed_at': 1 })
+      .limit(limit)
+      .lean();
+    return rows.map((r) => ({
+      id: r._id.toString(),
+      reason: (r as { tracking?: { reason?: string | null } }).tracking?.reason ?? null,
+    }));
+  }
+
+  /**
    * `session` (plan step 3.A.1): this write and the `agent.tracking_allow_changed` outbox row
    * it produces must commit together. Tracking Allow is the one event with no reconciliation
    * path in geo-tracker at all, so a row lost between this write and its enqueue meant an

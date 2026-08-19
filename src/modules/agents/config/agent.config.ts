@@ -32,6 +32,32 @@ export const AGENT_CONFIG = Object.freeze({
   CONTRACT_COD_THRESHOLD_MAX: intEnv('AGENCY_AGENT_COD_THRESHOLD_MAX', 1_000_000),
   CONTRACT_COD_THRESHOLD_MIN: intEnv('AGENCY_AGENT_COD_THRESHOLD_MIN', 0),
 
+  // ── Tracking Allow reconciliation (plan step 3.A.3) ───────────────────────
+  /**
+   * How often `TrackingAllowReconcileWorker` re-pushes outstanding tracking REVOCATIONS to
+   * geo-tracker, and how many agents one pass covers.
+   *
+   * ── This is a BACKSTOP interval, not a delivery latency ────────────────────
+   * The real push is transactional and immediate (`AgentTrackingPolicyService
+   * .setTrackingAllowed` writes the outbox row in the same transaction as the flag, and the
+   * dispatcher drains every 2 s). This sweep exists only for the case where the row committed
+   * and delivery then failed for long enough that the dispatcher **parked it as `failed`** —
+   * after which nothing replays it. So the number to reason about is not "how fast should a
+   * revocation arrive" but "how long may a *stuck* one go uncorrected".
+   *
+   * 15 minutes is chosen against that: long enough that a healthy system re-pushes almost
+   * nothing (the sweep is bounded by how many agents are revoked at all, which is small), short
+   * enough that a delivery outage does not leave an agent broadcasting for an hour after an
+   * administrator revoked them. Raising it above the dispatcher's own backoff-to-parked window
+   * is the mistake to avoid — that is what makes it a backstop rather than a second timer.
+   *
+   * The batch is a ceiling against a pathological population (a migration that revoked
+   * everybody), not a page size: passes are ordered oldest-decision-first, so a larger revoked
+   * set is covered across successive passes rather than flooding one.
+   */
+  TRACKING_ALLOW_RECONCILE_INTERVAL_MS: intEnv('TRACKING_ALLOW_RECONCILE_INTERVAL_MS', 15 * 60 * 1000),
+  TRACKING_ALLOW_RECONCILE_BATCH: intEnv('TRACKING_ALLOW_RECONCILE_BATCH', 200),
+
   // ── Capacity ──────────────────────────────────────────────────────────────
   /**
    * Bounds on an agent's own `capacity.max_active_shipments`. Capacity is a

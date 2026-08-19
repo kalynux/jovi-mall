@@ -1258,11 +1258,33 @@ assert('the limit is clamped to the ceiling', () => {
 
 section('Worker inventory — the thirteenth worker was invisible to every surface');
 
-// 14 since Phase 1 added PaymentReconciliationWorker — the sweep that closes a
-// mobile-money payment whose callback never arrived. The count is hardcoded on
-// purpose: a worker added without an inventory entry is invisible to every
-// operations surface, which is the defect this section was written about.
-assert('the inventory now holds 14 workers', () => WORKER_INVENTORY.length === 14);
+// 15 since plan step 3.A.3 added TrackingAllowReconcileWorker — the only thing that
+// re-delivers a tracking REVOCATION whose outbox row the dispatcher parked as `failed`,
+// and the one cross-service event with no other recovery path (geo-tracker's
+// `agentHasActiveShipment` aggregate covers the shipment events; nothing covers this one).
+// 14 before that, since Phase 1 added PaymentReconciliationWorker — the sweep that closes
+// a mobile-money payment whose callback never arrived.
+//
+// The count is hardcoded on purpose: a worker added without an inventory entry is invisible
+// to every operations surface AND is never stopped by the drain, which is the defect this
+// section was written about. Do not weaken it to `>=`.
+assert('the inventory now holds 15 workers', () => WORKER_INVENTORY.length === 15);
+
+/**
+ * The new one, asserted by name and by the two properties that make it a backstop rather
+ * than a second delivery timer: its schedule is derived from the env var it actually uses,
+ * and it is INERT when geo-tracker is not configured — the same posture as the dispatcher it
+ * feeds, so a local deploy does not accumulate re-pushes nothing will ever drain.
+ */
+assert('tracking-allow-reconcile is registered AND triggerable', () =>
+    WORKER_KEYS.includes('tracking-allow-reconcile' as never)
+    && WORKER_INVENTORY.some((e) => e.key === 'tracking-allow-reconcile' && e.triggerable));
+
+assert('its interval is derived from TRACKING_ALLOW_RECONCILE_INTERVAL_MS, not a literal', () => {
+    const entry = WORKER_INVENTORY.find((e) => e.key === 'tracking-allow-reconcile');
+    const schedule = entry?.worker.schedules[0];
+    return schedule?.kind === 'interval' && schedule.source === 'TRACKING_ALLOW_RECONCILE_INTERVAL_MS';
+});
 
 assert('analytics-aggregation is registered AND triggerable', () =>
     WORKER_KEYS.includes('analytics-aggregation' as never)
@@ -1301,8 +1323,8 @@ const WORKER_SOURCES = [
         readFileSync(join(SRC, 'core', 'jobs', 'aggregation-scheduler.ts'), 'utf8')) },
 ];
 
-assert('the scan sees every worker file — 13 module workers plus the scheduler', () =>
-    WORKER_SOURCES.length === 14);
+assert('the scan sees every worker file — 14 module workers plus the scheduler', () =>
+    WORKER_SOURCES.length === 15);
 
 assert('EVERY worker routes its pass through withWorkerLock', () => {
     const missing = WORKER_SOURCES.filter(({ code }) => !code.includes('withWorkerLock('));

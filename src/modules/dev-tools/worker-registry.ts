@@ -11,6 +11,7 @@ import { paymentReconciliationWorker } from '../payments/workers/payment-reconci
 import { codDepositDeadlineWorker } from '../cod/workers/cod-deposit-deadline.worker';
 import { trackingDispatchWorker } from '../tracking-integration/workers/tracking-dispatch.worker';
 import { agentCapacityReconcileWorker } from '../agents/workers/agent-capacity-reconcile.worker';
+import { trackingAllowReconcileWorker } from '../agents/workers/tracking-allow-reconcile.worker';
 import { assignmentSweepWorker } from '../shipment-assignment/workers/offer-expiry.worker';
 import { analyticsAggregationWorker } from '../../core/jobs/aggregation-scheduler';
 import { maintenanceBlocksWorkers } from '../system/services/maintenance.service';
@@ -204,6 +205,21 @@ export const WORKER_REGISTRY = Object.freeze({
         runOnce: () => runVoidSweep(
             () => agentCapacityReconcileWorker.runSweep(),
             'Active-shipment counters reconciled against reality',
+        ),
+    },
+    /**
+     * Added in plan step 3.A.3. Triggerable on purpose, and this is the one an operator most
+     * plausibly reaches for during an incident: it is the only way to re-deliver a tracking
+     * revocation whose outbox row the dispatcher has already parked as `failed`. A push is
+     * idempotent on geo-tracker's side (`SetTrackingAllow` writes device state and drives no
+     * new transition), so running it twice costs a duplicate webhook and nothing else.
+     */
+    'tracking-allow-reconcile': {
+        label: 'Tracking Allow reconciliation',
+        worker: trackingAllowReconcileWorker,
+        runOnce: () => runVoidSweep(
+            () => trackingAllowReconcileWorker.runSweep(),
+            'Outstanding tracking revocations re-pushed to geo-tracker',
         ),
     },
     /**
