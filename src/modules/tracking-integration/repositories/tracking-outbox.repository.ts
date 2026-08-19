@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { ClientSession } from 'mongoose';
 import { currentRequestContext } from '../../../core/logging/request-context';
 import {
   AgentActionKind,
@@ -37,8 +38,29 @@ export interface EnqueueInput {
  * subscriber; the claim/mark methods are called by the dispatch worker.
  */
 export class TrackingOutboxRepository {
-  async enqueue(input: EnqueueInput): Promise<ITrackingOutbox> {
-    return TrackingOutboxModel.create({
+  /**
+   * Write one outbox row.
+   *
+   * ── `session` IS THE CRASH-DURABILITY GUARANTEE (plan step 3.A.1) ────────────
+   * Pass the session of the transaction that made the change this row describes, and the row
+   * commits with it or not at all. Without it the row is written AFTER the state change has
+   * already committed, and a crash in that window loses the event permanently — which is
+   * exactly what X-1 was: the model's own docstring promised crash-durability that the write
+   * site did not provide. Everything downstream (retry, HMAC, `eventId` dedup) was always
+   * sound; the gap was this one hop, the only hop with no retry.
+   *
+   * ⚠ **`create` is called with an ARRAY, and that is not a style choice.** Mongoose reads the
+   * options argument — and therefore `{ session }` — only when the first argument is an array.
+   * `create(doc, { session })` silently ignores the session and writes outside the transaction,
+   * producing an outbox that *looks* transactional and is not. `test:tracking-outbox` §2 asserts
+   * the array form for this reason.
+   *
+   * `session` is optional because a caller with no transaction is still better served by a row
+   * than by nothing — the reconcile sweep (3.A.3) is one such caller, and a sweep is not a
+   * state change it could join.
+   */
+  async enqueue(input: EnqueueInput, session?: ClientSession): Promise<ITrackingOutbox> {
+    const [row] = await TrackingOutboxModel.create([{
       event_id: randomUUID(),
       type: input.type,
       shipment_id: input.shipmentId ?? null,
@@ -62,11 +84,12 @@ export class TrackingOutboxRepository {
        * (Phase 15).
        *
        * Same reasoning as generating the tracking number inside `ShipmentRepository.create`: a
-       * fourth enqueue site added later cannot forget it. It is null for anything a worker
+       * fifth enqueue site added later cannot forget it. It is null for anything a worker
        * enqueues, which is correct — a sweep is not a request.
        */
       request_id: currentRequestContext()?.requestId ?? null,
-    });
+    }], { session });
+    return row;
   }
 
   /** Oldest pending rows first, bounded by limit. */

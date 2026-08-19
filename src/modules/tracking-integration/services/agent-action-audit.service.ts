@@ -1,3 +1,4 @@
+import { ClientSession } from 'mongoose';
 import { AppError } from '../../../core/errors';
 import { ShipmentStatus, IShipment } from '../../shipments/shipment.model';
 import { AgentActionKind, AgentActionOutcome } from '../models/tracking-outbox.model';
@@ -66,37 +67,57 @@ export class AgentActionAuditService {
   /**
    * Enqueue one agent-action audit event. No-op when there is no agent — the
    * audit captures the AGENT's GPS, so an actionless-of-agent event has no
-   * subject. Callers invoke this fire-and-forget (`void ...catch(log)`).
+   * subject.
+   *
+   * ── `session` (plan step 3.A.1) ────────────────────────────────────────────
+   * Pass the session of the transaction whose action this audits, and the row commits with it.
+   * Omit it for a standalone action that has no transaction of its own — the COD collect
+   * handler's failure audits are the case: there is no state change to join, because the point
+   * of those rows is that the action did NOT happen.
+   *
+   * Callers with no session still invoke this fire-and-forget (`void ...catch(log)`); callers
+   * inside a transaction must `await` it, or the row escapes the transaction it was meant to
+   * join and the session may be closed under it.
    */
-  async emit(input: AgentActionInput): Promise<void> {
+  async emit(input: AgentActionInput, session?: ClientSession): Promise<void> {
     if (!input.agentId) return;
-    await this.outbox.enqueue({
-      type: 'agent.action',
-      agentId: input.agentId,
-      shipmentId: input.shipmentId ?? null,
-      action: input.action,
-      outcome: input.outcome,
-      actorRole: input.actorRole,
-      reason: input.reason ?? null,
-      occurredAt: input.occurredAt ?? new Date(),
-    });
+    await this.outbox.enqueue(
+      {
+        type: 'agent.action',
+        agentId: input.agentId,
+        shipmentId: input.shipmentId ?? null,
+        action: input.action,
+        outcome: input.outcome,
+        actorRole: input.actorRole,
+        reason: input.reason ?? null,
+        occurredAt: input.occurredAt ?? new Date(),
+      },
+      session
+    );
   }
 
   /**
    * Emit the SUCCESS audit for a shipment that just transitioned, if the new
    * status is one of the four audited actions and the shipment has an agent.
-   * Called post-commit from `ShipmentService` for agency-driven transitions.
+   * Called from `ShipmentService`'s shared transition core, inside its transaction.
    */
-  async emitShipmentTransition(shipment: IShipment, actorRole: string): Promise<void> {
+  async emitShipmentTransition(
+    shipment: IShipment,
+    actorRole: string,
+    session?: ClientSession
+  ): Promise<void> {
     const action = shipmentStatusToAction(shipment.status);
     if (!action) return;
-    await this.emit({
-      action,
-      outcome: 'success',
-      agentId: shipment.agent_id ? shipment.agent_id.toString() : null,
-      shipmentId: shipment._id.toString(),
-      actorRole,
-    });
+    await this.emit(
+      {
+        action,
+        outcome: 'success',
+        agentId: shipment.agent_id ? shipment.agent_id.toString() : null,
+        shipmentId: shipment._id.toString(),
+        actorRole,
+      },
+      session
+    );
   }
 }
 

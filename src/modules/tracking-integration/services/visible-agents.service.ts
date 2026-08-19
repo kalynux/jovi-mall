@@ -1,4 +1,4 @@
-import { FilterQuery } from 'mongoose';
+import { ClientSession, FilterQuery } from 'mongoose';
 import { IShipment, ShipmentModel, ShipmentStatus } from '../../shipments/shipment.model';
 import { OrderModel } from '../../orders/order.model';
 
@@ -121,13 +121,26 @@ export class VisibleAgentsService {
    * Reuses the same TRACKABLE_SHIPMENT_STATUSES an agency's visibility is
    * computed from, so an agent is trackable-by-shipment exactly while some agency
    * can see them.
+   *
+   * ── PASS THE SESSION WHEN YOU ARE INSIDE ONE (plan step 3.A.1) ──────────────
+   * This is a READ whose answer must reflect a write that has not committed yet. Since the
+   * outbox row is now written inside the transaction that made the transition, the aggregate
+   * has to be computed inside it too — and a session-less read there sees the PRE-transition
+   * shipment and reports the OLD aggregate. That is worse than the post-commit read it
+   * replaces: post-commit it was right and merely losable; session-less inside the
+   * transaction it would be wrong every single time.
+   *
+   * Omit it and the read is uncommitted-blind, which is correct for the callers that have no
+   * transaction (the visibility endpoints, the reconcile sweep).
    */
-  async agentHasActiveShipment(agentId: string): Promise<boolean> {
+  async agentHasActiveShipment(agentId: string, session?: ClientSession): Promise<boolean> {
     if (!agentId) return false;
     const exists = await ShipmentModel.exists({
       agent_id: agentId,
       status: { $in: TRACKABLE_SHIPMENT_STATUSES },
-    }).exec();
+    })
+      .session(session ?? null)
+      .exec();
     return exists != null;
   }
 
@@ -152,10 +165,20 @@ export class VisibleAgentsService {
    * The current status of one shipment, for events whose payload doesn't carry it
    * (a COD collection knows cash was taken, not what that made the shipment).
    * Returns null if the shipment is gone.
+   *
+   * `session` for the same reason as `agentHasActiveShipment` above — and here it is what
+   * makes the COD path work at all. The collection's own transaction is what sets the
+   * shipment `delivered`, so reading the status back from inside that transaction is the only
+   * way to see the value this collection caused. Session-less, the read would return the
+   * PRE-collection status and the event would report a delivered shipment as still in flight.
    */
-  async shipmentStatus(shipmentId: string | null): Promise<ShipmentStatus | null> {
+  async shipmentStatus(shipmentId: string | null, session?: ClientSession): Promise<ShipmentStatus | null> {
     if (!shipmentId) return null;
-    const shipment = await ShipmentModel.findById(shipmentId).select('status').lean().exec();
+    const shipment = await ShipmentModel.findById(shipmentId)
+      .select('status')
+      .session(session ?? null)
+      .lean()
+      .exec();
     return (shipment?.status as ShipmentStatus) ?? null;
   }
 
