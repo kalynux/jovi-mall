@@ -42,6 +42,13 @@ import { VirusScanValidator } from '../../src/core/uploads/validators/virus-scan
 import { UploadPipelineContextImpl } from '../../src/core/uploads/upload-pipeline-context';
 import { getDefaultUploadConfig, UploadPolicyConfig } from '../../src/core/uploads/upload-config';
 import { IVirusScanner, UploadRequest } from '../../src/core/uploads/upload-policy.types';
+import {
+    isPrivateStorageKey,
+    PRIVATE_STORAGE_TREES,
+    STORAGE_TREE_VISIBILITY,
+} from '../../src/core/storage/storage-trees';
+import { toFileDetail } from '../../src/modules/catalog/read-models/file-detail.resolver';
+import { MEDIA_CATEGORY_FOLDERS } from '../../src/core/uploads/media-folder';
 import { ERROR_CODES } from '../../src/core/error-codes';
 import { AppError } from '../../src/core/errors';
 
@@ -417,6 +424,126 @@ async function main(): Promise<void> {
         } finally {
             await close();
         }
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ADR-A01 D-2 / plan step 4.A.4b. Structural again, and for the same reason: a tree that
+    // slips back onto the static mount, or a `FileDetail` built by hand somewhere, is
+    // invisible to every behavioural test — the platform keeps working and the files are
+    // simply public.
+    console.log('\n▶ The private trees are off the public mount (ADR-A01 D-2)');
+
+    const apiIndex = code(fs.readFileSync(path.join(SRC, 'api', 'index.ts'), 'utf8'));
+
+    assert('nothing serves the whole storage root any more', () =>
+        !/express\.static\(path\.join\(__dirname, '\.\.\/\.\.', 'storage'\)\)/.test(apiIndex));
+    assert('the mounts are DERIVED from the classification, not a second list', () =>
+        /for \(const tree of PUBLIC_STORAGE_TREES\)/.test(apiIndex)
+        && /express\.static\(path\.join\(__dirname, '\.\.\/\.\.', 'storage', tree\)\)/.test(apiIndex));
+    assert('no express.static call anywhere in src/ names a private tree', () => {
+        const statics = srcFiles.flatMap((file) =>
+            code(fs.readFileSync(file, 'utf8')).match(/express\.static\([^)]*\)/g) ?? []);
+        return statics.every((call) => !PRIVATE_STORAGE_TREES.some((tree) => call.includes(tree)));
+    });
+
+    assert('the three private trees are exactly digital, shipments, ticket-attachments', () =>
+        [...PRIVATE_STORAGE_TREES].sort().join(',') === 'digital,shipments,ticket-attachments');
+    assert('an unknown tree is PRIVATE — a tree added next year is not public by default', () =>
+        isPrivateStorageKey('some-new-tree/2027/01/x.pdf'));
+    assert('…and so is a key with no tree at all', () =>
+        isPrivateStorageKey('loose-file.pdf') && isPrivateStorageKey(''));
+    assert('a WINDOWS-separated key classifies the same as a POSIX one', () =>
+        // `path.join` in the local provider produces `\` on this machine and `/` in the
+        // container. Classifying differently by platform would make a file private in
+        // development and public in production.
+        isPrivateStorageKey('shipments\\2026\\08\\x.jpg') === isPrivateStorageKey('shipments/2026/08/x.jpg'));
+
+    // Every folder any writer can name must be classified, or its files 404 with nothing
+    // saying why. This is what turns "remember to add a row" into a failing suite.
+    assert('every `folder:` literal in src/ is classified', () => {
+        const named = new Set<string>();
+        for (const file of srcFiles) {
+            for (const match of code(fs.readFileSync(file, 'utf8')).matchAll(/folder:\s*'([a-z-]+)'/g)) {
+                if (match[1] !== 'by-type') named.add(match[1]);
+            }
+        }
+        const unclassified = [...named].filter((tree) => !(tree in STORAGE_TREE_VISIBILITY));
+        if (unclassified.length) console.error(`     unclassified: ${unclassified.join(', ')}`);
+        return unclassified.length === 0;
+    });
+    assert('…and so is every media-category folder the by-type intake can produce', () => {
+        const unclassified = Object.values(MEDIA_CATEGORY_FOLDERS)
+            .filter((tree) => !(tree in STORAGE_TREE_VISIBILITY));
+        return unclassified.length === 0;
+    });
+
+    console.log('\n▶ toFileDetail is the only builder, and it decides the URL');
+
+    const publicDetail = toFileDetail(
+        { id: 'f1', key: 'images/2026/08/a.png', mimeType: 'image/png', size: 10 },
+        { getPublicUrl: (key: string) => `http://x/api/files/${key}` } as any,
+    );
+    const privateDetail = toFileDetail(
+        { id: 'f2', key: 'shipments/2026/08/proof.jpg', mimeType: 'image/jpeg', size: 20 },
+        { getPublicUrl: (key: string) => `http://x/api/files/${key}` } as any,
+    );
+
+    assert('a public file keeps its URL and reports access: public', () =>
+        publicDetail.url === 'http://x/api/files/images/2026/08/a.png'
+        && publicDetail.access === 'public');
+    assert('a PRIVATE file has url: null and reports access: authorized', () =>
+        privateDetail.url === null && privateDetail.access === 'authorized');
+    assert('…and still carries the id, which is the handle its authorized route takes', () =>
+        privateDetail.id === 'f2' && privateDetail.key === 'shipments/2026/08/proof.jpg');
+
+    assert('no file under src/ builds a FileDetail by hand — toFileDetail is the choke point', () => {
+        // Three sites used to, which is how a rule at the "single choke point" reached only
+        // some of the platform's files. The tell is `getPublicUrl` outside the resolver and
+        // the storage layer itself.
+        const offenders = srcFiles.filter((file) => {
+            if (file.includes(path.join('core', 'storage'))) return false;
+            if (file.endsWith('file-detail.resolver.ts')) return false;
+            return /url:\s*[\w.]*storage\w*\.getPublicUrl\(/.test(code(fs.readFileSync(file, 'utf8')));
+        });
+        if (offenders.length) {
+            console.error(`     offenders: ${offenders.map((f) => path.relative(ROOT, f)).join(', ')}`);
+        }
+        return offenders.length === 0;
+    });
+
+    console.log('\n▶ The private trees have an authorized route each');
+
+    const proofService = code(fs.readFileSync(
+        path.join(SRC, 'modules', 'shipments', 'delivery-proof.service.ts'), 'utf8'));
+    assert('the delivery proof streams through the SHIPMENT\'s own scoping, not a new rule', () =>
+        /streamTo\(/.test(proofService)
+        && /findByIdAndAgent\(shipmentId, viewer\.id\)/.test(proofService)
+        && /findByIdAndAgency\(shipmentId, viewer\.id\)/.test(proofService));
+    assert('…and answers 404, never 403 — an unrelated agent learns nothing', () => {
+        const streamFn = proofService.slice(proofService.indexOf('async streamTo('));
+        return streamFn.includes('SHIPMENT_NOT_FOUND, 404') && !/,\s*403/.test(streamFn);
+    });
+    assert('both roles have a route to it', () => {
+        const agent = code(fs.readFileSync(path.join(SRC, 'modules', 'delivery', 'agent.routes.ts'), 'utf8'));
+        const agency = code(fs.readFileSync(path.join(SRC, 'modules', 'delivery', 'agency.routes.ts'), 'utf8'));
+        return agent.includes("'/shipments/:id/delivery-proof/file'")
+            && agency.includes("'/shipments/:id/delivery-proof/file'");
+    });
+    assert('the digital tree already had its authorized route', () => {
+        const routes = code(fs.readFileSync(
+            path.join(SRC, 'modules', 'digital-delivery', 'routes', 'customer.routes.ts'), 'utf8'));
+        return /'\/download\/:token'/.test(routes);
+    });
+    assert('the proof bytes are not cacheable — the old URL was, which is half the leak', () => {
+        const controller = code(fs.readFileSync(
+            path.join(SRC, 'modules', 'shipments', 'agent-delivery-proof.controller.ts'), 'utf8'));
+        return /Cache-Control['"],\s*['"]private, no-store/.test(controller);
+    });
+    assert('the provider switch warns the NEXT author about reinstating a public URL', () => {
+        // ADR-019 D-1a: an object-storage provider returning a public CDN URL would undo all
+        // of the above without touching a single file this suite checks.
+        const factory = fs.readFileSync(path.join(SRC, 'core', 'storage', 'storage.factory.ts'), 'utf8');
+        return /ADR-A01 D-2/.test(factory) && /signed URL/.test(factory);
     });
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -215,7 +215,7 @@ function main(): void {
       endpoints([['s1', { pickup: pickup({ lat: 1, lng: 1 }, 'mixed', 2), deliveryAddress: address({ lat: 2, lng: 2 }) }]]),
       new Map([['o1', { order_number: 'ORD-9001' }]]),
       new Map([['a1', agent('a1', 'Awa', { phone: '+237600000000', vehicle: 'bike' })]]),
-      new Map([['a1', { id: 'f1', key: 'k', url: 'https://x/y.png', mimeType: 'image/png', size: 10, originalName: 'a.png' }]]),
+      new Map([['a1', { id: 'f1', key: 'images/k', url: 'https://x/y.png', access: 'public' as const, mimeType: 'image/png', size: 10, originalName: 'a.png' }]]),
       false,
     );
     const row = board.agents[0].shipments[0];

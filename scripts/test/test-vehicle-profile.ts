@@ -189,8 +189,12 @@ function main(): void {
 
   const photoDetail = {
     id: PHOTO_A,
-    key: 'agents/van.jpg',
+    key: 'images/2026/08/van.jpg',
     url: 'https://cdn.example/agents/van.jpg',
+    // A vehicle photo is an ordinary `by-type` upload in a PUBLIC tree, so it keeps a URL —
+    // unlike a delivery proof, which lands in `shipments/` and comes back `url: null`
+    // (ADR-A01 D-2). The key here says which it is, so it names a real public tree.
+    access: 'public' as const,
     mimeType: 'image/jpeg',
     size: 284119,
     originalName: 'van.jpg',

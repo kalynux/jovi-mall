@@ -4,6 +4,7 @@ import { AgencyProfileController, uploadAgencyPolicyDocuments } from './controll
 import { AgencyNetworkController } from './controllers/agency-network.controller';
 import { AgencyNotificationController } from './controllers/agency-notification.controller';
 import { ShipmentController } from '../shipments/shipment.controller';
+import { AgencyDeliveryProofController } from '../shipments/agent-delivery-proof.controller';
 import { AgencyAssignmentController } from '../shipment-assignment/controllers/agency-assignment.controller';
 import { AgencyCodController } from '../cod/controllers/agency-cod.controller';
 import { TrackingController } from '../tracking-integration/controllers/tracking.controller';
@@ -111,6 +112,20 @@ router.get('/shipments', ShipmentController.listForAgency);
  * multi-agency timeline.
  */
 router.get('/shipments/:id', ShipmentController.getDetailForAgency);
+
+/**
+ * GET /api/agency/shipments/:id/delivery-proof/file
+ *
+ * The proof image's BYTES, scoped by the SAME `findByIdAndAgency` predicate the detail above
+ * uses — the authorization is the shipment's, re-used rather than re-derived. This is the
+ * authorized door that replaced the public URL (ADR-A01 D-2): `storage/shipments/` is off
+ * `express.static`, so the photo is no longer fetchable by anyone holding its address, and
+ * `FileDetail.url` on the detail response is now `null` with `access: 'authorized'`.
+ *
+ * There is no agency upload/delete twin, deliberately — the proof is the AGENT's record of
+ * what they did. The agency reads it; it does not author it.
+ */
+router.get('/shipments/:id/delivery-proof/file', AgencyDeliveryProofController.download);
 
 /**
  * PATCH /api/agency/shipments/:id/status

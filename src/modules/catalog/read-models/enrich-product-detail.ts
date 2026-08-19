@@ -4,12 +4,17 @@ import { FileRepositoryMongo } from '../repositories/mongo/file.repository.mongo
 import { DigitalAssetModel } from '../../digital-delivery/models/digital-asset.model';
 import { IStorageProvider } from '../../../core/storage/storage-provider.interface';
 import { FileDetail, AssetDetail } from './product-detail.read-model';
+import { toFileDetail } from './file-detail.resolver';
 import { PickupLocationDetail, PickupLocationDetailResolver } from './pickup-location-detail.resolver';
 import { BargainRange, isBargainEffective } from '../domain/services/bargain-price.rule';
 
 /**
- * Fetch File documents for an array of IDs and compute their public URLs.
+ * Fetch File documents for an array of IDs and map them to `FileDetail`.
  * Files not found (deleted, invalid ID) are silently omitted.
+ *
+ * Built through `toFileDetail` rather than by hand — one of three sites that assembled the
+ * shape themselves, which is how a rule living at the "single choke point" reached only some
+ * of the platform's files. ADR-A01 D-2's public/authorized split is decided in one place.
  */
 async function buildFileDetails(
   fileIds: string[],
@@ -20,14 +25,7 @@ async function buildFileDetails(
   const results = await Promise.all(fileIds.map(id => fileRepo.findById(id)));
   return results
     .filter((f): f is NonNullable<typeof f> => f !== null)
-    .map(f => ({
-      id: f.id,
-      key: f.key,
-      url: storage.getPublicUrl(f.key),
-      mimeType: f.mimeType,
-      size: f.size,
-      originalName: f.originalName,
-    }));
+    .map(f => toFileDetail(f, storage));
 }
 
 function humanFileSize(bytes: number): string {

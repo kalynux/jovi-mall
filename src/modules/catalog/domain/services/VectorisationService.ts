@@ -30,6 +30,7 @@ import { VendorModel } from '../../../vendors/vendor.model';
 import { StoreModel } from '../../../store/models/store.model';
 import { creditWalletService } from '../../../billing/services/credit-wallet.service';
 import { VECTORISATION_COST } from '../../../billing/config/credit.config';
+import { isPrivateStorageKey } from '../../../../core/storage/storage-trees';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -297,7 +298,13 @@ export class VectorisationService {
       for (const f of fileDocs) {
         fileMap.set(f._id.toString(), {
           id: f._id.toString(),
-          url: storage.getPublicUrl(f.key),
+          // Not a `FileDetail` — this is the vectoriser's own payload shape, sent to an
+          // external service. It still asks the same question, and must give the same answer:
+          // since ADR-A01 D-2 the private trees are off `express.static`, so a public URL for
+          // one is a link that 404s. In practice these are product gallery images and always
+          // public; `null` is what keeps that "in practice" from becoming a dead link the day
+          // it stops being true.
+          url: isPrivateStorageKey(f.key) ? null : storage.getPublicUrl(f.key),
           mimeType: f.mimeType,
           size: f.size,
           originalName: f.originalName ?? null,

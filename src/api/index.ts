@@ -400,7 +400,24 @@ router.use('/me', userAccountRoutes);
 // File upload and management routes
 import fileRoutes from './routes/file-upload.routes';
 import path from "path";
-router.use('/files', express.static(path.join(__dirname, '../..', 'storage')));
+import { PUBLIC_STORAGE_TREES } from '../core/storage/storage-trees';
+/**
+ * ⚠ **PUBLIC trees only — this used to serve the whole of `storage/`** (ADR-A01 D-2).
+ *
+ * One unguarded `express.static` over the entire storage root, mounted before `fileRoutes`,
+ * meant a vendor's digital product and an agent's delivery-proof photo were fetchable by
+ * anyone holding the URL — and a stored file's `url`, on every `FileDetail` the platform
+ * emits, *is* that URL. The download token's single-use consumption, its counter and its
+ * revocation were all advisory while that path existed.
+ *
+ * The mount list is DERIVED from `core/storage/storage-trees.ts`, which carries an explicit
+ * verdict for every tree and treats an unknown one as private. So this loop cannot drift from
+ * the classification, and a tree added next year is private until somebody says otherwise —
+ * which is the correct default and the opposite of what was here.
+ */
+for (const tree of PUBLIC_STORAGE_TREES) {
+    router.use(`/files/${tree}`, express.static(path.join(__dirname, '../..', 'storage', tree)));
+}
 router.use('/files', fileRoutes);
 
 export const apiRouter = router;

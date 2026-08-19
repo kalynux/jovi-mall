@@ -183,6 +183,60 @@ export class DeliveryProofService {
         await this.shipmentRepo.setDeliveryProof(shipmentId, null);
         await this.fileRepository.softDelete(fileId);
     }
+
+    /**
+     * Stream the proof's BYTES to an authorized viewer — the door that replaces the public
+     * URL (ADR-A01 D-2).
+     *
+     * ── The authorization is the SHIPMENT's, deliberately re-used and not re-derived ───────
+     * `storage/shipments/` left `express.static`, so a proof photo is no longer fetchable by
+     * anyone holding the URL — which mattered because that URL is a delivery address and a
+     * timestamped location, and it worked forever once seen.
+     *
+     * The viewer discriminant selects between the SAME two ownership predicates the shipment
+     * reads already use (`findByIdAndAgent` / `findByIdAndAgency`), so "may this person see
+     * this shipment" has exactly one answer on the platform. Writing a fresh rule here — even
+     * a correct one today — is how a file route and its entity drift apart, which is the
+     * class of defect ADR-A01 D-2 exists to close rather than to relocate.
+     *
+     * 404 and never 403, matching the reads: an unrelated agent must not learn that a
+     * shipment exists.
+     *
+     * Only these two roles because only these two are ever shown the proof — `_buildDetail`
+     * is reached by `getDetailForAgency` and `getDetailForAgent` and by nothing else. The
+     * customer and vendor cases named in ADR-A01's map do not exist in the code; adding one
+     * means adding its read first, and then its branch here.
+     */
+    async streamTo(
+        viewer: { role: 'agent' | 'agency'; id: string },
+        shipmentId: string,
+    ): Promise<{ stream: NodeJS.ReadableStream; mimeType: string; size: number; filename: string }> {
+        const shipment = viewer.role === 'agent'
+            ? await this.shipmentRepo.findByIdAndAgent(shipmentId, viewer.id)
+            : await this.shipmentRepo.findByIdAndAgency(shipmentId, viewer.id);
+        if (!shipment) {
+            throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404, 'Shipment not found');
+        }
+
+        const fileId = shipment.delivery_proof_file_id?.toString();
+        if (!fileId) {
+            throw createAppError(ERROR_CODES.SHIPMENT_PROOF_NOT_FOUND, 404, 'No delivery proof');
+        }
+
+        const [file] = await this.fileRepository.findManyByIds([fileId]);
+        if (!file) {
+            // The reference outlived the file (soft-deleted, or reclaimed). Same answer as no
+            // proof at all: there is nothing to serve and the shipment is not the problem.
+            throw createAppError(ERROR_CODES.SHIPMENT_PROOF_NOT_FOUND, 404, 'No delivery proof');
+        }
+
+        return {
+            stream: await this.storageProvider.getDownloadStream(file.key),
+            mimeType: file.mimeType,
+            size: file.size,
+            filename: file.originalName ?? 'delivery-proof',
+        };
+    }
 }
 
 export const deliveryProofService = new DeliveryProofService();

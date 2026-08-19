@@ -135,8 +135,21 @@ router.post('/shipments/:id/cancel', AgentOfferController.cancelShipment);
  */
 router.post('/shipments/:id/delivery-proof', uploadDeliveryProof, AgentDeliveryProofController.upload);
 
-/** GET /api/agent/shipments/:id/delivery-proof — the current proof, or null. */
+/** GET /api/agent/shipments/:id/delivery-proof — the current proof's metadata, or null. */
 router.get('/shipments/:id/delivery-proof', AgentDeliveryProofController.get);
+
+/**
+ * GET /api/agent/shipments/:id/delivery-proof/file — the image BYTES.
+ *
+ * ⚠ Declared BEFORE nothing that could shadow it, but note the ordering rule anyway: a
+ * literal segment under a `:id` param is fine, a second `:param` at this depth would not be.
+ *
+ * This is the authorized door that replaced the public URL (ADR-A01 D-2) —
+ * `storage/shipments/` is off `express.static`, so a proof photo is no longer fetchable by
+ * anyone who has ever seen its address. `FileDetail.url` is `null` for these files and
+ * `access` is `authorized`; this route is where the bytes come from.
+ */
+router.get('/shipments/:id/delivery-proof/file', AgentDeliveryProofController.download);
 
 /** DELETE /api/agent/shipments/:id/delivery-proof — remove the proof. */
 router.delete('/shipments/:id/delivery-proof', AgentDeliveryProofController.remove);

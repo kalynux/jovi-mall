@@ -11,6 +11,7 @@ import { UpdateVendorProfileInput } from '../validators/vendor-onboarding.valida
 import { VendorOnboardingStep } from '../../../core/constants/onboarding-steps';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
 import { FileDetail } from '../../catalog/read-models/product-detail.read-model';
+import { toFileDetail } from '../../catalog/read-models/file-detail.resolver';
 import { IStorageProvider } from '../../../core/storage';
 
 // ─── Response DTOs ────────────────────────────────────────────────────────────
@@ -161,14 +162,9 @@ async function buildAvatarDetail(
   const files = await fileRepo.findManyByIds([id]);
   const f = files[0];
   if (!f) return null;
-  return {
-    id: f.id,
-    key: f.key,
-    url: storage.getPublicUrl(f.key),
-    mimeType: f.mimeType,
-    size: f.size,
-    originalName: f.originalName,
-  };
+  // Through `toFileDetail` — third of the three sites that hand-built the shape and therefore
+  // sat outside the "single choke point" ADR-A01 D-2 relies on.
+  return toFileDetail(f, storage);
 }
 
 export class VendorProfileMapper {

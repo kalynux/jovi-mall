@@ -170,3 +170,77 @@ Avast quarantines it, so the probe holds the signature in memory only.
 Deliberate, and the distinction is this ADR's own: S-2 was about a configuration that *claimed*
 to scan and did not. `enabled=false` claims nothing — it is an operator's explicit choice. It is
 logged loudly at boot rather than refused.
+
+---
+
+## D-2 as built (2026-08-19, plan step 4.A.4b)
+
+⚠ **Client-breaking. Its own release window, and it must not open until D-1 is deployed and
+quiet** (Phase 4 plan D-2). Code landed; the *release* is a separate decision.
+
+### The map above is wrong about `ticket-attachments/`, and the correction matters
+
+This ADR names three private trees, each holding its category's files. **Two of the three are
+real.** A census of every `folder:` literal in `src/` finds no writer for
+`storage/ticket-attachments` at all; the directory holds **one** file predating the current
+design, and the only other references to the name anywhere are stale example URLs in three
+api-docs (which additionally show `/storage/…`, a prefix that has not been correct for longer
+still).
+
+A ticket attachment today is an ordinary `by-type` upload: it goes through
+`POST /api/files/upload`, lands in `documents/` or `images/` **beside public product imagery**,
+and is attached to the ticket by id afterwards. So it **cannot be made private by moving a
+directory** — the tree it is in is the tree product photos are in.
+
+The tree is classified `private` here anyway (the one legacy file stops being served, and the
+name cannot become an unclassified surprise later), but **the real gap is open** and is stated
+rather than papered over: closing it needs a dedicated ticket-attachment upload path writing to
+a private purpose folder, plus an authorized read reusing the ticket's scope, plus a migration
+for existing attachments. That is its own decision, not a line in this step.
+
+### Built
+
+- **`core/storage/storage-trees.ts`** — one verdict per tree, and `express.static` mounts are
+  **derived** from it, so the mount and the classification cannot drift. An **unknown tree is
+  private**: `isPrivateStorageKey` fails closed, so a tree added next year is private until
+  somebody says otherwise. Keys are normalised for `\` — the local provider uses `path.join`,
+  so the same file must not classify one way on Windows and another in the container.
+  `test:uploads` asserts every `folder:` literal and every `MediaCategory` folder is
+  classified, which turns "remember to add a row" into a failing suite rather than a 404.
+- **`toFileDetail` returns `url: null` + `access: 'authorized'`** for a private key. `null`
+  rather than the authorized path, because a path is a string indistinguishable from a public
+  URL and every client would keep rendering it into nothing; `string | null` is a **type**
+  change, so the compiler produces the migration list.
+- ⚠ **Three sites were building `FileDetail` BY HAND** (`ProductListService`,
+  `enrich-product-detail`, `vendor-profile.dto`), which is how a rule living at "the single
+  choke point" reached only some of the platform's files. All three now call `toFileDetail`,
+  and `test:uploads` scans for `getPublicUrl` outside the resolver so a fourth cannot appear.
+  `VectorisationService` builds a different shape for an external payload and was given the
+  same guard rather than an exemption.
+- **`GET /api/{agent,agency}/shipments/:id/delivery-proof/file`** — the bytes, scoped by the
+  **same** `findByIdAndAgent` / `findByIdAndAgency` predicates the shipment reads use. Re-used,
+  not re-derived: a fresh rule here is how a file route and its entity drift apart, which is
+  the defect this decision closes rather than relocates. 404 and never 403, matching the reads.
+  `Cache-Control: private, no-store` — the URL this replaced was cacheable by anything, which
+  is half of what made it a durable leak.
+  Only those two roles, because `_buildDetail` — reached by `getDetailForAgency` and
+  `getDetailForAgent` — is the only thing that surfaces a proof. **The customer and vendor
+  cases in the map above do not exist in the code**; adding one means adding its read first.
+- **`GET /api/digital/download/:token`** needed no change and becomes real: its single-use
+  consumption, download counter and revocation stop being advisory the moment the second door
+  closes.
+- **The ADR-019 D-1a interaction is written at the provider switch**, in
+  `core/storage/storage.factory.ts`, where the next author will actually be standing. The
+  enforcement lives in `toFileDetail` and the mount list — **neither is inside a provider** —
+  so an object-storage provider returning a public CDN URL reinstates the leak without touching
+  either file and without failing a test. The note says what a new provider must do instead
+  (no public read ACL; stream through the authorized route, or sign inside it — never in
+  `getPublicUrl`, which has no idea who is asking).
+- **`api-doc/FRONTEND-CHANGELOG-private-files.md`** — the delivery mechanism, since the clients
+  are outside this workspace.
+
+### Not verified here, and it cannot be
+
+**R-3 stands.** The agency dashboard and the agent app may be rendering a proof photo from a raw
+URL; this repository cannot check that, and the changelog is a notice rather than a
+verification. Check both before the window opens.

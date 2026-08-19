@@ -27,7 +27,19 @@ export interface ActivationBlocker {
 export interface FileDetail {
   id: string;
   key: string;
-  url: string;           // Computed via storageProvider.getPublicUrl(key)
+  /**
+   * The publicly fetchable URL, or **`null` when the file is in a private tree** (ADR-A01
+   * D-2 — `digital/`, `shipments/`, `ticket-attachments/`). Computed by `toFileDetail`, which
+   * is the only place this shape is built.
+   *
+   * ⚠ `string | null` rather than a string is the enforcement. A private file's bytes come
+   * from the owning entity's own authorized read, keyed on `id`; handing back an
+   * authorized-route path here would be a string indistinguishable from a public URL, and
+   * every client would keep rendering it and silently show nothing.
+   */
+  url: string | null;
+  /** Which of the two the `url` above is. `authorized` ⇒ `url` is null and `id` is the handle. */
+  access: 'public' | 'authorized';
   mimeType: string;
   size: number;
   originalName?: string;

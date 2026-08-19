@@ -3,6 +3,7 @@ import { IFileRepository } from '../../repositories/interfaces/file.repository.i
 import { IStorageProvider } from '../../../../core/storage/storage-provider.interface';
 import { Page } from '../../repositories/types';
 import { FileDetail, ProductListItem } from '../../read-models/product-detail.read-model';
+import { toFileDetail } from '../../read-models/file-detail.resolver';
 
 export interface ProductListFilters {
     type?: 'physical' | 'digital' | 'service';
@@ -69,15 +70,12 @@ export class ProductListService {
         const fileDetailById = new Map<string, FileDetail>();
         if (allFileIds.length > 0) {
             const files = await this.fileRepository.findManyByIds(allFileIds);
+            // Through `toFileDetail`, not hand-built. This was one of THREE sites that
+            // assembled the shape themselves, which is how a rule living at the "single choke
+            // point" reached only some of the platform's files. The `access`/`url` split in
+            // ADR-A01 D-2 is decided in exactly one place now.
             for (const file of files) {
-                fileDetailById.set(file.id, {
-                    id: file.id,
-                    key: file.key,
-                    url: this.storage.getPublicUrl(file.key),
-                    mimeType: file.mimeType,
-                    size: file.size,
-                    originalName: file.originalName,
-                });
+                fileDetailById.set(file.id, toFileDetail(file, this.storage));
             }
         }
 

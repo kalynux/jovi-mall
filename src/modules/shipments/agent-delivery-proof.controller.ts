@@ -70,4 +70,56 @@ export class AgentDeliveryProofController {
 
         res.json({ success: true, message: 'Delivery proof removed' });
     });
+
+    /**
+     * GET /api/agent/shipments/:id/delivery-proof/file — the BYTES.
+     *
+     * This is the door that replaces the public URL (ADR-A01 D-2). The metadata route above
+     * still answers with a `FileDetail`, whose `url` is now `null` and whose `access` is
+     * `authorized`; this is where the image itself comes from.
+     */
+    static download = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        await streamDeliveryProof(res, { role: 'agent', id: req.auth!.role_entity._id.toString() }, req.params.id);
+    });
+}
+
+/**
+ * GET /api/agency/shipments/:id/delivery-proof/file — the same bytes, the agency's scope.
+ *
+ * Its own controller rather than a role parameter on the one above, because the two live on
+ * routers with different guards and different id sources; the shared part is
+ * `DeliveryProofService.streamTo`, which is where the scoping decision actually is.
+ */
+export class AgencyDeliveryProofController {
+    static download = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+        await streamDeliveryProof(res, { role: 'agency', id: req.auth!.role_entity._id.toString() }, req.params.id);
+    });
+}
+
+/**
+ * One streaming body for both roles.
+ *
+ * `inline`, not `attachment`: a proof photo is looked at on a shipment screen, not filed. And
+ * **`no-store`** — this replaced a URL that any cache would have been free to keep, which is
+ * half of what made the old public path a durable leak.
+ */
+async function streamDeliveryProof(
+    res: Response,
+    viewer: { role: 'agent' | 'agency'; id: string },
+    shipmentId: string,
+): Promise<void> {
+    const { stream, mimeType, size, filename } = await deliveryProofService.streamTo(viewer, shipmentId);
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Length', String(size));
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(filename)}"`);
+    res.setHeader('Cache-Control', 'private, no-store');
+
+    stream.pipe(res);
+    stream.on('error', () => {
+        // The headers are already out by the time a read fails, so there is no status left to
+        // send. Destroying the response is what tells the client the body is incomplete —
+        // ending it cleanly would hand over a truncated image that looks like the whole one.
+        res.destroy();
+    });
 }
