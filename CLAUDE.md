@@ -72,7 +72,7 @@ policy. Read the Dockerfile's header before editing it — every rule in it has 
 
 **`toolbox` is the only image that can run a migration**, and it exists because the runtime one
 structurally cannot: `scripts/` is never compiled and `ts-node` is a devDependency, so
-`npm ci --omit=dev` produces an image with no way to run any of the fifteen. Migrations go
+`npm ci --omit=dev` produces an image with no way to run any of the sixteen. Migrations go
 `docker compose run --rm jovi-mall-toolbox npm run migrate:up`.
 
 ⚠ **`node_modules` and `storage/` are in `.dockerignore`, and both are correctness.** `bcrypt`
@@ -84,13 +84,13 @@ is 112 MB of real uploads that belong in a named volume (D-6), never an image la
 Data/ops scripts (all `ts-node scripts/…`, and `src/scripts/**` is ESLint-ignored):
 
 **Run migrations through the runner, not the individual bindings.** `npm run migrate:status` and
-`npm run migrate:up` are the front door; the fifteen bindings below still work and are what the
+`npm run migrate:up` are the front door; the sixteen bindings below still work and are what the
 runner spawns, but only the runner writes the ledger. See "The migration ledger" below.
 
 ```bash
-npm run migrate:status                   # each of the 15: applied / not applied / applied-but-changed
+npm run migrate:status                   # each of the 16: applied / not applied / applied-but-changed
 npm run migrate:up                       # apply everything unapplied, in the declared order, ledgered
-npm run migrate:up -- --dry-run          # rehearse all 15; write nothing, ledger nothing
+npm run migrate:up -- --dry-run          # rehearse all 16; write nothing, ledger nothing
 npm run migrate:up -- --only migrate:storefront-indexes
 npm run aggregate:analytics              # Populate vendor analytics data
 npm run backfill:last-ordered            # Backfill last-ordered-at (idempotent, --dry-run)
@@ -103,6 +103,10 @@ npm run migrate:contract-terms           # terms_proposed_by/terms_version (idem
 npm run migrate:cod-late-deposit-index   # DROP the agent-scoped late_deposit index (--dry-run)
 npm run migrate:agent-vehicle-colors     # normalize vehicle_info.color to the palette; reports
                                          # every off-vocabulary value (idempotent, --dry-run)
+npm run migrate:drop-agent-invites       # ⚠ the ONLY DESTRUCTIVE one: DROPS agent_invites, the
+                                         # orphan of the deleted email-invite subsystem. Reads and
+                                         # prints (count, indexes, by-status, newest) before it
+                                         # drops; a no-op once gone (idempotent, --dry-run)
 npm run migrate:booking-rule-timezones   # clear the legacy 'UTC' default off availability rules so
                                          # they inherit the vendor's zone; reports every rule whose
                                          # effective hours would move (idempotent, --dry-run)
@@ -385,7 +389,7 @@ The consequence is deliberate and worth knowing before you touch an actor field:
 
 **`buildAdminVendorRouter` follows it** — mounted once at `/api/internal/admin/vendors`, writes only, no public twin. Seven operations: suspend/restore, KYC approve/reject, per-product suspend/restore, and a narrow settings PATCH. Contract in `api-doc/admin/vendors.md`; design record `../admin/docs/ADR-008-VENDOR-MANAGEMENT.md`. Note this domain *does* already have one public admin endpoint — `POST /api/admin/vendors/:vendorId/plan` in the billing module, which sets commission by assigning a plan. Nothing on the internal router duplicates it.
 
-**`Vendor.status` is now enforced, and this is the second time that sentence has been written here.** It used to be read by exactly one query (`findAvailableForAgencies`, hiding `inactive` vendors from the agency directory) and written by nothing — `updateStatus` had zero callers, and the three guards in `auth/guards/index.ts` that would have read it (`requireActiveUser`, `requireRoleEntityActive`, `requireLegitBusiness`) **still have zero call sites**. `requireAuth` and `login` now refuse a vendor whose role entity is `inactive` with `403 AUTH_VENDOR_SUSPENDED`.
+**`Vendor.status` is now enforced, and this is the second time that sentence has been written here.** It used to be read by exactly one query (`findAvailableForAgencies`, hiding `inactive` vendors from the agency directory) and written by nothing — `updateStatus` had zero callers, and the three guards in `auth/guards/index.ts` that would have read it (`requireActiveUser`, `requireRoleEntityActive`, `requireLegitBusiness`) **had zero call sites and were deleted with that file** (2026-08-19, plan step 4.A.3 — a guard nobody calls protects nothing, and one of the three would have denied every vendor if anyone had attached it). `requireAuth` and `login` now refuse a vendor whose role entity is `inactive` with `403 AUTH_VENDOR_SUSPENDED`.
 
 The check is deliberately `=== 'inactive'`, **never `!== 'active'`**: `pending_verification` is the schema default at registration, so the negated form would lock out every vendor who never verified their email. Refusing only `inactive` is provably a no-op against existing data. Don't "tidy" it — `wi-admin`'s `test:vendors` asserts the narrow form is what is in the file, and `verify:vendors` plants a `pending_verification` vendor to prove it stays untouched.
 
@@ -456,33 +460,36 @@ configured object storage and every upload went to a container disk wiped on res
 
 ### The migration ledger (`src/core/database/schema-migration.model.ts` + `scripts/migrate.ts`)
 
-Fifteen idempotent migration programs existed with good headers, npm bindings and **no record of
-what had been applied where**. `schema_migrations` is that record, with geo-tracker's semantics
+Sixteen idempotent migration programs exist with good headers, npm bindings and — until plan step
+2.C — **no record of what had been applied where**. `schema_migrations` is that record, with geo-tracker's semantics
 (`internal/platform/postgres/migrate.go`): **forward-only, no down migrations, one version table**.
 
 - **`checksum` is what makes it useful**, and it is the one field the Go version does not need —
-  its migrations are embedded SQL that never changes after it ships, while these fifteen are
+  its migrations are embedded SQL that never changes after it ships, while these are
   TypeScript programs somebody may still edit. Without it the ledger answers "this migration ran";
   with it, "*this version of* this migration ran", and an edit since the last run reports as
   **`applied-but-changed`** instead of hiding inside `applied`. It is normalised for line endings
-  — developed on Windows, deployed on Linux, and a CRLF checkout would otherwise report all fifteen
+  — developed on Windows, deployed on Linux, and a CRLF checkout would otherwise report all of them
   as changed on their first run in a container.
 - **The collection is APPEND-ONLY and has no unique key.** A failed attempt is worth more than a
   successful one during an incident, so a run never overwrites its predecessor; status is "the
   newest row for this name in this environment". A uniqueness claim would force either an upsert
   (destroying the history) or a failure on the second run of an idempotent script, which is the
   normal case.
-- **The runner SHELLS OUT to the existing npm bindings.** Each of the fifteen has its own
+- **The runner SHELLS OUT to the existing npm bindings.** Each of them has its own
   `dotenv.config()`, its own `mongoose.connect` and its own `process.exit`; importing them into one
-  process is a rewrite of all fifteen, and they are the part that already works. The migration
+  process is a rewrite of every one, and they are the part that already works. The migration
   under test is byte-identical to the one that runs, and this file cannot break a migration.
 - **Order is DECLARED, in `MIGRATIONS`.** `migrate:agent-memberships` first (the whole agent domain
   reads memberships), and every index build last (three claim uniqueness, and a unique build fails
   outright against data a later migration has not yet cleaned up). A failure **stops** the run.
 - **The registry is CLOSED.** `assertRegistryCovers()` diffs `MIGRATIONS` against every
   `migrate:*`/`backfill:*` binding in `package.json` and refuses to run on any difference — a
-  sixteenth migration added without a row would otherwise be one the ledger silently does not
-  track, which is the exact failure this exists to end. `test:system` asserts it too.
+  migration added without a row would otherwise be one the ledger silently does not track, which
+  is the exact failure this exists to end. `test:system` asserts it too.
+- ⚠ **Exactly one of them destroys** (`migrate:drop-agent-invites`, 2026-08-19). It reads and
+  prints what it is about to drop first, and forward-only is unrecoverable rather than merely
+  inconvenient for it — see `../docs/RUNBOOK.md` § 2.
 - **`--dry-run` ledgers nothing.** A rehearsal is not an application.
 - ⚠ **`scripts/migrate.ts` guards its own `main()` behind `require.main === module`**, because
   `test:system` imports it for the registry. Without that, a DB-free unit test would apply every
@@ -907,7 +914,7 @@ Consume the domain through the barrel (`src/modules/agents/index.ts`) — **exce
 
 Because `assertEligible` requires tracking-allowed before dispatch, geo-tracker **refuses** an agent's attempt to switch Tracking Allow off while they hold an active shipment (it would strand a delivery assigned on that promise). Note what Tracking Allow is *for* on geo-tracker's side: it is the permission to read an agent's **live position at all** — including an agent with no shipment, which is exactly the read that finds the one nearest a pickup. It is not what starts a tracking session; only a shipment is.
 
-Migration for pre-existing data: `npm run migrate:agent-memberships` (idempotent; `--dry-run` supported). The dead `agent_invites` collection is left in place — nothing reads it, and dropping it is a manual call.
+Migration for pre-existing data: `npm run migrate:agent-memberships` (idempotent; `--dry-run` supported). The orphaned `agent_invites` collection — nothing anywhere reads it — is dropped by `npm run migrate:drop-agent-invites`, a ledgered migration as of 2026-08-19 rather than the manual call this line used to describe. It is the only destructive one; read its `--dry-run` output before applying it anywhere you have not personally inspected.
 
 ### Base repository (`src/core/repositories/base.repository.ts`)
 Generic `BaseRepository<TDoc, TDomain>` provides: `findOne`, `findById`, `paginate`, `create`, `softDelete`, `restore`, `hardDelete`. All queries automatically filter `deletedAt: null`. Pass a Mongoose `ClientSession` for transactional operations.
@@ -1101,8 +1108,11 @@ prorates and peak-surcharges. Clearing is allowed on every type, so a stray wind
 `revalidateActiveStatus`, which silently demotes a live product to `draft` rather than refusing a
 write — the same failure mode `agency-storage-stock.rule.ts` was written to avoid.
 
-⚠ `VariantPricingService` (dead, barrel-only) writes `price` with no sync and must call the rule
-before it is ever wired up; flagged in its header, not fixed.
+⚠ `VariantPricingService` — dead, barrel-only, and writing `price` with no `minPrice` sync — was
+**deleted** 2026-08-19 (plan step 4.A.6.2). A dead service documenting the invariant it would break
+is a loaded gun: the header's warning does not survive a copy-paste. `variants/index.ts` carries a
+comment in its place naming `resolveBargainWrite` and the three live write paths, so new variant
+pricing is written against the rule from the start.
 
 Covered DB-free by `npm run test:bargain-price` (145). Contract in
 `api-doc/vendor/variants.md#bargainable-pricing`; the dashboard hand-off is

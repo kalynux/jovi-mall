@@ -24,7 +24,9 @@ export * from './services/download-execution.service';
 
 // Routes
 export * from './routes/customer.routes';
-// export * from './routes/vendor.routes'; // DEPRECATED/commented — superseded by catalog per-variant digital routes
+// Vendor digital-asset management is NOT here — it is per-variant in the catalog module, at
+// /api/vendor/products/:productId/variants/:variantId/digital/* (vendor-digital-asset.controller.ts).
+// The old `vendor.routes.ts` factory that used to sit beside this line was deleted 2026-08-19.
 
 // Types
 export * from './types';

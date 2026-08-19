@@ -39,6 +39,14 @@ export const LOGIN_CODE_DB = 14; // passwordless /login sessions — link token 
  * mechanisms the unified connection domain replaced. Both are gone; the numbers
  * are left unassigned so a stale key from a pre-cutover deployment can never be
  * read back by a feature that has since claimed the database.
+ *
+ * The gap in the sequence is the point, not an oversight. **Do not close it** by
+ * renumbering the constants below or by assigning 4 or 9 to the next feature: the
+ * cost of two unused integers is nothing, and the cost of reading a pre-cutover
+ * verification code back as something else entirely is a security incident.
+ * Inspected and deliberately kept by the Phase 4 dead-and-orphaned sweep,
+ * 2026-08-19 (plan step 4.A.6.4), which is the kind of pass most likely to take
+ * them. The next number to hand out is 15.
  */
 
 /**

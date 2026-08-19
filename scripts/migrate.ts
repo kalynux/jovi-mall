@@ -9,9 +9,9 @@
  *   npm run migrate:up -- --dry-run                          rehearse everything; ledger nothing
  *
  * ── It SHELLS OUT, and that is the design, not a shortcut ─────────────────────
- * Each of the fifteen is a standalone program with its own `dotenv.config()`, its own
- * `mongoose.connect` and its own `process.exit`. Importing fifteen of those into one
- * process is a rewrite of all fifteen — and they are the part of this that already works.
+ * Each migration is a standalone program with its own `dotenv.config()`, its own
+ * `mongoose.connect` and its own `process.exit`. Importing all of those into one process
+ * is a rewrite of every one of them — and they are the part of this that already works.
  * So the runner spawns `npm run <binding>`, times it, and writes what happened to the
  * ledger. The migration under test is byte-identical to the migration that runs.
  *
@@ -33,14 +33,14 @@
  *
  * ── The registry is CLOSED, and `status` proves it ────────────────────────────
  * `assertRegistryCovers()` diffs `MIGRATIONS` against every `migrate:*` / `backfill:*`
- * binding in `package.json` and fails on any difference. A sixteenth migration added
- * without a row here would otherwise be a migration the ledger silently does not track —
- * which is the exact failure this whole part exists to end.
+ * binding in `package.json` and fails on any difference. A migration added without a row
+ * here would otherwise be a migration the ledger silently does not track — which is the
+ * exact failure this whole part exists to end.
  *
  * ── Forward-only ──────────────────────────────────────────────────────────────
  * There is no `migrate:down`. Same as geo-tracker's `migrate.go`, and for the same reason:
  * a down migration for a backfill is a fiction (it cannot know which rows it wrote), and
- * every one of the fifteen is idempotent, so the correction for a bad migration is another
+ * every one of them is idempotent, so the correction for a bad migration is another
  * migration.
  */
 
@@ -69,14 +69,18 @@ export interface Migration {
     name: string;
     /** Relative to the repo root, so the checksum is of the file the binding actually runs. */
     file: string;
-    /** Whether the script accepts `--dry-run`. All fifteen do, as of plan step 2.C.3. */
+    /** Whether the script accepts `--dry-run`. All of them do, as of plan step 2.C.3. */
     dryRun: boolean;
     /** One line, for `status`. What is broken while this has not run. */
     note: string;
 }
 
 /**
- * The fifteen, in application order. See the ORDER note in the header.
+ * The sixteen, in application order. See the ORDER note in the header.
+ *
+ * ⚠ One of them DROPS A COLLECTION (`migrate:drop-agent-invites`, added 2026-08-19). Every
+ * other row here creates, backfills or re-indexes; that one destroys. It reads and prints
+ * what it is about to drop first, which is what makes `--dry-run` worth using here.
  */
 export const MIGRATIONS: Migration[] = [
     // ── Data: the agent domain, memberships first ────────────────────────────
@@ -141,6 +145,15 @@ export const MIGRATIONS: Migration[] = [
         file: 'scripts/backfill-shipment-tracking-numbers.ts',
         dryRun: true,
         note: "legacy shipments carry null tracking numbers — the platform's public handle for them",
+    },
+    // The only DESTRUCTIVE row. Last among the data migrations because it depends on none of
+    // them and nothing depends on it — the collection is orphaned, so its position is free and
+    // the safest free position is "after everything that reads data".
+    {
+        name: 'migrate:drop-agent-invites',
+        file: 'scripts/migrate-drop-agent-invites.ts',
+        dryRun: true,
+        note: 'the deleted email-invite subsystem leaves a collection of pending invitations nothing will ever answer',
     },
 
     // ── Indexes, last: three of these claim uniqueness ───────────────────────
@@ -236,7 +249,7 @@ export function assertRegistryCovers(): void {
  *
  * The normalisation is not cosmetic: this repository is developed on Windows and deployed
  * on Linux, and a checkout under `core.autocrlf=true` would otherwise produce a different
- * digest for a byte-identical migration — reporting every one of the fifteen as `changed`
+ * digest for a byte-identical migration — reporting every one of them as `changed`
  * on the first run in a container.
  */
 function checksumOf(file: string): string {
@@ -510,8 +523,8 @@ async function main(): Promise<void> {
 
     // No `autoIndex: false` here, deliberately, even though `lifecycle.ts` now sets it in
     // production. The ledger's own index is the one thing that cannot be created by a
-    // ledgered migration without circularity, and the collection is fifteen rows plus one
-    // per re-run — the build is instant and this process is the only writer.
+    // ledgered migration without circularity, and the collection is one row per migration
+    // plus one per re-run — the build is instant and this process is the only writer.
     await mongoose.connect(MONGO_URI);
 
     try {

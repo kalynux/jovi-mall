@@ -26,11 +26,13 @@ export {
   RegenerationResult 
 } from './VariantRegenerationService';
 
-export { 
-  VariantPricingService, 
-  SetVariantPriceCommand,
-  BulkSetPricesCommand 
-} from './VariantPricingService';
+// No variant PRICING service here, deliberately. The live price writers are
+// `vendor-variant.controller.ts` and the two SimpleProduct services, and every one of them
+// resolves the bargain window through `resolveBargainWrite` (`../bargain-price.rule`).
+// A dead `VariantPricingService` used to be exported here; it wrote `price` with no
+// `bargain.minPrice` sync and was deleted 2026-08-19 (Phase 4, ADR-A05) rather than left as a
+// copy-paste source that silently breaks that invariant. Write pricing against
+// `resolveBargainWrite` from the start.
 
 export { 
   VariantStockService, 

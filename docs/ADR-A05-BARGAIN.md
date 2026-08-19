@@ -59,10 +59,13 @@ something else.
    collection.** The source scan in `test:bargain-price` enforces this; treat a failure there as a
    product decision being made by accident.
 
-⚠ Unchanged and still true: `VariantPricingService` is dead (barrel-only) and writes `price` with
-no `minPrice` sync. Its own header says it must call `resolveBargainWrite` before it is ever
-wired up. Phase 4.A.6's recommendation — delete it or fix and wire it — stands, and this ADR does
-not resolve it.
+✅ **Resolved 2026-08-19 (Phase 4.A.6.2, [D-1](../PRODUCTION-READINESS/PHASE-4-HARDENING-PLAN.md#d-1)):
+`VariantPricingService` is deleted.** It was dead (barrel-only) and wrote `price` with no
+`minPrice` sync; its own header said it must call `resolveBargainWrite` before it was ever wired
+up. A dead service that documents the invariant it would break is a loaded gun — the header's
+warning does not survive a copy-paste. The barrel now carries a comment naming
+`resolveBargainWrite` and the three live write paths in its place, so the next author who needs
+variant pricing writes it correctly from the start. Git history is the archive.
 
 ---
 

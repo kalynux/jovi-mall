@@ -28,6 +28,7 @@
     "migrate:billing-owner-scope": "ts-node scripts/migrate-billing-owner-scope.ts",
     "migrate:agent-vehicle-colors": "ts-node scripts/migrate-agent-vehicle-colors.ts",
     "migrate:booking-rule-timezones": "ts-node scripts/migrate-booking-rule-timezones.ts",
+    "migrate:drop-agent-invites": "ts-node scripts/migrate-drop-agent-invites.ts",
     "migrate:storefront-indexes": "ts-node scripts/migrate-storefront-indexes.ts",
     "migrate:payment-indexes": "ts-node scripts/migrate-payment-indexes.ts",
     "audit:infinite-agency-stock": "ts-node scripts/audit-infinite-agency-stock.ts",

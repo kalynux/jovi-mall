@@ -5,7 +5,7 @@ import { COLLECTIONS, MODELS } from './collections';
  * The migration ledger — one row per attempt to apply one migration.
  *
  * ── What this closes ──────────────────────────────────────────────────────────
- * Fifteen idempotent migration and backfill programs live under `scripts/`, each wired to
+ * Sixteen idempotent migration and backfill programs live under `scripts/`, each wired to
  * an `npm run` binding, each with a good header. Between them there was no record of what
  * had been applied anywhere. Project notes carried three as written-but-never-applied, two
  * of which had since become silent no-ops; the tree could neither confirm nor deny that,
@@ -17,7 +17,7 @@ import { COLLECTIONS, MODELS } from './collections';
  * Mongo, with two additions the Go version does not need:
  *
  *   - `checksum` — sha256 of the script source. Go's migrations are embedded SQL files
- *     that are never edited after they ship; these fifteen are TypeScript programs
+ *     that are never edited after they ship; these are TypeScript programs
  *     somebody may still edit. Without the checksum the ledger answers "this migration
  *     ran", which is the wrong question. With it, it answers "*this version of* this
  *     migration ran", and an edit since the last run reports as `changed` rather than
@@ -83,8 +83,8 @@ const SchemaMigrationSchema = new Schema<ISchemaMigration>(
  * The only read the runner performs: newest-first within one name and environment.
  *
  * No TTL. This collection is the answer to "when did the schema last change here", and a
- * retention policy on it would silently delete that answer — the collection is fifteen
- * rows plus one per re-run, so it costs nothing to keep forever.
+ * retention policy on it would silently delete that answer — the collection is one row
+ * per migration plus one per re-run, so it costs nothing to keep forever.
  */
 SchemaMigrationSchema.index({ name: 1, environment: 1, appliedAt: -1 });
 

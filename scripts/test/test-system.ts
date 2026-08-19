@@ -1607,7 +1607,7 @@ assert('the frozen path is exempt from rate limiting — a 429 is a >= 300 to ge
  *
  * **The registry is closed.** `assertRegistryCovers()` diffs `MIGRATIONS` against every
  * `migrate:*` / `backfill:*` binding in package.json. Run from the suite rather than only
- * from whoever happens to type `migrate:status` next, because a sixteenth migration added
+ * from whoever happens to type `migrate:status` next, because a migration added
  * without a row is a migration the ledger silently does not track — which is precisely the
  * state this part was written to end.
  *
@@ -1623,8 +1623,8 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
     return true;
 });
 
-assert('all fifteen are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 15);
+assert('all sixteen are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 16);
 
 // Two ordering rules, from the runner's own header. Both are correctness, not taste:
 // the agent domain reads memberships, and a unique index build fails outright against
@@ -1643,7 +1643,7 @@ assert('every index migration runs after every data migration', () => {
 });
 
 // Correction #4 to the plan: three of the fifteen had no --dry-run at all, so "a dry run is
-// a safe read of current state" was not available for them. All fifteen have one now, and
+// a safe read of current state" was not available for them. All of them have one now, and
 // the runner's `dryRun` flag is what `migrate:up -- --dry-run` reads to decide whether it may
 // rehearse a script or must skip it.
 assert('every migration declares --dry-run, and every script actually accepts one', () => {
