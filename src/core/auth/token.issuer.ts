@@ -23,18 +23,55 @@ import { getJwtSecret, getJwtRefreshSecret } from '../../config/secrets.config';
 export const ACCESS_TOKEN_TTL_S = parseInt(process.env.AUTH_ACCESS_TOKEN_TTL || '900');     // 15 min
 export const REFRESH_TOKEN_TTL_S = parseInt(process.env.AUTH_REFRESH_TOKEN_TTL || '2592000'); // 30 days
 
+/**
+ * The absolute ceiling on one sign-in, in seconds. 90 days — ADR-A03 D-1.
+ *
+ * ── Why a session needs a ceiling at all ──────────────────────────────────────
+ * Every credential-issuing path here mints a FRESH PAIR at full lifetime, and `auth-me` is
+ * called by every client on launch — so the 30-day refresh window slides indefinitely and a
+ * stolen refresh token an attacker keeps using never lapses. The two revocations that do
+ * exist (a password change, a suspension) both require somebody to *know*. This is the one
+ * that does not.
+ *
+ * ── Why 90 days ──────────────────────────────────────────────────────────────
+ * A bearer client cannot renew silently inside an ordinary GET the way a cookie client can,
+ * so every cap is a VISIBLE sign-out. 90 days is long enough that a real user meets it as a
+ * rare event rather than as friction, and short enough that a stolen credential does not
+ * outlive a quarter.
+ *
+ * It is deliberately **not** derived from `REFRESH_TOKEN_TTL_S`. The two answer different
+ * questions — "how long may this token go unused" versus "how long may this sign-in last" —
+ * and expressing one as a multiple of the other means changing the refresh TTL silently moves
+ * the security ceiling.
+ */
+export const ABSOLUTE_SESSION_CAP_S = parseInt(
+    process.env.AUTH_ABSOLUTE_SESSION_CAP || '7776000',
+); // 90 days
+
 export interface AuthTokens {
     accessToken: string;
     refreshToken: string;
 }
 
-export function generateAccessToken(userId: string, role: string): string {
-    return jwt.sign({ userId, role }, getJwtSecret(), { expiresIn: ACCESS_TOKEN_TTL_S });
+/**
+ * The `auth_time` a fresh sign-in is stamped with.
+ *
+ * Whole seconds, matching `iat`'s unit — the two are compared against each other by
+ * `resolveAuthTime`'s D-9 fallback, and by nothing that would tolerate a unit mismatch.
+ */
+export function nowAuthTime(): number {
+    return Math.floor(Date.now() / 1000);
 }
 
-export function generateRefreshToken(userId: string, role: string): string {
+export function generateAccessToken(userId: string, role: string, authTime: number): string {
+    return jwt.sign({ userId, role, auth_time: authTime }, getJwtSecret(), {
+        expiresIn: ACCESS_TOKEN_TTL_S,
+    });
+}
+
+export function generateRefreshToken(userId: string, role: string, authTime: number): string {
     return jwt.sign(
-        { userId, role, type: 'refresh' },
+        { userId, role, type: 'refresh', auth_time: authTime },
         getJwtRefreshSecret(),
         { expiresIn: REFRESH_TOKEN_TTL_S },
     );
@@ -46,11 +83,31 @@ export function generateRefreshToken(userId: string, role: string): string {
  * `jsonwebtoken` stamps `iat` on each without being asked, and that claim is load-bearing:
  * it is what `isTokenPredatingPasswordChange` measures against `User.password_changed_at`.
  * Never sign one of these with `noTimestamp`.
+ *
+ * ── `authTime` and its default, which is the trap ─────────────────────────────
+ * `auth_time` is when the person last PROVED something — a password, or a single-use
+ * credential the bot handed them. It is stamped fresh there and copied **unchanged**
+ * everywhere else; `core/auth/session-cap.ts` measures the cap against it.
+ *
+ * The default is "now", which makes every *fresh* issue correct with no argument at the call
+ * site and leaves the calls that must NOT take it — the rotation, and the two re-issues that
+ * sit behind `requireAuth` — as the only ones obliged to pass a value. That is the right way
+ * round: a new sign-in path added later is capped by default, and the dangerous case is the
+ * one you have to type.
+ *
+ * ⚠ It is deliberately NOT optional on the two `generate*` functions above. Forgetting it
+ * there must not compile, because a token minted with no `auth_time` falls back to its own
+ * `iat` (D-9) — which is to say, it re-stamps itself on every rotation and the cap silently
+ * stops existing.
  */
-export function issueTokenPair(userId: string, role: string): AuthTokens {
+export function issueTokenPair(
+    userId: string,
+    role: string,
+    authTime: number = nowAuthTime(),
+): AuthTokens {
     return {
-        accessToken: generateAccessToken(userId, role),
-        refreshToken: generateRefreshToken(userId, role),
+        accessToken: generateAccessToken(userId, role, authTime),
+        refreshToken: generateRefreshToken(userId, role, authTime),
     };
 }
 

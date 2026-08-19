@@ -88,6 +88,10 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.AUTH_REFRESH_TOKEN_INVALID]: 'Invalid or expired refresh token',
     [ERROR_CODES.AUTH_SESSION_EXPIRED]: 'Session expired, please log in again',
     [ERROR_CODES.AUTH_PASSWORD_CHANGED]: 'Your password was changed. Please sign in again',
+    // Deliberately says nothing is wrong. The cap is routine, quarterly and not a security
+    // event — but it is also not refreshable, so the copy must send the person to the login
+    // screen rather than suggest waiting it out.
+    [ERROR_CODES.AUTH_SESSION_CAP_REACHED]: "It's been a while — please sign in again",
     [ERROR_CODES.AUTH_USER_NOT_FOUND]: 'User not found',
     [ERROR_CODES.AUTH_ROLE_PROFILE_NOT_FOUND]: 'Role profile not found',
 

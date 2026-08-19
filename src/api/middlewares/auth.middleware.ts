@@ -13,6 +13,7 @@ import { stampContextActor } from '../../core/logging/request-context';
 import { identityRateLimiter } from '../rate-limit/rate-limit.middleware';
 import { getJwtSecret } from '../../config/secrets.config';
 import { isTokenPredatingPasswordChange } from '../../core/auth/password-epoch';
+import { isSessionCapReached, resolveAuthTime } from '../../core/auth/session-cap';
 
 // Module-level singletons
 const userRepo = new UserRepository();
@@ -30,6 +31,13 @@ export interface AuthUserPayload {
    * date the token against `User.password_changed_at` — see `core/auth/password-epoch.ts`.
    */
   iat?: number;
+  /**
+   * Whole seconds. When the person last PROVED a credential — copied unchanged through every
+   * re-issue, so it dates the SIGN-IN rather than the token. See `core/auth/session-cap.ts`.
+   * Optional because a token minted before ADR-A03 landed carries none; D-9 dates those from
+   * their own `iat`.
+   */
+  auth_time?: number;
 }
 
 declare global {
@@ -40,6 +48,16 @@ declare global {
         user: import('../../modules/users/user.model').IUser;
         role: string;
         role_entity: any;
+        /**
+         * The verified token's session start, in whole seconds, with D-9's fallback already
+         * applied. Present on everything `requireAuth` admits; absent on the synthetic
+         * `req.auth` that `requireAdminCaller` builds from headers, which authenticates a
+         * service token rather than a session and has no sign-in to date.
+         *
+         * The two routes that re-issue a pair from an access token (`auth-me`, `add-role`)
+         * read it and COPY it — see `AuthService.authMe`.
+         */
+        auth_time?: number;
       };
       // Deprecated aliases kept for backward compatibility
       user?: import('../../modules/users/user.model').IUser;
@@ -199,6 +217,29 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
   }
 
   /**
+   * The 90-day absolute cap — ADR-A03, and the same two-call-site argument as the password
+   * epoch directly above.
+   *
+   * `rotateRefreshToken` is the eviction; this closes the 15-minute access tail. But here it
+   * does something the password check does not have to, and it is why the check is at
+   * `requireAuth` rather than only at the rotation: **`auth-me` and `add-role` both mint a
+   * full fresh pair from a valid access token**, and both sit behind this middleware. A
+   * client polling `auth-me` inside the access lifetime never reaches `rotateRefreshToken`
+   * at all — so gating the rotation alone would leave the sliding window exactly as A-3
+   * found it, with an implementation that looks complete.
+   *
+   * No query: the payload is already verified and in hand.
+   *
+   * ⚠ Read from the VERIFIED payload, never from a decoded one. `auth_time` is
+   * caller-controlled until the signature has been checked, and a forged one is a session
+   * that never caps. Both branches above either `jwt.verify` or decode a token this service
+   * has just minted.
+   */
+  if (isSessionCapReached(payload)) {
+    return next(createAppError(ERROR_CODES.AUTH_SESSION_CAP_REACHED, 401));
+  }
+
+  /**
    * Load Role Entity.
    *
    * There is no `'admin'` branch, and its absence is load-bearing rather than
@@ -258,8 +299,12 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
     );
   }
 
-  // Attach to Request
-  req.auth = { user, role, role_entity: entity };
+  // Attach to Request.
+  //
+  // `auth_time` carries D-9's fallback already applied, so the two re-issue routes behind
+  // this middleware copy one number and never repeat the fallback logic. Non-null by
+  // construction: `isSessionCapReached` above refuses any payload it cannot date.
+  req.auth = { user, role, role_entity: entity, auth_time: resolveAuthTime(payload)! };
 
   // Backward compatibility aliases
   req.user = user;

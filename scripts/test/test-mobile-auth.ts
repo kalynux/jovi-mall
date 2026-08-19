@@ -27,6 +27,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import jwt from 'jsonwebtoken';
 import { AUTH_SESSION_PATHS, isAuthSessionPathname } from '../../src/api/rate-limit/auth-paths';
 import {
     AUTH_POLICY,
@@ -36,7 +37,17 @@ import {
     GLOBAL_POLICY,
     POLICIES,
 } from '../../src/api/rate-limit/policy';
-import { ACCESS_TOKEN_TTL_S, REFRESH_TOKEN_TTL_S, tokenEnvelope } from '../../src/core/auth/token.issuer';
+import {
+    ABSOLUTE_SESSION_CAP_S,
+    ACCESS_TOKEN_TTL_S,
+    issueTokenPair,
+    REFRESH_TOKEN_TTL_S,
+    tokenEnvelope,
+} from '../../src/core/auth/token.issuer';
+import { isSessionCapReached, resolveAuthTime } from '../../src/core/auth/session-cap';
+import { ERROR_CODES } from '../../src/core/error-codes';
+import { DEFAULT_ERROR_MESSAGES } from '../../src/core/errors';
+import { categoryFor } from '../../src/core/error-category';
 import { accessCookieOptions, refreshCookieOptions } from '../../src/config/cookie.config';
 import { evaluateMaintenance, MaintenanceState } from '../../src/modules/system/domain/maintenance-mode';
 
@@ -202,7 +213,7 @@ function main(): void {
     assert('it returns a refreshToken as well as an accessToken', () =>
         /rotateRefreshToken\([\s\S]{0,200}?Promise<\{[^}]*refreshToken: string/.test(authService));
     assert('it mints through issueTokenPair', () =>
-        /rotateRefreshToken[\s\S]*?this\.issueTokenPair\(user, payload\.role\)/.test(authService));
+        /rotateRefreshToken[\s\S]*?this\.issueTokenPair\(user, payload\.role, authTime\)/.test(authService));
     assert('it still asserts the type: refresh claim', () =>
         authService.includes("payload.type !== 'refresh'"));
     assert('it still refuses a suspended account and a stale password epoch', () =>
@@ -410,6 +421,141 @@ function main(): void {
         };
         walk(SRC);
         return hits.length === 0;
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ADR-A03 / plan step 4.A.5. The cap is carried in a CLAIM rather than a store, so what
+    // can be asserted DB-free is more than usual: the arithmetic, the copy and the D-9
+    // fallback are all pure. What is NOT reachable without a database is the two raise sites
+    // themselves — both load a user row first — so those are source scans, and the LAST one
+    // in this group is the load-bearing assertion of the whole feature.
+    console.log('\n▶ The 90-day absolute session cap');
+
+    // The three minting cases below sign real JWTs, so a secret has to exist. This suite is
+    // DB-free but not env-free; a locally-run one may have neither variable, and refusing to
+    // mint is `getJwtSecret`'s correct production behaviour (step 3.E.2). A throwaway value
+    // is set only when there is none — never overwriting a real one, because these tokens are
+    // decoded, never verified, and a suite that quietly rewrote the signing key would be a
+    // trap for whatever ran after it.
+    if (!process.env.JWT_SECRET?.trim()) {
+        process.env.JWT_SECRET = 'test-only-secret-for-test-mobile-auth-0123456789';
+    }
+
+    const CAP = ABSOLUTE_SESSION_CAP_S;
+    const nowS = Math.floor(Date.now() / 1000);
+
+    assert('the cap is 90 days by default', () => CAP === 7776000);
+    assert('a session inside the cap is admitted', () =>
+        isSessionCapReached({ auth_time: nowS - (CAP - 3600), iat: nowS }) === false);
+    assert('a session past the cap is REFUSED, however fresh the token itself is', () =>
+        isSessionCapReached({ auth_time: nowS - (CAP + 1), iat: nowS }) === true);
+    // Distinctness from AUTH_SESSION_EXPIRED / AUTH_PASSWORD_CHANGED is enforced by the
+    // compiler — the registry is `Object.freeze`d with literal types, so writing that
+    // comparison here is a type error rather than a passing assertion. What is worth
+    // asserting is that the code EXISTS under the name the api-doc publishes.
+    assert('…and the refusal has its own code, under the published name', () =>
+        ERROR_CODES.AUTH_SESSION_CAP_REACHED === 'AUTH_SESSION_CAP_REACHED');
+    assert('it carries a registry message a client can show', () => {
+        const message = DEFAULT_ERROR_MESSAGES[ERROR_CODES.AUTH_SESSION_CAP_REACHED];
+        return typeof message === 'string' && message.length > 0;
+    });
+    assert('its taxonomy category is authentication, DERIVED from (code, 401)', () =>
+        categoryFor(ERROR_CODES.AUTH_SESSION_CAP_REACHED, 401) === 'authentication');
+
+    // A token that cannot be dated at all fails CLOSED. Unreachable for anything this
+    // service signs (jsonwebtoken always stamps `iat`), which is exactly why a payload
+    // arriving without either claim was assembled by hand.
+    assert('an undateable payload is refused rather than granted forever', () =>
+        isSessionCapReached({}) === true);
+
+    // ── `auth_time` survives a re-issue BYTE-IDENTICAL ────────────────────────
+    // Mint → decode → re-issue with what was decoded → decode again → compare. This is the
+    // issuer half of the rotation; the service half is the source scan below, and neither
+    // is sufficient alone.
+    const originalAuthTime = nowS - 86_400 * 10;
+    const first = issueTokenPair('64b7f0000000000000000001', 'agent', originalAuthTime);
+    const firstPayload = jwt.decode(first.refreshToken) as Record<string, number>;
+    assert('a minted pair carries auth_time on BOTH halves', () => {
+        const access = jwt.decode(first.accessToken) as Record<string, number>;
+        return access.auth_time === originalAuthTime && firstPayload.auth_time === originalAuthTime;
+    });
+
+    const rotated = issueTokenPair(
+        '64b7f0000000000000000001', 'agent', resolveAuthTime(firstPayload)!,
+    );
+    assert('auth_time survives a re-issue byte-identical', () => {
+        const access = jwt.decode(rotated.accessToken) as Record<string, number>;
+        const refresh = jwt.decode(rotated.refreshToken) as Record<string, number>;
+        return access.auth_time === originalAuthTime && refresh.auth_time === originalAuthTime;
+    });
+    assert('…while iat DOES move, so the two claims are not the same thing', () => {
+        const refresh = jwt.decode(rotated.refreshToken) as Record<string, number>;
+        return refresh.iat !== originalAuthTime && refresh.auth_time === originalAuthTime;
+    });
+
+    // ── D-9: a legacy token is dated from its own `iat` ───────────────────────
+    const legacyIat = nowS - 86_400 * 20;   // minted 20 days ago, before this feature existed
+    assert('a token with no auth_time is dated from its iat', () =>
+        resolveAuthTime({ iat: legacyIat }) === legacyIat);
+    assert('…so a legacy session inside the cap is ACCEPTED — nobody is signed out on deploy', () =>
+        isSessionCapReached({ iat: legacyIat }) === false);
+    assert('…and a legacy session past the cap is refused on its iat alone', () =>
+        isSessionCapReached({ iat: nowS - (CAP + 1) }) === true);
+    assert('…and its re-issue comes back carrying a REAL auth_time', () => {
+        const healed = issueTokenPair('64b7f0000000000000000001', 'agent',
+            resolveAuthTime({ iat: legacyIat })!);
+        return (jwt.decode(healed.refreshToken) as Record<string, number>).auth_time === legacyIat;
+    });
+
+    // ── The source scans. No behavioural test can catch a re-stamp in under 90 days ──
+    assert('rotateRefreshToken COPIES auth_time — it does not re-stamp', () =>
+        /const authTime = resolveAuthTime\(payload\)!/.test(authService)
+        && !/rotateRefreshToken[\s\S]*?this\.issueTokenPair\(user, payload\.role\)\s*;/.test(authService));
+    assert('rotateRefreshToken raises the cap code', () =>
+        /rotateRefreshToken[\s\S]*?isSessionCapReached\(payload\)[\s\S]{0,200}?AUTH_SESSION_CAP_REACHED/
+            .test(authService));
+
+    /**
+     * ⚠ **The one that makes the feature real.** `authMe` and `addRole` both mint a FULL
+     * FRESH PAIR from a valid access token, and every client calls `auth-me` on launch — so
+     * if either stamps a new `auth_time`, `nowS − auth_time` never approaches 90 days and the
+     * cap is unreachable while looking completely implemented. Plan step 4.A.5.2 lists both
+     * among the sites that stamp fresh; that is the correction this suite pins.
+     */
+    assert('authMe and addRole take an authTime and COPY it', () =>
+        /async authMe\(input: AuthMeInput, authTime: number\)/.test(authService)
+        && /async addRole\(userId: string, input: AddRoleInput, authTime: number\)/.test(authService)
+        && (authService.match(/this\.issueTokenPair\(user, role, authTime\)/g) ?? []).length === 2);
+    assert('…and neither takes the fresh-stamp default', () =>
+        !/async authMe[\s\S]*?this\.issueTokenPair\(user, role\)\s*;/.test(authService));
+
+    // The other half of that: the value has to reach them, and requireAuth is where the
+    // verified claim lives. All four call sites (browser + mobile) must pass one.
+    const authController = code(read('modules/auth/auth.controller.ts'));
+    assert('requireAuth publishes the verified auth_time on req.auth', () =>
+        /req\.auth = \{ user, role, role_entity: entity, auth_time: resolveAuthTime\(payload\)!/
+            .test(middlewareCode));
+    assert('requireAuth enforces the cap too — auth-me/add-role never reach the rotation', () =>
+        /isSessionCapReached\(payload\)[\s\S]{0,120}?AUTH_SESSION_CAP_REACHED/.test(middlewareCode));
+    assert('all four re-issue call sites pass an authTime through', () =>
+        (authController.match(/authService\.(authMe|addRole)\([^)]*authTime\)/g) ?? []).length === 2
+        && (mobileController.match(/authService\.(authMe|addRole)\([^)]*authTime\)/g) ?? []).length === 2);
+
+    // Fresh at the four credential proofs, and nowhere else. `login`/`register` take the
+    // default; the password change and the messaging login mint through the free function.
+    assert('login and register take the FRESH default', () =>
+        (authService.match(/\n\s*const tokens = this\.issueTokenPair\(user, role\);/g) ?? []).length === 2);
+    assert('the password-change re-issue stamps fresh', () =>
+        /issueTokenPair\(userId, req\.auth!\.role\)/.test(code(read('modules/users/user.controller.ts'))));
+    assert('the messaging login stamps fresh', () =>
+        /issueTokenPair\(String\(user\._id\), 'customer'\)/
+            .test(code(read('modules/messaging-login/services/messaging-login.service.ts'))));
+
+    assert('api-doc/auth documents the cap and tells a client not to retry', () => {
+        const doc = fs.readFileSync(path.join(ROOT, 'api-doc/auth/README.md'), 'utf8');
+        return doc.includes('AUTH_SESSION_CAP_REACHED')
+            && /90[\s-]day/i.test(doc)
+            && /never retry/i.test(doc);
     });
 
     // ─────────────────────────────────────────────────────────────────────────

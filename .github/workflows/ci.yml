@@ -107,7 +107,7 @@ jobs:
       # IN EITHER DIRECTION — a new failure is still caught, and a fix is noticed rather
       # than silently absorbed.
       #
-      #   test:mobile-auth       102/2  — the FAILURE count is what is baselined: the
+      #   test:mobile-auth       127/2  — the FAILURE count is what is baselined: the
       #                                   commented `if (!isValid) throw` in
       #                                   auth.service.ts, excluded by owner instruction.
       #                                   If it is ever re-enabled, the 2 moves and this
@@ -115,7 +115,13 @@ jobs:
       #                                   whenever the suite grows — 101 → 102 in plan
       #                                   step 2.E.3, which added the assertion that
       #                                   .env.example's ALLOWED_ORIGINS VALUE, not just
-      #                                   its comment, carries the Capacitor origins.
+      #                                   its comment, carries the Capacitor origins; and
+      #                                   102 → 127 in plan step 4.A.5, the 90-day absolute
+      #                                   session cap (ADR-A03) — 25 assertions covering
+      #                                   the arithmetic, the byte-identical copy through a
+      #                                   re-issue, D-9's iat fallback, and the source scans
+      #                                   that are the only thing capable of catching a
+      #                                   re-stamp in under 90 days.
       #
       # test:contact-validation was the second, at 73/1, and is GONE from both places as
       # of plan step 4.A.2 — it is 74/0 and runs in the discovery loop above like every
@@ -144,7 +150,7 @@ jobs:
             echo "✔ $suite — $got (baseline held)"
           }
           rc=0
-          assert_counts test:mobile-auth 102 2 || rc=1
+          assert_counts test:mobile-auth 127 2 || rc=1
           exit $rc
 
       # ── A REAL gate now, at high+ (plan step 2.D.5) ──────────────────────────

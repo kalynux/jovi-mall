@@ -80,14 +80,18 @@ export class MobileAuthController {
    */
   static authMe = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.auth?.user?.id;
-    if (!userId) {
+    // The session's start, copied into the new pair rather than re-stamped — which is what
+    // stops this endpoint, the one every client calls on launch, from resetting the 90-day
+    // cap on every app start. See `AuthService.authMe`.
+    const authTime = req.auth?.auth_time;
+    if (!userId || authTime === undefined) {
       return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
     }
 
     const input = AuthMeSchema.parse({ userId, role: req.params.role });
     const {
       user, role: resolvedRole, role_entity, accessToken, refreshToken,
-    } = await authService.authMe(input);
+    } = await authService.authMe(input, authTime);
 
     sendSuccess(res, {
       user,
@@ -100,12 +104,13 @@ export class MobileAuthController {
   /** POST /api/auth/mobile/add-role — the new pair is scoped to the role just added. */
   static addRole = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.auth?.user?.id;
-    if (!userId) {
+    const authTime = req.auth?.auth_time;   // copied, not re-stamped — see `AuthService.addRole`
+    if (!userId || authTime === undefined) {
       return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
     }
 
     const input = AddRoleSchema.parse(req.body);
-    const { user, role, role_entity, accessToken, refreshToken } = await authService.addRole(userId, input);
+    const { user, role, role_entity, accessToken, refreshToken } = await authService.addRole(userId, input, authTime);
 
     sendCreated(res, {
       user,

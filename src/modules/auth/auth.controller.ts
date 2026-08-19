@@ -96,23 +96,28 @@ export class AuthController {
 
   static authMe = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.auth?.user?.id;
-    if (!userId) {
+    // `auth_time` is set by `requireAuth` on everything it admits, so its absence means no
+    // verified token reached here — which is exactly what AUTH_MISSING_TOKEN says. Reading it
+    // in the same guard is what makes it impossible to call `authMe` without one.
+    const authTime = req.auth?.auth_time;
+    if (!userId || authTime === undefined) {
       return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
     }
     const { role } = req.params;
     const input = AuthMeSchema.parse({ userId, role });
-    const { user, role: resolvedRole, role_entity, accessToken, refreshToken } = await authService.authMe(input);
+    const { user, role: resolvedRole, role_entity, accessToken, refreshToken } = await authService.authMe(input, authTime);
     setAuthCookies(res, accessToken, refreshToken);
     sendSuccess(res, { user, role: resolvedRole, role_entity });
   });
 
   static addRole = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const userId = req.auth?.user?.id;
-    if (!userId) {
+    const authTime = req.auth?.auth_time;   // copied, not re-stamped — see `AuthService.addRole`
+    if (!userId || authTime === undefined) {
       return next(createAppError(ERROR_CODES.AUTH_MISSING_TOKEN, 401));
     }
     const input = AddRoleSchema.parse(req.body);
-    const { user, role, role_entity, accessToken, refreshToken } = await authService.addRole(userId, input);
+    const { user, role, role_entity, accessToken, refreshToken } = await authService.addRole(userId, input, authTime);
     setAuthCookies(res, accessToken, refreshToken);
     sendCreated(res, { user, role, role_entity });
   });

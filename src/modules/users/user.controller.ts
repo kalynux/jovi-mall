@@ -46,6 +46,17 @@ export class UserController {
      * services, which is what importing that class into this module would pull in at load
      * time. See that file.
      */
+    /**
+     * FRESH `auth_time` (the issuer's default), and this is a decision rather than an
+     * oversight — D-8 states it explicitly.
+     *
+     * The user presented their OLD password to get here, so a credential was proved. And a
+     * password change is this platform's only existing revocation: re-stamping the clock is
+     * what keeps "change your password" a COMPLETE remedy after a compromise, rather than
+     * one that leaves the victim's own new session carrying the attacker-era start date and
+     * expiring early for no reason they can see. That property is what ADR-A03 exists to
+     * preserve, not to weaken.
+     */
     const { accessToken, refreshToken } = issueTokenPair(userId, req.auth!.role);
     setAuthCookies(res, accessToken, refreshToken);
 

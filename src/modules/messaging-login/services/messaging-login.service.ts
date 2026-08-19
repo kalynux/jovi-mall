@@ -209,7 +209,14 @@ export class MessagingLoginService {
     return user;
   }
 
-  /** The role is a literal. It is never read from a request or from the record. */
+  /**
+   * The role is a literal. It is never read from a request or from the record.
+   *
+   * FRESH `auth_time` (the issuer's default) — the person spent a single-use credential the
+   * bot minted against a messaging identity they had already proved they control, which is a
+   * credential-proving event by the same test `login` passes. The 90-day cap starts here.
+   * ADR-A03 / D-8.
+   */
   private issueSession(user: IUser): MagicSignInResult {
     const tokens = issueTokenPair(String(user._id), 'customer');
     return { user, role: 'customer', ...tokens };

@@ -98,6 +98,26 @@ export const ERROR_CODES = Object.freeze({
      * 401, not 403: unlike a suspension, re-authenticating is exactly the remedy.
      */
     AUTH_PASSWORD_CHANGED: 'AUTH_PASSWORD_CHANGED',
+
+    /**
+     * The sign-in itself has outlived the 90-day absolute cap — ADR-A03 D-1.
+     *
+     * Its own code rather than `AUTH_SESSION_EXPIRED`, and the distinction is the whole
+     * point of raising it (D-10). `AUTH_SESSION_EXPIRED` is routine and REFRESHABLE — the
+     * client renews and carries on. This one is not: no credential the client holds can
+     * renew it, because the claim it failed on is copied unchanged through every rotation.
+     * A client that reads them as the same thing loops forever against a session that is
+     * never coming back. And unlike `AUTH_PASSWORD_CHANGED` it carries no alarm: nothing is
+     * wrong, the quarter simply ended.
+     *
+     * The remedy is exactly one thing, and the api-doc says it in those words: **route to
+     * login, never retry.**
+     *
+     * Raised at 401 on both credential paths — `requireAuth` (access, and therefore the two
+     * re-issue routes behind it) and `rotateRefreshToken` (refresh). See
+     * `core/auth/session-cap.ts`. 401, not 403: re-authenticating IS the remedy.
+     */
+    AUTH_SESSION_CAP_REACHED: 'AUTH_SESSION_CAP_REACHED',
     AUTH_USER_NOT_FOUND: 'AUTH_USER_NOT_FOUND',
     AUTH_ROLE_PROFILE_NOT_FOUND: 'AUTH_ROLE_PROFILE_NOT_FOUND',
     AUTH_FORBIDDEN: 'AUTH_FORBIDDEN',

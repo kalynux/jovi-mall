@@ -1211,15 +1211,54 @@ a session must end. Consequences, stated plainly rather than left to be discover
 
 - **A stolen refresh token stays valid until it expires.** Logging out does not revoke it —
   logging out only discards your own copy.
-- **A password change is the only thing that kills one early**, via the `iat` epoch above. It
-  is the correct remedy after a compromise, and it evicts every session on every device except
-  the one performing the change.
-- **For bearer clients the 30-day window is *sliding*, with no absolute cap.** Every
-  `/auth/mobile/refresh` and every `auth-me` re-issues the refresh token at full lifetime, so
-  an actively-used session never hard-expires — and neither does an actively-abused one. This
-  is not new behaviour (`auth-me` has always re-issued both, and every client calls it on
-  launch); the mobile namespace only makes it explicit. It is stated here so the trade is a
-  shared decision rather than an assumption.
+- **A password change is the only thing that kills one *on demand*,** via the `iat` epoch
+  above. It is the correct remedy after a compromise, and it evicts every session on every
+  device except the one performing the change.
+- **The 30-day window slides, but the SIGN-IN is capped at 90 days.** Each refresh and each
+  `auth-me` still re-issues both tokens at full lifetime, so an actively-used session never
+  hard-expires on inactivity — but it does end on the calendar. See below.
+
+### The 90-day absolute cap
+
+Every token carries an **`auth_time`** claim: the second at which the account holder last
+*proved* a credential. It is set at login, at registration, at a bot-issued sign-in and at a
+password change — and **copied unchanged** through every refresh and every `auth-me`. It is not
+`iat`, which moves on every re-issue.
+
+Once `now − auth_time` exceeds **90 days**, every credential path refuses:
+
+```
+401  { "success": false,
+       "error": { "code": "AUTH_SESSION_CAP_REACHED",
+                  "statusCode": 401,
+                  "category": "authentication",
+                  "message": "It's been a while — please sign in again" } }
+```
+
+**What a client must do: route to the login screen. Never retry, and never treat it as a
+transient failure.** This is the one 401 on this API that no credential you hold can fix —
+refreshing produces the same answer, because the claim that failed is copied into whatever the
+refresh would mint. A client that retries will loop until it is killed.
+
+Tell it apart from its neighbours, all of which are also 401:
+
+| Code | Meaning | What the client does |
+|---|---|---|
+| `AUTH_TOKEN_EXPIRED` | the 15-minute access token lapsed | refresh, then replay the request |
+| `AUTH_SESSION_EXPIRED` | the refresh token itself lapsed or was rejected | sign in again |
+| `AUTH_SESSION_CAP_REACHED` | **the sign-in is 90 days old** | sign in again — **do not retry** |
+| `AUTH_PASSWORD_CHANGED` | the password changed since this token was minted | sign in again, and consider warning the user |
+
+Cookie clients meet this as an ordinary redirect to a login page. **Bearer clients meet it as a
+visible sign-out**, because there is no silent renewal inside an ordinary request the way a
+browser has — so it is worth handling deliberately rather than as a generic 401.
+
+The window is configurable per deployment (`AUTH_ABSOLUTE_SESSION_CAP`, seconds); 90 days is the
+default and the documented policy. Design record: `docs/ADR-A03-SESSION-CAP.md`.
+
+A session that predates this feature is capped from the moment its current token was minted
+(at most 30 days ago) and gains a real `auth_time` on its first refresh — **nobody was signed
+out when this shipped.**
 
 The mitigation that is in force is client-side: **store tokens in the iOS Keychain / Android
 Keystore, never plain preferences.** If a server-side revocation store is wanted later, the

@@ -22,12 +22,14 @@ import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { getJwtRefreshSecret } from '../../config/secrets.config';
 import { isTokenPredatingPasswordChange } from '../../core/auth/password-epoch';
+import { isSessionCapReached, resolveAuthTime } from '../../core/auth/session-cap';
 import { generateSystemPassword } from '../../core/auth/system-password';
 import {
   AuthTokens,
   generateAccessToken,
   generateRefreshToken,
   issueTokenPair,
+  nowAuthTime,
 } from '../../core/auth/token.issuer';
 
 const EMAIL_VERIFY_EXPIRE = 86400; // 24 hours
@@ -67,16 +69,21 @@ export class AuthService {
 
   // ─── Token Generation ───────────────────────────────────────────────────────
 
-  generateAccessToken(user: IUser, role: string): string {
-    return generateAccessToken(String(user._id), role);
+  generateAccessToken(user: IUser, role: string, authTime: number = nowAuthTime()): string {
+    return generateAccessToken(String(user._id), role, authTime);
   }
 
-  generateRefreshToken(user: IUser, role: string): string {
-    return generateRefreshToken(String(user._id), role);
+  generateRefreshToken(user: IUser, role: string, authTime: number = nowAuthTime()): string {
+    return generateRefreshToken(String(user._id), role, authTime);
   }
 
-  issueTokenPair(user: IUser, role: string): AuthTokens {
-    return issueTokenPair(String(user._id), role);
+  /**
+   * `authTime` omitted means "the person just proved a credential" — see the trap note on
+   * `core/auth/token.issuer.ts`'s `issueTokenPair`. Every call in this class that is NOT a
+   * credential proof passes one.
+   */
+  issueTokenPair(user: IUser, role: string, authTime: number = nowAuthTime()): AuthTokens {
+    return issueTokenPair(String(user._id), role, authTime);
   }
 
   /**
@@ -101,7 +108,7 @@ export class AuthService {
   async rotateRefreshToken(
     refreshToken: string,
   ): Promise<{ accessToken: string; refreshToken: string; user: IUser; role: string }> {
-    let payload: { userId: string; role: string; type: string; iat?: number };
+    let payload: { userId: string; role: string; type: string; iat?: number; auth_time?: number };
 
     try {
       payload = jwt.verify(
@@ -139,7 +146,34 @@ export class AuthService {
       throw createAppError(ERROR_CODES.AUTH_PASSWORD_CHANGED, 401);
     }
 
-    const tokens = this.issueTokenPair(user, payload.role);
+    /**
+     * The absolute cap — ADR-A03. This is the EVICTION half: the refresh credential lives
+     * 30 days, so refusing here is what stops a capped session minting anything further.
+     * `requireAuth` carries the same check for the 15-minute access tail and for the two
+     * re-issue routes that sit behind it.
+     *
+     * Its own code, not `AUTH_SESSION_EXPIRED`: this one is not refreshable, and a client
+     * that cannot tell them apart retries forever.
+     */
+    if (isSessionCapReached(payload)) {
+      throw createAppError(ERROR_CODES.AUTH_SESSION_CAP_REACHED, 401);
+    }
+
+    /**
+     * ⚠ **The third argument is the entire decision.** `auth_time` is COPIED, never
+     * refreshed — nobody proved anything to get here, they presented a token. Writing
+     * `this.issueTokenPair(user, payload.role)` would take the "now" default, silently
+     * restore the uncapped sliding window, and look exactly like working code. No
+     * behavioural test can catch that in under 90 days, which is why `test:mobile-auth`
+     * asserts this line by SOURCE SCAN.
+     *
+     * `resolveAuthTime` is what applies D-9's fallback for a token minted before this
+     * feature existed: it is capped from its own `iat`, and comes back carrying a real
+     * `auth_time`. Non-null by construction — `isSessionCapReached` above returns true for
+     * a payload it cannot date, so an undateable token has already been refused.
+     */
+    const authTime = resolveAuthTime(payload)!;
+    const tokens = this.issueTokenPair(user, payload.role, authTime);
     return { ...tokens, user, role: payload.role };
   }
 
@@ -218,6 +252,8 @@ export class AuthService {
         throw createAppError(ERROR_CODES.AUTH_UNSUPPORTED_ROLE, 400, undefined, { role });
     }
 
+    // FRESH `auth_time` (the default) — registration is where the password is set, so this
+    // is a credential-proving event and the 90-day clock starts here. ADR-A03 / D-8.
     const tokens = this.issueTokenPair(user, role);
     return { user, role, role_entity: roleEntity, ...tokens };
   }
@@ -297,11 +333,28 @@ export class AuthService {
       );
     }
 
+    // FRESH `auth_time` (the default) — `bcrypt.compare` ran above, so this is THE
+    // credential-proving event and the 90-day clock starts here. ADR-A03 / D-8.
     const tokens = this.issueTokenPair(user, role);
     return { user, role, role_entity: entity, ...tokens };
   }
 
-  async authMe(input: AuthMeInput) {
+  /**
+   * Re-issue the caller's own pair, resolving (or switching) their role.
+   *
+   * ⚠ **`authTime` is REQUIRED and is COPIED, and this is a correction to plan step
+   * 4.A.5.2 rather than a detail.** That step lists this site among the "credential-proving"
+   * ones that stamp fresh. It proves no credential: it sits behind `requireAuth`, so its
+   * caller presented a token, exactly like the rotation does — and ADR-A03's own Context
+   * paragraph names *this* method as a cause of the uncapped window ("every client calls
+   * `auth-me` on launch and is re-issued both tokens at full lifetime").
+   *
+   * Stamping fresh here would therefore not implement the cap; it would make it unreachable.
+   * Every client calls this on launch, so `auth_time` would be reset every few days for the
+   * life of the account and `now − auth_time` would never approach 90 days. Required rather
+   * than defaulted so a caller cannot omit it and quietly get "now".
+   */
+  async authMe(input: AuthMeInput, authTime: number) {
     const user = await this.userRepo.findById(input.userId);
     if (!user) throw createAppError(ERROR_CODES.AUTH_ACCOUNT_NOT_FOUND, 401);
 
@@ -327,11 +380,18 @@ export class AuthService {
     else if (role === 'agency') entity = await this.agencyRepo.findByUserId(user.id);
     else if (role === 'agent') entity = await this.agentRepo.findByUserId(user.id);
 
-    const tokens = this.issueTokenPair(user, role);
+    // COPIED — see the note on this method. Switching role does not re-prove a credential.
+    const tokens = this.issueTokenPair(user, role, authTime);
     return { user, role, role_entity: entity, ...tokens };
   }
 
-  async addRole(userId: string, input: AddRoleInput) {
+  /**
+   * ⚠ **`authTime` is REQUIRED and is COPIED**, for the same reason as `authMe` and with the
+   * same correction to plan step 4.A.5.2. This route sits behind `requireAuth` and adds a
+   * role to an existing account: the caller presented a token, not a credential. Stamping
+   * fresh would hand any signed-in client a way to reset its own session clock on demand.
+   */
+  async addRole(userId: string, input: AddRoleInput, authTime: number) {
     const user = await this.userRepo.findById(userId);
     if (!user) throw createAppError(ERROR_CODES.AUTH_ACCOUNT_NOT_FOUND, 404);
 
@@ -387,7 +447,8 @@ export class AuthService {
 
     await this.userRepo.addRoleToUser(userId, role);
 
-    const tokens = this.issueTokenPair(user, role);
+    // COPIED — see the note on this method.
+    const tokens = this.issueTokenPair(user, role, authTime);
     return { user, role, role_entity: roleEntity, ...tokens };
   }
 
