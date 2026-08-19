@@ -578,30 +578,23 @@ export class CartService {
     };
   }
 
-  // TODO: Add checkout validation guards
   /**
-   * Validate cart before checkout
-   * 
-   * CHECKOUT CONSTRAINTS:
-   * - Digital products: no shipping address required
-   * - Digital products: no shipping fee
-   * - Digital products: skip shipping calculation pipeline
-   * 
-   * @param userId - User ID
-   * @throws ValidationError if cart invalid for checkout
+   * ── There is deliberately no `validateCheckout` here ─────────────────────────
+   *
+   * One used to be, with zero call sites and two debt markers inside it, and it was deleted on
+   * 2026-08-19 (Phase 4, plan step 4.A.7.1). The discomfort of deleting it *is* the finding:
+   * a method named `validateCheckout` that nothing calls reads, to every future author, as
+   * though checkout is validated. That is the same trap as the dead `auth/guards/`, deleted
+   * in the same phase for the same reason.
+   *
+   * Checkout validation lives on the path checkout actually takes:
+   *   - the empty-cart refusal is `CartQuoteService.quote` (`CART_EMPTY_CHECKOUT`, 400);
+   *   - the digital branch those markers described is already there —
+   *     `cart-quote.service.ts` branches on `cart.productType === 'digital'` for the
+   *     delivery-cost question, and the customer pays no delivery either way;
+   *   - address usability is `assertAddressUsable`, called from the same method.
+   *
+   * Add a new checkout rule there, not here. A second validator that only some callers reach
+   * is a rule enforced nowhere, which is what this was.
    */
-  async validateCheckout(userId: string): Promise<void> {
-    const cart = await CartModel.findOne({ userId });
-
-    if (!cart || cart.items.length === 0) {
-      throw createAppError(ERROR_CODES.CART_EMPTY_CHECKOUT, 400, 'Cannot checkout empty cart');
-    }
-
-    // TODO: Add shipping constraints for digital products
-    // if (cart.productType === 'digital') {
-    //   // Skip shipping address validation
-    //   // Skip shipping fee calculation
-    //   // Skip shipping method selection
-    // }
-  }
 }

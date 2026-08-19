@@ -6,15 +6,24 @@ import {
 import { GrantEntitlementDto, EntitlementSummary } from '../types';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
+import { OrderTimelineRepository } from '../../orders/order-timeline.repository';
+import { TimelineActorType } from '../../orders/order-timeline.model';
 
 /**
  * DigitalEntitlementService - Post-payment entitlement granting
- * 
+ *
  * CRITICAL GUARANTEES:
  * - Idempotent entitlement granting via unique index on (orderId, orderItemId)
  * - Webhook retries safe - duplicate key errors are caught and existing entitlement returned
  */
 export class DigitalEntitlementService {
+  /**
+   * The order timeline is this module's audit trail — append-only, and the same one
+   * `VendorOrderService` writes entitlement events to. Constructed here rather than injected
+   * to match the surrounding style; it holds no state.
+   */
+  private readonly timelineRepo = new OrderTimelineRepository();
+
   /**
    * Grant digital product entitlement after payment
    * 
@@ -175,31 +184,88 @@ export class DigitalEntitlementService {
   }
 
   /**
-   * Revoke an entitlement (admin/vendor action)
+   * Revoke an entitlement — take back something a customer paid for.
+   *
+   * ── The reason is now RECORDED, not just accepted ────────────────────────────
+   * This used to `$set: { revokedAt }` with a debt marker where the record should be — "add
+   * audit log entry with reason" — so the `reason` parameter was collected from the caller
+   * and discarded. Revocation removes purchased access; "when" without "why" or "who" cannot
+   * answer the only question anybody asks afterwards.
+   *
+   * It writes the module's EXISTING audit convention — an append-only `entitlement.revoked`
+   * entry on the order's timeline — rather than a second one. `VendorOrderService`'s twin
+   * (`/api/vendor/entitlements/:id/revoke`, the live door) already writes that exact event
+   * with that exact metadata shape; two doors onto one act must produce one kind of record,
+   * or a timeline read answers differently depending on which was used.
+   *
+   * ⚠ **The vendor service's method is the one that currently runs.** This one has no route
+   * of its own. Keep the two in step: a change to the shape here needs the same change there.
+   *
+   * Three ordering properties are load-bearing:
+   *
+   * - **The revoke is a compare-and-set on `revokedAt: null`.** Two administrators holding
+   *   the screen open would otherwise both "succeed", stamping the second one's moment over
+   *   the first's and writing two timeline entries for one revocation.
+   * - **The audit is appended only AFTER the CAS reports it took.** Auditing first, or
+   *   unconditionally, records a revocation that a lost race means never happened.
+   * - **404 and 422 stay distinct.** "No such entitlement" and "already revoked" have
+   *   different remedies, and the old `modifiedCount === 0` check collapsed them into a 404
+   *   that told the second administrator their colleague's entitlement did not exist.
+   *
    * @param entitlementId - Entitlement ID
-   * @param reason - Reason for revocation (audit trail)
+   * @param reason - Why. Recorded on the order timeline; required, never optional.
+   * @param actor - Who. `actorId` is null for `system`, which is why it is nullable.
    */
   async revokeEntitlement(
     entitlementId: string,
-    reason: string
+    reason: string,
+    actor: { type: TimelineActorType; id?: string | null }
   ): Promise<void> {
     if (!Types.ObjectId.isValid(entitlementId)) {
       throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_NOT_FOUND, 400, 'Invalid entitlement ID');
     }
 
+    // Read first: the timeline entry belongs to the entitlement's ORDER, so the document is
+    // needed either way — which is also what lets 404 and 422 be told apart below.
+    const entitlement = await CustomerDigitalEntitlementModel.findOne({
+      _id: entitlementId,
+      deletedAt: null,
+    });
+
+    if (!entitlement) {
+      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_NOT_FOUND, 404, 'Entitlement not found');
+    }
+
+    if (entitlement.revokedAt !== null) {
+      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_ALREADY_REVOKED, 422, 'Entitlement is already revoked');
+    }
+
+    const revokedAt = new Date();
     const result = await CustomerDigitalEntitlementModel.updateOne(
-      { _id: entitlementId, deletedAt: null },
-      {
-        $set: {
-          revokedAt: new Date(),
-          // TODO: Add audit log entry with reason
-        },
-      }
+      { _id: entitlementId, deletedAt: null, revokedAt: null },
+      { $set: { revokedAt } }
     );
 
+    // A miss here is the race the read above cannot close: somebody revoked it in between.
+    // Theirs is the revocation of record, and nothing is appended for ours.
     if (result.modifiedCount === 0) {
-      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_NOT_FOUND, 404, 'Entitlement not found or already revoked');
+      throw createAppError(ERROR_CODES.DIGITAL_ENTITLEMENT_ALREADY_REVOKED, 422, 'Entitlement is already revoked');
     }
+
+    await this.timelineRepo.appendEvent({
+      orderId: entitlement.orderId.toString(),
+      eventType: 'entitlement.revoked',
+      description: `Digital entitlement revoked: ${reason}`,
+      metadata: {
+        entitlementId,
+        productId: entitlement.productId.toString(),
+        customerId: entitlement.customerId.toString(),
+        revokedAt,
+        reason,
+      },
+      actorType: actor.type,
+      actorId: actor.id ?? null,
+    });
   }
 
   /**

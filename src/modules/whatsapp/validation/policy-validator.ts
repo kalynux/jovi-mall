@@ -163,18 +163,34 @@ export class WhatsAppPolicyValidator {
     }
 
     /**
-     * Get account capabilities
-     * 
-     * In real implementation, this would:
-     * - Check WhatsApp Business Manager settings
-     * - Query account tier/verification status
-     * - Check region-specific features
-     * 
-     * For now, returns default capabilities
+     * Get account capabilities.
+     *
+     * TODO(whatsapp, 2026-08-19): these are static optimistic defaults, not the account's
+     * real capabilities. Deferred deliberately — no phase owns it, because nothing has yet
+     * needed it to be true.
+     *
+     * ── What "real capability checking" would need, and why it is not free ───────
+     * It is a call to Meta against the configured phone number id, plus a cache — this
+     * function is on the send path of every message, so an unconditional network hop here
+     * would put a third-party round trip in front of every notification the platform emits.
+     * A cache then needs a TTL, an invalidation story for an account upgraded mid-window,
+     * and a failure policy of its own. The `WhatsappService` this class already holds is
+     * where such a call would live, so the seam exists; the cost is the caching, not the
+     * request.
+     *
+     * ── Why the defaults are the RIGHT placeholder, and what they cost ──────────
+     * They are optimistic (everything available, WhatsApp's own documented maxima), so the
+     * failure mode is **Meta refuses a composed message** — a logged send failure naming the
+     * capability, on one message. The pessimistic alternative fails the other way: this
+     * class is authoritative and `sendContext` may not be overridden by callers, so a `false`
+     * here silently downgrades or blocks every interactive send platform-wide, including for
+     * accounts that do have the capability. When one is wrong, the visible refusal is the
+     * cheaper wrong.
+     *
+     * Revisit when a real account is observed lacking one of these — that observation is the
+     * requirement, and it does not exist yet.
      */
     private getAccountCapabilities(): CapabilityPolicy {
-        // TODO: Implement real capability checking
-        // This could be cached or fetched from WhatsApp API
         return {
             hasInteractive: true,
             hasFlows: true, // Check if account has flows enabled

@@ -152,7 +152,11 @@ export class VendorAgencyMapper {
                 : null,
             country: agency.country ?? null,
             coverageAreas: magazin?.coverage_areas ?? [],
-            // TODO: populate from ratings system when implemented
+            // TODO(ratings, 2026-08-19, phase 6.E): always null — there is no ratings system,
+            // so there is nothing to populate this from. This is a BACKLOG item, not debt: the
+            // field is on the wire because the agency directory's card renders a rating slot,
+            // and 6.E owns whether that number ever exists. Until it does, `null` is the
+            // truthful answer and a computed placeholder would be a fabricated one.
             rating: null,
             policies: agency.policies
                 ? {

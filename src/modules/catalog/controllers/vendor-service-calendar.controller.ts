@@ -8,21 +8,35 @@ const productRepository = new ProductRepositoryMongo();
 
 /**
  * VendorServiceCalendarController
- * 
+ *
  * Service calendar integration status endpoint.
- * 
- * **STUB ONLY - Future Integration Point**
- * This endpoint currently returns stub data.
- * Real Google Calendar integration is not yet implemented.
+ *
+ * ⚠ **This is NOT a stub, and this header said it was until 2026-08-19.** It read
+ * "STUB ONLY — Future Integration Point … returns stub data … real Google Calendar
+ * integration is not yet implemented", and none of that has been true for some time: the
+ * handler below reads the real `ConnectedCalendarAccount`, the OAuth token vault is live,
+ * and `InboundCalendarSyncWorker` is registered in `lifecycle.ts`.
+ *
+ * The stale comment had reached outside this file. `PRODUCTION-READINESS/10-IMPLEMENTATION-
+ * PLAN.md` step 2.D.3 cites this line as evidence that "the dependency may be paying for a
+ * feature that does not exist yet" — a conclusion drawn from a comment rather than from the
+ * code under it. That premise is withdrawn.
+ *
+ * TODO(calendar, 2026-08-19): what 2.D.3 still legitimately owns is the *dependency* question
+ * — whether the Calendar feature justifies `googleapis`' transitive surface. That is a
+ * product-and-supply-chain decision, it is recorded there, and it is not a gap in this
+ * endpoint.
  */
 export class VendorServiceCalendarController {
     /**
      * GET /api/vendor/products/:id/service/calendar-status
-     * 
-     * Get calendar integration status for a service product
-     * 
-     * STUB: Returns placeholder data
-     * TODO: Integrate with Google Calendar API
+     *
+     * Get calendar integration status for a service product.
+     *
+     * Reports the VENDOR's connection, not the product's: a Google account is connected once
+     * per vendor and every service product they own reads the same one. The `productId` is
+     * still required and still scoped — it is what proves the caller owns a service product
+     * before their integration state is disclosed.
      */
     static getCalendarStatus = asyncHandler(async (req: Request, res: Response) => {
         const vendorId = req.auth!.role_entity._id.toString();

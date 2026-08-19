@@ -69,9 +69,18 @@ export class FlowRegistry {
     }
 
     /**
-     * Register default flows
-     * 
-     * TODO: Move this to configuration or database
+     * Register default flows.
+     *
+     * TODO(whatsapp, 2026-08-19): moving this to configuration or a database is a PRODUCT
+     * decision nobody has asked for, and it is deferred on that ground rather than on effort.
+     * No phase owns it.
+     *
+     * The registry is a compile-time map today, and for a codebase with **zero registered
+     * flows** that is the stronger shape: a flow id is a Meta-side artefact that must exist
+     * before it can be referenced, so a compile-time map fails at review when somebody names
+     * one that does not exist, while a database row fails at send time in front of a
+     * customer. Configuration only starts paying when flow ids differ per environment — i.e.
+     * when there is a second environment with its own flows, which is the trigger to revisit.
      */
     private registerDefaultFlows(): void {
         // Example flows (these should be configured per environment)
