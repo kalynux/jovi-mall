@@ -31,7 +31,7 @@ import {
   toE164,
 } from '../../src/core/validation/phone';
 import { RegisterSchema, LoginSchema } from '../../src/modules/auth/auth.schemas';
-import { PayoutDetailsZodSchema } from '../../src/core/types/payout.types';
+import { isPayoutMethodEnabled, PayoutDetailsZodSchema } from '../../src/core/types/payout.types';
 import { PaymentChannelSchema } from '../../src/modules/payments/validators/payment.validators';
 import { UpdateStoreProfileSchema } from '../../src/modules/store/validators/store.validator';
 
@@ -220,13 +220,40 @@ function main(): void {
     ]);
     return parsed[0].mobile_money?.phone_number === '+237670000000';
   });
-  assert('payout: a bank entry is unaffected (no phone at all)', () =>
-    PayoutDetailsZodSchema.safeParse([
-      {
-        method: 'bank',
-        bank: { bank_name: 'B', account_number: '1', account_name: 'Ada', country: 'CM' },
-      },
-    ]).success);
+  /**
+   * A bank entry carries no phone number at all, so the E.164 rule must not touch it.
+   *
+   * That used to be provable by asserting the whole schema ACCEPTS one — until
+   * `ENABLED_PAYOUT_METHODS` became `['mobile_money']` (`core/types/payout.types.ts:180`),
+   * at which point the schema started refusing bank entries on `method`, correctly and for
+   * a reason that has nothing to do with phone numbers. The old assertion then failed while
+   * the property it was written to protect was still true.
+   *
+   * So assert WHERE the refusal lands rather than that there is none, and read the current
+   * setting rather than hardcoding it — the shape `test:payout-methods` already uses at
+   * `:270-300`, so flipping a kind back on flips this test with it instead of failing it.
+   * It is also a stronger assertion than the original: it proves the phone rule is absent
+   * *and* that the switch is the only thing standing in the way.
+   */
+  const bankEnabled = isPayoutMethodEnabled('bank');
+  assert(
+    'payout: a bank entry is refused only by the SWITCH, never by the phone rule ' +
+      `(switch says ${bankEnabled})`,
+    () => {
+      const result = PayoutDetailsZodSchema.safeParse([
+        {
+          method: 'bank',
+          bank: { bank_name: 'B', account_number: '1', account_name: 'Ada', country: 'CM' },
+        },
+      ]);
+      if (bankEnabled) return result.success;
+      return (
+        !result.success &&
+        result.error.issues.length === 1 &&
+        result.error.issues[0].path.join('.') === '0.method'
+      );
+    },
+  );
 
   assert('payment channel: every field stays optional', () =>
     PaymentChannelSchema.safeParse({}).success);

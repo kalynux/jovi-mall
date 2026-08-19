@@ -83,11 +83,11 @@ jobs:
       # workers. `verify:*` is excluded on purpose: those need a real database and
       # belong to the job Phase 2.B.4 makes possible.
       #
-      # The two baselined suites are excluded here and asserted below by exact count.
+      # The one baselined suite is excluded here and asserted below by exact count.
       - name: DB-free suites
         run: |
           set -euo pipefail
-          BASELINED="test:mobile-auth test:contact-validation"
+          BASELINED="test:mobile-auth"
           SUITES=$(node -p "Object.keys(require('./package.json').scripts).filter(k => k.startsWith('test:')).join(' ')")
           failed=""
           for suite in $SUITES; do
@@ -100,12 +100,12 @@ jobs:
             exit 1
           fi
 
-      # ── The two known-red suites, declared rather than tolerated ─────────────
+      # ── The one known-red suite, declared rather than tolerated ──────────────
       # A pipeline that is red from its first run trains people to ignore it, which is
-      # the exact failure this whole workflow exists to prevent. So the two suites that
-      # fail today are asserted at their EXACT counts and the build fails if either
-      # number moves IN EITHER DIRECTION — a new failure is still caught, and a fix is
-      # noticed rather than silently absorbed.
+      # the exact failure this whole workflow exists to prevent. So the suite that fails
+      # today is asserted at its EXACT counts and the build fails if either number moves
+      # IN EITHER DIRECTION — a new failure is still caught, and a fix is noticed rather
+      # than silently absorbed.
       #
       #   test:mobile-auth       102/2  — the FAILURE count is what is baselined: the
       #                                   commented `if (!isValid) throw` in
@@ -116,9 +116,17 @@ jobs:
       #                                   step 2.E.3, which added the assertion that
       #                                   .env.example's ALLOWED_ORIGINS VALUE, not just
       #                                   its comment, carries the Capacitor origins.
-      #   test:contact-validation 73/1  — T-2: a payout BANK entry asserted against the
-      #                                   mobile_money-only ENABLED_PAYOUT_METHODS switch.
-      #                                   Resolved in plan step 4.A.2, not here.
+      #
+      # test:contact-validation was the second, at 73/1, and is GONE from both places as
+      # of plan step 4.A.2 — it is 74/0 and runs in the discovery loop above like every
+      # other suite. Dropping it from BASELINED without also deleting its assert_counts
+      # line would have turned the fix itself into a red build: that block fails in
+      # EITHER direction, which is exactly what it is for.
+      #
+      # ⚠ One LIVE suite is red for the same `isValid` reason and is baselined nowhere:
+      # verify:messaging-login, 36/1 on "…and the OLD password no longer works". It is
+      # not in this workflow yet. Whoever wires the live suites in (plan step 24) has to
+      # baseline it here in the same commit, or the new job is permanently red.
       - name: Baselined suites (exact counts)
         run: |
           set -uo pipefail
@@ -137,7 +145,6 @@ jobs:
           }
           rc=0
           assert_counts test:mobile-auth 102 2 || rc=1
-          assert_counts test:contact-validation 73 1 || rc=1
           exit $rc
 
       # ── A REAL gate now, at high+ (plan step 2.D.5) ──────────────────────────
