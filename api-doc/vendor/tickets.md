@@ -286,10 +286,10 @@ Body:
       "assigned_to": null,
       "assigned_admin_id": "string",
       "assigned_admin": {
-        "user_id": "string",
-        "role": "admin",
         "name": "Kofi Mensah",
-        "avatar": null
+        "job_title": "Support lead",
+        "department": "Customer Care",
+        "avatar_url": null
       },
       "priority_locked": true,
       "createdAt": "2026-02-11T19:00:00.000Z",
@@ -362,10 +362,10 @@ Body:
     "assigned_to": null,
     "assigned_admin_id": "string",
     "assigned_admin": {
-      "user_id": "string",
-      "role": "admin",
       "name": "Kofi Mensah",
-      "avatar": { "id": "…", "key": "…", "url": "https://.../kofi.png", "mimeType": "image/png", "size": 15360, "originalName": "kofi.png" }
+      "job_title": "Support lead",
+      "department": "Customer Care",
+      "avatar_url": null
     },
     "priority_locked": true,
     "followers": [
@@ -885,9 +885,9 @@ fields are **kept** for backward compatibility; the populated objects are added
 alongside them, so the frontend never has to issue follow-up lookups to display
 a name, avatar or entity label.
 
-**Actor summary** — used for `created_by`, `assigned_to`, `assigned_admin`,
+**Actor summary** — used for `created_by`, `assigned_to`,
 each entry in `followers`, the note `author`, and the attachment
-`uploadedByActor`:
+`uploadedByActor`. **`assigned_admin` is NOT one of these** — it has its own shape, below:
 
 ```json
 {
@@ -902,6 +902,34 @@ each entry in `followers`, the note `author`, and the attachment
 - `avatar` is the profile photo / logo where one exists — a resolved **file object** (`{ id, key, url, mimeType, size, originalName }`, the same shape product images use) — otherwise `null`.
 - If a reference cannot be resolved (deleted profile, etc.), `name` falls back to the capitalised role (e.g. `"Vendor"`) and `avatar` is `null`.
 - A `null` value (e.g. `assigned_to: null`, `assigned_admin: null`) means the corresponding `*_id` is unset.
+
+**Administrator snapshot** — used for `assigned_admin` and `created_by_admin`:
+
+```json
+{ "name": "Kofi Mensah", "job_title": "Support lead", "department": "Customer Care", "avatar_url": null }
+```
+
+**This is NOT the actor summary above, and it changed.** It used to be
+`{ user_id, role, name, avatar }`; it is now the four fields shown. Nothing broke when it
+changed, because it is `null` on almost every ticket — see below — which is exactly how a
+documented shape goes stale unnoticed.
+
+- `assigned_admin` is **`null` until a wi-admin administrator takes the ticket.** Support
+  administrators live in a separate service with its own database, so nobody is assigned by
+  default and most tickets never are. `null` is the normal state, not missing data.
+- `created_by_admin` is non-null only when an administrator opened the ticket **for** you.
+  When they did, `created_by` is also present with `role: "admin"` — but its `user_id` is an
+  administrator id from the other service, which resolves nowhere here, and its `avatar` is
+  always `null`. Render the person from this block, not from that one.
+- **`avatar_url` is reserved and always `null`.** Administrators have no picture: there is no
+  upload surface for one and no storage decision has been made. Draw the initials from `name`
+  and do not branch on this field. It is carried so that the day an avatar exists, nothing
+  about this shape changes.
+- `job_title` and `department` are free text and may each be `null`.
+- **No `tier`, no `id`.** The administrator hierarchy is internal and is deliberately not
+  disclosed to a ticket follower.
+- `assigned_admin_id` beside it is an id in the administration service. **It resolves to
+  nothing here** — treat it as opaque, or ignore it and read this block.
 
 **Entity summary** — used for the ticket `entity` field:
 

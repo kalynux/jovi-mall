@@ -15,6 +15,12 @@ scoped to the caller.
 > [ticket_types.txt](../ticket_types.txt).
 > This page lists the exact **agent** route set and the agent-specific differences.
 
+> **The administrator on a ticket.** `assigned_admin` is **not** an actor summary — it is
+> `{ name, job_title, department, avatar_url }`, and it is **`null` until a wi-admin
+> administrator takes the ticket**, which is the state almost every ticket is in.
+> `avatar_url` is **reserved and always `null`** — draw the initials from `name`. Full shape
+> and the reasoning: [vendor/tickets.md](../vendor/tickets.md#populated--enriched-references).
+
 ## Endpoints
 
 | Method | Path | Purpose |
