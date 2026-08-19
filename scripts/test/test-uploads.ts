@@ -40,7 +40,15 @@ import { ClamAVScanner } from '../../src/core/uploads/scanners/clamav-scanner';
 import { MockScanner } from '../../src/core/uploads/scanners/mock-scanner';
 import { VirusScanValidator } from '../../src/core/uploads/validators/virus-scan.validator';
 import { UploadPipelineContextImpl } from '../../src/core/uploads/upload-pipeline-context';
-import { getDefaultUploadConfig, UploadPolicyConfig } from '../../src/core/uploads/upload-config';
+import {
+    getDefaultUploadConfig,
+    getDeliveryProofUploadConfig,
+    getDigitalAssetUploadConfig,
+    getPolicyDocumentUploadConfig,
+    getVideoUploadConfig,
+    UploadPolicyConfig,
+} from '../../src/core/uploads/upload-config';
+import { PermissionValidator } from '../../src/core/uploads/validators/permission.validator';
 import { IVirusScanner, UploadRequest } from '../../src/core/uploads/upload-policy.types';
 import {
     isPrivateStorageKey,
@@ -272,6 +280,137 @@ async function main(): Promise<void> {
         return lines.length === 1 && /DISABLED/.test(lines[0]);
     });
     process.env.NODE_ENV = originalEnv;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    /*
+     * Step 25.1, and this group is here because step 8 shipped without it.
+     *
+     * `resolveVirusScanner(config)` reads `config.virusScan.provider`. Four of the five upload
+     * configs hardcoded `provider: 'mock'` — only `loadUploadConfig()` read the environment —
+     * so three of the four sites step 8 wired up were handed a TEST DOUBLE: in development
+     * they scanned nothing (leaving the digital-products path exactly as it was), and in
+     * production `resolveVirusScanner` would have refused, failing every video, digital-asset
+     * and delivery-proof upload.
+     *
+     * The boot assertion could not see it either — it checks `loadUploadConfig()`, the one
+     * config that was already right. So the assertion that matters is STRUCTURAL: no factory
+     * may write its own provider.
+     */
+    console.log('\n▶ EVERY upload config resolves its scanner from the environment (25.1)');
+
+    const uploadConfigSource = code(fs.readFileSync(
+        path.join(SRC, 'core', 'uploads', 'upload-config.ts'), 'utf8'));
+
+    assert('no upload config hardcodes a scanner provider', () => {
+        // The trailing `[,}]` is what separates an ASSIGNMENT from the interface's type union
+        // (`provider: 'mock' | 'clamav' | 'cloud';`), which is legitimate and must not match.
+        // `resolveVirusScanConfig`'s own read is `provider: (process.env… ) || 'mock'` and so
+        // does not match either — the fallback belongs in the resolver; it is the factories
+        // that must not have opinions.
+        const literals = uploadConfigSource.match(/provider:\s*'[^']*'\s*[,}]/g) ?? [];
+        if (literals.length) console.error(`     literals: ${literals.join(' | ')}`);
+        return literals.length === 0;
+    });
+    assert('…they all go through the one resolver', () => {
+        const factories = (uploadConfigSource.match(/virusScan:\s*resolveVirusScanConfig\(\)/g) ?? []).length;
+        // Five configs: default, digital-asset, video, delivery-proof, policy-document — plus
+        // loadUploadConfig. A count that drops means a factory grew its own answer again.
+        return factories === 6;
+    });
+
+    process.env.NODE_ENV = 'production';
+    process.env.UPLOAD_VIRUS_SCAN_PROVIDER = 'clamav';
+    for (const [label, factory] of [
+        ['the general config', getDefaultUploadConfig],
+        ['the DIGITAL-ASSET config', getDigitalAssetUploadConfig],
+        ['the video config', getVideoUploadConfig],
+        ['the delivery-proof config', getDeliveryProofUploadConfig],
+        ['the policy-document config', getPolicyDocumentUploadConfig],
+    ] as const) {
+        assert(`${label} resolves a REAL scanner in production`, () =>
+            resolveVirusScanner(factory()) instanceof ClamAVScanner);
+    }
+    delete process.env.UPLOAD_VIRUS_SCAN_PROVIDER;
+    assert('…and with the variable UNSET, every one of them refuses to boot', () =>
+        // `mock` is the fallback, so this is the forgot-the-variable case for ALL five, not
+        // just the one the boot guard is handed.
+        [getDefaultUploadConfig, getDigitalAssetUploadConfig, getVideoUploadConfig,
+            getDeliveryProofUploadConfig, getPolicyDocumentUploadConfig].every((factory) => {
+            try {
+                resolveVirusScanner(factory());
+                return false;
+            } catch (err) {
+                return err instanceof AppError
+                    && err.code === ERROR_CODES.CONFIG_INVALID_UPLOAD_SCANNER;
+            }
+        }));
+    process.env.NODE_ENV = originalEnv;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    console.log('\n▶ Policy documents reach the pipeline (25.2)');
+
+    for (const [label, relative] of [
+        ['the vendor endpoint', 'modules/vendor/controller/vendor-profile.controller.ts'],
+        ['the agency endpoint', 'modules/delivery/controllers/agency-profile.controller.ts'],
+    ] as const) {
+        const controller = code(fs.readFileSync(path.join(SRC, relative), 'utf8'));
+        assert(`${label} no longer calls storageProvider.put directly`, () =>
+            !/storageProvider\.put\(/.test(controller));
+        assert(`…and goes through the shared upload service`, () =>
+            /policyDocumentUploadService\.upload\(/.test(controller));
+    }
+
+    assert('the policy config is PDF-only and scanned', () => {
+        const config = getPolicyDocumentUploadConfig();
+        return Object.keys(config.perMimeType).join(',') === 'application/pdf'
+            && config.virusScan.enabled
+            && config.virusScan.blockOnFailure;
+    });
+
+    // ⚠ The trap this step exists around: a File with no reference is DELETED by
+    // `LonelyFileDeletionService` ("falls back to createdAt for files that were uploaded but
+    // never attached"). Creating the record without referencing it would have traded an
+    // unscanned upload for the loss of every vendor's policy PDFs.
+    assert('the upload writes a file_reference — without it the cleanup sweep reclaims them', () => {
+        const service = code(fs.readFileSync(
+            path.join(SRC, 'modules', 'catalog', 'domain', 'services', 'media',
+                'PolicyDocumentUploadService.ts'), 'utf8'));
+        return /fileReferenceService\.reconcile\(/.test(service)
+            && /field:\s*'policy_documents'/.test(service)
+            && /entityType:\s*ownerType/.test(service);
+    });
+
+    assert('both policy trees are classified, and both are public', () =>
+        STORAGE_TREE_VISIBILITY['vendor-policy-documents'] === 'public'
+        && STORAGE_TREE_VISIBILITY['agency-policy-documents'] === 'public');
+
+    // Keyed on ownerType, not role: the pipeline's `UserRole` cannot tell an agency from a
+    // customer, so without this rule the two new purpose folders would inherit the permission
+    // validator's "not named here, therefore allowed" default — a purpose folder with no
+    // purpose rule.
+    await assertAsync('a policy folder refuses an owner it is not for', async () => {
+        const context = new UploadPipelineContextImpl({
+            folder: 'agency-policy-documents',
+            context: { userId: 'u1', role: 'user', ownerType: 'vendor', ownerId: 'v1' },
+            files: [{ buffer: Buffer.from('%PDF-1.4'), mimeType: 'application/pdf' }],
+        });
+        try {
+            await new PermissionValidator(getPolicyDocumentUploadConfig()).validate(context);
+            return false;
+        } catch {
+            return context.violations.some((v) => v.code === 'PERMISSION_DENIED');
+        }
+    });
+
+    await assertAsync('…and admits the owner it IS for', async () => {
+        const context = new UploadPipelineContextImpl({
+            folder: 'agency-policy-documents',
+            context: { userId: 'u1', role: 'user', ownerType: 'agency', ownerId: 'a1' },
+            files: [{ buffer: Buffer.from('%PDF-1.4'), mimeType: 'application/pdf' }],
+        });
+        await new PermissionValidator(getPolicyDocumentUploadConfig()).validate(context);
+        return context.violations.length === 0;
+    });
 
     // ─────────────────────────────────────────────────────────────────────────
     console.log('\n▶ VirusScanValidator: dirty is refused, and so is "could not scan"');

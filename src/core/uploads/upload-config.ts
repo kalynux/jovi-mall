@@ -31,6 +31,44 @@ export interface VirusScanConfig {
 }
 
 /**
+ * The virus-scan settings, resolved from the environment — for **every** upload config.
+ *
+ * ── Why this exists, and why no factory may write its own (plan step 4.A.4c / 25.1) ──────
+ * `resolveVirusScanner(config)` reads `config.virusScan.provider`. Until this function
+ * existed, **only `loadUploadConfig()` read `UPLOAD_VIRUS_SCAN_PROVIDER`** — the other four
+ * factories hardcoded the literal `provider: 'mock'`. So three of the four sites step 8 wired
+ * up were handed a config that named a TEST DOUBLE:
+ *
+ *   - in development they resolved `MockScanner` and scanned nothing, which left the
+ *     **digital-products** path — the tree correction 4 exists for — exactly as unscanned as
+ *     before the step that was supposed to fix it;
+ *   - in production `resolveVirusScanner` refuses `mock`, so **every video, digital asset and
+ *     delivery proof would have failed to upload**.
+ *
+ * ⚠ And `assertUploadScannerSafe()` could not see any of it, because it checks
+ * `loadUploadConfig()` — the one config that was already right. The boot passed and the
+ * failure waited for the first upload, which is the precise failure mode that boot assertion
+ * was written to prevent, one level up.
+ *
+ * One resolver, spread by all five, makes the boot assertion cover every path **by
+ * construction** rather than by coincidence. `test:uploads` asserts the structural rule that
+ * keeps it true: **no config factory may contain a `provider:` literal.**
+ */
+export function resolveVirusScanConfig(): VirusScanConfig {
+  return {
+    // Default ON in both directions: scanning is opt-OUT, and a missing variable scans.
+    enabled: process.env.UPLOAD_VIRUS_SCAN_ENABLED !== 'false',
+    // `clamav` is the only value valid in production; `mock` (the historical default) and
+    // `cloud` are refused at boot by `assertUploadScannerSafe`. Left as a plain read so an
+    // unrecognised value reaches the factory's `default:` branch and is refused there rather
+    // than being silently coerced here.
+    provider: (process.env.UPLOAD_VIRUS_SCAN_PROVIDER as VirusScanConfig['provider']) || 'mock',
+    // A scanner that fails OPEN is the configuration that produced S-2. Opt-out, never default.
+    blockOnFailure: process.env.UPLOAD_VIRUS_SCAN_BLOCK_ON_FAILURE !== 'false',
+  };
+}
+
+/**
  * User quota configuration
  */
 export interface UserQuotaConfig {
@@ -153,11 +191,10 @@ export function getDefaultUploadConfig(): UploadPolicyConfig {
       // },
     },
     
-    virusScan: {
-      enabled: true,
-      provider: 'mock',
-      blockOnFailure: true,
-    },
+    // From the environment, never a literal — see `resolveVirusScanConfig`. A hardcoded
+    // `provider: 'mock'` here is what made three of step 8's four scanner sites take a test
+    // double in development and refuse every upload in production.
+    virusScan: resolveVirusScanConfig(),
     
     userQuotas: {
       enabled: true,
@@ -238,11 +275,10 @@ export function getDigitalAssetUploadConfig(): UploadPolicyConfig {
       'image/gif': noTransform(50 * MB),
     },
 
-    virusScan: {
-      enabled: true,
-      provider: 'mock',
-      blockOnFailure: true,
-    },
+    // From the environment, never a literal — see `resolveVirusScanConfig`. A hardcoded
+    // `provider: 'mock'` here is what made three of step 8's four scanner sites take a test
+    // double in development and refuse every upload in production.
+    virusScan: resolveVirusScanConfig(),
 
     // Digital assets are not subject to the shared per-vendor media quota.
     userQuotas: {
@@ -302,11 +338,10 @@ export function getVideoUploadConfig(): UploadPolicyConfig {
       'video/webm': noTransform(PER_VIDEO_MAX),
     },
 
-    virusScan: {
-      enabled: true,
-      provider: 'mock',
-      blockOnFailure: true,
-    },
+    // From the environment, never a literal — see `resolveVirusScanConfig`. A hardcoded
+    // `provider: 'mock'` here is what made three of step 8's four scanner sites take a test
+    // double in development and refuse every upload in production.
+    virusScan: resolveVirusScanConfig(),
 
     // Videos count against the same per-user media quota as images/docs.
     userQuotas: {
@@ -369,11 +404,10 @@ export function getDeliveryProofUploadConfig(): UploadPolicyConfig {
       },
     },
 
-    virusScan: {
-      enabled: true,
-      provider: 'mock',
-      blockOnFailure: true,
-    },
+    // From the environment, never a literal — see `resolveVirusScanConfig`. A hardcoded
+    // `provider: 'mock'` here is what made three of step 8's four scanner sites take a test
+    // double in development and refuse every upload in production.
+    virusScan: resolveVirusScanConfig(),
 
     // Counts against the agency's plan-driven media cap (limit + usage injected
     // by the api layer for the agency owner).
@@ -403,6 +437,74 @@ export function getDeliveryProofUploadConfig(): UploadPolicyConfig {
 }
 
 /**
+ * Policy documents — the vendor's and the agency's `policies.documents` addenda.
+ *
+ * ── Why this config exists at all (plan step 4.A.4c / 25.2) ───────────────────
+ * Both endpoints used to call `storageProvider.put(...)` **directly**, bypassing
+ * `UploadIntakeService` entirely: no virus scan, no magic-byte sniffing, no fingerprint, no
+ * quota. The only gate was `file.mimetype !== 'application/pdf'` — the **client-claimed**
+ * type, a string the uploader chose, which a `.pdf`-named executable satisfies for free.
+ *
+ * They were invisible to step 8's source scan because they construct no scanner: they reach no
+ * pipeline to need one. The bytes then come back as a public URL the owner submits into
+ * `policies.documents`, where counterparties read them — so these were the last two surfaces
+ * of S-2, and the finding is not closed without them.
+ *
+ * ── Shared by BOTH roles, deliberately ────────────────────────────────────────
+ * The vendor's and the agency's endpoints had byte-identical limits written out twice. One
+ * config means a limit changed for one role cannot silently stay old for the other.
+ */
+export function getPolicyDocumentUploadConfig(): UploadPolicyConfig {
+  const MB = 1024 * 1024;
+
+  return {
+    // The same 2 × 5 MB the two multer instances already enforce. Multer's ceiling protects
+    // process memory and answers with its own error shape; this one is the policy, and it is
+    // what produces a documented `UPLOAD_POLICY_VIOLATION`.
+    maxFilesPerRequest: 2,
+    maxTotalSizeBytes: 10 * MB,
+
+    // PDF only, and now checked against the SNIFFED type rather than the claimed one —
+    // `FileSniffingProcessor` runs before this in the pipeline.
+    perMimeType: {
+      'application/pdf': {
+        allowed: true,
+        maxSizeBytes: 5 * MB,
+      },
+    },
+
+    virusScan: resolveVirusScanConfig(),
+
+    // Counts against the owner's plan-driven media cap, like every other upload they make.
+    // Two 5 MB PDFs are not the reason anyone hits a cap, but a document path with no quota
+    // is a document path somebody can fill a disk through.
+    userQuotas: {
+      enabled: true,
+      maxFilesTotal: 1000,
+      maxStorageBytes: 5 * 1024 * 1024 * 1024, // fallback only; real cap injected per-owner
+    },
+
+    fingerprinting: {
+      algorithm: 'sha256',
+      enabled: true,
+    },
+
+    // Two owners uploading the same boilerplate policy PDF must get their own File records:
+    // one is not entitled to the other's document, and a shared record would make deleting
+    // one delete both. Same reasoning as the delivery proof above.
+    duplicateDetection: {
+      enabled: false,
+      blockDuplicates: false,
+    },
+
+    observability: {
+      enabled: true,
+      logLevel: 'info',
+    },
+  };
+}
+
+/**
  * Load upload configuration from environment variables
  * Falls back to defaults for missing values
  */
@@ -416,11 +518,9 @@ export function loadUploadConfig(): UploadPolicyConfig {
     maxFilesPerRequest: parseInt(process.env.UPLOAD_MAX_FILES_PER_REQUEST || String(defaults.maxFilesPerRequest)),
     maxTotalSizeBytes: parseInt(process.env.UPLOAD_MAX_TOTAL_SIZE_BYTES || String(defaults.maxTotalSizeBytes)),
     perMimeType: defaults.perMimeType, // TODO: Make configurable via env if needed
-    virusScan: {
-      enabled: process.env.UPLOAD_VIRUS_SCAN_ENABLED !== 'false',
-      provider: (process.env.UPLOAD_VIRUS_SCAN_PROVIDER as any) || defaults.virusScan.provider,
-      blockOnFailure: process.env.UPLOAD_VIRUS_SCAN_BLOCK_ON_FAILURE !== 'false',
-    },
+    // The same resolver every other factory uses. This block used to be the ONLY one that
+    // read the environment at all, which is exactly what made the other four dangerous.
+    virusScan: resolveVirusScanConfig(),
     userQuotas: {
       enabled: process.env.UPLOAD_USER_QUOTAS_ENABLED !== 'false',
       maxFilesTotal: parseInt(process.env.UPLOAD_USER_QUOTA_MAX_FILES || String(defaults.userQuotas.maxFilesTotal)),

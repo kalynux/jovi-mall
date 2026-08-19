@@ -16,7 +16,23 @@ export type UserRole = 'admin' | 'vendor' | 'user';
  * Purpose folders — the caller already knows what the file is FOR, and the
  * folder therefore carries an access rule (see PermissionValidator).
  */
-export type PurposeUploadFolder = 'products' | 'variants' | 'digital' | 'system' | 'shipments';
+export type PurposeUploadFolder =
+  | 'products'
+  | 'variants'
+  | 'digital'
+  | 'system'
+  | 'shipments'
+  /**
+   * The vendor's and the agency's `policies.documents` addenda (plan step 4.A.4c / 25.2).
+   *
+   * ⚠ **These two existed on disk long before they existed here.** Both endpoints wrote to
+   * them through `storageProvider.put`, whose `folder` option is a loose string — so a tree
+   * accumulated real files while the pipeline's own vocabulary had never heard of it, which
+   * is precisely how the upload path that skipped every check stayed invisible. Naming them
+   * in the union is what makes the compiler agree with the disk.
+   */
+  | 'vendor-policy-documents'
+  | 'agency-policy-documents';
 
 /**
  * Type folders — derived from the file's own (sniffed) media type rather than

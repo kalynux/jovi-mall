@@ -73,6 +73,18 @@ export function resolveVirusScanner(config: UploadPolicyConfig): IVirusScanner {
  * deploy gets by forgetting a variable) would start cleanly and fail on the first upload —
  * a vendor discovering the misconfiguration on the platform's behalf. Refuse at boot instead.
  *
+ * ── ⚠ ONE config checked, ALL of them covered — and only since step 25.1 ──────
+ * This is handed `loadUploadConfig()`, and that is sufficient **only because every upload
+ * config now spreads `resolveVirusScanConfig()`** instead of writing its own `virusScan`
+ * block. It was not sufficient before: four of the five factories hardcoded
+ * `provider: 'mock'`, so this assertion passed on the one config that was already correct
+ * while three live upload paths — video, digital assets, delivery proofs — were handed a test
+ * double, and would have thrown on the first upload in production.
+ *
+ * So the guarantee is structural, not incidental, and `test:uploads` pins the structure:
+ * **no config factory may contain a `provider:` literal.** If that assertion is ever removed,
+ * this one silently narrows back to a single path.
+ *
  * ⚠ `UPLOAD_VIRUS_SCAN_ENABLED=false` is deliberately NOT refused here, and the distinction is
  * the finding's own: that variable is an operator turning scanning off **on purpose**, which
  * claims nothing. S-2 was about a configuration that claimed to scan and did not. It is logged

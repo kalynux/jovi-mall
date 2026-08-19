@@ -191,6 +191,24 @@ npm run test:password-epoch                    # password-change revocation: the
                                                # predicate, the whole-second boundary that keeps the
                                                # caller's own replacement token valid, and a source
                                                # scan proving BOTH credential paths call it (25, no DB)
+npm run test:uploads                           # the virus scanner and the private storage trees
+                                               # (73, no DB — the clamd group talks to a FAKE daemon
+                                               # on a loopback socket). Its spine is SOURCE SCANS,
+                                               # because both findings it guards are wiring rather
+                                               # than logic and a regression is invisible elsewhere:
+                                               # no file may construct a scanner directly (the
+                                               # factory is the only door), no upload config may
+                                               # hardcode a `provider:` (four of five did, so three
+                                               # live paths took a test double), no express.static
+                                               # may reach a private tree, and no file may build a
+                                               # FileDetail by hand (three did, so the "single choke
+                                               # point" for the public/authorized URL split was not
+                                               # one). Plus the clamd wire protocol against real
+                                               # bytes — NUL-terminated AND newline-terminated
+                                               # replies, an ERROR reply, the multi-chunk framing
+                                               # reassembled and compared, and the timeout. That
+                                               # group exists because a live EICAR check found a bug
+                                               # every source scan had passed
 npm run test:mobile-auth                       # bearer auth for cookie-less clients (103, no DB) —
                                                # the /auth/mobile/* namespace, the token envelope,
                                                # the two /api/auth rate-limit buckets, and the
@@ -930,6 +948,28 @@ Generic `BaseRepository<TDoc, TDomain>` provides: `findOne`, `findById`, `pagina
 
 ### Storage (`src/core/storage/`)
 Factory + Strategy pattern. Active provider is selected via `STORAGE_PROVIDER` env var (`local` | `firebase` | `cloudinary`). Use `getStorageProvider()` singleton — never instantiate providers directly. Interface: `IStorageProvider` in `storage-provider.interface.ts`.
+
+**Three storage trees are PRIVATE, and the classification is `core/storage/storage-trees.ts`** (ADR-A01 D-2). `digital/`, `shipments/` and `ticket-attachments/` are off `express.static`; every other tree is mounted, and the mount list is **derived** from that table so the two cannot drift. An **unknown tree is private** — `isPrivateStorageKey` fails closed, so a tree added next year is private until somebody classifies it, and `test:uploads` fails if any `folder:` literal is unclassified rather than letting its files 404 silently.
+
+The enforcement is `toFileDetail`: a private key gets **`url: null`** and `access: 'authorized'`, and the bytes come from the owning entity's own route (`GET /api/digital/download/:token`, `GET /api/{agent,agency}/shipments/:id/delivery-proof/file`). `url` is `string | null` rather than an authorized path **because a path is a string indistinguishable from a public URL** — clients would keep rendering it into nothing; the type change makes the compiler produce the migration list instead.
+
+⚠ **A new storage provider can undo all of that without touching either file.** The rule lives in `toFileDetail` and the mount list, *not* in any provider, so an object-storage provider returning a public CDN URL silently republishes the private trees and no test fails. The reasoning is written at the provider switch in `storage.factory.ts`, where the next author will be standing.
+
+⚠ **`storage/ticket-attachments/` has NO WRITER** and holds one legacy file. A ticket attachment today is an ordinary `by-type` upload landing in `documents/` or `images/` — **beside public product imagery** — and attached by id afterwards, so it cannot be made private by moving a tree. That half of D-2 is open and needs a dedicated ticket-attachment upload path.
+
+### Upload security (`src/core/uploads/`)
+
+**Every upload path goes through `UploadIntakeService`, and `resolveVirusScanner()` is the only place a scanner is constructed.** Before Phase 4 the configuration named a provider and nothing read it: `UPLOAD_VIRUS_SCAN_PROVIDER` was parsed and never used, and each site hand-built a no-op — two `NoOpVirusScanner` definitions plus a `MockScanner` on the **digital-products** path, the tree whose bytes travel furthest. Nothing was scanned while the config said otherwise.
+
+Three rules hold it together, and each exists because the obvious version failed:
+
+- **The factory is the only door**, asserted by source scan. The reason this finding survived is that *a scanner which does nothing is indistinguishable from one that works* — same shape, same latency, same log line — so it can only be prevented structurally, never by testing the happy path.
+- **A provider that cannot scan REFUSES, at boot.** `cloud`, a typo, and `mock` under `NODE_ENV=production` all throw `CONFIG_INVALID_UPLOAD_SCANNER` from `assertUploadScannerSafe()`, beside `assertSigningSecrets()`. `mock` is the fallback, so "forgot the variable in production" is the *default* misconfiguration and it does not start. `UPLOAD_VIRUS_SCAN_ENABLED=false` is logged rather than refused — that variable claims nothing, and the finding was about a config that *claimed* to scan.
+- ⚠ **No config factory may write its own `virusScan` block.** All of them spread `resolveVirusScanConfig()`. Four used to hardcode `provider: 'mock'`, so only *one* of the wired sites actually scanned: in development the digital-products path stayed unscanned, and in production three paths threw on every upload — with the boot guard passing, because it checks the one config that was already right. `test:uploads` scans for a `provider:` literal.
+
+**`ClamAVScanner` speaks `clamd` INSTREAM over a raw socket** (no dependency; `clamscan` shells out to binaries the runtime image lacks). One **whole-operation** deadline, deliberately not `socket.setTimeout` — an idle timeout restarts on every byte, so `blockOnFailure` never gets a verdict. ⚠ Its reply is **NUL-terminated with no newline**, so an anchored `/…FOUND$/m` matches nothing; that was a live bug every source scan passed, and `test:uploads` now pins the wire protocol against a fake daemon.
+
+⚠ **The two policy-document endpoints used to bypass all of this** (`POST /api/{vendor,agency}/profile/policy-documents`), calling `storageProvider.put` directly with only a **client-claimed** MIME check. They go through `PolicyDocumentUploadService` now. **The trap that makes it non-trivial**: a `File` with no reference is *permanently deleted* by `LonelyFileDeletionService` (its clock falls back to `createdAt` for never-attached uploads), so the service writes a `file_reference` **at upload** — otherwise routing them through the pipeline would trade an unscanned upload for the loss of every vendor's policy PDFs. Accepted cost: an uploaded-but-never-submitted document is retained, a leak rather than a loss.
 
 ### Geocoding & geospatial addresses (`src/core/geocoding/` + `src/core/types/geo-address.types.ts`)
 Same factory + strategy + singleton shape as storage. Active provider is `GEO_PROVIDER` (`nominatim` — the keyless default — `| google | mapbox | here | geoapify`); only Nominatim has an adapter in this build, the factory throws `GEO_PROVIDER_NOT_CONFIGURED` for the rest so the seam stays visible. Use `getGeocodingProvider()`; the interface is `IGeocodingProvider` (`search` + `reverse`). **No business logic ever branches on the provider.** The HTTP surface is `src/modules/geo/` → `GET /api/geo/search` + `GET /api/geo/reverse` (any signed-in role), backing a Maps-style "type → search → select → store" flow.

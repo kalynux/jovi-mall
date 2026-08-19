@@ -10,7 +10,7 @@ import {
     AgencyOnboardingStep4Schema,
     CreateAgencySchema,
 } from '../validators/agency-onboarding.validator';
-import { getStorageProvider } from '../../../core/storage';
+import { policyDocumentUploadService } from '../../catalog/domain/services/media/PolicyDocumentUploadService';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
@@ -154,6 +154,11 @@ export class AgencyProfileController {
             );
         }
 
+        /*
+         * A cheap PRE-FILTER on the claimed type, not the real gate — it answers a wrong file
+         * with this endpoint's own documented code before any bytes are scanned or stored.
+         * The pipeline re-checks against the **sniffed** type, which is what actually decides.
+         */
         for (const file of req.files) {
             if (file.mimetype !== 'application/pdf') {
                 throw createAppError(
@@ -163,16 +168,23 @@ export class AgencyProfileController {
             }
         }
 
-        const storageProvider = getStorageProvider();
-        const urls: string[] = [];
-        for (const file of req.files) {
-            const result = await storageProvider.put(file.buffer, {
+        /*
+         * ⚠ This used to call `storageProvider.put` DIRECTLY — no virus scan, no magic-byte
+         * sniffing, no fingerprint, no quota (plan step 4.A.4c / 25.2, the last of S-2). The
+         * only gate was the loop above, on a MIME type the client chose. `{ urls }` is
+         * unchanged, so nothing on the wire moves. Identical to the vendor twin, through one
+         * shared service — the two used to be the same code written out twice.
+         */
+        const urls = await policyDocumentUploadService.upload(
+            'agency',
+            req.auth!.role_entity._id.toString(),
+            req.auth!.user._id.toString(),
+            req.files.map((file) => ({
+                buffer: file.buffer,
+                originalName: file.originalname,
                 mimeType: file.mimetype,
-                folder: 'agency-policy-documents',
-                filename: file.originalname,
-            });
-            urls.push(storageProvider.getPublicUrl(result.key));
-        }
+            })),
+        );
 
         res.status(201).json({ success: true, data: { urls }, message: `Uploaded ${urls.length} document(s)` });
     });

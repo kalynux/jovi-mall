@@ -12,7 +12,7 @@ import {
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
 import { vectorisationService } from '../../catalog/domain/services/VectorisationService';
-import { getStorageProvider } from '../../../core/storage';
+import { policyDocumentUploadService } from '../../catalog/domain/services/media/PolicyDocumentUploadService';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
@@ -169,6 +169,14 @@ export class VendorProfileController {
       );
     }
 
+    /*
+     * The claimed-type check stays, and it is now a CHEAP PRE-FILTER rather than the only
+     * gate. It answers a wrong file type with this endpoint's own documented code before any
+     * bytes are scanned or stored; the pipeline then re-checks against the **sniffed** type,
+     * which is the check that actually decides. Keeping both is deliberate — dropping this
+     * one would change a documented 400 into a generic UPLOAD_POLICY_VIOLATION for every
+     * vendor who picks the wrong file.
+     */
     for (const file of req.files) {
       if (file.mimetype !== 'application/pdf') {
         throw createAppError(
@@ -178,16 +186,25 @@ export class VendorProfileController {
       }
     }
 
-    const storageProvider = getStorageProvider();
-    const urls: string[] = [];
-    for (const file of req.files) {
-      const result = await storageProvider.put(file.buffer, {
+    /*
+     * ⚠ This used to call `storageProvider.put` DIRECTLY — no virus scan, no magic-byte
+     * sniffing, no fingerprint, no quota (plan step 4.A.4c / 25.2, the last of S-2). The only
+     * gate was the loop above, on a MIME type the client chose: anything named `.pdf` and
+     * declared `application/pdf` was stored and handed back as a public URL that this vendor
+     * then republishes to their counterparties.
+     *
+     * `{ urls }` is unchanged, so nothing on the wire moves.
+     */
+    const urls = await policyDocumentUploadService.upload(
+      'vendor',
+      req.auth!.role_entity._id.toString(),
+      req.auth!.user._id.toString(),
+      req.files.map((file) => ({
+        buffer: file.buffer,
+        originalName: file.originalname,
         mimeType: file.mimetype,
-        folder: 'vendor-policy-documents',
-        filename: file.originalname,
-      });
-      urls.push(storageProvider.getPublicUrl(result.key));
-    }
+      })),
+    );
 
     res.status(201).json({ success: true, data: { urls }, message: `Uploaded ${urls.length} document(s)` });
   });

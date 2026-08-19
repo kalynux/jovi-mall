@@ -11,6 +11,7 @@ import { UploadPolicyConfig } from '../upload-config';
  * Rules:
  * - Only vendors can upload to products, variants, digital folders
  * - Only admins can upload to system folder
+ * - A policy-document folder must match the owner it is stamped for
  * - Validates vendorId matches context
  *
  * These rules attach to a folder's PURPOSE. A `'by-type'` request has no
@@ -21,10 +22,37 @@ export class PermissionValidator implements IUploadValidator {
   constructor(private readonly config: UploadPolicyConfig) { }
 
   async validate(context: UploadPipelineContext): Promise<void> {
-    const { role, vendorId } = context.request.context;
+    const { role, vendorId, ownerType } = context.request.context;
     const folder = context.request.folder;
 
     const denials: UploadPolicyViolation[] = [];
+
+    /**
+     * Policy documents: the tree must match the owner it is being stamped for.
+     *
+     * ⚠ This rule is keyed on `ownerType`, NOT on `role`, and that is forced rather than
+     * chosen: the pipeline's `UserRole` is only `admin | vendor | user`, so it cannot tell an
+     * agency from a customer — every non-vendor caller arrives as `'user'`. `ownerType` is
+     * the identity the File is actually stamped with, so it is both the meaningful thing to
+     * check and the one the tree has to agree with.
+     *
+     * Without it these two folders would join the "not named here, therefore allowed"
+     * bucket, which is a denylist's default and is how a purpose folder ends up with no
+     * purpose rule. The HTTP routes are role-guarded either way; this is the layer that
+     * catches a caller writing a vendor's document into the agency's tree.
+     */
+    const POLICY_DOCUMENT_OWNERS: Record<string, string> = {
+      'vendor-policy-documents': 'vendor',
+      'agency-policy-documents': 'agency',
+    };
+    const requiredOwner = POLICY_DOCUMENT_OWNERS[folder];
+    if (requiredOwner && ownerType !== requiredOwner) {
+      denials.push({
+        code: 'PERMISSION_DENIED',
+        message: `The ${folder} folder is for ${requiredOwner} uploads`,
+        metadata: { role, folder, ownerType: ownerType ?? null },
+      });
+    }
 
     // System folder - only admins
     if (folder === 'system' && role !== 'admin') {
