@@ -186,10 +186,10 @@ export class DeliveryAgencyRepository {
    *
    * ── Why the three fields move together ───────────────────────────────────────
    * `status` is what actually gates anything today (`findAvailableForVendors` filters on
-   * it); `legit_verified` gates nothing, because `requireLegitBusiness` has no call sites.
-   * Writing only the flag would be a button that flips a column nobody reads, and writing
-   * only the status would leave the flag saying the opposite. They are one decision, so
-   * they are one write.
+   * it); `legit_verified` gates nothing, because `requireLegitBusiness` had no call sites
+   * and was deleted with the rest of `auth/guards/` (2026-08-19, Phase 4). Writing only the
+   * flag would be a button that flips a column nobody reads, and writing only the status
+   * would leave the flag saying the opposite. They are one decision, so they are one write.
    *
    * `verified_at` and the actor stamp are set here rather than by the caller for the same
    * reason `actorStamp` writes its three fields together: a timestamp that can disagree

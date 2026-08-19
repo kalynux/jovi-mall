@@ -1306,7 +1306,8 @@ assert('its schedule is derived from ANALYTICS_AGGREGATION_CRON, not a literal',
  * `withWorkerLock` directly with the Redis layer switched off, so they prove the in-process floor
  * — the layer that must hold with no Redis at all. The SOURCE SCAN then proves every worker
  * actually routes through it: a guard nobody calls protects nothing, which is exactly the state
- * `requireActiveUser` and the password-epoch predicate were both found in.
+ * `requireActiveUser` and the password-epoch predicate were both found in. That example is
+ * historical as of 2026-08-19: `auth/guards/` was deleted in Phase 4 for precisely that reason.
  */
 section('Worker overlap lock — the guard, and that every worker uses it');
 
