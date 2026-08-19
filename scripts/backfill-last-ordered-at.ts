@@ -12,8 +12,15 @@
  * the field current.
  *
  * Usage:
- *   npm run backfill:last-ordered
+ *   npm run backfill:last-ordered [-- --dry-run]
  *   npm run backfill:last-ordered -- --statuses=paid,refunded
+ *
+ * `--dry-run` was added in plan step 2.C.3, with the other two that lacked one. It runs the
+ * same aggregation and then reads back the CURRENT `lastOrderedAt` for the ids it produced,
+ * so what it reports is the number of rows that would actually change — not the number the
+ * aggregation matched. The two differ by everything already correct from a previous run,
+ * which on a re-run is nearly all of them; reporting the larger number would make an
+ * idempotent no-op look like a mass update.
  */
 
 import dotenv from 'dotenv';
@@ -24,6 +31,8 @@ import { ProductVariantModel } from '../src/modules/catalog/models/product-varia
 import { loadFileCleanupConfig } from '../src/config/file-cleanup.config';
 
 dotenv.config();
+
+const DRY_RUN = process.argv.includes('--dry-run');
 
 function parseStatuses(): string[] {
   const arg = process.argv.slice(2).find((a) => a.startsWith('--statuses='));
@@ -47,16 +56,37 @@ async function backfill(
 
   if (rows.length === 0) return 0;
 
-  const ops = rows
-    .filter((r) => r._id)
-    .map((r) => ({
-      updateOne: {
-        filter: { _id: r._id },
-        update: { $set: { lastOrderedAt: r.last } },
-      },
-    }));
+  const targets = rows.filter((r) => r._id);
+  if (targets.length === 0) return 0;
 
-  if (ops.length === 0) return 0;
+  if (DRY_RUN) {
+    // Count what would CHANGE, not what the aggregation matched. One read of the current
+    // values for exactly these ids; comparison in memory, because `lastOrderedAt` is a
+    // Date and `$ne` against a per-row value has no single-query form.
+    const current = await model
+      .find({ _id: { $in: targets.map((r) => r._id) } }, { lastOrderedAt: 1 })
+      .lean()
+      .exec();
+    const existing = new Map<string, Date | null>(
+      (current as Array<{ _id: mongoose.Types.ObjectId; lastOrderedAt?: Date | null }>)
+        .map((doc) => [doc._id.toString(), doc.lastOrderedAt ?? null]),
+    );
+    return targets.filter((r) => {
+      const now = existing.get(r._id.toString());
+      // Absent from the map = the id is on an order item but the product/variant is gone.
+      // bulkWrite would match nothing for it, so it is not a change.
+      if (now === undefined) return false;
+      return now === null || now.getTime() !== r.last.getTime();
+    }).length;
+  }
+
+  const ops = targets.map((r) => ({
+    updateOne: {
+      filter: { _id: r._id },
+      update: { $set: { lastOrderedAt: r.last } },
+    },
+  }));
+
   const result = await model.bulkWrite(ops, { ordered: false });
   return result.modifiedCount ?? 0;
 }
@@ -67,14 +97,23 @@ async function main() {
 
   console.log(`[Backfill] Connecting to MongoDB...`);
   await mongoose.connect(MONGO_URI);
-  console.log(`[Backfill] Connected. Counting orders with payment_status in [${statuses.join(', ')}]`);
+  console.log(
+    `[Backfill] Connected${DRY_RUN ? ' (DRY RUN — nothing will be written)' : ''}. ` +
+    `Counting orders with payment_status in [${statuses.join(', ')}]`,
+  );
 
   try {
+    const verb = DRY_RUN ? 'WOULD update' : 'Updated';
+
     const products = await backfill(ProductModel, 'product_id', statuses);
-    console.log(`[Backfill] Updated lastOrderedAt on ${products} products`);
+    console.log(`[Backfill] ${verb} lastOrderedAt on ${products} products`);
 
     const variants = await backfill(ProductVariantModel, 'variant_id', statuses);
-    console.log(`[Backfill] Updated lastOrderedAt on ${variants} variants`);
+    console.log(`[Backfill] ${verb} lastOrderedAt on ${variants} variants`);
+
+    if (DRY_RUN) {
+      console.log('[Backfill] DRY RUN — nothing was written. Re-run without --dry-run to apply.');
+    }
   } finally {
     await mongoose.disconnect();
     console.log('[Backfill] Done. Disconnected.');

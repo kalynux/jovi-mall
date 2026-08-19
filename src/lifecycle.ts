@@ -13,6 +13,7 @@ import { stopAllWorkers } from './modules/dev-tools/worker-registry';
 import { initializeMetrics, installOutboxDepthProvider, recordMongoError } from './modules/system/metrics/metrics';
 import { outboxDepthForMetrics } from './modules/system/services/queue-depth.service';
 import { primeMaintenanceState } from './modules/system/services/maintenance.service';
+import { inspectDatabase } from './modules/system/services/database-inspect.service';
 import { SYSTEM_CONFIG } from './modules/system/config/system.config';
 import { closeRedisClients } from './infra/redis/redis.factory';
 import { planExpiryWorker } from './modules/billing/workers/plan-expiry.worker';
@@ -108,7 +109,26 @@ export async function startServer(): Promise<Server> {
     reportBotWebhookGuard((message) => console.log(message));
 
     // Database Connection
-    await mongoose.connect(MONGO_URI);
+    //
+    // ── `autoIndex` OFF IN PRODUCTION (plan step 2.C.4) ───────────────────────────
+    // Until now this service left Mongoose's default on, and its own CLAUDE.md recorded
+    // the result: an index build triggered by a boot fails SILENTLY — the promise rejects
+    // into a listener nobody attached and the process comes up healthy. For a read index
+    // that is a slow page; for `payment_webhook_events`' unique `(gateway, eventId)` it is
+    // webhook dedup quietly not existing. It is also an unannounced load spike on the
+    // primary, timed to a deploy, which is the worst moment for one.
+    //
+    // wi-admin has had exactly this line since Phase 4 (`infra/mongo/connections.ts`),
+    // with a comment naming this service as the counter-example. Matching it makes index
+    // creation an explicit, ledgered migration step — `npm run migrate:up`.
+    //
+    // Turning it off converts a silent-SLOW failure into a silent-MISSING one, so it is
+    // paired with `reportIndexDrift()` after the listener opens. Development keeps
+    // `autoIndex` on: a developer who has just written a schema should not have to run a
+    // migration to use it.
+    await mongoose.connect(MONGO_URI, {
+        autoIndex: process.env.NODE_ENV !== 'production',
+    });
     console.log('Connected to MongoDB');
 
     /**
@@ -190,8 +210,79 @@ export async function startServer(): Promise<Server> {
     server.keepAliveTimeout = 65_000;
     server.headersTimeout = 66_000;
 
+    // The other half of turning `autoIndex` off. Deliberately AFTER the listener opens and
+    // deliberately not awaited — see the function's own header.
+    void reportIndexDrift();
+
     httpServer = server;
     return server;
+}
+
+/**
+ * Log any declared-but-absent index, once, at boot. Plan step 2.C.4.
+ *
+ * ── Why this exists at all ────────────────────────────────────────────────────
+ * `autoIndex` is now off in production, which is right — but it trades a silent-SLOW
+ * failure for a silent-MISSING one. Before, a declared index that failed to build left a
+ * slow query. Now, a declared index nobody built simply is not there, and the only
+ * detectors were `verify:live-parity` (a handful of models) and
+ * `GET /api/internal/admin/system/database`, both of which need somebody to go and look.
+ * An operator should learn this from the boot log, not from a duplicate that got through
+ * a unique constraint that was never created.
+ *
+ * ── It REPORTS. It does not build, and it does not fail readiness ─────────────
+ * Building here would reintroduce exactly what `autoIndex` was turned off to stop. Failing
+ * readiness on drift would mean a fresh database — where every index is legitimately
+ * missing until the first migration runs — can never become ready, which is a deadlock at
+ * precisely the moment somebody is trying to bring the system up for the first time.
+ * Whether drift should gate readiness is a later phase's decision, made with a ledger to
+ * consult; this is the warning that makes the question askable.
+ *
+ * ── Not awaited, and after the listener ───────────────────────────────────────
+ * `inspectDatabase` walks the collection registry issuing two commands each, bounded by
+ * `DB_INSPECT_BUDGET_MS`. That is real work on a primary, and none of it is a precondition
+ * for serving a request. Awaiting it would add its whole budget to every boot and to every
+ * rolling-deploy step. It can never throw: a report that takes the process down is worse
+ * than no report.
+ */
+async function reportIndexDrift(): Promise<void> {
+    try {
+        const result = await inspectDatabase(null);
+
+        const drifted = result.collections.filter((c) => c.indexes.drift.missing.length > 0);
+
+        if (drifted.length === 0) {
+            logger().info(
+                { collections: result.summary.collections, declaredIndexes: result.summary.declaredIndexes },
+                'index drift: none — every declared index exists'
+            );
+        } else {
+            for (const collection of drifted) {
+                logger().warn(
+                    {
+                        collection: collection.name,
+                        missing: collection.indexes.drift.missing.map((index) => index.key),
+                    },
+                    'index drift: DECLARED INDEX MISSING — run `npm run migrate:up`'
+                );
+            }
+            logger().warn(
+                { collections: drifted.length, indexes: result.summary.missing },
+                'index drift: some declared indexes do not exist in this database'
+            );
+        }
+
+        // Truncation is reported rather than swallowed: "no drift found" and "the sweep ran
+        // out of budget before it looked" must not read the same way in a log.
+        if (result.truncated) {
+            logger().warn(
+                { notReached: result.notReached.length },
+                'index drift: sweep hit its wall-clock budget; some collections were not checked'
+            );
+        }
+    } catch (error) {
+        logger().warn({ err: error }, 'index drift: check could not run');
+    }
 }
 
 /**

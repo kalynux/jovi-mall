@@ -1,0 +1,50 @@
+# What never enters the build context.
+#
+# Two entries here are correctness, not tidiness — read those before editing.
+
+# ─── CORRECTNESS ─────────────────────────────────────────────────────────────
+
+# `bcrypt` and `sharp` resolve PLATFORM binaries at install time. This tree is
+# developed on Windows, so a host `node_modules/` carries `@img/sharp-win32-x64`
+# and `bcrypt/prebuilds/win32-x64`. Copying it into a linux image produces a
+# container that installs cleanly and then throws at the first hash or resize.
+# `npm ci` runs INSIDE the image for exactly this reason; this line is what stops
+# a stray `COPY . .` from undoing that.
+node_modules
+**/node_modules
+
+# 112 MB / 73 files of real uploads. ADR-019 D-1a and plan D-6: they live in a
+# named volume mounted at /app/storage, never in an image layer. Without this
+# line every build ships them as context AND bakes them into the image, where a
+# `docker compose down -v` would be the only thing standing between a rebuild and
+# stale files shadowing the volume.
+storage
+
+# ─── SECRETS ─────────────────────────────────────────────────────────────────
+
+# The real environment. Compose supplies the container's environment and
+# `dotenv/config` no-ops when there is no file — that is intended, not a gap.
+# `.env.example` is kept: it documents the contract and carries no secret.
+.env
+.env.*
+!.env.example
+
+# ─── BUILD OUTPUT AND NOISE ──────────────────────────────────────────────────
+
+# The builder stage produces dist/ itself. A host copy would be a Windows-built
+# artefact of unknown vintage shadowing it.
+dist
+
+.git
+.gitignore
+.github
+.vscode
+*.log
+npm-debug.log*
+.DS_Store
+coverage
+
+# Documentation. Large, and no code path reads it.
+api-doc
+docs
+*.md

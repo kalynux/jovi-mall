@@ -1,5 +1,12 @@
 # Project Setup & Development Guide
 
+> **This document covers LOCAL DEVELOPMENT.** Deploying, migrating and rotating secrets are in
+> [`../docs/RUNBOOK.md`](../docs/RUNBOOK.md); the release shape they follow from is
+> [`ADR-019`](../docs/ADR-019-RELEASE-SHAPE.md). Two things there are easy to get wrong from here:
+> secrets come from the host's own secret store and never from a committed `.env`, and four values
+> are **shared with another service under a different variable name**, so rotating one side alone
+> breaks the seam silently. `.env.example` names the other side at each such variable.
+
 ## 1. Tech Stack Summary
 
 | Layer | Technology | Notes |

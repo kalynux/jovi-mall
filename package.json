@@ -3,13 +3,18 @@
   "version": "1.0.0",
   "description": "Custom commerce platform backend",
   "main": "dist/server.js",
+  "engines": {
+    "node": ">=22 <23"
+  },
   "scripts": {
     "start": "node dist/server.js",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "build": "tsc",
+    "build": "tsc && ts-node scripts/copy-build-assets.ts",
     "lint": "eslint src scripts --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
+    "migrate:status": "ts-node scripts/migrate.ts status",
+    "migrate:up": "ts-node scripts/migrate.ts up",
     "aggregate:analytics": "ts-node scripts/populate-vendor-analytics.ts",
     "backfill:last-ordered": "ts-node scripts/backfill-last-ordered-at.ts",
     "backfill:pickup-locations": "ts-node scripts/backfill-pickup-locations.ts",
@@ -98,6 +103,7 @@
     "@typescript-eslint/eslint-plugin": "^8.56.1",
     "@typescript-eslint/parser": "^8.56.1",
     "eslint": "^10.0.2",
+    "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.3.3",
     "typescript-eslint": "^8.56.1"

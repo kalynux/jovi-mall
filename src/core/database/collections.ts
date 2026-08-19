@@ -97,6 +97,19 @@ export const MODELS = Object.freeze({
    */
   SYSTEM_LOG: 'SystemLog',
 
+  /**
+   * The migration ledger (plan step 2.C.1) — what has been applied, where, and from which
+   * VERSION of the script.
+   *
+   * Forward-only, append-only, no down migrations: the same semantics geo-tracker's
+   * `internal/platform/postgres/migrate.go` has always had, and for the same reason — a
+   * service that owns its schema outright needs an answer to "has this run here", not a
+   * migration framework. The one field that is not in the Go version is `checksum`, which
+   * turns "this migration ran" into "*this version of* this migration ran"; all fifteen
+   * scripts are files somebody may still edit.
+   */
+  SCHEMA_MIGRATION: 'SchemaMigration',
+
   // Payments
   PAYMENT_TRANSACTION: 'PaymentTransaction',
   REFUND_TRANSACTION: 'RefundTransaction',
@@ -231,6 +244,9 @@ export const COLLECTIONS = Object.freeze({
 
   /** Capped, driver-managed. See the MODELS entry above for why there is no Mongoose model. */
   SYSTEM_LOG: 'system_logs',
+
+  /** The migration ledger. See the MODELS entry above. */
+  SCHEMA_MIGRATION: 'schema_migrations',
 
   // Payments
   PAYMENT_TRANSACTION: 'payment_transactions',

@@ -40,10 +40,72 @@ export interface IndexDrift {
 
 type RawSpec = Record<string, unknown> | undefined | null;
 
+/**
+ * A `$text` index is REPORTED in a different shape than it is DECLARED, and comparing the two
+ * verbatim reports a false `missing` plus a false `extra` for every one of them, forever.
+ *
+ * A schema declares `{ title: 'text', tags: 'text', description: 'text' }`. `listIndexes()`
+ * answers with the internal sentinel `{ _fts: 'text', _ftsx: 1 }` and puts the real fields in a
+ * sibling `weights` document — alphabetised, and therefore in a different order from the
+ * declaration as well. So both halves of the identity disagree.
+ *
+ * This was live: `products` carries the one `$text` index in this codebase, `verify:storefront`
+ * proves it exists, and `GET /system/database` reported it as missing. It surfaced when plan
+ * step 2.C.4 put this diff on the boot path — a warning that is always wrong is worse than no
+ * warning, because it is what teaches an operator to skip the one that is right.
+ *
+ * Both sides are rewritten to the same canonical form: the text fields, **sorted**, each mapped
+ * to `'text'`, in the position the sentinel occupied. Sorting is correct here specifically
+ * because a text index has no prefix semantics — unlike a compound b-tree index, where key order
+ * IS the identity and `indexIdentity` must keep it.
+ *
+ * Field WEIGHTS are deliberately not compared, consistent with the narrowness this file argues
+ * for elsewhere: a re-weighted text index is a relevance change, not a missing constraint.
+ */
+function canonicaliseTextKey(
+    key: Record<string, unknown>,
+    options: Record<string, unknown>,
+): Record<string, unknown> {
+    // The LIVE shape: expand the sentinel back into the fields `weights` names.
+    if (key._fts === 'text') {
+        const weights = options.weights;
+        if (!weights || typeof weights !== 'object') return key;
+        const out: Record<string, unknown> = {};
+        for (const [field, direction] of Object.entries(key)) {
+            if (field === '_ftsx') continue;
+            if (field === '_fts') {
+                for (const weighted of Object.keys(weights as Record<string, unknown>).sort()) {
+                    out[weighted] = 'text';
+                }
+                continue;
+            }
+            out[field] = direction;
+        }
+        return out;
+    }
+
+    // The DECLARED shape: sort the text-valued fields so it matches the expansion above.
+    const textFields = Object.keys(key).filter((field) => key[field] === 'text');
+    if (textFields.length === 0) return key;
+
+    const sorted = [...textFields].sort();
+    const out: Record<string, unknown> = {};
+    let taken = 0;
+    for (const field of Object.keys(key)) {
+        if (key[field] === 'text') {
+            out[sorted[taken]] = 'text';
+            taken += 1;
+        } else {
+            out[field] = key[field];
+        }
+    }
+    return out;
+}
+
 export function normaliseIndex(key: Record<string, unknown>, options: RawSpec): NormalisedIndex {
     const opts = options ?? {};
     const orderedKey: Record<string, number | string> = {};
-    for (const [field, direction] of Object.entries(key)) {
+    for (const [field, direction] of Object.entries(canonicaliseTextKey(key, opts))) {
         orderedKey[field] = typeof direction === 'number' || typeof direction === 'string'
             ? direction
             : Number(direction);

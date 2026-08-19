@@ -23,7 +23,15 @@
  * Idempotent: safe to re-run. Only touches products with no pickup_location.
  *
  * Usage:
- *   npm run backfill:pickup-locations
+ *   npm run backfill:pickup-locations [-- --dry-run]
+ *
+ * `--dry-run` was added in plan step 2.C.3, with the other two that lacked one. It walks
+ * exactly the same resolution — vendor, effective agency, policy, address — and prints the
+ * decision it would have written per product, without the `updateOne`. That matters more
+ * here than in the index migrations: this script picks BETWEEN two sources based on an
+ * agency's pricing policy, so "what would it decide" is a genuinely different question from
+ * "how many rows would it touch", and a migration you cannot rehearse is one you find out
+ * about in production.
  */
 
 import dotenv from 'dotenv';
@@ -34,12 +42,17 @@ import { DeliveryAgencyModel, IDeliveryAgency } from '../src/modules/delivery/de
 
 dotenv.config();
 
+const DRY_RUN = process.argv.includes('--dry-run');
+
 async function main() {
   const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/jovi-mall';
 
   console.log('[Backfill] Connecting to MongoDB...');
   await mongoose.connect(MONGO_URI);
-  console.log('[Backfill] Connected. Scanning physical products missing delivery.pickup_location...');
+  console.log(
+    `[Backfill] Connected${DRY_RUN ? ' (DRY RUN — nothing will be written)' : ''}. ` +
+    'Scanning physical products missing delivery.pickup_location...'
+  );
 
   try {
     const products = await ProductModel.find({
@@ -114,6 +127,16 @@ async function main() {
         continue;
       }
 
+      if (DRY_RUN) {
+        console.log(
+          `  → ${product._id} (vendor ${vendorId}, agency ${effectiveAgencyId}): ` +
+          `WOULD set source=${pickupLocation.source}` +
+          (pickupLocation.vendor_address_id ? ` vendor_address_id=${pickupLocation.vendor_address_id}` : ''),
+        );
+        updated++;
+        continue;
+      }
+
       await ProductModel.updateOne(
         { _id: product._id },
         { $set: { 'delivery.pickup_location': pickupLocation } },
@@ -121,9 +144,12 @@ async function main() {
       updated++;
     }
 
-    console.log(`[Backfill] Updated ${updated} product(s).`);
+    console.log(`[Backfill] ${DRY_RUN ? 'WOULD update' : 'Updated'} ${updated} product(s).`);
     console.log(`[Backfill] Skipped (no resolvable agency): ${skippedNoAgency}`);
     console.log(`[Backfill] Skipped (agency policy allows neither pickup nor storage): ${skippedNoPolicyMatch}`);
+    if (DRY_RUN) {
+      console.log('[Backfill] DRY RUN — nothing was written. Re-run without --dry-run to apply.');
+    }
   } finally {
     await mongoose.disconnect();
     console.log('[Backfill] Done. Disconnected.');
