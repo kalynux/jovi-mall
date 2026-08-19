@@ -10,8 +10,9 @@
  * ── Fail closed ───────────────────────────────────────────────────────────────
  * Unset means the internal admin API is DISABLED, exactly as an unset
  * `INTERNAL_SERVICE_TOKEN` disables the agent one. There is no development default and no
- * fallback: `JWT_SECRET` falling back to the literal `'secret'` is the pattern this file
- * exists not to repeat.
+ * fallback: `JWT_SECRET` **used to** fall back to the literal `'secret'`, and that is the
+ * pattern this file exists not to repeat. Both it and geo-tracker's copy fail closed as of
+ * 2026-08-19; the pattern is what is being avoided here, not a live defect.
  *
  * Read through the accessor rather than at module load, so a test can set the variable
  * before the first call without racing the import order.

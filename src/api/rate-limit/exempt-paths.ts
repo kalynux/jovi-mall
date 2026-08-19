@@ -52,6 +52,17 @@ export const EXEMPT_PATHS: readonly Exemption[] = Object.freeze([
             + 'blocking it turns a jovi-mall load spike into a geo-tracker outage.',
     },
     {
+        prefix: '/api/internal/shipments',
+        reason:
+            'The same caller as /api/internal/agents, on the same token: geo-tracker pulling a '
+            + 'shipment\'s geocoded drop-off so it can route to it. Every route under here is behind '
+            + 'requireServiceToken and read-only, so the caller is one authenticated peer rather than '
+            + 'a population — and it is pulled once per tracking session, never on the broadcast path. '
+            + 'A 429 here is quieter than on the prefix above (nobody is dropped) and correspondingly '
+            + 'easier to leave un-exempt: the session simply opens with no ETA, and geo-tracker does '
+            + 'not retry until the next activation or subscribe.',
+    },
+    {
         prefix: '/api/tracking/agent-state',
         reason:
             'The reverse channel, also requireServiceToken: geo-tracker pushing an agent\'s tracking '

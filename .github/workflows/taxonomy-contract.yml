@@ -26,6 +26,15 @@ on:
     # per-push run across three checkouts would cost more than it catches.
     - cron: '0 6 * * 1'
   workflow_dispatch:
+    inputs:
+      admin_ref:
+        description: 'wi-admin ref to check out'
+        required: false
+        default: 'main'
+      geo_ref:
+        description: 'geo-tracker ref to check out'
+        required: false
+        default: 'admin-built'
   push:
     # …and immediately whenever this repository's copy is touched.
     paths:
@@ -36,6 +45,26 @@ on:
 
 permissions:
   contents: read
+
+# ── WHICH BRANCH OF THE SIBLINGS ─────────────────────────────────────────────────
+# `actions/checkout` with no `ref` takes the repository's DEFAULT branch, and for two of
+# the three that is not where the code is. Probed through the contents API on the day
+# this job was first drilled (plan step 3.D.1, 2026-08-19):
+#
+#   kalynux/geo-tracker  @main         internal/platform/apperror/category.go  -> 404
+#   kalynux/geo-tracker  @admin-built  (same path)                             -> 200
+#   kalynux/backend-admin@main         src/core/errors/error-category.ts       -> 200
+#   kalynux/jovi-mall    @main         src/core/error-category.ts              -> 404
+#
+# So an UNPINNED job fails on geo-tracker with a build error — a red that says nothing
+# about drift. That is the failure mode which teaches people to ignore a contract job,
+# and it is worse than the job not existing. `admin-built` is the de-facto trunk in this
+# workspace; when the merge to `main` happens, change these two lines and delete this
+# note. The workflow_dispatch inputs above exist so a drill can point elsewhere without
+# editing the file.
+env:
+  ADMIN_REF: ${{ inputs.admin_ref || 'main' }}
+  GEO_REF: ${{ inputs.geo_ref || 'admin-built' }}
 
 jobs:
   contract:
@@ -75,6 +104,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: kalynux/backend-admin
+          ref: ${{ env.ADMIN_REF }}
           token: ${{ secrets.CROSS_REPO_TOKEN }}
           path: admin
 
@@ -82,8 +112,29 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: kalynux/geo-tracker
+          ref: ${{ env.GEO_REF }}
           token: ${{ secrets.CROSS_REPO_TOKEN }}
           path: geo-tracker
+
+      # ── A MISSING FILE IS A WRONG REF, NOT A CONTRACT VIOLATION ──────────────
+      # Without this the two are indistinguishable from the log: a checkout aimed at a
+      # branch that predates Phase 16 produces a Go build error and an npm test that
+      # cannot import, and both read as "the taxonomy broke". Say which it is first.
+      - name: Confirm each checkout carries its copy of the taxonomy
+        run: |
+          fail=0
+          expect() {   # $1 human name · $2 path · $3 the ref it came from
+            if [ ! -f "$2" ]; then
+              echo "::error::$1 has no $2 at ref '$3'."
+              echo "::error::That is a WRONG REF, not drift. Fix the ref before reading"
+              echo "::error::anything below as a taxonomy violation."
+              fail=1
+            fi
+          }
+          expect jovi-mall   jovi-mall/src/core/error-category.ts               "${GITHUB_REF_NAME}"
+          expect wi-admin    admin/src/core/errors/error-category.ts            "${ADMIN_REF}"
+          expect geo-tracker geo-tracker/internal/platform/apperror/category.go "${GEO_REF}"
+          exit $fail
 
       - uses: actions/setup-node@v4
         with:
@@ -131,8 +182,15 @@ jobs:
       # Same shape, same absence of enforcement: the blog block-type Zod union, which
       # `ArticleBody.tsx` in the marketing site switches over exhaustively.
       #
-      # Both are on the two-repo release checklist (plan step 2.F.3) until then.
+      # Both are on the two-repo release checklist, and as of plan steps 3.D.2/3.D.3 that
+      # is TRUE rather than aspirational: `docs/RUNBOOK.md` § Two-repo release checklist
+      # carries six rows, the last two naming the vendor dashboard and the marketing site
+      # as the other side, with the manual step spelled out for each. When this comment
+      # was first written the table had four rows and this notice pointed at a checklist
+      # entry that did not exist — the same class of defect as X-8, one layer down.
       - name: Note the unenforced fourth-repo contracts
         run: |
           echo "::notice::test:rich-description and the blog block-type union are two-repo"
-          echo "::notice::contracts whose OTHER side is not checked out here. See plan 3.D.2."
+          echo "::notice::contracts whose OTHER side is not checked out here. They are rows 5"
+          echo "::notice::and 6 of docs/RUNBOOK.md § Two-repo release checklist, and that"
+          echo "::notice::manual check is the only thing covering them."

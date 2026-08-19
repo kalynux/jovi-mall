@@ -189,6 +189,27 @@ export interface ShipmentEndpoints {
 }
 
 /**
+ * The drop-off, reduced to what a ROUTER needs — served to geo-tracker over
+ * `GET /api/internal/shipments/:shipmentId/destination`.
+ *
+ * Deliberately not an `AddressDetail`: geo-tracker has no address model and
+ * would only ever read two numbers off one. Naming them `latitude`/`longitude`
+ * matches its `geo.Coordinate` JSON exactly, so the payload decodes into the
+ * type it already has.
+ */
+export interface ShipmentDestination {
+    shipmentId: string;
+    /** Null when nothing on this shipment's path carries coordinates. */
+    destination: { latitude: number; longitude: number } | null;
+    /** Human-readable, and present even when `destination` is not. */
+    formattedAddress: string | null;
+    /** When the address was geocoded. Null on the legacy saved-address fallback. */
+    resolvedAt: Date | null;
+    /** Which rule produced the answer, so a wrong ETA is diagnosable. */
+    source: 'order_snapshot' | 'customer_saved_address' | null;
+}
+
+/**
  * Everything the assignment module needs to render a shipment an agent cannot
  * yet read — see `buildShipmentContext`. `agency` is who is dispatching it.
  */
@@ -583,6 +604,71 @@ export class ShipmentService {
         }
 
         return result;
+    }
+
+    /**
+     * The drop-off for ONE shipment, reduced to what a router needs: a
+     * coordinate, the line to show a human, and where the answer came from.
+     *
+     * Serves `GET /api/internal/shipments/:shipmentId/destination`, which
+     * geo-tracker pulls once at session activation so that EVERY watcher of
+     * that agent gets an ETA — not only the customers whose client happens to
+     * send a `destination` on the subscribe frame. It is a READ: nothing here
+     * decides anything, and geo-tracker holds the shipment's id, never its
+     * status.
+     *
+     * The resolution rule is `_resolveDeliveryAddress`'s, unchanged and shared
+     * with the agency tracking board and the agent's route — the checkout
+     * snapshot wins, the customer's current default saved address is the legacy
+     * fallback. A fourth surface answering a different address for the same
+     * shipment is precisely the bug that resolver exists to prevent, and it
+     * would be invisible here: a plausible ETA to the wrong place.
+     *
+     * `destination` is null whenever there is no coordinate — a legacy order
+     * whose fallback address was never geocoded, or an order row that has gone
+     * missing. `formattedAddress` may still be set in that case: the text is
+     * useful to whoever is asking why there is no ETA, and geo-tracker degrades
+     * to no ETA, which is its behaviour today for every non-customer viewer.
+     */
+    async resolveTrackingDestination(shipmentId: string): Promise<ShipmentDestination> {
+        const shipment = await this.shipmentRepo.findById(shipmentId);
+        if (!shipment) {
+            throw createAppError(ERROR_CODES.SHIPMENT_NOT_FOUND, 404);
+        }
+
+        // Only what the drop-off rule reads: the snapshot, and the customer id
+        // the legacy fallback needs. Not `items` — the pickup is not asked for.
+        const order = await OrderModel.findById(shipment.order_id)
+            .select('customer_id delivery_address')
+            .lean()
+            .exec() as any;
+
+        const fallbackSaved = order && !order.delivery_address
+            ? (await this._batchResolveCustomerAddresses([order.customer_id.toString()]))
+                .get(order.customer_id.toString())
+            : null;
+
+        const detail = this._resolveDeliveryAddress(order, fallbackSaved);
+
+        // `AddressDetail.coordinates` is ALREADY `{ lat, lng }` — the resolver is
+        // the one place GeoJSON's `[lng, lat]` gets flipped. This is a rename onto
+        // geo-tracker's `geo.Coordinate` JSON, not a second flip. And it is named
+        // fields on the wire, never the bare pair: the first person to read
+        // `[9.7, 4.05]` reads it latitude-first and drops the pin in the Gulf of
+        // Guinea.
+        const coords = detail?.coordinates ?? null;
+
+        return {
+            shipmentId: (shipment._id as Types.ObjectId).toString(),
+            destination: coords ? { latitude: coords.lat, longitude: coords.lng } : null,
+            formattedAddress: detail?.formattedAddress ?? null,
+            // Only a geocoded snapshot carries a resolution time. The saved-address
+            // fallback is read live, so "when was this geocoded" has no answer there.
+            resolvedAt: order?.delivery_address?.resolved_at ?? null,
+            source: !detail
+                ? null
+                : (order?.delivery_address ? 'order_snapshot' : 'customer_saved_address'),
+        };
     }
 
     /**

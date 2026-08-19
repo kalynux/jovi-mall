@@ -44,6 +44,7 @@
     "test:earnings-quote": "ts-node scripts/test/test-earnings-quote.ts",
     "test:tracking-number": "ts-node scripts/test/test-tracking-number.ts",
     "test:tracking-board": "ts-node scripts/test/test-tracking-board.ts",
+    "test:tracking-outbox": "ts-node scripts/test/test-tracking-outbox.ts",
     "test:payments": "ts-node scripts/test/test-payments.ts",
     "test:system": "ts-node scripts/test/test-system.ts",
     "verify:logs": "ts-node scripts/test/verify-logging-live.ts",

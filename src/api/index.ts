@@ -339,6 +339,7 @@ import agentSelfRoutes from '../modules/agents/routes/agent.routes';
 import agencyRosterRoutes from '../modules/agents/routes/agency-roster.routes';
 import adminAgentRoutes from '../modules/agents/routes/admin-agent.routes';
 import internalAgentRoutes from '../modules/agents/routes/internal-agent.routes';
+import internalShipmentRoutes from '../modules/shipments/internal-shipment.routes';
 import internalAdminRoutes from './routes/internal-admin.routes';
 router.use('/agent', agentSelfRoutes);
 router.use('/agency/agents', agencyRosterRoutes);
@@ -348,6 +349,13 @@ router.use('/admin/agents', adminAgentRoutes);
 // user session). jovi-mall answers "may this agent be tracked?"; geo-tracker
 // owns tracking execution. Disabled entirely when INTERNAL_SERVICE_TOKEN is unset.
 router.use('/internal/agents', internalAgentRoutes);
+
+// The second geo-tracker door, same guard and same fail-closed rule: the
+// geocoded DROP-OFF, so geo-tracker can route and estimate an arrival time.
+// jovi-mall owns the address (an address is order data — the governing rule in
+// ../CLAUDE.md); geo-tracker owns the road network. Read-only, deliberately:
+// there is no shipment write a service that has no shipment model should make.
+router.use('/internal/shipments', internalShipmentRoutes);
 
 // Service-to-service API consumed by the wi-admin backend. Same shape as the
 // geo-tracker door above, a SEPARATE secret (INTERNAL_ADMIN_SERVICE_TOKEN), and

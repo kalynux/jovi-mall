@@ -89,6 +89,15 @@ const ALWAYS_EXEMPT: ReadonlyArray<{ prefix: string; why: string }> = Object.fre
     why: 'geo-tracker visibility policy — same family, read-only',
   },
   {
+    prefix: '/api/internal/shipments',
+    // The drop-off geo-tracker routes to. Same family as the two above — read-only,
+    // service-token, geo-tracker-facing — and listed here for a smaller blast radius,
+    // which is exactly why it would be forgotten: blocking it drops no watcher, it
+    // silently removes the ETA from every tracking session that OPENS during the
+    // window, and geo-tracker only re-resolves on the next activation or subscribe.
+    why: 'geo-tracker ETA destination — read-only, and blocking it silently costs every session opened in the window',
+  },
+  {
     prefix: '/api/health',
     // If readiness 503s during maintenance the orchestrator kills the instances and the window
     // becomes an outage nobody can exit. Draining traffic is a load-balancer action, not a

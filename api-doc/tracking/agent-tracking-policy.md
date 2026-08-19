@@ -15,7 +15,9 @@ jovi-mall must never serve a live position. If an endpoint here starts answering
 agent?"*, the boundary has been broken.
 
 Related: [live-tracking](./live-tracking.md) answers *who may watch whom*. This page answers
-*may this agent be tracked at all*. Both live in jovi-mall for the same reason.
+*may this agent be tracked at all*. [shipment-destination](./shipment-destination.md) answers
+*where is the parcel going* — the other internal door on the same token. All three live in
+jovi-mall for the same reason.
 
 ---
 

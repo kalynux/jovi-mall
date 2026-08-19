@@ -10,9 +10,15 @@ import { ERROR_CODES } from '../core/error-codes';
  * forging an admin token was a one-liner. The fallback also made the failure
  * invisible — the server booted and behaved normally.
  *
- * geo-tracker already fails closed on an empty secret (`internal/platform/auth/token.go`),
- * so the fallback additionally made the two services disagree about the same
- * token. Both halves of that contract now behave the same way.
+ * geo-tracker holds the same secret and verifies the same tokens. ⚠ This comment used to
+ * claim it "already fails closed on an empty secret (`internal/platform/auth/token.go`)".
+ * That was **wrong on both counts**: the file is `internal/platform/config/config.go`, and
+ * until 2026-08-19 it read `getEnv("JWT_SECRET", "secret")` — so geo-tracker booted happily
+ * without the variable, verifying every token against a string anyone can guess, while this
+ * service refused to start. It fails closed now, with these same two thresholds, so both
+ * halves of the contract really do behave the same way. The lesson is the comment, not the
+ * code: a claim about the OTHER repository is an unverified claim, and this one was written
+ * by somebody who was not editing it.
  *
  * `assertSigningSecrets()` runs at boot (see `server.ts`) so a misconfigured
  * deployment dies immediately and loudly, rather than at the first request.

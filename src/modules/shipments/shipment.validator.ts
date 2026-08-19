@@ -163,3 +163,11 @@ export const AssignAgentSchema = z.object({
 });
 
 export type AssignAgentDto = z.infer<typeof AssignAgentSchema>;
+
+// The shipment id in a path parameter. Validated rather than passed straight to
+// a `findById` so a malformed id is a 400 with a message instead of a Mongoose
+// CastError surfacing as a 500 — which matters most on the internal route, where
+// the caller is geo-tracker and treats any status >= 300 identically.
+export const ShipmentIdParamSchema = z.object({
+    shipmentId: z.string().trim().regex(/^[0-9a-fA-F]{24}$/, 'Invalid shipment ID'),
+});

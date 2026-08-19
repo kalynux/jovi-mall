@@ -11,6 +11,7 @@ import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repos
 import { FileReferenceRepositoryMongo } from '../../catalog/repositories/mongo/file-reference.repository.mongo';
 import { FileReferenceService } from '../../catalog/domain/services/media/FileReferenceService';
 import { getStorageProvider, IStorageProvider } from '../../../core/storage';
+import { plainSubdocument } from '../../../core/utils/subdocument.util';
 
 export class CustomerProfileService {
     private customerRepo: CustomerRepository;
@@ -91,7 +92,12 @@ export class CustomerProfileService {
         if (input.dateOfBirth !== undefined) updates.date_of_birth = input.dateOfBirth as Date | null;
         if (input.recentProductCode !== undefined) updates.recent_product_code = input.recentProductCode as string | null;
         if (input.preferences !== undefined) {
-            updates.preferences = { ...customer.preferences, ...input.preferences };
+            // Hydrated sub-document: see `plainSubdocument`. Spread directly, this
+            // merge silently persists the preferences the customer already had.
+            updates.preferences = {
+                ...plainSubdocument(customer.preferences),
+                ...input.preferences,
+            };
         }
 
         const updated = await this.customerRepo.updateProfile(customerId, updates);

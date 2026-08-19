@@ -18,6 +18,19 @@ env:
   # ADR-019 D-1 pins the runtime in three places: `engines`, the Dockerfile and here.
   NODE_VERSION: '22'
 
+  # ── WHY THE HEAP CEILING IS RAISED HERE ──────────────────────────────────────
+  # Without this, `tsc` dies on a standard runner with 'FATAL ERROR: Ineffective
+  # mark-compacts near heap limit — JavaScript heap out of memory' and the step exits
+  # 134 (SIGABRT), carrying NO TypeScript diagnostic. So it reads as a broken
+  # type-check rather than as a memory ceiling, and everything after it — lint, the
+  # DB-free suites, the baselined suites, npm audit — is skipped.
+  #
+  # That is what happened on every run of this workflow from the day it was written
+  # (2026-08-18) until the plan 3.D.1 drill looked at it: five runs, five failures at
+  # 'Type-check src', not one suite ever executed. Verified fixed on a throwaway
+  # branch before landing here.
+  NODE_OPTIONS: '--max-old-space-size=4096'
+
 jobs:
   check:
     name: typecheck · lint · DB-free suites · audit

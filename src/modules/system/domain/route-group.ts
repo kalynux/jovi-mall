@@ -40,7 +40,10 @@ const MOUNTED_PREFIXES: readonly string[] = Object.freeze([
     'customer', 'customer/bookings', 'customer/cart', 'customer/notifications',
     'customer/orders', 'customer/tickets',
     'digital', 'files', 'geo', 'integrations/google',
-    'internal/admin', 'internal/agents',
+    // Both geo-tracker doors get their own group. Not optional: an unlisted prefix
+    // collapses into the bounded-label fallback, and a service-to-service surface
+    // whose latency and error rate are invisible is one nobody notices going slow.
+    'internal/admin', 'internal/agents', 'internal/shipments',
     // `me/connections` earns its own group for the same reason `me/payment-methods` does: it
     // is a distinct surface with its own failure modes. Specifically it is the one route in
     // the service carrying a per-endpoint rate limiter, so its 429 rate is a thing an

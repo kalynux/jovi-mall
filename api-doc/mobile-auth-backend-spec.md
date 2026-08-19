@@ -93,8 +93,17 @@ an accident. Two asks:
 longer the session, the more the login gate matters. We should not extend session lifetime while the
 gate is open.
 
-**Related:** the backend's own `CLAUDE.md` notes `JWT_SECRET` falls back to the literal string
-`'secret'` when unset. Worth confirming production sets it, in the same pass.
+**Related — and this paragraph was itself the example.** It used to read *"the backend's own
+`CLAUDE.md` notes `JWT_SECRET` falls back to the literal string `'secret'` when unset"*. That was
+**already false when it was written**: the fallback had been removed and `getJwtSecret()` fails
+closed. The claim had survived in three documents and reached this spec, which is how a frontend
+team came to quote a fixed defect back at the backend team.
+
+**Current behaviour, verified in source 2026-08-19:** `JWT_SECRET` is **required** on both
+services. jovi-mall throws `CONFIG_MISSING_JWT_SECRET` and refuses to boot
+(`config/secrets.config.ts` → `assertSigningSecrets()`); geo-tracker's `validate()` does the same,
+with the same minimum length and the same placeholder list. A deploy that forgets it does not
+start, on either side. Nothing for a client to work around.
 
 ---
 

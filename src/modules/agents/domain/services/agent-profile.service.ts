@@ -1,6 +1,7 @@
 import { AgentRepository, agentRepository } from '../../repositories/agent.repository';
 import { createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
+import { plainSubdocument } from '../../../../core/utils/subdocument.util';
 import {
   IDeliveryAgent,
   IAgentVehicleInfo,
@@ -184,7 +185,12 @@ export class AgentProfileService {
   ): Promise<GetAgentProfileResponseDto> {
     const agent = await this.requireAgent(agentId);
 
-    const merged: IAgentPreferences = { ...agent.preferences, ...stripUndefined(input) };
+    // `plainSubdocument` is load-bearing, not defensive: `agent.preferences`
+    // is a hydrated sub-document, and spreading one directly drops every key.
+    const merged: IAgentPreferences = {
+      ...plainSubdocument(agent.preferences),
+      ...stripUndefined(input),
+    };
     const updated = await this.agents.updateProfile(agentId, { preferences: merged });
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
 
@@ -206,7 +212,12 @@ export class AgentProfileService {
   ): Promise<GetAgentProfileResponseDto> {
     const agent = await this.requireAgent(agentId);
 
-    const next: IAgentSettings = { ...agent.settings, ...stripUndefined(input) };
+    // See `plainSubdocument`: spreading the hydrated sub-document directly is
+    // what made this endpoint answer 200 while writing nothing at all.
+    const next: IAgentSettings = {
+      ...plainSubdocument(agent.settings),
+      ...stripUndefined(input),
+    };
 
     const updated = await this.agents.updateProfile(agentId, { settings: next });
     if (!updated) throw createAppError(ERROR_CODES.AGENT_NOT_FOUND, 404);
