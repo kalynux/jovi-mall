@@ -6,7 +6,7 @@ import { IFileReferenceRepository } from '../../catalog/repositories/interfaces/
 import { UploadIntakeService } from '../../../core/uploads/upload-intake.service';
 import { getDigitalAssetUploadConfig } from '../../../core/uploads/upload-config';
 import { NoopObserver } from '../../../core/uploads/observers/noop-observer';
-import { MockScanner } from '../../../core/uploads/scanners/mock-scanner';
+import { resolveVirusScanner } from '../../../core/uploads/scanners';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
@@ -27,12 +27,24 @@ export class DigitalAssetService {
     private readonly fileRepository: IFileRepository,
     private readonly fileReferenceRepository: IFileReferenceRepository,
   ) {
+    /*
+     * ⚠ This site used to construct a `MockScanner` — a TEST DOUBLE, under a different class
+     * name in a different module from the two `NoOpVirusScanner`s, which is exactly why
+     * ADR-A01 D-1's sweep found those two and missed this one.
+     *
+     * It is the one that mattered most. This is the DIGITAL-PRODUCTS path: the tree whose
+     * bytes travel furthest — behind a download token, to a paying stranger who never met the
+     * vendor. Had the other two been fixed and this left, the platform would have had exactly
+     * one unscanned surface, and it would have been the worst one, with the configuration
+     * claiming otherwise. That is the finding reproduced rather than closed (S-2 / F-25).
+     */
+    const assetUploadConfig = getDigitalAssetUploadConfig();
     this.uploadIntakeService = new UploadIntakeService(
-      getDigitalAssetUploadConfig(),
+      assetUploadConfig,
       storageProvider,
       fileRepository,
       new NoopObserver(),
-      new MockScanner(),
+      resolveVirusScanner(assetUploadConfig),
     );
   }
 

@@ -61,6 +61,7 @@
     "test:agency-inventory": "ts-node scripts/test/test-agency-inventory.ts",
     "test:stock-requests": "ts-node scripts/test/test-stock-requests.ts",
     "test:upload-folders": "ts-node scripts/test/test-upload-folders.ts",
+    "test:uploads": "ts-node scripts/test/test-uploads.ts",
     "test:vehicle-profile": "ts-node scripts/test/test-vehicle-profile.ts",
     "test:payout-methods": "ts-node scripts/test/test-payout-methods.ts",
     "test:booking-availability": "ts-node scripts/test/test-booking-availability.ts",

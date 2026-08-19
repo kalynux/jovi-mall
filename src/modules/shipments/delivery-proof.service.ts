@@ -4,7 +4,8 @@ import { ShipmentRepository } from './shipment.repository';
 import { ShipmentStatus } from './shipment.model';
 import { getDeliveryProofUploadConfig } from '../../core/uploads/upload-config';
 import { UploadIntakeService } from '../../core/uploads/upload-intake.service';
-import { IUploadObserver, IVirusScanner } from '../../core/uploads/upload-policy.types';
+import { IUploadObserver } from '../../core/uploads/upload-policy.types';
+import { resolveVirusScanner } from '../../core/uploads/scanners';
 import { getStorageProvider, IStorageProvider } from '../../core/storage';
 import { FileRepositoryMongo } from '../catalog/repositories/mongo/file.repository.mongo';
 import { FileReferenceRepositoryMongo } from '../catalog/repositories/mongo/file-reference.repository.mongo';
@@ -29,13 +30,19 @@ export interface DeliveryProofFileInput {
     mimeType: string;
 }
 
-// Minimal no-op observer/scanner (the general upload controller uses the same).
+// Minimal no-op observer (the general upload controller uses the same).
 class NoOpUploadObserver implements IUploadObserver {}
-class NoOpVirusScanner implements IVirusScanner {
-    async scan(): Promise<{ clean: boolean }> {
-        return { clean: true };
-    }
-}
+
+/*
+ * The `NoOpVirusScanner` that used to sit here was a SECOND definition of the same class as
+ * the one in `api/controllers/file-upload.controller.ts` — which is how the sweep for it in
+ * ADR-A01 D-1 found two and missed a third. Both are gone; `resolveVirusScanner(config)` is
+ * the only construction path now (S-2 / F-25, closed 2026-08-19).
+ *
+ * Worth knowing for this tree specifically: a proof photo is not an internal artefact. It
+ * reaches the agency, the vendor AND the customer through their own shipment reads, so an
+ * infected file uploaded here is a file the platform hands to three other parties.
+ */
 
 /**
  * DeliveryProofService
@@ -93,12 +100,13 @@ export class DeliveryProofService {
             mediaStorageService.getUsedBytes('agency', agencyId),
         ]);
 
+        const proofUploadConfig = getDeliveryProofUploadConfig();
         const uploadIntakeService = new UploadIntakeService(
-            getDeliveryProofUploadConfig(),
+            proofUploadConfig,
             this.storageProvider,
             this.fileRepository,
             new NoOpUploadObserver(),
-            new NoOpVirusScanner(),
+            resolveVirusScanner(proofUploadConfig),
         );
 
         const [uploaded] = await uploadIntakeService.execute({

@@ -5,7 +5,8 @@ import { loadUploadConfig, getVideoUploadConfig } from '../../core/uploads/uploa
 import { getAcceptableClaimedMimeTypes, isAcceptableClaimedMimeType } from '../../core/uploads/mime-aliases';
 import { getStorageProvider } from '../../core/storage';
 import { FileRepositoryMongo } from '../../modules/catalog/repositories/mongo/file.repository.mongo';
-import { IUploadObserver, IVirusScanner } from '../../core/uploads/upload-policy.types';
+import { IUploadObserver } from '../../core/uploads/upload-policy.types';
+import { resolveVirusScanner } from '../../core/uploads/scanners';
 import { FileOwnerType } from '../../modules/catalog/models/file.model';
 import { entitlementService } from '../../modules/billing/services/entitlement.service';
 import { mediaStorageService } from '../../modules/catalog/domain/services/media/MediaStorageService';
@@ -86,14 +87,23 @@ async function resolveStorageContext(
     return { storageLimitBytes, currentUsageBytes };
 }
 
-// No-op implementations for observer and scanner
+// No-op observer. The scanner that used to sit beside it is GONE — see below.
 class NoOpUploadObserver implements IUploadObserver { }
 
-class NoOpVirusScanner implements IVirusScanner {
-    async scan(buffer: Buffer, filename?: string): Promise<{ clean: boolean; reason?: string; virus?: string }> {
-        return { clean: true };
-    }
-}
+/*
+ * WHAT WAS HERE: a `NoOpVirusScanner` returning `{ clean: true }` for every byte, injected into
+ * both upload paths below. It was one of TWO such classes in `src/`, with a third no-op
+ * (`MockScanner`) on the digital-products path. `UPLOAD_VIRUS_SCAN_PROVIDER` was parsed at
+ * `upload-config.ts` and read by nothing, so the configuration named a provider, the pipeline
+ * reported scans, and no uploaded byte was ever examined (S-2 / F-25 / ADR-A01 D-1, closed
+ * 2026-08-19).
+ *
+ * The replacement is `resolveVirusScanner(config)` — one factory keyed on the provider, which
+ * REFUSES rather than degrades when the provider cannot scan. Do not construct a scanner here
+ * again: `test:uploads` asserts by source scan that nothing under `src/` does, because the
+ * reason this survived is that a scanner which does nothing is indistinguishable from one
+ * that works.
+ */
 
 // Memory storage for multer
 const storage = multer.memoryStorage();
@@ -180,7 +190,7 @@ export class FileUploadController {
             const storageProvider = getStorageProvider();
             const fileRepository = new FileRepositoryMongo();
             const observer = new NoOpUploadObserver();
-            const virusScanner = new NoOpVirusScanner();
+            const virusScanner = resolveVirusScanner(config);
 
             const uploadIntakeService = new UploadIntakeService(
                 config,
@@ -298,7 +308,7 @@ export class FileUploadController {
             const storageProvider = getStorageProvider();
             const fileRepository = new FileRepositoryMongo();
             const observer = new NoOpUploadObserver();
-            const virusScanner = new NoOpVirusScanner();
+            const virusScanner = resolveVirusScanner(config);
 
             const uploadIntakeService = new UploadIntakeService(
                 config,

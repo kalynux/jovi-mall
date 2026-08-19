@@ -1,7 +1,8 @@
 # ADR-A01 — Who can download whose uploads, and what gets scanned
 
 **Date:** 2026-08-18 (evidence gathered 2026-08-17)
-**Status:** Accepted — decided; implemented in Phase 4.A.4
+**Status:** Accepted. **D-1 IMPLEMENTED 2026-08-19** (plan step 4.A.4a) · D-2 awaits its own
+release window (step 4.A.4b), which is deliberate — see [D-2](#d-2) of the Phase 4 plan
 **Scope:** jovi-mall
 **Answers:** [Q-5](../../PRODUCTION-READINESS/11-DECISIONS-REGISTER.md#q-5--who-can-download-whose-uploads)
 of the Phase D register · closes **S-2** and **F-25**
@@ -105,3 +106,67 @@ Implementation notes for 4.A.4:
 - The `UPLOAD_VIRUS_SCAN_*` variables become live for the first time; `.env.example`'s entries
   should say so, and `test:env` will keep them documented.
 - Scanning adds latency and a daemon to the deployment (ADR-019). Sizing is a Phase 2 concern.
+
+---
+
+## D-1 as built (2026-08-19, plan step 4.A.4a)
+
+**One correction to the decision, and it makes D-1 bigger than written.** The ADR says "both
+`NoOpVirusScanner` definitions become deletions". There were **three** no-ops, not two: a third
+lives at `digital-asset.service.ts` under a different class name — `MockScanner`, a test double
+imported from the production barrel. It is the **digital-products** path: the tree whose bytes
+travel furthest, behind a download token, to a paying stranger. Deleting the two named here and
+leaving it would have left exactly one unscanned surface, the worst one, with the configuration
+claiming otherwise — this finding reproduced rather than closed.
+
+Built:
+
+- **`core/uploads/scanners/index.ts`** — `resolveVirusScanner(config)`, the only construction
+  path. `cloud`, an unrecognised value, and `mock` under `NODE_ENV=production` all **throw**
+  (`CONFIG_INVALID_UPLOAD_SCANNER`). `assertUploadScannerSafe()` runs that at **boot**, beside
+  `assertSigningSecrets()` — every injection site builds per request, so without it a
+  misconfiguration is discovered by a vendor. `mock` is the built-in default, so this is what a
+  production deploy that forgets the variable meets.
+- **`ClamAVScanner`** — `clamd` INSTREAM over a raw TCP socket, no new dependency. One
+  whole-operation deadline (`UPLOAD_CLAMAV_TIMEOUT_MS`), not `socket.setTimeout`: an idle
+  timeout is restarted by every byte, so `blockOnFailure` never gets a verdict to act on.
+- **All three no-ops removed from the runtime path.** `MockScanner` survives as a test double
+  and left the `core/uploads` barrel, so nothing in `src/` can reach it by accident.
+- **`test:uploads`** (37) — its spine is a source scan asserting **no file under `src/`
+  constructs a scanner directly**, because the reason this survived is that a scanner which does
+  nothing is indistinguishable from one that works.
+- A `clamav` sidecar in `docker-compose.yml` (`service_healthy`, `clamdcheck.sh`, definitions on
+  a named volume) and a `docs/RUNBOOK.md` § 1 subsection.
+
+### The live check found a bug the source scans could not
+
+Proven against a real `clamav/clamav:stable` on this host (database 28097, 2026-08-19), driving
+`ClamAVScanner` and `VirusScanValidator` directly:
+
+```
+scan(EICAR)         -> {"clean":false,"virus":"Eicar-Test-Signature", ...}
+scan(clean)         -> {"clean":true}
+scan(2 MB clean)    -> {"clean":true}          # multi-chunk, so the framing is exercised
+validator(EICAR)    -> [{"code":"VIRUS_DETECTED", ...}]
+validator(no clamd) -> [{"code":"VIRUS_DETECTED","message":"Virus scan failed: File scanning is temporarily unavailable"}]
+```
+
+⚠ **The first run of that returned `stream: OK` for EICAR.** A `z`-prefixed clamd command gets a
+**NUL-terminated** reply with no trailing newline, so the wire carries
+`stream: Eicar-Test-Signature FOUND\0` — and an anchored `/…FOUND$/m` matches *neither* verdict,
+because `$` wants a newline or end-of-string and finds `\0`. Every scan fell through to the
+"unavailable" throw. The direction was safe (`blockOnFailure` refuses the upload), but the effect
+was **a scanner that never returns a verdict, behind a configuration that says it does** — this
+ADR's own finding in a new costume. A unit test written against a fixture the same author
+invented would have carried the same wrong assumption. `test:uploads` now pins the wire protocol
+against a fake clamd on a real socket, including both terminators and the chunk framing.
+
+Two host facts worth recording: `docker pull` of this image needed a retry behind the local TLS
+interception (R-1), and **an EICAR file cannot be written to disk on this machine at all** —
+Avast quarantines it, so the probe holds the signature in memory only.
+
+### Still open: `UPLOAD_VIRUS_SCAN_ENABLED=false` is not refused
+
+Deliberate, and the distinction is this ADR's own: S-2 was about a configuration that *claimed*
+to scan and did not. `enabled=false` claims nothing — it is an operator's explicit choice. It is
+logged loudly at boot rather than refused.

@@ -33,8 +33,16 @@ export * from './validators/duplicate-file.validator';
 export * from './validators/user-quota.validator';
 
 // Scanners
-export * from './scanners/mock-scanner';
-export * from './scanners/clamav-scanner';
+//
+// ⚠ `MockScanner` is deliberately NOT re-exported. It is a TEST DOUBLE that returns
+// `{ clean: true }` for every byte, and it reached the digital-products upload path — the tree
+// whose files travel furthest, behind a download token, to a paying stranger — precisely
+// because it was importable from the production barrel (ADR-A01 D-1 / D-6). The suites import
+// it from `./scanners/mock-scanner` directly; nothing in `src/` may.
+//
+// `resolveVirusScanner` is the ONLY way a scanner is constructed in the runtime path, and
+// `test:uploads` asserts that by source scan.
+export * from './scanners/index';
 
 // Observers
 export * from './observers/logging-observer';

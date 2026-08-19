@@ -267,6 +267,8 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.SHIPMENT_CONFIRMATION_NOT_ALLOWED]: 'This shipment cannot be confirmed yet',
     [ERROR_CODES.CONFIG_MISSING_STORAGE_PROVIDER]: 'config missing storage provider',
     [ERROR_CODES.CONFIG_INVALID_STORAGE_PROVIDER]: 'config invalid storage provider',
+    [ERROR_CODES.CONFIG_INVALID_UPLOAD_SCANNER]: 'File scanning is misconfigured',
+    [ERROR_CODES.UPLOAD_VIRUS_SCAN_UNAVAILABLE]: 'File scanning is temporarily unavailable',
     [ERROR_CODES.STORAGE_UPLOAD_FAILED]: 'storage upload failed',
     [ERROR_CODES.UPLOAD_POLICY_VIOLATION]: 'upload policy violation',
     [ERROR_CODES.VENDOR_UNSUPPORTED_FISCAL_CALENDAR]: 'vendor unsupported fiscal calendar',

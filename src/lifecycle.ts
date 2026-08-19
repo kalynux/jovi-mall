@@ -6,6 +6,8 @@ import { assertSigningSecrets } from './config/secrets.config';
 import { assertEnvironment } from './config/env';
 import { assertInternalAdminToken } from './config/internal-admin.config';
 import { assertExposedConfigSafe } from './modules/system/domain/exposed-config';
+import { assertUploadScannerSafe } from './core/uploads/scanners';
+import { loadUploadConfig } from './core/uploads/upload-config';
 import { reportBotWebhookGuard } from './api/middlewares/bot-webhook.middleware';
 import { initAggregationScheduler } from './core/jobs/aggregation-scheduler';
 import { awaitWorkerLocksReleased, locksHeldInProcess } from './core/jobs/worker-lock';
@@ -101,6 +103,11 @@ export async function startServer(): Promise<Server> {
     // process rather than serve it once. Pure function of code, so it belongs beside the other
     // two and before anything can accept a request.
     assertExposedConfigSafe();
+    // Same posture again, and for a finding that survived on exactly this gap: every upload
+    // path builds its scanner PER REQUEST, so a provider that cannot scan — `cloud`, a typo,
+    // or `mock` in production (which is what a deploy gets by forgetting the variable, since
+    // it is the default) — would boot cleanly and be discovered by a vendor. Refuse here.
+    assertUploadScannerSafe(loadUploadConfig(), (message) => console.log(message));
     // Reports rather than asserts, because the guard's unset behaviour differs by
     // environment: production refuses every bot webhook, development leaves them open.
     // Either way an operator should read it in the boot log rather than discover it —

@@ -432,6 +432,33 @@ export const ERROR_CODES = Object.freeze({
     CONFIG_NOTIFICATION_CATALOG_INCOMPLETE: 'CONFIG_NOTIFICATION_CATALOG_INCOMPLETE',
     CONFIG_INVALID_STORAGE_PROVIDER: 'CONFIG_INVALID_STORAGE_PROVIDER',
     CONFIG_INVALID_GEO_PROVIDER: 'CONFIG_INVALID_GEO_PROVIDER',
+    /**
+     * `UPLOAD_VIRUS_SCAN_PROVIDER` names something that cannot scan — `cloud` (declared,
+     * never implemented), `mock` in production (a test double), or a typo.
+     *
+     * Raised by `core/uploads/scanners/index.ts`, and asserted at BOOT rather than left to a
+     * request: every injection site builds its scanner per upload, so a per-request throw
+     * means the misconfiguration is discovered by a vendor. The failure direction that must
+     * never exist is the one this closes — falling back to something harmless-looking, which
+     * is a platform that believes it is protected. Same posture as
+     * `CONFIG_INVALID_STORAGE_PROVIDER`.
+     */
+    CONFIG_INVALID_UPLOAD_SCANNER: 'CONFIG_INVALID_UPLOAD_SCANNER',
+    /**
+     * The virus scanner could not be asked — unreachable, timed out, or answered something
+     * this client does not understand. **Not** a detection; a detection is a
+     * `VIRUS_DETECTED` violation inside `UPLOAD_POLICY_VIOLATION`.
+     *
+     * 502 rather than 500: the failure is a dependency's, and the category derives to
+     * `external_service`, which is what makes the boundary substitute the registry message and
+     * drop `details`. That matters here specifically — `VirusScanValidator` copies the thrown
+     * `message` into a violation a vendor sees, so the message must carry no host, port or
+     * connection detail. The diagnostics go in `details`, which is journaled and not sent.
+     *
+     * With `blockOnFailure` true (the shipped setting) this refuses the upload. That is the
+     * whole point: "could not scan" must never be spelled "clean".
+     */
+    UPLOAD_VIRUS_SCAN_UNAVAILABLE: 'UPLOAD_VIRUS_SCAN_UNAVAILABLE',
     // Boot assertions for the operations surface (Phase 14). Both are startup-only: a metric
     // label space that outgrew its cap, and a Redis database with no cache-flush policy row.
     CONFIG_METRICS_CARDINALITY_UNBOUNDED: 'CONFIG_METRICS_CARDINALITY_UNBOUNDED',
