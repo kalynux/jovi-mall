@@ -79,6 +79,7 @@
     "seed:cod-shipments:clean": "ts-node scripts/seed/seed-cod-shipments.ts --clean",
     "simulate:notifications": "ts-node scripts/simulate-vendor-notifications.ts",
     "migrate:admin-action-log": "ts-node scripts/migrate-admin-action-log-indexes.ts",
+    "backfill:actor-source": "ts-node scripts/backfill-actor-source.ts",
     "test:admin-audit": "ts-node scripts/test/test-admin-action-log.ts",
     "test:errors": "ts-node scripts/test/test-errors.ts",
     "test:env": "ts-node scripts/test/test-env.ts",

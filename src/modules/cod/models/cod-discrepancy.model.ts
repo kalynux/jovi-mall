@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
+import { ActorSource, actorStampFields } from '../../../core/types/actor-source.types';
 
 /**
  * CodDiscrepancy - a flagged problem in the cash chain.
@@ -51,6 +52,8 @@ export interface ICodDiscrepancy extends Document {
   note: string | null;
   resolution_note: string | null;
   resolved_by_user_id: mongoose.Types.ObjectId | null;
+  resolved_by_source: ActorSource;
+  resolved_by_name: string | null;
   opened_at: Date;
   resolved_at: Date | null;
   created_at: Date;
@@ -75,6 +78,17 @@ const CodDiscrepancySchema = new Schema<ICodDiscrepancy>(
     note: { type: String, default: null, trim: true, maxlength: 500 },
     resolution_note: { type: String, default: null, trim: true, maxlength: 500 },
     resolved_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
+    /**
+     * Resolving a discrepancy is an **admin-only** act — there is no agency or agent path
+     * to it — so this id is a wi-admin one on every write since the split, and it resolves
+     * in neither this database's `users` nor anywhere a reader can reach. It was the last
+     * actor field on the platform still stamped bare (J7, Phase 4 step 22).
+     *
+     * Note `raised_by` above is a different question and needs no companion: it is a
+     * four-value enum naming WHAT KIND of actor opened the flag, and `raised_by_user_id`
+     * beside it is `system`/`agency`/`agent` in practice — all of which resolve here.
+     */
+    ...actorStampFields('resolved_by'),
     opened_at: { type: Date, required: true, default: () => new Date() },
     resolved_at: { type: Date, default: null },
   },

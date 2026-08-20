@@ -1623,8 +1623,8 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
     return true;
 });
 
-assert('all sixteen are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 16);
+assert('all seventeen are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 17);
 
 // Two ordering rules, from the runner's own header. Both are correctness, not taste:
 // the agent domain reads memberships, and a unique index build fails outright against

@@ -1,4 +1,5 @@
 import { createAppError } from '../../../core/errors';
+import { ActorRef, actorStamp } from '../../../core/types/actor-source.types';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
 import { COD_CONFIG } from '../config/cod.config';
@@ -237,12 +238,20 @@ export class CodDiscrepancyService {
     return discrepancy;
   }
 
-  /** Admin resolution: 'resolved' (recovered/explained) or 'written_off'. */
+  /**
+   * Admin resolution: 'resolved' (recovered/explained) or 'written_off'.
+   *
+   * Takes an `ActorRef` rather than a bare id (J7, Phase 4 step 22). The parameter used to
+   * be `adminUserId: string` and the write stamped `resolved_by_user_id` alone — which,
+   * since the admin split, is a wi-admin id sitting in a column declared `ref: MODELS.USER`
+   * with nothing beside it saying so. The one caller is an admin route, so the change is not
+   * additive in the way the other J7 domains were; it is a straight replacement.
+   */
   async resolve(
     discrepancyId: string,
     resolution: Exclude<CodDiscrepancyStatus, 'open'>,
     note: string,
-    adminUserId: string
+    actor: ActorRef
   ) {
     const resolved = await CodDiscrepancyModel.findOneAndUpdate(
       { _id: discrepancyId, status: 'open' },
@@ -250,7 +259,9 @@ export class CodDiscrepancyService {
         $set: {
           status: resolution,
           resolution_note: note,
-          resolved_by_user_id: adminUserId,
+          // All three together, from one call — the guarantee that stops a source drifting
+          // from the id beside it.
+          ...actorStamp('resolved_by', actor),
           resolved_at: new Date(),
         },
       },

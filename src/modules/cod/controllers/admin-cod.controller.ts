@@ -259,7 +259,7 @@ export class AdminCodController {
       req.params.id,
       resolution,
       note,
-      req.auth!.user.id
+      actorFromRequest(req)
     );
 
     res.json({ success: true, data: discrepancy, message: `Discrepancy ${resolution}.` });

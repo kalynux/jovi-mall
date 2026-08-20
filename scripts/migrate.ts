@@ -76,7 +76,7 @@ export interface Migration {
 }
 
 /**
- * The sixteen, in application order. See the ORDER note in the header.
+ * The seventeen, in application order. See the ORDER note in the header.
  *
  * ⚠ One of them DROPS A COLLECTION (`migrate:drop-agent-invites`, added 2026-08-19). Every
  * other row here creates, backfills or re-indexes; that one destroys. It reads and prints
@@ -145,6 +145,12 @@ export const MIGRATIONS: Migration[] = [
         file: 'scripts/backfill-shipment-tracking-numbers.ts',
         dryRun: true,
         note: "legacy shipments carry null tracking numbers — the platform's public handle for them",
+    },
+    {
+        name: 'backfill:actor-source',
+        file: 'scripts/backfill-actor-source.ts',
+        dryRun: true,
+        note: 'eleven actor stamps are present on new rows and absent on old ones, so wi-admin reads undefined where mongoose would show "platform" (J6)',
     },
     // The only DESTRUCTIVE row. Last among the data migrations because it depends on none of
     // them and nothing depends on it — the collection is orphaned, so its position is free and
