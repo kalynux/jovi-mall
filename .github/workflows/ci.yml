@@ -80,8 +80,10 @@ jobs:
       # DISCOVERED from package.json rather than listed here, so a suite added next
       # month runs without its author touching this file — the same argument
       # test:system makes for scanning `*.worker.ts` instead of keeping a list of
-      # workers. `verify:*` is excluded on purpose: those need a real database and
-      # belong to the job Phase 2.B.4 makes possible.
+      # workers. `verify:*` is excluded from THIS loop on purpose: those need a real
+      # database, and they run in the `live-suites` job below (plan step 24.3). Keeping
+      # them out keeps this job fast and keeps a database outage from reading as a
+      # broken type-check.
       #
       # The one baselined suite is excluded here and asserted below by exact count.
       - name: DB-free suites
@@ -129,10 +131,10 @@ jobs:
       # line would have turned the fix itself into a red build: that block fails in
       # EITHER direction, which is exactly what it is for.
       #
-      # ⚠ One LIVE suite is red for the same `isValid` reason and is baselined nowhere:
-      # verify:messaging-login, 36/1 on "…and the OLD password no longer works". It is
-      # not in this workflow yet. Whoever wires the live suites in (plan step 24) has to
-      # baseline it here in the same commit, or the new job is permanently red.
+      # A second suite is red for the same `isValid` reason: verify:messaging-login,
+      # 36/1 on "…and the OLD password no longer works". It is a LIVE suite, so it is
+      # baselined in the `live-suites` job below rather than here — same shape, same
+      # fail-in-either-direction rule. Re-enabling that line moves BOTH baselines.
       - name: Baselined suites (exact counts)
         run: |
           set -uo pipefail
@@ -176,3 +178,162 @@ jobs:
       # Lower this to the default the moment @google-cloud/storage ships a bumped uuid.
       - name: npm audit (production dependencies)
         run: npm audit --omit=dev --audit-level=high
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  The live suites — the job that needs a database (plan step 24.3)
+  # ═══════════════════════════════════════════════════════════════════════════
+  #
+  # Eight of the nine `verify:*` suites, against a real Mongo and a real Redis. These
+  # are the only things that can prove an index actually built, that an aggregation
+  # pipeline executes, that a route table resolves literals before `:id` params, and
+  # that the graceful drain completes a request in flight. No DB-free suite can make
+  # any of those claims, and until this job existed none of them ran anywhere except
+  # on one developer's machine.
+  #
+  # ── A SEPARATE JOB, deliberately ──────────────────────────────────────────
+  # Same reasoning as geo-tracker's integration job. A database-needing job fails for
+  # environmental reasons sometimes — a service container that did not come up, a
+  # replica set that has not elected — and if that turned the whole build red, the fast
+  # checks (typecheck, lint, 40-odd DB-free suites) would look broken along with it and
+  # people would stop reading the result. `needs: check` keeps the ordering without
+  # merging the outcomes.
+  #
+  # ── MONGO MUST BE A REPLICA SET, and it is not optional ───────────────────
+  # jovi-mall's writes run through `runInTransactionWithRetry`, and MongoDB offers no
+  # transactions outside a replica set or a mongos. A standalone `mongod` fails every
+  # transactional write — the COD chain, the earnings splits, every shipment
+  # transition's compare-and-set — with an error that names transactions rather than
+  # topology, which reads as a broken suite to whoever meets it first.
+  #
+  # It is started with `docker run` rather than as a `services:` container because a
+  # service container cannot be given `--replSet` and then initiated: GitHub starts it
+  # before any step runs, and `rs.initiate()` has to happen afterwards. Doing it in a
+  # step also puts the requirement in front of the next reader instead of in a flag.
+  #
+  # ── ONE suite is excluded, and one is baselined ───────────────────────────
+  #   verify:gateways      EXCLUDED. It talks to NotchPay and My-CoolPay with real
+  #                        merchant credentials; there are none in CI, and putting them
+  #                        here would put live payment keys in a workflow. Its two
+  #                        money-moving probes are opt-in even locally.
+  #   verify:messaging-login  BASELINED at 36/1, for the same reason `test:mobile-auth`
+  #                        is baselined at 127/2: the commented `if (!isValid) throw`
+  #                        in `auth.service.ts`, out of scope by owner instruction. Its
+  #                        one failure is "…and the OLD password no longer works". If
+  #                        that line is ever re-enabled, both baselines move together.
+  live-suites:
+    name: live suites · Mongo (replica set) + Redis
+    runs-on: ubuntu-latest
+    needs: check
+
+    services:
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      # A single-node replica set is enough: `rs.initiate()` with one member elects
+      # itself primary in a second or two and supports transactions exactly as a
+      # three-node set does.
+      - name: Start MongoDB as a single-node replica set
+        run: |
+          set -euo pipefail
+          docker run -d --name mongo -p 27017:27017 mongo:7 \
+            --replSet rs0 --bind_ip_all
+          for i in $(seq 1 30); do
+            if docker exec mongo mongosh --quiet --eval 'db.adminCommand({ ping: 1 })' >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          docker exec mongo mongosh --quiet --eval '
+            try { rs.status() } catch (e) { rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "127.0.0.1:27017" }] }) }
+          '
+          # Wait for the election. Without this the first transactional write races the
+          # primary step-up and fails with NotWritablePrimary — intermittently, which is
+          # worse than failing outright.
+          for i in $(seq 1 30); do
+            if docker exec mongo mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true; then
+              echo "replica set is primary"; break
+            fi
+            sleep 2
+          done
+
+      - name: Compose a CI environment from the documented contract
+        run: |
+          cp .env.example .env
+          {
+            echo "WHATSAPP_ACCESS_TOKEN=ci-placeholder-not-a-real-token"
+            echo "WHATSAPP_PHONE_NUMBER_ID=ci-placeholder-phone-number-id"
+            echo "MONGO_URI=mongodb://127.0.0.1:27017/jovi_mall_ci?replicaSet=rs0"
+            echo "REDIS_URL=redis://127.0.0.1:6379"
+            echo "JWT_SECRET=ci-only-secret-not-used-anywhere-else-32b"
+            echo "INTERNAL_ADMIN_SERVICE_TOKEN=ci-internal-admin-token"
+            echo "INTERNAL_SERVICE_TOKEN=ci-internal-service-token"
+            echo "NODE_ENV=development"
+          } >> .env
+
+      # `verify:admin-users` is the one suite that needs the service listening rather
+      # than booting it in-process. Started here, stopped in the always-run step below.
+      - name: Start jovi-mall
+        run: |
+          set -euo pipefail
+          npm run dev > /tmp/jovi-dev.log 2>&1 &
+          echo $! > /tmp/jovi.pid
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8022/api/health >/dev/null; then echo "up"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::jovi-mall did not become healthy"; tail -100 /tmp/jovi-dev.log; exit 1
+
+      - name: Live suites
+        run: |
+          set -uo pipefail
+          EXCLUDED="verify:gateways"
+          BASELINED="verify:messaging-login"
+          SUITES=$(node -p "Object.keys(require('./package.json').scripts).filter(k => k.startsWith('verify:')).join(' ')")
+          failed=""
+          for suite in $SUITES; do
+            case " $EXCLUDED " in *" $suite "*) echo "── $suite — excluded (needs live gateway credentials)"; continue;; esac
+            case " $BASELINED " in *" $suite "*) echo "── $suite — baselined, asserted separately"; continue;; esac
+            echo "── $suite"
+            npm run --silent "$suite" || failed="$failed $suite"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::failing live suites:$failed"
+            exit 1
+          fi
+
+      # Same shape as the DB-free baseline block: exact counts, failing in EITHER
+      # direction, so a fix is noticed rather than silently absorbed.
+      - name: Baselined live suite (exact counts)
+        run: |
+          set -uo pipefail
+          out=$(npm run --silent verify:messaging-login 2>&1 || true)
+          got=$(echo "$out" | grep -oE '[0-9]+ passed, [0-9]+ failed' | tail -1)
+          want="36 passed, 1 failed"
+          if [ "$got" != "$want" ]; then
+            echo "$out"
+            echo "::error::verify:messaging-login — baseline is '$want', got '${got:-no count line}'."
+            echo "::error::If this is a FIX, update the baseline in .github/workflows/ci.yml."
+            exit 1
+          fi
+          echo "✔ verify:messaging-login — $got (baseline held)"
+
+      - name: Stop jovi-mall
+        if: always()
+        run: |
+          if [ -f /tmp/jovi.pid ]; then kill "$(cat /tmp/jovi.pid)" 2>/dev/null || true; fi
+          echo "── last 60 lines of the server log ──"
+          tail -60 /tmp/jovi-dev.log || true
