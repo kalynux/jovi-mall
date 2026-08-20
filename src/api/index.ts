@@ -415,8 +415,50 @@ import { PUBLIC_STORAGE_TREES } from '../core/storage/storage-trees';
  * the classification, and a tree added next year is private until somebody says otherwise —
  * which is the correct default and the opposite of what was here.
  */
+/**
+ * ⚠ **`Cross-Origin-Resource-Policy: cross-origin`, and it is required, not a relaxation
+ * of convenience.**
+ *
+ * `app.use(helmet())` stamps `same-origin` on every response in this service. For an API
+ * that is correct; for these bytes it is fatal, because CORP is enforced on **no-cors**
+ * requests — which is exactly what a plain `<img src>`, `<video>` or `<audio>` issues. Every
+ * dashboard renders this API's media from its own origin (`agency.wi-mall.com`,
+ * `vendor.wi-mall.com`, the Capacitor WebViews on `*.wi-mall.internal`, `localhost:517x` in
+ * development), so under `same-origin` the browser fetches the file, sees the header, and
+ * throws the bytes away. Every avatar, logo and thumbnail on the platform renders blank.
+ *
+ * The failure is unusually hard to read from the client side, which is why this comment is
+ * long. It looks like a CORS problem and is not one: `ALLOWED_ORIGINS` can name the origin,
+ * the response can carry a perfectly good `Access-Control-Allow-Origin`, and the image still
+ * does not paint — because a no-cors request never consults ACAO. A frontend that puts
+ * `crossOrigin` on the tag to "fix CORS" makes the image load again for a reason that has
+ * nothing to do with the attribute's purpose: CORS mode exempts the response from the CORP
+ * check. That workaround then breaks the moment a client appears on an origin
+ * `ALLOWED_ORIGINS` does not list, and it is how this arrived here.
+ *
+ * Scoped to the mount rather than widened globally: `PUBLIC_STORAGE_TREES` is public,
+ * unauthenticated, no-cookie content by classification (`core/storage/storage-trees.ts`) —
+ * anyone holding the URL may already read it, so declaring it embeddable gives away nothing.
+ * Everything else in this service keeps helmet's `same-origin`, including the private trees,
+ * which are not on this mount at all.
+ *
+ * A middleware in front of the mount rather than `express.static`'s `setHeaders` option:
+ * `test:uploads` pins the exact text of the `express.static(path.join(...))` call, which is
+ * what proves the mount list is derived from the classification and not a second hand-kept
+ * list. Passing options through that call would defeat the assertion for a formatting reason,
+ * so the header goes beside it instead of inside it.
+ */
+function allowCrossOriginEmbedding(
+    _req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+): void {
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    next();
+}
+
 for (const tree of PUBLIC_STORAGE_TREES) {
-    router.use(`/files/${tree}`, express.static(path.join(__dirname, '../..', 'storage', tree)));
+    router.use(`/files/${tree}`, allowCrossOriginEmbedding, express.static(path.join(__dirname, '../..', 'storage', tree)));
 }
 router.use('/files', fileRoutes);
 

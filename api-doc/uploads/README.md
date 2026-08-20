@@ -82,6 +82,27 @@ This is a storage-layout detail: always use the returned `id`/`url`, never a han
 Purpose-scoped folders (product media, digital assets, delivery proofs, system files) belong to their
 own dedicated endpoints and carry their own role restrictions.
 
+### Rendering a `url` — do NOT set `crossOrigin`
+
+A public file's `url` points at the API host, so every dashboard renders it cross-origin. Render it
+with a plain tag:
+
+```html
+<img src={file.url} />          <!-- correct -->
+<img src={file.url} crossOrigin="anonymous" />   <!-- do not -->
+```
+
+Public file responses carry `Cross-Origin-Resource-Policy: cross-origin`, which is what lets a
+no-cors subresource load (a plain `<img>`, `<video>`, `<audio>`) paint from any origin — no CORS,
+no `Origin` header, nothing that has to be allowlisted. Every other response in this service keeps
+helmet's `same-origin`.
+
+Adding `crossOrigin` turns the load into a CORS request instead, which then requires the API to name
+your exact origin in `ALLOWED_ORIGINS` — a standing dependency on a backend env var for something as
+ordinary as an avatar, and one that fails on any client whose origin is not in that list (a packaged
+Capacitor build, a new subdomain, a preview deploy). The attribute buys only un-tainted canvas
+readback; if you need that, fetch the bytes through the API.
+
 ### Errors
 
 | Status | `error.code` | When |

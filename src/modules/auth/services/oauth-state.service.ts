@@ -14,6 +14,22 @@ const STATE_EXPIRATION = '5m'; // 5 minutes
 
 interface OAuthStatePayload {
     userId: string;
+    /**
+     * Where the callback should hand control back to, when the caller is not the
+     * web dashboard.
+     *
+     * A packaged app cannot receive `GOOGLE_OAUTH_FRONTEND_REDIRECT_URL` — that
+     * is a web origin, and the app is a WebView serving local files — so it asks
+     * for its own custom-scheme URL (`wivendor://services/calendar`) and the OS
+     * hands the redirect back to it. Riding inside the *signed* state rather
+     * than a query parameter is what stops it being an open redirect: it cannot
+     * be edited between the consent screen and the callback.
+     *
+     * Still validated against an allowlist when it is minted — see
+     * `resolveReturnTo` in the Google routes. Never trust it just because it is
+     * signed; "we signed it" only proves we minted it, not that it was checked.
+     */
+    returnTo?: string;
 }
 
 export class OAuthStateService {
@@ -25,7 +41,8 @@ export class OAuthStateService {
     generateState(payload: OAuthStatePayload): string {
         return jwt.sign(
             {
-                userId: payload.userId
+                userId: payload.userId,
+                ...(payload.returnTo ? { returnTo: payload.returnTo } : {}),
             },
             oauthStateSecret(),
             {
@@ -44,12 +61,20 @@ export class OAuthStateService {
         try {
             const decoded = jwt.verify(state, oauthStateSecret()) as any;
 
-            if (!decoded.userId && !decoded.sessionId) {
+            // `userId`, not `userId || sessionId`. The previous form admitted a
+            // token carrying only `sessionId` and then returned `userId:
+            // undefined` — harmless while the caller cross-checked the value
+            // against its own cookie session, and an authentication hole the
+            // moment it stopped. The Google callback now derives the user from
+            // this payload alone, so an absent `userId` has to be a hard failure
+            // here rather than a falsy value handed downstream.
+            if (typeof decoded.userId !== 'string' || !decoded.userId) {
                 throw createAppError(ERROR_CODES.AUTH_OAUTH_STATE_INVALID, 400, 'Invalid state payload');
             }
 
             return {
-                userId: decoded.userId
+                userId: decoded.userId,
+                ...(typeof decoded.returnTo === 'string' ? { returnTo: decoded.returnTo } : {}),
             };
         } catch (error: any) {
             if (error.name === 'TokenExpiredError') {
