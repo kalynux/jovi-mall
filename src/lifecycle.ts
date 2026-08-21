@@ -37,6 +37,7 @@ import { trackingDispatchWorker } from './modules/tracking-integration/workers/t
 import { initializeAgentDomain } from './modules/agents';
 import { initializeShipmentAssignment } from './modules/shipment-assignment';
 import { agentCapacityReconcileWorker } from './modules/agents/workers/agent-capacity-reconcile.worker';
+import { agentTrustRecomputeWorker } from './modules/agents/workers/agent-trust-recompute.worker';
 import { trackingAllowReconcileWorker } from './modules/agents/workers/tracking-allow-reconcile.worker';
 import { initRateLimiters } from './api/rate-limit/rate-limit.middleware';
 
@@ -381,6 +382,11 @@ function startBackgroundWork(): void {
     // Agent capacity: nightly reconcile of the admission-control counter from
     // live shipment counts, correcting any drift from a missed reserve/release.
     agentCapacityReconcileWorker.start();
+
+    // Agent trust: nightly recompute of the composite score. ⚠ SHADOW — it writes
+    // `trust_signals.composite_score` and never `cod.trust_score`, which
+    // `CodTrustService.applyEvent` still owns. Phase 6 D-2; the flip is Step 11.
+    agentTrustRecomputeWorker.start();
 }
 
 /**

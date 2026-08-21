@@ -355,6 +355,34 @@ export class AgentRepository {
     return await DeliveryAgentModel.findByIdAndUpdate(agentId, { $set: set }, { new: true });
   }
 
+  /**
+   * The SHADOW write — signals plus the composite, and **never `cod.trust_score`**.
+   *
+   * This is what `AgentTrustRecomputeWorker` calls today. `setTrustScore` above is
+   * the same write plus the live score, and is what it will call after the Phase 6
+   * Step 11 flip; both exist so the cutover is a one-line change at the worker
+   * rather than a rewrite, and so the difference between them is legible here
+   * rather than hidden in a boolean.
+   *
+   * While this is the writer, `CodTrustService.applyEvent` remains the only thing
+   * that moves an agent's live score, and therefore their COD cash limit.
+   */
+  async setTrustSignalsShadow(
+    agentId: string,
+    compositeScore: number,
+    signals: Partial<IDeliveryAgent['trust_signals']>
+  ): Promise<IDeliveryAgent | null> {
+    const set: Record<string, unknown> = {
+      'trust_signals.composite_score': compositeScore,
+      'trust_signals.computed_at': new Date(),
+    };
+    for (const [key, value] of Object.entries(signals)) {
+      if (key === 'composite_score' || key === 'computed_at') continue;
+      if (value !== undefined) set[`trust_signals.${key}`] = value;
+    }
+    return await DeliveryAgentModel.findByIdAndUpdate(agentId, { $set: set }, { new: true });
+  }
+
   /** Every agent the nightly trust recompute should visit. */
   async listAllIds(): Promise<string[]> {
     const rows = await DeliveryAgentModel.find({}, { _id: 1 });

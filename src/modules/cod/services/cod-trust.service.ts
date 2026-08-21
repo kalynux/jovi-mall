@@ -3,6 +3,7 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { CodTrustEventModel, CodTrustEventType, ICodTrustEvent } from '../models/cod-trust-event.model';
 import { DeliveryAgentModel, IDeliveryAgent, agentMembershipRepository } from '../../agents';
+import { agentTrustRecomputeWorker } from '../../agents/workers/agent-trust-recompute.worker';
 
 /**
  * CodTrustService - the agent trust score: a 0–100 signal of how safely an
@@ -59,6 +60,25 @@ export class CodTrustService {
       ref_id: refId ? new Types.ObjectId(refId) : null,
       note: note ?? null,
     });
+
+    /**
+     * Refresh the SHADOW composite for this agent immediately (Phase 6 D-2).
+     *
+     * This is the choke point every COD trust movement passes through, which is
+     * why the call is here rather than at the two discrepancy sites — a third
+     * caller added later inherits it.
+     *
+     * It closes the safety regression `AGENT-CONTRACT-REFACTOR.md` flagged to the
+     * product owner and left unresolved: recompute is nightly by decision, so a
+     * cash shortfall would not throttle an agent's limit until 03:00, where the
+     * delta model above throttles it instantly. When the composite becomes the
+     * live score (Step 11) this call is what keeps that property.
+     *
+     * Fire-and-forget on purpose. A trust recompute must never fail the COD write
+     * that triggered it, and the nightly sweep is the backstop; `recomputeOne`
+     * catches its own errors and the `void` is here to say so at the call site.
+     */
+    void agentTrustRecomputeWorker.recomputeOne(agentId);
 
     return { scoreAfter, event };
   }

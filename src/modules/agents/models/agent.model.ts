@@ -354,6 +354,29 @@ export interface IAgentTrustSignals {
   /** Lifetime cash handled and returned cleanly (minor units) — scale matters. */
   cod_volume_returned: number;
 
+  /**
+   * The composite score AgentTrustService computes from the fields above — and
+   * **the score nothing acts on yet.**
+   *
+   * ── Why there are two scores, and which one is live ──────────────────────────
+   * `cod.trust_score` is LIVE: `CodTrustService.applyEvent` writes it on every COD
+   * discrepancy and admin adjustment, and `CodExposureService` reads it to set an
+   * agent's cash limit. This field is the SHADOW: the nightly recompute writes it
+   * and writes nothing else, so the composite can be compared against the live
+   * number before it replaces it.
+   *
+   * The shadow exists because the cutover is not free. Three of the composite's
+   * five factors are ratings (50 of 100 weight) and **nothing rates an agent yet**,
+   * so today they all blend to the seed. Flipping without looking would re-score
+   * every agent from half-invented inputs and move real cash exposure with it —
+   * `TRUST_FULL_THRESHOLD` (80) and `TRUST_REDUCED_THRESHOLD` (50) are the two
+   * numbers that would move. Phase 6 Step 11 is the flip, and it is taken against
+   * a table of who crosses those thresholds, not against an argument.
+   *
+   * `null` until the first recompute visits this agent.
+   */
+  composite_score: number | null;
+
   computed_at: Date | null;
 }
 
@@ -516,6 +539,8 @@ const TrustSignalsSchema = new Schema(
     cod_clean_return_count: { type: Number, default: 0, min: 0 },
     cod_discrepancy_count: { type: Number, default: 0, min: 0 },
     cod_volume_returned: { type: Number, default: 0, min: 0 },
+    /** The SHADOW score — see `IAgentTrustSignals.composite_score`. Nothing acts on it yet. */
+    composite_score: { type: Number, default: null, min: 0, max: 100 },
     computed_at: { type: Date, default: null },
   },
   { _id: false }
@@ -658,6 +683,7 @@ export const agentDefaults = {
     cod_clean_return_count: 0,
     cod_discrepancy_count: 0,
     cod_volume_returned: 0,
+    composite_score: null,
     computed_at: null,
   }),
   /**

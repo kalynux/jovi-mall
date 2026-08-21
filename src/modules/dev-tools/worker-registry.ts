@@ -11,6 +11,7 @@ import { paymentReconciliationWorker } from '../payments/workers/payment-reconci
 import { codDepositDeadlineWorker } from '../cod/workers/cod-deposit-deadline.worker';
 import { trackingDispatchWorker } from '../tracking-integration/workers/tracking-dispatch.worker';
 import { agentCapacityReconcileWorker } from '../agents/workers/agent-capacity-reconcile.worker';
+import { agentTrustRecomputeWorker } from '../agents/workers/agent-trust-recompute.worker';
 import { trackingAllowReconcileWorker } from '../agents/workers/tracking-allow-reconcile.worker';
 import { assignmentSweepWorker } from '../shipment-assignment/workers/offer-expiry.worker';
 import { analyticsAggregationWorker } from '../../core/jobs/aggregation-scheduler';
@@ -205,6 +206,22 @@ export const WORKER_REGISTRY = Object.freeze({
         runOnce: () => runVoidSweep(
             () => agentCapacityReconcileWorker.runSweep(),
             'Active-shipment counters reconciled against reality',
+        ),
+    },
+    /**
+     * Triggerable, and cheaper to reason about than most of these: it is the one
+     * sweep here that **writes nothing an agent can feel**. It recomputes the
+     * SHADOW composite (`trust_signals.composite_score`) and never `cod.trust_score`,
+     * so running it does not move anybody's COD cash limit. That is what makes it
+     * the right button during the Phase 6 Step 11 comparison — an operator can
+     * refresh the shadow and read it beside the live score at will.
+     */
+    'agent-trust-recompute': {
+        label: 'Agent trust recompute (shadow)',
+        worker: agentTrustRecomputeWorker,
+        runOnce: () => runVoidSweep(
+            () => agentTrustRecomputeWorker.runSweep(),
+            'Composite trust scores recomputed into the shadow field',
         ),
     },
     /**
