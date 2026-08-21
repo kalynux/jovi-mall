@@ -14,6 +14,7 @@ import { buildAdminDevToolsRouter } from '../../modules/dev-tools/admin-dev-tool
 import { buildAdminSystemRouter } from '../../modules/system/admin-system.routes';
 import { buildAdminTicketRouter } from '../../modules/tickets';
 import { buildAdminFileRouter } from '../../modules/catalog/routes/admin-file.routes';
+import { buildAdminMessagingRouter } from '../../modules/telegram/admin-messaging.routes';
 
 /**
  * `/api/internal/admin/*` — the service-to-service surface the **wi-admin** backend calls.
@@ -39,8 +40,11 @@ import { buildAdminFileRouter } from '../../modules/catalog/routes/admin-file.ro
  * `/agents` + `/agencies` with the delivery network at Phase 9, and `/orders` +
  * `/shipments` with the commerce phase at Phase 10. Phase 11 added `/billing`,
  * `/earnings` and `/payout-requests`, and the dashboard-request round added `/files`.
- * Still to come, by repeating the same factory pattern per router: tickets, blog,
- * telegram.
+ * Phase 17 added `/tickets`, and Phase 5 finished the list: Part A took the blog — which
+ * MOVED to wi-admin rather than landing here, so there is deliberately no `/articles`
+ * mount — Part B added the two file housekeeping routes to `/files`, and Part C added
+ * `/messaging`. **Nothing is still to come.** With `/messaging` mounted, the legacy
+ * endpoint map is empty and this is the whole administrative surface.
  *
  * The public `/api/admin/*` mounts stay live alongside these until cutover (Phase 8), so
  * the dashboard keeps working while endpoints migrate one at a time. `/users` is the
@@ -192,9 +196,9 @@ router.use('/earnings', buildAdminEarningsRouter([requireAdminCaller]));
 router.use('/payout-requests', buildAdminPayoutRequestsRouter([requireAdminCaller]));
 
 /**
- * Files — one route, and the only reason it exists is that a URL cannot cross the
- * service boundary as an id.
+ * Files — three routes now, and they answer two different questions.
  *
+ * `POST /resolve` exists because a URL cannot cross the service boundary as an id.
  * wi-admin ships `logoFileId` / `avatarFileId` / `bannerFileId` / `deliveryProofFileId`
  * as opaque ids and states that it "resolves no file URLs" (ADR-009 D-6), which is the
  * right call — building one means `storage.getPublicUrl(key)`, and that means a second
@@ -202,10 +206,34 @@ router.use('/payout-requests', buildAdminPayoutRequestsRouter([requireAdminCalle
  * dashboard to resolve them "against jovi-mall", and the dashboard talks to wi-admin
  * and to nothing else. So every avatar and logo on the admin surface rendered as a
  * placeholder. This is the door that was missing, on the side that owns the provider.
- *
  * Batch and bounded at 100, matching wi-admin's page ceiling. It resolves ids the
  * caller already holds; it does not enumerate.
+ *
+ * `GET /orphans` and `DELETE /:id/permanent` are the housekeeping pair, moved here from
+ * the public `/api/files` router at Phase 5 Part B — they were its only two
+ * `requireRole(['admin'])` routes. **The handlers did not move**, and their in-handler
+ * `role !== 'admin'` checks are satisfied by `requireAdminCaller` rather than made wrong
+ * by it, so they stay as a second lock on an unrecoverable delete. wi-admin gates them
+ * on `files.orphans.read` and `files.delete`, both tier-1-only, and adds the
+ * confirmation and the key-withholding projection on its own side.
  */
 router.use('/files', buildAdminFileRouter([requireAdminCaller]));
+
+/**
+ * Messaging (Phase 5 Part C) — one route, and the last legacy admin endpoint anywhere.
+ *
+ * `POST /api/webhooks/telegram/send` was an admin-only capability sitting on a
+ * public-looking webhook prefix, guarded by `requireRole(['admin'])` on a platform `users`
+ * row. It is gone; this is where it lives now, behind the service token and wi-admin's
+ * `messaging.telegram.send`. The family was renamed from `broadcast` there because nothing
+ * about it fans out: one message, one recipient, no delivery record.
+ *
+ * ⚠ Two side effects of the move that are invisible in a diff (Phase 5 C-6), stated at the
+ * factory in full: the send became **unconditionally** maintenance-exempt by landing on
+ * this prefix — losing the per-window `blockWebhooks` off switch it used to have — and
+ * this service's rate limiter stopped applying to it, because `internal_service` is exempt
+ * in both policies. wi-admin's identity-scoped limiter is what bounds an operator now.
+ */
+router.use('/messaging', buildAdminMessagingRouter([requireAdminCaller]));
 
 export default router;

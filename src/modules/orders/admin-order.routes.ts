@@ -1,5 +1,4 @@
 import { RequestHandler, Router } from 'express';
-import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
 import { AdminOrderController } from './admin-order.controller';
 
 /**
@@ -87,5 +86,18 @@ export function buildAdminOrderRouter(guards: RequestHandler[], scope: 'public' 
     return router;
 }
 
-/** The public mount — unchanged URLs, unchanged guards, unchanged surface. */
-export default buildAdminOrderRouter([requireAuth, requireRole(['admin'])], 'public');
+/**
+ * ── There is NO public mount any more (Phase 5 Part E) ──────────────────────
+ *
+ * `export default buildAdminOrderRouter([requireAuth, requireRole(['admin'])], 'public');`
+ * stood here, serving the payment-dispute hold to any platform session whose `users` row
+ * carried `roles: ['admin']` — jovi-mall's second authorization model, which the cutover
+ * retired. The factory is untouched: `internal-admin.routes.ts` instantiates it with
+ * `[requireAdminCaller]` and `'internal'`, and that mount is live.
+ *
+ * ⚠ **The `scope` parameter now has one caller and one value, and it is LEFT THAT WAY on
+ * purpose** (Phase 5 E.2). Collapsing it is a signature change across a router whose internal
+ * mount is live, for no behavioural gain — and the parameter still documents something true:
+ * `attachInternalRoutes` exists because a subset of this surface was never public. If a
+ * second caller never appears, collapse it in a change that is only about that.
+ */

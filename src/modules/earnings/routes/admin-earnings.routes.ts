@@ -1,5 +1,4 @@
 import { RequestHandler, Router } from 'express';
-import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
 import { AdminEarningsController } from '../controllers/admin-earnings.controller';
 
 /**
@@ -9,7 +8,7 @@ import { AdminEarningsController } from '../controllers/admin-earnings.controlle
  * Mounted TWICE, behind two different guard chains (see `modules/cod/admin-cod.routes.ts`
  * for why the guards are a parameter):
  *
- *   /api/admin                     requireAuth + requireRole(['admin'])   the dashboard, today
+ *   (none — the public mount was deleted at the Phase 5 cutover)
  *   /api/internal/admin/earnings   requireAdminCaller                     the wi-admin service
  *
  * ── The paths here are RELATIVE, and that is a trap worth knowing ────────────
@@ -65,7 +64,23 @@ export function buildAdminEarningsRouter(guards: RequestHandler[]): Router {
     return attachRoutes(router);
 }
 
-/** The public mount — unchanged behaviour, same guards and same paths as before. */
-const router = buildAdminEarningsRouter([requireAuth, requireRole(['admin'])]);
-
-export default router;
+/**
+ * ── There is NO public mount any more (Phase 5 Part E) ──────────────────────
+ *
+ * `const router = buildAdminEarningsRouter([requireAuth, requireRole(['admin'])]);`
+ * and its default export stood here, serving the earnings admin surface to any platform
+ * session whose `users` row carried `roles: ['admin']`. That was jovi-mall's second
+ * authorization model, and the cutover retired it: a legacy `admin` holds no tier, no
+ * permission set and no audit identity, so none of wi-admin's tier matrix, escalation rules,
+ * dual-control queue or audit trail applied to a request that arrived this way.
+ *
+ * **The factory above is untouched, and it is the same code that serves the surface today** —
+ * `internal-admin.routes.ts` instantiates it with `[requireAdminCaller]`. Only the guard
+ * array and the mount prefix ever differed between the two, which is why this deletion is
+ * subtractive rather than a migration.
+ *
+ * ⚠ Do not re-add a public instantiation. `requireRole(['admin'])` still exists and still
+ * guards vendor, agency, agent and customer routes, so writing one would compile and work —
+ * and would reopen the model this phase closed. The route it would serve belongs behind
+ * `requireAdminCaller`, beside its siblings.
+ */

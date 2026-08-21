@@ -347,7 +347,16 @@ function census(): Map<string, CensusRow> {
     const KNOWN_STATUS_CONFLICTS: ReadonlySet<string> = new Set([
         'AUTH_USER_NOT_FOUND',
         'AUTH_ACCOUNT_NOT_FOUND',
-        'AUTH_OAUTH_STATE_INVALID',
+        // `AUTH_OAUTH_STATE_INVALID` was here and is REMOVED (2026-08-21). It is now raised at
+        // 400 at all three of its sites (`oauth-state.service.ts` ×2, `google.routes.ts`), so
+        // there is no conflict left to baseline — and the census said so out loud, printing
+        // `fixed — remove from the baseline` on every run until somebody did.
+        //
+        // That is the ratchet working in the direction people forget: the list is allowed to
+        // SHRINK, and a stale entry is not harmless. It keeps a fixed code on a list headed
+        // "known conflicts", which is where the next reader looks to decide whether a code is
+        // trustworthy.
+
         'AUTH_OAUTH_STATE_EXPIRED',
         'INTERNAL_SERVER_ERROR',
         'DELIVERY_AGENCY_NOT_FOUND',

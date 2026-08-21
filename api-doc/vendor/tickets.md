@@ -141,7 +141,7 @@ item assigned to them, agent → orders with a shipment assigned to them).
 
 > This endpoint is mounted under **every** ticket namespace, scoped to the caller's role:
 > `/api/customer/tickets/reference/orders`, `/api/vendor/...`, `/api/agency/...`, `/api/agent/...`,
-> `/api/admin/...` (admin is unscoped).
+> `/api/internal/admin/tickets` (admin is unscoped).
 
 **Query Parameters**:
 - `page` (integer, optional, default 1)

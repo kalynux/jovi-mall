@@ -49,10 +49,17 @@
 > ### Still open
 >
 > - **Tier 3** in full (§4).
-> - **`POST /auth/login` does not check the password** — out of scope by decision, and now
->   documented at the top of [auth/README.md](../auth/README.md).
 > - Registration's 6-character password and its `role` default of `'vendor'` (§3.3) are
 >   unchanged; reset uses the strong rule.
+>
+> ### Closed since this was written
+>
+> - **`POST /auth/login` checks the password.** An earlier revision listed this as open; it is
+>   not, and there is no flag that can disable the check.
+> - **Customer sign-in is the bot flow**, not this form — customers hold a system-generated
+>   password and register on first contact with the WhatsApp / Telegram bot. §3.3's account gaps
+>   are answered by [auth/customer-auth.md](../auth/customer-auth.md), which is the storefront's
+>   contract for registration and sign-in.
 >
 > ### New error codes to mirror in `src/lib/auth/backend-error-codes.ts` (§6.4)
 >

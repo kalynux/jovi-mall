@@ -1,5 +1,24 @@
 # Admin Billing API
 
+> ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
+>
+> **The public mount `/api/admin` is DELETED.** It was served to any platform session
+> whose `users` row carried `roles: ['admin']` — jovi-mall's second authorization model, which
+> carried no tier, no permission set and no audit identity. That model is retired.
+>
+> **The routes themselves are unchanged and still live, at `/api/internal/admin/billing`**, behind
+> `requireAdminCaller` (a service token plus `X-Actor-*` headers, never a user session). One
+> factory always served both mounts, so every path, payload and response below is still exact —
+> only the prefix and the guard changed. **Every path in this document has been rewritten to
+> the internal prefix**, so what you read here is what the service answers.
+>
+> **If you are building a dashboard, this is not your document.** Call wi-admin's `/api/v1/billing` instead — it resolves the
+> administrator's tier and permissions, writes the audit row, and calls this surface on your
+> behalf. See [internal-service-api.md](./internal-service-api.md) for the door itself, and
+> `admin/docs/api/` in the wi-admin repository for the dashboard contract.
+
+---
+
 Admin-facing endpoints to manage the pricing plan catalog and assign plans to
 **vendors, agencies and agents**. The billing engine is one owner-scoped engine
 across all three roles; a plan's `role` decides which limit fields it carries.
@@ -8,7 +27,7 @@ Read [billing-overview.md](./billing-overview.md) and
 
 ## Base Path
 ```
-/api/admin
+/api/internal/admin/billing
 ```
 
 ## Authentication
@@ -23,23 +42,29 @@ Authorization: Bearer <access_token>
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/admin/plans` | List plans (all roles, incl. inactive; filter with `?role=`) |
-| POST | `/api/admin/plans` | Create a pricing plan (any role) |
-| PATCH | `/api/admin/plans/:id` | Update a pricing plan |
-| DELETE | `/api/admin/plans/:id` | Archive (soft-delete) a plan |
-| GET | `/api/admin/entitlements/:ownerType/:ownerId` | The limits this owner's plan grants |
-| POST | `/api/admin/vendors/:vendorId/plan` | Assign / queue a plan for a vendor |
-| POST | `/api/admin/agencies/:agencyId/plan` | Assign / queue a plan for an agency |
-| POST | `/api/admin/agents/:agentId/plan` | Assign / queue a plan for an agent |
+| GET | `/api/internal/admin/billing/plans` | List plans (all roles, incl. inactive; filter with `?role=`) |
+| POST | `/api/internal/admin/billing/plans` | Create a pricing plan (any role) |
+| PATCH | `/api/internal/admin/billing/plans/:id` | Update a pricing plan |
+| DELETE | `/api/internal/admin/billing/plans/:id` | Archive (soft-delete) a plan |
+| GET | `/api/internal/admin/billing/entitlements/:ownerType/:ownerId` | The limits this owner's plan grants |
+| POST | `/api/internal/admin/billing/vendors/:vendorId/plan` | Assign / queue a plan for a vendor |
+| POST | `/api/internal/admin/billing/agencies/:agencyId/plan` | Assign / queue a plan for an agency |
+| POST | `/api/internal/admin/billing/agents/:agentId/plan` | Assign / queue a plan for an agent |
 
-> **The same routes are mounted twice.** wi-admin reaches them over the service token at
-> `/api/internal/admin/billing/*` — so `/plans` becomes `/billing/plans` and
-> `/vendors/:id/plan` becomes `/billing/vendors/:id/plan`. One factory, two guard chains
-> (`src/modules/billing/routes/admin-billing.routes.ts`). The public URLs above are unchanged.
+> **These routes used to be mounted twice, and the public URLs were SHAPED DIFFERENTLY.** The
+> deleted public mount was `router.use('/admin', adminBillingRoutes)` — no `/billing` segment —
+> so `/plans` was served at `/api/admin/plans` and `/vendors/:id/plan` at
+> `/api/admin/vendors/:id/plan`. The surviving internal mount adds the family segment, which is
+> why every path above reads `/api/internal/admin/billing/…`.
+>
+> That difference is worth knowing if you are reading an old dashboard bug report or an
+> `admin_action_log` row: the same operation appears under two different URLs depending on when
+> it was recorded. One factory served both
+> (`src/modules/billing/routes/admin-billing.routes.ts`); only the public instantiation went.
 
 ---
 
-### GET /api/admin/entitlements/:ownerType/:ownerId
+### GET /api/internal/admin/billing/entitlements/:ownerType/:ownerId
 
 **Description**: The limits the owner's **currently active** plan grants. Read-only.
 
@@ -71,7 +96,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-### GET /api/admin/plans
+### GET /api/internal/admin/billing/plans
 
 **Description**: List pricing plans, **including** inactive ones (unlike the role-facing lists). Sorted by `sort_order`, then `price`. Soft-deleted plans are excluded.
 
@@ -115,7 +140,7 @@ Limit fields are **role-specific** and `null` when not applicable: vendor plans 
 
 ---
 
-### POST /api/admin/plans
+### POST /api/internal/admin/billing/plans
 
 **Description**: Create a new pricing plan. The `code` must be unique per role among non-deleted plans.
 
@@ -186,7 +211,7 @@ Field rules:
 
 ---
 
-### PATCH /api/admin/plans/:id
+### PATCH /api/internal/admin/billing/plans/:id
 
 **Description**: Update a pricing plan's mutable fields. **`code` and `role` are immutable** (silently ignored if sent) so existing vendor assignments stay stable. Changing `price`, `credit_allowance`, `max_active_products`, etc. affects **future** activations only — already-active vendor plans keep the terms they were activated with (allowances were already granted; their stored `expires_at` is unchanged).
 
@@ -210,7 +235,7 @@ Field rules:
 
 ---
 
-### DELETE /api/admin/plans/:id
+### DELETE /api/internal/admin/billing/plans/:id
 
 **Description**: Archive (soft-delete) a plan. It disappears from both the vendor and admin lists and can no longer be assigned. Existing vendor assignments referencing it are unaffected.
 
@@ -228,7 +253,7 @@ Field rules:
 
 ---
 
-### POST /api/admin/vendors/:vendorId/plan
+### POST /api/internal/admin/billing/vendors/:vendorId/plan
 
 **Description**: Manually assign a plan to a vendor. This is an **admin override** for comps, support fixes, or migrations — the normal path is the vendor buying a plan themselves (`POST /vendor/plans/:planId/purchase`, see the [vendor billing doc](../vendor/billing.md)), which auto-activates on payment with no admin step. This endpoint applies the **same two-plan rule** without requiring a payment:
 
@@ -285,7 +310,7 @@ The returned record is a **SubscriberPlan** (`owner_type`/`owner_id`, generalize
 
 ---
 
-### POST /api/admin/agencies/:agencyId/plan · POST /api/admin/agents/:agentId/plan
+### POST /api/internal/admin/billing/agencies/:agencyId/plan · POST /api/internal/admin/billing/agents/:agentId/plan
 
 **Description**: Manually assign a plan to an **agency** or an **agent** — the same override, same body, same two-plan rule as the vendor endpoint above. The path param is the target's id, and `planId` must be a plan whose `role` matches (`agency` / `agent`). The response is a SubscriberPlan with the matching `owner_type`.
 
@@ -308,4 +333,4 @@ The returned record is a **SubscriberPlan** (`owner_type`/`owner_id`, generalize
 - **Editing live plans** changes only future activations. To change an active owner's terms now, assign them a plan (which activates immediately when their current plan is free/lapsed, or queues otherwise).
 - **Role limits differ.** Vendor plans gate products/storage/commission; agency & agent plans gate `max_unterminated_shipments` (agency = soft/alert, agent = hard/enforced). `live_tracking_enabled` is universal `true` today (future free-tier gate).
 - **Credit grants are one-time per activation** and guarded server-side (`allowance_granted`); re-assigning the same active plan will not double-grant.
-- **Bulk re-vectorisation** (`POST /api/admin/products/bulk-vectorise`, documented under admin catalogue) is **not** charged to vendor credit wallets.
+- **Bulk re-vectorisation** (`POST /api/internal/admin/dev-tools/catalogue/vectorise`, documented in [dev-tools.md](./dev-tools.md)) is **not** charged to vendor credit wallets.

@@ -1272,7 +1272,7 @@ discriminator in the payload decides whose they are. See
 ## Transfers
 
 Moving an agent between agencies is **admin-only** — an agency must not be able to pull an agent off
-a rival's roster. See [`POST /api/admin/agents/transfer`](../admin/agents.md).
+a rival's roster. See [`POST /api/internal/admin/agents/transfer`](../admin/agents.md).
 
 ---
 

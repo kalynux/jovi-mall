@@ -348,10 +348,10 @@ state, not as controls:
 | Field | Written by | Where |
 |---|---|---|
 | `capacity.maxActiveShipments` | the agent's billing plan | [billing.md](./billing.md) |
-| `tracking.allowed` | admin | `PUT /api/admin/agents/:agentId/tracking-allow` — see [../tracking/agent-tracking-policy.md](../tracking/agent-tracking-policy.md) |
-| `status` / `statusReason` | admin | `PATCH /api/admin/agents/:agentId/status` |
-| `kyc` | admin | `PUT /api/admin/agents/:agentId/kyc`. Not returned on this endpoint, but note that dispatch requires `verified` — an agent whose offers all fail eligibility is usually waiting on this |
-| `cod.max_threshold` | admin | `PUT /api/admin/agents/:agentId/cod-threshold`; the agent's read is `GET /agent/cod/allocation` — see [cod-cash.md](./cod-cash.md) |
+| `tracking.allowed` | admin | `PUT /api/internal/admin/agents/:agentId/tracking-allow` — see [../tracking/agent-tracking-policy.md](../tracking/agent-tracking-policy.md) |
+| `status` / `statusReason` | admin | `PATCH /api/internal/admin/agents/:agentId/status` |
+| `kyc` | admin | `PUT /api/internal/admin/agents/:agentId/kyc`. Not returned on this endpoint, but note that dispatch requires `verified` — an agent whose offers all fail eligibility is usually waiting on this |
+| `cod.max_threshold` | admin | `PUT /api/internal/admin/agents/:agentId/cod-threshold`; the agent's read is `GET /agent/cod/allocation` — see [cod-cash.md](./cod-cash.md) |
 | `workingState` | the system | derived from shipment counts |
 | `lastKnownTrackingState` | geo-tracker | pushed over the internal API |
 

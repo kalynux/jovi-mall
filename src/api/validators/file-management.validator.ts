@@ -66,9 +66,11 @@ export type UpdateFileInput = z.infer<typeof UpdateFileSchema>;
 
 /**
  * List Orphans Query Parameters
- * GET /api/files/orphans
- * 
- * Guardrail: olderThan must be at least 24 hours in the past
+ * GET /api/internal/admin/files/orphans
+ *
+ * Guardrail: olderThan must be at least 24 hours in the past — a file uploaded a minute
+ * ago and attached a minute later is not an orphan, and this is what keeps it out of a
+ * delete candidate list.
  */
 export const OrphansQuerySchema = z.object({
     olderThan: z.coerce.date().optional(), // Default: 7 days ago

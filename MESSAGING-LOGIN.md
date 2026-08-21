@@ -524,6 +524,17 @@ No data migration. Development, no legacy rows — see the note under D-1.
 - disable link previews on these replies
 - send `X-Webhook-Secret` (already required for `/connect`)
 
+> ### 📤 Handed off 2026-08-21 — [`api-doc/auth/N8N-HANDOFF.md`](./api-doc/auth/N8N-HANDOFF.md)
+>
+> The operator-facing version of the list above: seven items, each with why it matters and a link
+> to the canonical contract, plus the three end-to-end checks that prove it took. Phase 6 Step 1
+> ([`PRODUCTION-READINESS/PHASE-6-UNBUILT-SCOPE-PLAN.md`](../PRODUCTION-READINESS/PHASE-6-UNBUILT-SCOPE-PLAN.md)).
+>
+> Platform side re-verified the same day: `test:messaging-login` **158 / 0**.
+> `BOT_WEBHOOK_SECRET` is set (Phase 2, step 2.E.4).
+>
+> **Went live on the n8n side:** _not yet — record the date here when checks 1–3 on that page pass._
+
 ## 9. Verification
 
 **`npm run test:messaging-login`** — DB-free, hand-rolled asserts, following `test:connections`:

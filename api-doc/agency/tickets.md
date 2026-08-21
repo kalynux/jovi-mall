@@ -22,7 +22,7 @@ Authorization: Bearer <access_token>
 > This is the same ticketing engine documented for other roles (see
 > [vendor/tickets.md](../vendor/tickets.md)) — the same controllers/services are mounted under
 > `/api/vendor/tickets`, `/api/agency/tickets`, `/api/agent/tickets`, `/api/customer/tickets` and
-> `/api/admin/tickets`, scoped to the caller's role. Mechanics (follower system, priority locking,
+> `/api/internal/admin/tickets`, scoped to the caller's role. Mechanics (follower system, priority locking,
 > visibility rules) are identical across roles; this document lists the **current, authoritative**
 > enum values from `src/modules/tickets/types/ticket.types.ts`. The full `TicketType` list is also
 > kept as a flat file at [../ticket_types.txt](../ticket_types.txt).
@@ -443,7 +443,7 @@ reflect the new assignment). A system note is appended.
 - `403` – `TICKET_ACCESS_DENIED` – Only ticket creator or admin can close tickets
 
 > There is no `POST /:id/reopen` under this namespace — reopening a closed ticket is admin-only
-> (`/api/admin/tickets/:id/reopen`).
+> (`/api/internal/admin/tickets/:id/reopen`).
 
 ---
 

@@ -252,8 +252,30 @@ assert('readonly allows reads and refuses writes', () =>
 
 assert('down refuses reads too', () => !allowed(state(), 'GET', '/api/products'));
 
-assert('/api/admin/* is NOT exempt — an admin with a users row is still a user', () =>
-    !allowed(state(), 'POST', '/api/admin/cod/settlements'));
+/**
+ * ── Restated at the Phase 5 cutover, because its subject no longer exists ────
+ *
+ * This read `'/api/admin/* is NOT exempt — an admin with a users row is still a user'`, and it
+ * was the right assertion while jovi-mall served a public admin surface: an operator holding a
+ * legacy `admin` role got no maintenance bypass from it. **Part E deleted that prefix**, so the
+ * check would now pass because nothing is routed there — vacuously green, catching nothing.
+ *
+ * The fact that replaces it is the one that actually matters and was asserted NOWHERE:
+ * **`/api/internal/admin` IS exempt, in every mode, unconditionally.** It is the first entry in
+ * `ALWAYS_EXEMPT`, and it has to be, because it is the door an operator uses to turn maintenance
+ * OFF — `/system/*` tells them when it is safe to exit and `/dev-tools/*` is the switch. An
+ * exemption that a maintenance window could remove would lock the operator out of their own
+ * recovery.
+ *
+ * Both modes are asserted, and a WRITE is used deliberately: `readonly` refusing writes is the
+ * rule this exemption has to survive, so testing it with a GET would prove nothing.
+ */
+assert('/api/internal/admin IS exempt in DOWN — it is the door that turns maintenance off', () =>
+    allowed(state(), 'POST', '/api/internal/admin/dev-tools/maintenance')
+    && allowed(state(), 'GET', '/api/internal/admin/system/health'));
+
+assert('…and in READONLY, including writes', () =>
+    allowed(state({ mode: 'readonly' }), 'POST', '/api/internal/admin/cod/settlements'));
 
 section('Maintenance — the webhook trade');
 
@@ -1258,6 +1280,10 @@ assert('the limit is clamped to the ceiling', () => {
 
 section('Worker inventory — the thirteenth worker was invisible to every surface');
 
+// 16 since Phase 6 Step 3 added AgentTrustRecomputeWorker — the nightly composite trust
+// recompute. It is the one worker here that writes nothing an agent can feel: it fills the
+// SHADOW `trust_signals.composite_score` and never `cod.trust_score`, so a pass moves no
+// COD cash limit (Phase 6 D-2; `test:agent-trust` pins that by source scan).
 // 15 since plan step 3.A.3 added TrackingAllowReconcileWorker — the only thing that
 // re-delivers a tracking REVOCATION whose outbox row the dispatcher parked as `failed`,
 // and the one cross-service event with no other recovery path (geo-tracker's
@@ -1268,7 +1294,7 @@ section('Worker inventory — the thirteenth worker was invisible to every surfa
 // The count is hardcoded on purpose: a worker added without an inventory entry is invisible
 // to every operations surface AND is never stopped by the drain, which is the defect this
 // section was written about. Do not weaken it to `>=`.
-assert('the inventory now holds 15 workers', () => WORKER_INVENTORY.length === 15);
+assert('the inventory now holds 16 workers', () => WORKER_INVENTORY.length === 16);
 
 /**
  * The new one, asserted by name and by the two properties that make it a backstop rather
@@ -1324,8 +1350,8 @@ const WORKER_SOURCES = [
         readFileSync(join(SRC, 'core', 'jobs', 'aggregation-scheduler.ts'), 'utf8')) },
 ];
 
-assert('the scan sees every worker file — 14 module workers plus the scheduler', () =>
-    WORKER_SOURCES.length === 15);
+assert('the scan sees every worker file — 15 module workers plus the scheduler', () =>
+    WORKER_SOURCES.length === 16);
 
 assert('EVERY worker routes its pass through withWorkerLock', () => {
     const missing = WORKER_SOURCES.filter(({ code }) => !code.includes('withWorkerLock('));
@@ -1623,8 +1649,12 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
     return true;
 });
 
-assert('all seventeen are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 17);
+// 17 → 18 at Phase 5 Part E: `migrate:retire-admin-role`, which pulls the legacy `admin` role
+// off `users` rows and suspends any row that carried nothing else. The pair with `auth.service`'s
+// new role filter is the point — the guard stops new admin tokens being minted, this removes the
+// rows a future regression would mint them from.
+assert('all eighteen are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 18);
 
 // Two ordering rules, from the runner's own header. Both are correctness, not taste:
 // the agent domain reads memberships, and a unique index build fails outright against

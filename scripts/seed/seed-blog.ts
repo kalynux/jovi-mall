@@ -8,14 +8,20 @@
  * **Only the author.** No articles are seeded, deliberately: the frontend's five fixture
  * articles are structural placeholders, not reviewed editorial, and importing unreviewed
  * prose is how a new domain teaches Google it is a content farm. Articles come in through
- * `POST /api/admin/articles` once a person has read them.
+ * wi-admin's `POST /api/v1/content/articles` once a person has read them.
+ *
+ * ⚠ **This is a seed, and it is now the only thing in this repository that writes
+ * `article_authors` at all.** The editor moved to wi-admin at Phase 5 Part A (ADR-004 D-4)
+ * and jovi-mall's writers were deleted with it; a seed is not a runtime writer, so this one
+ * stayed. Do not grow it into one — two services writing this collection, only one of which
+ * applies the schema's defaults, is the state that port exists to prevent.
  *
  * `type: 'Organization'` and not `Person`, because "The WiMall team" is not a human — and
  * that field becomes the `@type` of the `author` node in the article's `BlogPosting`
  * structured data, where claiming otherwise is the kind of thing that earns a manual action.
  *
- * Idempotent upsert by `key`. Safe to re-run; edits made through the admin API are reset,
- * so prefer the API for ongoing changes.
+ * Idempotent upsert by `key`. Safe to re-run; edits made through wi-admin's editor are
+ * reset, so prefer that API for ongoing changes.
  *
  * Run:
  *   npm run seed:blog
@@ -72,7 +78,7 @@ async function run() {
   const articles = await mongoose.connection.collection('articles').countDocuments({ deletedAt: null });
   console.log(
     `[seed:blog] ${articles} article(s) in the database. ` +
-      'None are seeded here — publish through POST /api/admin/articles.',
+      'None are seeded here — publish through wi-admin, POST /api/v1/content/articles.',
   );
 
   await mongoose.disconnect();

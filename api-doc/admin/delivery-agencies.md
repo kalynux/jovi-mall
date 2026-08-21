@@ -1,5 +1,24 @@
 # Admin Delivery Agencies API
 
+> ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
+>
+> **The public mount `/api/admin/delivery-agencies` is DELETED.** It was served to any platform session
+> whose `users` row carried `roles: ['admin']` — jovi-mall's second authorization model, which
+> carried no tier, no permission set and no audit identity. That model is retired.
+>
+> **The routes themselves are unchanged and still live, at `/api/internal/admin/agencies`**, behind
+> `requireAdminCaller` (a service token plus `X-Actor-*` headers, never a user session). One
+> factory always served both mounts, so every path, payload and response below is still exact —
+> only the prefix and the guard changed. **Every path in this document has been rewritten to
+> the internal prefix**, so what you read here is what the service answers.
+>
+> **If you are building a dashboard, this is not your document.** Call wi-admin's `/api/v1/agencies` instead — it resolves the
+> administrator's tier and permissions, writes the audit row, and calls this surface on your
+> behalf. See [internal-service-api.md](./internal-service-api.md) for the door itself, and
+> `admin/docs/api/` in the wi-admin repository for the dashboard contract.
+
+---
+
 Admin-facing endpoints to manage delivery agency accounts. There is no hard delete —
 "deactivating" an agency flips its `status` to `inactive` (agencies are referenced by
 historical orders/shipments and can't be safely removed).
@@ -21,11 +40,11 @@ Authorization: Bearer <access_token>
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/admin/delivery-agencies` | List all agencies (any status), paginated |
-| GET | `/api/admin/delivery-agencies/:id` | Get one agency by id |
-| POST | `/api/admin/delivery-agencies/:id/verify` | Approve business verification — the exit from `pending_verification` |
-| PATCH | `/api/admin/delivery-agencies/:id/deactivate` | Deactivate an agency |
-| PATCH | `/api/admin/delivery-agencies/:id/reactivate` | Reactivate an agency |
+| GET | `/api/internal/admin/agencies` | List all agencies (any status), paginated |
+| GET | `/api/internal/admin/agencies/:id` | Get one agency by id |
+| POST | `/api/internal/admin/agencies/:id/verify` | Approve business verification — the exit from `pending_verification` |
+| PATCH | `/api/internal/admin/agencies/:id/deactivate` | Deactivate an agency |
+| PATCH | `/api/internal/admin/agencies/:id/reactivate` | Reactivate an agency |
 
 > **The same five routes are also mounted at `/api/internal/admin/agencies/*`** behind the
 > service token, for wi-admin. One factory, two guard chains; the paths after the prefix are
@@ -33,7 +52,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## POST `/api/admin/delivery-agencies/:id/verify`
+## POST `/api/internal/admin/agencies/:id/verify`
 
 The **only** exit from `pending_verification`. Approving moves `status` and both
 `legit_verified` mirrors together in **one compare-and-set**, and stamps the approving actor
@@ -124,7 +143,7 @@ suspension by editing that product's own delivery agency — see
 
 ---
 
-### GET /api/admin/delivery-agencies
+### GET /api/internal/admin/agencies
 
 **Description**: List every delivery agency, including `inactive` and
 `pending_verification` ones (unlike the vendor-facing agency browser).
@@ -158,7 +177,7 @@ suspension by editing that product's own delivery agency — see
 
 ---
 
-### GET /api/admin/delivery-agencies/:id
+### GET /api/internal/admin/agencies/:id
 
 **Success Response** — `200 OK`: same item shape as the list endpoint.
 
@@ -166,7 +185,7 @@ suspension by editing that product's own delivery agency — see
 
 ---
 
-### PATCH /api/admin/delivery-agencies/:id/deactivate
+### PATCH /api/internal/admin/agencies/:id/deactivate
 
 **Description**: Deactivate the agency and cascade-suspend affected vendors' physical
 products (see above). No request body.
@@ -197,7 +216,7 @@ any provenance) that was riding this agency.
 
 ---
 
-### PATCH /api/admin/delivery-agencies/:id/reactivate
+### PATCH /api/internal/admin/agencies/:id/reactivate
 
 **Description**: Reactivate the agency and cascade-restore affected vendors' physical
 products suspended for this reason (see above). No request body.

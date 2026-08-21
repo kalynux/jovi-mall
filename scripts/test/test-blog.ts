@@ -1,15 +1,34 @@
 /**
- * Test: the blog's content rules — the block vocabulary, slug handling and the derivations.
+ * Test: the blog's **public reader** — the block vocabulary, the slug index, the derivations
+ * and the public projection.
  *
  * Follows the scripts/test convention (plain ts-node, hand-rolled asserts, no framework).
- * DB-free: everything under test is either a Zod schema or a pure function, which is why
- * they were kept out of the services.
+ * DB-free: everything under test is either a Zod schema or a pure function.
  *
- * The first section is the point of the file. `ArticleBodySchema` is the **only** thing
+ * ── What left this file at Phase 5 Part A, and why the rest stayed ────────────
+ * The editor moved to wi-admin (ADR-004 D-4), and with it the create/update payload
+ * schemas, `mergeTranslations`, `contentChanged`, `collectPublishBlockers` and
+ * `isReservedSlug`. Those are **write** rules, and wi-admin's `test:content` owns them now.
+ * Asserting them here would be asserting a copy nothing runs.
+ *
+ * What stayed is what jovi-mall still executes on every public request: the block union,
+ * the derivations read off a body, `buildSlugKeys` (the model's, and the index the redirect
+ * depends on) and the public DTO.
+ *
+ * ── The cross-repo fixture assertion (Phase 5 C-15) ───────────────────────────
+ * `ArticleBodySchema` now exists in BOTH repositories — wi-admin validates what it writes,
+ * jovi-mall types what it reads — and there is no shared package to keep them in step. So
+ * the two are pinned the way `test-rich-description.ts` pins the vendor dashboard's
+ * formatters: § 2b below holds a fixture list of block documents with their expected
+ * verdict, wi-admin's `test:content` holds the **identical** list, and neither repo imports
+ * the other. A change to the union on either side turns both red.
+ *
+ * That list is the point of the file now. `ArticleBodySchema` is still the only thing
  * standing between an editor and the published marketing domain — the frontend renders
  * blocks through React components rather than `dangerouslySetInnerHTML`, so a body that
- * gets past this schema is a body that renders. Each rejection below is a page-level bug
- * it prevents, not a style preference.
+ * gets past that schema is a body that renders. jovi-mall no longer writes one, but it
+ * still serves every one wi-admin writes, and a union that has silently diverged is how a
+ * block reaches the reader that this side cannot render.
  *
  * Run: npm run test:blog
  */
@@ -22,16 +41,8 @@ import {
 import {
   ArticleSlugSchema,
   ArticleKeySchema,
-  CreateArticleSchema,
   PublicArticleListQuerySchema,
 } from '../../src/modules/blog/validators/article.validator';
-import {
-  contentChanged,
-  collectPublishBlockers,
-  isReservedSlug,
-  mergeTranslations,
-  TranslationInput,
-} from '../../src/modules/blog/domain/article-content.rules';
 import { buildSlugKeys, IArticle, IArticleTranslation, slugKey } from '../../src/modules/blog/models/article.model';
 import {
   availableLocalesOf,
@@ -81,15 +92,26 @@ const heading = (id: string, text = 'A heading') => ({
   text,
 });
 
-const translation = (over: Partial<TranslationInput> = {}): TranslationInput => ({
-  locale: 'en',
-  slug: 'getting-paid-on-whatsapp-in-cameroon',
-  title: 'Getting paid on WhatsApp',
-  excerpt: 'How the money actually reaches you.',
-  body: [paragraph('Commission is taken at payment, not at payout.')],
-  published: true,
-  ...over,
-});
+/**
+ * A stored translation, as `buildSlugKeys` receives it.
+ *
+ * It used to be built by `mergeTranslations` from an editor payload. That function moved to
+ * wi-admin with the rest of the write path, so the fixture is now the **persisted** shape
+ * directly — which is also the shape jovi-mall actually reads.
+ */
+const translation = (over: Partial<IArticleTranslation> = {}): IArticleTranslation =>
+  ({
+    locale: 'en',
+    slug: 'getting-paid-on-whatsapp-in-cameroon',
+    title: 'Getting paid on WhatsApp',
+    meta_title: null,
+    excerpt: 'How the money actually reaches you.',
+    body: [paragraph('Commission is taken at payment, not at payout.')],
+    word_count: 8,
+    published: true,
+    previous_slugs: [],
+    ...over,
+  }) as IArticleTranslation;
 
 // ─── 1. Links: the locale-prefix rule and the protocol allowlist ─────────────
 
@@ -195,6 +217,85 @@ assert('a list of rich-text items is accepted', () =>
     { type: 'list', ordered: true, items: [[{ type: 'text', text: 'One' }], [{ type: 'text', text: 'Two' }]] },
   ]));
 
+// ─── 2b. The CROSS-REPO fixture list (Phase 5 C-15) ──────────────────────────
+
+/**
+ * The shared block-union contract, copied verbatim into wi-admin's `test:content`.
+ *
+ * ⚠ **This array is duplicated in another repository and the duplication is the point.**
+ * There is no shared package between jovi-mall and wi-admin and there will not be one, so
+ * the house answer — established by `test-rich-description.ts`, which copies the vendor
+ * dashboard's fixture strings byte-for-byte — is that both sides assert the *same inputs*
+ * reach the *same verdict*. Neither repo imports the other; both go red when they disagree.
+ *
+ * Editing a case here without editing wi-admin's copy is the failure this guards, and it is
+ * a silent one in production: wi-admin would accept a block jovi-mall's reader cannot type,
+ * or refuse one the public DTO already serves. Change both, in one commit.
+ *
+ * Keep it small and behavioural. It is a drift alarm, not a second copy of § 2 — the cases
+ * are the ones where the two unions could plausibly diverge, not every rule either enforces.
+ */
+const SHARED_BLOCK_FIXTURES: ReadonlyArray<{ name: string; body: unknown; accepted: boolean }> = [
+  { name: 'a minimal paragraph', body: [paragraph('Hello.')], accepted: true },
+  { name: 'an empty body', body: [], accepted: false },
+  { name: 'a raw-html block', body: [{ type: 'html', html: '<script>x</script>' }], accepted: false },
+  {
+    name: 'an unknown key on a known block',
+    body: [{ type: 'paragraph', text: [{ type: 'text', text: 'Hi.' }], html: '<b>x</b>' }],
+    accepted: false,
+  },
+  { name: 'a heading with no id', body: [{ type: 'heading', level: 2, text: 'No id' }], accepted: false },
+  { name: 'a heading at level 4', body: [{ type: 'heading', level: 4, id: 'x', text: 'Deep' }], accepted: false },
+  { name: 'two headings sharing an id', body: [heading('pricing'), heading('pricing')], accepted: false },
+  { name: 'two headings with distinct ids', body: [heading('pricing'), heading('payouts')], accepted: true },
+  {
+    name: 'an image without dimensions',
+    body: [{ type: 'image', url: 'https://cdn.example/a.jpg', alt: 'A' }],
+    accepted: false,
+  },
+  {
+    name: 'an image with dimensions',
+    body: [{ type: 'image', url: 'https://cdn.example/a.jpg', alt: 'A', width: 1600, height: 900 }],
+    accepted: true,
+  },
+  {
+    name: 'a javascript: href',
+    body: [{ type: 'paragraph', text: [{ type: 'link', text: 'x', href: 'javascript:alert(1)' }] }],
+    accepted: false,
+  },
+  {
+    name: 'a locale-prefixed internal href',
+    body: [{ type: 'paragraph', text: [{ type: 'link', text: 'x', href: '/fr/pricing' }] }],
+    accepted: false,
+  },
+  {
+    name: 'an unprefixed internal href',
+    body: [{ type: 'paragraph', text: [{ type: 'link', text: 'x', href: '/pricing' }] }],
+    accepted: true,
+  },
+  { name: 'a divider alone', body: [{ type: 'divider' }], accepted: true },
+  { name: 'an empty faq', body: [{ type: 'faq', items: [] }], accepted: false },
+  {
+    name: 'a faq with one pair',
+    body: [{ type: 'faq', items: [{ question: 'Q?', answer: 'A.' }] }],
+    accepted: true,
+  },
+  {
+    name: 'a callout with an unknown tone',
+    body: [{ type: 'callout', tone: 'danger', text: [{ type: 'text', text: 'x' }] }],
+    accepted: false,
+  },
+];
+
+console.log('\n── Shared block fixtures (mirrored in wi-admin test:content) ──');
+
+for (const fixture of SHARED_BLOCK_FIXTURES) {
+  assert(`${fixture.name} is ${fixture.accepted ? 'ACCEPTED' : 'REFUSED'}`, () =>
+    ArticleBodySchema.safeParse(fixture.body).success === fixture.accepted);
+}
+
+assert('the shared fixture list has not silently shrunk', () => SHARED_BLOCK_FIXTURES.length === 17);
+
 // ─── 3. Derivations from a body ──────────────────────────────────────────────
 
 console.log('\n── Derivations ──');
@@ -252,199 +353,69 @@ assert('an article id must be ASCII kebab', () => accepts(ArticleKeySchema, 'get
 assert('an article id refuses non-ASCII (it is a log key, not a URL)', () =>
   rejects(ArticleKeySchema, 'كيفية-البيع'));
 
-assert('"category" is reserved (collides with the hub route)', () => isReservedSlug('category'));
-assert('"page" is reserved (collides with /blog/page/2)', () => isReservedSlug('page'));
-assert('"index" is reserved (collides with GET /articles/index)', () => isReservedSlug('index'));
-assert('a normal slug is not reserved', () => !isReservedSlug('getting-paid-on-whatsapp'));
+/**
+ * The reserved list, but NOT the `isReservedSlug` predicate.
+ *
+ * That predicate is a write-time refusal and moved to wi-admin with the editor. The list
+ * itself stays here because it is a fact about **this** service's public route table:
+ * `category` collides with the hub route, `page` with `/blog/page/2`, and `index` with
+ * `GET /api/public/articles/index`, which `public-blog.routes.ts` declares before `/:slug`.
+ *
+ * So this asserts what jovi-mall still owns — the membership — and leaves the enforcement
+ * to the repo that enforces it. If a route is added here that shadows a slug, this list
+ * grows and wi-admin's copy has to grow with it; that is a two-repo change, and the
+ * count below is what makes forgetting it visible on this side.
+ */
+assert('"category" is reserved (collides with the hub route)', () =>
+  RESERVED_ARTICLE_SLUGS.includes('category'));
+assert('"page" is reserved (collides with /blog/page/2)', () => RESERVED_ARTICLE_SLUGS.includes('page'));
+assert('"index" is reserved (collides with GET /articles/index)', () =>
+  RESERVED_ARTICLE_SLUGS.includes('index'));
+assert('a normal slug is not reserved', () =>
+  !RESERVED_ARTICLE_SLUGS.includes('getting-paid-on-whatsapp'));
 assert('the reserved list is exactly those three', () => RESERVED_ARTICLE_SLUGS.length === 3);
 
-// ─── 5. Create payload ───────────────────────────────────────────────────────
+// ─── 5. Slug keys — the retired-slug index the redirect depends on ───────────
 
-console.log('\n── Create payload ──');
+console.log('\n── Slug keys ──');
 
-const validCreate = {
-  id: 'getting-paid-on-whatsapp',
-  categoryKey: 'payments',
-  authorId: 'wimall-editorial',
-  translations: [translation()],
-};
+// `buildSlugKeys` lives on the MODEL, not on the deleted service, so it is still
+// jovi-mall code and still runs on every read that resolves a slug. wi-admin has its own
+// copy (`content/domain/slug-keys.ts`) because it derives the field on write; the two must
+// agree, and the fixtures below are the same ones its `test:content` uses.
+//
+// Retired slugs are in the index deliberately: a renamed article keeps answering its old
+// address with `BLOG_ARTICLE_MOVED`, and no OTHER article may claim it — a reused slug
+// turns a permanent redirect into a wrong answer, which is worse than the 404 it avoided.
 
-assert('a valid create body parses', () => accepts(CreateArticleSchema, validCreate));
-assert('status is not settable on create', () =>
-  rejects(CreateArticleSchema, { ...validCreate, status: 'published' }));
-assert('an unknown category key is refused', () =>
-  rejects(CreateArticleSchema, { ...validCreate, categoryKey: 'money' }));
-assert('two translations in the same locale are refused', () =>
-  rejects(CreateArticleSchema, {
-    ...validCreate,
-    translations: [translation(), translation({ slug: 'other-slug' })],
-  }));
-assert('two translations in different locales are accepted', () =>
-  accepts(CreateArticleSchema, {
-    ...validCreate,
-    translations: [translation(), translation({ locale: 'fr', slug: 'se-faire-payer' })],
-  }));
-assert('no translations is refused', () =>
-  rejects(CreateArticleSchema, { ...validCreate, translations: [] }));
-assert('a cover without dimensions is refused', () =>
-  rejects(CreateArticleSchema, {
-    ...validCreate,
-    cover: { url: 'https://cdn.example/c.jpg', alt: 'Cover' },
-  }));
-assert('translations default to published', () => {
-  const parsed = CreateArticleSchema.parse(validCreate);
-  return parsed.translations[0].published === true;
-});
+assert("a slug key is locale-prefixed", () => slugKey("fr", "vendre") === "fr:vendre");
 
-console.log('\n── Public list query ──');
+assert("the current slug is in the index", () =>
+  buildSlugKeys([translation()]).includes("en:getting-paid-on-whatsapp-in-cameroon"));
 
-assert('locale is required — no silent English default', () =>
-  rejects(PublicArticleListQuerySchema, { category: 'payments' }));
-assert('limit defaults to 24, offset to 0', () => {
-  const parsed = PublicArticleListQuerySchema.parse({ locale: 'fr' });
-  return parsed.limit === 24 && parsed.offset === 0;
-});
-assert('limit and offset coerce from query strings', () => {
-  const parsed = PublicArticleListQuerySchema.parse({ locale: 'fr', limit: '10', offset: '20' });
-  return parsed.limit === 10 && parsed.offset === 20;
-});
-assert('an unknown locale is refused', () => rejects(PublicArticleListQuerySchema, { locale: 'de' }));
-
-// ─── 6. Slug history — the redirect the requirements ask for ─────────────────
-
-console.log('\n── Slug history ──');
-
-const initial = mergeTranslations([], [translation()]);
-
-assert('a first save has no slug history', () => initial[0].previous_slugs.length === 0);
-assert('word_count is derived on save', () => initial[0].word_count > 0);
-
-const renamed = mergeTranslations(initial, [translation({ slug: 'how-to-get-paid-on-whatsapp' })]);
-
-assert('renaming a slug retires the old one', () =>
-  JSON.stringify(renamed[0].previous_slugs) === JSON.stringify(['getting-paid-on-whatsapp-in-cameroon']));
-
-const renamedTwice = mergeTranslations(renamed, [translation({ slug: 'third-slug' })]);
-
-assert('a second rename keeps both retired slugs', () => renamedTwice[0].previous_slugs.length === 2);
-
-const revertedToFirst = mergeTranslations(renamedTwice, [
-  translation({ slug: 'getting-paid-on-whatsapp-in-cameroon' }),
-]);
-
-assert('reverting to an old slug removes it from the history (it is current, not retired)', () =>
-  !revertedToFirst[0].previous_slugs.includes('getting-paid-on-whatsapp-in-cameroon') &&
-  revertedToFirst[0].previous_slugs.length === 2);
-
-assert('an unchanged slug does not accumulate history', () => {
-  const again = mergeTranslations(initial, [translation()]);
-  return again[0].previous_slugs.length === 0;
-});
-
-assert('a new locale starts with a clean history', () => {
-  const withFrench = mergeTranslations(renamed, [
-    translation({ slug: 'how-to-get-paid-on-whatsapp' }),
-    translation({ locale: 'fr', slug: 'se-faire-payer-sur-whatsapp' }),
+assert("a retired slug stays in the index — this IS the redirect", () => {
+  const keys = buildSlugKeys([
+    translation({ slug: "how-to-get-paid", previous_slugs: ["getting-paid-on-whatsapp-in-cameroon"] }),
   ]);
-  return withFrench[1].previous_slugs.length === 0;
+  return keys.includes("en:how-to-get-paid") && keys.includes("en:getting-paid-on-whatsapp-in-cameroon");
 });
 
-console.log('\n── Slug keys (the uniqueness index) ──');
+assert("two renames keep both retired slugs", () =>
+  buildSlugKeys([
+    translation({ slug: "third-slug", previous_slugs: ["getting-paid-on-whatsapp-in-cameroon", "how-to-get-paid"] }),
+  ]).length === 3);
 
-assert('slug keys cover current and retired slugs', () => {
-  const keys = buildSlugKeys(renamed);
-  return (
-    keys.includes(slugKey('en', 'how-to-get-paid-on-whatsapp')) &&
-    keys.includes(slugKey('en', 'getting-paid-on-whatsapp-in-cameroon')) &&
-    keys.length === 2
-  );
-});
+assert("slug keys are per-locale — the same slug in two languages is two keys", () =>
+  buildSlugKeys([
+    translation({ locale: "en", slug: "shared-slug" }),
+    translation({ locale: "fr", slug: "shared-slug" }),
+  ]).length === 2);
 
-assert('slug keys are per-locale — the same slug in two languages is two keys', () => {
-  const both = mergeTranslations([], [
-    translation({ locale: 'en', slug: 'shared-slug' }),
-    translation({ locale: 'fr', slug: 'shared-slug' }),
-  ]);
-  return buildSlugKeys(both).length === 2;
-});
+assert("slug keys de-duplicate within one document", () =>
+  buildSlugKeys([
+    translation({ slug: "getting-paid-on-whatsapp-in-cameroon", previous_slugs: ["getting-paid-on-whatsapp-in-cameroon"] }),
+  ]).length === 1);
 
-assert('slug keys de-duplicate within one document', () => {
-  const withDupHistory: IArticleTranslation[] = [
-    { ...initial[0], previous_slugs: [initial[0].slug] },
-  ];
-  return buildSlugKeys(withDupHistory).length === 1;
-});
-
-// ─── 7. contentChanged — what counts as a revision ───────────────────────────
-
-console.log('\n── Revision detection ──');
-
-const before = { translations: initial, cover: null };
-
-assert('an identical save is not a revision', () =>
-  !contentChanged(before, { translations: mergeTranslations([], [translation()]), cover: null }));
-
-assert('editing the body IS a revision', () =>
-  contentChanged(before, {
-    translations: mergeTranslations(initial, [
-      translation({ body: [paragraph('Rewritten entirely.')] }),
-    ]),
-    cover: null,
-  }));
-
-assert('editing the title IS a revision', () =>
-  contentChanged(before, {
-    translations: mergeTranslations(initial, [translation({ title: 'A new title' })]),
-    cover: null,
-  }));
-
-assert('adding a cover IS a revision', () =>
-  contentChanged(before, {
-    translations: initial,
-    cover: { url: '/c.jpg', alt: 'Cover', width: 1600, height: 900 },
-  }));
-
-assert('adding a language IS a revision (the hreflang set changed)', () =>
-  contentChanged(before, {
-    translations: mergeTranslations(initial, [
-      translation(),
-      translation({ locale: 'fr', slug: 'se-faire-payer' }),
-    ]),
-    cover: null,
-  }));
-
-// The trap this whole mechanism exists to avoid: `featured` and `published` move on the
-// document, so Mongoose's own updatedAt moves too — and a wrong `dateModified` in the
-// structured data is what that would publish.
-assert('flipping `published` on a translation is NOT a revision', () =>
-  !contentChanged(before, {
-    translations: mergeTranslations(initial, [translation({ published: false })]),
-    cover: null,
-  }));
-
-// ─── 8. Publish blockers ─────────────────────────────────────────────────────
-
-console.log('\n── Publish blockers ──');
-
-assert('a complete article has no blockers', () =>
-  collectPublishBlockers({ translations: initial, authorExists: true }).length === 0);
-
-assert('a missing author blocks', () =>
-  collectPublishBlockers({ translations: initial, authorExists: false }).length === 1);
-
-assert('no translations blocks', () =>
-  collectPublishBlockers({ translations: [], authorExists: true }).length === 1);
-
-assert('every-translation-unpublished blocks', () =>
-  collectPublishBlockers({
-    translations: mergeTranslations(initial, [translation({ published: false })]),
-    authorExists: true,
-  }).length === 1);
-
-// A checklist, not a first failure: an editor should not learn about three problems over
-// three round-trips.
-assert('blockers accumulate rather than short-circuit', () =>
-  collectPublishBlockers({ translations: [], authorExists: false }).length === 2);
 
 // ─── 9. The public projection ────────────────────────────────────────────────
 
@@ -476,10 +447,10 @@ const makeArticle = (over: Partial<IArticle> = {}) =>
     archived_at: null,
     createdAt: publishedAt,
     updatedAt: publishedAt,
-    translations: mergeTranslations([], [
+    translations: [
       translation(),
       translation({ locale: 'fr', slug: 'se-faire-payer-sur-whatsapp' }),
-    ]),
+    ],
     ...over,
   } as unknown as IArticle);
 
@@ -495,10 +466,10 @@ assert('availableLocales lists published languages in canonical order', () =>
 
 assert('an unpublished translation is NOT in availableLocales', () => {
   const article = makeArticle({
-    translations: mergeTranslations([], [
+    translations: [
       translation(),
       translation({ locale: 'fr', slug: 'se-faire-payer-sur-whatsapp', published: false }),
-    ]),
+    ],
   });
   return JSON.stringify(availableLocalesOf(article)) === JSON.stringify(['en']);
 });
@@ -522,7 +493,7 @@ assert('updatedAt is present once revised', () => {
 
 assert('metaTitle is present once set', () => {
   const withMeta = makeArticle({
-    translations: mergeTranslations([], [translation({ metaTitle: 'Getting paid — MoMo, OM and cash' })]),
+    translations: [translation({ meta_title: 'Getting paid — MoMo, OM and cash' })],
   });
   const dto = toPublicArticleSummaryDto(withMeta, withMeta.translations[0], author);
   return dto.metaTitle === 'Getting paid — MoMo, OM and cash';

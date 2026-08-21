@@ -516,6 +516,34 @@ function main(): void {
             .test(authService));
 
     /**
+     * ⚠ **The cutover's security half** — Phase 5 Part E, step E.1 — and it is here for the
+     * same reason the `auth_time` scans above are: **no behavioural test can see it.**
+     *
+     * `rotateRefreshToken` copies the role out of the PRESENTED token; nothing in the method
+     * re-reads `user.roles`. So proving the guard works needs a refresh token carrying
+     * `role: 'admin'`, and there is no supported way to obtain one — `login`, `register`,
+     * `authMe` and `addRole` have all refused that role for phases, which is precisely how
+     * this path came to be the only one left open. A test that cannot mint the input cannot
+     * assert the output; a source scan can.
+     *
+     * Two halves, both load-bearing:
+     *   1. The guard is present, inside this method, and reads `payload.role` — the value that
+     *      arrives from the token — rather than something derived from the user row.
+     *   2. It sits BEFORE `issueTokenPair`. A guard after the mint is not a guard.
+     */
+    assert('rotateRefreshToken FILTERS the role — no legacy admin token can refresh itself', () =>
+        /rotateRefreshToken[\s\S]*?if \(!isAuthenticatableRole\(payload\.role\)\)[\s\S]{0,200}?AUTH_ROLE_NOT_FOUND/
+            .test(authService));
+    assert('…and the filter runs BEFORE the pair is issued, not after', () => {
+        const body = authService.slice(authService.indexOf('async rotateRefreshToken('));
+        const guard = body.indexOf('isAuthenticatableRole(payload.role)');
+        const mint = body.indexOf('this.issueTokenPair(user, payload.role, authTime)');
+        return guard !== -1 && mint !== -1 && guard < mint;
+    });
+    assert('…using the same code login and authMe answer for the same condition', () =>
+        (authService.match(/AUTH_ROLE_NOT_FOUND, 403, undefined, \{ role/g) ?? []).length === 3);
+
+    /**
      * ⚠ **The one that makes the feature real.** `authMe` and `addRole` both mint a FULL
      * FRESH PAIR from a valid access token, and every client calls `auth-me` on launch — so
      * if either stamps a new `auth_time`, `nowS − auth_time` never approaches 90 days and the

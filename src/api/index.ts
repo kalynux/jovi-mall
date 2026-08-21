@@ -36,34 +36,29 @@ import { authBucketDispatcher, publicRateLimiter } from './rate-limit/rate-limit
 const router = express.Router();
 
 /**
- * ── Administrative action logging — MUST be registered before every `/admin*` mount ──
+ * ── `adminActionLogMiddleware` was mounted here, and it is GONE (Phase 5 Part E) ─────
  *
- * One `use('/admin', …)` matches all twelve of them by prefix, so this cannot miss an
- * endpoint by omission — including ones added to the legacy surface later. That property is
- * the entire reason it sits here rather than being attached per router, and it depends on
- * registration ORDER: Express runs middleware in the order it was mounted, so moving this
- * below any `router.use('/admin…')` silently stops recording that router.
+ * Three mounts recorded every request to jovi-mall's legacy admin surface: `use('/admin', …)`
+ * covering the whole prefix, plus named mounts on `/files` and `/webhooks/telegram` for the
+ * three admin-only endpoints that lived outside it on public-looking paths. Parts B and C
+ * ported those three and took their two mounts with them; the cutover takes the last one,
+ * because the prefix it matched no longer exists.
  *
- * It deliberately does NOT cover `/internal/admin/*` (mounted further down): those are
- * wi-admin's delegated calls, already audited there against a real administrator identity.
- * Recording them here would double-count every ported operation.
+ * ⚠ **The collection, the model, the recorder and `AuditLogger` all SURVIVE, and deleting
+ * them would break a live path** (Phase 5 D-7). `AuditLogger.log` routes any entry whose
+ * `actor.role === 'admin'` into `admin_action_log`, and `AdminAgencyService.deactivate` /
+ * `reactivate` hardcode `actor: { userId, role: 'admin' }` — reached over
+ * `/api/internal/admin/agencies`, which is the surface that survives. What went is the
+ * COARSE `source: 'request'` row this middleware wrote; the deliberate, named rows stay.
  *
- * Interim, and deleted with the legacy surface at the Phase 8 cutover.
+ * The middleware never covered `/internal/admin/*`, deliberately: those are wi-admin's
+ * delegated calls, already audited there against a real administrator identity, and
+ * recording them here would have double-counted every ported operation. That reasoning is
+ * now the whole story rather than half of it — **after cutover every row still written to
+ * `admin_action_log` duplicates a wi-admin audit row for the same operation.** Whether
+ * `AuditLogger` should stop writing them is a follow-up (Phase 5 O-6), not part of this
+ * change: it is a decision about that class's branching, not about the mounts.
  */
-import { adminActionLogMiddleware } from './middlewares/admin-action-log.middleware';
-router.use('/admin', adminActionLogMiddleware);
-
-/**
- * The three legacy admin endpoints that do NOT live under `/admin`. Named individually
- * because a prefix cannot reach them, and they are exactly the kind of thing a sweep
- * misses — an admin-only capability sitting on a public-looking path.
- *
- * `/files` also serves `express.static` and public reads; the middleware skips safe methods,
- * so nothing there is affected. Both mounts are wider than the endpoints they exist for,
- * which is accepted for a surface being deleted.
- */
-router.use('/files', adminActionLogMiddleware);
-router.use('/webhooks/telegram', adminActionLogMiddleware);
 
 // Shared middleware and routes can be exported from here
 // export * from './middlewares';
@@ -164,11 +159,12 @@ router.use('/agency/stock-requests', agencyStockRequestRoutes);
 import vendorBillingRoutes from '../modules/billing/routes/vendor-billing.routes';
 import agencyBillingRoutes from '../modules/billing/routes/agency-billing.routes';
 import agentBillingRoutes from '../modules/billing/routes/agent-billing.routes';
-import adminBillingRoutes from '../modules/billing/routes/admin-billing.routes';
 router.use('/vendor', vendorBillingRoutes);
 router.use('/agency', agencyBillingRoutes);
 router.use('/agent', agentBillingRoutes);
-router.use('/admin', adminBillingRoutes);
+// `/admin` was the fourth. Deleted at the cutover (Phase 5 Part E) — wi-admin reaches the
+// SAME router through `buildAdminBillingRouter([requireAdminCaller])` on
+// `/api/internal/admin`. The factory stays; only the public instantiation went.
 
 // ─── Public (unauthenticated) ────────────────────────────────────────────────
 // The published price list, for the marketing site — which prints real prices and
@@ -219,18 +215,18 @@ router.use('/public', publicCatalogRoutes);
 import vendorEarningsRoutes from '../modules/earnings/routes/vendor-earnings.routes';
 import agencyEarningsRoutes from '../modules/earnings/routes/agency-earnings.routes';
 import agentEarningsRoutes from '../modules/earnings/routes/agent-earnings.routes';
-import adminEarningsRoutes from '../modules/earnings/routes/admin-earnings.routes';
 router.use('/vendor', vendorEarningsRoutes);
 router.use('/agency', agencyEarningsRoutes);
 router.use('/agent', agentEarningsRoutes);
-router.use('/admin/earnings', adminEarningsRoutes);
+// `/admin/earnings` (the platform commission account) was here. Deleted at the cutover
+// (Phase 5 Part E); wi-admin reaches the same router on `/api/internal/admin`.
 
 // Payout requests: vendor/agency/agent request a withdrawal of their entire
 // available balance, which opens a PAYOUT_REQUEST ticket for admins to process.
-// /vendor/earnings/payout, /agency/earnings/payout, /agent/earnings/payout (all
-// mounted above alongside earnings) + the admin processing queue below.
-import adminPayoutRequestsRoutes from '../modules/earnings/routes/admin-payout-requests.routes';
-router.use('/admin/payout-requests', adminPayoutRequestsRoutes);
+// /vendor/earnings/payout, /agency/earnings/payout, /agent/earnings/payout are mounted
+// above alongside earnings. The admin PROCESSING queue was `/admin/payout-requests` and is
+// deleted at the cutover — it now lives at `/api/v1/money` in wi-admin, which reaches this
+// service's factory over `/api/internal/admin`.
 
 // Unified transactions feed (merges plan purchases, credit top-ups, credit usage
 // and earnings into one history) — same engine for vendor, agency & agent.
@@ -263,9 +259,10 @@ router.use('/digital', createCustomerDigitalRoutes(
   new DownloadExecutionService(getStorageProvider()),
 ));
 
-// Admin order controls (payment-dispute hold: list frozen orders, manual resolve)
-import adminOrderRoutes from '../modules/orders/admin-order.routes';
-router.use('/admin/orders', adminOrderRoutes);
+// `/admin/orders` (the payment-dispute hold: list frozen orders, manual resolve) was mounted
+// here and is deleted at the cutover (Phase 5 Part E). `buildAdminOrderRouter` survives with
+// its `'internal'` instantiation on `/api/internal/admin/orders`, which is what wi-admin's
+// `/api/v1/orders/disputes` reaches.
 
 // Ticketing Module Routes
 //
@@ -337,13 +334,13 @@ router.use('/agent', agentRoutes);
 // re-exporting routes from it closes a require cycle that crashes at boot.
 import agentSelfRoutes from '../modules/agents/routes/agent.routes';
 import agencyRosterRoutes from '../modules/agents/routes/agency-roster.routes';
-import adminAgentRoutes from '../modules/agents/routes/admin-agent.routes';
 import internalAgentRoutes from '../modules/agents/routes/internal-agent.routes';
 import internalShipmentRoutes from '../modules/shipments/internal-shipment.routes';
 import internalAdminRoutes from './routes/internal-admin.routes';
 router.use('/agent', agentSelfRoutes);
 router.use('/agency/agents', agencyRosterRoutes);
-router.use('/admin/agents', adminAgentRoutes);
+// `/admin/agents` was here. Deleted at the cutover (Phase 5 Part E); the same factory is
+// instantiated with `[requireAdminCaller]` on `/api/internal/admin/agents`.
 
 // Service-to-service API consumed by geo-tracker (shared-secret auth, not a
 // user session). jovi-mall answers "may this agent be tracked?"; geo-tracker
@@ -362,31 +359,47 @@ router.use('/internal/shipments', internalShipmentRoutes);
 // the same fail-closed rule. It re-exposes existing admin routers behind a
 // service-token guard so wi-admin executes platform logic here rather than
 // reproducing it against the shared database — see
-// `admin/docs/ADR-004-DOMAIN-OWNERSHIP.md`. The public /admin/* mounts stay live
-// alongside it until cutover.
+// `admin/docs/ADR-004-DOMAIN-OWNERSHIP.md`.
+//
+// ⚠ **Since Phase 5 Part E this is the ONLY administrative door into this service.** The
+// public `/admin/*` mounts that ran beside it are deleted, and with them the second
+// authorization model they carried — `requireRole(['admin'])` on a platform `users` row that
+// holds no tier, no permission set and no audit identity. Every routed factory below is the
+// SAME factory the public mounts used; only the guard array and the prefix differ.
 router.use('/internal/admin', internalAdminRoutes);
 
-// Admin delivery agency management (deactivate/reactivate cascades to vendor products).
-// The prefix carries the `/delivery-agencies` segment that the router used to declare on
-// every route — it became path-relative at Phase 9 so the same factory could also be
-// mounted under `/api/internal/admin/agencies`. Public URLs are unchanged.
-import adminAgencyRoutes from '../modules/delivery/admin-agency.routes';
-router.use('/admin/delivery-agencies', adminAgencyRoutes);
+// `/admin/delivery-agencies` (deactivate/reactivate, which cascades to vendor products) and
+// `/admin/cod` (the cash chain: remittance confirmation, liabilities, discrepancies) were
+// mounted here. Both deleted at the cutover; both factories are alive on
+// `/api/internal/admin/{agencies,cod}`. The `/delivery-agencies` segment lived on the PREFIX
+// rather than on each route precisely so one factory could serve both mounts — which is what
+// made deleting one of them a two-line change rather than a rewrite.
 
-// Admin COD oversight (cash chain: remittance confirmation, liabilities, discrepancies)
-import adminCodRoutes from '../modules/cod/admin-cod.routes';
-router.use('/admin/cod', adminCodRoutes);
+// The blog editor used to mount here, at `/admin/articles` and `/admin/article-authors`.
+// It was deleted at Phase 5 Part A: wi-admin owns article and byline WRITES outright now
+// (ADR-004 D-4), serving them at `/api/v1/content` against this database.
+//
+// What is left in `modules/blog/` is the public reader and the two Mongoose models. The
+// models stay HERE deliberately, and that split is the thing to remember before editing
+// either side: wi-admin writes a collection whose schema and indexes — including the
+// unique multikey index on `slug_keys` — are declared in this repository and created from
+// its migration ledger. Adding a field to `ArticleSchema` without adding it to wi-admin's
+// writer produces documents the public DTO renders wrong, and nothing in either repo's
+// tests would see it.
 
-// Blog editor — the admin half of /api/public/articles. Mounted at its own specific
-// prefixes rather than on the shared `/admin` root, so it cannot be shadowed by (or
-// shadow) the four routers already stacked there.
-import { adminArticleRoutes, adminArticleAuthorRoutes } from '../modules/blog/routes/admin-blog.routes';
-router.use('/admin/articles', adminArticleRoutes);
-router.use('/admin/article-authors', adminArticleAuthorRoutes);
-
-// Admin profile routes
-import adminRoutes from '../modules/admins/routes';
-router.use('/admin', adminRoutes);
+// `/admin` (the administrator's own profile, and the catalogue bulk-vectorise tool) was the
+// LAST public admin mount and is deleted at the cutover (Phase 5 Part E).
+//
+// Nothing replaced it here, because both halves had already moved: `GET`/`PATCH
+// /administrators/me` have existed in wi-admin since Phase 2, and `bulk-vectorise` became
+// `POST /api/v1/dev-tools/catalogue/vectorise` at Phase 12 — which still runs through this
+// service's controller, over `/api/internal/admin`.
+//
+// ⚠ **`AdminModel` and `AdminRepository` SURVIVE, and they are not admin surface.** Two live
+// readers resolve historical rows through them: `ticket-enrichment.service.ts` resolves an
+// `ActorRole.ADMIN` on old ticket actors, and `file-management.controller.ts` resolves owner
+// names for files an admin uploaded. Deleting the model would break a customer's view of an
+// old ticket — see `modules/admins/admin.model.ts`.
 
 // Saved payment methods (shared across all roles, resolved from req.auth)
 import paymentMethodRoutes from '../modules/payment-methods/routes';

@@ -5,6 +5,10 @@ Two commands on the same bots. **`/login`** signs a *customer* in without a pass
 link `POST /auth/forgot-password` sends by email and WhatsApp. See
 [`/reset-password`](#reset-password--a-reset-link-from-a-chat-any-role) below.
 
+> **This page is the endpoint-level contract.** If you are building the storefront and want the
+> customer's flow end to end — where registration happens, what to deep-link, what page you owe,
+> and what not to build — start at **[customer-auth.md](./customer-auth.md)**.
+
 ---
 
 ## Passwordless sign-in — `/login`
@@ -198,6 +202,17 @@ Returned as the reply text, so the user is always told something:
 | Account not active | "This account is not active. Please contact support." |
 | That Telegram chat belongs to another account | "This Telegram account is already connected to another account." |
 
+> **The first row is transitional copy.** Customer accounts are created on the person's first
+> interaction with the bot, so a sender with no account will be registered rather than turned
+> away — that is bot-side work landing with the n8n integration, and `LOGIN_REFUSALS.no_account`
+> changes with it. **Nothing on the frontend depends on it**: the reply is relayed verbatim by
+> the automation layer and no `/auth/magic/*` response shape is involved. See
+> [customer-auth.md](./customer-auth.md#1-registration--send-them-to-the-bot).
+>
+> The other three rows are stable. `not_customer` in particular is a rule, not a gap — **a
+> customer role is never auto-provisioned onto a business account**, whatever registration does
+> for a brand-new number.
+
 > Telling senders their own number is unrecognised leaks nothing — they control it. The platform
 > deliberately does **not** mint a decoy credential to disguise the answer; that would strand a
 > real user with a code that can never work.
@@ -224,9 +239,13 @@ previous link *and* code, so one person never holds more than one live pair.
 Customers are now registered with a **system-generated password that is hashed and never
 disclosed to anybody, including them**. Three consequences:
 
+- **A customer account is created in the bot, on first contact.** The storefront calls no
+  registration endpoint and shows no signup form — it deep-links the person into WhatsApp or
+  Telegram. See [customer-auth.md](./customer-auth.md#1-registration--send-them-to-the-bot).
 - **`POST /auth/register` no longer requires `password` for `role: "customer"`**, and **ignores
   one if sent**. Accepting a caller-supplied password would create accounts whose password
-  somebody else chose and knows. Every other role still requires it, unchanged.
+  somebody else chose and knows. Every other role still requires it, unchanged. The endpoint
+  still works — it is simply not the storefront's path.
 - **`POST /auth/login` will always fail for a customer who has never run a password reset** —
   correctly, since there is no password to present. **The storefront's sign-in form should route
   customers to the messaging flow rather than showing them a password field that cannot work.**
@@ -315,6 +334,39 @@ original command again.
 
 ---
 
+## A third entrance — an operator sends the link
+
+Both credentials above have an administrator-initiated twin on the internal admin surface, for
+support:
+
+| Route | Mints | For |
+|---|---|---|
+| `POST /api/internal/admin/users/:userId/login-link` | the **same** 10-minute, single-use, `customer`-scoped session credential as `/login` | customers only |
+| `POST /api/internal/admin/users/:userId/password-reset-link` | the **same** 30-minute reset token as `/reset-password` | any role |
+
+Body is `{ channel: 'email' | 'whatsapp' | 'telegram' }` and nothing else. **A third entrance,
+never a third mechanism**: both go through the machinery on this page, so the lifetime, the
+single-use rule, the re-checked gates and the redemption endpoints are identical — a magic link
+sent by an operator lands on the same `/login/magic` page and the same `POST /auth/magic/link`.
+
+Three properties are worth knowing because they are what keep it from being a way to *obtain*
+somebody's account rather than return it:
+
+- **The destination is not in the request.** It is read from the party's own record. A caller who
+  could name it could mail themselves a working credential for another person's account.
+- **The response carries a masked destination and no token** (`+2376••••4417`, `j••••@example.com`).
+- **The login link is customers only, and the split is the same one `/login` makes** — a vendor,
+  agency or agent reaches money and other people's data, so they get a reset link instead.
+- Rate-limited on both axes: **3 links per party per hour** (a harassment and SMS-bill bound) and
+  **30 per administrator per hour** (a compromised or careless operator account). Neither
+  substitutes for the other.
+
+Not a storefront surface — it lives on the admin dashboard, and `mintForAdministrator` keys the
+credential on the **target user**, not the operator, so two operators helping one customer leave
+one live credential rather than two.
+
+---
+
 ## Bearer clients are out of scope
 
 Both endpoints set cookies. The magic link opens the system browser and the code is typed on the
@@ -345,6 +397,8 @@ works, but the one-tap path is gone.
 
 ## Related
 
+- **[customer-auth.md](./customer-auth.md)** — the customer's flow end to end: where registration
+  happens, what to deep-link, the page you owe, and what not to build
 - [README.md](./README.md) — the rest of the auth surface
 - [../connections/README.md](../connections/README.md) — `/connect`, the other bot-minted code
 - [../whatsapp/README.md](../whatsapp/README.md), [../telegram/README.md](../telegram/README.md) — the bot bridges

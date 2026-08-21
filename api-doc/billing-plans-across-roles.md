@@ -85,9 +85,9 @@ must be updated.
 
 ## Admin (catalog + assignment)
 
-- `GET /api/admin/plans?role=vendor|agency|agent` — full catalog incl. inactive (omit `role` for all).
-- `POST /api/admin/plans` — create a plan of any role; send only the limit fields that role uses (`max_active_products`/`max_storage_bytes`/`commission_percent` for vendor, `max_unterminated_shipments` for agency/agent, `live_tracking_enabled` for both).
-- `POST /api/admin/{vendors|agencies|agents}/:id/plan` — manually assign/queue a plan (comps/support/migrations), no payment. Assigning an agent plan updates their delivery ceiling immediately.
+- `GET /api/internal/admin/billing/plans?role=vendor|agency|agent` — full catalog incl. inactive (omit `role` for all).
+- `POST /api/internal/admin/billing/plans` — create a plan of any role; send only the limit fields that role uses (`max_active_products`/`max_storage_bytes`/`commission_percent` for vendor, `max_unterminated_shipments` for agency/agent, `live_tracking_enabled` for both).
+- `POST /api/internal/admin/billing/{vendors|agencies|agents}/:id/plan` — manually assign/queue a plan (comps/support/migrations), no payment. Assigning an agent plan updates their delivery ceiling immediately.
 
 See [admin/billing.md](./admin/billing.md).
 

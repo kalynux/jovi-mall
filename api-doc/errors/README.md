@@ -412,8 +412,10 @@ The agency-facing product actions
 
 ## Blog / editorial
 
-The public reader ([public/articles.md](../public/articles.md)) and the editor
-([admin/articles.md](../admin/articles.md)).
+The public reader ([public/articles.md](../public/articles.md)). The editor moved to wi-admin at
+Phase 5 Part A (`admin/docs/api/content.md`), and it raises these **same codes** from its own
+registry — deliberately, so a client sees one vocabulary across the cutover. The three below that
+a logged-out visitor can reach are still raised here, by the public reader.
 
 The first three are reachable by a **logged-out visitor**, so their `message` is written to be shown.
 

@@ -5,13 +5,14 @@ import { ArticleAuthorModel, IArticleAuthor } from '../models/article-author.mod
  *
  * `findByKeys` is the batch path and it is the one that matters: an index page of 24
  * articles resolves its bylines in a single query, not 24.
+ *
+ * ── READ ONLY since Phase 5 Part A ────────────────────────────────────────────
+ * `create`, `updateByKey` and `softDeleteByKey` went with `ArticleAuthorService` when the
+ * editor moved to wi-admin (ADR-004 D-4). Same rule as `article.repository.ts`: do not add
+ * a write back here — wi-admin is the writer, and a second one applying different defaults
+ * to the same collection is the state Phase 5 step 5.0 exists to prevent.
  */
 export class ArticleAuthorRepository {
-  async create(data: Partial<IArticleAuthor>): Promise<IArticleAuthor> {
-    const [doc] = await ArticleAuthorModel.create([data]);
-    return doc;
-  }
-
   async findByKey(key: string): Promise<IArticleAuthor | null> {
     return ArticleAuthorModel.findOne({ key, deletedAt: null }).exec();
   }
@@ -27,14 +28,6 @@ export class ArticleAuthorRepository {
 
   async listAll(): Promise<IArticleAuthor[]> {
     return ArticleAuthorModel.find({ deletedAt: null }).sort({ name: 1 }).exec();
-  }
-
-  async updateByKey(key: string, set: Partial<IArticleAuthor>): Promise<IArticleAuthor | null> {
-    return ArticleAuthorModel.findOneAndUpdate({ key, deletedAt: null }, { $set: set }, { new: true }).exec();
-  }
-
-  async softDeleteByKey(key: string): Promise<void> {
-    await ArticleAuthorModel.updateOne({ key, deletedAt: null }, { $set: { deletedAt: new Date() } }).exec();
   }
 }
 

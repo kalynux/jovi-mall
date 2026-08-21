@@ -1,24 +1,35 @@
 # Order administration
 
-> **Two mounts, and they are not the same surface.**
+> **ONE mount. There were two, and the legacy one was deleted at the Phase 5 cutover.**
 >
-> - `/api/admin/orders` — the LEGACY dashboard mount, `requireAuth` + `requireRole(['admin'])`.
->   Serves the two dispute endpoints only. Alive until cutover.
 > - `/api/internal/admin/orders` — called by the **wi-admin backend**, never by a browser.
->   Serves those two *plus* the four capabilities Phase 10 added.
+>   All six capabilities: the two dispute endpoints plus the four Phase 10 added.
+> - ~~`/api/admin/orders`~~ — the legacy dashboard mount, `requireAuth` +
+>   `requireRole(['admin'])`, which served the two dispute endpoints only. **Deleted.**
 >
 > The dashboard talks to wi-admin's `/api/v1/orders`, which reads `jovi_mall` directly and
-> delegates each write to one of the calls below.
+> delegates each write to one of the calls below. That has been true since Phase 10; what
+> changed at cutover is that it is now the *only* way in.
 >
 > Design record: `../../../admin/docs/ADR-010-ORDERS-AND-SHIPMENTS.md`.
 
-## Why the four new endpoints are internal-only
+## Why the four newer endpoints were internal-only from the start
 
-The public mount's guard is `requireRole(['admin'])` on a platform `users` row — a
-credential that predates wi-admin's permission catalog entirely and knows nothing about
+The deleted public mount's guard was `requireRole(['admin'])` on a platform `users` row — a
+credential that predated wi-admin's permission catalog entirely and knew nothing about
 `orders.refund` being a `financial` permission held by tier 2 alone. A refund moves money
-through a payment gateway; it does not belong behind a role check that cannot express who
+through a payment gateway; it did not belong behind a role check that could not express who
 may issue one.
+
+**That argument is what the whole cutover generalised.** The other two endpoints were on the
+weak guard as well, for no better reason than that they were older, and the reasoning above
+applies to them identically. Phase 5 Part E finished the job: the surface is one mount, one
+guard, and one authorization model — wi-admin's, where a tier and a permission set exist.
+
+⚠ **The route headings below still say "both mounts" on the two dispute endpoints.** That now
+means *the same two routes that used to be on both* — read every path in this document under
+`/api/internal/admin/orders`. Left rather than rewritten because the distinction it draws
+(these two are older than Phase 10, those four are not) is a real one worth keeping.
 
 ## Authentication (internal mount)
 

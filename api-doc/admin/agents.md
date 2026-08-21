@@ -1,5 +1,24 @@
 # Admin — Agent Administration
 
+> ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
+>
+> **The public mount `/api/admin/agents` is DELETED.** It was served to any platform session
+> whose `users` row carried `roles: ['admin']` — jovi-mall's second authorization model, which
+> carried no tier, no permission set and no audit identity. That model is retired.
+>
+> **The routes themselves are unchanged and still live, at `/api/internal/admin/agents`**, behind
+> `requireAdminCaller` (a service token plus `X-Actor-*` headers, never a user session). One
+> factory always served both mounts, so every path, payload and response below is still exact —
+> only the prefix and the guard changed. **Every path in this document has been rewritten to
+> the internal prefix**, so what you read here is what the service answers.
+>
+> **If you are building a dashboard, this is not your document.** Call wi-admin's `/api/v1/agents` instead — it resolves the
+> administrator's tier and permissions, writes the audit row, and calls this surface on your
+> behalf. See [internal-service-api.md](./internal-service-api.md) for the door itself, and
+> `admin/docs/api/` in the wi-admin repository for the dashboard contract.
+
+---
+
 Platform-level administration of delivery agents: view an agent's full record, change account status,
 control the tracking-allow flag, transfer an agent between agencies, and inspect eligibility/history.
 
@@ -19,23 +38,23 @@ control the tracking-allow flag, transfer an agent between agencies, and inspect
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/admin/agents/transfer` | Move an agent from one agency to another |
-| `GET` | `/admin/agents/:agentId` | Agent profile + every membership |
-| `PATCH` | `/admin/agents/:agentId/status` | Set account status (activate/suspend/…) |
-| `PUT` | `/admin/agents/:agentId/tracking-allow` | Enable/disable tracking-allow |
-| `GET` | `/admin/agents/:agentId/tracking-policy` | The tracking policy geo-tracker would see |
-| `PUT` | `/admin/agents/:agentId/kyc` | Set the KYC verdict — **required before the agent can be dispatched** |
-| `PUT` | `/admin/agents/:agentId/ban` | Ban or unban platform-wide |
-| `PUT` | `/admin/agents/:agentId/cod-threshold` | Set the agent's whole COD pool |
-| `GET` | `/admin/agents/:agentId/cod-allocation` | The pool, every contract's slice, and the headroom |
-| `GET` | `/admin/agents/:agentId/history` | Membership/lifecycle history |
-| `GET` | `/admin/agents/:agentId/eligibility?agencyId=` | Assignment-eligibility check for an agency |
+| `POST` | `/internal/admin/agents/transfer` | Move an agent from one agency to another |
+| `GET` | `/internal/admin/agents/:agentId` | Agent profile + every membership |
+| `PATCH` | `/internal/admin/agents/:agentId/status` | Set account status (activate/suspend/…) |
+| `PUT` | `/internal/admin/agents/:agentId/tracking-allow` | Enable/disable tracking-allow |
+| `GET` | `/internal/admin/agents/:agentId/tracking-policy` | The tracking policy geo-tracker would see |
+| `PUT` | `/internal/admin/agents/:agentId/kyc` | Set the KYC verdict — **required before the agent can be dispatched** |
+| `PUT` | `/internal/admin/agents/:agentId/ban` | Ban or unban platform-wide |
+| `PUT` | `/internal/admin/agents/:agentId/cod-threshold` | Set the agent's whole COD pool |
+| `GET` | `/internal/admin/agents/:agentId/cod-allocation` | The pool, every contract's slice, and the headroom |
+| `GET` | `/internal/admin/agents/:agentId/history` | Membership/lifecycle history |
+| `GET` | `/internal/admin/agents/:agentId/eligibility?agencyId=` | Assignment-eligibility check for an agency |
 
 > Route order matters: `/transfer` is declared **before** `/:agentId` so it is not read as an agent id.
 
 ---
 
-## POST `/admin/agents/transfer`
+## POST `/internal/admin/agents/transfer`
 
 **Purpose**: Move an agent from one agency's roster to another. **Admin-only** — an agency must not be
 able to pull an agent off a rival's roster.
@@ -68,7 +87,7 @@ able to pull an agent off a rival's roster.
 
 ---
 
-## GET `/admin/agents/:agentId`
+## GET `/internal/admin/agents/:agentId`
 
 **Purpose**: Return the agent's profile and **every** membership (across all agencies).
 
@@ -134,7 +153,7 @@ endpoints.
 
 ---
 
-## PATCH `/admin/agents/:agentId/status`
+## PATCH `/internal/admin/agents/:agentId/status`
 
 **Purpose**: Set the agent's account status. Memberships are intentionally left intact so reinstatement
 restores them.
@@ -162,7 +181,7 @@ restores them.
 
 ---
 
-## PUT `/admin/agents/:agentId/tracking-allow`
+## PUT `/internal/admin/agents/:agentId/tracking-allow`
 
 **Purpose**: Enable or disable the **tracking-allow** flag. jovi-mall owns this flag; geo-tracker
 enforces it — flipping it here revokes/permits live tracking downstream.
@@ -184,7 +203,7 @@ enforces it — flipping it here revokes/permits live tracking downstream.
 
 ---
 
-## GET `/admin/agents/:agentId/tracking-policy`
+## GET `/internal/admin/agents/:agentId/tracking-policy`
 
 **Purpose**: Return the tracking policy geo-tracker would resolve for this agent (what the tracking
 service sees). Read-only.
@@ -193,7 +212,7 @@ service sees). Read-only.
 
 ---
 
-## PUT `/admin/agents/:agentId/kyc`
+## PUT `/internal/admin/agents/:agentId/kyc`
 
 **Purpose**: Record the KYC verdict for an agent.
 
@@ -241,7 +260,7 @@ Side effects: `verified_at` and `verified_by_user_id` are stamped only on `verif
 
 ---
 
-## PUT `/admin/agents/:agentId/ban`
+## PUT `/internal/admin/agents/:agentId/ban`
 
 **Purpose**: Ban or unban an agent platform-wide.
 
@@ -272,7 +291,7 @@ Side effects: `verified_at` and `verified_by_user_id` are stamped only on `verif
 
 ---
 
-## PUT `/admin/agents/:agentId/cod-threshold`
+## PUT `/internal/admin/agents/:agentId/cod-threshold`
 
 **Purpose**: Set the agent's **whole COD pool** — the most cash they may carry across every agency.
 
@@ -292,7 +311,7 @@ Side effects: `verified_at` and `verified_by_user_id` are stamped only on `verif
 
 ### Example success `200`
 
-Returns the same shape as `GET /admin/agents/:agentId/cod-allocation`.
+Returns the same shape as `GET /internal/admin/agents/:agentId/cod-allocation`.
 
 ### Errors specific to this endpoint
 
@@ -303,7 +322,7 @@ Returns the same shape as `GET /admin/agents/:agentId/cod-allocation`.
 
 ---
 
-## GET `/admin/agents/:agentId/cod-allocation`
+## GET `/internal/admin/agents/:agentId/cod-allocation`
 
 **Purpose**: The agent's pool, each contract's slice of it, and the unallocated headroom. The view
 to consult before changing either level.
@@ -335,7 +354,7 @@ to consult before changing either level.
 
 ---
 
-## GET `/admin/agents/:agentId/history`
+## GET `/internal/admin/agents/:agentId/history`
 
 **Purpose**: Return the agent's append-only membership/lifecycle history.
 
@@ -343,7 +362,7 @@ to consult before changing either level.
 
 ---
 
-## GET `/admin/agents/:agentId/eligibility`
+## GET `/internal/admin/agents/:agentId/eligibility`
 
 **Purpose**: Evaluate whether the agent is eligible for assignment **for a given agency**, reporting
 **every** failed rule at once (not banned · KYC verified · account active · holds an **active
@@ -412,11 +431,11 @@ levers it legitimately owns:
 |---|---|---|
 | whether the agent can work at all | `PATCH /status`, `PUT /ban`, `PUT /kyc` | editing contracts |
 | the agent's total cash risk | `PUT /cod-threshold` (the **pool**) | a contract's slice |
-| which agency an agent belongs to | `POST /admin/agents/transfer` | approving contracts for them |
+| which agency an agent belongs to | `POST /internal/admin/agents/transfer` | approving contracts for them |
 
 ### Transfers carry the terms across
 
-`POST /admin/agents/transfer` is the one admin action that creates a contract, and it lands the
+`POST /internal/admin/agents/transfer` is the one admin action that creates a contract, and it lands the
 destination **`active`** — it does not pass through the handshake, so neither party approves it and
 the terms guard on `approve` never runs.
 

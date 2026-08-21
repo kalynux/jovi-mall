@@ -144,7 +144,11 @@ npm run test:vehicle-profile                   # vehicle colour + photo merge (3
 npm run test:payout-methods                    # the shared payout schema + switch (53, no DB needed)
 npm run test:booking-availability               # booking windows/timezones/seats (54, no DB needed)
 npm run test:customer-notifications             # customer catalog + balance settlement (30, no DB needed)
-npm run test:blog                              # article blocks, slugs, DTO projection (100, no DB needed)
+npm run test:blog                              # article blocks, slug keys, DTO projection (91, no DB
+                                               # needed). Includes the CROSS-REPO fixture list that
+                                               # wi-admin's test:content mirrors byte-for-byte — the
+                                               # block union lives in both repos with no shared
+                                               # package, and that list is what keeps them in step
 npm run test:rich-description                  # structured descriptions (149, no DB) — the WhatsApp and
                                                # Telegram formatters asserted against the vendor
                                                # dashboard's OWN fixtures byte-for-byte (two repos, no
@@ -293,7 +297,7 @@ npm run verify:connections                     # messaging connections against r
                                                # unavailable on Redis 3.0. Writes then deletes its own
                                                # `verify-conn-*` fixtures, pass or fail
 npm run verify:live-parity                     # agent↔agency smoke test — NEEDS Mongo
-npm run verify:blog                            # blog lifecycle + index builds + route order — NEEDS Mongo
+npm run verify:blog                            # public reader + index builds + route order — NEEDS Mongo
 npm run verify:storefront                      # the storefront against real Mongo (28) — proves the
                                                # indexes actually BUILD (incl. the $text one, and that
                                                # there is exactly one), that every public aggregation
@@ -314,6 +318,12 @@ the only place the unique multikey index on `slug_keys` is proven to build, the 
 translation queries are proven to run, and `/articles/index` is proven to be declared before
 `/articles/:slug`. Unlike `verify:live-parity` it **writes**, then deletes its own `verify-blog-*`
 documents, pass or fail.
+
+Since Phase 5 Part A it also proves the index **binds** — that a duplicate `slug_keys` entry is
+actually rejected, not merely indexed. That stopped being a formality when wi-admin became the
+writer: the index is declared in this repository and enforced against writes from another, so "no
+two articles answer one URL" is now a claim spanning two services, and an index that builds but
+does not bind is indistinguishable from one that works until it matters.
 
 `verify:live-parity` is the other script here that requires a database, and it exists because the
 DB-free suites structurally cannot cover four things: that the schema **indexes actually build**
@@ -399,13 +409,15 @@ The consequence is deliberate and worth knowing before you touch an actor field:
 
 `INTERNAL_ADMIN_SERVICE_TOKEN` authenticates that caller and is deliberately **not** `INTERNAL_SERVICE_TOKEN` (geo-tracker's) — different blast radii, so one secret would make either compromise the other's. Both fail closed when unset. Note the token is a *full-privilege* credential: authorization is resolved in wi-admin before the call and this service re-checks nothing, exactly as it trusts geo-tracker.
 
-**Admin routers are dual-mounted, via a factory.** `buildAdminCodRouter(guards)` is instantiated twice — once with `[requireAuth, requireRole(['admin'])]` at `/api/admin/cod` for the dashboard, once with `[requireAdminCaller]` at `/api/internal/admin/cod`. A single Router instance cannot be mounted twice because its `router.use` guards would re-run, which is why the guards are a parameter. The remaining admin routers follow the same shape as they migrate; both surfaces run until cutover. Ownership per domain is recorded in `../admin/docs/ADR-004-DOMAIN-OWNERSHIP.md`.
+**⛔ THE CUTOVER HAPPENED. Admin routers are mounted ONCE, internal only** (Phase 5 Part E, 2026-08-20). Every public `/api/admin/*` mount is deleted — eleven of them — and with them jovi-mall's **second authorization model**: `requireRole(['admin'])` on a platform `users` row that holds no tier, no permission set and no audit identity, and so bypassed wi-admin's tier matrix, escalation rules, dual-control queue and audit trail entirely. **`/api/internal/admin/*` is now the only administrative door into this service**: 111 routes in fifteen groups, behind `requireAdminCaller`. Ownership per domain is recorded in `../admin/docs/ADR-004-DOMAIN-OWNERSHIP.md`; the cutover itself is `../admin/docs/ADR-017-PHASE-17-CLOSEOUT.md` D-2.
 
-**`buildAdminAgentRouter` and `buildAdminAgencyRouter` followed at Phase 9**, mounted at `/api/admin/agents` + `/api/internal/admin/agents` and `/api/admin/delivery-agencies` + `/api/internal/admin/agencies`. The agency one carries a trap worth knowing: its routes used to declare `/delivery-agencies/...` because it was mounted at the bare `/admin` prefix, so they were made **path-relative** and `api/index.ts` absorbed the segment. Public URLs are byte-identical; if you change one of those paths, check that mount. wi-admin reads both collections directly and calls only the writes plus the three *verdict* reads (`tracking-policy`, `cod-allocation`, `eligibility`) — see `../admin/docs/ADR-009-DELIVERY-NETWORK.md` D-1.
+**The factory shape survives, and is still the shape to follow.** `buildAdminCodRouter(guards)` takes its guard chain as a parameter because a single Router instance cannot be mounted twice — its `router.use` guards would re-run. That is why the deletion was *subtractive*: the same factories that served both mounts now serve one, and only the `'public'` instantiation and its default export went. Each of the seven carries a header saying so, and saying **not to re-add one** — `requireRole(['admin'])` still exists (it guards vendor, agency, agent and customer routes), so writing a public admin mount would compile, work, and silently reopen the model this phase closed.
 
-**`buildAdminUserRouter` is the exception: mounted ONCE, internal only.** The user domain never had a public admin surface, so there is no dashboard calling `/api/admin/users` to keep alive — a public mount would create surface whose only future is the cutover deletion list. It carries writes only (`PATCH /:userId` for the login identifiers, `POST /:userId/{suspend,restore}`); wi-admin reads the `users` collection directly.
+**Two traps that outlived the public mounts.** The agency router's routes are **path-relative** (`/:id/deactivate`, not `/delivery-agencies/:id/deactivate`) because the prefix used to absorb that segment — that is what let one factory serve `/api/admin/delivery-agencies` and `/api/internal/admin/agencies`, and it is still how the surviving mount is shaped. The billing router is the same story with a bigger gap: its public URLs had **no `/billing` segment at all** (`/api/admin/plans`), so the same operation appears under two different URLs depending on when an `admin_action_log` row was written. wi-admin reads `delivery_agents` and `agent_agency_contracts` directly and calls only the writes plus the three *verdict* reads (`tracking-policy`, `cod-allocation`, `eligibility`) — `../admin/docs/ADR-009-DELIVERY-NETWORK.md` D-1.
 
-**`buildAdminVendorRouter` follows it** — mounted once at `/api/internal/admin/vendors`, writes only, no public twin. Seven operations: suspend/restore, KYC approve/reject, per-product suspend/restore, and a narrow settings PATCH. Contract in `api-doc/admin/vendors.md`; design record `../admin/docs/ADR-008-VENDOR-MANAGEMENT.md`. Note this domain *does* already have one public admin endpoint — `POST /api/admin/vendors/:vendorId/plan` in the billing module, which sets commission by assigning a plan. Nothing on the internal router duplicates it.
+**`buildAdminUserRouter` and `buildAdminVendorRouter` were internal-only from the start, and that is now the ordinary case rather than the exception.** Neither domain ever had a public admin surface — the argument at the time was that a public mount would create surface whose only future is the cutover deletion list, which is exactly what happened to the eleven that had one. Users carries writes only (`PATCH /:userId` for the login identifiers, `POST /:userId/{suspend,restore}`); vendors carries seven (suspend/restore, KYC approve/reject, per-product suspend/restore, a narrow settings PATCH). Contract in `api-doc/admin/vendors.md`; design record `../admin/docs/ADR-008-VENDOR-MANAGEMENT.md`. The one public vendor-admin endpoint that did exist — `POST /api/admin/vendors/:vendorId/plan`, in the billing module — went with the rest and is now `POST /api/internal/admin/billing/vendors/:vendorId/plan`.
+
+**The `admin` role VALUE survives here, and deleting it would break about twenty sites.** `requireAdminCaller` *synthesises* `req.auth.role = 'admin'` for every wi-admin call, and the upload policy, file ownership stamping, `FileAttachService`, `FileReferenceService`, `actorSourceOf`, the rate-limit caller class and `AuditLogger.log` all branch on it. `'admin'` also stays in `UserRole` on the Mongoose user model, because that enum describes what a legacy row *may hold*; `AUTHENTICATABLE_ROLES` is what may be signed in *as*, and the two are deliberately different. What was retired is a **platform user session's** ability to carry the role and reach a route with it — see the auth note below.
 
 **`Vendor.status` is now enforced, and this is the second time that sentence has been written here.** It used to be read by exactly one query (`findAvailableForAgencies`, hiding `inactive` vendors from the agency directory) and written by nothing — `updateStatus` had zero callers, and the three guards in `auth/guards/index.ts` that would have read it (`requireActiveUser`, `requireRoleEntityActive`, `requireLegitBusiness`) **had zero call sites and were deleted with that file** (2026-08-19, plan step 4.A.3 — a guard nobody calls protects nothing, and one of the three would have denied every vendor if anyone had attached it). `requireAuth` and `login` now refuse a vendor whose role entity is `inactive` with `403 AUTH_VENDOR_SUSPENDED`.
 
@@ -436,6 +448,8 @@ Vendor-scoped queries extract `req.auth!.role_entity._id.toString()` as `vendorI
 ⚠ **Passing `issueTokenPair(user, role)` at a copy site is the bug this whole design exists to prevent, and it would look exactly like working code.** No behavioural test can catch a re-stamp in under 90 days, so `test:mobile-auth` asserts all seven sites by **source scan**. Client contract — including "route to login, **never retry**" — is `api-doc/auth/README.md`.
 
 Cookie `maxAge` and JWT `expiresIn` now come from **one** pair of constants (`ACCESS_TOKEN_TTL_S` / `REFRESH_TOKEN_TTL_S` in `core/auth/token.issuer.ts`, which `cookie.config.ts` imports). They used to be two independent `parseInt`s of the same variables, agreeing only because the defaults matched — harmless while nothing published a lifetime, and a client refreshing at the wrong moment once `tokenEnvelope` started to.
+
+**`AUTHENTICATABLE_ROLES` is now enforced on ALL FIVE token-minting paths, and the fifth is the cutover's security half.** `['customer','vendor','agency','agent']` (`auth/auth.schemas.ts`) is one list behind four Zod schemas plus a runtime guard, `isAuthenticatableRole`, for the paths where a role arrives from a stored `users.roles` array rather than a parsed body. `register` and `addRole` refuse `'admin'` at parse; `login` and `authMe` refuse it at parse *and* through `roles.filter(isAuthenticatableRole)`. **`rotateRefreshToken` was the fifth and it was open**: it copies the role straight out of the presented token and never re-reads `user.roles`, so a refresh token minted before the cutover kept producing `role: 'admin'` access tokens for the remainder of its 30-day life — and such a token satisfied every `requireRole(['admin'])` site this service used to serve. It now throws `AUTH_ROLE_NOT_FOUND` (403, the same code `login` and `authMe` answer for the same condition — deliberately *not* `AUTH_SESSION_EXPIRED`, which a client would retry forever). **No behavioural test can see this**, because there is no supported way to mint an `admin` refresh token any more, so `test:mobile-auth` pins it by SOURCE SCAN — three assertions: the guard exists, it reads `payload.role`, and it runs *before* `issueTokenPair`. The rows it protects against were removed in the same change by `migrate:retire-admin-role`, which pulls `'admin'` off every `users` row and suspends any row that carried nothing else: the guard stops new admin tokens being minted, the migration removes what a future regression would mint them from.
 
 **`User.status` is now enforced, and on three paths rather than one.** It used to be written by nothing and read by nothing — `requireActiveUser` had zero call sites, `login` never looked at it, `rotateRefreshToken` never looked at it, and `UserRepository.updateStatus` had no callers. A suspended account was a label. `login`, `rotateRefreshToken` **and `requireAuth`** now refuse a non-`active` account with `403 AUTH_ACCOUNT_SUSPENDED`. The third is the load-bearing one: access tokens are stateless and 15 minutes long while the refresh cookie is 30 days, so a check at login alone would let a suspended person keep working and then silently refresh back in. `requireAuth` already loads the user row, so it costs a comparison and no query. **Consequence:** any `users` row already sitting at `suspended` loses access the moment this deploys, and there is no way for the person to get back in without an administrator — which is the correct meaning of the column, but check the count before rolling out.
 
@@ -909,7 +923,7 @@ Four state axes are kept deliberately separate — collapsing any two makes "is 
 | `status` | may this account work at all? | admin |
 | `availability` | does the agent *want* work now? | the agent |
 | `working_state` | how loaded is he? (derived from shipment counts) | system |
-| `tracking.allowed` | may he be tracked? | admin (`PUT /api/admin/agents/:agentId/tracking-allow`) — there is no agency or agent write path |
+| `tracking.allowed` | may he be tracked? | admin (`PUT /api/internal/admin/agents/:agentId/tracking-allow`) — there is no agency or agent write path |
 
 Two more are worth knowing because nothing agent-facing writes them either: `kyc.status` (admin;
 **eligibility passes only on `verified`**, so an unverified agent is undispatchable) and
@@ -1233,11 +1247,24 @@ exists yet** — the formatters are ready and nothing calls them.
 
 ### Blog / editorial (`src/modules/blog/`)
 
-The marketing site's article pages, in two halves that never touch: a **public reader**
-(`/api/public/articles`, no auth, `Cache-Control: public, max-age=300`) and an **editor**
-(`/api/admin/articles` + `/api/admin/article-authors`, `requireRole(['admin'])`). Built to
-`api-doc/BACKEND-BLOG-REQUIREMENTS.md`; contracts in `api-doc/public/articles.md` and
-`api-doc/admin/articles.md`.
+The marketing site's article pages. **This service now holds the public reader and the data
+model only** (`/api/public/articles`, no auth, `Cache-Control: public, max-age=300`); the editor
+moved to wi-admin at Phase 5 Part A and serves `/api/v1/content` there (ADR-004 D-4).
+`/api/admin/articles` and `/api/admin/article-authors` no longer exist. Built to
+`api-doc/BACKEND-BLOG-REQUIREMENTS.md`; contract in `api-doc/public/articles.md`, the editor's in
+`../admin/docs/api/content.md`.
+
+⚠ **wi-admin WRITES a collection whose schema and indexes are declared here**, on the raw driver,
+which applies none of this schema's defaults or validators. That split is the thing to check before
+editing either side: a field added to `ArticleSchema` without being added to wi-admin's writer
+produces documents the public DTO renders wrong, and no test in either repository would see it.
+The index definitions stay here because the public reader needs the schema and `autoIndex` is off
+in production, so they come from this service's migration ledger.
+
+**Both repositories now carry a copy of `ArticleBodySchema`**, and there is no shared package. They
+are pinned to each other the way `test-rich-description.ts` pins the vendor dashboard's formatters:
+`test:blog` § 2b holds a fixture list of block documents with their expected verdict and wi-admin's
+`test:content` holds the identical list. Changing the union is a two-repo change, in one commit.
 
 **Bodies are typed blocks, never an HTML string, and `article-body.validator.ts` is the security
 boundary.** The frontend renders blocks through React components rather than
@@ -1269,22 +1296,32 @@ frontend can emit. Same reasoning behind `410 BLOG_ARTICLE_GONE` carrying `categ
 
 **`draft` and `archived` are both invisible publicly and are not interchangeable** — a draft 404s
 (never live), an archived article 410s with its hub (was live, has inbound links). That is why
-`DELETE` is refused once `published_at` is set, and why a preview is
-`GET /api/admin/articles/:id/preview` returning the *public* DTO behind the admin guard rather than a
-flag that returns drafts from the public route.
+`DELETE` is refused once `published_at` is set (in wi-admin, which owns the delete), and why a
+preview is `GET /api/v1/content/articles/:articleKey/preview` **there**, returning the *public* DTO
+behind the admin guard rather than a flag that returns drafts from the public route. **Do not add
+such a flag here** — that preview endpoint exists precisely so previewing never becomes a reason to
+relax the public endpoints.
 
 **`content_updated_at` is stamped from a content comparison, not from Mongoose's `updatedAt`.**
 `featured`, `categoryKey` and a translation's `published` all move the document; stamping off the row
 would put a `dateModified` in the structured data for a revision that never happened. `contentChanged`
-fingerprints only what a reader sees. Likewise `wordCount` is derived on write and `readingMinutes`
-is deliberately **not sent** — the frontend computes it from the body it is about to render.
+fingerprints only what a reader sees. Both that comparison and the `wordCount` derivation are
+wi-admin's now (they run on write); this service serves the stored values. `readingMinutes` is
+deliberately **not sent** — the frontend computes it from the body it is about to render.
 
 Two rules the requirements ask for that are **not** enforced in code, by agreement: no prices in
 article bodies (they go stale silently — link `/pricing`), and no invented metrics.
 
-Covered by `npm run test:blog` (100 assertions, DB-free) and `npm run verify:blog` (47, needs Mongo —
-index builds, the whole lifecycle against real persistence, and that `/articles/index` is declared
-before `/articles/:slug`). `npm run seed:blog` creates the house byline; **no articles are seeded**,
+Covered by `npm run test:blog` (91 assertions, DB-free — the block union incl. the cross-repo
+fixture list, the body derivations, `buildSlugKeys` and the public DTO) and `npm run verify:blog`
+(needs Mongo — index builds, that the unique `slug_keys` index actually REJECTS a duplicate, the
+public queries against real persistence, and that `/articles/index` is declared before
+`/articles/:slug`). Both shrank at Phase 5 Part A: the write rules they used to assert —
+slug-taken, reserved slugs, the featured demotion, publish-twice, delete-once-published, the
+author-in-use guard — are wi-admin's now and its `test:content` / `verify:content` own them.
+`verify:blog` drives its lifecycle through `ArticleModel` fixtures rather than a service, and
+asserts that **no `/api/admin/article*` route survives** — the half of a mount deletion that can
+silently fail. `npm run seed:blog` creates the house byline; **no articles are seeded**,
 deliberately.
 
 ### The public storefront (`/api/public/*` — catalog half)

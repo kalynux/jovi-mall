@@ -1,11 +1,30 @@
 # Admin Tickets
 
+> ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
+>
+> **The public mount `/api/admin/tickets` is DELETED.** It was served to any platform session
+> whose `users` row carried `roles: ['admin']` — jovi-mall's second authorization model, which
+> carried no tier, no permission set and no audit identity. That model is retired.
+>
+> **The routes themselves are unchanged and still live, at `/api/internal/admin/tickets`**, behind
+> `requireAdminCaller` (a service token plus `X-Actor-*` headers, never a user session). One
+> factory always served both mounts, so every path, payload and response below is still exact —
+> only the prefix and the guard changed. **Every path in this document has been rewritten to
+> the internal prefix**, so what you read here is what the service answers.
+>
+> **If you are building a dashboard, this is not your document.** Call wi-admin's `/api/v1/support/tickets` instead — it resolves the
+> administrator's tier and permissions, writes the audit row, and calls this surface on your
+> behalf. See [internal-service-api.md](./internal-service-api.md) for the door itself, and
+> `admin/docs/api/` in the wi-admin repository for the dashboard contract.
+
+---
+
 ## Base Path
 
 All endpoints in this document share this base path:
 
 ```
-/api/admin/tickets
+/api/internal/admin/tickets
 ```
 
 ## Authentication
@@ -35,15 +54,15 @@ For populating the ticket-creation form, the same cheap, role-scoped lookups doc
 [vendor/tickets.md](../vendor/tickets.md) are mounted under the admin namespace (admin scope is
 unscoped — all orders / all products):
 
-- `GET /api/admin/tickets/reference/orders`
-- `GET /api/admin/tickets/reference/products`
+- `GET /api/internal/admin/tickets/reference/orders`
+- `GET /api/internal/admin/tickets/reference/products`
 
 When `trackingNumber` is supplied on creation it is persisted and returned as `tracking_number`
 on ticket responses (`null` when omitted).
 
 ## Endpoints
 
-### POST /api/admin/tickets
+### POST /api/internal/admin/tickets
 
 **Description**: Create a new support ticket as an admin.
 
@@ -104,7 +123,7 @@ Body:
 
 ---
 
-### GET /api/admin/tickets
+### GET /api/internal/admin/tickets
 
 **Description**: List all tickets in the system with filters, search, sorting, and pagination. Admins can see all tickets.
 
@@ -166,7 +185,7 @@ Body:
 
 ---
 
-### GET /api/admin/tickets/:id
+### GET /api/internal/admin/tickets/:id
 
 **Description**: Get detailed information for any ticket in the system.
 
@@ -216,7 +235,7 @@ Body:
 
 ---
 
-### PATCH /api/admin/tickets/:id
+### PATCH /api/internal/admin/tickets/:id
 
 **Description**: Update ticket subject and/or description. Requires exclusive admin lock.
 
@@ -264,7 +283,7 @@ Body:
 
 ---
 
-### PATCH /api/admin/tickets/:id/status
+### PATCH /api/internal/admin/tickets/:id/status
 
 **Description**: Update ticket status. First admin action locks the ticket exclusively to that admin.
 
@@ -312,7 +331,7 @@ Body:
 
 ---
 
-### PATCH /api/admin/tickets/:id/assign
+### PATCH /api/internal/admin/tickets/:id/assign
 
 **Description**: Assign ticket to a role or specific user.
 
@@ -360,7 +379,7 @@ Body:
 
 ---
 
-### PATCH /api/admin/tickets/:id/priority
+### PATCH /api/internal/admin/tickets/:id/priority
 
 **Description**: Update ticket priority. When admin updates priority, it becomes **locked permanently**. Active admin can re-update locked priority.
 
@@ -407,7 +426,7 @@ Body:
 
 ---
 
-### POST /api/admin/tickets/:id/close
+### POST /api/internal/admin/tickets/:id/close
 
 **Description**: Close a ticket. Auto-unlocks the ticket (clears assigned_admin_id).
 
@@ -447,7 +466,7 @@ Body:
 
 ---
 
-### POST /api/admin/tickets/:id/reopen
+### POST /api/internal/admin/tickets/:id/reopen
 
 **Description**: Reopen a closed ticket. **Admin only**. Admin who reopens becomes the new active admin.
 
@@ -487,7 +506,7 @@ Body:
 
 ---
 
-### POST /api/admin/tickets/:id/followers
+### POST /api/internal/admin/tickets/:id/followers
 
 **Description**: Add a follower to a ticket. Respects 5 non-admin user limit.
 
@@ -537,7 +556,7 @@ Body:
 
 ---
 
-### DELETE /api/admin/tickets/:id/followers/:userId
+### DELETE /api/internal/admin/tickets/:id/followers/:userId
 
 **Description**: Remove a follower from a ticket. **Admin only**.
 
@@ -572,7 +591,7 @@ Body:
 
 ---
 
-### POST /api/admin/tickets/:ticketId/notes
+### POST /api/internal/admin/tickets/:ticketId/notes
 
 **Description**: Create a note on a ticket. Admins can create PUBLIC or PRIVATE notes.
 
@@ -624,7 +643,7 @@ Body:
 
 ---
 
-### GET /api/admin/tickets/:ticketId/notes
+### GET /api/internal/admin/tickets/:ticketId/notes
 
 **Description**: Get all notes for a ticket. **Admins see all notes** (PUBLIC and PRIVATE).
 
@@ -677,7 +696,7 @@ Body:
 
 ---
 
-### POST /api/admin/tickets/:ticketId/attachments
+### POST /api/internal/admin/tickets/:ticketId/attachments
 
 **Description**: Attach an already-uploaded file to a ticket. The file is **not**
 uploaded here — first upload it via `POST /api/files/upload` (images, documents,
@@ -735,7 +754,7 @@ Body:
 
 ---
 
-### GET /api/admin/tickets/:ticketId/attachments
+### GET /api/internal/admin/tickets/:ticketId/attachments
 
 **Description**: List all attachments for a ticket. **Admins see all attachments** (PUBLIC and PRIVATE).
 
@@ -779,7 +798,7 @@ Body:
 
 ---
 
-### DELETE /api/admin/tickets/attachments/:id
+### DELETE /api/internal/admin/tickets/attachments/:id
 
 **Description**: Delete an attachment. **Admin only**.
 

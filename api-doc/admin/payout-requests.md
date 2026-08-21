@@ -1,5 +1,24 @@
 # Admin Payout Requests API
 
+> ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
+>
+> **The public mount `/api/admin/payout-requests` is DELETED.** It was served to any platform session
+> whose `users` row carried `roles: ['admin']` — jovi-mall's second authorization model, which
+> carried no tier, no permission set and no audit identity. That model is retired.
+>
+> **The routes themselves are unchanged and still live, at `/api/internal/admin/payout-requests`**, behind
+> `requireAdminCaller` (a service token plus `X-Actor-*` headers, never a user session). One
+> factory always served both mounts, so every path, payload and response below is still exact —
+> only the prefix and the guard changed. **Every path in this document has been rewritten to
+> the internal prefix**, so what you read here is what the service answers.
+>
+> **If you are building a dashboard, this is not your document.** Call wi-admin's `/api/v1/money` instead — it resolves the
+> administrator's tier and permissions, writes the audit row, and calls this surface on your
+> behalf. See [internal-service-api.md](./internal-service-api.md) for the door itself, and
+> `admin/docs/api/` in the wi-admin repository for the dashboard contract.
+
+---
+
 Processing queue for vendor/agency payout requests. Each request is also mirrored as a
 `PAYOUT_REQUEST` support ticket (admin-pool assigned) — this API is for the money-side actions
 (mark paid / reject), which are deliberately **separate** from generic ticket-status changes so
@@ -35,14 +54,14 @@ Authorization: Bearer <access_token>
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/admin/payout-requests` | List payout requests (filterable, paginated) |
-| GET | `/api/admin/payout-requests/:id` | Get one payout request |
-| POST | `/api/admin/payout-requests/:id/mark-paid` | Confirm the payout was sent; permanently deducts the earmarked funds |
-| POST | `/api/admin/payout-requests/:id/reject` | Reject the request; returns the earmarked funds to `available` |
+| GET | `/api/internal/admin/payout-requests` | List payout requests (filterable, paginated) |
+| GET | `/api/internal/admin/payout-requests/:id` | Get one payout request |
+| POST | `/api/internal/admin/payout-requests/:id/mark-paid` | Confirm the payout was sent; permanently deducts the earmarked funds |
+| POST | `/api/internal/admin/payout-requests/:id/reject` | Reject the request; returns the earmarked funds to `available` |
 
 ---
 
-### GET /api/admin/payout-requests
+### GET /api/internal/admin/payout-requests
 
 **Description**: Newest-first, paginated list of payout requests across vendors and agencies.
 
@@ -110,7 +129,7 @@ Full contract for what the owner could have entered, including why no PAN exists
 **[Agent](../agent/payout-methods.md)** payout methods — the three are the same schema, documented
 per role.
 
-### GET /api/admin/payout-requests/:id
+### GET /api/internal/admin/payout-requests/:id
 
 **Description**: Fetch a single payout request.
 
@@ -118,7 +137,7 @@ per role.
 
 **Error Responses**: `404` – `EARNINGS_PAYOUT_REQUEST_NOT_FOUND`.
 
-### POST /api/admin/payout-requests/:id/mark-paid
+### POST /api/internal/admin/payout-requests/:id/mark-paid
 
 **Description**: Confirm the payout was sent out-of-band (bank transfer / mobile money). This
 **permanently deducts** the earmarked `requested` amount — there is no undo. Also auto-resolves
@@ -140,7 +159,7 @@ the linked ticket with a system note and notifies the requester.
 > is still marked paid — the financial action is never rolled back by a ticket-workflow conflict.
 > Resolve the ticket manually in that case.
 
-### POST /api/admin/payout-requests/:id/reject
+### POST /api/internal/admin/payout-requests/:id/reject
 
 **Description**: Reject the request. Returns the earmarked amount to the requester's `available`
 balance immediately. Also auto-resolves the linked ticket with the reason as a system note and

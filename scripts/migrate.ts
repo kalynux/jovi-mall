@@ -161,6 +161,15 @@ export const MIGRATIONS: Migration[] = [
         dryRun: true,
         note: 'the deleted email-invite subsystem leaves a collection of pending invitations nothing will ever answer',
     },
+    // Phase 5 Part E. Runs among the data migrations rather than at the end: nothing here
+    // depends on it and it depends on nothing, but it SIGNS SOMEBODY OUT, so it belongs where
+    // a `--dry-run` of the whole set will show it before the index builds start taking minutes.
+    {
+        name: 'migrate:retire-admin-role',
+        file: 'scripts/migrate-retire-admin-role.ts',
+        dryRun: true,
+        note: "legacy users rows still carry roles:'admin' — inert in code since the cutover, but the rows a future regression would mint admin tokens from",
+    },
 
     // ── Indexes, last: three of these claim uniqueness ───────────────────────
     {

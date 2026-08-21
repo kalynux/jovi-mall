@@ -172,6 +172,33 @@ export class AuthService {
      * `auth_time`. Non-null by construction — `isSessionCapReached` above returns true for
      * a payload it cannot date, so an undateable token has already been refused.
      */
+    /**
+     * ⚠ **The role is FILTERED here, and this line is the whole of the cutover's security
+     * half** (Phase 5 Part E, step E.1).
+     *
+     * `AUTHENTICATABLE_ROLES` is the one list behind four schemas, and until this guard
+     * existed it covered four of the five paths that mint a token: `register` and `addRole`
+     * refuse `'admin'` at parse, `login` and `authMe` refuse it both at parse and through
+     * `roles.filter(isAuthenticatableRole)`.
+     *
+     * **This method was the fifth, and it was open.** It copies the role straight out of the
+     * presented token — nothing here re-reads `user.roles` — so a refresh token minted before
+     * the cutover went on producing `role: 'admin'` access tokens for the remainder of its
+     * 30-day life, and such a token satisfied every `requireRole(['admin'])` site jovi-mall
+     * used to serve. The public `/api/admin/*` mounts are gone now, which is why deleting them
+     * is hygiene and this is the fix: without it, re-adding any admin-guarded route anywhere
+     * silently re-opens the hole.
+     *
+     * `AUTH_ROLE_NOT_FOUND` at 403 deliberately — it is what `login` and `authMe` answer for
+     * the same condition, so a client sees one behaviour for "that role cannot be signed in
+     * as". It is NOT `AUTH_SESSION_EXPIRED`: this session is not refreshable and a client that
+     * cannot tell the two apart retries forever, which is the reasoning that gave
+     * `AUTH_SESSION_CAP_REACHED` a code of its own a few lines above.
+     */
+    if (!isAuthenticatableRole(payload.role)) {
+      throw createAppError(ERROR_CODES.AUTH_ROLE_NOT_FOUND, 403, undefined, { role: payload.role });
+    }
+
     const authTime = resolveAuthTime(payload)!;
     const tokens = this.issueTokenPair(user, payload.role, authTime);
     return { ...tokens, user, role: payload.role };
@@ -270,13 +297,32 @@ export class AuthService {
 
     if (!user) throw createAppError(ERROR_CODES.AUTH_INVALID_CREDENTIALS, 401);
 
-    // ⚠ The throw below was commented out for a period, which meant `bcrypt.compare` ran and
-    // its verdict was DISCARDED: any password authenticated any account, for every role. It is
-    // restored, and deliberately with no environment escape hatch — a bypass whose failure
-    // direction is "open on a typo" is the exact shape `config/env.ts` exists to argue against.
-    // A seed or fixture that relied on the hole needs a real password, not a flag.
+    /**
+     * ⚠ **THE CREDENTIAL CHECK. Do not comment this out again.**
+     *
+     * With the throw removed, `bcrypt.compare` still runs and its verdict is DISCARDED: any
+     * password authenticates any account, for every role. Not a theory — on 2026-08-21 a real
+     * customer account was signed into with the string
+     * `"this-is-definitely-not-the-password-xyz123"` and answered `200` with a full session.
+     *
+     * **This comment has been wrong once, and that is the part worth remembering.** It
+     * previously read *"It is restored, and deliberately with no environment escape hatch"* —
+     * while the line below it was still commented out. So the file asserted its own safety in
+     * prose, next to the code that contradicted it, and the prose is what people read. Three
+     * assertions across two suites were failing the whole time and had been written off as an
+     * expected baseline.
+     *
+     * Restored for real 2026-08-21, by the owner's decision, and still with **no environment
+     * escape hatch** — a bypass whose failure direction is "open on a typo" is the exact shape
+     * `config/env.ts` exists to argue against. A seed or fixture that relied on the hole needs
+     * a real password, not a flag; `scripts/seed/` already sets documented ones.
+     *
+     * Pinned by SOURCE SCAN in `test:mobile-auth` (`the verdict is acted on, not discarded`)
+     * and behaviourally by `verify:messaging-login`, which resets a password and then proves
+     * the OLD one stops working — the assertion that failed for a year of commits.
+     */
     const isValid = await bcrypt.compare(input.password, user.password_hash);
-    // if (!isValid) throw createAppError(ERROR_CODES.AUTH_INVALID_CREDENTIALS, 401);
+    if (!isValid) throw createAppError(ERROR_CODES.AUTH_INVALID_CREDENTIALS, 401);
 
     // Ordered AFTER the credential comparison on purpose: naming the suspension is only
     // safe for a caller who has already proved they hold the account, otherwise the

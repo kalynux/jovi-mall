@@ -1,5 +1,24 @@
 # Admin — Platform Earnings & owner balances
 
+> ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
+>
+> **The public mount `/api/admin/earnings` is DELETED.** It was served to any platform session
+> whose `users` row carried `roles: ['admin']` — jovi-mall's second authorization model, which
+> carried no tier, no permission set and no audit identity. That model is retired.
+>
+> **The routes themselves are unchanged and still live, at `/api/internal/admin/earnings`**, behind
+> `requireAdminCaller` (a service token plus `X-Actor-*` headers, never a user session). One
+> factory always served both mounts, so every path, payload and response below is still exact —
+> only the prefix and the guard changed. **Every path in this document has been rewritten to
+> the internal prefix**, so what you read here is what the service answers.
+>
+> **If you are building a dashboard, this is not your document.** Call wi-admin's `/api/v1/money` instead — it resolves the
+> administrator's tier and permissions, writes the audit row, and calls this surface on your
+> behalf. See [internal-service-api.md](./internal-service-api.md) for the door itself, and
+> `admin/docs/api/` in the wi-admin repository for the dashboard contract.
+
+---
+
 Read-only view of the **singleton platform earnings account** — the marketplace's accumulated
 commission — and its append-only ledger, plus the **per-owner balances** ("what do we owe this
 vendor / agency / agent").
@@ -16,14 +35,15 @@ vendor / agency / agent").
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/admin/earnings/platform` | Current platform balances |
-| `GET` | `/admin/earnings/platform/ledger` | Paginated platform earnings ledger |
-| `GET` | `/admin/earnings/accounts` | Every owner's balances, ranked by what is withdrawable |
-| `GET` | `/admin/earnings/balances/:ownerType/:ownerId` | One owner's four balances |
+| `GET` | `/internal/admin/earnings/platform` | Current platform balances |
+| `GET` | `/internal/admin/earnings/platform/ledger` | Paginated platform earnings ledger |
+| `GET` | `/internal/admin/earnings/accounts` | Every owner's balances, ranked by what is withdrawable |
+| `GET` | `/internal/admin/earnings/balances/:ownerType/:ownerId` | One owner's four balances |
 
-> **The same four routes are also mounted at `/api/internal/admin/earnings/*`** behind the
-> service token, for wi-admin. Same paths, same shapes, different guard —
-> `src/modules/earnings/routes/admin-earnings.routes.ts` builds one factory and mounts it twice.
+> **These four routes used to be mounted publicly at `/api/admin/earnings/*` as well**, behind
+> `requireAuth + requireRole(['admin'])`. That mount was deleted at the Phase 5 cutover — one
+> factory served both and now serves one. `src/modules/earnings/routes/admin-earnings.routes.ts`
+> still exports the factory; only the public instantiation went.
 
 > **`platform` is not a valid `:ownerType`.** The vocabulary on `/accounts` and `/balances` is
 > `vendor · agency · agent` only. The commission account has its own endpoint because it answers a
@@ -32,7 +52,7 @@ vendor / agency / agent").
 
 ---
 
-## GET `/admin/earnings/platform`
+## GET `/internal/admin/earnings/platform`
 
 **Purpose**: Return the platform account's current balances.
 
@@ -63,7 +83,7 @@ vendor / agency / agent").
 
 ---
 
-## GET `/admin/earnings/platform/ledger`
+## GET `/internal/admin/earnings/platform/ledger`
 
 **Purpose**: Return the platform's append-only earnings ledger, newest first. Every balance movement
 (hold, release, reserve, reversal) writes one row.
@@ -112,7 +132,7 @@ vendor / agency / agent").
 
 ---
 
-## GET `/admin/earnings/accounts`
+## GET `/internal/admin/earnings/accounts`
 
 **Purpose**: Every owner account the platform holds money for, **sorted by `available` descending**
 (ties broken by `_id`) — i.e. ranked by what is withdrawable right now.
@@ -150,7 +170,7 @@ vendor / agency / agent").
 
 ---
 
-## GET `/admin/earnings/balances/:ownerType/:ownerId`
+## GET `/internal/admin/earnings/balances/:ownerType/:ownerId`
 
 **Purpose**: One owner's four balances.
 

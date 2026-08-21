@@ -798,7 +798,35 @@ only DB-free check that all four new situations carry copy in all five languages
 3. ~~**Controllers/routes** for: agent threshold, contract terms, settlements,
    KYC/ban admin, status-request inbox.~~ **DONE 2026-07-29** — see the step 4 section below for
    what shipped and the one deliberate deviation (settlements).
-4. **Migration** — collection rename `agent_agency_memberships` →
+4. ~~**Migration**~~ — ✅ **CLOSED 2026-08-21 as NOT APPLICABLE PRE-PRODUCTION.**
+
+   > **There is no production data.** Everything in every database is development data that will
+   > be deleted and repopulated at the production cutover — owner decision **D-5**, recorded in
+   > [`PRODUCTION-READINESS/PHASE-6-UNBUILT-SCOPE-PLAN.md`](../PRODUCTION-READINESS/PHASE-6-UNBUILT-SCOPE-PLAN.md).
+   > A rename and a backfill are "carry existing rows across" jobs with no rows worth carrying, so
+   > neither is written. **Index migrations are unaffected** and still matter: `autoIndex` is off
+   > in production, so the first deploy against an empty database still needs them.
+   >
+   > Measured in the dev database on 2026-08-21 before closing this (plan P-11 … P-14):
+   >
+   > - The **code is already post-rename** — `collections.ts:231` reads `agent_agency_contracts`
+   >   and `agent_agency_memberships` appears **nowhere** in `src/`.
+   > - The old collection **does still exist in dev** with 7 documents, **zero** of whose `_id`s
+   >   appear in `agent_agency_contracts`. They carry the pre-refactor shape (`status: "approved"`,
+   >   `cod.max_exposure_override`), last written 2026-07-15. Orphaned and inert; drop when
+   >   convenient.
+   > - **`cod.outstanding_balance` is populated, not zero** — so the silent-no-op this item warned
+   >   about is not present. The COD late-deposit sweep is demonstrably writing rows
+   >   (open `late_deposit` discrepancies at 8 000 and 1 200).
+   > - ⚠ **The derivation stated below is the BACKFILL's formula and is not what the application
+   >   maintains.** Re-deriving `sum(collected) − sum(deposits)` from current rows disagrees with
+   >   one of seven contracts, because `seed:cod-shipments --clean` removes source rows while
+   >   `cod_cash_ledgers` is append-only. The invariants that **do** hold exactly are
+   >   `cod_cash_accounts.balance == Σ its ledger rows` and `Σ contract slices == the agent's pot`.
+   >   Assert those, never the re-derivation.
+
+   *Original text, kept because the reasoning is still the record of what was intended:*
+   collection rename `agent_agency_memberships` →
    `agent_agency_contracts`, status remap (`approved`→`active`,
    `removed`→`deactivated`), `cod.max_exposure_override` → `cod.threshold`,
    capacity backfill from `settings.max_concurrent_shipments`. Must be

@@ -313,23 +313,26 @@ is public.
 
 ---
 
-## 9. ⚠️ One thing you must know: login does not check the password
+## 9. ✅ Resolved — `POST /api/auth/login` checks the password
 
-`POST /api/auth/login` computes `bcrypt.compare(...)` and **throws the result away** — the
-`if (!isValid) throw` line is commented out. **Any password authenticates any account**, on
-every role.
+An earlier revision of this changelog flagged that the login handler discarded
+`bcrypt.compare`'s verdict. **That is closed.** `POST /api/auth/login` verifies the password,
+and there is no environment variable that can disable the check.
 
-This is pre-existing, was explicitly scoped out of this work, and is now documented at the top
-of [auth/README.md](../auth/README.md). It is flagged here because it affects you directly:
+What this means for you:
 
-- If your dev or E2E flows currently sign in with arbitrary passwords, **they are relying on
-  this** and will break the moment it is fixed (a one-line change).
-- Password reset is built and correct, but it currently **reduces nobody's exposure**, because
-  the front door is open regardless. Please do not present it to anyone as a security
-  improvement until the login check is restored.
+- **Dev or E2E flows that signed in with an arbitrary password need a real one.**
+- Password reset now does what it says: `POST /api/auth/forgot-password` /
+  `POST /api/auth/reset-password` are a genuine recovery path, and a reset revokes every other
+  live session.
 
 Everything downstream — session revocation on password change, suspension checks, the 20/min
-credential rate limit — is sound and is simply being bypassed at the front door.
+credential bucket — was always sound and is now actually reached. See
+[auth/README.md](../auth/README.md).
+
+> Note that a **customer** still cannot sign in this way unless they have run a password reset:
+> they hold a system-generated password nobody knows, and their sign-in is the bot flow. See
+> [auth/customer-auth.md](../auth/customer-auth.md).
 
 ---
 

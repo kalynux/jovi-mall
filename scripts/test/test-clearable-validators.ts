@@ -11,7 +11,8 @@
 
 import { UpdateStoreProfileSchema } from '../../src/modules/store/validators/store.validator';
 import { StoreProfileMapper } from '../../src/modules/store/dto/store-profile.dto';
-import { UpdateAdminProfileSchema } from '../../src/modules/admins/validators/admin-profile.validator';
+// `UpdateAdminProfileSchema` was imported here and is DELETED (Phase 5 Part E) — see the
+// "Admin profile" section below.
 import {
   SetAvailabilitySchema,
   SetTrackingAllowedSchema,
@@ -79,15 +80,19 @@ function assert(condition: boolean, label: string): void {
   assert(setPayload.logo_file_id?.toString() === validId, 'store mapper: valid id maps to ObjectId');
 }
 
-// ─── Admin profile ────────────────────────────────────────────────────────────
-
-{
-  const cleared = UpdateAdminProfileSchema.safeParse({ job_title: '', avatar_url: null });
-  assert(cleared.success && cleared.data.job_title === null && cleared.data.avatar_url === null,
-    "admin: job_title ''/avatar_url null → null");
-
-  assert(!UpdateAdminProfileSchema.safeParse({ avatar_url: 'nope' }).success, 'admin: invalid avatar_url still rejected');
-}
+// ─── Admin profile — GONE (Phase 5 Part E) ────────────────────────────────────
+//
+// Two assertions stood here, over `UpdateAdminProfileSchema`: that `job_title: ''` and
+// `avatar_url: null` both normalise to null, and that an invalid `avatar_url` is still
+// rejected. The schema is deleted with the rest of `modules/admins/` — administrator identity
+// lives in wi-admin, and `PATCH /api/admin/profile` has had a counterpart there
+// (`PATCH /administrators/me`) since Phase 2.
+//
+// **Not restated here, and that is the point of the note.** The `clearable()` contract this
+// suite exists to pin is unchanged and is still asserted by the seven other validators below.
+// What went is one adopter, not a rule — and re-adding a jovi-mall admin profile schema to
+// keep an assertion alive would be the tail wagging the dog. The equivalent rule on the
+// surviving surface is wi-admin's own, tested there.
 
 // ─── Agent ────────────────────────────────────────────────────────────────────
 

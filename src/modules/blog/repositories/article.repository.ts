@@ -1,18 +1,10 @@
 import { FilterQuery } from 'mongoose';
 import { ArticleModel, IArticle, slugKey } from '../models/article.model';
-import { BlogArticleStatus, BlogCategoryKey, BlogLocale } from '../blog.types';
-import { Page, PaginationOptions } from '../../../core/repositories/base.repository';
+import { BlogCategoryKey, BlogLocale } from '../blog.types';
 
 export interface PublicArticleListFilters {
   locale: BlogLocale;
   category?: BlogCategoryKey;
-}
-
-export interface AdminArticleListFilters {
-  status?: BlogArticleStatus;
-  category?: BlogCategoryKey;
-  locale?: BlogLocale;
-  authorKey?: string;
 }
 
 /**
@@ -22,6 +14,17 @@ export interface AdminArticleListFilters {
  * predicate the generic finders cannot express.
  *
  * Every query filters `deletedAt: null` explicitly.
+ *
+ * ── READ ONLY since Phase 5 Part A ────────────────────────────────────────────
+ * The write half — `create`, `updateByKey`, `setFeatured`, `softDeleteByKey`,
+ * `slugTakenByAnother`, `findFeaturedSharingLocales`, `listForEditor`, `countByAuthor` —
+ * went with `ArticleService` when the editor moved to wi-admin (ADR-004 D-4). wi-admin
+ * writes this collection through its own `PlatformOwnedRepository`, on the raw driver.
+ *
+ * **Do not add a write back here.** Two writers on one collection, only one of which
+ * applies this schema's defaults and validators, is the state Phase 5 step 5.0 exists to
+ * prevent. If jovi-mall needs to change an article, the question to answer first is why
+ * the service that owns the editor cannot.
  */
 
 /**
@@ -35,12 +38,7 @@ export interface AdminArticleListFilters {
 const PUBLISHED_SORT = { published_at: -1 as const, _id: -1 as const };
 
 export class ArticleRepository {
-  async create(data: Partial<IArticle>): Promise<IArticle> {
-    const [doc] = await ArticleModel.create([data]);
-    return doc;
-  }
-
-  /** By stable public id, whatever its status — the editor's read. */
+  /** By stable public id, whatever its status. */
   async findByKey(key: string): Promise<IArticle | null> {
     return ArticleModel.findOne({ key, deletedAt: null }).exec();
   }
@@ -56,21 +54,6 @@ export class ArticleRepository {
    */
   async findBySlug(locale: BlogLocale, slug: string): Promise<IArticle | null> {
     return ArticleModel.findOne({ slug_keys: slugKey(locale, slug), deletedAt: null }).exec();
-  }
-
-  /**
-   * Does any **other** article answer to this `(locale, slug)`?
-   *
-   * `excludeKey` is the article being edited — re-saving it with the slug it already has
-   * must not collide with itself.
-   */
-  async slugTakenByAnother(locale: BlogLocale, slug: string, excludeKey: string): Promise<boolean> {
-    const existing = await ArticleModel.exists({
-      slug_keys: slugKey(locale, slug),
-      key: { $ne: excludeKey },
-      deletedAt: null,
-    }).exec();
-    return existing !== null;
   }
 
   /**
@@ -111,68 +94,6 @@ export class ArticleRepository {
     return ArticleModel.find({ status: 'published', deletedAt: null }).sort(PUBLISHED_SORT).exec();
   }
 
-  /** The editor's list. Every status by default — a draft inbox is the point of it. */
-  async listForEditor(
-    filters: AdminArticleListFilters,
-    pagination: PaginationOptions,
-  ): Promise<Page<IArticle>> {
-    const { page, limit } = pagination;
-
-    const filter: FilterQuery<IArticle> = { deletedAt: null };
-    if (filters.status) filter.status = filters.status;
-    if (filters.category) filter.category_key = filters.category;
-    if (filters.authorKey) filter.author_key = filters.authorKey;
-    if (filters.locale) filter['translations.locale'] = filters.locale;
-
-    const [total, docs] = await Promise.all([
-      ArticleModel.countDocuments(filter).exec(),
-      ArticleModel.find(filter)
-        // Drafts have no `published_at`, so the editor's list sorts by last touched
-        // instead — a different question from the reader's, and deliberately a different
-        // order. Nothing public reads this method.
-        .sort({ updatedAt: -1, _id: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .exec(),
-    ]);
-
-    return { data: docs, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
-  }
-
-  /**
-   * Published articles that are `featured` and share a locale with the given list.
-   *
-   * Backs the "at most one featured article per locale" rule: featuring an article demotes
-   * whatever it would have competed with, rather than 409-ing an editor who has no way to
-   * know what is featured in another language.
-   */
-  async findFeaturedSharingLocales(locales: BlogLocale[], excludeKey: string): Promise<IArticle[]> {
-    if (locales.length === 0) return [];
-    return ArticleModel.find({
-      featured: true,
-      status: 'published',
-      key: { $ne: excludeKey },
-      deletedAt: null,
-      translations: { $elemMatch: { locale: { $in: locales }, published: true } },
-    }).exec();
-  }
-
-  async setFeatured(key: string, featured: boolean): Promise<void> {
-    await ArticleModel.updateOne({ key, deletedAt: null }, { $set: { featured } }).exec();
-  }
-
-  async updateByKey(key: string, set: Partial<IArticle>): Promise<IArticle | null> {
-    return ArticleModel.findOneAndUpdate({ key, deletedAt: null }, { $set: set }, { new: true }).exec();
-  }
-
-  async softDeleteByKey(key: string): Promise<void> {
-    await ArticleModel.updateOne({ key, deletedAt: null }, { $set: { deletedAt: new Date() } }).exec();
-  }
-
-  /** Guards the author delete: a byline credited on an article cannot be removed. */
-  async countByAuthor(authorKey: string): Promise<number> {
-    return ArticleModel.countDocuments({ author_key: authorKey, deletedAt: null }).exec();
-  }
 }
 
 export const articleRepository = new ArticleRepository();

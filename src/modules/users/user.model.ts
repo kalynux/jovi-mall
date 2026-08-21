@@ -80,7 +80,50 @@ const UserSchema = new Schema<IUser>(
     password_changed_at: { type: Date, default: null },
   },
   {
-    timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } // snake_case timestamps
+    timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' }, // snake_case timestamps
+
+    /**
+     * ── `password_hash` NEVER leaves this process (added 2026-08-21) ──────────
+     *
+     * `POST /api/auth/login` and `POST /api/auth/mobile/login` answered
+     * `sendSuccess(res, { user, role, role_entity })` with the Mongoose document itself, so
+     * the bcrypt hash of the caller's password was in the response body — verified on a
+     * running server, not inferred. `/auth/me`, `/auth/auth-me` and `addRole` shipped the
+     * same object.
+     *
+     * A bcrypt hash is a credential. It is offline-crackable at leisure, it lands in
+     * browser devtools, proxy logs, error reporters and anything that captures a response
+     * body, and no client has ever had a use for it.
+     *
+     * ── Why here, and not in five controllers ────────────────────────────────
+     * This is the ONE place every serialisation passes through, so it cannot be forgotten
+     * by a route added later — which is exactly how it got out: `admin-user.service.ts`
+     * already knew the risk and defended it with a named projection on its own surface,
+     * while the auth surface shipped the raw document beside it.
+     *
+     * Nothing internal breaks, because nothing internal reads this field through JSON:
+     * `AuthService.login`, `UserService.changePassword` and `verifyPassword` all read
+     * `user.password_hash` off the document, where it is untouched. A census of every
+     * `password_hash` reference in `src/` confirmed it before this was added.
+     *
+     * ⚠ **Deleting the field here does not stop it being SELECTED.** This is a
+     * serialisation guard, not `select: false` — chosen deliberately, because `select: false`
+     * would silently give `bcrypt.compare` an `undefined` hash at every call site that
+     * forgot `.select('+password_hash')`, and *that* failure direction is "authentication
+     * quietly stops working" rather than "a field is missing from a response".
+     */
+    toJSON: {
+      transform: (_doc: unknown, ret: Record<string, unknown>) => {
+        delete ret.password_hash;
+        return ret;
+      },
+    },
+    toObject: {
+      transform: (_doc: unknown, ret: Record<string, unknown>) => {
+        delete ret.password_hash;
+        return ret;
+      },
+    },
   }
 );
 

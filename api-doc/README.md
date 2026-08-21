@@ -121,9 +121,17 @@ header.** See [auth/README.md](./auth/README.md) for the full flow.
   the internal route docs.
 - **When both are present**, the bearer wins. `Authorization` is read before the cookie, so a
   stale cookie in a native HTTP layer's OS jar can never beat a freshly-refreshed bearer.
-- **Roles**: every account holds one or more of `customer · vendor · agency · agent · admin`. A JWT is
-  scoped to **one active role**; switch roles by logging in again with `role`, or add a role via
-  `POST /api/auth/add-role` (`/api/auth/mobile/add-role` for bearer clients).
+- **Customers**: a different flow entirely — **no registration form and no password field.** The
+  account is created on their first interaction with the WhatsApp / Telegram bot, and they sign in
+  with a bot-issued magic link or 8-character code redeemed at `POST /api/auth/magic/{link,code}`.
+  A storefront deep-links them to the bot and calls no registration endpoint. Full contract:
+  [auth/customer-auth.md](./auth/customer-auth.md).
+- **Roles**: every account holds one or more of `customer · vendor · agency · agent`. A JWT is
+  scoped to **one active role**; switch with `GET /api/auth/auth-me/:role` (no password), or log in
+  again with `role`; add a role via `POST /api/auth/add-role` (`/api/auth/mobile/add-role` for
+  bearer clients). **`admin` is not a role you can authenticate as here** — administrators live in
+  the separate wi-admin database and reach this service over the internal service surface, which is
+  what the Admin column below means.
 - **Current identity**: `GET /api/auth/me` (or `GET /api/auth/auth-me/:role`, `…/mobile/auth-me/:role`,
   on app launch to restore + refresh).
 
@@ -152,7 +160,6 @@ Every route tree is guarded by role. `✅` = full access to that area's endpoint
 | Public catalog (`/public/products`, `/public/stores`, `/public/categories`) | ✅⁵ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Published price list (`/public/plans`, `/public/credit-packs`) | ✅⁵ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Published blog (`/public/articles`) | ✅⁵ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Blog editor (`/admin/articles`, `/admin/article-authors`) | — | — | — | — | — | ✅ |
 | Cart & checkout | — | ✅ | — | — | — | — |
 | Customer orders / confirm delivery | — | ✅ (self) | — | — | — | — |
 | Gateway payments (`/payments`) | initiate/verify only³ | ✅ (self) | —⁴ | — | — | ✅ (all) |
@@ -238,11 +245,11 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 ## Documentation index
 
 ### Cross-cutting
-- [Auth & sessions](./auth/README.md) · [Onboarding](./auth/onboarding.md)
+- [Auth & sessions](./auth/README.md) · [**Customer auth (bot registration + passwordless sign-in)**](./auth/customer-auth.md) · [Bot `/login` & `/reset-password`](./auth/magic-login.md) · [Onboarding](./auth/onboarding.md)
 - [Change password (`/me/password`, all roles)](./me/password.md)
 - [**Public API (no auth)**](./public/README.md) — the published price list: plan catalog + credit packs, for the marketing site
 - [**Public catalog (no auth)**](./public/catalog.md) — the storefront's read side: products, categories, stores. **Product URLs are nested under their store**
-- [**Public blog (no auth)**](./public/articles.md) — articles, typed blocks, hreflang & slug redirects. Editor: [admin/articles.md](./admin/articles.md)
+- [**Public blog (no auth)**](./public/articles.md) — articles, typed blocks, hreflang & slug redirects. The editor is **wi-admin's** (`admin/docs/api/content.md`), not this service's
 - [**Billing, plans & credit — cross-dashboard guide**](./billing-plans-across-roles.md) (vendor · agency · agent · admin)
 - [Error catalog](./errors/README.md)
 - [Geospatial addresses & address search](./geo/README.md)
@@ -257,6 +264,7 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Telegram bot webhook & admin send](./telegram/README.md) · [Google Calendar (OAuth)](./integrations/google-calendar.md)
 
 ### Customer
+- **▶ [Auth — registration & sign-in](./auth/customer-auth.md)** — **start here if you are building the storefront.** Customers register in the bot and sign in without a password; there is no registration endpoint and no password field
 - [Profile & addresses](./customer/profile.md) · [Cart](./customer/cart.md) · [Orders](./customer/orders.md)
 - [Bookings](./customer/bookings.md) · [Payment methods](./customer/payment-methods.md) · [Digital products](./customer/digital-products.md) · [Tickets](./customer/tickets.md)
 
@@ -285,16 +293,34 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [File management](./agent/file-management.md) · [Storage](./agent/storage.md)
 - [Notifications](./agent/notifications.md) · [Push notifications (Flutter)](./agent/push-notifications.md) — includes offer quick actions, whose rationale record is [offer-quick-actions.md](./agent/offer-quick-actions.md) · [Tickets](./agent/tickets.md)
 
-### Admin
-- [Profile](./admin/profile.md) · [Orders (dispute hold)](./admin/orders.md) · [Agents](./admin/agents.md)
-- [Delivery agencies](./admin/delivery-agencies.md) · [COD oversight](./admin/cod.md) · [Platform earnings](./admin/earnings.md) · [Payout requests](./admin/payout-requests.md)
-- [Billing](./admin/billing.md) · [Billing overview](./admin/billing-overview.md) · [Catalogue vectorisation](./admin/catalogue-vectorisation.md)
-- [Payment methods](./admin/payment-methods.md) · [Tickets](./admin/tickets.md)
-- [**Blog editor**](./admin/articles.md) — articles + bylines; the write side of [public/articles.md](./public/articles.md)
+### Admin — ⚠️ **not a frontend surface any more**
+
+**There is no public `/api/admin/*` in this service.** Every mount was deleted at the Phase 5
+cutover, together with the second authorization model it carried — `requireRole(['admin'])` on a
+platform `users` row that holds no tier, no permission set and no audit identity. **If you are
+building an admin dashboard, you want the wi-admin backend** (`/api/v1/*`, documented in
+`admin/docs/api/`), which resolves the administrator's permissions, writes the audit row, and
+calls the surface below on their behalf.
+
+The pages here document `/api/internal/admin/*` — 111 routes in fifteen groups, behind
+`requireAdminCaller`. They are kept because one factory always served both mounts, so they remain
+exact for request and response shapes; each was **rewritten to the internal prefix**, not deleted.
+
+- [**The internal admin API**](./admin/internal-service-api.md) — start here: the door, its
+  headers, the route inventory, and the delegate-a-verdict/read-a-record rule that decides what
+  is on it
+- [Orders (disputes, cancel, dispatch, refund)](./admin/orders.md) · [Agents](./admin/agents.md) · [Delivery agencies](./admin/delivery-agencies.md)
+- [COD oversight](./admin/cod.md) · [Platform earnings](./admin/earnings.md) · [Payout requests](./admin/payout-requests.md) · [Billing](./admin/billing.md)
+- [Tickets](./admin/tickets.md) · [Vendors](./admin/vendors.md) · [Shipments](./admin/shipments.md) — the last two never had a public mount
 - [**System operations**](./admin/system.md) — dependency health · integration status · queue depth · cache status · background jobs · operational metrics · the error journal. **Read-only, every route a GET**
-- [**Developer tools**](./admin/dev-tools.md) — the dangerous half: run a worker · replay/prune the outbox · rebuild search vectors · **maintenance mode** · **cache flush**
-- [**The internal admin API**](./admin/internal-service-api.md) — `/api/internal/admin/*`, the service-to-service door wi-admin calls. **Not a frontend surface**; documented so the two mounts can be told apart
-- Internal-only surfaces with no dashboard twin: [Vendors](./admin/vendors.md) (`/api/internal/admin/vendors`) · [Shipments](./admin/shipments.md) (`/api/internal/admin/shipments`)
+- [**Developer tools**](./admin/dev-tools.md) — the dangerous half: run a worker · replay/prune the outbox · rebuild search vectors (the old `POST /admin/products/bulk-vectorise`) · **maintenance mode** · **cache flush**
+- Not admin surfaces, filed here for historical reasons: [Billing overview](./admin/billing-overview.md) (a cross-role explainer) · [Payment methods](./admin/payment-methods.md) (`/api/me/payment-methods`, every role)
+
+Two pages were **deleted** rather than repointed, because nothing replaced them here:
+`profile.md` (`/api/admin/profile` — wi-admin has served `GET`/`PATCH /administrators/me` since
+Phase 2) and `catalogue-vectorisation.md` (`POST /api/admin/products/bulk-vectorise` — the same
+controller now runs at `/api/internal/admin/dev-tools/catalogue/vectorise`, documented in
+[dev-tools.md](./admin/dev-tools.md)).
 
 ### Tracking (authorization; streaming is in geo-tracker)
 - [Live tracking](./tracking/live-tracking.md) · [Agent tracking policy](./tracking/agent-tracking-policy.md)

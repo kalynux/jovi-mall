@@ -11,7 +11,8 @@ import { VendorProfileMapper } from '../../src/modules/vendor/dto/vendor-profile
 import { CustomerProfileMapper } from '../../src/modules/customers/dto/customer-profile.dto';
 import { AgencyProfileMapper } from '../../src/modules/delivery/dto/agency-profile.dto';
 import { AgentProfileMapper } from '../../src/modules/agents';
-import { AdminProfileMapper } from '../../src/modules/admins/dto/admin-profile.dto';
+// `AdminProfileMapper` was imported here and is DELETED (Phase 5 Part E) — see the "Admin
+// Mapper" note where its three assertions were.
 import { FileRepositoryMongo } from '../../src/modules/catalog/repositories/mongo/file.repository.mongo';
 import { IStorageProvider } from '../../src/core/storage';
 
@@ -215,30 +216,21 @@ async function main(): Promise<void> {
         return AgentProfileMapper.toRosterEntryDto(agentMock).activeShipmentCount === 3;
     });
 
-    // ─── Admin Mapper ─────────────────────────────────────────────────────────
-    console.log('\n── Admin Profile Mapper ──────────────────────────────────────────────────');
-
-    const adminMock = makeDoc({
-        name: 'Super Admin', email: 'admin@test.com',
-        avatar_url: null, job_title: 'CTO', department: 'Engineering',
-        two_factor_enabled: true, last_login_ip: '192.168.1.100',
-        timezone: 'UTC', onboarding_step: 0,
-    });
-
-    const adminPublicDto = await AdminProfileMapper.toResponseDto(adminMock, stubFileRepo, stubStorage);
-    const adminSelfDto = await AdminProfileMapper.toSelfResponseDto(adminMock, stubFileRepo, stubStorage);
-
-    assert('Admin public DTO never contains last_login_ip', () => {
-        return !('lastLoginIp' in adminPublicDto);
-    });
-
-    assert('Admin self DTO contains last_login_ip', () => {
-        return adminSelfDto.lastLoginIp === '192.168.1.100';
-    });
-
-    assert('Admin onboarding_step is always 0', () => {
-        return adminPublicDto.onboardingStep === 0;
-    });
+    // ─── Admin Mapper — GONE (Phase 5 Part E) ─────────────────────────────────
+    //
+    // Three assertions stood here over `AdminProfileMapper`: that the public DTO never carries
+    // `lastLoginIp`, that the self DTO does, and that `onboardingStep` is always 0 for an
+    // administrator. The mapper is deleted with the rest of `modules/admins/` — its only
+    // consumer was `AdminProfileService`, which served `GET`/`PATCH /api/admin/profile`, and
+    // that surface has had a counterpart in wi-admin (`GET`/`PATCH /administrators/me`) since
+    // Phase 2.
+    //
+    // **The self-vs-public split those assertions pinned is a real rule and it did NOT go with
+    // them.** It survives on the projection jovi-mall still serves: `PublicAdminSnapshot`
+    // (`core/types/admin-snapshot.types.ts`), the four-field block a customer, vendor, agency
+    // or agent sees on a ticket. That is the one an outsider can actually reach now, and it
+    // withholds far more than `lastLoginIp`. What is gone is the mapper for a profile endpoint
+    // nobody can call.
 
     // ─── Summary ──────────────────────────────────────────────────────────────
     console.log(`\n─────────────────────────────────────────────────────────────────────────`);

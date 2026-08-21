@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAuth, requireRole } from '../middlewares/auth.middleware';
+import { requireAuth } from '../middlewares/auth.middleware';
 import { FileUploadController, uploadMultiple, uploadVideos } from '../controllers/file-upload.controller';
 import { FileManagementController } from '../controllers/file-management.controller';
 
@@ -11,7 +11,15 @@ const router = Router();
  * Provides file upload and management endpoints for authenticated users.
  * - Upload: Role-based file size limits (100MB-2GB)
  * - Management: List, retrieve, update, delete files
- * - Admin: Hard delete, orphan listing
+ *
+ * ⚠ There is no administrative half here any more. `GET /orphans` and
+ * `DELETE /:id/permanent` were the only two `requireRole(['admin'])` routes on this
+ * router, and Phase 5 Part B moved them onto the internal admin mount
+ * (`/api/internal/admin/files`, `modules/catalog/routes/admin-file.routes.ts`) behind
+ * `requireAdminCaller` and wi-admin's `files.orphans.read` / `files.delete`. The
+ * handlers did not move — only the door. Do not re-add an admin-only route here: this
+ * surface is the one a vendor, agency, agent or customer session reaches, and an
+ * `admin` role can no longer arrive on it at all.
  */
 
 // Apply authentication to all routes
@@ -59,14 +67,6 @@ router.post('/upload/video', uploadVideos, FileUploadController.uploadVideos);
 // === CRUD MANAGEMENT ===
 
 /**
- * GET /api/files/orphans
- * List orphaned files (no live references, older than specified date)
- * Admin only
- * MUST be before /:id route to avoid routing conflict
- */
-router.get('/orphans', requireRole(['admin']), FileManagementController.listOrphans);
-
-/**
  * GET /api/files/storage
  * Storage usage + plan limit summary for the authenticated owner.
  * MUST be before /:id to avoid routing conflict.
@@ -99,12 +99,5 @@ router.patch('/:id', FileManagementController.updateFile);
  * Only works if the file has no live references
  */
 router.delete('/:id', FileManagementController.deleteFile);
-
-/**
- * DELETE /api/files/:id/permanent
- * Permanently delete file (admin only)
- * Best-effort storage delete - logs failure but doesn't rollback DB delete
- */
-router.delete('/:id/permanent', requireRole(['admin']), FileManagementController.hardDeleteFile);
 
 export default router;

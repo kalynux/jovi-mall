@@ -1,11 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
-import { TelegramNotificationService } from './services/telegram-notification.service';
-import { SendNotificationSchema } from './validators/telegram.validator';
 import { CommandBus } from '../command-bus/command-bus';
 import { asyncHandler } from '../../api/middlewares/async-handler';
 import { AppError, createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
-import { sendSuccess } from '../../core/responses';
 
 interface TelegramWebhookPayload {
     chat_id: string;
@@ -16,19 +13,22 @@ interface TelegramWebhookPayload {
 }
 
 /**
- * Telegram bot ingress + the admin direct-send.
+ * Telegram bot ingress — **the webhook, and nothing else**.
  *
  * Account linking is NOT here any more. `link-token`, `status`, `toggle` and
  * `disconnect` moved to `/api/me/connections`, which binds to the User rather
- * than issuing a deep-link token the user carries to the bot. This controller
- * keeps only what genuinely belongs to Telegram: the webhook, and sending.
+ * than issuing a deep-link token the user carries to the bot.
+ *
+ * The admin direct-send is not here either (Phase 5 Part C). `sendNotification` was an
+ * admin-only handler on a webhook prefix; the capability now lives at
+ * `POST /api/internal/admin/messaging/telegram` and calls
+ * `TelegramNotificationService` from there, which is why this class no longer holds one.
+ * The service itself is untouched and has several other callers.
  */
 export class TelegramController {
-    private notificationService: TelegramNotificationService;
     private commandBus: CommandBus;
 
     constructor(commandBus: CommandBus) {
-        this.notificationService = new TelegramNotificationService();
         this.commandBus = commandBus;
     }
 
@@ -80,34 +80,6 @@ export class TelegramController {
             if (error instanceof AppError) return next(error);
 
             next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 400, error.message));
-        }
-    });
-
-    /**
-     * Send a Telegram message (admin only).
-     *
-     * Resolves `userId` through the connections module now — the `telegram_links`
-     * collection it used to read is gone.
-     */
-    sendNotification = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-        try {
-            const validatedData = SendNotificationSchema.parse(req.body);
-
-            const result = await this.notificationService.send(validatedData);
-
-            if (result.success) {
-                sendSuccess(res, result);
-            } else {
-                next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 400, result.error));
-            }
-        } catch (error: any) {
-            console.error('[Telegram] Error sending notification:', error.message);
-
-            if (error.name === 'ZodError') {
-                return next(createAppError(ERROR_CODES.VALIDATION_ERROR, 400, 'Validation failed', { details: error.errors }));
-            }
-
-            next(createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 500, 'Failed to send notification'));
         }
     });
 }

@@ -580,9 +580,14 @@ export class FileManagementController {
     });
 
     /**
-     * DELETE /api/files/:id/permanent
-     * Permanently delete file (admin only)
+     * DELETE /api/internal/admin/files/:id/permanent
+     * Permanently delete file (administrators only)
      * Storage delete is best-effort - logs failure but doesn't rollback
+     *
+     * Moved off the public `/api/files` router at Phase 5 Part B; the handler is
+     * unchanged. The `role !== 'admin'` check below is now a SECOND lock rather than
+     * the only one — `requireAdminCaller` fabricates `req.auth.role = 'admin'`, so it
+     * is satisfied rather than contradicted, and it stays deliberately.
      */
     static hardDeleteFile = asyncHandler(async (req: Request, res: Response) => {
         const { id } = req.params;
@@ -623,9 +628,14 @@ export class FileManagementController {
     });
 
     /**
-     * GET /api/files/orphans
-     * List orphaned files (admin only)
+     * GET /api/internal/admin/files/orphans
+     * List orphaned files (administrators only)
      * Minimum 24 hours old to prevent accidental deletion
+     *
+     * Moved off the public `/api/files` router at Phase 5 Part B; the handler is
+     * unchanged, including the `role !== 'admin'` check — see `hardDeleteFile` above.
+     * ⚠ This answers the whole `File`, storage `key` included. wi-admin withholds the
+     * key from its own projection (Phase 5 D-10); the two shapes are not the same.
      */
     static listOrphans = asyncHandler(async (req: Request, res: Response) => {
         // Admin-only (also enforced by requireRole at the route level)
