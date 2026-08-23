@@ -37,7 +37,7 @@ dotenv.config();
 
 import { GeoapifyProvider } from '../../src/core/geocoding/providers/geoapify.provider';
 import { LocationIqProvider } from '../../src/core/geocoding/providers/locationiq.provider';
-import { IGeocodingProvider } from '../../src/core/geocoding/geocoding-provider.interface';
+import { GeoCandidate, IGeocodingProvider } from '../../src/core/geocoding/geocoding-provider.interface';
 
 let passed = 0;
 let failed = 0;
@@ -77,11 +77,37 @@ async function exercise(label: string, provider: IGeocodingProvider): Promise<vo
     assert(`${label}: formatted_address is non-empty`, first.formatted_address.trim().length > 0,
         'an empty formatted address is the signature of a mis-mapped response field');
 
-    const [lon, lat] = first.coordinates.coordinates;
+    // ⚠ Asserted across the CANDIDATE LIST, not on the top result, and the
+    // distinction was learned the hard way on 2026-08-23. This suite's job is the
+    // adapter's FIELD MAPPING; a provider's RANKING is its own business and not
+    // something this repository can fix. Geoapify ranks the exact street match
+    // for "Boulevard de la Liberté, Akwa, Douala" THIRD, with confidence 0, below
+    // a different Akwa 267 km away — so asserting on `results[0]` failed for a
+    // reason that had nothing to do with the mapping being right.
+    //
+    // The failure this assertion exists for is still caught: a swapped [lat, lng]
+    // pair puts Douala in the Gulf of Guinea, thousands of km out, so NO candidate
+    // would land near. Both halves stay plausible numbers, which is why it is
+    // asserted rather than eyeballed.
+    const distanceKm = (c: GeoCandidate): number => {
+        const [lon, lat] = c.coordinates.coordinates;
+        return Math.hypot((lon - LNG) * 111 * Math.cos((LAT * Math.PI) / 180), (lat - LAT) * 111);
+    };
+    const nearest = results.reduce((a, b) => (distanceKm(a) <= distanceKm(b) ? a : b));
+
     assert(`${label}: coordinates are [lng, lat] in that ORDER`,
-        Math.abs(lat - LAT) < 0.5 && Math.abs(lon - LNG) < 0.5,
-        `got [${lon}, ${lat}] — a swapped pair puts Douala in the Gulf of Guinea, and both halves `
-        + 'are still plausible numbers, which is why this is asserted rather than eyeballed');
+        distanceKm(nearest) < 25,
+        `nearest of ${results.length} candidate(s) was ${distanceKm(nearest).toFixed(1)} km from Akwa — `
+        + 'a swapped pair would be thousands of km out');
+
+    // REPORTED, never asserted. Relevance is the provider's, and pinning it would
+    // make this suite fail on somebody else's ranking change. It is printed
+    // because it is the number that decides the CHAIN ORDER (ADR-A04 D-3): the
+    // chain only consults the next provider when the first returns nothing, so
+    // whoever is first is what a customer sees.
+    console.log(
+        `  ℹ  ${label}: top result ${distanceKm(first).toFixed(1)} km from Akwa — "${first.formatted_address}"`,
+    );
 
     assert(`${label}: the GeoJSON type is Point`, first.coordinates.type === 'Point');
 

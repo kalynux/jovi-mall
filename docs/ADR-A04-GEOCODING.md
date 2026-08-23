@@ -84,19 +84,58 @@ address search reaches, at which point the platform is back where this ADR start
 geocode. Two providers do not merely hedge the choice, they **add the allowances together**, and
 the code to do it is one class.
 
-**The order is not the obvious one, and that is the part to preserve.** LocationIQ has the larger
-daily allowance and still goes *second*, because:
+**The order is `locationiq,geoapify`, and it was REVERSED by measurement on the day it shipped.**
+The original reasoning below is kept, because it is a good argument that turned out to be aimed at
+the wrong risk.
 
-| | Geoapify | LocationIQ |
-|---|---|---|
-| daily | 3 000 | **5 000** |
-| burst | **5 rps** | 2 rps |
-| when exceeded | **soft** — they contact you | **hard** — immediate 429, no buffer on the free plan |
-
-Address autocomplete is bursty by nature: three keystrokes in one second is already over
-LocationIQ's limit. So the provider that tolerates bursts and degrades gracefully absorbs the
-normal load, and the one that refuses hard is held in reserve for when the first runs out. Leading
-with LocationIQ would produce 429s during ordinary typing while its daily allowance sat unspent.
+> ### ⚠ Amended the same day — the first draft optimised for the wrong failure
+>
+> **The original order was `geoapify,locationiq`,** on these numbers:
+>
+> | | Geoapify | LocationIQ |
+> |---|---|---|
+> | daily | 3 000 | **5 000** |
+> | burst | **5 rps** | 2 rps |
+> | when exceeded | **soft** — they contact you | **hard** — immediate 429, no buffer |
+>
+> Address autocomplete is bursty — three keystrokes in one second is already over LocationIQ's
+> limit — so the provider that tolerates bursts led, and the one that refuses hard was held in
+> reserve. That reasoning is sound and it is **not** why the order is what it is.
+>
+> **What it missed: the chain only consults the next provider when the first returns NOTHING.**
+> A first provider that answers *confidently and wrongly* is therefore never corrected, while one
+> that 429s always is. **The failover already absorbs the rate limit. Nothing absorbs bad
+> relevance.** The two failure modes have asymmetric costs and the order must be chosen for the
+> one that has no recovery.
+>
+> **Measured on six real Cameroonian addresses, 2026-08-23**, top result vs. the true location:
+>
+> | Query | Geoapify | LocationIQ |
+> |---|---|---|
+> | Boulevard de la Liberté, Akwa, Douala | **267.6 km** — *"Akwa, Akonolinga"*, a different town | 0.8 km |
+> | Carrefour Ndokotti, Douala | 2.3 km | 2.3 km |
+> | Rue Njo-Njo, Bonapriso, Douala | 0.9 km | 0.4 km |
+> | Bonamoussadi, Douala | 0.9 km | 0.5 km |
+> | Marché Central, Yaoundé | 1.0 km | 1.0 km |
+> | Avenue Kennedy, Yaoundé | 1.3 km | 1.3 km |
+> | **within 10 km** | **5 / 6** | **6 / 6** |
+>
+> ⚠ **The tally understates it — read the failure mode instead.** For the first query Geoapify
+> returned the *exact street*, correctly geocoded, as its **third** candidate with
+> `rank.confidence: 0`, beneath a same-named place 267 km away at confidence 0.5. So it is not a
+> coverage gap that a second provider would fill; it is a **ranking** defect, and sorting our
+> candidates by the provider's own confidence would make it worse rather than better. There is no
+> adapter-side fix.
+>
+> **Accepted cost of the reversal:** LocationIQ's 2 rps is now the front line, so sustained
+> concurrent typing will 429 more often, and each 429 costs a wasted call before Geoapify answers.
+> That is affordable here — the D-1 cache sits in front of the whole chain, so repeated and common
+> queries never reach a provider at all, and the combined 8 000/day has ample headroom at this
+> stage. Revisit if `GEO_PROVIDER_RATE_LIMITED` becomes common in the logs.
+>
+> **The lesson, and it is the reusable half:** an ordering decision taken on published rate limits
+> is a decision taken on the vendor's documentation. This one survived about two hours against six
+> real addresses from the market the platform actually serves.
 
 **What the chain falls over on** — and the third row is the one somebody will want to "improve":
 
@@ -128,12 +167,20 @@ both. The second is the `assertUploadScannerSafe` argument: silently skipping a 
 deployment runs on its fallback believing it runs on its primary. Nominatim is keyless and always
 appended, so the chain can never come out empty.
 
-**⚠ Neither adapter has been exercised against a live key.** They are written against the
-published response shapes. `verify:geocoding-providers` is the check — it asserts the field
-mapping, the `[lng, lat]` **order** (a swapped pair puts Douala in the Gulf of Guinea and both
-halves remain plausible numbers), and that a no-match returns `[]` rather than throwing. It
-**skips green** when a key is absent, and says loudly that it proved nothing. Run it before
-trusting the chain in a deployment.
+**✅ Both adapters are verified against live keys — 2026-08-23, `verify:geocoding-providers` 28/0.**
+Field mapping, `components.city`/`region`/`country_code` populated, the `[lng, lat]` **order** (a
+swapped pair puts Douala in the Gulf of Guinea and both halves remain plausible numbers), reverse
+geocoding, and that a no-match returns `[]` rather than throwing — Geoapify signals it with an
+empty `FeatureCollection`, LocationIQ with a **404**, and both had to arrive as an empty array or
+the chain would spend every provider's quota on every unmatchable address.
+
+⚠ **That suite asserts the MAPPING and only reports the RANKING.** The distinction was learned
+here: its coordinate assertion originally read `results[0]` and failed against Geoapify for a
+reason that had nothing to do with the adapter — see the amendment above. It now asserts that
+*some* candidate lands near (which still catches a swapped pair, thousands of km out) and prints
+where the top one landed, because that number is what decides the chain order and is not something
+this repository can fix. It **skips green** when a key is absent and says loudly that it proved
+nothing.
 
 ---
 

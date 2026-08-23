@@ -125,9 +125,15 @@ function buildOne(
  * ⚠ A misspelt name is still fatal — see the `default` branch above.
  */
 function buildChain(config: GeocodingConfig): IGeocodingProvider {
+    // ⚠ LocationIQ FIRST. This is the reverse of what the rate limits alone
+    // suggest, and it was reversed on 2026-08-23 by measurement — see ADR-A04
+    // D-3's amendment. The short version: the chain only consults the second
+    // provider when the first returns EMPTY or errors, so a first provider that
+    // answers CONFIDENTLY AND WRONGLY is never corrected, while one that 429s is.
+    // The failover already absorbs the rate limit; nothing absorbs bad relevance.
     const requested = config.chain && config.chain.length > 0
         ? [...config.chain]
-        : (['geoapify', 'locationiq'] as GeoProviderName[]);
+        : (['locationiq', 'geoapify'] as GeoProviderName[]);
 
     if (!requested.includes('nominatim')) requested.push('nominatim');
 
