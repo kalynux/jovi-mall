@@ -40,9 +40,17 @@ export interface IAgencyStockLevel extends IBaseDocument {
   product_id: Types.ObjectId;
   variant_id: Types.ObjectId;
 
-  /** Physically on the shelf. Only Phase 2 writes this; `derived` rows hold 0. */
+  /**
+   * Physically on the shelf, INCLUDING units already spoken for. `derived` rows hold
+   * 0 — nobody has counted them. Written only by `AgencyStockMovementRepository`,
+   * always beside the movement row that explains it.
+   */
   quantity_on_hand: number;
-  /** Spoken for by an unfulfilled order. Only Phase 2 writes this. */
+  /**
+   * The subset of `quantity_on_hand` an unfulfilled order is holding, so what is
+   * sellable from this shelf is `on_hand − reserved` — the same split
+   * `InventoryAvailabilityCalculator` computes for the catalogue counter.
+   */
   quantity_reserved: number;
 
   source: StockLevelSource;
@@ -62,12 +70,17 @@ export interface IAgencyStockLevel extends IBaseDocument {
  *
  * ## Why two quantity fields when Phase 1 populates neither
  *
- * Phase 2 wires the (currently dead) `StockReservationService` family as
- * written: stock is decremented at *reservation* time, restored on release, and
- * commit is a bookkeeping flip. That model needs on-hand and reserved as
- * separate counters — it is exactly the split `InventoryAvailabilityCalculator`
- * already computes as `stock - activeReservations`. Adding the second field
- * later means migrating every row; adding it now costs a default of 0.
+ * ⚠ **This paragraph used to say the `StockReservationService` family was "currently
+ * dead". It has not been true since `OrderStockService` wired it** — reserve at
+ * checkout, commit at payment success and at COD order creation, release on cancel and
+ * on the unpaid sweep, restock on a returned shipment. Step 14 therefore did not have
+ * to invent movement events; it PROJECTS those four onto these two counters
+ * (`AgencyStockProjectionService`). Recorded rather than quietly corrected, because it
+ * is the fourth "nothing does X yet" claim in this phase to outlive its subject.
+ *
+ * The split still earns both fields for the reason it always did: what is sellable from
+ * a shelf is `on_hand − reserved`, exactly as `InventoryAvailabilityCalculator`
+ * computes `stock − activeReservations` for the catalogue counter.
  *
  * ## Soft-deleted, not hard-deleted
  *
@@ -102,17 +115,25 @@ const AgencyStockLevelSchema = new Schema<IAgencyStockLevel>({
     ref: MODELS.PRODUCT_VARIANT,
     required: true,
   },
+  // ⚠ NO `min: 0`, and that is a decision rather than an omission.
+  //
+  // An order may sell units a depot record never received — the agency simply has
+  // not entered the intake yet — and the honest record of that is a NEGATIVE balance
+  // the agency can see and settle with a `count_adjustment`. A `min` would make the
+  // write throw inside a post-payment path, and clamping would silently break
+  // `quantity_on_hand === Σ movement deltas`, which is the one invariant the
+  // reconciler checks. Agency-initiated movements ARE refused below zero, in
+  // `AgencyStockMovementRepository` — see its class docstring for why the rule is
+  // asymmetric.
   quantity_on_hand: {
     type: Number,
     required: true,
     default: 0,
-    min: 0,
   },
   quantity_reserved: {
     type: Number,
     required: true,
     default: 0,
-    min: 0,
   },
   source: {
     type: String,

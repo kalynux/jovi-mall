@@ -72,6 +72,52 @@ router.post('/products/:productId/suspend', AgencyInventoryController.suspend);
 router.post('/products/:productId/unsuspend', AgencyInventoryController.unsuspend);
 
 /**
+ * The counted-stock verbs (Step 14, D-6). Keyed on the ROW, unlike the three product-level
+ * actions above — a receipt is a physical event at one shelf, and two variants of one
+ * product can arrive on different days.
+ *
+ * All four are declared BEFORE `/:id`. They are two-segment paths and Express matches in
+ * declaration order, so the bare `/:id` GET above would not shadow them — but `/:id` is a
+ * literals-last convention here and breaking it once is how the next route gets swallowed.
+ *
+ * ⚠ **Nothing here writes `ProductVariant.stock`.** The catalogue number is the vendor's,
+ * changed only through the two-sided stock-request flow; these move the AGENCY's count of
+ * what is physically on its shelf. The two are allowed to disagree — that disagreement is
+ * exactly what `POST /:id/count` exists to settle.
+ */
+
+/**
+ * POST /api/agency/inventory/:id/receipts
+ *
+ * Body: `{ quantity, note? }`. Goods arrived. The first receipt on a row flips it from
+ * `derived` to `counted`, after which order movements are projected onto it and the
+ * storage invoice bills against it.
+ */
+router.post('/:id/receipts', AgencyInventoryController.recordReceipt);
+
+/** POST /api/agency/inventory/:id/returns — `{ quantity, reason? }`, goods back to the vendor. */
+router.post('/:id/returns', AgencyInventoryController.recordReturnToVendor);
+
+/**
+ * POST /api/agency/inventory/:id/count
+ *
+ * Body: `{ countedQuantity, reason }` — what you COUNTED, not a difference. The reason is
+ * required because this is the one verb that moves stock with no physical event behind it.
+ */
+router.post('/:id/count', AgencyInventoryController.recordCount);
+
+/**
+ * POST /api/agency/inventory/:id/transfers
+ *
+ * Body: `{ toLocationId, quantity, reason? }` — `null` for your primary depot. Two movements
+ * in one transaction, so units are never in both buildings or neither. Moves STOCK, not the
+ * arrangement: the product still names the depot its vendor chose.
+ */
+router.post('/:id/transfers', AgencyInventoryController.transfer);
+
+/** GET /api/agency/inventory/:id/movements — the shelf's ledger, newest first. */
+router.get('/:id/movements', AgencyInventoryController.listMovements);
+/**
  * GET /api/agency/inventory/:id
  *
  * `:id` is the stock-level ROW id, not a variant — the same SKU at two depots is

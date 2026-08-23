@@ -3,15 +3,14 @@ import { IStorageBasedPricing } from '../../../delivery/delivery-agency.model';
 /**
  * What an agency should be charging to warehouse one SKU, for one month.
  *
- * ## This is a DISPLAY figure and nothing else
+ * ## This is a figure the platform now RECORDS, and still does not charge (D-7)
  *
- * The platform does not track storage payment, does not invoice it, and does not
- * act on it. `monthly_storage_fee_per_sku` has been collected at agency onboarding
- * since day one and has never been charged — `EarningsQuoteService` deliberately
- * excludes it from the per-order split because it is rent, not a delivery fee.
- * Nothing here changes that. It exists so an agency can see, per SKU, the number it
- * is owed and go and collect it out-of-band; the only platform lever attached to it
- * is the agency's own manual suspension.
+ * Step 14 gave it a durable home: `AgencyStorageInvoiceService` issues a monthly
+ * statement per (agency, vendor) built from these quotes, which both sides can read and
+ * the agency can mark settled. **No money moves.** `EarningsQuoteService` still excludes
+ * `monthly_storage_fee_per_sku` from every per-order split — it is rent, not a delivery
+ * fee — and the platform neither collects it from the vendor nor pays it to the agency.
+ * What changed is that the number is written down instead of merely rendered.
  *
  * ## Why size is shown but does not price
  *
@@ -49,6 +48,15 @@ export interface StorageFeeQuote {
     monthlyRatePerSku: number;
     /** The quantity the fee is computed over — see `resolveStorageQuantity`. */
     quantity: number;
+    /**
+     * Where that quantity came from.
+     *
+     * `counted` — an agency has recorded intake on this shelf and the figure is theirs.
+     * `uncounted` — nobody has, so the quantity is 0 and the estimate with it. A client
+     * must render those two differently: "0 due" and "not counted yet" are not the same
+     * statement, and conflating them is how an agency concludes it is owed nothing.
+     */
+    quantityBasis: 'counted' | 'uncounted';
     monthlyEstimate: number;
     size: StorageSize | null;
 }
@@ -107,37 +115,44 @@ export function resolveStorageSize(
 /**
  * The quantity a storage fee is charged over.
  *
- * **Not `quantity_on_hand`.** That counter is Phase 2's and is 0 on every row
- * today, so pricing off it would quote every agency zero. The number used is the
- * catalogue quantity for the SKU — which is legitimate here precisely because of
- * the other two changes shipped with this: it is now a figure *both parties signed
- * off on* (nobody moves it unilaterally on a warehoused SKU), and it is guaranteed
- * finite (unlimited stock blocks activation for `agency_storage` products).
+ * ⚠ **This is `quantity_on_hand` now, and it used to be the catalogue quantity.** The old
+ * comment here said "not `quantity_on_hand` — that counter is Phase 2's and is 0 on every
+ * row today", which was true and is the reason the catalogue number stood in for it.
+ * Step 14 makes the counter real (D-6), and rent is owed on what is physically on a shelf,
+ * not on what a vendor lists for sale. The two can now legitimately differ — a vendor
+ * selling from two channels, a delivery not yet booked in, a variance not yet settled —
+ * and billing the wrong one would put a number on an invoice that nobody can go and count.
  *
- * An infinite-stock SKU still yields 0 — it can only be a legacy or suspended row,
- * and inventing a quantity for it would be a fabricated charge.
+ * **An UNCOUNTED row yields 0**, and that is the visible cost of D-6: until an agency
+ * records intake, the platform does not know what it is holding and will not invent a
+ * charge for it. The quote reports which case it is in (`quantityBasis`) so a screen can
+ * say "no intake recorded" rather than "nothing owed".
+ *
+ * A NEGATIVE balance also yields 0. It means more went out than was ever recorded in, so
+ * the shelf holds nothing this can honestly bill for, and the agency owes itself a count.
  */
 export function resolveStorageQuantity(
-    catalogStock: { quantity: number; isInfinite: boolean },
+    warehoused: { onHand: number; isCounted: boolean },
 ): number {
-    if (catalogStock.isInfinite) return 0;
-    return Math.max(0, catalogStock.quantity);
+    if (!warehoused.isCounted) return 0;
+    return Math.max(0, warehoused.onHand);
 }
 
 export function quoteStorageFee(
     pricing: IStorageBasedPricing | null | undefined,
-    catalogStock: { quantity: number; isInfinite: boolean },
+    warehoused: { onHand: number; isCounted: boolean },
     size: StorageSize | null,
 ): StorageFeeQuote {
     const storageBasedEnabled = pricing?.enabled ?? false;
     const monthlyRatePerSku = pricing?.monthly_storage_fee_per_sku ?? 0;
-    const quantity = resolveStorageQuantity(catalogStock);
+    const quantity = resolveStorageQuantity(warehoused);
 
     return {
         basis: 'per_sku_monthly',
         storageBasedEnabled,
         monthlyRatePerSku,
         quantity,
+        quantityBasis: warehoused.isCounted ? 'counted' : 'uncounted',
         monthlyEstimate: storageBasedEnabled ? monthlyRatePerSku * quantity : 0,
         size,
     };

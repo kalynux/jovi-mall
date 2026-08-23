@@ -38,15 +38,19 @@ export function findRemovedDepotIds(
  * and, because routing falls back to the primary on a dangling id, the goods
  * would quietly appear to be in a different building.
  *
- * ## What "holds stock" means in Phase 1
+ * ## What "holds stock" means (Step 14)
  *
- * Row EXISTENCE, not quantity. Every derived quantity is currently 0, so a
- * `quantity > 0` test would never fire and this guard would be decorative. The
- * true statement this phase can make is "products are configured to be stored
- * here", and that is exactly what deleting the depot would orphan. When Phase 2
- * makes counts real, tighten `countByLocations` to
- * `quantity_on_hand > 0 || quantity_reserved > 0` — the call site here does not
- * change.
+ * **Quantity, not row existence** — `quantity_on_hand > 0 || quantity_reserved > 0`, in
+ * `countByLocations`. The call site here did not change, exactly as the Phase 1 note
+ * predicted; only the predicate did.
+ *
+ * The consequence is deliberate and is the reason it waited for counted stock: a depot
+ * holding only configured-but-never-counted rows is now removable, and those rows land as
+ * **unassigned** on the next reconcile rather than being silently attributed to another
+ * building. Refusing on configuration alone would mean an agency could never close a depot
+ * it had emptied, because the vendors' products still name it.
+ *
+ * `skuCount` in the error details therefore now means "rows holding something", not "rows".
  *
  * ## Why not MAGAZIN_CONFLICT
  *

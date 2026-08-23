@@ -1,13 +1,14 @@
 # Agency Inventory
 
-Which SKUs this agency warehouses, at which depot, what they should be costing in
-storage rent, and the two things the agency can do about them. Backs the agency
-dashboard's inventory screen.
+Which SKUs this agency warehouses, at which depot, **how many are physically on the
+shelf**, what they cost in storage rent, and what the agency can do about them. Backs the
+agency dashboard's inventory screen.
 
 > Related docs: [Magazin](./magazin.md) (the depots themselves) ·
 > [Stock requests](./stock-requests.md) (changing a recorded quantity) ·
 > [Vendor → Delivery Agencies](../vendor/delivery-agencies.md#list-an-agencys-pickup-locations)
 > (how a vendor picks a depot) · [Earnings](./earnings.md) ·
+> [Storage statements](./storage-invoices.md) (the monthly rent record) ·
 > [Front-end changelog](../FRONTEND-CHANGELOG-agency-storage.md).
 
 ## Base Path
@@ -30,26 +31,38 @@ the caller.
 | [`PATCH /products/:productId/depot`](#4-move-a-product-to-another-depot) | re-point a stored product |
 | [`POST /products/:productId/suspend`](#5-suspend--unsuspend) | take it off the storefront |
 | [`POST /products/:productId/unsuspend`](#5-suspend--unsuspend) | put it back |
+| [`POST /:id/receipts`](#6-counting-what-is-on-the-shelf) | goods arrived |
+| [`POST /:id/returns`](#6-counting-what-is-on-the-shelf) | goods went back to the vendor |
+| [`POST /:id/count`](#6-counting-what-is-on-the-shelf) | a physical count |
+| [`POST /:id/transfers`](#6-counting-what-is-on-the-shelf) | move stock to another of your depots |
+| [`GET /:id/movements`](#7-the-movement-ledger) | that shelf's ledger |
 
 ---
 
 > [!IMPORTANT]
 > ## Two different quantities live on every row. Do not merge them.
 >
-> | Field | What it is | Real today? |
+> | Field | What it is | Who moves it |
 > |---|---|---|
-> | `catalogStock.quantity` | the **agreed** quantity for this SKU — the vendor's catalogue number, which on a warehoused SKU neither party can now change alone | **yes** |
-> | `quantityOnHand` / `quantityReserved` | the **counted** quantity — what somebody physically verified on a shelf | **no, always `0`** |
+> | `catalogStock.quantity` | the **agreed** quantity for this SKU — the vendor's catalogue number across every channel | the vendor proposes, you approve ([stock requests](./stock-requests.md)) |
+> | `quantityOnHand` / `quantityReserved` | the **counted** quantity — what is physically on your shelf | **you**, by recording receipts, returns and counts; and the order path, as customers buy |
 >
-> `countsAreDerived: true` and per-row `source: "derived"` still describe the second
-> pair only. Phase 1 has no intake flow, stock does not move on delivery, and nothing
-> counts a shelf — so those two remain zero and the honest label for them is still
-> "not counted".
+> **Both are real now.** They are allowed to disagree, and the disagreement is
+> information rather than an error: a vendor sells the same SKU through other channels,
+> a delivery has arrived but not been booked in, a box is missing. `POST /:id/count` is
+> how you settle it.
 >
-> What *has* changed is that the first one is now meaningful to you: it is the number
-> the two of you jointly govern (see [Stock requests](./stock-requests.md)), it is
-> guaranteed finite, and it is what the storage fee is quoted against. Label the two
-> distinctly on screen — something like **"Agreed"** vs **"Counted on hand"**.
+> ⚠ **A row you have never counted reports `source: "derived"` and quantities of `0`,**
+> and that is not "you hold none" — it is "nobody has said". Until you record a receipt
+> the platform makes no claim about that shelf, its storage fee quotes **0**
+> (`storageFee.quantityBasis: "uncounted"`), and the order path leaves its counters
+> alone. Render those two states differently: *"not counted yet"* and *"empty"* are not
+> the same sentence.
+>
+> `countsAreDerived` at the top level is now **computed** — true only when every row in
+> the response is uncounted. On a mixed page it is `false` while uncounted rows are still
+> present, so **read the per-row `source`**; the top-level flag is a shortcut for a screen
+> that has not started counting at all.
 
 ---
 
@@ -464,7 +477,144 @@ inactive or their connection needs re-approval. The two never interfere:
 
 ---
 
-## 6. How rows appear and disappear
+## 6. Counting what is on the shelf
+
+Four verbs, all keyed on the **stock row** (`:id` from the list) rather than on the
+product — a receipt is a physical event at one shelf, and two variants of one product can
+arrive on different days. All four answer `201` with the row's new balances.
+
+```json
+{
+  "success": true,
+  "data": {
+    "stockLevelId": "665f…",
+    "quantityOnHand": 42,
+    "quantityReserved": 3,
+    "movementId": "665f…",
+    "appliedDelta": 12
+  },
+  "message": "Stock received."
+}
+```
+
+### `POST /:id/receipts` — goods arrived
+
+```json
+{ "quantity": 12, "reason": "delivery note 4471" }
+```
+
+`quantity` is a positive integer. **The first receipt on a row is what makes it counted**
+— it flips `source` to `"counted"`, after which sales move its counters and the monthly
+storage statement bills against it.
+
+### `POST /:id/returns` — goods went back to the vendor
+
+Same body. Refused with `422 INVENTORY_INSUFFICIENT_STOCK` if the shelf does not hold
+that many; `details` carries `quantityOnHand`, `quantityReserved` and `requested`.
+
+### `POST /:id/count` — a physical count
+
+```json
+{ "countedQuantity": 40, "reason": "quarterly count" }
+```
+
+**Send what you counted, not the difference.** The platform works out the delta against
+whatever the record says at that instant, inside the same transaction that applies it, so
+a sale landing mid-count cannot turn your correction into a second error. `0` is a
+legitimate count. `reason` is **required**: this is the only verb that moves stock with no
+physical event behind it, so it is the only record that will ever explain the difference
+between "we miscounted" and "a box is missing".
+
+A count that matches the record still writes a movement, with a delta of 0. *"We checked,
+and it was right"* is worth having in the ledger.
+
+### `POST /:id/transfers` — move stock between your own depots
+
+```json
+{ "toLocationId": "665f…", "quantity": 4, "reason": "consolidating" }
+```
+
+`toLocationId: null` means your primary depot. Two movements land in one transaction, so
+the units are never in both buildings or in neither. The destination row is created if you
+have never held that SKU there.
+
+| Refusal | Meaning |
+|---|---|
+| `422 INVENTORY_LOCATION_UNKNOWN` | that depot is not one of yours |
+| `422 INVENTORY_TRANSFER_SAME_LOCATION` | the stock is already there |
+| `422 INVENTORY_INSUFFICIENT_STOCK` | the source shelf does not hold that many |
+
+> [!IMPORTANT]
+> **A transfer moves goods; it does not move the arrangement.** The product still names
+> the depot its vendor chose, so the next reconcile re-derives the original row. If what
+> you want is for the SKU to *live* at the other depot from now on, use
+> [`PATCH /products/:productId/depot`](#4-move-a-product-to-another-depot) as well — and
+> note it now answers **`409 INVENTORY_DEPOT_CHANGE_HOLDS_STOCK`** while counted units are
+> still sitting on the old shelf. Transfer first, then re-point. The order matches physical
+> reality, which is the point.
+
+### What the order path does to these numbers
+
+On a **counted** row, and never on an uncounted one:
+
+| When | `quantityOnHand` | `quantityReserved` |
+|---|---|---|
+| a customer checks out | — | **+** held |
+| the sale completes (payment, or a COD order being placed) | **−** sold | **−** released |
+| the checkout is cancelled or lapses | — | **−** released |
+| a delivered parcel comes back | **+** returned | — |
+
+⚠ **`quantityOnHand` can go negative**, and it is a signal rather than a bug: it means more
+has been sold from that shelf than was ever recorded as arriving — usually a delivery
+nobody booked in. Your own verbs refuse to go below zero; the order path does not, because
+refusing there would fail a customer's checkout over your paperwork, and clamping would
+hide the gap for good. Settle it with `POST /:id/count`.
+
+---
+
+## 7. The movement ledger
+
+`GET /:id/movements?page=1&limit=20` — every movement on one shelf, newest first.
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "665f…",
+      "type": "sale",
+      "onHandDelta": -2,
+      "reservedDelta": -2,
+      "onHandAfter": 40,
+      "reservedAfter": 0,
+      "reason": null,
+      "actorRole": "system",
+      "refType": "order",
+      "refId": "665f…",
+      "createdAt": "2026-08-22T10:14:03.221Z"
+    }
+  ],
+  "meta": { "total": 37, "page": 1, "limit": 20, "totalPages": 2 }
+}
+```
+
+| `type` | `actorRole` | Meaning |
+|---|---|---|
+| `receipt` | `agency` | goods arrived |
+| `return_to_vendor` | `agency` | goods went back |
+| `count_adjustment` | `agency` | a physical count corrected the record |
+| `transfer_out` / `transfer_in` | `agency` | the same goods, another of your depots |
+| `reservation` / `reservation_released` | `system` | a checkout held units, or gave them up |
+| `sale` | `system` | the units were sold and left the shelf |
+| `customer_return` | `system` | a delivered parcel came back |
+
+`onHandAfter` and `reservedAfter` are the balances that movement produced, so the ledger
+reads as a running account. The row's current quantities are always the sum of its
+deltas — a scheduled sweep checks exactly that and repairs the row if they ever disagree.
+
+---
+
+## 8. How rows appear and disappear
 
 You do not create rows. The roster is **derived** from the catalog and refreshed
 when you read this endpoint (debounced, so rapid paging costs nothing). A depot change
@@ -494,17 +644,18 @@ a new one.
 
 ---
 
-## 7. Not yet available
+## 9. Not yet available
 
-Deliberately absent, in the order they are planned:
+The three items this section used to list — counted quantities, intake and transfer, and
+storage billing — **are now built**; sections 6 and 7 above and
+[Storage statements](./storage-invoices.md) are their contracts. What is still absent:
 
-1. **True counted quantities** — reservation at checkout, settlement on delivery,
-   restoration on return/failure. This is what flips `source` to `"counted"` and makes
-   `quantityOnHand` real. Note this is now the *only* missing quantity: the agreed
-   quantity (`catalogStock`) is live, and it is the one the fee is quoted against.
-2. **Intake and transfer** — recording what physically arrived, and moving stock
-   between your depots. (You can move a product's *routing* today; you cannot yet
-   record a physical transfer.)
-3. **Storage billing** — the platform still does not invoice or track
-   `monthly_storage_fee_per_sku`. `storageFee` above tells you what to charge; charging
-   it and chasing it remain yours.
+1. **The platform does not move storage money.** A statement is a record both sides can
+   read; nothing charges the vendor and nothing pays you. Collecting it is still yours.
+2. **No stock-level alerts.** Nothing warns you that a shelf is running low, has gone
+   negative, or has not been counted in months. The numbers are there; the watching is not.
+3. **No per-depot capacity.** A depot has no declared size, so nothing refuses a receipt
+   for being more than the building holds.
+4. **No historical quantity series.** The movement ledger reconstructs one, but there is no
+   endpoint that returns "what did this shelf hold on the 4th" — which is also why a
+   storage statement bills the quantity on hand at issue rather than a monthly average.

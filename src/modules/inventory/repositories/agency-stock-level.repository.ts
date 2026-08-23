@@ -1,4 +1,4 @@
-import { PipelineStage, Types } from 'mongoose';
+import { ClientSession, PipelineStage, Types } from 'mongoose';
 import { AgencyStockLevelModel, IAgencyStockLevel } from '../models/agency-stock-level.model';
 import { COLLECTIONS } from '../../../core/database/collections';
 
@@ -72,11 +72,20 @@ export interface StockLevelSummary {
   /** Distinct products the agency has storage-suspended. */
   suspendedCount: number;
   /**
-   * Σ over rows of `monthly_storage_fee_per_sku × catalogue quantity`. Computed in
-   * the aggregation rather than by summing a page, because a dashboard header that
-   * only totals the visible 20 rows is worse than no total at all.
+   * Σ over rows of `monthly_storage_fee_per_sku × COUNTED quantity on hand`. Computed in
+   * the aggregation rather than by summing a page, because a dashboard header that only
+   * totals the visible 20 rows is worse than no total at all.
+   *
+   * ⚠ It used to multiply by the CATALOGUE quantity, because no counted one existed
+   * (Step 14 / D-6). An agency that has recorded no intake now totals **0** where it
+   * previously saw a figure — which is the honest answer, and is why `countedRows` sits
+   * beside it: a header must be able to say "nothing counted yet" rather than "nothing owed".
    */
   totalMonthlyEstimate: number;
+  /** Rows whose quantities somebody has actually counted. */
+  countedRows: number;
+  /** Rows that exist because a product is configured here, and were never counted. */
+  derivedRows: number;
 }
 
 export interface StockLevelFilters {
@@ -202,6 +211,34 @@ export class AgencyStockLevelRepository {
   }
 
   /**
+   * Every COUNTED row this agency holds, joined to the catalogue — the storage invoice's
+   * input.
+   *
+   * Unpaginated on purpose: a statement that stopped at a page boundary would bill part of a
+   * magazine and look complete. Bounded in practice by how many SKUs an agency has actually
+   * taken in, which is the same order as its roster.
+   *
+   * DERIVED rows are excluded because nobody counted them, so there is no quantity this
+   * could honestly charge for — the same rule resolveStorageQuantity applies per row.
+   */
+  async findCountedRowsForAgency(agencyId: string): Promise<StockLevelRow[]> {
+    if (!Types.ObjectId.isValid(agencyId)) return [];
+
+    const rows = await AgencyStockLevelModel.aggregate([
+      {
+        $match: {
+          agency_id: new Types.ObjectId(agencyId),
+          deletedAt: null,
+          source: 'counted',
+          quantity_on_hand: { $gt: 0 },
+        },
+      },
+      ...CATALOG_JOIN_STAGES,
+    ]).exec();
+    return (rows as Array<Record<string, any>>).map(toStockLevelRow);
+  }
+
+  /**
    * The whole-magazine roll-up, over the SAME filters as the list so the header and
    * the rows below it agree.
    *
@@ -250,15 +287,21 @@ export class AgencyStockLevelRepository {
         },
         // An infinite-stock SKU contributes 0, matching `resolveStorageQuantity` —
         // inventing a quantity for it would be a fabricated charge.
+        // The COUNTED shelf, not the catalogue quantity — `resolveStorageQuantity` makes the
+        // same choice for a single row, and the header must agree with the rows under it.
+        // An uncounted row contributes 0; so does a negative one, which means the record is
+        // in variance and there is nothing here that can honestly be billed.
         billableUnits: {
           $sum: {
             $cond: [
-              { $eq: ['$variant.isInfiniteStock', true] },
+              { $eq: ['$source', 'counted'] },
+              { $max: [0, { $ifNull: ['$quantity_on_hand', 0] }] },
               0,
-              { $max: [0, { $ifNull: ['$variant.stock', 0] }] },
             ],
           },
         },
+        countedRows: { $sum: { $cond: [{ $eq: ['$source', 'counted'] }, 1, 0] } },
+        derivedRows: { $sum: { $cond: [{ $eq: ['$source', 'counted'] }, 0, 1] } },
       },
     });
 
@@ -269,6 +312,8 @@ export class AgencyStockLevelRepository {
       unassignedCount: result?.unassignedCount ?? 0,
       suspendedCount: (result?.suspendedProductIds ?? []).length,
       totalMonthlyEstimate: (result?.billableUnits ?? 0) * monthlyRatePerSku,
+      countedRows: result?.countedRows ?? 0,
+      derivedRows: result?.derivedRows ?? 0,
     };
   }
 
@@ -355,16 +400,168 @@ export class AgencyStockLevelRepository {
   }
 
   /**
+   * What each of these variants has COUNTED on a shelf, keyed by variant id.
+   *
+   * A variant maps to at most one counted row (one effective agency, one depot), so this
+   * is a lookup rather than a sum. Absent from the map means "nobody has counted it",
+   * which is deliberately distinguishable from a counted zero — see
+   * `resolveStorageQuantity`, where the two produce the same number and must not produce
+   * the same sentence on a screen.
+   */
+  async warehousedByVariant(variantIds: string[]): Promise<Map<string, number>> {
+    const valid = variantIds.filter(id => Types.ObjectId.isValid(id));
+    if (valid.length === 0) return new Map();
+
+    const rows = await AgencyStockLevelModel.find({
+      variant_id: { $in: valid.map(id => new Types.ObjectId(id)) },
+      source: 'counted',
+      deletedAt: null,
+    })
+      .select('variant_id quantity_on_hand')
+      .lean()
+      .exec();
+
+    return new Map(rows.map(r => [String(r.variant_id), r.quantity_on_hand ?? 0]));
+  }
+
+  /**
+   * Force a row's counters to given values. The drift repair, and nothing else.
+   *
+   * ⚠ The ONLY write to these two fields that does not go through
+   * `AgencyStockMovementRepository`, and it exists to restore the invariant that
+   * repository maintains rather than to move stock. Do not reach for it to implement a
+   * verb — a quantity that changes with no movement row is precisely the state
+   * `findDrift` reports as a bug.
+   */
+  async setCounters(
+    agencyId: string,
+    stockLevelId: string,
+    onHand: number,
+    reserved: number,
+  ): Promise<void> {
+    await AgencyStockLevelModel.updateOne(
+      {
+        _id: new Types.ObjectId(stockLevelId),
+        agency_id: new Types.ObjectId(agencyId),
+        deletedAt: null,
+      },
+      { $set: { quantity_on_hand: onHand, quantity_reserved: reserved } },
+    ).exec();
+  }
+
+  /**
+   * The raw document, scoped to the agency.
+   *
+   * Distinct from `findByIdForAgency`, which returns the joined READ model. The
+   * counted-stock verbs need the row itself — its current counters, its variant and
+   * its depot — inside the same transaction that is about to move it.
+   */
+  async findRawByIdForAgency(
+    id: string,
+    agencyId: string,
+    session?: ClientSession,
+  ): Promise<IAgencyStockLevel | null> {
+    if (!Types.ObjectId.isValid(id) || !Types.ObjectId.isValid(agencyId)) return null;
+    const query = AgencyStockLevelModel.findOne({
+      _id: new Types.ObjectId(id),
+      agency_id: new Types.ObjectId(agencyId),
+      deletedAt: null,
+    });
+    if (session) query.session(session);
+    return query.exec();
+  }
+
+  /**
+   * The row a transfer is moving stock INTO, created if this agency has never held
+   * that SKU at that depot.
+   *
+   * Stamped `counted` on creation, and that is what keeps it alive: the reconciler
+   * retires only `derived` rows, so a destination the catalogue does not name — the
+   * ordinary case, since the product still names the depot it was configured with —
+   * survives the next sweep instead of vanishing with the goods on it.
+   */
+  async findOrCreateCountedRow(
+    agencyId: string,
+    locationId: string | null,
+    template: { vendorId: Types.ObjectId; productId: Types.ObjectId; variantId: Types.ObjectId },
+    session: ClientSession,
+  ): Promise<IAgencyStockLevel> {
+    const filter = {
+      agency_id: new Types.ObjectId(agencyId),
+      variant_id: template.variantId,
+      location_id: locationId ? new Types.ObjectId(locationId) : null,
+      deletedAt: null,
+    };
+
+    const row = await AgencyStockLevelModel.findOneAndUpdate(
+      filter,
+      {
+        $setOnInsert: {
+          vendor_id: template.vendorId,
+          product_id: template.productId,
+          quantity_on_hand: 0,
+          quantity_reserved: 0,
+          source: 'counted',
+          last_reconciled_at: new Date(),
+          deletedAt: null,
+          purgeAt: null,
+        },
+      },
+      { new: true, upsert: true, session },
+    ).exec();
+
+    return row;
+  }
+
+  /**
+   * Every live row for an agency, as raw documents — the reconciler drift pass.
+   *
+   * `derived` rows are included on purpose: a derived row that somehow holds a
+   * non-zero counter is precisely the drift worth reporting.
+   */
+  async findAllRawForAgency(agencyId: string): Promise<IAgencyStockLevel[]> {
+    if (!Types.ObjectId.isValid(agencyId)) return [];
+    return AgencyStockLevelModel.find({
+      agency_id: new Types.ObjectId(agencyId),
+      deletedAt: null,
+    }).exec();
+  }
+
+  /**
+   * The counted row holding this variant, if one exists.
+   *
+   * The order path's entry point. A variant maps to at most one row: a product names
+   * ONE effective agency and ONE depot, so there is no ambiguity to resolve here — and
+   * `derived` rows are excluded because nobody has counted them, so an order must not
+   * drive their counters (D-6).
+   */
+  async findCountedByVariant(variantId: string): Promise<IAgencyStockLevel | null> {
+    if (!Types.ObjectId.isValid(variantId)) return null;
+    return AgencyStockLevelModel.findOne({
+      variant_id: new Types.ObjectId(variantId),
+      source: 'counted',
+      deletedAt: null,
+    }).exec();
+  }
+  /**
    * How many SKUs sit at each of the given depots — the depot-deletion guard's
    * input. Depots with no rows are ABSENT from the map, so read it as
    * `map.get(id) ?? 0`.
    *
-   * Counts ROW EXISTENCE, not quantity, and that is deliberate for Phase 1:
-   * every derived quantity is 0, so a `quantity > 0` test would never fire and
-   * the guard would be decorative. "Products are configured to be stored here"
-   * is the true statement this phase can make, and it is exactly what deleting
-   * the depot would orphan. When Phase 2 makes counts real, tighten this to
-   * `quantity_on_hand > 0 || quantity_reserved > 0`.
+   * Counts rows that HOLD SOMETHING — `quantity_on_hand > 0 || quantity_reserved > 0`.
+   *
+   * ⚠ This changed in Step 14 and the change has a visible consequence. It used to count
+   * row EXISTENCE, because every quantity was 0 and a quantity test would never have fired;
+   * the true statement available then was "products are configured to be stored here".
+   * Now that counts are real, a depot holding only `derived` rows — configured, never
+   * counted — no longer blocks its own removal. Those rows are not lost: the next reconcile
+   * resolves them to `location_id: null` and the screen surfaces them as **unassigned**,
+   * which is what that state is for. What must not happen is the opposite — a depot with
+   * goods actually on its shelves being deletable — and that is what this now prevents.
+   *
+   * A NEGATIVE balance counts as holding something too, deliberately: it means the shelf
+   * record is in variance, and deleting the building it refers to is the last thing anybody
+   * should be able to do before settling it.
    */
   async countByLocations(agencyId: string, locationIds: string[]): Promise<Map<string, number>> {
     const valid = locationIds.filter(id => Types.ObjectId.isValid(id));
@@ -376,6 +573,10 @@ export class AgencyStockLevelRepository {
           agency_id: new Types.ObjectId(agencyId),
           deletedAt: null,
           location_id: { $in: valid.map(id => new Types.ObjectId(id)) },
+          $or: [
+            { quantity_on_hand: { $ne: 0 } },
+            { quantity_reserved: { $ne: 0 } },
+          ],
         },
       },
       { $group: { _id: '$location_id', count: { $sum: 1 } } },

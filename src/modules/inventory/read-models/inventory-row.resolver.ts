@@ -254,9 +254,13 @@ export class InventoryRowResolver {
           : null,
       },
 
+      // Against the WAREHOUSED count, never the catalogue quantity (Step 14). The two are
+      // both on this row — `catalogStock` above is what the vendor lists, this is what the
+      // agency counted — and rent is owed on the second. An uncounted row quotes 0 and says
+      // so through `quantityBasis`.
       storageFee: quoteStorageFee(
         pricing,
-        { quantity: catalogStock.quantity ?? 0, isInfinite: catalogStock.isInfinite ?? false },
+        { onHand: row.quantityOnHand, isCounted: row.source === 'counted' },
         resolveStorageSize(row.variantDimensions, row.productDimensions),
       ),
 

@@ -21,11 +21,14 @@ export interface InventoryListResult {
   data: InventoryRowDto[];
   meta: { total: number; page: number; limit: number; totalPages: number };
   /**
-   * TRUE for the whole of Phase 1. Every quantity below describes what is
-   * *configured* to be stored here, not what anybody counted — there is no
-   * intake flow and stock does not move on delivery yet. Surfaced at the top
-   * level (and per row as `source`) so a client cannot present these as counts
-   * by accident.
+   * TRUE when **every row in this response** is derived — configured to be stored here,
+   * never counted.
+   *
+   * ⚠ It used to be the hardcoded literal `true`, which was honest while nothing could
+   * count. Step 14 makes it computed, and the consequence is that a mixed page reports
+   * `false` while still containing derived rows: **the per-row `source` is the precise
+   * answer and the flag is the shortcut**, not the other way round. A client that renders a
+   * whole screen off this flag will mislabel a mixed page — read `source`.
    */
   countsAreDerived: boolean;
 }
@@ -48,7 +51,9 @@ export class AgencyInventoryService {
   ) { }
 
   async list(agencyId: string, query: InventoryQueryInput): Promise<InventoryListResult> {
-    await this.reconciler.reconcileIfStale(agencyId);
+    // No reconcile here. Rebuilding the roster on a read was right while it was pure
+    // configuration; it now also walks the movement ledger, which is not work to hang off a
+    // page load. `AgencyInventoryReconcileWorker` owns it — INVENTORY_CONFIG says why.
 
     const [page, pricing] = await Promise.all([
       this.stockLevels.paginateForAgency(
@@ -71,7 +76,7 @@ export class AgencyInventoryService {
         limit: query.limit,
         totalPages: Math.ceil(page.total / query.limit),
       },
-      countsAreDerived: true,
+      countsAreDerived: page.data.every(row => row.source !== 'counted'),
     };
   }
 
@@ -83,7 +88,6 @@ export class AgencyInventoryService {
    * page load pay for a second full-collection aggregation it usually does not need.
    */
   async summary(agencyId: string, query: InventoryQueryInput): Promise<StockLevelSummary> {
-    await this.reconciler.reconcileIfStale(agencyId);
 
     const pricing = await this.loadStoragePricing(agencyId);
     return this.stockLevels.summaryForAgency(
@@ -119,7 +123,7 @@ export class AgencyInventoryService {
     }
     const pricing = await this.loadStoragePricing(agencyId);
     const detail = await this.rows.toDetail(row, agencyId, this.storage, pricing);
-    return { ...detail, countsAreDerived: true };
+    return { ...detail, countsAreDerived: row.source !== 'counted' };
   }
 }
 

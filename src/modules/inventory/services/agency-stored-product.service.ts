@@ -83,6 +83,33 @@ export class AgencyStoredProductService {
       );
     }
 
+    // ⚠ Counted stock does not move because a configuration field changed (Step 14).
+    //
+    // Repointing the arrangement while units sit on the old shelf would either strand
+    // them on a row the reconciler no longer marks, or — worse, and this is the failure
+    // the whole inventory module was written to avoid — read as though the goods had
+    // walked to another building. Moving goods is `POST /inventory/:id/transfers`, which
+    // writes a movement pair and says so; this verb stays what it was, a change of
+    // arrangement. The agency does both, in the order that matches physical reality.
+    const holding = await this.stockLevels.findRowsForAgencyAndProduct(agencyId, productId);
+    const stillHolding = holding.filter(
+      row => row.quantityOnHand !== 0 || row.quantityReserved !== 0,
+    );
+    if (stillHolding.length > 0) {
+      throw createAppError(
+        ERROR_CODES.INVENTORY_DEPOT_CHANGE_HOLDS_STOCK,
+        409,
+        undefined,
+        {
+          rows: stillHolding.map(row => ({
+            stockLevelId: row.id,
+            sku: row.sku,
+            quantityOnHand: row.quantityOnHand,
+            quantityReserved: row.quantityReserved,
+          })),
+        },
+      );
+    }
     // ALWAYS through `mergeDeliveryConfig`. The repository `$set`s the whole
     // `delivery` sub-document, so writing it by hand would silently wipe
     // `agency_id` and `free_delivery` — and it also normalises `vendor_address_id`

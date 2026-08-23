@@ -47,6 +47,7 @@ import { AvailabilityRepositoryMongo } from '../../catalog/repositories/mongo/av
 import { StockReservationService } from '../../catalog/domain/services/pricing-inventory/StockReservationService';
 import { StockCommitService } from '../../catalog/domain/services/pricing-inventory/StockCommitService';
 import { StockReleaseService } from '../../catalog/domain/services/pricing-inventory/StockReleaseService';
+import { agencyStockProjectionService } from '../../inventory/services/agency-stock-projection.service';
 import { IOrder } from '../order.model';
 
 /**
@@ -132,6 +133,10 @@ export class OrderStockService {
                 session,
             });
         }
+
+        // The same hold, on the shelf it is actually held on. Skips every SKU no
+        // agency has counted, which is most of them — see AgencyStockProjectionService.
+        await agencyStockProjectionService.reserve(cartId, lines, session);
     }
 
     /**
@@ -170,6 +175,13 @@ export class OrderStockService {
                 );
             }
         }
+
+        await agencyStockProjectionService.sell(
+            cartId,
+            projectableLines(order),
+            String(order._id),
+            session,
+        );
     }
 
     /**
@@ -203,6 +215,8 @@ export class OrderStockService {
                 );
             }
         }
+
+        await agencyStockProjectionService.release(cartId, projectableLines(order), session);
     }
 
     /**
@@ -260,7 +274,7 @@ export class OrderStockService {
      */
     async restockForShipment(
         orderId: string,
-        shipment: { items?: Array<{ variant_id?: unknown; quantity: number }> },
+        shipment: { _id?: unknown; items?: Array<{ variant_id?: unknown; quantity: number }> },
         session?: ClientSession,
     ): Promise<void> {
         const lines = (shipment.items ?? []).map((item) => ({
@@ -268,6 +282,18 @@ export class OrderStockService {
             quantity: item.quantity,
         }));
         await this.restockLines(orderId, lines, session);
+
+        // Keyed on the SHIPMENT rather than the order: one order can return in several
+        // parcels, and an order-keyed idempotency key would let the first swallow the rest.
+        // A shipment with no id (legacy, or a caller passing a plain object) is skipped —
+        // an unkeyed projection is one a retry would apply twice.
+        if (shipment._id) {
+            await agencyStockProjectionService.restock(
+                String(shipment._id),
+                lines.filter((l): l is { variantId: string; quantity: number } => !!l.variantId),
+                session,
+            );
+        }
     }
 
     /**
@@ -286,6 +312,19 @@ export class OrderStockService {
         const held = await this.reservationRepository.countActiveByVariant(variantId);
         return variant.stock - held;
     }
+}
+
+/**
+ * An order's lines in the shape the depot projection wants.
+ *
+ * Lines with no `variant_id` are dropped rather than guessed at — the same escape the
+ * catalogue-counter loops above take, and for the same reason: a line that cannot name
+ * its sellable unit cannot name a shelf either.
+ */
+function projectableLines(order: IOrder): Array<{ variantId: string; quantity: number }> {
+    return order.items
+        .filter((item) => !!item.variant_id)
+        .map((item) => ({ variantId: String(item.variant_id), quantity: item.quantity }));
 }
 
 export const orderStockService = new OrderStockService();

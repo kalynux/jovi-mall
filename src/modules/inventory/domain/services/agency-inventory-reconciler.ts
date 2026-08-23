@@ -1,10 +1,15 @@
 import { IProductRepository } from '../../../catalog/repositories/interfaces/product.repository.interface';
 import { ProductRepositoryMongo } from '../../../catalog/repositories/mongo/product.repository.mongo';
 import { MagazinRepository } from '../../../magazin/repositories/magazin.repository';
+import { Types } from 'mongoose';
 import {
   AgencyStockLevelRepository,
   DerivedStockRow,
 } from '../../repositories/agency-stock-level.repository';
+import {
+  AgencyStockMovementRepository,
+  agencyStockMovementRepository,
+} from '../../repositories/agency-stock-movement.repository';
 
 /**
  * Where a stored product's stock is recorded, given the depot it names.
@@ -71,6 +76,7 @@ export class AgencyInventoryReconciler {
     private readonly products: IProductRepository = new ProductRepositoryMongo(),
     private readonly magazins: MagazinRepository = new MagazinRepository(),
     private readonly stockLevels: AgencyStockLevelRepository = new AgencyStockLevelRepository(),
+    private readonly movements: AgencyStockMovementRepository = agencyStockMovementRepository,
   ) { }
 
   /**
@@ -115,17 +121,106 @@ export class AgencyInventoryReconciler {
   /**
    * Reconcile unless it ran recently.
    *
-   * Called on the read path rather than from a cron, deliberately: Phase 1
-   * quantities are derived, so a stale roster costs nothing worth scheduling a
-   * job for, and an agency that has just onboarded a vendor sees the change
-   * immediately instead of at 3am. Phase 2, where quantities move with real
-   * events, is where a worker starts to earn its place.
+   * ⚠ **No longer called from the read path** (Step 14). It survives for the two places
+   * that legitimately want the roster fresh *now* — `changeDepot`, and a manual worker
+   * trigger — and it keeps the debounce so those cannot become an accidental hot loop.
+   * The scheduled pass is `AgencyInventoryReconcileWorker`; see `INVENTORY_CONFIG` for
+   * why a customer-facing GET is the wrong place to do this work now.
    */
   async reconcileIfStale(agencyId: string, maxAgeMs = RECONCILE_DEBOUNCE_MS): Promise<void> {
     const last = await this.stockLevels.findLastReconciledAt(agencyId);
     if (last && Date.now() - last.getTime() < maxAgeMs) return;
     await this.reconcile(agencyId);
   }
+
+  /**
+   * Every row whose counters disagree with its own movement ledger.
+   *
+   * **The ledger is the authority, and nothing else is.** Both are written in one
+   * transaction by `AgencyStockMovementRepository`, so a disagreement is a bug or a
+   * half-applied write — never a legitimate difference. It is deliberately NOT compared
+   * against `ProductVariant.stock`: that is the vendor's catalogue number across every
+   * channel, D-6 makes the depot count independent of it, and "correcting" one to the
+   * other would erase exactly the variance an agency needs to see. P-14 is the same
+   * lesson from the COD ledger — assert the invariant the application maintains, never a
+   * re-derivation from another collection.
+   *
+   * A row with no movements at all is not in drift; it is simply uncounted.
+   */
+  async findDrift(agencyId: string): Promise<StockDrift[]> {
+    const rows = await this.stockLevels.findAllRawForAgency(agencyId);
+    if (rows.length === 0) return [];
+
+    const sums = await this.movements.sumByStockLevels(
+      rows.map(r => r._id as Types.ObjectId),
+    );
+
+    const drifted: StockDrift[] = [];
+    for (const row of rows) {
+      const id = (row._id as Types.ObjectId).toString();
+      const ledger = sums.get(id);
+      if (!ledger) {
+        // No movements. A counter that is nonetheless non-zero IS drift — it means
+        // something wrote the row without writing the ledger, which is the exact
+        // failure this check exists for.
+        if (row.quantity_on_hand !== 0 || row.quantity_reserved !== 0) {
+          drifted.push({
+            stockLevelId: id,
+            onHand: row.quantity_on_hand,
+            reserved: row.quantity_reserved,
+            ledgerOnHand: 0,
+            ledgerReserved: 0,
+          });
+        }
+        continue;
+      }
+      if (row.quantity_on_hand !== ledger.onHand || row.quantity_reserved !== ledger.reserved) {
+        drifted.push({
+          stockLevelId: id,
+          onHand: row.quantity_on_hand,
+          reserved: row.quantity_reserved,
+          ledgerOnHand: ledger.onHand,
+          ledgerReserved: ledger.reserved,
+        });
+      }
+    }
+    return drifted;
+  }
+
+  /**
+   * Set every drifted counter back to what its ledger says, and report what moved.
+   *
+   * Idempotent by construction: a second pass finds nothing, because the correction sets
+   * the counter TO the ledger sum rather than adjusting it by a difference.
+   *
+   * ⚠ **The correction writes no movement row**, and that is the one judgement call here.
+   * A movement would balance the books and destroy the evidence — the ledger would then
+   * agree with the counter and nobody could ever tell that it once had not. The counter is
+   * the derived value; the ledger is the record; a repair restores the derived value and
+   * leaves the record alone. It is logged loudly instead, because a non-empty result here
+   * means a bug somewhere upstream and there is no other way to learn that.
+   */
+  async correctDrift(agencyId: string): Promise<StockDrift[]> {
+    const drifted = await this.findDrift(agencyId);
+    for (const drift of drifted) {
+      await this.stockLevels.setCounters(
+        agencyId,
+        drift.stockLevelId,
+        drift.ledgerOnHand,
+        drift.ledgerReserved,
+      );
+    }
+    return drifted;
+  }
+}
+
+/** A row whose counters and whose ledger disagree. The ledger side is the truth. */
+export interface StockDrift {
+  stockLevelId: string;
+  onHand: number;
+  reserved: number;
+  ledgerOnHand: number;
+  ledgerReserved: number;
 }
 
 /** How long a roster is considered fresh enough to serve without re-deriving. */
