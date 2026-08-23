@@ -89,7 +89,10 @@ jobs:
       - name: DB-free suites
         run: |
           set -euo pipefail
-          BASELINED="test:mobile-auth"
+          # EMPTY, and that is the point — see the note below. Every DB-free suite
+          # now runs in this loop. Keep the mechanism: it costs nothing and the next
+          # deliberate exclusion needs somewhere to go.
+          BASELINED=""
           SUITES=$(node -p "Object.keys(require('./package.json').scripts).filter(k => k.startsWith('test:')).join(' ')")
           failed=""
           for suite in $SUITES; do
@@ -102,58 +105,32 @@ jobs:
             exit 1
           fi
 
-      # ── The one known-red suite, declared rather than tolerated ──────────────
+      # ── There is no longer a known-red suite, and the mechanism is kept anyway ──
       # A pipeline that is red from its first run trains people to ignore it, which is
-      # the exact failure this whole workflow exists to prevent. So the suite that fails
-      # today is asserted at its EXACT counts and the build fails if either number moves
-      # IN EITHER DIRECTION — a new failure is still caught, and a fix is noticed rather
-      # than silently absorbed.
+      # the exact failure this whole workflow exists to prevent. So a suite that failed
+      # for a declared reason was asserted at its EXACT counts, failing IN EITHER
+      # DIRECTION — a new failure still caught, a fix noticed rather than absorbed.
       #
-      #   test:mobile-auth       127/2  — the FAILURE count is what is baselined: the
-      #                                   commented `if (!isValid) throw` in
-      #                                   auth.service.ts, excluded by owner instruction.
-      #                                   If it is ever re-enabled, the 2 moves and this
-      #                                   file must move with it. The PASS count moves
-      #                                   whenever the suite grows — 101 → 102 in plan
-      #                                   step 2.E.3, which added the assertion that
-      #                                   .env.example's ALLOWED_ORIGINS VALUE, not just
-      #                                   its comment, carries the Capacitor origins; and
-      #                                   102 → 127 in plan step 4.A.5, the 90-day absolute
-      #                                   session cap (ADR-A03) — 25 assertions covering
-      #                                   the arithmetic, the byte-identical copy through a
-      #                                   re-issue, D-9's iat fallback, and the source scans
-      #                                   that are the only thing capable of catching a
-      #                                   re-stamp in under 90 days.
+      # ALL THREE baselines are now gone, each because the suite went green:
       #
-      # test:contact-validation was the second, at 73/1, and is GONE from both places as
-      # of plan step 4.A.2 — it is 74/0 and runs in the discovery loop above like every
-      # other suite. Dropping it from BASELINED without also deleting its assert_counts
-      # line would have turned the fix itself into a red build: that block fails in
-      # EITHER direction, which is exactly what it is for.
+      #   test:contact-validation  73/1  -> 74/0   plan step 4.A.2
+      #   test:mobile-auth        127/2  -> 132/0  2026-08-21, Phase 5 Part E
+      #   verify:messaging-login   36/1  ->  41/0  2026-08-21, same change
       #
-      # A second suite is red for the same `isValid` reason: verify:messaging-login,
-      # 36/1 on "…and the OLD password no longer works". It is a LIVE suite, so it is
-      # baselined in the `live-suites` job below rather than here — same shape, same
-      # fail-in-either-direction rule. Re-enabling that line moves BOTH baselines.
-      - name: Baselined suites (exact counts)
-        run: |
-          set -uo pipefail
-          assert_counts() {
-            suite="$1"; want_pass="$2"; want_fail="$3"
-            out=$(npm run --silent "$suite" 2>&1 || true)
-            got=$(echo "$out" | grep -oE '[0-9]+ passed, [0-9]+ failed' | tail -1)
-            want="$want_pass passed, $want_fail failed"
-            if [ "$got" != "$want" ]; then
-              echo "$out"
-              echo "::error::$suite — baseline is '$want', got '${got:-no count line}'."
-              echo "::error::If this is a FIX, update the baseline in .github/workflows/ci.yml."
-              return 1
-            fi
-            echo "✔ $suite — $got (baseline held)"
-          }
-          rc=0
-          assert_counts test:mobile-auth 127 2 || rc=1
-          exit $rc
+      # The last two were the `isValid` pair: the commented `if (!isValid) throw` in
+      # auth.service.ts was RESTORED with the Phase 5 admin cutover, so the two failures
+      # it caused went with it and both suites then grew.
+      #
+      # ⚠ THE FIX SAT UNNOTICED FOR TWO DAYS, and this comment is where that gets
+      # recorded. Two phase close-outs re-stated "the two baseline reds are unchanged"
+      # without re-running either command; the numbers above were taken on 2026-08-23 by
+      # actually running them. The fail-in-either-direction rule was built precisely to
+      # catch this and could not, because nothing had been PUSHED since Phase 4 — an
+      # assertion that never executes enforces nothing, however well designed.
+      #
+      # jovi-mall now has NO red assertion anywhere. If a suite ever needs excluding
+      # again, add it to BASELINED above AND add an assert_counts line here — dropping
+      # it from one place only is how a fix becomes a red build.
 
       # ── A REAL gate now, at high+ (plan step 2.D.5) ──────────────────────────
       # Was reporting-only at 49 vulnerabilities / 4 critical. Part 2.D took production to
@@ -210,16 +187,23 @@ jobs:
   # before any step runs, and `rs.initiate()` has to happen afterwards. Doing it in a
   # step also puts the requirement in front of the next reader instead of in a flag.
   #
-  # ── ONE suite is excluded, and one is baselined ───────────────────────────
+  # ── ONE suite is excluded, and NONE is baselined any more ─────────────────
   #   verify:gateways      EXCLUDED. It talks to NotchPay and My-CoolPay with real
   #                        merchant credentials; there are none in CI, and putting them
   #                        here would put live payment keys in a workflow. Its two
   #                        money-moving probes are opt-in even locally.
-  #   verify:messaging-login  BASELINED at 36/1, for the same reason `test:mobile-auth`
-  #                        is baselined at 127/2: the commented `if (!isValid) throw`
-  #                        in `auth.service.ts`, out of scope by owner instruction. Its
-  #                        one failure is "…and the OLD password no longer works". If
-  #                        that line is ever re-enabled, both baselines move together.
+  #   verify:geocoding-providers  RUNS, and SKIPS GREEN here. It needs GEO_GEOAPIFY_API_KEY
+  #                        / GEO_LOCATIONIQ_API_KEY, which CI does not have; the suite is
+  #                        built to report each absent provider as skipped and stay green,
+  #                        saying loudly that it proved nothing. Locally, with both keys,
+  #                        it is 28/0 (2026-08-23). Do NOT add the keys here — it spends
+  #                        real quota on every run and the answer does not change per-commit.
+  #   verify:messaging-login  NO LONGER BASELINED. It was 36/1 for the same reason
+  #                        `test:mobile-auth` was 127/2 — the commented
+  #                        `if (!isValid) throw` in `auth.service.ts`. That line was
+  #                        RESTORED in Phase 5 Part E on 2026-08-21, so both suites went
+  #                        green and then grew: 41/0 and 132/0, measured 2026-08-23. It
+  #                        runs in the ordinary loop below like every other live suite.
   live-suites:
     name: live suites · Mongo (replica set) + Redis
     runs-on: ubuntu-latest
@@ -301,7 +285,9 @@ jobs:
         run: |
           set -uo pipefail
           EXCLUDED="verify:gateways"
-          BASELINED="verify:messaging-login"
+          # EMPTY — see the note above the job. Kept so the next deliberate
+          # exclusion has somewhere to go.
+          BASELINED=""
           SUITES=$(node -p "Object.keys(require('./package.json').scripts).filter(k => k.startsWith('verify:')).join(' ')")
           failed=""
           for suite in $SUITES; do
@@ -315,21 +301,12 @@ jobs:
             exit 1
           fi
 
-      # Same shape as the DB-free baseline block: exact counts, failing in EITHER
-      # direction, so a fix is noticed rather than silently absorbed.
-      - name: Baselined live suite (exact counts)
-        run: |
-          set -uo pipefail
-          out=$(npm run --silent verify:messaging-login 2>&1 || true)
-          got=$(echo "$out" | grep -oE '[0-9]+ passed, [0-9]+ failed' | tail -1)
-          want="36 passed, 1 failed"
-          if [ "$got" != "$want" ]; then
-            echo "$out"
-            echo "::error::verify:messaging-login — baseline is '$want', got '${got:-no count line}'."
-            echo "::error::If this is a FIX, update the baseline in .github/workflows/ci.yml."
-            exit 1
-          fi
-          echo "✔ verify:messaging-login — $got (baseline held)"
+      # The "Baselined live suite (exact counts)" step that stood here asserted
+      # verify:messaging-login at 36/1 and was DELETED on 2026-08-23, because the suite
+      # is 41/0. Removing it from BASELINED above without also deleting this step would
+      # have turned the fix into a red build — that block failed in EITHER direction,
+      # which is exactly what it was for, and is the same two-places edit the DB-free
+      # note above describes.
 
       - name: Stop jovi-mall
         if: always()
