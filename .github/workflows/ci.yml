@@ -270,6 +270,24 @@ jobs:
 
       # `verify:admin-users` is the one suite that needs the service listening rather
       # than booting it in-process. Started here, stopped in the always-run step below.
+      # ── The database CI starts with is EMPTY, and some suites assume it is not ──
+      # A developer machine has had `seed:plans` run against it at some point, months
+      # ago, and nobody remembers doing it. CI gets a fresh mongo container every run,
+      # so the first live run that ever happened failed inside verify:agent-e2e with
+      #     Default vendor plan 'starter' is not configured. Run the plan seed.
+      # raised from the COD earnings split — a failure three layers below the assertion
+      # that tripped, and nothing to do with the code under test.
+      #
+      # Pricing plans are reference data, not fixtures: the owner-scoped billing engine
+      # resolves every vendor, agency and agent to a plan, so a missing `starter` makes
+      # any money path throw. Seeding is therefore part of standing the service up, not
+      # part of any one suite.
+      #
+      # It runs BEFORE the server starts so a suite can never observe a half-seeded
+      # database, and it is idempotent — safe to re-run against a warm database too.
+      - name: Seed reference data (pricing plans)
+        run: npm run seed:plans
+
       - name: Start jovi-mall
         run: |
           set -euo pipefail

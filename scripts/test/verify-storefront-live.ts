@@ -284,7 +284,41 @@ async function main(): Promise<void> {
             .filter((l: { route?: unknown }) => l.route)
             .map((l: { route: { path: string } }) => l.route.path);
 
-        await assert('all seven public catalog routes are declared', () => paths.length === 7);
+        // ⚠ This asserted `paths.length === 7` and broke when Step 9 added
+        // `/products/:productId/related` — reporting only "expected 7", which says
+        // nothing about WHICH route appeared or vanished. A count is the weakest form
+        // of this check: it goes stale on every legitimate addition and it cannot tell
+        // an added route from a deleted one plus an added one. Naming them makes the
+        // failure message the diff.
+        const EXPECTED_PUBLIC_ROUTES = [
+            '/products',
+            '/products/:productId/related',
+            '/products/:productId',
+            '/categories',
+            '/stores',
+            '/stores/:slug',
+            '/stores/:slug/products',
+            '/stores/:storeSlug/products/:productSlug',
+        ];
+        await assert(
+            `the public catalog declares exactly its ${EXPECTED_PUBLIC_ROUTES.length} routes`,
+            () => {
+                const missing = EXPECTED_PUBLIC_ROUTES.filter((p) => !paths.includes(p));
+                const unexpected = paths.filter((p) => !EXPECTED_PUBLIC_ROUTES.includes(p));
+                if (missing.length || unexpected.length) {
+                    log(`     missing:    ${missing.join(', ') || '(none)'}`);
+                    log(`     unexpected: ${unexpected.join(', ') || '(none)'}`);
+                    return false;
+                }
+                return true;
+            },
+        );
+
+        // The two-segment route must come first. It is ordering-safe today because
+        // Express matches on segment count, but that stops being true the moment
+        // anybody makes the bare product route a prefix or wildcard match.
+        await assert('/products/:productId/related precedes the bare /products/:productId', () =>
+            paths.indexOf('/products/:productId/related') < paths.indexOf('/products/:productId'));
 
         await assert('/stores/:slug/products precedes the 4-segment product route', () =>
             paths.indexOf('/stores/:slug/products') < paths.indexOf('/stores/:storeSlug/products/:productSlug'));
