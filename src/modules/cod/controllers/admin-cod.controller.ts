@@ -7,6 +7,7 @@ import { agencyRemittanceService } from '../services/agency-remittance.service';
 import { agentDepositService } from '../services/agent-deposit.service';
 import { codDiscrepancyService } from '../services/cod-discrepancy.service';
 import { codTrustService } from '../services/cod-trust.service';
+import { resolveEffectiveTrustScore } from '../../agents/domain/services/agent-trust-override';
 import { codSummaryService } from '../services/cod-summary.service';
 import {
   CodPaginationQuerySchema,
@@ -53,6 +54,21 @@ const ResolveDiscrepancySchema = z.object({
 const TrustAdjustmentSchema = z.object({
   delta: z.number().int().min(-100).max(100),
   note: z.string().trim().min(1, 'A justification note is required').max(500),
+});
+
+/**
+ * The persistent trust override (O-7). `score: null` releases it.
+ *
+ * ⚠ Note this is an ABSOLUTE score where the sibling above is a DELTA, and that
+ * difference is the point rather than an inconsistency. A delta is a correction
+ * to a computed number and is consumed by the next recompute; an override is a
+ * judgement that replaces the computed number and outlives every recompute.
+ * `.nullable()` and not `clearable()` — an omitted `score` must be a 400, not a
+ * silent release of somebody else's pin.
+ */
+const TrustOverrideSchema = z.object({
+  score: z.number().int().min(0).max(100).nullable(),
+  reason: z.string().trim().min(1, 'A justification is required').max(500),
 });
 
 /**
@@ -294,6 +310,47 @@ export class AdminCodController {
       success: true,
       data: { agentId: req.params.id, trustScore: result.scoreAfter },
       message: 'Trust score adjusted.',
+    });
+  });
+
+  /**
+   * PUT /api/internal/admin/cod/agents/:id/trust-override
+   * Pin a trust score that OUTRANKS the computed one, or release it with
+   * `score: null`. Body: { score: 0..100 | null, reason }
+   *
+   * This is O-7's answer. See `resolveEffectiveTrustScore` for why it is a
+   * separate field rather than a write to `cod.trust_score`: the computed score
+   * is derived and every recompute overwrites it, so a judgement written there
+   * does not survive the night — which is exactly the failure that blocks the
+   * trust cutover.
+   */
+  static setTrustOverride = asyncHandler(async (req: Request, res: Response) => {
+    const { score, reason } = TrustOverrideSchema.parse(req.body);
+
+    const agent = await codTrustService.setOverride({
+      agentId: req.params.id,
+      score,
+      reason,
+      // `actorFromRequest` plus the role — the three-field stamp is what makes an
+      // administrator's id resolvable later, since they hold no row in this
+      // database and the cross-database join cannot exist.
+      actor: { ...actorFromRequest(req), role: req.auth!.role },
+    });
+
+    const effective = resolveEffectiveTrustScore(agent);
+
+    res.json({
+      success: true,
+      data: {
+        agentId: req.params.id,
+        // Both numbers, always. A screen that shows only the effective score
+        // cannot tell an operator what releasing the override would do.
+        effectiveTrustScore: effective.score,
+        computedTrustScore: effective.computed,
+        trustSource: effective.source,
+        override: effective.override,
+      },
+      message: score === null ? 'Trust override released.' : 'Trust override set.',
     });
   });
 

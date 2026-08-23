@@ -261,6 +261,61 @@ export interface IAgentCodProfile {
    * (agent lowering, agency raising).
    */
   max_threshold: number;
+
+  /**
+   * An administrator's PERSISTENT trust override — the answer to **O-7**.
+   *
+   * ── The question this field exists to answer ─────────────────────────────
+   *
+   * `trust_score` is computed. Today `CodTrustService.applyEvent` computes it
+   * from deltas; after the cutover `AgentTrustRecomputeWorker` will compute it
+   * from the five-factor composite. Either way it is DERIVED, and a nightly
+   * recompute overwrites whatever is there. That is fine for a signal and fatal
+   * for a judgement: an agent the platform has deliberately BLOCKED at 35 scores
+   * 100 under the composite, so the first recompute after the flip would hand
+   * them full cash exposure — measured, on the dev roster, at Phase 6 Step 11.
+   *
+   * O-7 put the two possible answers plainly: *either administrators keep a
+   * persistent override outside the composite, or manual adjustment stops being
+   * a thing that survives. Both are product decisions; what must not happen is
+   * the flip landing without either.* **The owner chose the override**
+   * (2026-08-23).
+   *
+   * ── Why it is a SEPARATE FIELD read at decision time ─────────────────────
+   *
+   * Not `trust_score` written by an admin — that is what does not survive. Not a
+   * value the recompute folds in — a recompute that writes `override ?? composite`
+   * into one field loses the distinction between *computed* and *pinned*, and
+   * there is then no way to un-pin.
+   *
+   * Because it lives beside the computed score and is consulted by the reader,
+   * it works **identically before and after the cutover**. That is the property
+   * that makes the flip safe rather than something to remember: no recompute
+   * touches this field, so none can erase it.
+   *
+   * `resolveEffectiveTrustScore()` is the ONE resolver. `null` means no override
+   * and the computed score applies, which is the normal state of every agent.
+   */
+  trust_override: IAgentTrustOverride | null;
+}
+
+/**
+ * A pinned trust score, set by an administrator, that outranks the computed one.
+ *
+ * The actor stamp is the three-field `actorStampFields()` convention: an
+ * administrator holds no row in this database, so `set_by_source` says which
+ * identity space `set_by_user_id` resolves in and `set_by_name` snapshots who it
+ * was, because the cross-database join cannot exist.
+ */
+export interface IAgentTrustOverride {
+  /** 0–100, on the same scale as `trust_score`. */
+  score: number;
+  /** Why it was pinned. Required — an unexplained override is unreviewable. */
+  reason: string;
+  set_at: Date;
+  set_by_user_id: string | null;
+  set_by_source: string;
+  set_by_name: string | null;
 }
 
 /** KYC / identity verification — a platform-wide gate, not an agency's call. */
@@ -529,6 +584,29 @@ const HomeBaseSchema = new Schema(
   { _id: false }
 );
 
+/**
+ * The administrator's pinned trust score (O-7). See `IAgentTrustOverride`.
+ *
+ * `_id: false` because it is a value, not an entity — there is one per agent and
+ * it is replaced wholesale or cleared, never referenced.
+ */
+const TrustOverrideSchema = new Schema(
+  {
+    score: {
+      type: Number,
+      required: true,
+      min: AGENT_CONFIG.TRUST_SCORE_MIN,
+      max: AGENT_CONFIG.TRUST_SCORE_MAX,
+    },
+    // Required, deliberately. An override with no reason cannot be reviewed by
+    // the next administrator, and this field outranks the whole scoring system.
+    reason: { type: String, required: true, trim: true },
+    set_at: { type: Date, required: true, default: Date.now },
+    ...actorStampFields('set_by'),
+  },
+  { _id: false }
+);
+
 const TrustSignalsSchema = new Schema(
   {
     on_time_rate: { type: Number, default: null, min: 0, max: 1 },
@@ -698,6 +776,10 @@ export const agentDefaults = {
   cod: (): IAgentCodProfile => ({
     trust_score: AGENT_CONFIG.TRUST_SCORE_SEED,
     max_threshold: AGENT_CONFIG.COD_THRESHOLD_MIN,
+    // No override is the normal state. `null` is the whole vocabulary — there is
+    // deliberately no "override disabled but remembered" state, because an
+    // override an operator can see and cannot rely on is worse than none.
+    trust_override: null,
   }),
 };
 
@@ -736,6 +818,9 @@ const DeliveryAgentSchema = new Schema<IDeliveryAgent>(
             min: AGENT_CONFIG.COD_THRESHOLD_MIN,
             max: AGENT_CONFIG.COD_THRESHOLD_MAX,
           },
+          // O-7's answer. Nullable, and NOT written by any recompute — see
+          // IAgentCodProfile.trust_override for why that is the whole design.
+          trust_override: { type: TrustOverrideSchema, default: null },
         },
         { _id: false }
       ),

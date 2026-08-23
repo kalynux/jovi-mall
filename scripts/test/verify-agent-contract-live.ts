@@ -77,6 +77,10 @@ import { agentContractService } from '../../src/modules/agents/domain/services/a
 import { agentGateService } from '../../src/modules/agents/domain/services/agent-gate.service';
 import { agentContractRepository } from '../../src/modules/agents/repositories/agent-contract.repository';
 import { codCashAccountService } from '../../src/modules/cod/services/cod-cash-account.service';
+import { codExposureService } from '../../src/modules/cod/services/cod-exposure.service';
+import { codTrustService } from '../../src/modules/cod/services/cod-trust.service';
+import { CodTrustEventModel } from '../../src/modules/cod/models/cod-trust-event.model';
+import { agentRepository } from '../../src/modules/agents/repositories/agent.repository';
 import { transactionManager } from '../../src/core/database/transaction.manager';
 import { ERROR_CODES } from '../../src/core/error-codes';
 
@@ -113,6 +117,16 @@ const ACTOR_USER = new Types.ObjectId();
 
 /** A platform-source actor stamp — the ban writes three fields from one call. */
 const BAN_ACTOR = { userId: ACTOR_USER.toString(), source: 'platform' as const, role: 'admin', name: 'verify:agent-contract' };
+
+/**
+ * An ADMIN-source stamp, for the trust override.
+ *
+ * ⚠ The two sources are not interchangeable and this fixture pair is the point:
+ * `source` says which DATABASE the id resolves in. An administrator holds no row
+ * in jovi-mall at all, so an override stamped 'platform' sends a future reader
+ * looking for a `users` document that was never there.
+ */
+const ADMIN_ACTOR = { userId: ACTOR_USER.toString(), source: 'admin' as const, role: 'admin', name: 'An Administrator' };
 
 const MINTED_AGENCIES = [AGENCY_A, AGENCY_B, AGENCY_C];
 
@@ -153,6 +167,7 @@ async function cleanup(): Promise<void> {
   await AgentAgencyContractModel.deleteMany({ agent_id: AGENT });
   await CodCashAccountModel.deleteMany({ owner_id: { $in: [AGENT.toString(), ...MINTED_AGENCIES.map((a) => a.toString())] } });
   await CodCashLedgerModel.deleteMany({ owner_id: { $in: [AGENT.toString(), ...MINTED_AGENCIES.map((a) => a.toString())] } });
+  await CodTrustEventModel.deleteMany({ agent_id: AGENT });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -631,6 +646,123 @@ async function scenario7Ban(): Promise<void> {
   assert('…and does NOT report a ban it does not have', kycGate.banned === false);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 8 · The administrator's persistent trust override (O-7)
+// ─────────────────────────────────────────────────────────────────────────────
+async function scenario8TrustOverride(): Promise<void> {
+  console.log('\n── 8 · The trust override outranks the computed score ──────────────────\n');
+  console.log('   O-7\'s answer, and the thing that makes the trust cutover safe: a');
+  console.log('   recompute may write anything it likes, and an administrator\'s pin');
+  console.log('   still decides. Asserted against real persistence because the whole');
+  console.log('   claim is about what SURVIVES a write.\n');
+
+  await makeAgent();
+
+  const full = await DeliveryAgentModel.findById(AGENT);
+  assert(
+    'an agent with no override is at their computed score',
+    codExposureService.effectiveLimit(full!, 500_000) === 500_000,
+    'a trust of 100 should scale the agency cap by 1',
+  );
+
+  // Pin them into the BLOCKED tier while the computed score stays at 100 — the
+  // exact shape of the case Phase 6 Step 11 measured and refused to flip on.
+  await codTrustService.setOverride({
+    agentId: AGENT.toString(),
+    score: 35,
+    reason: 'verify:agent-contract — cash shortfall under investigation',
+    actor: ADMIN_ACTOR,
+  });
+
+  const pinned = await DeliveryAgentModel.findById(AGENT);
+  assert(
+    'the computed score is UNTOUCHED by pinning — the two are separate axes',
+    pinned?.cod?.trust_score === 100,
+    `trust_score = ${pinned?.cod?.trust_score}`,
+  );
+  assert('…and the override is stored with its reason', pinned?.cod?.trust_override?.score === 35);
+  assert(
+    '…and an actor stamp, because an administrator resolves in no table here',
+    pinned?.cod?.trust_override?.set_by_source === 'admin',
+    `set_by_source = ${pinned?.cod?.trust_override?.set_by_source}`,
+  );
+
+  assert(
+    'the exposure limit collapses to ZERO — the pin, not the computed 100, decides',
+    codExposureService.effectiveLimit(pinned!, 500_000) === 0,
+    `limit = ${codExposureService.effectiveLimit(pinned!, 500_000)}`,
+  );
+
+  const refusal = await codeOf(() => codExposureService.assertCanTakeCodShipment(pinned!, 1, 500_000));
+  assert(
+    'a COD assignment is refused for trust, on the pinned number',
+    refusal === ERROR_CODES.COD_AGENT_TRUST_TOO_LOW,
+    `got ${refusal}`,
+  );
+
+  // ⚠ THE PROPERTY THE CUTOVER DEPENDS ON. A recompute writes the computed score;
+  // the override must be untouched by it. Simulated with the real repository
+  // method the worker calls, so this is the actual write path.
+  await agentRepository.setTrustScore(AGENT.toString(), 100, {});
+  const afterRecompute = await DeliveryAgentModel.findById(AGENT);
+  assert(
+    'a RECOMPUTE writing 100 does not erase the pin — this is what O-7 asked for',
+    afterRecompute?.cod?.trust_override?.score === 35,
+    `override = ${JSON.stringify(afterRecompute?.cod?.trust_override ?? null)}`,
+  );
+  assert(
+    '…so the agent is still blocked afterwards',
+    codExposureService.effectiveLimit(afterRecompute!, 500_000) === 0,
+  );
+
+  // Releasing returns them to what the platform thinks TODAY, not to what it
+  // thought when they were pinned.
+  await codTrustService.setOverride({
+    agentId: AGENT.toString(),
+    score: null,
+    reason: 'verify:agent-contract — investigation closed',
+    actor: ADMIN_ACTOR,
+  });
+  const released = await DeliveryAgentModel.findById(AGENT);
+  assert('releasing clears the override', (released?.cod?.trust_override ?? null) === null);
+  assert(
+    '…and the agent returns to the CURRENT computed score, not the pinned one',
+    codExposureService.effectiveLimit(released!, 500_000) === 500_000,
+  );
+
+  // An override is not a floor: it works upward too, which a clamping
+  // implementation would silently break.
+  await agentRepository.setTrustScore(AGENT.toString(), 40, {});
+  const dropped = await DeliveryAgentModel.findById(AGENT);
+  assert('a computed 40 puts the agent in the reduced tier', codExposureService.effectiveLimit(dropped!, 500_000) < 500_000);
+
+  await codTrustService.setOverride({
+    agentId: AGENT.toString(),
+    score: 90,
+    reason: 'verify:agent-contract — discrepancy resolved in their favour',
+    actor: ADMIN_ACTOR,
+  });
+  const raised = await DeliveryAgentModel.findById(AGENT);
+  assert(
+    'an override ABOVE the computed score restores full exposure — it is not a floor',
+    codExposureService.effectiveLimit(raised!, 500_000) === 500_000,
+  );
+
+  // The audit trail. An override changes cash standing more decisively than any
+  // delta, so it must be in the same append-only log.
+  const events = await CodTrustEventModel.find({ agent_id: AGENT }).sort({ created_at: 1 });
+  assert('every override write appended a trust event', events.length >= 3, `${events.length} event(s)`);
+  assert(
+    '…recording a delta of ZERO, because the COMPUTED score genuinely did not move',
+    events.every((e) => e.delta === 0),
+    'a fictional delta here would corrupt the log that reconstructs the computed score',
+  );
+  assert(
+    '…and naming the pinned value in the note',
+    events.some((e) => (e.note ?? '').includes('SET to 35')) && events.some((e) => (e.note ?? '').includes('RELEASED')),
+  );
+}
+
 async function main(): Promise<void> {
   await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/jovi_mall');
 
@@ -647,6 +779,7 @@ async function main(): Promise<void> {
     await scenario5Termination();
     await scenario6Pause();
     await scenario7Ban();
+    await scenario8TrustOverride();
   } finally {
     await cleanup();
     await mongoose.disconnect();

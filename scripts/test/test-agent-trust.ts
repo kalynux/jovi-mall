@@ -28,6 +28,10 @@ import {
   computeComposite,
   ratingFactor,
 } from '../../src/modules/agents/domain/services/agent-trust.service';
+import {
+  effectiveTrustScore,
+  resolveEffectiveTrustScore,
+} from '../../src/modules/agents/domain/services/agent-trust-override';
 import { AGENT_CONFIG } from '../../src/modules/agents/config/agent.config';
 import { IAgentTrustSignals } from '../../src/modules/agents/models/agent.model';
 
@@ -306,6 +310,97 @@ function main(): void {
     const start = worker.indexOf('for (const id of ids)');
     const end = worker.indexOf('console.log', start);
     return start > -1 && worker.slice(start, end).includes('catch');
+  });
+
+  console.log('\n── The administrator\'s persistent override (O-7) ──────────────────────\n');
+
+  // The behavioural half. `resolveEffectiveTrustScore` is pure, so unlike the
+  // shadow guarantee above this one CAN be tested rather than only scanned.
+  const agentWith = (
+    trustScore: number,
+    override: { score: number; reason: string } | null,
+  ) => ({
+    cod: {
+      trust_score: trustScore,
+      max_threshold: 0,
+      trust_override: override
+        ? {
+            score: override.score,
+            reason: override.reason,
+            set_at: new Date('2026-08-23T00:00:00Z'),
+            set_by_user_id: 'admin-1',
+            set_by_source: 'admin',
+            set_by_name: 'An Administrator',
+          }
+        : null,
+    },
+  }) as unknown as Parameters<typeof resolveEffectiveTrustScore>[0];
+
+  assert('with no override the computed score applies', () =>
+    resolveEffectiveTrustScore(agentWith(72, null)).score === 72);
+
+  assert('…and reports itself as computed', () =>
+    resolveEffectiveTrustScore(agentWith(72, null)).source === 'computed');
+
+  // THE case O-7 was raised about: the composite scores a blocked agent 100.
+  assert('an override BELOW the computed score wins — the O-7 case', () =>
+    resolveEffectiveTrustScore(agentWith(100, { score: 35, reason: 'cash shortfall under investigation' })).score === 35);
+
+  // …and the mirror image, which a "floor" or "ceiling" reading would break.
+  assert('an override ABOVE the computed score wins too — it is not a floor', () =>
+    resolveEffectiveTrustScore(agentWith(40, { score: 90, reason: 'discrepancy resolved in their favour' })).score === 90);
+
+  assert('the computed score is reported ALONGSIDE, so a screen can show both', () => {
+    const r = resolveEffectiveTrustScore(agentWith(100, { score: 35, reason: 'why' }));
+    return r.computed === 100 && r.override?.score === 35;
+  });
+
+  assert('…with the reason, because an unexplained override is unreviewable', () =>
+    resolveEffectiveTrustScore(agentWith(100, { score: 35, reason: 'cash shortfall' })).override?.reason
+      === 'cash shortfall');
+
+  assert('effectiveTrustScore() is the same answer, shorter', () =>
+    effectiveTrustScore(agentWith(100, { score: 35, reason: 'why' })) === 35);
+
+  console.log('\n── SOURCE SCANS: the override survives every recompute ────────────────\n');
+
+  // This is the guarantee the whole design rests on, and no behavioural test can
+  // see it: a recompute that overwrote the override would still produce a number.
+  assert('the recompute worker never writes cod.trust_override', () =>
+    !worker.includes('trust_override'));
+
+  assert('…and neither repository write path names it', () => {
+    const repo = stripComments(read('modules/agents/repositories/agent.repository.ts'));
+    const setScore = repo.slice(repo.indexOf('async setTrustScore'), repo.indexOf('async setTrustSignalsShadow'));
+    return !setScore.includes('trust_override');
+  });
+
+  assert('setTrustOverride is the ONLY writer of the field', () => {
+    const repo = stripComments(read('modules/agents/repositories/agent.repository.ts'));
+    // The DOTTED PATH is what writes; the bare word also appears as a parameter
+    // type. Both writes ($set and $unset) must be inside setTrustOverride, and
+    // there must be no third one anywhere in the file.
+    const writes = repo.split("'cod.trust_override'").length - 1;
+    const start = repo.indexOf('async setTrustOverride');
+    const end = repo.indexOf('async setTrustScore');
+    const inside = repo.slice(start, end).split("'cod.trust_override'").length - 1;
+    return writes === 2 && inside === 2;
+  });
+
+  // The two decision points. Reading `agent.cod.trust_score` at either of these
+  // is exactly the regression that makes an override look implemented and do
+  // nothing — the same failure class as the stock `$inc` that never ran.
+  assert('CodExposureService gates on the EFFECTIVE score, never the raw one', () => {
+    const exposure = stripComments(read('modules/cod/services/cod-exposure.service.ts'));
+    return exposure.includes('resolveEffectiveTrustScore(agent)')
+        && exposure.includes('effectiveTrustScore(agent)')
+        && !exposure.includes('agent.cod?.trust_score');
+  });
+
+  assert('setOverride does NOT write the computed score', () => {
+    const start = codTrust.indexOf('async setOverride');
+    const end = codTrust.indexOf('async applyEvent');
+    return start > -1 && !codTrust.slice(start, end).includes("'cod.trust_score'");
   });
 
   console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);

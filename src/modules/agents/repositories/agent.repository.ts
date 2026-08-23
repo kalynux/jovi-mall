@@ -65,6 +65,39 @@ export class AgentRepository {
     return await DeliveryAgentModel.find({ _id: { $in: agentIds } });
   }
 
+  /**
+   * Batch-resolve agent ids → the two fields a NON-STAFF audience may be shown:
+   * their name and their photo. Keyed by agent id string; ids with no agent are
+   * absent from the map.
+   *
+   * A narrow projection rather than `findManyByIds`, and the narrowness is the
+   * point rather than a performance note. The agent document carries legal
+   * identity, payout details, an emergency contact, device telemetry, trust
+   * signals and a cash balance; a caller that hydrates the whole thing to render
+   * a name is one careless spread away from publishing all of it. Same argument
+   * `AgentDirectoryMapper` makes, one layer lower.
+   *
+   * ⚠ It returns the FULL stored name. Callers publishing to a customer must put
+   * it through `toAgentDisplayName` first (ADR-A06) — this method answers "what is
+   * on file", not "what may be shown".
+   */
+  async findPublicIdentitiesByIds(
+    agentIds: string[],
+  ): Promise<Map<string, { name: string; avatarFileId: string | null }>> {
+    const ids = [...new Set(agentIds.filter((id): id is string => !!id))];
+    if (ids.length === 0) return new Map();
+    const rows = await DeliveryAgentModel.find({ _id: { $in: ids } })
+      .select('name avatar_file_id')
+      .lean()
+      .exec();
+    return new Map(
+      rows.map((r) => [
+        r._id.toString(),
+        { name: r.name, avatarFileId: r.avatar_file_id ? r.avatar_file_id.toString() : null },
+      ]),
+    );
+  }
+
   // ─── Directory (agency-facing discovery) ──────────────────────────────────
 
   /**
@@ -339,6 +372,30 @@ export class AgentRepository {
   }
 
   // ─── Trust ────────────────────────────────────────────────────────────────
+
+  /**
+   * Set or clear the administrator's persistent trust override (O-7).
+   *
+   * ⚠ **This is the ONLY writer of `cod.trust_override`, and no recompute is
+   * allowed to become a second one.** That is the property the whole design rests
+   * on: an override that a nightly sweep could touch is not persistent, and the
+   * cutover would then need somebody to remember to exclude it. Neither
+   * `setTrustScore` nor `setTrustSignalsShadow` names this field, deliberately.
+   *
+   * `null` clears, via `$unset` rather than `$set: null` — the schema path is
+   * nullable and both would read as "no override", but `$unset` keeps "never
+   * pinned" and "pinned then released" from becoming two documents that mean the
+   * same thing. Same rule the `bargain` window follows.
+   */
+  async setTrustOverride(
+    agentId: string,
+    override: IDeliveryAgent['cod']['trust_override'],
+  ): Promise<IDeliveryAgent | null> {
+    const update = override
+      ? { $set: { 'cod.trust_override': override } }
+      : { $unset: { 'cod.trust_override': 1 } };
+    return await DeliveryAgentModel.findByIdAndUpdate(agentId, update, { new: true });
+  }
 
   async setTrustScore(
     agentId: string,

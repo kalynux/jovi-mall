@@ -84,6 +84,17 @@ function attachRoutes(router: Router): Router {
      */
     router.post('/agents/:id/trust-adjustment', AdminCodController.adjustTrust);
 
+    /**
+     * PUT /agents/:id/trust-override
+     * Pin a trust score that OUTRANKS the computed one, or release it with
+     * `score: null`. Body: { score: 0..100 | null, reason }
+     *
+     * ⚠ Not the same thing as the adjustment above. That one nudges the COMPUTED
+     * score and is consumed by the next recompute; this one replaces it and
+     * survives every recompute — which is the point (O-7).
+     */
+    router.put('/agents/:id/trust-override', AdminCodController.setTrustOverride);
+
     /** GET /agencies — agencies currently owing the platform cash. */
     router.get('/agencies', AdminCodController.listAgencies);
 

@@ -6,6 +6,10 @@ import { CashCollectionModel } from '../models/cash-collection.model';
 import { CodCashAccountService, codCashAccountService } from './cod-cash-account.service';
 import { CodDiscrepancyService, codDiscrepancyService } from './cod-discrepancy.service';
 import { IDeliveryAgent } from '../../agents';
+import {
+  effectiveTrustScore,
+  resolveEffectiveTrustScore,
+} from '../../agents/domain/services/agent-trust-override';
 
 /**
  * CodExposureService - "never let an agent carry unlimited cash".
@@ -52,12 +56,22 @@ export class CodExposureService {
     maxExposureOverride: number | null
   ): Promise<void> {
     const agentId = agent._id.toString();
-    const trustScore = agent.cod?.trust_score ?? 100;
+    // ⚠ `resolveEffectiveTrustScore`, NEVER `agent.cod.trust_score`. An
+    // administrator's persistent override outranks the computed score — see that
+    // function's header for why (O-7). This is one of the two decision points
+    // that must read it; the other is `effectiveLimit` below.
+    const trust = resolveEffectiveTrustScore(agent);
+    const trustScore = trust.score;
 
     if (trustScore < COD_CONFIG.TRUST_REDUCED_THRESHOLD) {
       throw createAppError(ERROR_CODES.COD_AGENT_TRUST_TOO_LOW, 422, undefined, {
         trustScore,
         minimum: COD_CONFIG.TRUST_REDUCED_THRESHOLD,
+        // Which number refused them. An agency told "trust too low" about an
+        // agent whose computed score is 100 needs to know a human pinned it, or
+        // they will reasonably conclude the platform is broken.
+        trustSource: trust.source,
+        ...(trust.override ? { overrideReason: trust.override.reason } : {}),
       });
     }
 
@@ -89,7 +103,11 @@ export class CodExposureService {
    */
   effectiveLimit(agent: IDeliveryAgent, maxExposureOverride: number | null): number {
     const base = maxExposureOverride ?? COD_CONFIG.AGENT_MAX_EXPOSURE_DEFAULT;
-    const trustScore = agent.cod?.trust_score ?? 100;
+    // The second decision point. ⚠ Note there are now TWO unrelated things called
+    // an "override" on this method: `maxExposureOverride` is the dispatching
+    // AGENCY's cash cap, and the trust override is an ADMINISTRATOR's pinned
+    // score. They are multiplied together here and neither implies the other.
+    const trustScore = effectiveTrustScore(agent);
     if (trustScore >= COD_CONFIG.TRUST_FULL_THRESHOLD) return base;
     if (trustScore >= COD_CONFIG.TRUST_REDUCED_THRESHOLD) {
       return Math.floor(base * COD_CONFIG.TRUST_REDUCED_MULTIPLIER);

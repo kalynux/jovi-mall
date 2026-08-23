@@ -23,6 +23,19 @@ import { AgentRepository, agentRepository } from '../repositories/agent.reposito
  * `test:agent-trust` asserts it by source scan. The flip is Step 11 and it is a
  * one-line change here: `setTrustSignalsShadow` → `setTrustScore`.
  *
+ * ── ⚠ AND IT NEVER TOUCHES `cod.trust_override` ──────────────────────────────
+ * An administrator's pinned score (O-7) is a separate field, and NOTHING here
+ * writes it — not `setTrustSignalsShadow`, not `setTrustScore` after the flip.
+ * That is the property the whole override design rests on: an override a nightly
+ * sweep could overwrite is not persistent, and the cutover would then depend on
+ * somebody remembering to exclude it.
+ *
+ * The consequence worth stating: after the flip this worker will happily compute
+ * 100 for an agent an administrator has pinned at 35, and write it — correctly.
+ * The computed score is what the platform thinks; the override is what a human
+ * decided; `resolveEffectiveTrustScore` is where the two meet, and it is the
+ * override that wins. `test:agent-trust` scans for both halves.
+ *
  * Daily node-cron, mirroring the other maintenance sweeps.
  */
 export class AgentTrustRecomputeWorker implements ObservableWorker {
