@@ -9,7 +9,14 @@ import { GeoProviderName } from '../types/geo-address.types';
  * mirroring `core/storage/storage.instance.ts`.
  */
 
-export type GeocodingProviderType = GeoProviderName;
+/**
+ * What `GEO_PROVIDER` may be set to: any single provider, or `'chain'`.
+ *
+ * ⚠ `'chain'` is a CONFIGURATION value and is deliberately NOT a
+ * {@link GeoProviderName} — see that type's header. A chained deployment stores
+ * `'geoapify'` or `'locationiq'` on each address, never `'chain'`.
+ */
+export type GeocodingProviderType = GeoProviderName | 'chain';
 
 /** OpenStreetMap Nominatim. Keyless, but the usage policy REQUIRES a User-Agent. */
 export interface NominatimConfig {
@@ -58,9 +65,21 @@ export interface GeocodingConfig {
     /** Result caching. Always present; `enabled: false` is how it is switched off. */
     cache: GeocodingCacheConfig;
 
+    /**
+     * The failover order when `provider` is `'chain'`, from `GEO_PROVIDER_CHAIN`.
+     *
+     * A provider named here with no credentials is **skipped with a warning**, not
+     * a boot failure — that is what lets one `GEO_PROVIDER=chain` setting serve a
+     * developer machine with no keys, a staging box with one, and production with
+     * both. The chain only refuses to start when the skipping leaves it empty, and
+     * it cannot: `nominatim` is keyless and is always appended as the last resort.
+     */
+    chain?: GeoProviderName[];
+
     nominatim?: NominatimConfig;
     google?: ApiKeyProviderConfig;
     mapbox?: ApiKeyProviderConfig;
     here?: ApiKeyProviderConfig;
     geoapify?: ApiKeyProviderConfig;
+    locationiq?: ApiKeyProviderConfig;
 }

@@ -498,6 +498,13 @@ export const ERROR_CODES = Object.freeze({
     GEO_PROVIDER_UNAVAILABLE: 'GEO_PROVIDER_UNAVAILABLE',
     // Provider returned a non-2xx or unparseable response.
     GEO_SEARCH_FAILED: 'GEO_SEARCH_FAILED',
+    // Provider answered 429 — over its per-second cap or out of daily quota.
+    // Distinct from GEO_PROVIDER_UNAVAILABLE because the remedy differs (wait or
+    // upgrade, rather than investigate an outage), and because it is one of the
+    // two codes ChainedGeocodingProvider treats as "ask the next provider". Both
+    // paid free tiers here are small enough that this is an ordinary event, not
+    // an incident: Geoapify 3 000/day at 5 rps, LocationIQ 5 000/day at 2 rps.
+    GEO_PROVIDER_RATE_LIMITED: 'GEO_PROVIDER_RATE_LIMITED',
     // A new/edited business or headquarters address was submitted without a
     // geocoded `geo` (a selected /api/geo/search result). Required so every
     // physical location is mappable and its country verifiable.

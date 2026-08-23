@@ -1,4 +1,5 @@
 import { GeocodingConfig, GeocodingProviderType } from './geocoding.config';
+import { GeoProviderName } from '../types/geo-address.types';
 import { IGeocodingProvider } from './geocoding-provider.interface';
 import { createGeocodingProvider } from './geocoding.factory';
 import { CachedGeocodingProvider } from './geocoding.cache';
@@ -10,13 +11,21 @@ import { CachedGeocodingProvider } from './geocoding.cache';
  * from environment variables (mirrors `core/storage/storage.instance.ts`).
  *
  * ENVIRONMENT VARIABLES:
- * - GEO_PROVIDER            : 'nominatim' | 'google' | 'mapbox' | 'here' | 'geoapify' (default 'nominatim')
+ * - GEO_PROVIDER            : 'chain' | 'nominatim' | 'geoapify' | 'locationiq' | 'google' |
+ *                             'mapbox' | 'here' (default 'nominatim'). **'chain' is the
+ *                             intended production setting** — see the factory.
+ * - GEO_PROVIDER_CHAIN      : failover order for 'chain' (default 'geoapify,locationiq').
+ *                             `nominatim` is always appended as the keyless last resort.
  * - GEO_REQUEST_TIMEOUT_MS  : per-request timeout (default 5000)
  * - GEO_DEFAULT_LIMIT       : default search result count (default 5)
  * - GEO_DEFAULT_COUNTRY_CODES: comma-separated ISO-2 bias, e.g. 'cm' (default 'cm')
  * - GEO_NOMINATIM_BASE_URL  : Nominatim endpoint (default public OSM instance)
  * - GEO_NOMINATIM_USER_AGENT: REQUIRED-by-policy identifying UA
  * - GEO_NOMINATIM_EMAIL     : optional contact email
+ * - GEO_GEOAPIFY_API_KEY    : Geoapify key. Free tier 3 000/day @ 5 rps, SOFT limits
+ * - GEO_GEOAPIFY_BASE_URL   : override (default https://api.geoapify.com/v1/geocode)
+ * - GEO_LOCATIONIQ_API_KEY  : LocationIQ key. Free tier 5 000/day @ 2 rps, HARD limits
+ * - GEO_LOCATIONIQ_BASE_URL : region host (default https://eu1.locationiq.com/v1; us1 also valid)
  * - GEO_CACHE_ENABLED       : result cache on/off (default true) — ADR-A04 D-1
  * - GEO_CACHE_TTL_SECONDS   : how long a resolved result is kept (default 86400)
  * - GEO_CACHE_NEGATIVE_TTL_SECONDS: how long an empty result is kept (default 600)
@@ -31,6 +40,20 @@ function parseCountryCodes(raw: string | undefined): string[] {
         .filter(Boolean);
 }
 
+/**
+ * Parse `GEO_PROVIDER_CHAIN`. Returns undefined for an unset/blank value so the
+ * factory applies its own default order rather than being handed an empty array.
+ *
+ * Names are NOT validated here — a typo must reach the factory, which refuses to
+ * boot on it. Filtering unknown names out at parse time is how a deployment ends
+ * up silently running on its fallback while believing it runs on its primary.
+ */
+function parseChain(raw: string | undefined): GeoProviderName[] | undefined {
+    if (raw == null || raw.trim() === '') return undefined;
+    const names = raw.split(',').map(n => n.trim().toLowerCase()).filter(Boolean);
+    return names.length > 0 ? (names as GeoProviderName[]) : undefined;
+}
+
 function loadGeocodingConfig(): GeocodingConfig {
     const provider = (process.env.GEO_PROVIDER || 'nominatim') as GeocodingProviderType;
 
@@ -40,6 +63,12 @@ function loadGeocodingConfig(): GeocodingConfig {
         defaultLimit: Number(process.env.GEO_DEFAULT_LIMIT) || 5,
         // Default-bias to Cameroon (the platform's market); override to '' for worldwide.
         defaultCountryCodes: parseCountryCodes(process.env.GEO_DEFAULT_COUNTRY_CODES ?? 'cm'),
+        // Order matters and the default is not arbitrary: Geoapify first because its
+        // limits are SOFT and its burst ceiling is the higher (5 rps vs 2), LocationIQ
+        // second because its daily allowance is the larger (5 000 vs 3 000) and it is
+        // therefore the better reserve. Putting LocationIQ first would 429 on ordinary
+        // autocomplete typing — three keystrokes in a second is over its limit.
+        chain: parseChain(process.env.GEO_PROVIDER_CHAIN),
         cache: {
             // ON by default, unlike most optional infrastructure here. The cache is what makes
             // the keyless Nominatim default survivable — its public instance permits roughly one
@@ -67,6 +96,25 @@ function loadGeocodingConfig(): GeocodingConfig {
             'jovi-mall/1.0 (+https://jovimall.com; geocoding)',
         email: process.env.GEO_NOMINATIM_EMAIL || undefined,
     };
+
+    // ⚠ A block is populated ONLY when its key is present, and the factory reads
+    // that absence as "skip this provider" when building a chain. So the presence
+    // of a key is the switch — there is deliberately no separate `*_ENABLED` flag
+    // to disagree with it.
+    if (process.env.GEO_GEOAPIFY_API_KEY) {
+        config.geoapify = {
+            apiKey: process.env.GEO_GEOAPIFY_API_KEY,
+            baseUrl: process.env.GEO_GEOAPIFY_BASE_URL,
+        };
+    }
+    if (process.env.GEO_LOCATIONIQ_API_KEY) {
+        config.locationiq = {
+            apiKey: process.env.GEO_LOCATIONIQ_API_KEY,
+            // `us1` and `eu1` are separate hosts serving the same API; eu1 is the
+            // shorter round trip from this platform's market.
+            baseUrl: process.env.GEO_LOCATIONIQ_BASE_URL,
+        };
+    }
 
     // Future adapters: only populate their block when a key is present.
     if (process.env.GEO_GOOGLE_API_KEY) {

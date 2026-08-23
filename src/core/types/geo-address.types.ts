@@ -27,8 +27,21 @@ import { GeoPointSchema, GeoPointZodSchema, IGeoPoint } from './geo.types';
  *    which is useful for debugging bad matches and re-search.
  */
 
-/** Providers the abstraction can name. Only `nominatim` has an adapter today. */
-export const GEO_PROVIDERS = ['nominatim', 'google', 'mapbox', 'here', 'geoapify'] as const;
+/**
+ * Providers the abstraction can name. `nominatim`, `geoapify` and `locationiq`
+ * have adapters; `google`, `mapbox` and `here` are named seams with none.
+ *
+ * ⚠ **This list is PERSISTED**, on every stored `GeoAddress.provider` and as the
+ * Mongoose enum below, so it is append-only in practice: removing a name orphans
+ * every row that already carries it. Adding one is free.
+ *
+ * ⚠ **There is deliberately no `'chain'` here**, even though a deployment may run
+ * `ChainedGeocodingProvider`. The chain is a mechanism, not a service: a stored
+ * row must record which SERVICE resolved the address, because that is what makes
+ * its `provider_place_id` resolvable later. A row saying "chain" would name the
+ * plumbing and lose the fact. The chain passes candidates through untouched.
+ */
+export const GEO_PROVIDERS = ['nominatim', 'google', 'mapbox', 'here', 'geoapify', 'locationiq'] as const;
 export type GeoProviderName = (typeof GEO_PROVIDERS)[number];
 
 // ─── Mongoose Sub-Schemas ────────────────────────────────────────────────────
@@ -139,12 +152,45 @@ export type GeoAddressInput = z.infer<typeof GeoAddressZodSchema>;
  * validated business/HQ/saved address) into a persistable `geo: IGeoAddress | null`,
  * leaving every other field untouched. Use when mapping a full-replace address
  * array to its persistence shape, e.g. `input.addresses.map(withGeoAddress)`.
+ *
+ * It also DROPS a nullish deprecated `location` key rather than persisting the
+ * null — see {@link dropNullLocation}, which is where the reasoning lives.
  */
-export function withGeoAddress<T extends { geo?: GeoAddressInput | null }>(
+export function withGeoAddress<T extends { geo?: GeoAddressInput | null; location?: IGeoPoint | null }>(
     entry: T,
-): Omit<T, 'geo'> & { geo: IGeoAddress | null } {
+): Omit<T, 'geo' | 'location'> & { geo: IGeoAddress | null; location?: IGeoPoint } {
     const { geo, ...rest } = entry;
-    return { ...rest, geo: geo ? toGeoAddress(geo) : null };
+    return {
+        ...(dropNullLocation(rest) as Omit<T, 'geo' | 'location'>),
+        geo: geo ? toGeoAddress(geo) : null,
+    };
+}
+
+/**
+ * Remove a `location` key that would otherwise be persisted as `null`.
+ *
+ * ── Why this is not fussiness ────────────────────────────────────────────────
+ *
+ * Every array of addresses on this platform is 2dsphere-indexed on the deprecated
+ * bare `location` leaf, and MongoDB extracts index keys for the WHOLE array. One
+ * element holding a real point beside one holding an explicit `null` fails key
+ * extraction, and the refusal is not scoped to the address: EVERY subsequent write
+ * to that customer / vendor / magazin is rejected, whatever it touches, and so is
+ * the index build. Measured on 2026-08-23 — see `GeoPointSchema`.
+ *
+ * An ABSENT key is fine. So the rule at every write boundary is: a point we do not
+ * have is a key we do not write. Callers that already know they hold a real point
+ * (the magazin, which derives it from `geo.coordinates`) do the same thing inline.
+ *
+ * The wire contract is unchanged: the validators still accept `location: null`,
+ * because "I have no coordinate" is a thing a client may legitimately say. It just
+ * stops being something the database is asked to store.
+ */
+export function dropNullLocation<T extends { location?: IGeoPoint | null }>(
+    entry: T,
+): Omit<T, 'location'> & { location?: IGeoPoint } {
+    const { location, ...rest } = entry;
+    return location ? { ...rest, location } : (rest as Omit<T, 'location'>);
 }
 
 export function toGeoAddress(input: GeoAddressInput): IGeoAddress {
