@@ -1,11 +1,15 @@
 import { Request, Response } from 'express';
 import { UserService } from './user.service';
-import { UpdatePasswordSchema } from './user.validator';
+import { AccountClosureService } from './account-closure.service';
+import { UpdatePasswordSchema, CloseAccountSchema } from './user.validator';
 import { asyncHandler } from '../../api/middlewares/async-handler';
 import { issueTokenPair } from '../../core/auth/token.issuer';
-import { setAuthCookies } from '../../config/cookie.config';
+import { setAuthCookies, clearAuthCookies } from '../../config/cookie.config';
+import { createAppError } from '../../core/errors';
+import { ERROR_CODES } from '../../core/error-codes';
 
 const userService = new UserService();
+const accountClosureService = new AccountClosureService();
 
 /**
  * User Account Controller
@@ -63,6 +67,66 @@ export class UserController {
     res.json({
       success: true,
       message: 'Password updated successfully. All other sessions have been signed out.',
+    });
+  });
+
+  /**
+   * POST /api/me/close — close and anonymise the caller's own account (ADR-A02 D-1).
+   *
+   * The account is always `req.auth`'s. There is no id in the path and none accepted in the
+   * body (the schema is `.strict()`), so this endpoint cannot be aimed at anybody else.
+   *
+   * ── The role guard is HERE, not in the router ────────────────────────────────
+   * `/api/me` is role-agnostic by design and carries no `requireRole`. Closure is defined
+   * for a customer-only account and refuses every other shape, but the refusal has to name
+   * WHICH roles blocked it — a `requireRole('customer')` on the route would answer 403 "not
+   * your role" to a vendor who also holds `customer`, which is both true and useless. The
+   * service raises `ACCOUNT_CLOSURE_ROLE_NOT_ELIGIBLE` with `blockingRoles` instead.
+   *
+   * The 409 case is the guard that matters for a double-submit: the compare-and-set in the
+   * repository, not this handler.
+   */
+  static closeAccount = asyncHandler(async (req: Request, res: Response) => {
+    CloseAccountSchema.parse(req.body);
+
+    const userId = req.auth!.user._id.toString();
+
+    /**
+     * A customer-only account whose active role is not `customer` cannot exist — but the
+     * token names a role and the role entity is resolved from it, so this reads what it is
+     * about to anonymise rather than assuming. A vendor token would have been refused by the
+     * service's role guard a moment later anyway; this makes the failure a clear 422 instead
+     * of a customer profile lookup against a vendor's id.
+     */
+    if (req.auth!.role !== 'customer') {
+      throw createAppError(ERROR_CODES.ACCOUNT_CLOSURE_ROLE_NOT_ELIGIBLE, 422, undefined, {
+        blockingRoles: [req.auth!.role],
+      });
+    }
+
+    const customerId = req.auth!.role_entity._id.toString();
+    const { closedAt } = await accountClosureService.close(userId, customerId);
+
+    /**
+     * Clear the cookies on the way out.
+     *
+     * The closure already revoked them — `password_changed_at` is stamped to the same
+     * instant, so every token minted before it is refused on sight. This is the client-side
+     * half: without it a browser keeps sending a cookie that will now 403 on every request,
+     * and the person is left on a signed-in-looking page that fails everywhere. A bearer
+     * client discards its own pair.
+     */
+    clearAuthCookies(res);
+
+    res.json({
+      success: true,
+      // "Anonymised", not "deleted" — ADR-A02 D-2. The sentence is the product promise, and
+      // it is deliberately specific about what survives, because the alternative is a
+      // customer believing their orders are gone.
+      message:
+        'Your account has been closed and your personal details anonymised. '
+        + 'Past orders are kept as business records, without your name or contact details.',
+      data: { closedAt: closedAt.toISOString() },
     });
   });
 }

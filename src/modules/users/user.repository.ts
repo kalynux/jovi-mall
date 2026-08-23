@@ -104,4 +104,108 @@ export class UserRepository {
       { new: true }
     );
   }
+
+  // ─── Self-service contact change (Phase 6 · 6.D.1) ─────────────────────────
+  //
+  // Four methods, and the pairing is the contract: `setPending*` opens a change and
+  // `apply*Change` closes it, and the second writes the identifier and clears the pending
+  // block in ONE `$set`. Never two statements — a pending block that outlives its own
+  // confirmation is a token that can be spent twice, which is precisely the property the
+  // whole flow exists to deny.
+  //
+  // `login_email` / `login_phone` are NOT touched by `setPending*`. That is the rule the
+  // model's docstring states and the one a test asserts: writing the new identifier early
+  // and marking it unverified locks a mistyped address out of the account with no
+  // self-service way back, because the correction form is behind the sign-in.
+
+  /** Open (or replace) a pending email change. Replaces silently — a second request supersedes. */
+  async setPendingEmail(
+    userId: string,
+    pending: { address: string; tokenHash: string; requestedAt: Date; expiresAt: Date }
+  ): Promise<IUser | null> {
+    return await UserModel.findByIdAndUpdate(
+      userId,
+      {
+        $set: {
+          pending_email: {
+            address: normalizeEmailAddress(pending.address),
+            token_hash: pending.tokenHash,
+            requested_at: pending.requestedAt,
+            expires_at: pending.expiresAt,
+          },
+        },
+      },
+      { new: true }
+    );
+  }
+
+  /** Open (or replace) a pending phone change. */
+  async setPendingPhone(
+    userId: string,
+    pending: { number: string; requestedAt: Date; expiresAt: Date }
+  ): Promise<IUser | null> {
+    return await UserModel.findByIdAndUpdate(
+      userId,
+      {
+        $set: {
+          pending_phone: {
+            number: normalizePhoneNumber(pending.number),
+            requested_at: pending.requestedAt,
+            expires_at: pending.expiresAt,
+          },
+        },
+      },
+      { new: true }
+    );
+  }
+
+  /**
+   * Resolve the account a confirmation token belongs to.
+   *
+   * By HASH, so the caller must digest the plaintext first — the collection never holds a
+   * spendable token. Served by the sparse `pending_email.token_hash` index.
+   */
+  async findByPendingEmailToken(tokenHash: string): Promise<IUser | null> {
+    return await UserModel.findOne({ 'pending_email.token_hash': tokenHash });
+  }
+
+  /**
+   * Swap the login email and clear the pending block, in one write.
+   *
+   * Guarded on the token hash as well as the id — a compare-and-set, for the same reason
+   * `applyStatusChangeIfCurrent` is one. Two confirmations of the same link can race, and
+   * an unguarded write would let the loser report success for a swap the winner already
+   * made and a third request may have since superseded. A miss returns null.
+   */
+  async applyEmailChange(userId: string, tokenHash: string, email: string): Promise<IUser | null> {
+    return await UserModel.findOneAndUpdate(
+      { _id: userId, 'pending_email.token_hash': tokenHash },
+      { $set: { login_email: normalizeEmailAddress(email), pending_email: null } },
+      { new: true }
+    );
+  }
+
+  /**
+   * Swap the login phone and clear the pending block, in one write.
+   *
+   * Guarded on the pending NUMBER rather than a token, because the phone flow has none —
+   * see `IUser.pending_phone`. Same compare-and-set property: a second confirm after the
+   * pending block was replaced by a newer request misses and returns null.
+   */
+  async applyPhoneChange(userId: string, pendingNumber: string): Promise<IUser | null> {
+    const number = normalizePhoneNumber(pendingNumber);
+    return await UserModel.findOneAndUpdate(
+      { _id: userId, 'pending_phone.number': number },
+      { $set: { login_phone: number, pending_phone: null } },
+      { new: true }
+    );
+  }
+
+  /** Abandon a pending change. `field` is the sub-document, not the identifier. */
+  async clearPendingContact(
+    userId: string,
+    field: 'pending_email' | 'pending_phone'
+  ): Promise<IUser | null> {
+    return await UserModel.findByIdAndUpdate(userId, { $set: { [field]: null } }, { new: true });
+  }
 }

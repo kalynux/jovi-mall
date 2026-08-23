@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <style>
+        body {
+            font-family: sans-serif;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: #f4f4f4;
+            padding: 10px;
+            text-align: center;
+        }
+
+        .content {
+            padding: 20px 0;
+            text-align: center;
+        }
+
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+        }
+
+        .address {
+            font-weight: bold;
+        }
+
+        .footer {
+            font-size: 12px;
+            color: #888;
+            text-align: center;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Confirm your new email address</h1>
+        </div>
+        <div class="content">
+            <p>Hi,</p>
+            <p>
+                Someone asked to change the email address on a Jovi Mall account to
+                <span class="address">{{newEmail}}</span>.
+            </p>
+            <p>Confirm it below and this address becomes the one you sign in with.</p>
+            <p>
+                <a href="{{link}}" class="button">Confirm this address</a>
+            </p>
+            <p>The link expires in {{hours}} hour(s).</p>
+            <p>
+                If you did not ask for this, ignore this message — nothing has changed,
+                and the account still signs in with its current address.
+            </p>
+        </div>
+        <div class="footer">
+            <p>&copy; {{year}} Jovi Mall. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+
+</html>
