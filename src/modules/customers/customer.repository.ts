@@ -21,6 +21,39 @@ export class CustomerRepository {
     );
   }
 
+  /**
+   * Land a confirmed contact change on the profile — the value AND its verified flag,
+   * together (Phase 6 · 6.D.1).
+   *
+   * Separate from `markEmailVerified` because that one answers "the address already on
+   * file has now been proved" and this one answers "a different address has been proved
+   * and is now the address on file". Writing the pair in one `$set` is what stops the
+   * profile ever showing an unverified address that the login identifier has already
+   * moved to — the two would then disagree about the same fact.
+   *
+   * Deliberately does **not** touch `status`, unlike the vendor and agency
+   * `markEmailVerified` pipelines: changing your email is not an onboarding step, and a
+   * customer sitting at `pending_verification` for an unrelated reason must not be
+   * promoted out of it by editing their contact details.
+   */
+  async setVerifiedContact(
+    userId: string,
+    contact: { email?: string; phone?: string }
+  ): Promise<ICustomer | null> {
+    const set: Record<string, unknown> = {};
+    if (contact.email !== undefined) {
+      set.email = contact.email;
+      set.email_verified = true;
+    }
+    if (contact.phone !== undefined) {
+      set.phone = contact.phone;
+      set.phone_verified = true;
+    }
+    if (Object.keys(set).length === 0) return await this.findByUserId(userId);
+
+    return await CustomerModel.findOneAndUpdate({ user_id: userId }, { $set: set }, { new: true });
+  }
+
   async updateStatus(userId: string, status: string): Promise<ICustomer | null> {
     return await CustomerModel.findOneAndUpdate({ user_id: userId }, { status }, { new: true });
   }

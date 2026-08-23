@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../../api/middlewares/auth.middleware';
 import { CustomerProfileController } from './controllers/customer-profile.controller';
+import { CustomerCatalogController } from './controllers/customer-catalog.controller';
 import { DeviceTokenController } from '../notifications/controllers/device-token.controller';
 
 const router = Router();
@@ -62,5 +63,31 @@ router.post('/payment-methods', CustomerProfileController.addPaymentMethod);
 
 /** DELETE /api/customer/payment-methods/:id */
 router.delete('/payment-methods/:id', CustomerProfileController.removePaymentMethod);
+
+/**
+ * ── The customer's own view of the catalogue (Phase 6 · 6.E.1 / 6.E.2) ───────
+ *
+ * Saved products and recently-viewed products. Both are owner-scoped by construction:
+ * every handler reads `req.auth.role_entity._id` and there is no path segment or body
+ * field naming a customer, so there is nothing an ownership check could be forgotten on.
+ *
+ * ⚠ **`/wishlist/saved-among` is declared BEFORE `/wishlist/:productId`.** Express matches
+ * in declaration order, and they are both two-segment paths under `/wishlist` — reversed,
+ * the literal would be swallowed by the parameter and every call would 400 on the id
+ * regex. The same hazard the `/addresses/:id/default` comment above describes; here it is
+ * live rather than hypothetical, which is why the ordering is not left to chance.
+ *
+ * (`saved-among` is a POST and `:productId` a DELETE, so today they could not actually
+ * collide — but a GET added on either later would make them, silently, and route order is
+ * exactly the kind of thing that looks right and is not.)
+ */
+router.get('/wishlist', CustomerCatalogController.listWishlist);
+router.post('/wishlist', CustomerCatalogController.addWishlistItem);
+router.post('/wishlist/saved-among', CustomerCatalogController.savedAmong);
+router.delete('/wishlist/:productId', CustomerCatalogController.removeWishlistItem);
+
+router.get('/recently-viewed', CustomerCatalogController.listRecentlyViewed);
+router.post('/recently-viewed', CustomerCatalogController.recordView);
+router.delete('/recently-viewed', CustomerCatalogController.clearRecentlyViewed);
 
 export default router;
