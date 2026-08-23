@@ -250,11 +250,7 @@ export class OrderStockService {
                 // put back — the same escape the commit takes.
                 if (!variant || variant.isInfiniteStock) continue;
 
-                await this.variantRepository.update(
-                    line.variantId,
-                    { stock: { $inc: line.quantity } as never },
-                    { session },
-                );
+                await this.variantRepository.adjustStock(line.variantId, line.quantity, { session });
             } catch (error) {
                 logger().warn(
                     { orderId, variantId: line.variantId, err: error },

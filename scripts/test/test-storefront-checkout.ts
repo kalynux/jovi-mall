@@ -123,8 +123,26 @@ assert('RESERVE measures against active reservations, not the raw counter', () =
 assert('RESERVE honours both vendor escapes (infinite stock, oversell)', () =>
     reserveSrc.includes('isInfiniteStock') && reserveSrc.includes('allowOversell'));
 
-assert('COMMIT is the ONLY one of the three that decrements', () =>
-    commitSrc.includes('$inc: -') && !reserveSrc.includes('$inc: -') && !releaseSrc.includes('$inc: -'));
+// ⚠ THIS ASSERTION USED TO READ `commitSrc.includes('$inc: -')`, AND IT WAS WORSE
+// THAN NOTHING. The commit passed `{ stock: { $inc: -n } as any }` to the repository's
+// `update()`, which puts everything it is given under `$set` — so Mongo received
+// `$set: { stock: { $inc: -1 } }`, threw a CastError, and `OrderStockService` swallowed
+// it as "stock commit skipped for order line". Stock was never decremented on any sale.
+//
+// The scan was green throughout, because the string it looked for was present. It was
+// asserting that the file CONTAINED SOMETHING THAT LOOKS LIKE a decrement, not that a
+// decrement happens — and the `as any` is what let the difference compile. The fix gave
+// the repository an explicit `adjustStock(id, delta)`; this now names the call, which is
+// at least a thing that cannot be true while the write is inert.
+//
+// The real proof is behavioural and lives in `verify:agent-e2e` (`500 → 499` on a sale).
+// A source scan cannot make it, and the history above is why that is worth saying.
+assert('COMMIT is the ONLY one of the three that moves the counter', () =>
+    commitSrc.includes('adjustStock(') && commitSrc.includes('-reservation.quantity')
+    && !reserveSrc.includes('adjustStock') && !releaseSrc.includes('adjustStock'));
+
+assert('…and no caller smuggles a raw operator through update() again', () =>
+    ![reserveSrc, commitSrc, releaseSrc].some((src) => /update\([^)]*\$inc/s.test(src)));
 
 assert('COMMIT pushes the TTL out so the audit row survives', () =>
     commitSrc.includes('COMMITTED_RESERVATION_RETENTION_DAYS') && commitSrc.includes('.commit('));

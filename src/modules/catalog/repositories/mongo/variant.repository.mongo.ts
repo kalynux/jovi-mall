@@ -118,6 +118,25 @@ export class VariantRepositoryMongo extends BaseRepository<IProductVariant, Vari
     return doc ? this.mapper.toDomain(doc) : null;
   }
 
+  /**
+   * The one place `$inc` reaches `stock`. See the interface for why it is not
+   * `update({ stock: { $inc: n } })` — that shape compiles, and does nothing.
+   *
+   * Deliberately NOT guarded at zero. A committed reservation may legitimately
+   * drive the counter negative when the variant allows oversell, and the vendor
+   * needs to see that number: it is exactly what they have to go and source.
+   */
+  async adjustStock(id: string, delta: number, options?: RepositoryOptions): Promise<Variant | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+
+    const doc = await this.model.findOneAndUpdate(
+      { _id: id, deletedAt: null },
+      { $inc: { stock: delta } },
+      { new: true, session: options?.session }
+    );
+    return doc ? this.mapper.toDomain(doc) : null;
+  }
+
   async delete(id: string, options?: RepositoryOptions): Promise<void> {
     return this.softDelete(id, options);
   }

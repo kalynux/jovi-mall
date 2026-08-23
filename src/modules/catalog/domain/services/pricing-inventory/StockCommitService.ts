@@ -106,9 +106,9 @@ export class StockCommitService {
           throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
         }
         if (!variant.isInfiniteStock) {
-          await this.variantRepository.update(
+          await this.variantRepository.adjustStock(
             reservation.variantId,
-            { stock: { $inc: -reservation.quantity } as any },
+            -reservation.quantity,
             { session },
           );
         }
