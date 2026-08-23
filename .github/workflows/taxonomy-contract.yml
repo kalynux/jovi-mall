@@ -30,11 +30,11 @@ on:
       admin_ref:
         description: 'wi-admin ref to check out'
         required: false
-        default: 'main'
+        default: 'phase-6-unbuilt-scope'
       geo_ref:
         description: 'geo-tracker ref to check out'
         required: false
-        default: 'admin-built'
+        default: 'phase-6-unbuilt-scope'
   push:
     # …and immediately whenever this repository's copy is touched.
     paths:
@@ -47,24 +47,26 @@ permissions:
   contents: read
 
 # ── WHICH BRANCH OF THE SIBLINGS ─────────────────────────────────────────────────
-# `actions/checkout` with no `ref` takes the repository's DEFAULT branch, and for two of
-# the three that is not where the code is. Probed through the contents API on the day
-# this job was first drilled (plan step 3.D.1, 2026-08-19):
+# `actions/checkout` with no `ref` takes the repository's DEFAULT branch, and for none
+# of the three is that where the code is. First probed through the contents API on
+# 2026-08-19 (plan step 3.D.1); the answer has since MOVED, which is the point of this
+# note:
 #
-#   kalynux/geo-tracker  @main         internal/platform/apperror/category.go  -> 404
-#   kalynux/geo-tracker  @admin-built  (same path)                             -> 200
-#   kalynux/backend-admin@main         src/core/errors/error-category.ts       -> 200
-#   kalynux/jovi-mall    @main         src/core/error-category.ts              -> 404
+#   2026-08-19   wi-admin @main  200 · geo-tracker @admin-built 200 · @main 404
+#   2026-08-23   all three repositories' work is on `phase-6-unbuilt-scope`
 #
 # So an UNPINNED job fails on geo-tracker with a build error — a red that says nothing
 # about drift. That is the failure mode which teaches people to ignore a contract job,
-# and it is worse than the job not existing. `admin-built` is the de-facto trunk in this
-# workspace; when the merge to `main` happens, change these two lines and delete this
-# note. The workflow_dispatch inputs above exist so a drill can point elsewhere without
-# editing the file.
+# and it is worse than the job not existing. A STALE pin is worse still: it compares
+# this repository's live copy against a sibling's months-old one and calls the
+# difference drift.
+#
+# ⚠ These two lines track the de-facto trunk and must move with it. When the merge to
+# `main` happens, set both to 'main' and delete this note. The workflow_dispatch inputs
+# above exist so a drill can point elsewhere without editing the file.
 env:
-  ADMIN_REF: ${{ inputs.admin_ref || 'main' }}
-  GEO_REF: ${{ inputs.geo_ref || 'admin-built' }}
+  ADMIN_REF: ${{ inputs.admin_ref || 'phase-6-unbuilt-scope' }}
+  GEO_REF: ${{ inputs.geo_ref || 'phase-6-unbuilt-scope' }}
 
 jobs:
   contract:
