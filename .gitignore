@@ -1,4 +1,10 @@
-/.env
+# Every .env variant is a real secret file. `/.env` alone let two hand-made
+# backups (.env.bak.localhost, .env.bak-before-localhost-origin) sit untracked-
+# but-not-ignored, and one of them WAS committed. Ignore the family; the
+# example is the one exception, and it holds names, never values.
+.env
+.env.*
+!.env.example
 /dist
 /node_modules
 /src/scripts
