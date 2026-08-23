@@ -31,6 +31,8 @@ export const RATE_LIMIT_DB = 11; // request counters for the rate limiter (Phase
 export const WORKER_LOCK_DB = 12; // background-worker overlap locks (F-19)
 export const CONNECTION_CODE_DB = 13; // unified messaging connection codes (Phase 2/3)
 export const LOGIN_CODE_DB = 14; // passwordless /login sessions — link token + code
+export const GEO_CACHE_DB = 15; // geocoding results — forward search + reverse (ADR-A04 D-1)
+export const RECOMMENDATION_CACHE_DB = 16; // computed "also bought" / related lists (Phase 6 · 6.E.3)
 
 /**
  * ⚠ 4 and 9 are RETIRED, not free.
@@ -46,7 +48,8 @@ export const LOGIN_CODE_DB = 14; // passwordless /login sessions — link token 
  * verification code back as something else entirely is a security incident.
  * Inspected and deliberately kept by the Phase 4 dead-and-orphaned sweep,
  * 2026-08-19 (plan step 4.A.6.4), which is the kind of pass most likely to take
- * them. The next number to hand out is 15.
+ * them. 15 went to `GEO_CACHE_DB` and 16 to `RECOMMENDATION_CACHE_DB` (both 2026-08-21);
+ * the next number to hand out is 17.
  */
 
 /**
@@ -161,6 +164,34 @@ export const REDIS_DB_CATALOG: readonly RedisDbSpec[] = Object.freeze([
     // Same ten minutes, very different thing to leak.
     purpose: 'Magic-link tokens and /login codes. Losing them fails every sign-in in flight.',
     ttlHint: '10 minutes',
+  },
+  {
+    db: GEO_CACHE_DB,
+    constant: 'GEO_CACHE_DB',
+    label: 'Geocoding results',
+    // The THIRD database whose loss is harmless, and the only one that is purely an
+    // optimisation: every key here is reconstructible by asking the provider again. Flushing
+    // it costs one provider call per distinct address until it refills — which matters only
+    // because Nominatim's public instance is rate-limited at roughly one request per second.
+    // See ADR-A04 D-1 and `core/geocoding/geocoding.cache.ts`.
+    purpose: 'Address-search results, keyed by normalised query. Losing them re-asks the provider.',
+    ttlHint: 'hours to days (GEO_CACHE_TTL_SECONDS)',
+  },
+  {
+    db: RECOMMENDATION_CACHE_DB,
+    constant: 'RECOMMENDATION_CACHE_DB',
+    label: 'Product recommendation lists',
+    // The FOURTH harmless one, and like 15 it is purely an optimisation — every key is
+    // recomputable from `orders` and `products`. What it buys is that the co-occurrence
+    // aggregation (a `$match` on one product's order lines, then a `$group` over their
+    // siblings) does not run once per product-page view.
+    //
+    // A SEPARATE database from 15 rather than a prefix on it, for the reason the LOGIN_CODE
+    // note above gives: the flush policy states consequences per database, and "the next
+    // few product pages recompute their related strip" is not "the next few addresses are
+    // re-geocoded". One is free, the other spends a rate-limited third-party call.
+    purpose: 'Computed related-product lists, keyed by product id. Losing them recomputes on the next view.',
+    ttlHint: 'hours (RELATED_PRODUCTS_CACHE_TTL_SECONDS)',
   },
 ]);
 

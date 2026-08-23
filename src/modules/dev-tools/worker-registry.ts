@@ -12,6 +12,8 @@ import { codDepositDeadlineWorker } from '../cod/workers/cod-deposit-deadline.wo
 import { trackingDispatchWorker } from '../tracking-integration/workers/tracking-dispatch.worker';
 import { agentCapacityReconcileWorker } from '../agents/workers/agent-capacity-reconcile.worker';
 import { agentTrustRecomputeWorker } from '../agents/workers/agent-trust-recompute.worker';
+import { agencyInventoryReconcileWorker } from '../inventory/workers/agency-inventory-reconcile.worker';
+import { agencyStorageInvoiceWorker } from '../inventory/workers/agency-storage-invoice.worker';
 import { trackingAllowReconcileWorker } from '../agents/workers/tracking-allow-reconcile.worker';
 import { assignmentSweepWorker } from '../shipment-assignment/workers/offer-expiry.worker';
 import { analyticsAggregationWorker } from '../../core/jobs/aggregation-scheduler';
@@ -216,6 +218,39 @@ export const WORKER_REGISTRY = Object.freeze({
      * the right button during the Phase 6 Step 11 comparison — an operator can
      * refresh the shadow and read it beside the live score at will.
      */
+    /**
+     * Added in Phase 6 Step 14. Triggerable, and the reason is drift: this sweep is the only
+     * thing that compares a depot row's counters against its own movement ledger, so an
+     * operator investigating "the agency says the shelf reads wrong" wants it on demand
+     * rather than at the next quarter hour. Running it twice is a no-op — the roster pass is
+     * mark-and-sweep and the repair sets counters TO the ledger rather than adjusting by a
+     * difference.
+     */
+    /**
+     * Triggerable, and safe to trigger, because the generator upserts on
+     * (agency, vendor, period): a second run reports every statement as already issued and
+     * writes nothing. An operator reaches for this when a scheduled run was missed — a
+     * restart across 02:00 on the 1st — rather than to reissue anything.
+     *
+     * It bills the PREVIOUS month, so triggering it mid-month does not produce a partial
+     * statement for the month in progress.
+     */
+    'agency-storage-invoice': {
+        label: 'Agency storage invoicing (monthly)',
+        worker: agencyStorageInvoiceWorker,
+        runOnce: () => runVoidSweep(
+            () => agencyStorageInvoiceWorker.runSweep(),
+            'Storage statements issued for the previous month',
+        ),
+    },
+    'agency-inventory-reconcile': {
+        label: 'Agency inventory reconcile',
+        worker: agencyInventoryReconcileWorker,
+        runOnce: () => runVoidSweep(
+            () => agencyInventoryReconcileWorker.runSweep(),
+            'Stored-SKU rosters rebuilt and counter drift repaired',
+        ),
+    },
     'agent-trust-recompute': {
         label: 'Agent trust recompute (shadow)',
         worker: agentTrustRecomputeWorker,

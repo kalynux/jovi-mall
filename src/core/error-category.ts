@@ -151,6 +151,12 @@ export const CATEGORY_OVERRIDES: Partial<Record<ErrorCode, CategoryOverride>> = 
         category: ERROR_CATEGORIES.AUTHENTICATION,
         reason: 'Same as AUTH_ACCOUNT_SUSPENDED, one axis down: the vendor role entity is switched off',
     },
+    [ERROR_CODES.AUTH_ACCOUNT_CLOSED]: {
+        category: ERROR_CATEGORIES.AUTHENTICATION,
+        reason:
+            'Same 403-but-the-session-is-over shape as AUTH_ACCOUNT_SUSPENDED, and more final: the '
+            + 'account was anonymised by its owner and no other resource will authorize either',
+    },
 
     // ── 400s that are really state errors ────────────────────────────────────
     // The 400 is historical (`connection.service.ts:234,390` predate the 422 convention) and

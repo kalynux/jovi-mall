@@ -80,6 +80,36 @@ export class VendorRepository {
   }
 
   /**
+   * Land a confirmed contact change on the profile — the value AND its verified flag,
+   * together (Phase 6 · 6.D.1). See `CustomerRepository.setVerifiedContact` for the full
+   * reasoning; the same method exists on all four role repositories.
+   *
+   * ⚠ Deliberately **not** a `$cond` pipeline like `markEmailVerified` above, and the
+   * difference matters here more than on the other three: that method promotes a vendor
+   * out of `pending_verification`, which is correct when the address on file is finally
+   * proved at registration. Changing an email later is a different event, and a
+   * `suspended` vendor must not walk their own suspension back by editing their contact
+   * details — the same trap the conditional was added to close.
+   */
+  async setVerifiedContact(
+    userId: string,
+    contact: { email?: string; phone?: string }
+  ): Promise<IVendor | null> {
+    const set: Record<string, unknown> = {};
+    if (contact.email !== undefined) {
+      set.email = contact.email;
+      set.email_verified = true;
+    }
+    if (contact.phone !== undefined) {
+      set.phone = contact.phone;
+      set.phone_verified = true;
+    }
+    if (Object.keys(set).length === 0) return await VendorModel.findOne({ user_id: userId });
+
+    return await VendorModel.findOneAndUpdate({ user_id: userId }, { $set: set }, { new: true });
+  }
+
+  /**
    * Move the vendor between statuses, but only from the status the caller believes it
    * is in — the vendor half of the compare-and-set every two-actor document on this
    * platform now uses (`UserRepository.applyStatusChangeIfCurrent`,

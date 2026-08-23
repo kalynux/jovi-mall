@@ -738,7 +738,7 @@ Body:
     "fileName": "debug-log.txt",
     "fileSize": 12345,
     "mimeType": "text/plain",
-    "url": "http://localhost:3000/storage/ticket-attachments/...",
+    "url": "http://localhost:8022/api/files/images/2026/02/a1b2c3…_checkout-error.png",
     "uploadedBy": "string",
     "uploadedByRole": "admin",
     "createdAt": "2026-02-11T19:30:00.000Z"
@@ -784,7 +784,7 @@ Body:
       "fileName": "screenshot.png",
       "fileSize": 245678,
       "mimeType": "image/png",
-      "url": "http://localhost:3000/storage/ticket-attachments/...",
+      "url": "http://localhost:8022/api/files/images/2026/02/a1b2c3…_checkout-error.png",
       "uploadedBy": "string",
       "uploadedByRole": "vendor",
       "createdAt": "2026-02-11T19:30:00.000Z"

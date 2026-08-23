@@ -15,6 +15,7 @@ import { buildAdminSystemRouter } from '../../modules/system/admin-system.routes
 import { buildAdminTicketRouter } from '../../modules/tickets';
 import { buildAdminFileRouter } from '../../modules/catalog/routes/admin-file.routes';
 import { buildAdminMessagingRouter } from '../../modules/telegram/admin-messaging.routes';
+import { buildAdminReviewRouter } from '../../modules/reviews/routes/admin-review.routes';
 
 /**
  * `/api/internal/admin/*` — the service-to-service surface the **wi-admin** backend calls.
@@ -235,5 +236,24 @@ router.use('/files', buildAdminFileRouter([requireAdminCaller]));
  * in both policies. wi-admin's identity-scoped limiter is what bounds an operator now.
  */
 router.use('/messaging', buildAdminMessagingRouter([requireAdminCaller]));
+
+/**
+ * Review moderation (Phase 6 Step 10) — net-new, and the second mount here with no
+ * public twin (after `/tickets`) because the surface it moderates did not exist
+ * before the cutover.
+ *
+ * Delegated rather than written directly by wi-admin for the ordinary reason
+ * (ADR-004 D-2), and here it is unusually concrete: a moderation verdict is a
+ * compare-and-set on `pending` **plus** a recompute of every aggregate the review
+ * contributes to **plus**, for a delivery review, an immediate trust recompute of the
+ * agent — which after Phase 6 Step 11 moves that agent's COD cash limit. A second
+ * writer would flip `status` in `reviews` and leave all of that unfired, silently,
+ * with the storefront's rating and the agent's trust score both stale and nothing
+ * anywhere reporting it.
+ *
+ * wi-admin may read `reviews` and `review_aggregates` directly for a report; it calls
+ * in to decide one. Same read-a-record / delegate-a-verdict split as ADR-009 D-1.
+ */
+router.use('/reviews', buildAdminReviewRouter([requireAdminCaller]));
 
 export default router;

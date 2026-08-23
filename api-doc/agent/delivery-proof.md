@@ -35,6 +35,12 @@ Attach or replace the proof. `multipart/form-data`, single field **`file`**.
   **agency's** storage cap. If the agency is at 100% of its cap, the upload is
   rejected with `UPLOAD_POLICY_VIOLATION` (`QUOTA_EXCEEDED`).
 
+- Since 2026-08-19 the bytes are **virus-scanned** and the type is checked against the
+  **sniffed** bytes rather than the declared `Content-Type`. An infected file is a
+  `VIRUS_DETECTED` violation inside `UPLOAD_POLICY_VIOLATION`; a scanner that could not be
+  reached is `502 UPLOAD_VIRUS_SCAN_UNAVAILABLE` — a retryable dependency failure, **not** a
+  verdict on the photo.
+
 **Success** — `201 Created`:
 ```json
 {
@@ -42,7 +48,8 @@ Attach or replace the proof. `multipart/form-data`, single field **`file`**.
   "data": {
     "id": "665f0c…",
     "key": "shipments/…webp",
-    "url": "https://…/shipments/…webp",
+    "url": null,
+    "access": "authorized",
     "mimeType": "image/webp",
     "size": 184320,
     "originalName": "proof.jpg"
@@ -51,11 +58,33 @@ Attach or replace the proof. `multipart/form-data`, single field **`file`**.
 }
 ```
 
+> 🔴 **`url` is `null`, and that is not a bug.** The `shipments/` storage tree left the public
+> static mount on 2026-08-19 (ADR-A01 D-2): a proof photo is a place and a time about a real
+> customer's address, and it used to be fetchable forever by anyone who had seen the URL. Use
+> the byte route below. Full detail:
+> [FRONTEND-CHANGELOG-private-files.md](../FRONTEND-CHANGELOG-private-files.md).
+
 ### GET /api/agent/shipments/:id/delivery-proof
-The current proof as a `FileDetail`, or `null` when none is attached.
+The current proof's **metadata** as a `FileDetail`, or `null` when none is attached. Use it to
+know whether a proof exists and to render `originalName` / `size`.
 ```json
-{ "success": true, "data": { "id": "…", "url": "…", "mimeType": "image/webp", "size": 184320 } }
+{ "success": true, "data": { "id": "…", "key": "shipments/…webp", "url": null,
+  "access": "authorized", "mimeType": "image/webp", "size": 184320 } }
 ```
+
+### GET /api/agent/shipments/:id/delivery-proof/file
+**The image bytes** — the route that replaced the public URL.
+
+| | |
+|---|---|
+| Returns | the raw image · `Content-Type` from the file |
+| Headers | `Content-Disposition: inline` · `Cache-Control: private, no-store` |
+| Authorization | the **shipment's own** — the same scoping as `GET /api/agent/shipments/:id` |
+| Not the agent's shipment, or no proof attached | **404**, never 403 |
+
+A bearer client must fetch with its `Authorization` header and turn the response into a blob;
+a cookie-session browser can point an `<img>` at it directly. The agency's equivalent is
+`GET /api/agency/shipments/:id/delivery-proof/file`, scoped by the agency's own shipment read.
 
 ### DELETE /api/agent/shipments/:id/delivery-proof
 Remove the proof (frees the agency's bytes).

@@ -22,6 +22,7 @@ import {
 } from '../../inventory/domain/services/storage-fee.calculator';
 import { MagazinRepository } from '../../magazin/repositories/magazin.repository';
 import { VendorModel } from '../vendor.model';
+import { AgencyStockLevelRepository } from '../../inventory/repositories/agency-stock-level.repository';
 
 /**
  * ── The administrative product detail ────────────────────────────────────────
@@ -209,15 +210,25 @@ export class AdminProductDetailResolver {
             .sort({ createdAt: 1 })
             .exec();
 
-        const [images, reservedByVariant, shipping, agency] = await Promise.all([
+        const [images, reservedByVariant, shipping, agency, warehousedByVariant] = await Promise.all([
             this.resolveImages(product, variants),
             reservedUnitsByVariant(variants.map((v) => String(v._id))),
             ShippingConfigModel.findOne({ productId: product._id }).lean().exec(),
             this.resolveAgency(product),
+            // Step 14: the storage quote bills the agency's COUNTED shelf, so the depot rows
+            // have to be read here. Batched by variant so a product with twenty variants is
+            // one query rather than twenty.
+            new AgencyStockLevelRepository().warehousedByVariant(variants.map((v) => String(v._id))),
         ]);
 
         const variantDtos = variants.map((variant) =>
-            this.toVariantDto(variant, reservedByVariant.get(String(variant._id)) ?? 0, shipping, agency),
+            this.toVariantDto(
+            variant,
+            reservedByVariant.get(String(variant._id)) ?? 0,
+            shipping,
+            agency,
+            warehousedByVariant,
+        ),
         );
 
         return {
@@ -333,6 +344,7 @@ export class AdminProductDetailResolver {
         reserved: number,
         shipping: { weight?: number; length?: number; width?: number; height?: number } | null,
         agency: ResolvedAgency | null,
+        warehousedByVariant: Map<string, number>,
     ): AdminProductVariantDto {
         const tracked = !variant.isInfiniteStock;
 
@@ -356,7 +368,14 @@ export class AdminProductDetailResolver {
                     ? toStorageDto(
                         quoteStorageFee(
                             agency.pricing,
-                            { quantity: variant.stock, isInfinite: variant.isInfiniteStock },
+                            // The AGENCY's counted shelf, not `variant.stock` (Step 14). An
+                            // administrator reading this screen is being shown what an agency
+                            // is owed for warehousing; quoting the catalogue number would
+                            // bill for units the agency may never have received.
+                            {
+                                onHand: warehousedByVariant.get(String(variant._id)) ?? 0,
+                                isCounted: warehousedByVariant.has(String(variant._id)),
+                            },
                             resolveStorageSize(variant, shipping),
                         ),
                     )

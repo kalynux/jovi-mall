@@ -3,6 +3,7 @@ import { authRouter } from '../modules/auth/auth.routes';
 import { browserAuthRoutes } from '../modules/auth/routes/browser-auth.routes';
 import { mobileAuthRoutes } from '../modules/auth/routes/mobile-auth.routes';
 import { messagingLoginRoutes } from '../modules/messaging-login/messaging-login.routes';
+import { mobileMessagingLoginRoutes } from '../modules/messaging-login/mobile-messaging-login.routes';
 import { createWhatsappRouter } from '../modules/whatsapp/whatsapp.routes';
 import { createTelegramRouter } from '../modules/telegram/telegram.routes';
 import { CommandBus } from '../modules/command-bus/command-bus';
@@ -101,6 +102,21 @@ router.use('/auth/mobile', mobileAuthRoutes);    // Bearer auth for WebView / na
  * `rate-limit/auth-paths.ts` is an allowlist, so not naming them there IS how they get it.
  */
 router.use('/auth/magic', messagingLoginRoutes);
+/**
+ * The bearer twin of the two routes above, for the customer app.
+ *
+ * Mounted BEFORE nothing and AFTER `/auth/mobile` deliberately — `router.use`
+ * falls through when no route inside matches, and `mobileAuthRoutes` declares no
+ * `/magic/*`, so either order works. It sits here, beside the cookie twin it
+ * mirrors, because that is where someone changing one will look for the other.
+ *
+ * Same bucket as the cookie pair, and by the same mechanism: the dispatcher on
+ * `/auth` covers this path, and `rate-limit/auth-paths.ts` names neither it nor
+ * any prefix that would cover it, so it stays at the strict 20/min. The two
+ * `/auth/mobile/*` entries that ARE named there match on the full anchored path
+ * and do not reach `/auth/mobile/magic`.
+ */
+router.use('/auth/mobile/magic', mobileMessagingLoginRoutes);
 router.use('/webhooks/whatsapp', createWhatsappRouter(commandBus));
 router.use('/webhooks/telegram', createTelegramRouter(commandBus));  // Telegram webhook
 router.use('/webhooks', paymentWebhookRouter);  // Payment gateway webhooks
@@ -137,6 +153,15 @@ router.use('/agency/magazin', magazinRoutes);
 // Agency inventory — which SKUs this agency warehouses, at which depot
 import agencyInventoryRoutes from '../modules/inventory/routes';
 router.use('/agency/inventory', agencyInventoryRoutes);
+
+// ─── Storage statements (Phase 6 · Step 14, D-7) ─────────────────────────────
+// A monthly RECORD of warehousing rent, per (agency, vendor). No money moves through
+// either mount: the platform is not a party to this rent and neither collects nor pays it.
+// The agency issues and settles; the vendor reads. Two routers rather than one mounted
+// twice — a Router instance re-runs its own `use` guards on a second mount.
+import { agencyStorageInvoiceRoutes, vendorStorageInvoiceRoutes } from '../modules/inventory/storage-invoice.routes';
+router.use('/agency/storage-invoices', agencyStorageInvoiceRoutes);
+router.use('/vendor/storage-invoices', vendorStorageInvoiceRoutes);
 
 // Vendor product management routes
 import vendorProductsRoutes from '../modules/catalog/routes/vendor-products.routes';
@@ -207,6 +232,17 @@ router.use('/public', publicBlogRoutes);
 import publicCatalogRoutes from '../modules/catalog/routes/public-catalog.routes';
 router.use('/public', publicCatalogRoutes);
 
+// Published product reviews, for the product page's review tab and its rating
+// histogram. The FOURTH router on this prefix; it declares only
+// `/products/:productId/reviews`, which the catalog router above has no route for,
+// so Express falls through to it. Same rules as its three neighbours: published data
+// only, five-minute cache, no identity.
+//
+// ⚠ Product reviews ONLY. A delivery review names an agent and stays inside the
+// platform — see public-review.routes.ts.
+import publicReviewRoutes from '../modules/reviews/routes/public-review.routes';
+router.use('/public', publicReviewRoutes);
+
 // Earnings: commission/escrow ledger. Vendor sees held vs withdrawable balances;
 // agency sees its own held vs withdrawable delivery-fee balance; agent sees their
 // cut of the delivery fees on runs they completed; admin sees the platform
@@ -243,6 +279,23 @@ router.use('/customer/cart', customerCartRoutes);
 // Customer order actions (e.g. confirm delivery → completes order, starts escrow hold)
 import customerOrderRoutes from '../modules/orders/customer-order.routes';
 router.use('/customer/orders', customerOrderRoutes);
+
+// ─── Reviews & ratings ───────────────────────────────────────────────────────
+// One module, two subjects, three author roles. A customer reviews a PRODUCT they
+// bought and a DELIVERY they received; a vendor and an agency review a delivery only.
+// All three delivery reviews land on the same agent in three separate aggregates,
+// which is what finally gives the trust composite its 50 weight of rating factors.
+//
+// Three mounts rather than one because the author's role comes from the MOUNT, never
+// from the request body — see controllers/review.controller.ts. Each shares its role
+// prefix with routers mounted earlier in this file; none of them declares `/reviews`,
+// and Express falls through a `use`-mounted router when nothing inside it matches.
+import customerReviewRoutes from '../modules/reviews/routes/customer-review.routes';
+import vendorReviewRoutes from '../modules/reviews/routes/vendor-review.routes';
+import agencyReviewRoutes from '../modules/reviews/routes/agency-review.routes';
+router.use('/customer/reviews', customerReviewRoutes);
+router.use('/vendor/reviews', vendorReviewRoutes);
+router.use('/agency/reviews', agencyReviewRoutes);
 
 // Customer digital-product delivery: mint download links, execute downloads
 // (single-use token in the URL), and list the purchased library. Mounted at

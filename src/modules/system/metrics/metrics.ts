@@ -126,6 +126,27 @@ export const integrationCallsTotal = new Counter({
     registers: [registry],
 });
 
+/**
+ * The geocoding cache's hit rate — ADR-A04 D-1, and the instrument D-2 asks for by name.
+ *
+ * D-2 defers self-hosting until "the cache's hit rate stops rising and the miss volume justifies
+ * it". That is a measurement, and this is the only place it can come from. Two labels would have
+ * been the obvious shape (`op` × `event`); one is enough, because the decision is about the cache
+ * as a whole and `route_group` already separates `/api/geo/search` from `/api/geo/reverse` on the
+ * HTTP counter.
+ *
+ * `event` is a CLOSED set of five — hit · miss · store · bypass · error — declared in
+ * `core/geocoding/geocoding.cache.ts`. Never label this by query: an address is user input and
+ * would be unbounded cardinality carrying personal data, which is the rule
+ * `domain/route-group.ts` states for every label here.
+ */
+export const geocodingCacheEventsTotal = new Counter({
+    name: `${PREFIX}geocoding_cache_events_total`,
+    help: 'Geocoding cache outcomes (hit, miss, store, bypass, error)',
+    labelNames: ['event'] as const,
+    registers: [registry],
+});
+
 export const integrationDuration = new Histogram({
     name: `${PREFIX}integration_duration_seconds`,
     help: 'Outbound integration call duration in seconds',

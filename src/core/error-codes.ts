@@ -36,6 +36,7 @@ type DomainPrefix =
     | 'COD'
     | 'INVENTORY'     // what an agency warehouses, per depot
     | 'STOCK'         // the two-sided stock-adjustment request flow
+    | 'REVIEW'        // reviews & ratings — products AND deliveries
     | 'SYSTEM'        // operations surface: maintenance mode, cache controls
     | 'INTERNAL'      // INTERNAL_SERVER_ERROR
     | 'NOT'           // NOT_FOUND — router-level only
@@ -145,6 +146,25 @@ export const ERROR_CODES = Object.freeze({
      * the same person's customer account working. Raised by `requireAuth` and `login`.
      */
     AUTH_VENDOR_SUSPENDED: 'AUTH_VENDOR_SUSPENDED',
+
+    /**
+     * The account was CLOSED by the person who owned it (ADR-A02 D-1).
+     *
+     * Its own code rather than `AUTH_ACCOUNT_SUSPENDED`, for the reason that code's own
+     * neighbour gives: the two have different remedies and a client has to be able to say
+     * which happened. A suspension has an appeal and a `restore`; a closure has neither, and
+     * telling somebody who anonymised their own account that it is "suspended" invites a
+     * support ticket asking to have it lifted.
+     *
+     * Raised on the same three paths a suspension is — login, refresh rotation, `requireAuth`
+     * — plus the password-reset redemption, and always BEFORE the suspension check, because a
+     * closed account is not an active one and both guards would otherwise match.
+     *
+     * In practice a client rarely sees it: closure removes both login identifiers, so `login`
+     * cannot resolve the account at all. It is what the live access token minted seconds
+     * earlier meets.
+     */
+    AUTH_ACCOUNT_CLOSED: 'AUTH_ACCOUNT_CLOSED',
 
     // ── PAYMENT ───────────────────────────────────────────────────────────────
     PAYMENT_ORDER_NOT_FOUND: 'PAYMENT_ORDER_NOT_FOUND',
@@ -747,6 +767,16 @@ export const ERROR_CODES = Object.freeze({
     CONNECTION_NOT_ACTIVE: 'CONNECTION_NOT_ACTIVE',
 
     // ── CUSTOMER ──────────────────────────────────────────────────────────────
+    /**
+     * That product is not on this customer's wishlist.
+     *
+     * A 404 and never a 403, even when the row exists on somebody else's list. Every query
+     * behind it is scoped by `customer_id`, so a foreign row matches nothing and there is
+     * no place for an ownership check to be forgotten — the same reasoning the public
+     * catalogue uses when it answers 404 rather than confirming a draft product exists.
+     */
+    WISHLIST_ITEM_NOT_FOUND: 'WISHLIST_ITEM_NOT_FOUND',
+
     CUSTOMER_NOT_FOUND: 'CUSTOMER_NOT_FOUND',
     CUSTOMER_ADDRESS_NOT_FOUND: 'CUSTOMER_ADDRESS_NOT_FOUND',
     CUSTOMER_PAYMENT_METHOD_NOT_FOUND: 'CUSTOMER_PAYMENT_METHOD_NOT_FOUND',
@@ -777,6 +807,116 @@ export const ERROR_CODES = Object.freeze({
      * self-service path back.
      */
     USER_CONTACT_REQUIRED: 'USER_CONTACT_REQUIRED',
+
+    // ── PRODUCT SHARE (6.J · vendor shares a product over a connected channel) ─
+
+    /**
+     * The vendor asked to share over a channel their account is not connected to.
+     *
+     * 422 rather than 404: the channel exists and the product exists — what is missing is a
+     * connection, and the message carries the `/connect` instruction that fixes it.
+     *
+     * ⚠ Restored 2026-08-21 after being lost to a concurrent edit of this file; the throw
+     * site (`ProductShareService.resolveTarget`) is the definition of what it means.
+     */
+    PRODUCT_SHARE_CHANNEL_NOT_CONNECTED: 'PRODUCT_SHARE_CHANNEL_NOT_CONNECTED',
+
+    /**
+     * WhatsApp's 24-hour service window is closed, so no free-form message may be sent.
+     *
+     * 422 and not 502: nothing failed. Meta's policy permits only an approved `template`
+     * outside the window, and there is deliberately no product-share template — a share is
+     * a vendor pressing a button, not a delivery notification that must arrive. The remedy
+     * is in the message and the vendor can perform it: send the bot any message, which
+     * reopens the window.
+     *
+     * Telegram has no equivalent and never raises this.
+     */
+    PRODUCT_SHARE_WINDOW_CLOSED: 'PRODUCT_SHARE_WINDOW_CLOSED',
+
+    /**
+     * The channel accepted the request and did not deliver.
+     *
+     * 502 — `external_service`, so the boundary replaces this message with the registry
+     * default and drops `details`. The `cause` put in `details` at the throw site is for
+     * the journal, which is exactly what that category's exposure rule is for.
+     */
+    PRODUCT_SHARE_SEND_FAILED: 'PRODUCT_SHARE_SEND_FAILED',
+
+    // ── ACCOUNT CLOSURE (ADR-A02 · self-service, `POST /api/me/close`) ────────
+
+    /**
+     * The caller holds a role beyond `customer`, so closure is refused OUTRIGHT.
+     *
+     * ADR-A02 D-1: "a dual-role account is refused, not partially closed". Anonymising the
+     * person behind a live storefront leaves a shop trading under a name nobody can resolve,
+     * with products, payouts and a KYC record attached to an identity that no longer exists.
+     * The remedy is a real one and is stated in the message: close the other role first.
+     *
+     * 422 rather than 403 — the caller is entitled to this endpoint, and a rule refused the
+     * request. See `error-category.ts`'s 400-vs-422 note.
+     */
+    ACCOUNT_CLOSURE_ROLE_NOT_ELIGIBLE: 'ACCOUNT_CLOSURE_ROLE_NOT_ELIGIBLE',
+
+    /**
+     * The customer has orders still moving, so closure is refused until they settle.
+     *
+     * Not in ADR-A02, and added because the anonymisation makes an in-flight delivery
+     * undeliverable rather than merely untidy: `CashCollectionService.notifyCodeIssued`
+     * sends the COD delivery code to `Customer.phone`, which closure clears, and the
+     * messaging connections that carry every other delivery notification are deleted. The
+     * agent arrives at an address holding a parcel the recipient can no longer be given a
+     * code for.
+     *
+     * `details.activeOrderCount` says how many, so a client can render "you have 2 orders in
+     * progress" without a second call.
+     */
+    ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT: 'ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT',
+
+    // ── CONTACT CHANGE (self-service, `/api/me/{email,phone}`) ────────────────
+    /**
+     * The identifier the caller asked to move to is the one already on the account.
+     *
+     * Refused rather than treated as a no-op: a silent success would send a verification
+     * mail to an address that is already verified, and would teach a client that
+     * "pending" and "done" are the same state.
+     */
+    CONTACT_CHANGE_SAME_IDENTIFIER: 'CONTACT_CHANGE_SAME_IDENTIFIER',
+
+    /**
+     * Another account already holds this email or phone.
+     *
+     * Raised at BOTH ends of the flow — on request and again on confirm — because the
+     * identifier can be claimed in the window between them, and `login_email` /
+     * `login_phone` carry sparse UNIQUE indexes: swapping into a taken value is a
+     * driver-level duplicate-key error, i.e. a 500, unless it is caught here first.
+     */
+    CONTACT_CHANGE_IDENTIFIER_TAKEN: 'CONTACT_CHANGE_IDENTIFIER_TAKEN',
+
+    /** Confirm or cancel with no change in flight. */
+    CONTACT_CHANGE_NOT_PENDING: 'CONTACT_CHANGE_NOT_PENDING',
+
+    /**
+     * The pending change aged out.
+     *
+     * A separate code from `CONTACT_CHANGE_TOKEN_INVALID` on purpose: "start again" and
+     * "that link is not ours" are different things to say to a person, and only the first
+     * describes the platform behaving normally.
+     */
+    CONTACT_CHANGE_EXPIRED: 'CONTACT_CHANGE_EXPIRED',
+
+    /** No pending change matches this token — wrong, already spent, or forged. */
+    CONTACT_CHANGE_TOKEN_INVALID: 'CONTACT_CHANGE_TOKEN_INVALID',
+
+    /**
+     * A phone change was confirmed without proof that the account controls the number.
+     *
+     * The proof is a `channel_connections` row binding this account to that number on
+     * WhatsApp — see `services/contact-change.service.ts`. Without it the confirm would
+     * move a login identifier onto a number nobody has ever shown they can receive on,
+     * which is an account-recovery hole rather than a contact edit.
+     */
+    CONTACT_CHANGE_PHONE_UNPROVEN: 'CONTACT_CHANGE_PHONE_UNPROVEN',
 
     // ── VENDOR ADMINISTRATION (wi-admin's `/api/internal/admin/vendors`) ──────
     VENDOR_NOT_FOUND: 'VENDOR_NOT_FOUND',
@@ -834,6 +974,25 @@ export const ERROR_CODES = Object.freeze({
     // Unsuspend re-runs the activation gate; `details.blockers` carries the checklist.
     INVENTORY_PRODUCT_UNSUSPEND_BLOCKED: 'INVENTORY_PRODUCT_UNSUSPEND_BLOCKED',
 
+    // ── COUNTED STOCK (Phase 6 · Step 14, D-6) ────────────────────────────────
+    // An AGENCY movement that would drive a counter below zero. Never raised for a
+    // system movement: an order selling stock the shelf record does not have is a
+    // variance to surface, not a checkout to fail — see
+    // AgencyStockMovementRepository.
+    INVENTORY_INSUFFICIENT_STOCK: 'INVENTORY_INSUFFICIENT_STOCK',
+    // A transfer whose source and destination depot are the same row.
+    INVENTORY_TRANSFER_SAME_LOCATION: 'INVENTORY_TRANSFER_SAME_LOCATION',
+    // Repointing a product to another depot while its shelves still hold units. A CONFLICT:
+    // the remedy is to transfer the stock first, not to retry.
+    INVENTORY_DEPOT_CHANGE_HOLDS_STOCK: 'INVENTORY_DEPOT_CHANGE_HOLDS_STOCK',
+
+    // ── STORAGE INVOICES (Phase 6 · Step 14, D-7) ─────────────────────────────
+    // A RECORD of rent owed, not a charge: nothing here moves money.
+    STORAGE_INVOICE_NOT_FOUND: 'STORAGE_INVOICE_NOT_FOUND',
+    // Settle and void both compare-and-set from `open`; a miss is a conflict, never
+    // a not-found — the invoice is right there, it is just not in that state.
+    STORAGE_INVOICE_NOT_OPEN: 'STORAGE_INVOICE_NOT_OPEN',
+
     // ── STOCK ADJUSTMENT REQUESTS (vendor ↔ agency, two-sided) ─────────────────
     STOCK_REQUEST_NOT_FOUND: 'STOCK_REQUEST_NOT_FOUND',
     STOCK_REQUEST_ALREADY_PENDING: 'STOCK_REQUEST_ALREADY_PENDING',
@@ -844,6 +1003,46 @@ export const ERROR_CODES = Object.freeze({
     // The product stopped being stored with this agency while the request stood.
     STOCK_REQUEST_STALE: 'STOCK_REQUEST_STALE',
     STOCK_REQUEST_NO_CHANGE: 'STOCK_REQUEST_NO_CHANGE',
+
+    // ── REVIEWS & RATINGS (products AND deliveries) ───────────────────────────
+    // Each is raised at EXACTLY ONE status — `test:errors` censuses every
+    // createAppError site and fails if a code appears at two statuses that
+    // disagree on category.
+    REVIEW_NOT_FOUND: 'REVIEW_NOT_FOUND',
+    /**
+     * 409. One review per author per subject, enforced by a unique index AND by a
+     * pre-check. A CONFLICT rather than a validation error: the body was fine, the
+     * author has simply already had their say. There is deliberately no edit verb,
+     * so this is terminal for that (author, subject) pair.
+     */
+    REVIEW_ALREADY_EXISTS: 'REVIEW_ALREADY_EXISTS',
+    /**
+     * 422. The verified-purchase / verified-delivery gate. The author has no
+     * completed order containing this product, or is not a party to this delivered
+     * shipment. Deliberately NOT a 403: whether *somebody else* may review it is
+     * not what was asked, and this is a rule of the domain, not an ownership check.
+     */
+    REVIEW_NOT_ELIGIBLE: 'REVIEW_NOT_ELIGIBLE',
+    /**
+     * 404. The product or shipment being reviewed does not exist — or does not
+     * exist *for this caller*, which is the same answer on purpose. A 403 here
+     * would confirm that an id somebody guessed is real.
+     */
+    REVIEW_SUBJECT_NOT_FOUND: 'REVIEW_SUBJECT_NOT_FOUND',
+    /**
+     * 422. The subject exists and is not in a state that can be reviewed — a
+     * delivered shipment with no agent bound to it, the case every target
+     * derivation needs and no real delivery produces.
+     */
+    REVIEW_SUBJECT_NOT_REVIEWABLE: 'REVIEW_SUBJECT_NOT_REVIEWABLE',
+    /**
+     * 409. A moderation compare-and-set miss — the review left `pending` while the
+     * administrator was looking at it. Same shape and same reasoning as
+     * `STOCK_REQUEST_NOT_PENDING`: the row exists, somebody else decided first.
+     */
+    REVIEW_NOT_PENDING: 'REVIEW_NOT_PENDING',
+    /** 400. This author role may not review this subject type at all. */
+    REVIEW_ROLE_NOT_ALLOWED: 'REVIEW_ROLE_NOT_ALLOWED',
 
     // ── BLOG / EDITORIAL ──────────────────────────────────────────────────────
     // Public reads produce only the first three; the rest are the editor's.

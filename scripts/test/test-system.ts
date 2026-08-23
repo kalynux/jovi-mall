@@ -40,6 +40,8 @@ import {
     RATE_LIMIT_DB,
     CONNECTION_CODE_DB,
     LOGIN_CODE_DB,
+    GEO_CACHE_DB,
+    RECOMMENDATION_CACHE_DB,
 } from '../../src/infra/redis/redis.factory';
 import { describeSchedule, WorkerSchedule } from '../../src/core/jobs/worker-schedule';
 import { withWorkerLock, SWEEP_SKIPPED, __resetWorkerLocksForTest } from '../../src/core/jobs/worker-lock';
@@ -492,10 +494,18 @@ assert('every exported *_DB constant appears exactly once in the catalog', () =>
     // LOGIN_CODE_DB (14) is separate from 13 rather than a prefix on it: the flush
     // policy states consequences per DATABASE, and "in-flight sign-ins fail" is not
     // "in-flight connections fail".
+    //
+    // 15 and 16 are Phase 6's, and both are pure OPTIMISATION caches — the first two in
+    // this catalogue whose entire contents are recomputable, which is why neither is
+    // `destructive` in the flush policy. They are separate databases rather than two
+    // prefixes on one for the same reason 13 and 14 are: the blast radius is stated per
+    // database, and "the next few address searches re-ask a rate-limited provider" is not
+    // "the next few product pages recompute a strip".
     const exported = [
         EMAIL_VERIFY_DB, WA_IDEMPOTENCY_DB, WA_WINDOW_DB,
         SLOT_LOCK_DB, DOWNLOAD_TOKEN_DB, TELEGRAM_WINDOW_DB,
         RATE_LIMIT_DB, WORKER_LOCK_DB, CONNECTION_CODE_DB, LOGIN_CODE_DB,
+        GEO_CACHE_DB, RECOMMENDATION_CACHE_DB,
     ];
     return exported.every((db) => REDIS_DB_CATALOG.filter((row) => row.db === db).length === 1)
         && REDIS_DB_CATALOG.length === exported.length;
@@ -1294,7 +1304,7 @@ section('Worker inventory — the thirteenth worker was invisible to every surfa
 // The count is hardcoded on purpose: a worker added without an inventory entry is invisible
 // to every operations surface AND is never stopped by the drain, which is the defect this
 // section was written about. Do not weaken it to `>=`.
-assert('the inventory now holds 16 workers', () => WORKER_INVENTORY.length === 16);
+assert('the inventory now holds 18 workers', () => WORKER_INVENTORY.length === 18);
 
 /**
  * The new one, asserted by name and by the two properties that make it a backstop rather
@@ -1350,8 +1360,8 @@ const WORKER_SOURCES = [
         readFileSync(join(SRC, 'core', 'jobs', 'aggregation-scheduler.ts'), 'utf8')) },
 ];
 
-assert('the scan sees every worker file — 15 module workers plus the scheduler', () =>
-    WORKER_SOURCES.length === 16);
+assert('the scan sees every worker file — 17 module workers plus the scheduler', () =>
+    WORKER_SOURCES.length === 18);
 
 assert('EVERY worker routes its pass through withWorkerLock', () => {
     const missing = WORKER_SOURCES.filter(({ code }) => !code.includes('withWorkerLock('));
@@ -1653,14 +1663,29 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
 // off `users` rows and suspends any row that carried nothing else. The pair with `auth.service`'s
 // new role filter is the point — the guard stops new admin tokens being minted, this removes the
 // rows a future regression would mint them from.
-assert('all eighteen are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 18);
+//
+// 18 → 20 in Phase 6, and both additions are index builds whose UNIQUE half is load-bearing
+// rather than an optimisation — with `autoIndex` off in production, an unbuilt one means the
+// uniqueness the code upserts against is enforced by nothing:
+//   `migrate:review-indexes`           (6.E.4) one review per author per subject
+//   `migrate:customer-catalog-indexes` (6.E.1 / 6.E.2) one wishlist / recently-viewed row per
+//                                      (customer, product)
+//
+// 20 → 21 at Step 14: `migrate:inventory-indexes`, same argument again and the sharpest case
+// of it — `stock_movement_idempotency` is what stops a retried payment webhook selling the same
+// depot shelf twice, and `storage_invoice_identity` is what stops the monthly run issuing two
+// statements for one month.
+assert('all twenty are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 20);
 
-// Two ordering rules, from the runner's own header. Both are correctness, not taste:
-// the agent domain reads memberships, and a unique index build fails outright against
-// data a later migration has not yet cleaned up.
-assert('migrate:agent-memberships is FIRST — the agent domain reads memberships', () =>
-    MIGRATIONS[0].name === 'migrate:agent-memberships');
+// ONE ordering rule now, from the runner's own header, and it is correctness rather than
+// taste: a unique index build fails outright against data a later migration has not yet
+// cleaned up. The second rule ("migrate:agent-memberships FIRST") went with the migration
+// itself — deleted 2026-08-23, Phase 6 Step 17, because it wrote the retired status
+// literal `approved`. Nothing replaced it: no surviving data migration reads another's
+// output. Its ledger row stays in schema_migrations as history and is not reported.
+assert('migrate:agent-memberships is GONE — it wrote a retired ContractStatus', () =>
+    !MIGRATIONS.some((m) => m.name === 'migrate:agent-memberships'));
 
 // Classified on the FILE, not the binding: `migrate:admin-action-log` builds indexes
 // (including a TTL) and its binding name does not say so, while its file —

@@ -154,6 +154,37 @@ export const CACHE_FLUSH_POLICY: readonly CacheFlushPolicy[] = Object.freeze([
             + 'never been told), so everyone signing in at that moment fails and has no password '
             + 'to fall back on. Moderate, and worst during exactly the incident that tempts it.',
     },
+    {
+        spec: specFor('GEO_CACHE_DB'),
+        wholeDbAllowed: true,
+        // The first of the two pure-OPTIMISATION databases in this catalogue: nothing here is
+        // state, every key is an answer the provider will give again, and so flushing is the
+        // correct remedy for the one real failure mode — a wrong or stale result cached for up
+        // to a day. Whole-database is allowed for the same reason it is on WORKER_LOCK_DB: an
+        // operator facing one bad address does not know its key, and the key is a HASH of the
+        // address precisely so nobody can go looking for it.
+        destructive: false,
+        blastRadius:
+            'Address search re-asks the geocoding provider until the cache refills. Nothing '
+            + 'durable is lost — a stored GeoAddress lives on the order or the profile, not '
+            + 'here. The cost is provider load, and on the keyless default that is real: '
+            + "Nominatim's public instance permits roughly one request per second and bans for "
+            + 'abuse. Low during ordinary traffic; do not do it repeatedly.',
+    },
+    {
+        spec: specFor('RECOMMENDATION_CACHE_DB'),
+        wholeDbAllowed: true,
+        // Not destructive by ANY reading of this file's definition: nothing is duplicated,
+        // no customer work is lost, and every key is recomputed from `orders` and `products`
+        // on the next request that needs it. It is the safest row in the table, and saying
+        // so plainly matters as much as the warnings above — an operator who cannot tell
+        // which flushes are harmless treats them all as dangerous, or none of them.
+        destructive: false,
+        blastRadius:
+            'The next view of each affected product page recomputes its related-products '
+            + 'strip — one aggregation over that product\'s past order lines. Nothing durable '
+            + 'is lost and no third party is called. Negligible, and safe during an incident.',
+    },
 ]);
 
 /**

@@ -44,6 +44,13 @@ export const MODELS = Object.freeze({
   // What an agency stores, per depot. Distinct from STOCK_RESERVATION (which is
   // vendor-global and has no location) — see modules/inventory.
   AGENCY_STOCK_LEVEL: 'AgencyStockLevel',
+  // Append-only: every movement of a depot row, with the balances it produced.
+  // The counted quantities on AGENCY_STOCK_LEVEL are the sum of these, and the
+  // reconciler asserts exactly that — never a re-derivation from the catalogue.
+  AGENCY_STOCK_MOVEMENT: 'AgencyStockMovement',
+  // A month of storage rent, per (agency, vendor). A RECORD, not a money
+  // movement — D-7. Nothing charges it and nothing pays it out.
+  AGENCY_STORAGE_INVOICE: 'AgencyStorageInvoice',
   // A proposed change to `ProductVariant.stock` on an agency-warehoused SKU,
   // awaiting the other party's approval — see modules/stock-requests.
   STOCK_ADJUSTMENT_REQUEST: 'StockAdjustmentRequest',
@@ -147,6 +154,12 @@ export const MODELS = Object.freeze({
   CUSTOMER_NOTIFICATION_PREFERENCE: 'CustomerNotificationPreference',
   DEVICE_TOKEN: 'DeviceToken',
 
+  // A customer's own relationship to the catalogue: what they saved, and what
+  // they looked at. Both are one row per (customer, product) with a unique
+  // compound index — the index IS the deduplication, never application code.
+  WISHLIST_ITEM: 'WishlistItem',
+  RECENTLY_VIEWED_ITEM: 'RecentlyViewedItem',
+
   // Integrations
   CONNECTED_CALENDAR_ACCOUNT: 'ConnectedCalendarAccount',
   CHANNEL_CONNECTION: 'ChannelConnection',
@@ -170,6 +183,25 @@ export const MODELS = Object.freeze({
   // Blog / editorial (the marketing site's article pages)
   ARTICLE: 'Article',
   ARTICLE_AUTHOR: 'ArticleAuthor',
+
+  /**
+   * Reviews & ratings (Phase 6 Step 10) — ONE collection, two subjects.
+   *
+   * A row rates either a `product` or a `delivery`, told apart by `subject_type`.
+   * The split is the whole design: a product review is what the storefront's
+   * `aggregateRating` is built from, and a delivery review is what finally gives
+   * `DeliveryAgent.trust_signals` its three rating factors — 50 of the composite's
+   * 100 weight, seeded since the score existed. Building only the product half
+   * would leave the trust composite unflippable. See modules/reviews.
+   */
+  REVIEW: 'Review',
+  /**
+   * The derived side of the above: one row per (target, author role), rebuilt from
+   * the published reviews whenever one of them changes state. It is a CACHE of an
+   * aggregation and never a second source of truth, which is why every write
+   * recomputes from `reviews` rather than incrementing a counter.
+   */
+  REVIEW_AGGREGATE: 'ReviewAggregate',
 
   // COD (cash on delivery: collections, cash liabilities, reconciliation)
   CASH_COLLECTION: 'CashCollection',
@@ -205,6 +237,8 @@ export const COLLECTIONS = Object.freeze({
   STOCK_RESERVATION: 'stock_reservations',
   STOCK_AUDIT_LOG: 'stock_audit_logs',
   AGENCY_STOCK_LEVEL: 'agency_stock_levels',
+  AGENCY_STOCK_MOVEMENT: 'agency_stock_movements',
+  AGENCY_STORAGE_INVOICE: 'agency_storage_invoices',
   STOCK_ADJUSTMENT_REQUEST: 'stock_adjustment_requests',
   FILE: 'files',
   FILE_REFERENCE: 'file_references',
@@ -284,6 +318,8 @@ export const COLLECTIONS = Object.freeze({
   CUSTOMER_NOTIFICATION: 'customer_notifications',
   CUSTOMER_NOTIFICATION_PREFERENCE: 'customer_notification_preferences',
   DEVICE_TOKEN: 'device_tokens',
+  WISHLIST_ITEM: 'wishlist_items',
+  RECENTLY_VIEWED_ITEM: 'recently_viewed_items',
 
   // Integrations
   CONNECTED_CALENDAR_ACCOUNT: 'connected_calendar_accounts',
@@ -308,6 +344,10 @@ export const COLLECTIONS = Object.freeze({
   // Blog / editorial (the marketing site's article pages)
   ARTICLE: 'articles',
   ARTICLE_AUTHOR: 'article_authors',
+
+  // Reviews & ratings (see the MODELS entries above for what each holds)
+  REVIEW: 'reviews',
+  REVIEW_AGGREGATE: 'review_aggregates',
 
   // COD (cash on delivery: collections, cash liabilities, reconciliation)
   CASH_COLLECTION: 'cash_collections',

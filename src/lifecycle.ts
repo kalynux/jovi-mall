@@ -38,6 +38,8 @@ import { initializeAgentDomain } from './modules/agents';
 import { initializeShipmentAssignment } from './modules/shipment-assignment';
 import { agentCapacityReconcileWorker } from './modules/agents/workers/agent-capacity-reconcile.worker';
 import { agentTrustRecomputeWorker } from './modules/agents/workers/agent-trust-recompute.worker';
+import { agencyInventoryReconcileWorker } from './modules/inventory/workers/agency-inventory-reconcile.worker';
+import { agencyStorageInvoiceWorker } from './modules/inventory/workers/agency-storage-invoice.worker';
 import { trackingAllowReconcileWorker } from './modules/agents/workers/tracking-allow-reconcile.worker';
 import { initRateLimiters } from './api/rate-limit/rate-limit.middleware';
 
@@ -294,7 +296,7 @@ async function reportIndexDrift(): Promise<void> {
 }
 
 /**
- * The fourteen workers and the event consumers, started in one place.
+ * The fifteen workers and the event consumers, started in one place.
  *
  * Extracted from the boot sequence so the read is short and so `drain()` has a visible
  * counterpart — but note the asymmetry, which is deliberate: this function names each worker
@@ -387,6 +389,14 @@ function startBackgroundWork(): void {
     // `trust_signals.composite_score` and never `cod.trust_score`, which
     // `CodTrustService.applyEvent` still owns. Phase 6 D-2; the flip is Step 11.
     agentTrustRecomputeWorker.start();
+
+    // Rebuilds every agency's stored-SKU roster and repairs any counter that has drifted
+    // from its movement ledger. This work used to happen on the inventory read path;
+    // Step 14 moved it here — see INVENTORY_CONFIG.RECONCILE_CRON for why.
+    agencyInventoryReconcileWorker.start();
+
+    // Writes last month's storage statements. A RECORD only — nothing here moves money (D-7).
+    agencyStorageInvoiceWorker.start();
 }
 
 /**

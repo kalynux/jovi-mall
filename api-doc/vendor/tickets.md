@@ -789,6 +789,19 @@ or be system-owned (admins can attach any file).
 }
 ```
 
+> ⚠ **`visibility` controls who is shown the attachment *row*, not who can fetch the bytes.**
+> A ticket attachment is an ordinary `POST /api/files/upload` that lands in the **public**
+> `images/` or `documents/` tree — the same folders as public product imagery — and is attached
+> to the ticket by id afterwards. Its `url` is therefore a plain public URL, and a `PRIVATE`
+> attachment's URL is still fetchable by anyone who has it.
+>
+> This is a **known open gap**, named in `docs/ADR-A01-UPLOAD-DOWNLOAD-MAP.md`: closing it needs
+> a dedicated ticket-attachment upload path writing to a private folder, an authorized read
+> reusing the ticket's scope, and a migration for existing rows. **None of that exists yet.**
+> Phase 4 made delivery-proof photos and digital products private
+> ([FRONTEND-CHANGELOG-private-files.md](../FRONTEND-CHANGELOG-private-files.md)); it did **not**
+> close this one. Do not promise attachment privacy in product copy.
+
 **Success Response**:
 
 Status: `201 Created`
@@ -802,7 +815,7 @@ Body:
     "fileName": "checkout-error.png",
     "fileSize": 245678,
     "mimeType": "image/png",
-    "url": "http://localhost:3000/storage/ticket-attachments/...",
+    "url": "http://localhost:8022/api/files/images/2026/02/a1b2c3…_checkout-error.png",
     "uploadedBy": "string",
     "uploadedByRole": "vendor",
     "uploadedByActor": {
@@ -855,7 +868,7 @@ Body:
       "fileName": "checkout-error.png",
       "fileSize": 245678,
       "mimeType": "image/png",
-      "url": "http://localhost:3000/storage/ticket-attachments/...",
+      "url": "http://localhost:8022/api/files/images/2026/02/a1b2c3…_checkout-error.png",
       "uploadedBy": "string",
       "uploadedByRole": "vendor",
       "uploadedByActor": {

@@ -547,7 +547,7 @@ Body:
     "fileName": "proof-of-attempt.jpg",
     "fileSize": 184320,
     "mimeType": "image/jpeg",
-    "url": "http://localhost:3000/storage/ticket-attachments/...",
+    "url": "http://localhost:8022/api/files/images/2026/02/a1b2c3…_checkout-error.png",
     "uploadedBy": "string",
     "uploadedByRole": "agency",
     "uploadedByActor": {

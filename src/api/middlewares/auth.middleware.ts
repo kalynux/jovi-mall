@@ -191,6 +191,20 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
    * sends a browser client into a refresh loop against an account that is never coming
    * back.
    */
+  /**
+   * A CLOSED account is refused first, and with its own code (ADR-A02 D-1).
+   *
+   * Ordering, not duplication: `closed` is not `active`, so the suspension guard below would
+   * match it and tell somebody who anonymised their own account that it is "suspended" —
+   * which reads as an appealable administrative decision and produces a support ticket
+   * nobody can act on. This is also the ONE path a client realistically meets it on:
+   * closure removes both login identifiers, so `login` can no longer resolve the account at
+   * all, and what is left is the access token minted before the closure landed.
+   */
+  if (user.status === 'closed') {
+    return next(createAppError(ERROR_CODES.AUTH_ACCOUNT_CLOSED, 403));
+  }
+
   if (user.status !== 'active') {
     return next(
       createAppError(ERROR_CODES.AUTH_ACCOUNT_SUSPENDED, 403, 'This account is suspended')

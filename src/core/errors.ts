@@ -93,6 +93,9 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     // screen rather than suggest waiting it out.
     [ERROR_CODES.AUTH_SESSION_CAP_REACHED]: "It's been a while — please sign in again",
     [ERROR_CODES.AUTH_USER_NOT_FOUND]: 'User not found',
+    // Says "closed", never "deleted" — ADR-A02 D-2 is explicit that the promise is
+    // anonymisation and must not be described to a customer as an erasure.
+    [ERROR_CODES.AUTH_ACCOUNT_CLOSED]: 'This account has been closed',
     [ERROR_CODES.AUTH_ROLE_PROFILE_NOT_FOUND]: 'Role profile not found',
 
     [ERROR_CODES.EARNINGS_INVALID_SPLIT]: 'Order fees exceed the paid amount; cannot split earnings',
@@ -282,6 +285,11 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     // as `activationBlockers[].message` by the simple-product endpoints, so they must
     // read as instructions to the vendor, not as code identifiers.
     [ERROR_CODES.CATALOG_PRODUCT_NO_VARIANTS]: 'This product needs at least one variant with a price before it can be published',
+    [ERROR_CODES.INVENTORY_DEPOT_CHANGE_HOLDS_STOCK]: 'Move this stock to the new depot before changing where the product is stored',
+    [ERROR_CODES.INVENTORY_INSUFFICIENT_STOCK]: 'That shelf does not hold enough stock for this movement',
+    [ERROR_CODES.INVENTORY_TRANSFER_SAME_LOCATION]: 'That stock is already at this depot',
+    [ERROR_CODES.STORAGE_INVOICE_NOT_FOUND]: 'Storage invoice not found',
+    [ERROR_CODES.STORAGE_INVOICE_NOT_OPEN]: 'That storage invoice is no longer open',
     [ERROR_CODES.CATALOG_PRODUCT_NO_DEFAULT_VARIANT]: 'This product needs an active default variant before it can be published',
     [ERROR_CODES.CATALOG_PRODUCT_DIGITAL_NO_ASSET]: 'catalog product digital no asset',
     [ERROR_CODES.CATALOG_PRODUCT_SERVICE_NO_DURATION]: 'catalog product service no duration',
@@ -369,12 +377,24 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.CONNECTION_WRONG_REAPPROVAL_PARTY]: 'The other party changed their policy — you are not the one who needs to reapprove this connection',
     [ERROR_CODES.CONNECTION_NOT_ACTIVE]: 'You need an active, approved connection with this party before you can do that',
     [ERROR_CODES.CUSTOMER_NOT_FOUND]: 'customer not found',
+    [ERROR_CODES.WISHLIST_ITEM_NOT_FOUND]: 'That product is not on your wishlist',
     [ERROR_CODES.CUSTOMER_ADDRESS_NOT_FOUND]: 'customer address not found',
     [ERROR_CODES.CUSTOMER_PAYMENT_METHOD_NOT_FOUND]: 'customer payment method not found',
     [ERROR_CODES.PAYMENT_METHOD_NOT_FOUND]: 'Payment method not found',
     [ERROR_CODES.PAYMENT_METHOD_LIMIT_REACHED]: 'You have reached the maximum number of saved payment methods',
     [ERROR_CODES.USER_NOT_FOUND]: 'user not found',
     [ERROR_CODES.USER_INVALID_PASSWORD]: 'user invalid password',
+    [ERROR_CODES.ACCOUNT_CLOSURE_ROLE_NOT_ELIGIBLE]:
+        'Only a customer-only account can be closed here. Close your other roles first.',
+    [ERROR_CODES.ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT]:
+        'You have orders still in progress. They have to finish before this account can be closed.',
+    [ERROR_CODES.CONTACT_CHANGE_SAME_IDENTIFIER]: 'That is already the address on your account',
+    [ERROR_CODES.CONTACT_CHANGE_IDENTIFIER_TAKEN]: 'That address is already in use on another account',
+    [ERROR_CODES.CONTACT_CHANGE_NOT_PENDING]: 'There is no change waiting to be confirmed',
+    [ERROR_CODES.CONTACT_CHANGE_EXPIRED]: 'That change request has expired — start again',
+    [ERROR_CODES.CONTACT_CHANGE_TOKEN_INVALID]: 'That confirmation link is not valid',
+    [ERROR_CODES.CONTACT_CHANGE_PHONE_UNPROVEN]:
+        'Connect that number on WhatsApp first, so we know you can receive on it',
     [ERROR_CODES.STORE_NOT_FOUND]: 'store not found',
     [ERROR_CODES.STORE_SLUG_TAKEN]: 'store slug taken',
     [ERROR_CODES.VENDOR_NOTIFICATION_NOT_FOUND]: 'vendor notification not found',
@@ -446,6 +466,18 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.BLOG_AUTHOR_NOT_FOUND]: 'Author not found',
     [ERROR_CODES.BLOG_AUTHOR_KEY_TAKEN]: 'An author already uses this id',
     [ERROR_CODES.BLOG_AUTHOR_IN_USE]: 'This author is credited on one or more articles',
+
+    // Reviews. Written for the person holding the form, because two of them are the
+    // only explanation a shopper ever gets for a refused review — and "not eligible"
+    // on its own reads as a bug rather than as the verified-purchase rule working.
+    [ERROR_CODES.REVIEW_NOT_FOUND]: 'Review not found',
+    [ERROR_CODES.REVIEW_ALREADY_EXISTS]: 'You have already reviewed this',
+    [ERROR_CODES.REVIEW_NOT_ELIGIBLE]:
+      'Only a completed purchase or a completed delivery can be reviewed, and only by the person it belonged to',
+    [ERROR_CODES.REVIEW_SUBJECT_NOT_FOUND]: 'There is nothing to review at this reference',
+    [ERROR_CODES.REVIEW_SUBJECT_NOT_REVIEWABLE]: 'This cannot be reviewed yet',
+    [ERROR_CODES.REVIEW_NOT_PENDING]: 'This review has already been moderated',
+    [ERROR_CODES.REVIEW_ROLE_NOT_ALLOWED]: 'Your account type cannot review this',
 
     // ── System operations (Phase 14) ──────────────────────────────────────────
     // The maintenance message is the one default here written for a CUSTOMER rather than an
