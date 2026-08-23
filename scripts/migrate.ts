@@ -19,17 +19,22 @@
  * happens at deploy time. The benefit is that this file cannot break a migration.
  *
  * ── ORDER IS DECLARED, not discovered ─────────────────────────────────────────
- * `MIGRATIONS` below is the order. Two rules produced it:
+ * `MIGRATIONS` below is the order. One rule produces it:
  *
- *   1. `migrate:agent-memberships` runs FIRST among the data migrations. It moves
- *      `DeliveryAgent.agency_id` into the membership collection, and the whole agent
- *      domain — contracts, deposits, COD — reads memberships. Anything that runs before
- *      it sees an agent with no agency.
- *   2. Index builds run LAST. Three of them claim UNIQUENESS
- *      (`migrate:payment-indexes`, `migrate:cod-late-deposit-index`), and a unique build
- *      fails outright against data that still holds duplicates. Letting the data
- *      migrations reach their final shape first turns "E11000, go and investigate" into a
- *      build that simply succeeds.
+ *   Index builds run LAST. Three of them claim UNIQUENESS
+ *   (`migrate:payment-indexes`, `migrate:cod-late-deposit-index`), and a unique build
+ *   fails outright against data that still holds duplicates. Letting the data
+ *   migrations reach their final shape first turns "E11000, go and investigate" into a
+ *   build that simply succeeds.
+ *
+ * ⚠ There used to be a second rule — `migrate:agent-memberships` FIRST, because the whole
+ * agent domain reads contracts. That migration was DELETED 2026-08-23 (Phase 6 Step 17)
+ * rather than repaired: it wrote `status: 'approved'`, a literal that stopped being a
+ * `ContractStatus` at the agent-contract refactor, so its create would have thrown a
+ * Mongoose ValidationError and its idempotence filter could never match its own rows. It
+ * was harmless only because it carries pre-refactor `DeliveryAgent.agency_id` rows and
+ * owner decision D-5 says none exist. Its ledger row survives in `schema_migrations` as
+ * history and is simply not reported — `resolveAll()` maps over MIGRATIONS, not the rows.
  *
  * ── The registry is CLOSED, and `status` proves it ────────────────────────────
  * `assertRegistryCovers()` diffs `MIGRATIONS` against every `migrate:*` / `backfill:*`
@@ -76,20 +81,18 @@ export interface Migration {
 }
 
 /**
- * The seventeen, in application order. See the ORDER note in the header.
+ * Every migration, in application order. See the ORDER note in the header.
+ *
+ * The count used to be written out here ("the seventeen"), and it went stale twice in one
+ * day as Phase 6 added rows. `assertRegistryCovers()` is what actually proves this list is
+ * complete — a number in a comment proves nothing and is one more thing to forget.
  *
  * ⚠ One of them DROPS A COLLECTION (`migrate:drop-agent-invites`, added 2026-08-19). Every
  * other row here creates, backfills or re-indexes; that one destroys. It reads and prints
  * what it is about to drop first, which is what makes `--dry-run` worth using here.
  */
 export const MIGRATIONS: Migration[] = [
-    // ── Data: the agent domain, memberships first ────────────────────────────
-    {
-        name: 'migrate:agent-memberships',
-        file: 'scripts/migrate-agent-memberships.ts',
-        dryRun: true,
-        note: 'legacy agents keep a dead agency_id and have no membership; the agent domain reads memberships',
-    },
+    // ── Data: the agent domain ───────────────────────────────────────────────
     {
         name: 'migrate:agent-deposits',
         file: 'scripts/migrate-agent-deposits.ts',
@@ -197,10 +200,28 @@ export const MIGRATIONS: Migration[] = [
         note: 'late-deposit uniqueness stays scoped to the agent, so a second agency cannot record one',
     },
     {
+        name: 'migrate:customer-catalog-indexes',
+        file: 'scripts/migrate-customer-catalog-indexes.ts',
+        dryRun: true,
+        note: 'WISHLIST AND RECENTLY-VIEWED DEDUPLICATION IS ENFORCED BY NOTHING — both repositories upsert against a unique index that is not there, so a double tap inserts a second row',
+    },
+    {
         name: 'migrate:admin-action-log',
         file: 'scripts/migrate-admin-action-log-indexes.ts',
         dryRun: true,
         note: 'admin_action_log has no TTL, so it grows without bound',
+    },
+    {
+        name: 'migrate:review-indexes',
+        file: 'scripts/migrate-review-indexes.ts',
+        dryRun: true,
+        note: 'ONE REVIEW PER AUTHOR IS ENFORCED BY NOTHING — the pre-check is a race, and duplicates inflate ratings and agent trust scores',
+    },
+    {
+        name: 'migrate:inventory-indexes',
+        file: 'scripts/migrate-inventory-indexes.ts',
+        dryRun: true,
+        note: 'AN ORDER-PATH STOCK PROJECTION CAN APPLY TWICE — the idempotency pre-read is a race, so a retried payment webhook sells the same depot shelf twice; and the monthly storage run can issue two statements for one month',
     },
 ];
 

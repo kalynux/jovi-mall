@@ -489,6 +489,31 @@ export class AgentRepository {
     return await DeliveryAgentModel.findOneAndUpdate({ user_id: userId }, { email_verified: true }, { new: true });
   }
 
+  /**
+   * Land a confirmed contact change on the profile — the value AND its verified flag,
+   * together (Phase 6 · 6.D.1). See `CustomerRepository.setVerifiedContact`; the same
+   * method exists on all four role repositories, and none of them touches `status`.
+   */
+  async setVerifiedContact(
+    userId: string,
+    contact: { email?: string; phone?: string }
+  ): Promise<IDeliveryAgent | null> {
+    const set: Record<string, unknown> = {};
+    if (contact.email !== undefined) {
+      set.email = contact.email;
+      set.email_verified = true;
+    }
+    if (contact.phone !== undefined) {
+      set.phone = contact.phone;
+      set.phone_verified = true;
+    }
+    if (Object.keys(set).length === 0) {
+      return await DeliveryAgentModel.findOne({ user_id: userId });
+    }
+
+    return await DeliveryAgentModel.findOneAndUpdate({ user_id: userId }, { $set: set }, { new: true });
+  }
+
 }
 
 export const agentRepository = new AgentRepository();

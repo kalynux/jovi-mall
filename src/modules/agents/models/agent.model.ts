@@ -366,9 +366,13 @@ export interface IAgentTrustSignals {
    * number before it replaces it.
    *
    * The shadow exists because the cutover is not free. Three of the composite's
-   * five factors are ratings (50 of 100 weight) and **nothing rates an agent yet**,
-   * so today they all blend to the seed. Flipping without looking would re-score
-   * every agent from half-invented inputs and move real cash exposure with it —
+   * five factors are ratings (50 of 100 weight), and until Phase 6 Step 10 nothing
+   * rated an agent at all, so they blended to the seed. `modules/reviews` now feeds
+   * all three — a delivery review by its recipient, by the seller, and by the
+   * agent's own agency — but an agent with no reviews yet still blends to the seed,
+   * so the shadow's numbers move only as real ratings accumulate. Flipping without
+   * looking would re-score every agent from largely seeded inputs and move real cash
+   * exposure with it —
    * `TRUST_FULL_THRESHOLD` (80) and `TRUST_REDUCED_THRESHOLD` (50) are the two
    * numbers that would move. Phase 6 Step 11 is the flip, and it is taken against
    * a table of who crosses those thresholds, not against an argument.

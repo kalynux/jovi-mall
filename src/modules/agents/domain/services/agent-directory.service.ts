@@ -11,6 +11,7 @@ import { FileRepositoryMongo } from '../../../catalog/repositories/mongo/file.re
 import { resolveFileDetails } from '../../../catalog/read-models/file-detail.resolver';
 import { getStorageProvider, IStorageProvider } from '../../../../core/storage';
 import { VendorAgencyListItemDto, VendorAgencyMapper } from '../../../vendor/dto/vendor-agency.dto';
+import { reviewAggregateRepository } from '../../../reviews/repositories/review-aggregate.repository';
 import {
   AgentDirectoryItemDto,
   AgentDirectoryMapper,
@@ -145,13 +146,18 @@ export class AgentDirectoryService {
     );
     const agencyIds = agencies.map((a) => a._id.toString());
 
-    const [contracts, logoByFileId] = await Promise.all([
+    const [contracts, logoByFileId, ratingByAgencyId] = await Promise.all([
       this.contracts.findForAgentAndAgencies(agentId, agencyIds),
       resolveFileDetails(
         agencies.map((a) => a.magazin?.logo_file_id?.toString() ?? null),
         this.files,
         this.storage
       ),
+      // One query for the whole page, like the logo resolve beside it — a rating per
+      // card would be the same N+1 that resolve exists to avoid. `customer` because
+      // an agency's public rating is its customers' delivery reviews; see
+      // `VendorAgencyListItemDto.rating`.
+      reviewAggregateRepository.findMany('agency', agencyIds, 'customer'),
     ]);
 
     const byAgencyId = AgentDirectoryService.groupBy(contracts, (c) => c.agency_id.toString());
@@ -159,7 +165,12 @@ export class AgentDirectoryService {
     const items = agencies.map((agency) => {
       const fileId = agency.magazin?.logo_file_id?.toString();
       const logo = fileId ? logoByFileId.get(fileId) ?? null : null;
-      const dto = VendorAgencyMapper.toListItemDto(agency, agency.magazin ?? null, logo);
+      const dto = VendorAgencyMapper.toListItemDto(
+        agency,
+        agency.magazin ?? null,
+        logo,
+        ratingByAgencyId.get(agency._id.toString()) ?? null,
+      );
       return { ...dto, contract: this.pickContract(byAgencyId.get(dto.id) ?? []) };
     });
 

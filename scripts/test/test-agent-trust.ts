@@ -100,10 +100,24 @@ function main(): void {
 
   assert('exactly five factors carry weight', () => Object.keys(AGENT_CONFIG.TRUST_WEIGHTS).length === 5);
 
-  assert('half the weight is ratings — the reason the score is not live yet', () => {
+  // Phase 6 Step 10 gave all three rating factors a SOURCE (`modules/reviews`), so
+  // this is no longer "the reason the score is not live". The reason now is that the
+  // source has no DATA yet — zero delivery reviews — plus the unanswered O-7. Both
+  // are recorded in the Step 11 plan record; the weight itself is what makes them
+  // matter, which is why it is still pinned here.
+  assert('half the weight is ratings — which is why the flip waits on real ratings', () => {
     const w = AGENT_CONFIG.TRUST_WEIGHTS;
     return w.CUSTOMER_RATING + w.AGENCY_RATING + w.VENDOR_RATING === 50;
   });
+
+  // P-24: the seed IS the maximum, so an unmeasured factor scores perfectly rather
+  // than neutrally. Pinned because Step 11's table is unreadable without it — a
+  // `blocked → full` row on a roster with no reviews is what this guarantees.
+  assert('the seed is the MAXIMUM, so "unknown" and "perfect" are the same number', () =>
+    AGENT_CONFIG.TRUST_SCORE_SEED === AGENT_CONFIG.TRUST_SCORE_MAX);
+
+  assert('an unmeasured rating factor therefore contributes its FULL weight', () =>
+    ratingFactor(null, 0) === 1);
 
   console.log('\n── No evidence resolves to the SEED, never to zero ─────────────────────\n');
 

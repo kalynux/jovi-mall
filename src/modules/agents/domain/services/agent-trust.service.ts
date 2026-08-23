@@ -6,6 +6,7 @@ import { ShipmentAssignmentOfferModel } from '../../../shipment-assignment/model
 import { AgentDepositModel } from '../../../cod/models/agent-deposit.model';
 import { CodDiscrepancyModel } from '../../../cod/models/cod-discrepancy.model';
 import { CodTrustEventModel } from '../../../cod/models/cod-trust-event.model';
+import { reviewAggregateRepository } from '../../../reviews/repositories/review-aggregate.repository';
 
 /**
  * AgentTrustService — the composite trust score.
@@ -20,16 +21,24 @@ import { CodTrustEventModel } from '../../../cod/models/cod-trust-event.model';
  * `cod.trust_score`, which `CodTrustService.applyEvent` still owns and which
  * `CodExposureService` reads to set an agent's cash limit. Phase 6 D-2.
  *
- * The reason is arithmetic rather than caution. **Half the weight has no data
- * source in this platform:**
+ * ── ⚠ THE RATING FACTORS NOW HAVE A SOURCE (Phase 6 Step 10) ─────────────────
+ * This block used to say "half the weight has no data source in this platform"
+ * and it is no longer true. `modules/reviews` writes all three:
  *
- *   customer rating  30 ┐
- *   agency rating    10 ├─ 50 of 100. Nothing rates an agent. No review model
- *   vendor rating    10 ┘  exists (Phase 6 Step 10 builds one — and note that a
- *                          product review will not do: this factor is a rating
- *                          of a DELIVERY, by its recipient, about the agent).
+ *   customer rating  30    a DELIVERY review by its recipient
+ *   agency rating    10    a delivery review by the agent's own agency
+ *   vendor rating    10    a delivery review by the seller whose goods they carried
  *   activity         20    partial — see `on_time_rate` below.
  *   COD              30    real, from settlements and discrepancies.
+ *
+ * All three rate the **same shipment** and land in three separate
+ * `review_aggregates` rows keyed by `(agent, author_role)`, which is why one
+ * delivery can move three different factors. Note what still would NOT do: a
+ * *product* review. This is a rating of a delivery, not of an item.
+ *
+ * A factor with no reviews yet still resolves to the seed, so the shadow's
+ * "every delta is ≥ 0" property holds until real ratings accumulate — it is now a
+ * fact about the data rather than about the code.
  *
  * Flipping the live score onto a composite that is half seed would re-score every
  * agent at once, and the two numbers that move are `TRUST_FULL_THRESHOLD` (80)
@@ -81,9 +90,10 @@ const blendTowardSeed = (observed: number, confidence: number): number =>
 /**
  * A 1–5 star average as a 0–1 factor, with confidence from the number of ratings.
  *
- * `avg` is null and `count` is 0 on every agent in the platform today — nothing
- * writes them. Both together are what "no evidence" looks like, and the blend
- * turns that into the seed rather than into a zero.
+ * `avg === null` with `count === 0` is what "no evidence" looks like, and the blend
+ * turns that into the seed rather than into a zero. That is the shape
+ * `collectSignals` produces for an agent nobody has reviewed — deliberately not
+ * `avg: 0`, which would mean "everybody rated them one star".
  */
 export function ratingFactor(avg: number | null, count: number): number {
   if (avg === null || count <= 0) return SEED_FRACTION;
@@ -117,10 +127,15 @@ export function ratingFactor(avg: number | null, count: number): number {
  * trust events at all — but it is exactly what a real adjustment would look like
  * after the flip.)
  *
- * So this is a **question for Phase 6 Step 11**, not a bug to fix here: either
- * administrators keep a persistent override outside the composite, or manual
- * adjustment stops being a thing that survives. Both are product decisions. What
- * must not happen is the flip landing without either.
+ * ── ✅ Step 11 was TAKEN, and the answer was "not yet" (2026-08-21) ───────────
+ * This paragraph used to say the question was "for Phase 6 Step 11". Step 11 has
+ * now run its measurement, and **this is one of the two blockers that stopped the
+ * flip**: a `blocked → full` transition on the only adjusted-looking row in the
+ * roster. It is carried as **O-7** in `PRODUCTION-READINESS/PHASE-6-UNBUILT-SCOPE-PLAN.md`
+ * § 5, and the position is unchanged: either administrators keep a persistent
+ * override outside the composite, or manual adjustment stops being a thing that
+ * survives. Both are product decisions, and **the flip may not land without one of
+ * them answered in writing**. `npm run audit:trust-shadow` is how you re-measure.
  */
 export function codFactor(signals: Pick<IAgentTrustSignals, 'cod_clean_return_count' | 'cod_discrepancy_count' | 'cod_volume_returned'>): number {
   const settlements = signals.cod_clean_return_count + signals.cod_discrepancy_count;
@@ -201,15 +216,22 @@ export class AgentTrustService {
    * testable without a database — the same split `deriveWorkingState` and
    * `effectiveLimit` already follow in this module.
    *
-   * The three rating fields are returned as their empty values because **nothing
-   * writes them yet**. They are not omitted: a caller reading `customer_rating_avg`
-   * should see `null` (unknown) rather than a missing key, and the persisted
-   * document keeps its shape.
+   * ── The three rating fields, and the ONE path they arrive by ────────────────
+   * They come from `review_aggregates`, read here and nowhere else. The chain is:
+   * a delivery review is published → `ReviewService.refreshTargets` recomputes the
+   * `(agent, author_role)` aggregate → this collector reads it → the worker writes
+   * `trust_signals`. **One writer at every hop**, which is the rule the whole trust
+   * design rests on. Nothing in `modules/reviews` touches `delivery_agents`, and
+   * nothing here touches `reviews`.
+   *
+   * An agent nobody has reviewed reads `avg: null, count: 0` — not `avg: 0` — so
+   * `ratingFactor` resolves to the seed rather than to "everybody rated them one
+   * star". The keys are always present so the persisted document keeps its shape.
    */
   async collectSignals(agentId: string): Promise<IAgentTrustSignals> {
     const agentObjectId = new Types.ObjectId(agentId);
 
-    const [completedShipments, offerCounts, deposits, discrepancyCount, discrepancyDepositIds, unlinkedPenalties] = await Promise.all([
+    const [completedShipments, offerCounts, deposits, discrepancyCount, discrepancyDepositIds, unlinkedPenalties, ratings] = await Promise.all([
       ShipmentModel.countDocuments({ agent_id: agentObjectId, status: 'delivered' }),
 
       // Response rate is offers ANSWERED over offers that reached a verdict.
@@ -252,6 +274,15 @@ export class AgentTrustService {
         event_type: { $in: ['late_deposit', 'deposit_shortfall'] },
         ref_type: { $ne: 'cod_discrepancy' },
       }),
+
+      /**
+       * All three rating rows in one query — customer, agency and vendor.
+       *
+       * Read together rather than separately because the composite weights them
+       * differently and needs all three to produce one score; three round trips
+       * would buy nothing and would make a partial read possible.
+       */
+      reviewAggregateRepository.findAgentRatings(agentId),
     ]);
 
     const byStatus = new Map(offerCounts.map((row) => [row._id, row.n]));
@@ -273,12 +304,14 @@ export class AgentTrustService {
       assignment_response_rate: reachedVerdict > 0 ? accepted / reachedVerdict : null,
       completed_shipments: completedShipments,
 
-      customer_rating_avg: null,
-      customer_rating_count: 0,
-      agency_rating_avg: null,
-      agency_rating_count: 0,
-      vendor_rating_avg: null,
-      vendor_rating_count: 0,
+      // `null` when nobody has rated — never `0`. See the docstring above and
+      // `ratingFactor`: the two mean opposite things to the composite.
+      customer_rating_avg: ratings.customer.count > 0 ? ratings.customer.average : null,
+      customer_rating_count: ratings.customer.count,
+      agency_rating_avg: ratings.agency.count > 0 ? ratings.agency.average : null,
+      agency_rating_count: ratings.agency.count,
+      vendor_rating_avg: ratings.vendor.count > 0 ? ratings.vendor.average : null,
+      vendor_rating_count: ratings.vendor.count,
 
       cod_clean_return_count: cleanReturns,
       // Discrepancy rows PLUS any COD penalty recorded only in the trust log —
