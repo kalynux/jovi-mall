@@ -2,15 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> ## ⚠️ Agent-contract refactor — landed, except three named items
+> ## ⚠️ Agent-contract refactor — one item left, and it is a decision
 >
 > The COD **shared-pool** model, the contract lifecycle, negotiated terms, agent
 > earnings on **both** payment methods, and every admin/agent controller are built,
 > reachable and live. The old independent per-agency cap
 > (`cod.max_exposure_override`) is gone from the model, and **nothing below still
-> describes the pre-refactor model** — that was the third of the three items the
-> previous banner named, closed 2026-08-22 (Phase 6 Step 16). The other two were the
-> trust composite and the collection-rename migration; where they stand:
+> describes the pre-refactor model**.
 >
 > 1. ⛔ **The trust composite is BUILT but runs in SHADOW, and that is deliberate.**
 >    `AgentTrustService` and `AgentTrustRecomputeWorker` compute the five-factor score
@@ -18,24 +16,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 >    `CodTrustService.applyEvent` is still the sole writer of `cod.trust_score`, the
 >    number `CodExposureService` turns into an agent's cash limit. See
 >    [§ Agent trust score](#agent-trust-score-live-vs-shadow) for the two blockers
->    holding the flip and where the decision is recorded.
+>    holding the flip and where the decision is recorded. **This is the only item
+>    still open, and it is blocked on a product decision (O-7) plus rating data that
+>    does not exist yet — not on anybody writing code.**
 > 2. ✅ **The collection rename and the `cod.outstanding_balance` backfill are
 >    CLOSED as not applicable pre-production** (owner decision D-5, 2026-08-21) —
 >    not forgotten. The code has been post-rename since before the decision;
 >    `agent_agency_memberships` appears nowhere in `src/`. The reasoning is in the
 >    handoff doc's § "Not built at all".
-> 3. ⛔ **Two verification items were never built** and are the reason this banner
->    still exists at all: the **7 named scenarios** including the
->    concurrent-allocation race, and the **E2E against live Mongo**.
->    `npm run test:agent-domain` (green at **211**) is DB-free by construction, so it
->    covers neither the allocation race nor the money movements.
+> 3. ✅ **Both verification items are BUILT — 2026-08-23.** The 7 scenarios including
+>    the concurrent-allocation race are `npm run verify:agent-contract` (**66**), and
+>    the 8-step E2E is `npm run verify:agent-e2e` (**55**). Both need Mongo as a
+>    replica set. `npm run test:agent-domain` (211) is still DB-free by construction
+>    and still covers neither — that is what these two are for.
+>
+>    ⚠ **They found two live defects on their first run**, both on the order path and
+>    both silent: the stock commit was a no-op (an `$inc` smuggled through a `$set`
+>    builder behind an `as any`, so **no sale ever decremented stock**), and
+>    `markProductsOrdered` threw a BSONError on every paid order because
+>    `OrderRepository.findById` populates `items.product_id`. Both are fixed. That is
+>    the argument for these two suites in one sentence.
 >
 > **Read [AGENT-CONTRACT-REFACTOR.md](./AGENT-CONTRACT-REFACTOR.md) before touching
 > `src/modules/agents/`, `src/modules/cod/`, or
 > `src/modules/shipments/shipment.service.ts`.** It lists what is built, what is not,
 > the decisions already settled with the product owner, and the order to finish in.
-> **Delete this banner when items 1 and 3 close** — not before, and do not delete it
-> in exchange for a sentence somewhere else.
+> **Delete this banner when item 1 closes** — not before, and do not delete it in
+> exchange for a sentence somewhere else.
 
 ## Commands
 
@@ -145,6 +152,37 @@ hand-rolled asserts — follow that convention rather than introducing a runner:
 
 ```bash
 npm run test:agent-domain                      # agent domain (211 assertions, no DB needed)
+npm run verify:agent-contract                  # the seven invariants the refactor locked, against
+                                               # real Mongo (66) — NEEDS a REPLICA SET. Its subject
+                                               # is everything test:agent-domain structurally cannot
+                                               # see: every guard here is enforced by a QUERY FILTER
+                                               # rather than an `if`, and a DB-free stub cannot fail
+                                               # a filter. The concurrent-allocation race (10
+                                               # simultaneous reservations against a cap of 3 admit
+                                               # exactly 3), the §1 worked example with its numbers
+                                               # (three agencies wanting 1M each out of one 1M pool),
+                                               # a threshold below the cash already held, the cash
+                                               # chain's two exact invariants (balance == Σ ledger;
+                                               # Σ slices == pot) incl. that a REFUSED debit leaves
+                                               # no ledger row, the settlement-vs-deactivation RACE
+                                               # (request raised clear, cash collected, approval
+                                               # refused), pausing not freeing the pool, and
+                                               # ban-as-override-not-cascade
+npm run verify:agent-e2e                       # one COD delivery end to end (55) — NEEDS a REPLICA
+                                               # SET. Contract formation → checkout → offer/accept →
+                                               # transit → the delivery code → the hand-over →
+                                               # capacity + the terminal tracking verdict → clean
+                                               # termination, through the REAL services. It builds
+                                               # its own world under `e2eac…` and deletes it, so it
+                                               # touches no real agency or agent. Its value is the
+                                               # CHAIN: it pins that for a COD delivery the terminal
+                                               # verdict rides `cod.collection.recorded` and NOT
+                                               # `shipment.status_changed` — a geo-tracker author
+                                               # closing sessions only on the latter would leave
+                                               # every COD session open forever, with no symptom on
+                                               # this side at all. It found two live silent defects
+                                               # on its first run (the stock-commit no-op and the
+                                               # markProductsOrdered BSONError)
 npm run test:agent-trust                       # the trust composite and its nightly worker (35, no
                                                # DB) — incl. the SOURCE SCAN that keeps the shadow a
                                                # shadow: the worker must not write cod.trust_score
@@ -195,6 +233,16 @@ npm run test:reviews                           # reviews & ratings (62, no DB) �
                                                # collector as its only reader, a compare-and-set on
                                                # the moderation verdict, and no public route to a
                                                # delivery review
+npm run test:customer-order-detail             # the customer's view of a parcel (46, no DB) — the
+                                               # ADR-A06 agent-disclosure window as a TOTAL table over
+                                               # all eleven shipment statuses, the partial-name
+                                               # reducer, and SOURCE SCANS for the two rules nothing
+                                               # behavioural can see: an agent outside the window is
+                                               # never LOOKED UP (so there is nothing to leak), and
+                                               # the stored full name never reaches the DTO. Its
+                                               # second half pins the 2dsphere null-`location` rule
+                                               # across all THREE models that carry it — the defect
+                                               # that made "add a second saved address" impossible
 npm run test:storefront-checkout               # stock semantics + the cart write contract (50, no DB).
                                                # Largely a SOURCE SCAN, because the invariant that
                                                # matters is structural: reserve writes no stock,
@@ -1499,9 +1547,16 @@ A review is a rating 1–5, optional prose, by one identified person, about one 
 **All three delivery authors rate the same shipment and land in three different aggregates**
 (customer 30, agency 10, vendor 10). The vendor is in because they are the one non-recipient who
 actually *meets* the agent — `vendor-order.service.ts` puts the agent's name, phone and avatar on
-their order view. The customer is the one role that **never learns which agent carried their
-parcel** (`orders/dto/customer-shipment.dto.ts` withholds it); they rate the *delivery* and the
-attribution happens server-side. Do not undo either half.
+their order view. The customer rates the *delivery* and the attribution happens **server-side**;
+they never choose an agent, and that half is unchanged.
+
+⚠ **The other half of this paragraph used to read "the customer is the one role that never learns
+which agent carried their parcel", and it is no longer true** (2026-08-23,
+`docs/ADR-A06-AGENT-IDENTITY-DISCLOSURE.md`). `orders/dto/customer-shipment.dto.ts` now publishes
+a **partial name and a photo, and never a phone number**, only while that agent is physically
+carrying the parcel, revoked at `delivered`/`returned`. What did not change is what the review
+path cares about: a customer still cannot *name* a target, so a delivery review still cannot be
+aimed at a person of the author's choosing.
 
 Five rules, each because the obvious version is wrong:
 

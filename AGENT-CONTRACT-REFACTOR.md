@@ -1,4 +1,4 @@
-# Agent Contract Refactor — the build is DONE; two verification items are not
+# Agent Contract Refactor — the build is DONE, the verification is DONE; one DECISION is open
 
 > **Read this before touching `src/modules/agents/`, `src/modules/cod/`, or
 > `src/modules/shipments/shipment.service.ts`.**
@@ -10,10 +10,13 @@
 > earnings on **both** payment methods, and all five admin/agent controller
 > groups are built, routed and reachable.
 >
-> **As of 2026-08-22: `npx tsc --noEmit` and `npm run lint` are clean,
-> `npm run test:agent-domain` is green at 211, `test:agent-trust` at 35,
-> `test:agent-shipment-status` at 32, `test:earnings-quote` at 29, and
-> `test:system` at 228.**
+> **As of 2026-08-23: `npx tsc --noEmit`, `npm run typecheck:scripts` and
+> `npm run lint` are clean, `npm run test:agent-domain` is green at 211,
+> `test:agent-trust` at 35, `test:agent-shipment-status` at 32,
+> `test:earnings-quote` at 29, `test:system` at 228, `test:storefront-checkout`
+> at 51 — and the two verification items this file owed are written:
+> `verify:agent-contract` at **66** and `verify:agent-e2e` at **55**, both
+> against real Mongo.**
 >
 > **Delete this file when § "Still open" below is empty — not before.**
 
@@ -42,14 +45,15 @@ in neither.
 | "Not built at all" #8 · **Docs** | **Done 2026-08-22** (Phase 6 Step 16). `CLAUDE.md` and `ARCHITECTURE.md` no longer describe the pre-refactor model: the contract vocabulary, the seven statuses, the shared pool, and a new § *Agent trust score* stating which of the two scores is live |
 | §4's terms-negotiation dependency · `migrate:contract-terms` | **Written and registered** in the ledger. Same D-5 caveat as its siblings: it is a legacy-data migration and there is no legacy data |
 | §4's `late_deposit` index swap | **Written and registered** as `migrate:cod-late-deposit-index`. This one is an **index** migration and D-5 does **not** exempt it — `autoIndex` is off in production, so the first deploy still needs it |
+| **"Not built at all" #6 · Tests** — the 7 named scenarios, the §1 worked example, the concurrent-allocation race | ✅ **BUILT 2026-08-23** — `npm run verify:agent-contract`, **66 assertions**, NEEDS Mongo as a replica set. The enumerations this document pointed at (its §7/§8) had been rewritten away long before the items were built, so the seven are reconstructed from the invariants **this file's own § "Decisions locked" and `AgentContractService`'s three docstring invariants** state: the allocation race · the shared pool from both directions (the §1 worked example, with its numbers) · a threshold below what is held · the cash chain and its two exact invariants · termination and the settlement-vs-deactivation race · pausing not freeing the pool · ban-as-override. **Two of them are the items the "Known-and-accepted" table below lists as *unverified*** — they are verified now |
+| **"Not built at all" #7 · E2E** against live Mongo — the 8-step scenario | ✅ **BUILT 2026-08-23** — `npm run verify:agent-e2e`, **55 assertions**, NEEDS Mongo as a replica set. Contract formation → COD checkout → offer/accept → pickup and transit → the delivery code → the hand-over → capacity and the terminal tracking verdict → clean termination. It builds its own world under `e2eac…` and deletes it, so it touches no real agency or agent — deliberately unlike `seed:cod-shipments`, which reuses a real pair and modifies their contract.<br><br>⚠ **It found two live defects on its first run, both silent, both fixed in the same change.** (1) The stock commit was a **no-op**: `StockCommitService` passed `{ stock: { $inc: -n } as any }` to a repository `update()` that puts everything under `$set`, Mongo threw a CastError and `OrderStockService` swallowed it — **no sale had ever decremented stock**, and the oversell protection never ran. Closed by giving the repository an explicit `adjustStock(id, delta)`. ⚠ `test:storefront-checkout`'s source scan was GREEN throughout, because it asserted the *string* `'$inc: -'` was present rather than that a decrement happened; that assertion is rewritten. (2) `markProductsOrdered` threw a BSONError on every paid order, because `OrderRepository.findById` populates `items.product_id` and `.toString()` on a populated document is not an id — so `lastOrderedAt`, the inactivity clock the file-cleanup sweep reads, was never stamped on anything |
 
 ### ⛔ Still open
 
 | Item | Status | Trigger to close it |
 |---|---|---|
 | **The trust CUTOVER** (locked decision: *"composite REPLACES the delta model; `CodTrustService.applyEvent` stops writing the score"*) | Engine built, running in **shadow**. `cod.trust_score` is byte-identical to what it always was | Two blockers, both measured (Phase 6 Step 11): **(a)** zero delivery reviews exist, so 50 of 100 weight still resolves to the seed and the composite cannot lower anybody — re-run `npm run audit:trust-shadow` and reopen when its footer stops printing the `every delta is ≥ 0` line; **(b)** **O-7** — an agent at a live 35 (COD-**blocked**) scores 100, so a flip hands them full exposure. Either administrators keep a persistent override outside the composite, or manual adjustment stops surviving a recompute. **Undecided.** Then the flip itself is one line: `setTrustSignalsShadow` → `setTrustScore` |
-| **"Not built at all" #6 · Tests** — the 7 named scenarios, the §1 worked example, the concurrent-allocation race | **Not written.** `test:agent-domain` (211) is DB-free by construction, so it covers neither the allocation race nor the money movements | Needs a Mongo-backed suite or the E2E path below. Nothing blocks starting it |
-| **"Not built at all" #7 · E2E** against live Mongo — the 8-step scenario | **Not written** | Same |
+⚠ **This table had three rows until 2026-08-23. Two of them are now in the CLOSED table above** — the seven scenarios and the E2E were written and are green. Only the cutover remains, and it is a decision, not a build.
 
 ### 🔸 Known-and-accepted, not tracked as refactor debt
 
@@ -58,7 +62,7 @@ in neither.
 | `cod_limit_changed` is declared and **written by nothing** | `setContractThreshold` takes no actor and appends no event, so a COD threshold change is the one contract mutation with no audit trail. Closing it needs an `Actor` threaded to the call site. See § "Found while doing step 1" |
 | `CodExposureService.effectiveLimit(agent, maxExposureOverride)` is named for a dead field | Cosmetic, on a live dispatch path. Both call sites pass a definite number, so the `?? AGENT_MAX_EXPOSURE_DEFAULT` fallback is unreachable |
 | ~~⚠ `scripts/migrate-agent-memberships.ts` writes the **retired** status literal `'approved'`~~ | ✅ **CLOSED 2026-08-23 by DELETION** (Phase 6 Step 17). It created rows with `status: 'approved'`, which the schema enum no longer accepts, and its idempotence filter `$in: ['pending','approved','suspended']` could never match an `approved` row either — so it would have thrown a Mongoose `ValidationError` the moment it met a legacy agent. Found 2026-08-22 during Step 16 and deliberately left for a step that could touch code. The script, its `migrate:agent-memberships` npm binding and its `MIGRATIONS` row are **gone**; repairing it would have moved the checksum of an already-applied migration to save a script whose only job is to carry pre-refactor rows **D-5 says will never exist**. Its `schema_migrations` row survives as history and is not reported — the runner maps over `MIGRATIONS`, not over the ledger |
-| Settlement-vs-deactivation race | Not covered by a test. The re-check at approval handles it in principle; unverified |
+| ~~Settlement-vs-deactivation race~~ | ✅ **VERIFIED 2026-08-23.** `verify:agent-contract` scenario 5 raises a deactivation request while the contract is clear, collects 45 000 under it, and asserts `resolveRequest` **refuses** with `CONTRACT_HAS_OUTSTANDING_COD` — then that the same request approves once the cash is settled. The re-check at approval does hold, and is no longer taken on trust |
 
 > ### ⚠️ 2026-08-02 — terms negotiation landed, and it took a dependency on §4
 >
@@ -983,9 +987,11 @@ only DB-free check that all four new situations carry copy in all five languages
   `composite_score`, not `cod.trust_score` — so today the instant `−20` is still
   what actually throttles an agent, and the immediate recompute is what makes the
   cutover safe rather than what makes it unnecessary.
-- **Settlement-vs-deactivation race** is not covered by a test: cash could be
+- ~~**Settlement-vs-deactivation race** is not covered by a test: cash could be
   collected between a deactivation request and its approval. The re-check at
-  approval handles it in principle; unverified.
+  approval handles it in principle; unverified.~~ ✅ **COVERED 2026-08-23** —
+  `verify:agent-contract` scenario 5 drives exactly that sequence against real
+  Mongo and asserts the approval is refused. It held.
 
 ## Ordering for the next session
 
@@ -1008,6 +1014,14 @@ only DB-free check that all four new situations carry copy in all five languages
    **not applicable pre-production** under D-5. The three that *were* written are all applied:
    `migrate:status` reads **21 of 21, 0 not applied** as of 2026-08-22, and that includes
    `migrate:agent-deposits`, which this line used to warn had to run before 3f deploys.
-7. ⛔ **START HERE:** tests, then E2E — the 7 named scenarios, the §1 worked example, the
-   concurrent-allocation race, and the 8-step E2E against live Mongo. Nothing blocks this.
+7. ~~Tests, then E2E — the 7 named scenarios, the §1 worked example, the concurrent-allocation
+   race, and the 8-step E2E against live Mongo.~~ **Done 2026-08-23.**
+   `npm run verify:agent-contract` (66) and `npm run verify:agent-e2e` (55), both against
+   real Mongo. They found and closed two silent order-path defects on their first run — see
+   the close-out ledger at the top.
+
+   ⛔ **START HERE now:** there is nothing left to BUILD. What remains is item 4, the trust
+   cutover, and it is a **product decision** (O-7) plus rating data that does not exist yet.
+   Run `npm run audit:trust-shadow`; if its rating-coverage footer still reports zero, the
+   answer has not changed and the flip must not be taken.
 8. ~~Docs.~~ **Done 2026-08-22** (Phase 6 Step 16).
