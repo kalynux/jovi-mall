@@ -22,7 +22,7 @@
  *
  * Run: npm run test:account-closure
  */
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import {
     CloseAccountSchema,
@@ -31,6 +31,7 @@ import {
 
 let passed = 0;
 let failed = 0;
+let skipped = 0;
 
 function assert(name: string, fn: () => boolean): void {
     let ok: boolean;
@@ -433,25 +434,45 @@ function main(): void {
 
     console.log('\n── geo-tracker\'s position is written down (step 12.5) ──────────────────\n');
 
-    const adr = readFileSync(
-        join(ROOT, '..', 'geo-tracker', 'docs', 'ADR-B02-CLOSED-ACCOUNT-TRAIL.md'),
-        'utf8',
-    );
+    // ⚠ This block reads a file in ANOTHER REPOSITORY, and therefore has to be able
+    // to not find it. It passed for days on a developer machine, where all three
+    // repositories sit side by side under `backend/`, and threw ENOENT the first time
+    // CI ran — because jovi-mall's workflow checks out jovi-mall and nothing else.
+    // That is not a flaw in the assertion; it is the assertion being in the only
+    // place it can be written and the only place it cannot always run.
+    //
+    // Skipping LOUDLY rather than passing quietly is the point: a silent pass would
+    // make this look enforced when it is not, which is worse than not having it. The
+    // enforced-everywhere half is `taxonomy-contract.yml`, which checks out all three
+    // repositories on purpose; if this claim ever needs to be a hard gate, it belongs
+    // there.
+    const adrPath = join(ROOT, '..', 'geo-tracker', 'docs', 'ADR-B02-CLOSED-ACCOUNT-TRAIL.md');
+    if (!existsSync(adrPath)) {
+        console.log(
+            `  ⏭  SKIPPED — geo-tracker is not checked out beside this repository.\n` +
+            `     Looked for: ${adrPath}\n` +
+            `     These 4 assertions verify a SIBLING repository and can only run in a\n` +
+            `     workspace that holds all three. They are NOT enforced by this run.`,
+        );
+        skipped += 4;
+    } else {
+        const adr = readFileSync(adrPath, 'utf8');
 
-    assert('the ADR exists and answers ADR-A02', () => adr.includes('ADR-A02'));
+        assert('the ADR exists and answers ADR-A02', () => adr.includes('ADR-A02'));
 
-    assert('it states the decision: no cross-service call', () =>
-        /no code change/i.test(adr) && /triggers nothing in geo-tracker/i.test(adr));
+        assert('it states the decision: no cross-service call', () =>
+            /no code change/i.test(adr) && /triggers nothing in geo-tracker/i.test(adr));
 
-    // The trigger clause is the half that keeps the ADR true later.
-    assert('it names `tracking_audit` as the trigger to reopen it', () =>
-        adr.includes('tracking_audit') && /trigger to reopen/i.test(adr));
+        // The trigger clause is the half that keeps the ADR true later.
+        assert('it names `tracking_audit` as the trigger to reopen it', () =>
+            adr.includes('tracking_audit') && /trigger to reopen/i.test(adr));
+    }
 
     assert('jovi-mall links to it, so a client is not left guessing', () =>
         doc.includes('ADR-B02-CLOSED-ACCOUNT-TRAIL.md'));
 
     console.log('\n' + '─'.repeat(72));
-    console.log(`  ${passed} passed, ${failed} failed`);
+    console.log(`  ${passed} passed, ${failed} failed${skipped > 0 ? `, ${skipped} skipped` : ''}`);
     console.log('─'.repeat(72) + '\n');
     if (failed > 0) process.exit(1);
 }

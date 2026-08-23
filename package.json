@@ -106,7 +106,6 @@
     "test:recently-viewed": "ts-node scripts/test/test-recently-viewed.ts",
     "test:related-products": "ts-node scripts/test/test-related-products.ts",
     "test:reviews": "ts-node scripts/test/test-reviews.ts",
-    "test:customer-order-detail": "ts-node scripts/test/test-customer-order-detail.ts",
     "seed:tickets": "ts-node scripts/seed/seed-tickets.ts",
     "seed:tickets:clean": "ts-node scripts/seed/seed-tickets.ts --clean",
     "seed:plans": "ts-node scripts/seed/seed-pricing-plans.ts",

@@ -695,18 +695,39 @@ async function main(): Promise<void> {
     assert('the template warns that `mock` is the default and is refused in production', () =>
         /TEST DOUBLE/.test(envExample) && /DEFAULT/.test(envExample));
 
-    const compose = fs.readFileSync(path.join(ROOT, '..', 'docker-compose.yml'), 'utf8');
-    assert('the compose stack runs a clamav service', () => /^\s{2}clamav:/m.test(compose));
-    assert('…with a healthcheck that proves a LOADED DATABASE, not an open port', () =>
-        /clamdcheck\.sh/.test(compose));
-    assert('…and jovi-mall waits for it to be HEALTHY, not merely started', () => {
-        const joviBlock = compose.slice(compose.indexOf('\n  jovi-mall:'), compose.indexOf('\n  jovi-mall-toolbox:'));
-        return /clamav:\s*\n\s*condition: service_healthy/.test(joviBlock);
-    });
-    assert('…and the signature database survives a restart on a named volume', () =>
-        /clamav-db:\/var\/lib\/clamav/.test(compose) && /^\s{2}clamav-db:/m.test(compose));
+    // ⚠ The workspace compose file is OUTSIDE this repository — `backend/` is the
+    // workspace root and is in no git repository at all (page 02, C-9). So this block
+    // can run on a developer machine and can never run in jovi-mall's CI, which checks
+    // out jovi-mall alone. It threw ENOENT on the first CI run that ever happened.
+    //
+    // Skipped LOUDLY, not quietly: a silent pass would advertise a guarantee that is
+    // not being checked. The four assertions below are about the STACK, not about this
+    // service, and they will only become enforceable once the workspace root is itself
+    // versioned and something checks it out.
+    const composePath = path.join(ROOT, '..', 'docker-compose.yml');
+    let composeSkipped = 0;
+    if (!fs.existsSync(composePath)) {
+        console.log(
+            `  ⏭  SKIPPED — the workspace compose file is not beside this repository.\n` +
+            `     Looked for: ${composePath}\n` +
+            `     These 4 assertions describe the 9-service workspace stack and can only\n` +
+            `     run from a full checkout. They are NOT enforced by this run.`,
+        );
+        composeSkipped = 4;
+    } else {
+        const compose = fs.readFileSync(composePath, 'utf8');
+        assert('the compose stack runs a clamav service', () => /^\s{2}clamav:/m.test(compose));
+        assert('…with a healthcheck that proves a LOADED DATABASE, not an open port', () =>
+            /clamdcheck\.sh/.test(compose));
+        assert('…and jovi-mall waits for it to be HEALTHY, not merely started', () => {
+            const joviBlock = compose.slice(compose.indexOf('\n  jovi-mall:'), compose.indexOf('\n  jovi-mall-toolbox:'));
+            return /clamav:\s*\n\s*condition: service_healthy/.test(joviBlock);
+        });
+        assert('…and the signature database survives a restart on a named volume', () =>
+            /clamav-db:\/var\/lib\/clamav/.test(compose) && /^\s{2}clamav-db:/m.test(compose));
+    }
 
-    console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
+    console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed${composeSkipped > 0 ? `, ${composeSkipped} skipped` : ''}\n`);
     if (failed > 0) process.exit(1);
 }
 
