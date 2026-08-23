@@ -135,6 +135,40 @@ const AgencyKycDetailsSchema = new Schema(
      */
     legit_verified: { type: Boolean, default: false },
     /**
+     * The VERDICT, beside its boolean projection — the same pair `VendorKycDetailsSchema`
+     * carries, added for the same reason and by the same rule.
+     *
+     * ── Why the boolean alone was not enough ──────────────────────────────────
+     * `legit_verified: false` means BOTH "never reviewed" and "reviewed and refused",
+     * and no reader can tell them apart. A review queue is unbuildable over a field
+     * with that ambiguity: an administrator opening an agency cannot see that a
+     * colleague already decided, and the agency is never told what to fix.
+     *
+     * The two are written **together and never apart**, by
+     * `DeliveryAgencyRepository.markVerifiedIfPending` and `.rejectIfPending` — the
+     * same rule the vendor block states, and the reason both live behind repository
+     * methods rather than being `$set` by callers.
+     *
+     * ── What `rejected` does NOT do ───────────────────────────────────────────
+     * It does not touch the agency's top-level `status`, which stays
+     * `pending_verification`. That is deliberate and is what makes rejection safe to
+     * add: every existing gate already refuses a non-`active` agency — product
+     * activation (`ProductStatusValidationService`), pickup resolution
+     * (`PickupLocationResolver`), COD eligibility (`CodEligibilityService`) and a
+     * vendor's target agency (`vendor-product.controller`). A rejected agency is
+     * therefore already blocked from everything that matters, by machinery that
+     * predates this field, and it can be re-reviewed without an un-reject verb.
+     *
+     * Revoking an agency that is already `verified` is `deactivate`, not this — that
+     * one runs the product-suspension cascade, which a first refusal has no need of.
+     */
+    status: {
+      type: String,
+      enum: ['pending', 'verified', 'rejected'],
+      default: 'pending',
+    },
+    rejection_reason: { type: String, default: null, trim: true, maxlength: 500 },
+    /**
      * Who approved the verification, and when (Phase 9).
      *
      * Until then the flag was written by nothing — `setLegitVerified` had no caller — so
@@ -221,10 +255,16 @@ export interface IAgencyPolicies {
   documents?: string[];
 }
 
+export type AgencyKycStatus = 'pending' | 'verified' | 'rejected';
+
 export interface IAgencyKycDetails {
   registration_number: string | null;
   transport_license_id: string | null;
+  /** The boolean projection of `status === 'verified'`. Written together, never apart. */
   legit_verified: boolean;
+  status: AgencyKycStatus;
+  /** Set on `rejected`, cleared on `verified`. */
+  rejection_reason: string | null;
   /** Stamped by `POST /api/admin/delivery-agencies/:id/verify` (Phase 9). */
   verified_at?: Date | null;
   verified_by_user_id?: Types.ObjectId | string | null;
@@ -320,6 +360,8 @@ const DeliveryAgencySchema = new Schema<IDeliveryAgency>(
         registration_number: null,
         transport_license_id: null,
         legit_verified: false,
+        status: 'pending',
+        rejection_reason: null,
       }),
     },
     policies: { type: AgencyPoliciesSchema, default: null },

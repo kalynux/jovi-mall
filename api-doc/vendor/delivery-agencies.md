@@ -73,7 +73,8 @@ Only agencies that meet **both** of the following conditions are returned:
       },
       "country": "CM",
       "coverageAreas": ["littoral", "centre", "west"],
-      "rating": null,
+      "rating": 4.6,          // null when nobody has rated them
+      "ratingCount": 38,      // 0 when rating is null
       "policies": {
         "pricing": {
           "storage_based_enabled": true,
@@ -125,7 +126,8 @@ Only agencies that meet **both** of the following conditions are returned:
 | `headquartersAddress` | `object \| null` | Primary headquarters address (always index 0). See below. |
 | `country` | `string \| null` | 🆕 ISO-2 country the agency operates in (e.g. `"CM"`), set once at their onboarding. What scopes `coverageAreas` to a region catalogue. `null` on legacy agencies. |
 | `coverageAreas` | `string[]` | Region keys this agency serves (e.g. `["littoral", "centre"]`), from `locations.json`, always within `country`. |
-| `rating` | `number \| null` | Average rating (0–5). Always `null` until the rating system is implemented. |
+| `rating` | `number \| null` | Service rating, 0–5, from this agency's **customers'** delivery reviews. `null` when nobody has rated them — never `0`. Only customer reviews feed it: an agency's own reviews of its agents move the *agent's* score, so a directory rating can never be self-reported. See [reviews.md](../reviews.md). |
+| `ratingCount` | `number` | How many reviews `rating` averages. `0` when `rating` is `null`. **Render it** — 5.0 from one delivery and 4.6 from two hundred are not the same claim. |
 | `policies` | `object \| null` | Policy summary. See below. Always present for agencies with `onboardingStep = 0`. |
 
 ### `headquartersAddress`
@@ -306,8 +308,10 @@ export interface VendorAgencyListItemDto {
   /** ISO-2, e.g. "CM". Scopes `coverageAreas`. null on legacy agencies. */
   country: string | null;
   coverageAreas: string[];
-  /** Always null until the rating system is implemented. */
+  /** Customers' delivery-review average, 0–5. null when unrated — never 0. */
   rating: number | null;
+  /** How many reviews the average is over. 0 when `rating` is null. */
+  ratingCount: number;
   policies: VendorAgencyPolicySummaryDto | null;
 }
 

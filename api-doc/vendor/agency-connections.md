@@ -66,7 +66,8 @@ current connection state to that agency (if any), so the UI can render the right
       "headquartersAddress": { "region": "Littoral", "city": "Douala", "address_description": "4th Floor, Immeuble Ndokotti, Akwa" },
       "country": "CM",
       "coverageAreas": ["littoral", "centre", "west"],
-      "rating": null,
+      "rating": 4.6,
+      "ratingCount": 38,
       "policies": { "pricing": { "storage_based_enabled": true, "pickup_based_enabled": true, "notes": null }, "returns": { "payer": "vendor", "return_window_days": 7, "notes": null }, "damage": { "claim_deadline_days": 5, "max_refund_per_item": 50000, "notes": null } },
       "connection": { "id": "665f0000000000000000aa11", "status": "pending" }
     },
@@ -78,7 +79,8 @@ current connection state to that agency (if any), so the UI can render the right
       "headquartersAddress": null,
       "country": "CM",
       "coverageAreas": ["centre"],
-      "rating": null,
+      "rating": null,          // nobody has rated them yet — never sent as 0
+      "ratingCount": 0,
       "policies": null,
       "connection": null
     }

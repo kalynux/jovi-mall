@@ -16,6 +16,7 @@ import { auditLogger } from '../../core/audit/audit-logger';
 import { eventBus } from '../../core/events/event-bus';
 import { PaginationOptions } from '../../core/repositories/base.repository';
 import { VendorAgencyListItemDto, VendorAgencyMapper, AgencyListMeta } from '../vendor/dto/vendor-agency.dto';
+import { reviewAggregateRepository } from '../reviews/repositories/review-aggregate.repository';
 import { AgencyVendorListItemDto, AgencyVendorMapper } from './dto/agency-vendor-browse.dto';
 import {
   IVendorAgencyConnection,
@@ -542,17 +543,33 @@ export class ConnectionService {
     ]);
     const byAgencyId = new Map(connections.map((c) => [c.agency_id.toString(), c]));
 
-    // Business name/logo come from the joined Magazin. Batch-resolve logos.
-    const logoByFileId = await resolveFileDetails(
-      agencies.map((a) => a.magazin?.logo_file_id?.toString() ?? null),
-      this.fileRepository,
-      this.storageProvider,
-    );
+    // Business name/logo come from the joined Magazin. Batch-resolve logos — and the
+    // service rating beside them, in one query for the whole page rather than one per
+    // card. `customer` because an agency's public rating is its customers' delivery
+    // reviews; see `VendorAgencyListItemDto.rating` for why the three author roles
+    // are not averaged together.
+    const [logoByFileId, ratingByAgencyId] = await Promise.all([
+      resolveFileDetails(
+        agencies.map((a) => a.magazin?.logo_file_id?.toString() ?? null),
+        this.fileRepository,
+        this.storageProvider,
+      ),
+      reviewAggregateRepository.findMany(
+        'agency',
+        agencies.map((a) => a._id.toString()),
+        'customer',
+      ),
+    ]);
 
     const items = agencies.map((agency) => {
       const logoFileId = agency.magazin?.logo_file_id?.toString();
       const logo = logoFileId ? logoByFileId.get(logoFileId) ?? null : null;
-      const dto = VendorAgencyMapper.toListItemDto(agency, agency.magazin ?? null, logo);
+      const dto = VendorAgencyMapper.toListItemDto(
+        agency,
+        agency.magazin ?? null,
+        logo,
+        ratingByAgencyId.get(agency._id.toString()) ?? null,
+      );
       const connection = byAgencyId.get(dto.id);
       return {
         ...dto,

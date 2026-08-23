@@ -129,6 +129,40 @@ export class AdminAgencyService {
     }
 
     /**
+     * Refuse an agency's business verification, with a reason.
+     *
+     * ── Why this had to exist beside `verify` ────────────────────────────────────
+     * Until it did, `kyc_details.legit_verified: false` meant both "never reviewed" and
+     * "reviewed and refused", so a review queue could not be built over it and an agency
+     * was never told what to fix. The vendor lifecycle solved the same problem the same
+     * way and its model docstring is the argument.
+     *
+     * ── Why it is not a transaction, and why it changes no status ────────────────
+     * Same as `verify`: one compare-and-set, no cascade. Rejection leaves the agency at
+     * `pending_verification`, where every existing gate already refuses them, so this
+     * adds a *record* rather than new enforcement. Re-review therefore needs no
+     * "un-reject" verb — fixing the problem and calling `verify` is the whole loop.
+     *
+     * A miss is 409, never 404, for the reason `verify` gives: the caller needs to tell
+     * "no such agency" from "a colleague already decided".
+     */
+    async reject(agencyId: string, actor: ActorRef, reason: string): Promise<AdminAgencyListItemDto> {
+        const rejected = await this.agencyRepo.rejectIfPending(agencyId, actor, reason);
+        if (rejected) return this.toDto(rejected);
+
+        const existing = await this.agencyRepo.findById(agencyId);
+        if (!existing) {
+            throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, 'Delivery agency not found');
+        }
+        throw createAppError(
+            ERROR_CODES.DELIVERY_AGENCY_STATUS_CONFLICT,
+            409,
+            `This agency is ${existing.status}, not pending verification — re-read it before deciding`,
+            { currentStatus: existing.status },
+        );
+    }
+
+    /**
      * Deactivate an agency. Idempotent — no-op if the agency is already inactive.
      */
     async deactivate(agencyId: string, actorUserId: string): Promise<{

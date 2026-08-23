@@ -3,6 +3,7 @@ import { AdminAgencyService } from '../services/admin-agency.service';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { vectorisationService } from '../../catalog/domain/services/VectorisationService';
 import { actorFromRequest } from '../../../core/types/actor-source.types';
+import { AdminRejectAgencyKycSchema } from '../validators/admin-agency.validator';
 
 const adminAgencyService = new AdminAgencyService();
 
@@ -40,6 +41,22 @@ export class AdminAgencyController {
     static verify = asyncHandler(async (req: Request, res: Response) => {
         const agency = await adminAgencyService.verify(req.params.id, actorFromRequest(req));
         res.json({ success: true, data: agency, message: 'Agency verified and activated.' });
+    });
+
+    /**
+     * POST /api/admin/delivery-agencies/:id/reject — body `{ reason }`.
+     *
+     * The other verdict, added beside `verify` in Phase 6 Step 4. `actorFromRequest`
+     * for the same reason as its sibling: this write stamps the reviewer, and under
+     * `requireAdminCaller` that id resolves in the wi-admin database and nowhere here.
+     *
+     * It changes no status — see `AdminAgencyService.reject`. The agency stays pending,
+     * which is what every existing gate already refuses.
+     */
+    static reject = asyncHandler(async (req: Request, res: Response) => {
+        const input = AdminRejectAgencyKycSchema.parse(req.body);
+        const agency = await adminAgencyService.reject(req.params.id, actorFromRequest(req), input.reason);
+        res.json({ success: true, data: agency, message: 'Agency verification rejected.' });
     });
 
     /** PATCH /api/admin/delivery-agencies/:id/deactivate */

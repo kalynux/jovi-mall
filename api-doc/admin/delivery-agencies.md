@@ -43,6 +43,7 @@ Authorization: Bearer <access_token>
 | GET | `/api/internal/admin/agencies` | List all agencies (any status), paginated |
 | GET | `/api/internal/admin/agencies/:id` | Get one agency by id |
 | POST | `/api/internal/admin/agencies/:id/verify` | Approve business verification — the exit from `pending_verification` |
+| POST | `/api/internal/admin/agencies/:id/reject` | Refuse business verification, with a reason. Changes no status |
 | PATCH | `/api/internal/admin/agencies/:id/deactivate` | Deactivate an agency |
 | PATCH | `/api/internal/admin/agencies/:id/reactivate` | Reactivate an agency |
 
@@ -72,6 +73,64 @@ first approval and `reactivate` only to undo a `deactivate`.
 |---|---|---|
 | `DELIVERY_AGENCY_NOT_FOUND` | 404 | No agency with that id |
 | `DELIVERY_AGENCY_STATUS_CONFLICT` | 409 | The agency is not `pending_verification` — usually because another administrator approved it first. `details.currentStatus` carries the actual status. **Re-read before deciding**; do not resend |
+
+---
+
+## POST `/api/internal/admin/agencies/:id/reject`
+
+The other verdict. Same compare-and-set on `pending_verification`, same 409 on a miss.
+
+```jsonc
+{ "reason": "Transport licence has expired" }   // required, 3–500 chars, trimmed
+```
+
+**The reason is stored on the agency** (`kyc_details.rejection_reason`) rather than only in
+wi-admin's audit trail, and that is the point of the endpoint: the agency is shown it, and
+cannot read the admin database. A refusal whose cause they cannot see is one they cannot act
+on — they re-submit the same unchanged application, and it costs a second review.
+
+### ⚠ It changes no status, and that is deliberate
+
+The agency stays `pending_verification`. It is **not** moved to `inactive` — that is
+`deactivate`, which runs the whole product-suspension cascade a never-verified agency has
+nothing for.
+
+Staying pending is what makes rejection safe to apply without new enforcement: a
+non-`active` agency is already refused by product activation, pickup resolution, COD
+eligibility and vendor default-agency selection. And it is why **there is no un-reject** —
+the agency is still pending, so `POST /verify` accepts them once they fix what the reason
+names.
+
+### What moves
+
+| Field | After a rejection |
+|---|---|
+| `kyc_details.status` | `rejected` |
+| `kyc_details.rejection_reason` | the reason |
+| `kyc_details.legit_verified` · `legit_verified` | `false` (both, together) |
+| `kyc_details.verified_at` | `null` — cleared, so an approval that was withdrawn does not read as still standing |
+| `kyc_details.verified_by_*` | the reviewing actor |
+| `status` | **unchanged** — still `pending_verification` |
+
+### Why the verdict exists at all
+
+`legit_verified: false` meant BOTH "never reviewed" and "reviewed and refused". No reader
+could tell them apart, so a review queue was unbuildable and an agency was never told what
+to fix. `kyc_details.status` carries the verdict; `legit_verified` stays as its boolean
+projection, and the two are **written together and never apart**. Same shape as the vendor
+lifecycle, for the same reason.
+
+### Responses
+
+```json
+{ "success": true, "data": { "...": "the agency" }, "message": "Agency verification rejected." }
+```
+
+| `error.code` | Status | When |
+|---|---|---|
+| `VALIDATION_ERROR` | 400 | Missing, blank, under 3 or over 500 characters, or an unknown field (the schema is strict) |
+| `DELIVERY_AGENCY_NOT_FOUND` | 404 | No agency with that id |
+| `DELIVERY_AGENCY_STATUS_CONFLICT` | 409 | Not `pending_verification` — another administrator reached a verdict first. `details.currentStatus` carries it |
 
 ---
 

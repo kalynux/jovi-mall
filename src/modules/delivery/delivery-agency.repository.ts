@@ -67,6 +67,21 @@ export class DeliveryAgencyRepository {
    * agency's policy for a multi-shipment order without an N+1 query per
    * shipment). Agencies not found are simply absent from the result.
    */
+  /**
+   * Every agency id, for a sweep that must visit all of them.
+   *
+   * Deliberately unfiltered by status: the inventory reconcile has to reach a suspended
+   * agency too, because its vendors` products still name its depots and the roster is what
+   * an administrator would look at while deciding what to do about it.
+   */
+  async listAllIds(): Promise<string[]> {
+    const rows = await DeliveryAgencyModel.find({ deletedAt: null })
+      .select('_id')
+      .lean()
+      .exec();
+    return rows.map(r => String(r._id));
+  }
+
   async findByIds(agencyIds: string[]): Promise<IDeliveryAgency[]> {
     return DeliveryAgencyModel.find({ _id: { $in: agencyIds } });
   }
@@ -144,6 +159,36 @@ export class DeliveryAgencyRepository {
     return query.exec();
   }
 
+  /**
+   * Land a confirmed contact change on the profile — the value AND its verified flag,
+   * together (Phase 6 · 6.D.1). See `CustomerRepository.setVerifiedContact`; the same
+   * method exists on all four role repositories, and none of them touches `status`.
+   */
+  async setVerifiedContact(
+    userId: string,
+    contact: { email?: string; phone?: string },
+    session?: ClientSession,
+  ): Promise<IDeliveryAgency | null> {
+    const set: Record<string, unknown> = {};
+    if (contact.email !== undefined) {
+      set.email = contact.email;
+      set.email_verified = true;
+    }
+    if (contact.phone !== undefined) {
+      set.phone = contact.phone;
+      set.phone_verified = true;
+    }
+    if (Object.keys(set).length === 0) {
+      const existing = DeliveryAgencyModel.findOne({ user_id: userId });
+      if (session) existing.session(session);
+      return existing.exec();
+    }
+
+    const query = DeliveryAgencyModel.findOneAndUpdate({ user_id: userId }, { $set: set }, { new: true });
+    if (session) query.session(session);
+    return query.exec();
+  }
+
   async updateStatus(userId: string, status: string, session?: ClientSession): Promise<IDeliveryAgency | null> {
     const query = DeliveryAgencyModel.findOneAndUpdate({ user_id: userId }, { status }, { new: true });
     if (session) query.session(session);
@@ -207,10 +252,67 @@ export class DeliveryAgencyRepository {
           status: 'active',
           legit_verified: true,
           'kyc_details.legit_verified': true,
+          // The verdict beside its boolean projection — one decision, one write, the
+          // same rule the two flags above already follow. `rejection_reason` is cleared
+          // rather than left behind: a reason sitting beside a `verified` verdict
+          // describes a refusal that has been overturned, and the durable record of
+          // that is the wi-admin audit row, not this field.
+          'kyc_details.status': 'verified',
+          'kyc_details.rejection_reason': null,
           'kyc_details.verified_at': new Date(),
           // The prefix is a dotted PATH, so one call still writes the three stamp fields
           // together — which is the property that stops a `_source` drifting from the id
           // beside it, and the reason `actorStamp` exists rather than three `$set` keys.
+          ...actorStamp('kyc_details.verified_by', actor),
+        },
+      },
+      { new: true },
+    );
+    if (session) query.session(session);
+    return query.exec();
+  }
+
+  /**
+   * Refuse an agency's business verification — the other exit from a pending review.
+   *
+   * ── The same compare-and-set, for the same reason ────────────────────────────
+   * Filtered on `status: 'pending_verification'` exactly as `markVerifiedIfPending`
+   * is, so two administrators reaching a verdict at once produce one winner and one
+   * 409 rather than a rejection silently overwriting a colleague's approval.
+   *
+   * ── What it deliberately does NOT write ──────────────────────────────────────
+   * The agency's top-level `status`. It stays `pending_verification`, which is what
+   * makes this verb safe to add without designing new enforcement: every gate that
+   * matters already refuses a non-`active` agency — product activation, pickup
+   * resolution, COD eligibility, and a vendor's target agency. A rejected agency is
+   * blocked by machinery that predates this field.
+   *
+   * It also means re-review needs no "un-reject": the agency is still pending, so
+   * `markVerifiedIfPending` accepts it once they fix what the reason names.
+   *
+   * Revoking an agency that is already **verified** is `deactivate`, not this — that
+   * path runs the product-suspension cascade, which a first refusal has nothing to do.
+   */
+  async rejectIfPending(
+    agencyId: string,
+    actor: ActorRef,
+    rejectionReason: string,
+    session?: ClientSession,
+  ): Promise<IDeliveryAgency | null> {
+    const query = DeliveryAgencyModel.findOneAndUpdate(
+      { _id: agencyId, status: 'pending_verification' },
+      {
+        $set: {
+          // Both flags stay false — they already were; writing them keeps this method
+          // and its sibling symmetrical, so neither can drift into setting one alone.
+          legit_verified: false,
+          'kyc_details.legit_verified': false,
+          'kyc_details.status': 'rejected',
+          'kyc_details.rejection_reason': rejectionReason,
+          // Cleared for the same reason the approval clears the rejection reason: a
+          // `verified_at` beside a `rejected` verdict describes an approval that has
+          // been withdrawn.
+          'kyc_details.verified_at': null,
           ...actorStamp('kyc_details.verified_by', actor),
         },
       },

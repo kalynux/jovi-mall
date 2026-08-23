@@ -51,6 +51,20 @@ function attachRoutes(router: Router): Router {
      */
     router.post('/:id/verify', AdminAgencyController.verify);
 
+    /**
+     * POST /:id/reject — body `{ reason }`. The other verdict.
+     *
+     * Same compare-and-set on `pending_verification` as `/verify`, so two administrators
+     * deciding at once produce one winner and one 409.
+     *
+     * It writes `kyc_details.status: 'rejected'` + the reason and leaves the agency's
+     * top-level `status` alone. That is what makes it a *record* rather than new
+     * enforcement — a pending agency is already refused by product activation, pickup
+     * resolution, COD eligibility and vendor default-agency selection. Re-review is
+     * `/verify` again; there is deliberately no un-reject.
+     */
+    router.post('/:id/reject', AdminAgencyController.reject);
+
     /** PATCH /:id/deactivate — status → inactive, and the product cascade. */
     router.patch('/:id/deactivate', AdminAgencyController.deactivate);
 

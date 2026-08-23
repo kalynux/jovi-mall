@@ -150,7 +150,11 @@ contract state, so the UI can render Apply / Pending / Connected.
       "headquartersAddress": { "region": "Littoral", "city": "Douala", "address_description": "Akwa, Rue Joss" },
       "country": "CM",
       "coverageAreas": ["littoral", "centre"],
-      "rating": null,
+      // The agency's service rating, from its CUSTOMERS' delivery reviews.
+      // `null` when nobody has rated them — never `0`. Show the count beside it.
+      // See ../reviews.md.
+      "rating": 4.6,
+      "ratingCount": 38,
       "policies": { "pricing": { "storage_based_enabled": true, "pickup_based_enabled": true, "notes": null }, "returns": { "payer": "vendor", "return_window_days": 7, "notes": null }, "damage": { "claim_deadline_days": 5, "max_refund_per_item": 50000, "notes": null } },
       "contract": null
     }
