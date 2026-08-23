@@ -176,6 +176,7 @@ Every route tree is guarded by role. `✅` = full access to that area's endpoint
 | Notifications & preferences | — | ✅ (self)⁶ | ✅ (self) | ✅ (self) | ✅ (self) | — |
 | Saved payment methods (`/me/payment-methods`) | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Change password (`/me/password`) | — | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Close account (`/me/close`) | — | ✅ (customer-only accounts) | — | — | — | — |
 | File upload / management (`/files`) | — | ✅ | ✅ | ✅ | ✅ | ✅ (+ hard-delete/orphans) |
 | Admin order controls / COD oversight / agent admin | — | — | — | — | — | ✅ |
 | Tracking authorization (`/tracking/visible-agents`) | — | ✅ (own orders) | — | ✅ (its agents) | ✅ (self) | ✅ (all) |
@@ -246,15 +247,18 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 
 ### Cross-cutting
 - [Auth & sessions](./auth/README.md) · [**Customer auth (bot registration + passwordless sign-in)**](./auth/customer-auth.md) · [Bot `/login` & `/reset-password`](./auth/magic-login.md) · [Onboarding](./auth/onboarding.md)
-- [Change password (`/me/password`, all roles)](./me/password.md)
+- [Change password (`/me/password`, all roles)](./me/password.md) · [**Change email or phone (`/me/{email,phone}`, all roles)**](./me/contact-change.md) — pending until proved; the identifier never moves early · [**Close account (`/me/close`, customers)**](./me/account-closure.md) — anonymise-and-retain, *not* a deletion (ADR-A02)
 - [**Public API (no auth)**](./public/README.md) — the published price list: plan catalog + credit packs, for the marketing site
 - [**Public catalog (no auth)**](./public/catalog.md) — the storefront's read side: products, categories, stores. **Product URLs are nested under their store**
 - [**Public blog (no auth)**](./public/articles.md) — articles, typed blocks, hreflang & slug redirects. The editor is **wi-admin's** (`admin/docs/api/content.md`), not this service's
+- [**Reviews & ratings — cross-role**](./reviews.md) — one module, **two subjects**: a product review (public, verified purchase) and a **delivery** review (internal, written by the customer *and* the vendor *and* the agency, each feeding a different factor of the agent's trust score). Also the rule for `aggregateRating`: emit it **iff** `rating` is non-null
 - [**Billing, plans & credit — cross-dashboard guide**](./billing-plans-across-roles.md) (vendor · agency · agent · admin)
 - [Error catalog](./errors/README.md)
 - [Geospatial addresses & address search](./geo/README.md)
 - [Gateway payments (role-neutral)](./payments/README.md) — initiate · verify · read a transaction
 - [**Phase D · 0 · 1 — what the readiness phases changed**](./phase-d-0-1/README.md) — one document per audience ([admin](./phase-d-0-1/admin-dashboard.md) · [vendor & agency dashboards](./phase-d-0-1/vendor-agency-dashboard.md) · [customer app](./phase-d-0-1/customer-app.md) · [agency & agent app](./phase-d-0-1/agency-agent-app.md)). Real mobile money, the one-time-code step, callback settlement, refund verdicts, and the ten decisions with their build status
+- [**Phase 2 · 3 — deployability and the cross-service seam**](./FRONTEND-CHANGELOG-phase-2-3.md) — the cross-role page, plus one per role folder ([vendor](./vendor/FRONTEND-CHANGELOG-phase-2-3.md) · [agency](./agency/FRONTEND-CHANGELOG-phase-2-3.md) · [agent](./agent/FRONTEND-CHANGELOG-phase-2-3.md) · [customer](./customer/FRONTEND-CHANGELOG-phase-2-3.md) · [landing & shop](./public/FRONTEND-CHANGELOG-phase-2-3.md) · [admin dashboard](../../admin/docs/FRONTEND-CHANGELOG-phase-2-3.md) · [tracking clients](../../geo-tracker/api-doc/FRONTEND-CHANGELOG-phase-2-3.md)). 🔴 **A dropped tracking subscription used to always say `shipment_completed`** — read your role's page before shipping anything that reads that frame
+- [**Phase 4 · 5 — hardening and the admin cutover**](./FRONTEND-CHANGELOG-phase-4-5.md) — the cross-role page, plus one per role folder ([vendor](./vendor/FRONTEND-CHANGELOG-phase-4-5.md) · [agency](./agency/FRONTEND-CHANGELOG-phase-4-5.md) · [agent](./agent/FRONTEND-CHANGELOG-phase-4-5.md) · [customer](./customer/FRONTEND-CHANGELOG-phase-4-5.md) · [landing & shop](./public/FRONTEND-CHANGELOG-phase-4-5.md) · [admin dashboard](../../admin/docs/FRONTEND-CHANGELOG-phase-4-5.md) · [tracking clients](../../geo-tracker/api-doc/FRONTEND-CHANGELOG-phase-4-5.md)). 🔴 **Two deliberate breaks**: `FileDetail.url` is now `string | null` with a new `access` field, and a session is capped at **90 days absolutely** (`AUTH_SESSION_CAP_REACHED` — route to login, never retry). Plus: every upload is really scanned now, and **there is no public `/api/admin/*` any more**
 - **Payout methods** — where you get paid *to* (mobile money · bank · **card**), one schema documented per role: [vendor](./vendor/payout-methods.md) · [agency](./agency/payout-methods.md) · [agent](./agent/payout-methods.md). Distinct from *payment* methods, which are what you pay *with*
 - [Uploads (role-neutral)](./uploads/README.md)
 - [**Health probes & metrics**](./health.md) — `/api/health` (frozen — geo-tracker's readiness depends on it), `/api/health/{live,ready}`, `/metrics`
@@ -265,8 +269,9 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 
 ### Customer
 - **▶ [Auth — registration & sign-in](./auth/customer-auth.md)** — **start here if you are building the storefront.** Customers register in the bot and sign in without a password; there is no registration endpoint and no password field
-- [Profile & addresses](./customer/profile.md) · [Cart](./customer/cart.md) · [Orders](./customer/orders.md)
+- [Profile & addresses](./customer/profile.md) · [Cart](./customer/cart.md) · [Orders](./customer/orders.md) · [**Wishlist & recently viewed**](./customer/saved-and-viewed.md) — server-side, replacing the storefront's `localStorage`; entries degrade rather than vanish when a product goes off sale
 - [Bookings](./customer/bookings.md) · [Payment methods](./customer/payment-methods.md) · [Digital products](./customer/digital-products.md) · [Tickets](./customer/tickets.md)
+- [**Reviews**](./reviews.md) — `/api/customer/reviews`. A customer reviews a **product** they bought *and* a **delivery** they received; the two have different eligibility rules and only the first is ever published
 
 ### Vendor
 - [Store](./vendor/store.md) · [Profile](./vendor/profile.md) · [Onboarding](./vendor/onboarding.md)
@@ -274,7 +279,8 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Inventory](./vendor/inventory.md) · [Orders](./vendor/orders.md) · [Shipping](./vendor/shipping.md) · [Delivery agencies](./vendor/delivery-agencies.md) · [Agency connections](./vendor/agency-connections.md)
 - [Bookings](./vendor/bookings.md) · [Booking guide](./booking-implementation-guide.md) · [Calendar](./vendor/calendar.md) · [Availability rules](./vendor/availability-rules.md)
 - [Billing](./vendor/billing.md) · [Billing overview](./vendor/billing-overview.md) · [Earnings](./vendor/earnings.md) · [Transactions](./vendor/transactions.md) · [Stripe payments](./vendor/stripe-payments.md) · [Payment methods](./vendor/payment-methods.md) (pay *with*) · [**Payout methods**](./vendor/payout-methods.md) (get paid *to* — mobile money only right now; 🚧 bank + card switched off)
-- [Analytics](./vendor/analytics.md) · [Customer management](./vendor/customer-management.md) · [Storage](./vendor/storage.md) · [File management](./vendor/file-management.md)
+- [Analytics](./vendor/analytics.md) · [Customer management](./vendor/customer-management.md) · [Storage](./vendor/storage.md) · [File management](./vendor/file-management.md) · [Storage statements](./vendor/storage-invoices.md) — what each agency says you owe it for warehousing
+- [**Reviews**](./reviews.md) — `/api/vendor/reviews`. **Deliveries only**: rate how your consignment was collected and carried. A product review is the buyer's
 - [Notifications](./vendor/notifications.md) · [Notification channels](./vendor/notification-channels.md) · [Tickets](./vendor/tickets.md) — the shared payload reference for every role's ticket surface; the `TicketType` list is [ticket_types.txt](./ticket_types.txt), and the picker gaps still open are in [tickets-reference-frontend-requirements.md](./vendor/tickets-reference-frontend-requirements.md)
 
 ### Agency
@@ -283,7 +289,9 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [Live tracking](./agency/live-tracking.md) — the map: watchable agents, their active shipments, and each shipment's pickup → drop-off pins (movement itself comes from geo-tracker's socket)
 - [Billing (plans & credit)](./agency/billing.md) · [COD cash management](./agency/cod-cash-management.md) · [Earnings](./agency/earnings.md) · [Payment methods](./agency/payment-methods.md) (pay *with*) · [**Payout methods**](./agency/payout-methods.md) (get paid *to* — mobile money only right now; 🚧 bank + card switched off)
 - [Vendor connections](./agency/vendor-connections.md) · [Vendors](./agency/vendors.md) · [Products](./agency/products.md)
+- [**Inventory**](./agency/inventory.md) — what you warehouse, per depot, and since Step 14 **what is physically on the shelf**: receipts, counts, transfers and a movement ledger · [Stock requests](./agency/stock-requests.md) (changing the vendor's agreed quantity) · [**Storage statements**](./agency/storage-invoices.md) — the monthly record of rent owed. A RECORD: the platform moves none of this money · [Magazin](./agency/magazin.md) (the depots themselves)
 - [File management](./agency/file-management.md) · [Storage](./agency/storage.md)
+- [**Reviews**](./reviews.md) — `/api/agency/reviews`. **Deliveries only**, and your review moves *the agent's* rating, never your own: your directory score comes from your customers
 - [Notifications](./agency/notifications.md) · [Tickets](./agency/tickets.md)
 
 ### Agent
@@ -312,6 +320,7 @@ exact for request and response shapes; each was **rewritten to the internal pref
 - [Orders (disputes, cancel, dispatch, refund)](./admin/orders.md) · [Agents](./admin/agents.md) · [Delivery agencies](./admin/delivery-agencies.md)
 - [COD oversight](./admin/cod.md) · [Platform earnings](./admin/earnings.md) · [Payout requests](./admin/payout-requests.md) · [Billing](./admin/billing.md)
 - [Tickets](./admin/tickets.md) · [Vendors](./admin/vendors.md) · [Shipments](./admin/shipments.md) — the last two never had a public mount
+- [**Review moderation**](./admin/reviews.md) — net-new, and the second group here with no public twin. The queue holds **prose only**: a bare star rating publishes on submission, because a number cannot be abusive and the verified-purchase gate has already run
 - [**System operations**](./admin/system.md) — dependency health · integration status · queue depth · cache status · background jobs · operational metrics · the error journal. **Read-only, every route a GET**
 - [**Developer tools**](./admin/dev-tools.md) — the dangerous half: run a worker · replay/prune the outbox · rebuild search vectors (the old `POST /admin/products/bulk-vectorise`) · **maintenance mode** · **cache flush**
 - Not admin surfaces, filed here for historical reasons: [Billing overview](./admin/billing-overview.md) (a cross-role explainer) · [Payment methods](./admin/payment-methods.md) (`/api/me/payment-methods`, every role)

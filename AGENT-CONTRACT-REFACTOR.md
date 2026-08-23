@@ -1,23 +1,64 @@
-# Agent Contract Refactor — IN FLIGHT (compiles; incomplete)
+# Agent Contract Refactor — the build is DONE; two verification items are not
 
 > **Read this before touching `src/modules/agents/`, `src/modules/cod/`, or
 > `src/modules/shipments/shipment.service.ts`.**
 >
-> A large refactor is part-applied. The domain layer is done, the COD cash chain
-> is complete and reachable over HTTP, and the mechanism that releases COD
-> headroom now exists (agent→agency deposits draw down the contract balance via
-> `AgentDepositService` → `recordSettlement`). **Agent earnings are now complete
-> for BOTH payment methods** — a prepaid delivery pays the agent exactly as a COD
-> one does, and `/api/agent/earnings` + `/api/agent/payout-methods` make it
-> visible and withdrawable. Still incomplete: the trust composite engine, several
-> admin/agent controllers, the collection-rename migration, and the doc refresh.
+> **Every behavioural item of this refactor has shipped.** The domain layer, the
+> COD shared-pool model, the contract lifecycle with negotiated terms, the COD
+> cash chain and its release mechanism (agent→agency deposits draw down the
+> contract balance via `AgentDepositService` → `recordSettlement`), agent
+> earnings on **both** payment methods, and all five admin/agent controller
+> groups are built, routed and reachable.
 >
-> **As of 2026-07-29: `npx tsc --noEmit` and `npm run lint` are both clean,
-> `src/app.ts` loads, and `npm run test:agent-domain` is green at 96 assertions.**
-> Steps 1–3 below are finished. Steps 4–8 are not — see "Not built at
-> all" and "Ordering for the next session".
+> **As of 2026-08-22: `npx tsc --noEmit` and `npm run lint` are clean,
+> `npm run test:agent-domain` is green at 211, `test:agent-trust` at 35,
+> `test:agent-shipment-status` at 32, `test:earnings-quote` at 29, and
+> `test:system` at 228.**
 >
-> Delete this file when the work below is finished.
+> **Delete this file when § "Still open" below is empty — not before.**
+
+---
+
+## Where every remaining item stands — the close-out ledger
+
+Written 2026-08-22 as Phase 6 Step 16.3. The rule it exists to satisfy: *a banner
+removed while an item is silently open is worse than the banner.* Everything this
+document ever listed as unbuilt is in one of the two tables below, and nothing is
+in neither.
+
+### ✅ Closed — built, or ruled not applicable
+
+| Item | How it closed |
+|---|---|
+| §1 · The 8 errors | **Built** 2026-07-16 |
+| §2 · Settlement, COD half | **Built** 2026-07-16 — the increment, the decrement, and the §4 gate made real |
+| §3 · Earnings `owner_type: 'agent'` | **Built** — COD 2026-07-16, **prepaid 2026-07-29**. Agents are paid on every physical delivery, cash or card, and can see and withdraw it. Sub-steps 3b–3h all built |
+| §3's agency-side quote | **Built** 2026-08-05 — `quoteAgencyForShipment(s)`, from the same four pure helpers the split uses |
+| "Not built at all" #1 · the agent's cut on PREPAID orders | **Built** 2026-07-29 |
+| "Not built at all" #2 · trust composite **engine** + nightly worker | **Built** 2026-08-21 (Phase 6 Step 3). `AgentTrustService` + `AgentTrustRecomputeWorker` + `test:agent-trust`. ⚠ **The engine is built; the CUTOVER is not** — see the open table |
+| "Not built at all" #3 · controllers/routes | **Built** 2026-07-29 — agent threshold, contract terms, settlements, KYC/ban, status-request inbox |
+| "Not built at all" #4 · the collection-rename migration | **Not applicable pre-production** (owner decision **D-5**, 2026-08-21). Code was already post-rename; the orphan collection was backed up and dropped rather than migrated |
+| "Not built at all" #4 · the `cod.outstanding_balance` backfill | **Not applicable pre-production** (D-5). Fixed in **`seed:cod-shipments`** instead, with a seed-level assertion — Phase 6 Step 2.3. This was the "single most load-bearing item in §4" and it closed by making the fixture correct rather than by carrying rows nobody is keeping |
+| "Not built at all" #8 · **Docs** | **Done 2026-08-22** (Phase 6 Step 16). `CLAUDE.md` and `ARCHITECTURE.md` no longer describe the pre-refactor model: the contract vocabulary, the seven statuses, the shared pool, and a new § *Agent trust score* stating which of the two scores is live |
+| §4's terms-negotiation dependency · `migrate:contract-terms` | **Written and registered** in the ledger. Same D-5 caveat as its siblings: it is a legacy-data migration and there is no legacy data |
+| §4's `late_deposit` index swap | **Written and registered** as `migrate:cod-late-deposit-index`. This one is an **index** migration and D-5 does **not** exempt it — `autoIndex` is off in production, so the first deploy still needs it |
+
+### ⛔ Still open
+
+| Item | Status | Trigger to close it |
+|---|---|---|
+| **The trust CUTOVER** (locked decision: *"composite REPLACES the delta model; `CodTrustService.applyEvent` stops writing the score"*) | Engine built, running in **shadow**. `cod.trust_score` is byte-identical to what it always was | Two blockers, both measured (Phase 6 Step 11): **(a)** zero delivery reviews exist, so 50 of 100 weight still resolves to the seed and the composite cannot lower anybody — re-run `npm run audit:trust-shadow` and reopen when its footer stops printing the `every delta is ≥ 0` line; **(b)** **O-7** — an agent at a live 35 (COD-**blocked**) scores 100, so a flip hands them full exposure. Either administrators keep a persistent override outside the composite, or manual adjustment stops surviving a recompute. **Undecided.** Then the flip itself is one line: `setTrustSignalsShadow` → `setTrustScore` |
+| **"Not built at all" #6 · Tests** — the 7 named scenarios, the §1 worked example, the concurrent-allocation race | **Not written.** `test:agent-domain` (211) is DB-free by construction, so it covers neither the allocation race nor the money movements | Needs a Mongo-backed suite or the E2E path below. Nothing blocks starting it |
+| **"Not built at all" #7 · E2E** against live Mongo — the 8-step scenario | **Not written** | Same |
+
+### 🔸 Known-and-accepted, not tracked as refactor debt
+
+| | |
+|---|---|
+| `cod_limit_changed` is declared and **written by nothing** | `setContractThreshold` takes no actor and appends no event, so a COD threshold change is the one contract mutation with no audit trail. Closing it needs an `Actor` threaded to the call site. See § "Found while doing step 1" |
+| `CodExposureService.effectiveLimit(agent, maxExposureOverride)` is named for a dead field | Cosmetic, on a live dispatch path. Both call sites pass a definite number, so the `?? AGENT_MAX_EXPOSURE_DEFAULT` fallback is unreachable |
+| ~~⚠ `scripts/migrate-agent-memberships.ts` writes the **retired** status literal `'approved'`~~ | ✅ **CLOSED 2026-08-23 by DELETION** (Phase 6 Step 17). It created rows with `status: 'approved'`, which the schema enum no longer accepts, and its idempotence filter `$in: ['pending','approved','suspended']` could never match an `approved` row either — so it would have thrown a Mongoose `ValidationError` the moment it met a legacy agent. Found 2026-08-22 during Step 16 and deliberately left for a step that could touch code. The script, its `migrate:agent-memberships` npm binding and its `MIGRATIONS` row are **gone**; repairing it would have moved the checksum of an already-applied migration to save a script whose only job is to carry pre-refactor rows **D-5 says will never exist**. Its `schema_migrations` row survives as history and is not reported — the runner maps over `MIGRATIONS`, not over the ledger |
+| Settlement-vs-deactivation race | Not covered by a test. The re-check at approval handles it in principle; unverified |
 
 > ### ⚠️ 2026-08-02 — terms negotiation landed, and it took a dependency on §4
 >
@@ -29,6 +70,17 @@
 > order check on both routers are all clean.
 >
 > **Two of §4's pending migrations are now blockers rather than tidy-ups:**
+>
+> ✅ **BOTH CLOSED, and by different routes — 2026-08-21.** Kept in full because the
+> reasoning below is why item 1 was load-bearing at all. **(1)** was closed **without a
+> backfill**: owner decision **D-5** rules that there is no production data to carry, so the
+> derivation was moved into `seed:cod-shipments` with a seed-level assertion instead
+> (Phase 6 Step 2.3). The silent no-op this warns about was then measured on the dev database
+> and was **not present** — `cod.outstanding_balance` is populated and the late-deposit sweep
+> is demonstrably writing rows. **(2)** was closed by **running it**: it is an *index*
+> migration, which D-5 does not exempt, and `migrate:cod-late-deposit-index` is applied.
+> ⚠ Do not read (1) as licence to skip index migrations — `autoIndex` is off in production,
+> so the first deploy against an empty database still needs every one of them.
 >
 > 1. **`cod.outstanding_balance` backfill.** `CodDepositDeadlineWorker` no longer
 >    iterates cash accounts — it iterates contracts and reads
@@ -53,8 +105,13 @@
 ## What this refactor is
 
 Replaces the per-agency COD cap with a **shared-pool allocation model**, and
-reframes `agent_agency_memberships` as a **contract** with a conditional status
-lifecycle.
+reframes the agent↔agency **membership** as a **contract** with a conditional
+status lifecycle. The collection followed the vocabulary:
+`agent_agency_memberships` → **`agent_agency_contracts`**, which is what the code
+has read since before Phase 6. The model *file* and a handful of exported aliases
+(`AgentAgencyMembershipModel`, `MembershipStatus`, `LIVE_MEMBERSHIP_STATUSES`)
+still say "membership" — they are aliases of the contract exports, not a second
+concept, and `agent_membership_events` kept its name on purpose.
 
 **The governing rule:** *an agent's COD threshold is a shared pool; every
 contract is a sub-allocation of it, and the sum across allocating contracts can
@@ -138,11 +195,16 @@ E2E path (§7/§8) or a Mongo-backed test.
   `kyc`, `platform_ban`, `payout_details` (sensitive), `home_base`,
   `trust_signals`. `settings.max_concurrent_shipments` moved to `capacity`.
 - **Contract model** (`models/agent-agency-membership.model.ts`, exports
-  `AgentAgencyContractModel`) — statuses `pending | rejected | active | paused |
-  suspended | deactivated`. `approved` is an ACTION, not a state; approving
-  lands in `active`. Terms: `cod.threshold`, `cod.outstanding_balance`,
-  `payment.outstanding_to_agent`, `remittance_terms`, `coverage`, `fee_split`,
-  `shipment_value_ceiling`.
+  `AgentAgencyContractModel`) — statuses `pending | rejected | withdrawn |
+  active | paused | suspended | deactivated`. `approved` is an ACTION, not a
+  state; approving lands in `active`. Terms: `cod.threshold`,
+  `cod.outstanding_balance`, `payment.outstanding_to_agent`,
+  `remittance_terms`, `coverage`, `fee_split`, `shipment_value_ceiling`.
+  **`withdrawn` arrived later**, with the symmetric agent↔agency handshake that
+  replaced the email-invite subsystem, and it is deliberately outside
+  `LIVE_CONTRACT_STATUSES` — that list backs the partial unique index on
+  `(agent_id, agency_id)`, so including it would make a withdrawn request block
+  the re-request it exists to permit.
 - **`ALLOCATING_CONTRACT_STATUSES`** = `active | paused | suspended`. Pausing
   does NOT free the pool (the agent may still hold that agency's cash), so
   reactivation can never fail a headroom check. `pending` never allocated;
@@ -794,7 +856,26 @@ only DB-free check that all four new situations carry copy in all five languages
      agent accepts. The collection row is created at acceptance, so the old read returned `null`
      exactly when an agency was deciding who to send; the projection reports `status: null` to mark
      itself as such rather than inventing a fourth `CashCollectionStatus`.
-2. **Trust composite engine** + nightly worker (see decisions below).
+2. ~~**Trust composite engine** + nightly worker~~ — ⚠ **ENGINE BUILT 2026-08-21
+   (Phase 6 Step 3). THE CUTOVER IS NOT DONE and is the one open behavioural item.**
+
+   > `AgentTrustService` (pure `computeComposite` + I/O `collectSignals`) and
+   > `AgentTrustRecomputeWorker` (nightly, `AGENT_TRUST_RECOMPUTE_CRON`, lock-guarded)
+   > are built, registered and green at `npm run test:agent-trust` (35). All five
+   > factors have a real source — the three rating factors got theirs when
+   > `modules/reviews` shipped (Phase 6 Step 10). An immediate `recomputeOne` fires
+   > after a COD discrepancy resolution and after a review moves an agent's
+   > aggregate, which **closes the safety regression flagged below**.
+   >
+   > **What has NOT happened is the decision this refactor locked**: *"composite
+   > REPLACES the delta model; `CodTrustService.applyEvent` stops writing the
+   > score."* The worker writes `trust_signals.composite_score` only;
+   > `cod.trust_score` is untouched and `CodExposureService` still reads the delta
+   > model. Phase 6 **D-2** made the shadow deliberate — the cutover was to be *"a
+   > decision taken against observed numbers instead of a deploy"* — and the
+   > observed numbers said not yet. See the close-out ledger at the top of this
+   > file for both blockers and the trigger, and `npm run audit:trust-shadow` for
+   > the instrument.
 3. ~~**Controllers/routes** for: agent threshold, contract terms, settlements,
    KYC/ban admin, status-request inbox.~~ **DONE 2026-07-29** — see the step 4 section below for
    what shipped and the one deliberate deviation (settlements).
@@ -811,10 +892,12 @@ only DB-free check that all four new situations carry copy in all five languages
    >
    > - The **code is already post-rename** — `collections.ts:231` reads `agent_agency_contracts`
    >   and `agent_agency_memberships` appears **nowhere** in `src/`.
-   > - The old collection **does still exist in dev** with 7 documents, **zero** of whose `_id`s
-   >   appear in `agent_agency_contracts`. They carry the pre-refactor shape (`status: "approved"`,
-   >   `cod.max_exposure_override`), last written 2026-07-15. Orphaned and inert; drop when
-   >   convenient.
+   > - The old collection **was still in dev** with 7 documents, **zero** of whose `_id`s appeared
+   >   in `agent_agency_contracts`. They carried the pre-refactor shape (`status: "approved"`,
+   >   `cod.max_exposure_override`), last written 2026-07-15 — orphaned and inert.
+   >   ✅ **DROPPED 2026-08-21**, on the owner's instruction, after a JSON backup of all 7. The
+   >   contracts collection did not move (7 before, 7 after) and `test:agent-domain` stayed
+   >   **211 / 0**. `agent_agency_memberships` no longer exists in the dev database.
    > - **`cod.outstanding_balance` is populated, not zero** — so the silent-no-op this item warned
    >   about is not present. The COD late-deposit sweep is demonstrably writing rows
    >   (open `late_deposit` discrepancies at 8 000 and 1 200).
@@ -830,7 +913,8 @@ only DB-free check that all four new situations carry copy in all five languages
    `agent_agency_contracts`, status remap (`approved`→`active`,
    `removed`→`deactivated`), `cod.max_exposure_override` → `cod.threshold`,
    capacity backfill from `settings.max_concurrent_shipments`. Must be
-   idempotent with `--dry-run`, like `migrate:agent-memberships`.
+   idempotent with `--dry-run`, like `migrate:agent-memberships` *(which no longer exists — deleted
+   2026-08-23, see the Known-and-accepted table)*.
    **Note (2026-07-29):** `settings.max_concurrent_shipments` no longer exists in code — the
    validator that still accepted it was removed, since the strict Mongoose cast had been silently
    dropping it all along. The migration must therefore read the raw field straight out of Mongo,
@@ -845,7 +929,14 @@ only DB-free check that all four new situations carry copy in all five languages
 6. **Tests** — the 7 named scenarios, incl. the §1 worked example and the
    concurrent-allocation race.
 7. **E2E** against live Mongo — the 8-step scenario.
-8. **Docs** — `ARCHITECTURE.md` / `CLAUDE.md` still describe the old model.
+8. ~~**Docs** — `ARCHITECTURE.md` / `CLAUDE.md` still describe the old model.~~
+   ✅ **DONE 2026-08-22 (Phase 6 Step 16).** Both files carry the contract
+   vocabulary, the seven statuses including `withdrawn`, the shared-pool rule in
+   place of the per-agency cap, and a new § *Agent trust score* in `CLAUDE.md`
+   stating plainly which of the two scores is live. `CLAUDE.md`'s in-flight banner
+   was **shrunk, not deleted** — it now names only the three items still open, per
+   the rule that a banner removed while an item is silently open is worse than the
+   banner.
 
 ## Decisions locked (do not re-litigate)
 
@@ -877,9 +968,21 @@ only DB-free check that all four new situations carry copy in all five languages
 
 - Because `cod.trust_score` *is* the composite and `CodExposureService` reads it,
   **customer ratings now influence COD cash limits**.
-- With **nightly-only recompute**, a cash shortfall no longer throttles an
+- ~~With **nightly-only recompute**, a cash shortfall no longer throttles an
   agent's limit until the next night — today the −20 penalty is instant. This is
-  a safety regression; consider an immediate recompute on COD-negative events.
+  a safety regression; consider an immediate recompute on COD-negative events.~~
+  ✅ **CLOSED 2026-08-21 (Phase 6 Step 3.5), as suggested.**
+  `AgentTrustRecomputeWorker.recomputeOne(agentId)` fires from
+  `CodTrustService.applyEvent` — the choke point every COD trust movement passes
+  through, so a third caller inherits it — and from `ReviewService` when a review
+  moves an agent's aggregate. It is deliberately **not** behind the sweep lock (a
+  single-document write should not queue behind a batch) and is best-effort: it
+  catches its own failure so a trust recompute can never fail the COD write that
+  triggered it. The nightly sweep is the backstop, not the mechanism.
+  **Note this closes the regression in the SHADOW.** Until the cutover it moves
+  `composite_score`, not `cod.trust_score` — so today the instant `−20` is still
+  what actually throttles an agent, and the immediate recompute is what makes the
+  cutover safe rather than what makes it unnecessary.
 - **Settlement-vs-deactivation race** is not covered by a test: cash could be
   collected between a deactivation request and its approval. The re-check at
   approval handles it in principle; unverified.
@@ -895,10 +998,16 @@ only DB-free check that all four new situations carry copy in all five languages
    the agent→agency handover (3f). **Step 3 closed 2026-07-29** with the agent's cut on PREPAID
    orders (§1 under "Not built at all") — agents are now paid on every physical delivery, cash or
    card, and can see and withdraw it.
-4. **START HERE:** trust engine + nightly worker; stop `CodTrustService` writing the score.
+4. ~~Trust engine + nightly worker~~ **Engine done 2026-08-21.** ⛔ *"…stop `CodTrustService`
+   writing the score"* is **NOT done** — the worker runs in shadow. This is the one open
+   behavioural item; both blockers and the trigger are in the close-out ledger at the top.
 5. ~~Controllers + routes (agent threshold, contract terms, settlements, KYC/ban, status inbox).~~
    **Done 2026-07-29** — see step 4 below.
-6. Migration (+ `--dry-run` count against live Mongo). **`migrate:agent-deposits` is written and
-   dry-run clean (2 legacy rows locally) but has NOT been applied — it must run before 3f deploys.**
-7. Tests, then E2E.
-8. Docs.
+6. ~~Migration (+ `--dry-run` count against live Mongo).~~ **Closed 2026-08-21.** The two items
+   that were never written (the collection rename, the `cod.outstanding_balance` backfill) are
+   **not applicable pre-production** under D-5. The three that *were* written are all applied:
+   `migrate:status` reads **21 of 21, 0 not applied** as of 2026-08-22, and that includes
+   `migrate:agent-deposits`, which this line used to warn had to run before 3f deploys.
+7. ⛔ **START HERE:** tests, then E2E — the 7 named scenarios, the §1 worked example, the
+   concurrent-allocation race, and the 8-step E2E against live Mongo. Nothing blocks this.
+8. ~~Docs.~~ **Done 2026-08-22** (Phase 6 Step 16).

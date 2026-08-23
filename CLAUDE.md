@@ -2,40 +2,40 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> ## ⚠️ A refactor is in flight — compiles, but incomplete
+> ## ⚠️ Agent-contract refactor — landed, except three named items
 >
-> A large agent-contract / COD-shared-pool refactor is part-applied. As of
-> **2026-07-30** `npx tsc --noEmit` and `npm run lint` are clean and the app loads.
-> Steps 1–3 are done: the COD cash chain is complete and reachable, and the
-> mechanism that **releases COD headroom now exists** — an agent→agency deposit
-> (`POST /api/agent/cod/deposits` declare → agency confirm, or the agency's
-> one-step `POST /api/agency/cod/deposits`) draws down the contract's outstanding
-> balance via `AgentDepositService` → `recordSettlement`, so a COD pool drains.
-> **Agent earnings are complete for both payment methods** (see "The earnings
-> split" below). The admin/agent controllers (threshold, contract terms,
-> settlements, KYC/ban, status-request inbox) **landed 2026-07-29** — including
-> the KYC write path, without which no agent could accept an offer outside a
-> seeded database. What is still missing: the trust composite engine, the
-> collection-rename migration, and the doc refresh.
+> The COD **shared-pool** model, the contract lifecycle, negotiated terms, agent
+> earnings on **both** payment methods, and every admin/agent controller are built,
+> reachable and live. The old independent per-agency cap
+> (`cod.max_exposure_override`) is gone from the model, and **nothing below still
+> describes the pre-refactor model** — that was the third of the three items the
+> previous banner named, closed 2026-08-22 (Phase 6 Step 16). The other two were the
+> trust composite and the collection-rename migration; where they stand:
+>
+> 1. ⛔ **The trust composite is BUILT but runs in SHADOW, and that is deliberate.**
+>    `AgentTrustService` and `AgentTrustRecomputeWorker` compute the five-factor score
+>    nightly and write `trust_signals.composite_score` **only**;
+>    `CodTrustService.applyEvent` is still the sole writer of `cod.trust_score`, the
+>    number `CodExposureService` turns into an agent's cash limit. See
+>    [§ Agent trust score](#agent-trust-score-live-vs-shadow) for the two blockers
+>    holding the flip and where the decision is recorded.
+> 2. ✅ **The collection rename and the `cod.outstanding_balance` backfill are
+>    CLOSED as not applicable pre-production** (owner decision D-5, 2026-08-21) —
+>    not forgotten. The code has been post-rename since before the decision;
+>    `agent_agency_memberships` appears nowhere in `src/`. The reasoning is in the
+>    handoff doc's § "Not built at all".
+> 3. ⛔ **Two verification items were never built** and are the reason this banner
+>    still exists at all: the **7 named scenarios** including the
+>    concurrent-allocation race, and the **E2E against live Mongo**.
+>    `npm run test:agent-domain` (green at **211**) is DB-free by construction, so it
+>    covers neither the allocation race nor the money movements.
 >
 > **Read [AGENT-CONTRACT-REFACTOR.md](./AGENT-CONTRACT-REFACTOR.md) before touching
-> `src/modules/agents/`, `src/modules/cod/`, or `src/modules/shipments/shipment.service.ts`.**
-> It lists what is built, what is not, decisions already settled with the product
-> owner, and the order to finish in.
->
-> `npm run test:agent-domain` was stale against the new model and is **repaired**;
-> it is green at **211 assertions** as of 2026-08-06. It is DB-free, so it still
-> cannot cover the COD allocation race or the money movements — see the handoff doc.
-> `npm run test:agent-shipment-status` (green at **32**, added 2026-07-30) covers
-> the shared transition map, the map↔schema drift guard, and the agency
-> notification catalog's five-language completeness.
-> `npm run test:earnings-quote` (green at **29**, added 2026-08-05) covers the fee
-> arithmetic itself — it re-derives what both splits allocate from the same pure
-> helpers they call, so the estimate and the actual cannot drift apart unnoticed.
->
-> Parts of this file below still describe the *pre-refactor* model (notably
-> per-agency `cod.max_exposure_override` and membership statuses). The handoff doc
-> wins where they disagree. Delete this banner when the refactor lands.
+> `src/modules/agents/`, `src/modules/cod/`, or
+> `src/modules/shipments/shipment.service.ts`.** It lists what is built, what is not,
+> the decisions already settled with the product owner, and the order to finish in.
+> **Delete this banner when items 1 and 3 close** — not before, and do not delete it
+> in exchange for a sentence somewhere else.
 
 ## Commands
 
@@ -72,7 +72,7 @@ policy. Read the Dockerfile's header before editing it — every rule in it has 
 
 **`toolbox` is the only image that can run a migration**, and it exists because the runtime one
 structurally cannot: `scripts/` is never compiled and `ts-node` is a devDependency, so
-`npm ci --omit=dev` produces an image with no way to run any of the sixteen. Migrations go
+`npm ci --omit=dev` produces an image with no way to run any of the twenty. Migrations go
 `docker compose run --rm jovi-mall-toolbox npm run migrate:up`.
 
 ⚠ **`node_modules` and `storage/` are in `.dockerignore`, and both are correctness.** `bcrypt`
@@ -84,20 +84,23 @@ is 112 MB of real uploads that belong in a named volume (D-6), never an image la
 Data/ops scripts (all `ts-node scripts/…`, and `src/scripts/**` is ESLint-ignored):
 
 **Run migrations through the runner, not the individual bindings.** `npm run migrate:status` and
-`npm run migrate:up` are the front door; the sixteen bindings below still work and are what the
+`npm run migrate:up` are the front door; the individual bindings still work and are what the
 runner spawns, but only the runner writes the ledger. See "The migration ledger" below.
 
 ```bash
-npm run migrate:status                   # each of the 16: applied / not applied / applied-but-changed
+npm run migrate:status                   # each of the 20: applied / not applied / applied-but-changed
 npm run migrate:up                       # apply everything unapplied, in the declared order, ledgered
-npm run migrate:up -- --dry-run          # rehearse all 16; write nothing, ledger nothing
+npm run migrate:up -- --dry-run          # rehearse all 20; write nothing, ledger nothing
 npm run migrate:up -- --only migrate:storefront-indexes
 npm run aggregate:analytics              # Populate vendor analytics data
 npm run backfill:last-ordered            # Backfill last-ordered-at (idempotent, --dry-run)
 npm run backfill:pickup-locations        # Backfill pickup locations (idempotent, --dry-run)
 npm run backfill:shipment-tracking-numbers  # Stamp legacy shipments (idempotent, --dry-run)
 npm run migrate:customer-payment-methods # → user_payment_methods (idempotent, --dry-run)
-npm run migrate:agent-memberships        # agency_id → memberships (idempotent, --dry-run)
+                                         # ⚠ migrate:agent-memberships is GONE (2026-08-23) — it
+                                         # wrote the retired status literal `approved`, so its
+                                         # create would have thrown; deleted rather than repaired
+                                         # because D-5 leaves it no rows to carry
 npm run migrate:agent-deposits           # backfill deposit status/recipient (idempotent, --dry-run)
 npm run migrate:contract-terms           # terms_proposed_by/terms_version (idempotent, --dry-run)
 npm run migrate:cod-late-deposit-index   # DROP the agent-scoped late_deposit index (--dry-run)
@@ -110,6 +113,11 @@ npm run migrate:drop-agent-invites       # ⚠ the ONLY DESTRUCTIVE one: DROPS a
 npm run migrate:booking-rule-timezones   # clear the legacy 'UTC' default off availability rules so
                                          # they inherit the vendor's zone; reports every rule whose
                                          # effective hours would move (idempotent, --dry-run)
+npm run migrate:inventory-indexes        # the agency stock-movement + storage-invoice indexes.
+                                         # Two of them are correctness: one stops a retried payment
+                                         # webhook selling a depot shelf twice, the other stops the
+                                         # monthly storage run issuing two statements for one month
+                                         # (idempotent, --dry-run)
 npm run migrate:storefront-indexes       # build the public-catalog indexes, incl. the ONE $text
                                          # index in this codebase. autoIndex builds them too, but
                                          # silently — a failed build leaves every storefront request
@@ -137,9 +145,21 @@ hand-rolled asserts — follow that convention rather than introducing a runner:
 
 ```bash
 npm run test:agent-domain                      # agent domain (211 assertions, no DB needed)
+npm run test:agent-trust                       # the trust composite and its nightly worker (35, no
+                                               # DB) — incl. the SOURCE SCAN that keeps the shadow a
+                                               # shadow: the worker must not write cod.trust_score
+npm run test:agent-shipment-status             # the shared transition map, the map↔schema drift
+                                               # guard, and the agency notification catalog's
+                                               # five-language completeness (32, no DB needed)
 npm run test:earnings-quote                    # the delivery-fee arithmetic (29, no DB needed)
 npm run test:pickup-depot                      # the agency-depot pickup location (44, no DB needed)
-npm run test:agency-inventory                  # the agency stored-SKU roster (31, no DB needed)
+npm run test:agency-inventory                  # the agency stored-SKU roster AND its counted
+                                               # stock (99, no DB) — the movement deltas, the
+                                               # asymmetric non-negative rule, an idempotent replayed
+                                               # sale, drift-vs-ledger, and SOURCE SCANS for the two
+                                               # invariants nothing behavioural can see: only the two
+                                               # repositories write the counters, and nothing in the
+                                               # storage-invoice path moves money
 npm run test:vehicle-profile                   # vehicle colour + photo merge (31, no DB needed)
 npm run test:payout-methods                    # the shared payout schema + switch (53, no DB needed)
 npm run test:booking-availability               # booking windows/timezones/seats (54, no DB needed)
@@ -165,6 +185,16 @@ npm run test:public-catalog                    # the storefront's visibility rul
                                                # asserted to contain none of it. /api/public/* has no
                                                # auth guard, so those projections ARE the access
                                                # control.
+npm run test:reviews                           # reviews & ratings (62, no DB) — the target matrix
+                                               # (which aggregates one review moves, and why an
+                                               # agency's review never moves its OWN score), the
+                                               # publish-vs-hold rule, LEAK assertions that a public
+                                               # review carries no author identity, and SOURCE SCANS
+                                               # for the invariants no behavioural test can see:
+                                               # exactly one writer of `review_aggregates`, the trust
+                                               # collector as its only reader, a compare-and-set on
+                                               # the moderation verdict, and no public route to a
+                                               # delivery review
 npm run test:storefront-checkout               # stock semantics + the cart write contract (50, no DB).
                                                # Largely a SOURCE SCAN, because the invariant that
                                                # matters is structural: reserve writes no stock,
@@ -305,6 +335,17 @@ npm run verify:storefront                      # the storefront against real Mon
                                                # while a suspended one is not, and that the route
                                                # tables resolve. Writes then deletes its own
                                                # `verify-storefront-*` fixtures, pass or fail. NEEDS Mongo
+npm run verify:reviews                         # the review pipeline against real Mongo (16) — NEEDS
+                                               # Mongo. Its first group is the point: it plants a
+                                               # DUPLICATE and asserts the E11000, because
+                                               # `review_one_per_author_per_subject` is the only thing
+                                               # making "one review per author" true (the service
+                                               # pre-check is a race) and autoIndex fails silently.
+                                               # Also proves a REJECTED review's star really leaves
+                                               # the average, and that collectSignals reads the
+                                               # aggregate back — the cross-module hop the whole
+                                               # module exists for. Fresh ObjectIds, so it touches no
+                                               # real agent; writes then deletes its fixtures
 npx ts-node scripts/test/test-profile-mappers.ts
 ```
 
@@ -521,9 +562,11 @@ Sixteen idempotent migration programs exist with good headers, npm bindings and 
   `dotenv.config()`, its own `mongoose.connect` and its own `process.exit`; importing them into one
   process is a rewrite of every one, and they are the part that already works. The migration
   under test is byte-identical to the one that runs, and this file cannot break a migration.
-- **Order is DECLARED, in `MIGRATIONS`.** `migrate:agent-memberships` first (the whole agent domain
-  reads memberships), and every index build last (three claim uniqueness, and a unique build fails
-  outright against data a later migration has not yet cleaned up). A failure **stops** the run.
+- **Order is DECLARED, in `MIGRATIONS`.** One rule survives: every index build runs last (three
+  claim uniqueness, and a unique build fails outright against data a later migration has not yet
+  cleaned up). A failure **stops** the run. ⚠ There used to be a second — `migrate:agent-memberships`
+  first — and it went with that migration when it was **deleted** (2026-08-23, Phase 6 Step 17). No
+  surviving data migration reads another's output, so nothing replaced it.
 - **The registry is CLOSED.** `assertRegistryCovers()` diffs `MIGRATIONS` against every
   `migrate:*`/`backfill:*` binding in `package.json` and refuses to run on any difference — a
   migration added without a row would otherwise be one the ledger silently does not track, which
@@ -547,7 +590,9 @@ The moment it has two, ORDER becomes a fact somebody must declare and the honest
 entrypoint whose only jobs are to evaluate `dotenv/config` above the module graph and to register
 the signal handlers before the boot begins.
 
-Background workers/consumers register at boot, all after the Mongo connection: aggregation scheduler, plan-expiry worker + notification consumer, vendor / agency / **agent** notification consumers, file-cleanup, earnings-release, unpaid-order-cancel, COD deposit-deadline, payment reconciliation, and the tracking **dispatch worker** (there is no tracking event subscriber any more — plan step 3.A.1 moved the outbox write into the producing transaction and deleted it). A feature that needs periodic sweeps registers in `startBackgroundWork()`; sub-minute cadences use `setInterval`, daily ones use `node-cron`.
+Background workers/consumers register at boot, all after the Mongo connection, in `startBackgroundWork()`. **Do not read the list below as the roster** — `startBackgroundWork()` is, and `WORKER_INVENTORY` is what every surface reports from; this is orientation. Analytics aggregation scheduler · billing (plan-expiry + its notification consumer, agent plan→capacity consumer, agency shipment-cap monitor) · the four notification consumer stacks (vendor / agency / **agent** / customer) · file-cleanup · earnings-release · unpaid-order-cancel · bookings (unpaid-booking-cancel, booking-reminder, inbound-calendar-sync) · COD deposit-deadline · payment reconciliation · the tracking **dispatch worker** and the tracking-allow **reconcile** backstop · the shipment-assignment auto-assign subscriber + offer-expiry sweep · agent capacity-reconcile · agent **trust recompute** (⚠ shadow — see § Agent trust score) · agency inventory-reconcile · agency storage-invoice.
+
+There is no tracking event subscriber any more — plan step 3.A.1 moved the outbox write into the producing transaction and deleted it. A feature that needs periodic sweeps registers in `startBackgroundWork()`; sub-minute cadences use `setInterval`, daily ones use `node-cron`.
 
 Two things run **before the listener opens**: `initializeMetrics()` (the private Prometheus registry, plus the Redis error sink) and `primeMaintenanceState()`. The second is load-bearing — an instance starting during a maintenance window must come up already closed, or a rolling deploy serves one full cache window of writes against a platform that is supposed to be shut.
 
@@ -578,7 +623,7 @@ The order is load-bearing, and `test:system` asserts it from source:
 4. **Flush the log sink**, which writes to Mongo, so it must precede the disconnect.
 5. **Mongo, then Redis.**
 
-`stopAllWorkers()` **iterates `WORKER_INVENTORY`** rather than naming fourteen singletons —
+`stopAllWorkers()` **iterates `WORKER_INVENTORY`** rather than naming eighteen singletons —
 `ObservableWorker` declares `stop()`, so a worker that loses one is a compile error, and
 `test:system` couples the inventory's size to the count of `*.worker.ts` files so an
 uninventoried worker fails rather than silently outliving the process. That is the same defect
@@ -669,7 +714,7 @@ ring buffer and a **capped** `system_logs` collection persisting warn+ — behin
 
 **Workers report three booleans, never one.** `scheduled` / `executing` / `manualClaim`, because three different things in this codebase were all called `running` and `GET /dev-tools/workers` reported the least useful of them — a scheduled sweep churning for ten minutes showed `running: false`. Schedules are **derived** from the value each worker schedules with (`core/jobs/worker-schedule.ts`); the old hand-typed strings were wrong for **eight of ten** workers. Two workers were missing entirely: `AssignmentSweepWorker` is now registered (it is the only thing advancing auto-assignment sessions, so a stalled sweep was invisible from every angle), and `InboundCalendarSyncWorker` appears in `WORKER_INVENTORY` but stays out of the triggerable `WORKER_REGISTRY` — "run it once" has no single meaning for it.
 
-**Overlap is now PREVENTED, by one mechanism, for all fourteen** (`core/jobs/worker-lock.ts` — audit finding F-19; design record `../admin/docs/ADR-014-SYSTEM-OPERATIONS.md` D-8-A). The old note here said "the seven cron workers"; it was **nine** — `analytics-aggregation` and both `inbound-calendar-sync` loops had the same unguarded shape and were simply not cron. That miscount is why the source scan in `test:system`, not a hand-kept list, is what enforces this: every `*.worker.ts` plus the scheduler must call `withWorkerLock(`.
+**Overlap is now PREVENTED, by one mechanism, for every one of them** — **18** today: 17 `*.worker.ts` files plus the aggregation scheduler (`core/jobs/worker-lock.ts` — audit finding F-19; design record `../admin/docs/ADR-014-SYSTEM-OPERATIONS.md` D-8-A). The old note here said "the seven cron workers"; it was **nine** — `analytics-aggregation` and both `inbound-calendar-sync` loops had the same unguarded shape and were simply not cron. ⚠ **Do not trust the number in this sentence over the one in the code**: it read "fourteen", then "fifteen", while three more workers landed under it (the trust recompute at Phase 6 Step 3, then the inventory reconcile and the storage invoice at Step 14). That is the same miscount, and it is why the source scan in `test:system`, not a hand-kept list, is what enforces the rule: every `*.worker.ts` plus the scheduler must call `withWorkerLock(`, and `WORKER_SOURCES.length === WORKER_INVENTORY.length` couples the count to the filesystem.
 
 Five properties are load-bearing:
 
@@ -848,9 +893,15 @@ instant somebody accepts. A missing *contract* is not unavailable: the cut is 0 
 the whole fee, which is exactly what the split does.
 
 ### Agent domain (`src/modules/agents/`)
-The agent is a **platform identity, not an agency-owned record** — they sign up independently and may serve **several agencies at once**. `DeliveryAgent.agency_id` no longer exists; the relationship is `AgentAgencyMembership` (one row per agent↔agency), with `AgentMembershipEvent` as its append-only history.
+The agent is a **platform identity, not an agency-owned record** — they sign up independently and may serve **several agencies at once**. `DeliveryAgent.agency_id` no longer exists; the relationship is a **contract** — `AgentAgencyContract`, one row per agent↔agency in `agent_agency_contracts` — with `AgentMembershipEvent` (`agent_membership_events`) as its append-only history.
 
-**The rule for any new agent field: if the value could differ per agency, it belongs on the membership.** Employment terms and the COD exposure cap are per-membership; identity, trust score, availability, device and tracking permission are per-agent.
+⚠ **"Membership" is the OLD word and it survives in three places on purpose**, so do not treat any of them as a second concept: the file is still `models/agent-agency-membership.model.ts`, `AgentAgencyMembershipModel` / `MembershipStatus` / `LIVE_MEMBERSHIP_STATUSES` are backwards-compatible aliases of the contract exports, and the eligibility rule is still keyed `approved` on the wire (`membership_not_approved`). The events collection kept its name too. All four are one thing: the contract.
+
+**Statuses are `pending · rejected · withdrawn · active · paused · suspended · deactivated`, and `approved` is NOT among them** — approving is an *action*, and it lands the row in `active`. `withdrawn` arrived with the symmetric handshake and is deliberately outside `LIVE_CONTRACT_STATUSES`, so a withdrawn request does not block the re-request it exists to permit. Three lists derive from that enum and none is a synonym for another: `ALLOCATING_CONTRACT_STATUSES` (`active|paused|suspended`) consume the COD pool, `LIVE_CONTRACT_STATUSES` back the partial unique index on `(agent_id, agency_id)`, and `COUNTED_CONTRACT_STATUSES` bound the max-relationships cap.
+
+**The rule for any new agent field: if the value could differ per agency, it belongs on the contract.** Employment terms, coverage, the fee split and the contract's COD **threshold** are per-contract; identity, trust score, availability, device and tracking permission are per-agent.
+
+⚠ **The COD limit is a SHARED POOL, not a per-agency cap, and that is the whole refactor.** The agent owns one `cod.max_threshold`; every contract's `cod.threshold` is a **sub-allocation** of it, and `AgentCodThresholdService` enforces `Σ (allocating contracts' thresholds) ≤ the agent's pool` from both directions, inside the caller's transaction. The old `cod.max_exposure_override` was an *independent* cap per agency — three agencies could each grant 1M to an agent willing to hold 1M, and the platform discovered the 3M of real exposure only when cash went missing. A pool cannot be over-committed by construction. Lowering a threshold below that contract's outstanding balance is a hard rejection with no side effects. ⚠ One naming leftover: `CodExposureService.effectiveLimit(agent, maxExposureOverride)` is still named for the dead field and its `?? AGENT_MAX_EXPOSURE_DEFAULT` fallback is dead — both call sites pass a definite number. Left alone deliberately (live dispatch path, cosmetic rename); tracked in the handoff doc.
 
 **The handshake is symmetric, and the terms are NEGOTIATED.** Both directions —
 `requestFromAgency` (an agency naming a specific agent, **terms required**) and `requestToJoin` (an
@@ -935,9 +986,35 @@ is authoritative — it is what `tryReserveCapacity` compare-and-sets on accept 
 `working_state.active_shipment_count` is a recomputed input to the label above and can lag it.
 Report the former.
 
+#### Agent trust score: live vs shadow
+
+**Two numbers exist, one is live, and mixing them up moves real cash.**
+
+| Field | Written by | Read by | Status |
+|---|---|---|---|
+| `cod.trust_score` | `CodTrustService.applyEvent` — deltas, `+`/`−` per event | `CodExposureService` → the agent's permitted cash | **LIVE** |
+| `trust_signals.composite_score` | `AgentTrustRecomputeWorker` via `agentRepository.setTrustSignalsShadow` | `npm run audit:trust-shadow`, and **wi-admin's** agent read (`compositeScore`) | **SHADOW — read by nothing that decides anything** |
+
+The composite is the design locked with the product owner (`AGENT-CONTRACT-REFACTOR.md` § "Decisions locked"): a pure function of five weighted factors — **COD 30 · activity 20 · customer rating 30 · agency rating 10 · vendor rating 10** — recomputed nightly, replacing the delta model. `AgentTrustService` splits deliberately into `computeComposite(signals)` (**pure**, no I/O, no clock — this is what `test:agent-trust` asserts) and `collectSignals(agentId)` (the I/O half). `agent.config.ts` throws at import if the weights don't sum to 100.
+
+**A factor with no evidence resolves to the SEED, never to zero** — zero would assert "untrustworthy" where the truth is "we do not know". Below `TRUST_MIN_OBSERVATIONS` (5) a rating factor blends toward `TRUST_SCORE_SEED`.
+
+⚠ **`TRUST_SCORE_SEED` is 100 and `TRUST_SCORE_MAX` is 100, so the seed IS the maximum**, and three things follow that are easy to misread: an unmeasured factor contributes its **full** weight rather than a neutral one; sparse evidence is pulled *upward* (a genuine 3-star average from one review resolves to 0.92 on that factor); and therefore "every delta is ≥ 0" on a roster with no reviews is **arithmetic, not a finding about the agents**. This is the locked design — *a new agent is trusted by default* — not a defect. `audit:trust-shadow` prints rating coverage beside every row so the table cannot be read without it.
+
+**Why it is still a shadow.** Flipping is a **one-line** change in the worker (`setTrustSignalsShadow` → `setTrustScore`), and it is held back by two measured blockers, not by caution:
+
+- **There are zero delivery reviews**, so all 50 rating weight still resolves to the seed on every agent and the composite is structurally incapable of lowering anybody. `modules/reviews` gave those three factors a *source* (Phase 6 Step 10); it did not give them *values*.
+- **The flip erases every administrative adjustment.** Measured on the dev roster: an agent the platform had **blocked** at a live 35 scores **100** under the composite, so the next nightly recompute would hand them full cash exposure. Either administrators keep a persistent override outside the composite, or manual adjustment stops surviving a recompute. Both are product decisions; **neither has been taken** — carried as **O-7**.
+
+Run `npm run audit:trust-shadow [-- --json]` to see the two numbers side by side (READ-ONLY; it recomputes in memory and persists nothing — it does not even refresh the stored shadow). ⚠ **No jovi-mall DTO carries `composite_score`** — not the directory, not the profile, not the COD self-view, all of which report `cod.trust_score` as `trustScore`. The shadow is visible through that script and through **wi-admin**, whose agent read projects it field by field. The decision, its table and the trigger for reopening it are `../PRODUCTION-READINESS/PHASE-6-UNBUILT-SCOPE-PLAN.md` Step 11.
+
+**The nightly sweep is not the only recompute.** `recomputeOne(agentId)` runs synchronously-ish (`void`-dispatched, self-catching) after two writes: a COD discrepancy resolution (`CodTrustService`) and a review that moves an agent's aggregate (`ReviewService`). That closes the safety regression the refactor flagged — with nightly-only recompute a cash shortfall would not throttle an agent until the next night, where the delta model's `−20` is instant. The sweep is the backstop, not the mechanism. Cadence and kill-switch: `AGENT_TRUST_RECOMPUTE_CRON` (default `0 3 * * *`) and `AGENT_TRUST_RECOMPUTE_ENABLED`.
+
+⚠ **One writer at every hop, and `test:agent-trust`'s source scan is what keeps the shadow a shadow** — it asserts the worker never writes `cod.trust_score`. Do not "tidy" `setTrustScore` and `setTrustSignalsShadow` into one repository method: the two-method split is the seam the scan reads.
+
 Consume the domain through the barrel (`src/modules/agents/index.ts`) — **except routes**, which the API layer imports directly from `routes/*`. Routers pull in `auth.middleware` → `auth.service` → the barrel; re-exporting routes from it closes a require cycle that crashes at boot with "AuthService is not a constructor".
 
-**Eligibility** (`agent-eligibility.service.ts`) gates assignment on the agent: active · approved with the *dispatching* agency · online · tracking allowed · device location not disabled · under capacity. It reports **every** failed rule at once, never just the first. An agent may hold several active shipments — capacity bounds that, and counts across all agencies.
+**Eligibility** (`agent-eligibility.service.ts`) gates assignment on the agent: active · an **`active` contract** with the *dispatching* agency · online · tracking allowed · device location not disabled · under capacity. It reports **every** failed rule at once, never just the first. An agent may hold several active shipments — capacity bounds that, and counts across all agencies. Note the second rule is still **keyed `approved`** on the wire and reports `membership_not_approved`; that is the old vocabulary kept for clients, and what it tests is `findActive` — `paused` and `suspended` contracts fail it even though they still consume the pool.
 
 **Contract terms gate the SHIPMENT, and live elsewhere.** `evaluate(agentId, agencyId)` takes no shipment, so a rule that needs one cannot go there. `contract-coverage.service.ts` holds the two pure predicates — `contractCoversRegion` (against `order.delivery_address.components.region`) and `contractAllowsShipmentValue` — enforced in `AssignmentCandidateService.buildRanking` (the auto pool) and in `ShipmentAssignmentService.assertContractPolicy`, which runs on **all three** command paths: `offerToAgent`, `accept` and `reassign`. Gate the ranking but miss a command path and a manual assign silently bypasses the term, which is worse than not enforcing it — the rule would appear to work.
 
@@ -955,7 +1032,9 @@ Consume the domain through the barrel (`src/modules/agents/index.ts`) — **exce
 
 Because `assertEligible` requires tracking-allowed before dispatch, geo-tracker **refuses** an agent's attempt to switch Tracking Allow off while they hold an active shipment (it would strand a delivery assigned on that promise). Note what Tracking Allow is *for* on geo-tracker's side: it is the permission to read an agent's **live position at all** — including an agent with no shipment, which is exactly the read that finds the one nearest a pickup. It is not what starts a tracking session; only a shipment is.
 
-Migration for pre-existing data: `npm run migrate:agent-memberships` (idempotent; `--dry-run` supported). The orphaned `agent_invites` collection — nothing anywhere reads it — is dropped by `npm run migrate:drop-agent-invites`, a ledgered migration as of 2026-08-19 rather than the manual call this line used to describe. It is the only destructive one; read its `--dry-run` output before applying it anywhere you have not personally inspected.
+**Migrations here were for LEGACY data, and D-5 says there is none — so the last one is gone.** `migrate:agent-memberships` carried a pre-refactor `DeliveryAgent.agency_id` into one contract row, and it was **deleted 2026-08-23** (Phase 6 Step 17) along with its npm binding and its `MIGRATIONS` row. It was not merely redundant: it wrote `status: 'approved'`, a literal retired from `ContractStatus` at the refactor, so its create would have thrown a Mongoose `ValidationError` and its idempotence filter could never have matched its own rows. Repairing it would have moved the checksum of an already-applied migration to fix a script whose only job is to carry rows D-5 says will never exist. Its `schema_migrations` row survives as history and is not reported. The **collection rename** (`agent_agency_memberships` → `agent_agency_contracts`) and the **`cod.outstanding_balance` backfill** were never written and are **closed as not applicable pre-production** — the code has been post-rename throughout, and the fix for the balance went into `seed:cod-shipments` rather than into a backfill of rows nobody is keeping. See `AGENT-CONTRACT-REFACTOR.md` § "Not built at all" item 4.
+
+The orphaned `agent_invites` collection — nothing anywhere reads it — is dropped by `npm run migrate:drop-agent-invites`, a ledgered migration as of 2026-08-19 rather than the manual call this line used to describe. It is the only destructive one; read its `--dry-run` output before applying it anywhere you have not personally inspected.
 
 ### Base repository (`src/core/repositories/base.repository.ts`)
 Generic `BaseRepository<TDoc, TDomain>` provides: `findOne`, `findById`, `paginate`, `create`, `softDelete`, `restore`, `hardDelete`. All queries automatically filter `deletedAt: null`. Pass a Mongoose `ClientSession` for transactional operations.
@@ -1018,15 +1097,27 @@ Covered DB-free by `npm run test:pickup-depot`.
 
 `agency_stock_levels` — `(agency_id, location_id, vendor_id, product_id, variant_id)` + `quantity_on_hand` / `quantity_reserved` — is the platform's only record of **what an agency warehouses**. Before it, `agency_storage` was a routing flag carrying no quantity and `ProductVariant.stock` was one global scalar with no location dimension. `GET /api/agency/inventory` + `/:id` read it.
 
-**Phase 1 rows are DERIVED, not counted, and the wire says so** (`countsAreDerived` + per-row `source: 'derived' | 'counted'`). `AgencyInventoryReconciler` builds the roster from products whose pickup is `agency_storage` and whose effective agency is this one, one row per active variant; quantities stay **0**. Do not seed them from `variant.stock` — that is the vendor's global number across every channel, and copying it per depot manufactures precision nobody can verify. Reconciliation is **mark-and-sweep** (one shared `last_reconciled_at`, then retire older `derived` rows) and runs debounced on the read path, not from a cron — a derived roster isn't worth a scheduled job, and Phase 2's event-driven quantities are where a worker earns its place. `source: 'counted'` rows are **never** swept: once a row asserts goods are physically present, a config change must not silently delete it.
+**A row is DERIVED until somebody counts it, and the wire says which** (`countsAreDerived` + per-row `source: 'derived' | 'counted'`). `AgencyInventoryReconciler` builds the roster from products whose pickup is `agency_storage` and whose effective agency is this one, one row per active variant, with quantities of **0**. Do not seed those from `variant.stock` — that is the vendor's global number across every channel, and copying it per depot manufactures precision nobody can verify. Reconciliation is **mark-and-sweep** (one shared `last_reconciled_at`, then retire older `derived` rows); `source: 'counted'` rows are **never** swept, because once a row asserts goods are physically present a config change must not silently delete it.
+
+**Counted quantities are real since Phase 6 Step 14 (D-6), and intake is what creates them.** A row becomes `counted` on its first `receipt` or `count_adjustment` — never automatically — and from then on the order path projects onto it and the storage statement bills against it. Four rules hold the design together:
+
+- **`AgencyStockMovementRepository` is the only writer of the two counters**, and it writes the counter and its ledger row in one transaction, so `quantity_on_hand === Σ on_hand_delta` is true by construction. The reconcile worker checks it anyway and repairs the counter *to* the ledger (never the reverse, and never against `variant.stock` — P-14's lesson: assert the invariant the application maintains, not a re-derivation from another collection). `setCounters` is the single documented exception and exists only for that repair.
+- **The non-negative rule is ASYMMETRIC.** An agency movement that would drive a counter below zero is refused (`422 INVENTORY_INSUFFICIENT_STOCK`); a system movement is not. If the shelf record says 0 and an order sells one, refusing would fail a checkout over bookkeeping and clamping would break the invariant above — a negative balance is the variance an agency settles with `POST /:id/count`. That is why the model carries **no `min: 0`**.
+- **The projection touches COUNTED rows only, and never throws at its caller.** `AgencyStockProjectionService` hangs off `OrderStockService`'s four existing moments (reserve · commit · release · restock) and skips every row nobody has counted — D-6 says the platform claims nothing about those. Each write is idempotent on the reservation id `OrderStockService` already derives, so a retried payment webhook cannot sell one shelf twice.
+- **The reconciler is a WORKER now** (`AgencyInventoryReconcileWorker`, 15-minutely), not a read-path debounce. It also walks the movement ledger, which is not work to hang off a page load — and an agency nobody is looking at is exactly the one whose drift wants finding.
+
+⚠ **`countsAreDerived` is computed, not a literal.** It is true only when *every* row in the response is uncounted, so a mixed page reports `false` while uncounted rows are still on it — the per-row `source` is the precise answer. It used to be the hardcoded `true`, which was honest while nothing could count.
 
 **`resolveStockLocationId` is not `resolveHqAddress`, and the difference is the whole design.** Both send a product naming no depot to the primary, and a product naming a live depot to that depot. They diverge on a **dangling** id: routing falls back to the primary (an agent must be sent *somewhere*), inventory records **`location_id: null`** and the screen surfaces it as unassigned. Falling back would move goods between buildings on paper. Never call the routing resolver from the inventory module.
 
-**Deleting a depot that holds stock is refused** — `409 MAGAZIN_LOCATION_IN_USE` on both magazin write paths (`MagazinProfileService.updateMagazin`, `AgencyProfileService.persistLogisticsToMagazin`). Removals are diffed against the array `toPersistableHeadquarters` is about to persist, **not** the request: an entry that omitted its `id` may still have kept one by content match, and diffing the raw payload would 409 every save from a client that hasn't shipped the id echo. "Holds stock" is **row existence** in Phase 1 — every quantity is 0, so a `quantity > 0` test would never fire; tighten `countByLocations` when Phase 2 lands. The guard is check-then-write (`updateByAgencyId` is not session-aware); the `version` CAS narrows the race.
+**Deleting a depot that holds stock is refused** — `409 MAGAZIN_LOCATION_IN_USE` on both magazin write paths (`MagazinProfileService.updateMagazin`, `AgencyProfileService.persistLogisticsToMagazin`). Removals are diffed against the array `toPersistableHeadquarters` is about to persist, **not** the request: an entry that omitted its `id` may still have kept one by content match, and diffing the raw payload would 409 every save from a client that hasn't shipped the id echo. **"Holds stock" is QUANTITY** (`quantity_on_hand !== 0 || quantity_reserved !== 0`) since Step 14; it tested row *existence* while every quantity was 0, and leaving it there once counts are real would mean an agency could never close a depot it had emptied. Configured-but-uncounted rows no longer block a removal — they land as **unassigned** on the next reconcile, which is what that state is for. The guard is check-then-write (`updateByAgencyId` is not session-aware); the `version` CAS narrows the race.
+
+**Re-pointing a product while its shelves hold counted stock is refused too** — `409 INVENTORY_DEPOT_CHANGE_HOLDS_STOCK` on `changeDepot`. Moving goods is `POST /api/agency/inventory/:id/transfers`, which writes a `transfer_out`/`transfer_in` pair in one transaction; `changeDepot` stays a change of *arrangement*. Letting a config edit move goods on paper is the exact failure `resolveStockLocationId` exists to prevent, one level up.
 
 **`IShipmentItem.variant_id` exists now and is nullable forever.** Stock lives on the variant, so a delivered shipment previously could not say which variant left. Written at all three construction sites (checkout + both reassignment branches). Nullable because legacy shipments have none and `addItem` uses a raw `$push` no default reaches — readers treat null as "legacy, join `order_item_id` against the order", which is what they already do for title/sku. `sku` is deliberately **not** denormalized: `CashCollectionService.computeExpectedAmount` hard-throws on a missing order-item join where ~14 other readers tolerate it, and a second source of truth would change that failure behaviour for money code.
 
-Covered DB-free by `npm run test:agency-inventory`. Contract in `api-doc/agency/inventory.md`.
+Covered DB-free by `npm run test:agency-inventory` (99). Contracts in
+`api-doc/agency/inventory.md` and `api-doc/agency/storage-invoices.md`.
 
 **The agency now WRITES, and three of the four writes are one-sided on purpose.** Phase 1
 was read-only; `src/modules/inventory/services/agency-stored-product.service.ts` adds
@@ -1075,15 +1166,22 @@ skipping, because it is an explicit human action. `findAgencyStoredVariants` was
 keep `agency_storage_suspended` rows — otherwise suspending a product deletes the row its
 own unsuspend button lives on.
 
-**The storage fee is displayed, never charged.** `storage-fee.calculator.ts` is pure and
-quotes `monthly_storage_fee_per_sku × quantity`. Two things it deliberately does not do:
-it does not price by size (dimensions and volume are surfaced so an agency can sanity-check
-a flat rate against what it is shelving — a client must not multiply by them), and it does
-not read `quantity_on_hand`, which is Phase 2's and still 0. The quantity is
-`ProductVariant.stock`, exposed on the wire as a **separate `catalogStock` block** and never
-written into `quantity_on_hand`: the model's prohibition on seeding derived counters from
-the catalogue stands. What makes the catalogue number legitimate to bill against is the
-stock-request flow below — it is now jointly agreed and guaranteed finite.
+**The storage fee is RECORDED and still never charged (D-7).** `storage-fee.calculator.ts`
+is pure and quotes `monthly_storage_fee_per_sku × quantity`; `AgencyStorageInvoiceWorker`
+turns those quotes into a monthly per-(agency, vendor) statement on `agency_storage_invoices`,
+readable from both sides and settleable by the agency. **No money moves** — no earnings entry,
+no wallet debit, no payout, and `EarningsQuoteService` still excludes the fee from every
+per-order split. `test:agency-inventory` scans the module for exactly that.
+
+⚠ **The quantity it bills is `quantity_on_hand`, and it used to be the catalogue number.**
+Rent is owed on what is physically on a shelf, and since Step 14 the platform knows that.
+The consequence is visible and deliberate: an agency that has recorded no intake is billed
+**0**, and the quote says which case it is in (`storageFee.quantityBasis`) so a screen can
+distinguish "not counted yet" from "nothing owed". `catalogStock` stays on the wire as the
+vendor's agreed number, and the two are allowed to disagree.
+
+Size still does not price anything: dimensions and volume are surfaced so an agency can
+sanity-check a flat rate against what it is shelving, and a client must not multiply by them.
 
 ### Two-sided stock adjustment (`src/modules/stock-requests/`)
 
@@ -1126,7 +1224,7 @@ unpublish a product the moment it sold out. Pre-existing offenders are listed by
 `npm run audit:infinite-agency-stock` (read-only, no migration).
 
 Covered DB-free by `npm run test:stock-requests` (40) and the extended
-`npm run test:agency-inventory` (53). Contracts in `api-doc/{agency,vendor}/stock-requests.md`;
+`npm run test:agency-inventory` (99). Contracts in `api-doc/{agency,vendor}/stock-requests.md`;
 the dashboard hand-off is `api-doc/FRONTEND-CHANGELOG-agency-storage.md`.
 
 ### Bargainable pricing (`catalog/domain/services/bargain-price.rule.ts`)
@@ -1242,8 +1340,27 @@ deliberately not offered — eighteen escape characters that commerce prose coll
 with constantly, where one miss drops the message rather than degrading it.
 
 Contract: `api-doc/vendor/product-description-rich.md`; the dashboard hand-off is
-`api-doc/FRONTEND-CHANGELOG-rich-descriptions.md`. **No product-share send path
-exists yet** — the formatters are ready and nothing calls them.
+`api-doc/FRONTEND-CHANGELOG-rich-descriptions.md`.
+
+**The send path exists now** — `POST /api/vendor/products/:id/share`
+(`catalog/domain/services/ProductShareService.ts`, Phase 6 Step 5). It is the first
+caller of `toWhatsApp` / `toTelegramHtml`, and `test:product-share` (28, no DB) scans
+for those imports so the path cannot rot back to "the formatters are ready and nothing
+calls them".
+
+⚠ **A share goes to the VENDOR'S OWN connected identity, and there is deliberately no
+recipient field.** Neither channel can address a stranger: WhatsApp permits only an
+approved `template` outside its 24-hour service window (and there is no share template),
+and the Telegram Bot API sends to a `chat_id` that exists only once that person has
+started the bot. The vendor receives the formatted message and forwards it. The window is
+checked *before* sending — not because the policy layer would miss it, but because
+reaching that layer yields an error naming message types where this one names the remedy
+(`PRODUCT_SHARE_WINDOW_CLOSED`).
+
+One rendering rule is its own: **the header is clamped to 200 characters.**
+`Product.title` has no `maxlength`, so an unclamped header pushes the body past 4096
+however small the description budget goes — and `WaServiceMessage.text` then hard-cuts the
+rendered *string*, which is the severed-marker failure `fitFormatted` exists to prevent.
 
 ### Blog / editorial (`src/modules/blog/`)
 
@@ -1364,6 +1481,67 @@ one text index per collection. Built by `npm run migrate:storefront-indexes`.
 `/api/public/*` has its own IP-scoped rate-limit bucket on top of Layer A, so anonymous browse
 traffic cannot exhaust the global counter for the signed-in users behind the same NAT.
 
+### Reviews & ratings (`src/modules/reviews/`)
+
+**ONE collection, TWO subjects, THREE author roles**, and the reason it is not just a storefront
+feature is arithmetic: `DeliveryAgent.trust_signals` carries three rating factors worth **50 of the
+trust composite's 100 weight**, and until this module shipped nothing wrote any of them. Building
+only the product half would have left the composite unflippable forever (Phase 6 Step 10, O-1).
+
+A review is a rating 1–5, optional prose, by one identified person, about one identified thing.
+`subject_type` tells the two kinds apart:
+
+| `subject_type` | subject | authors | visibility |
+|---|---|---|---|
+| `product` | a product | the **customer** who bought it | **public** — the storefront's `aggregateRating` |
+| `delivery` | a **shipment** | the **customer**, the **vendor** *and* the **agency** | **internal** — feeds the agent's trust score |
+
+**All three delivery authors rate the same shipment and land in three different aggregates**
+(customer 30, agency 10, vendor 10). The vendor is in because they are the one non-recipient who
+actually *meets* the agent — `vendor-order.service.ts` puts the agent's name, phone and avatar on
+their order view. The customer is the one role that **never learns which agent carried their
+parcel** (`orders/dto/customer-shipment.dto.ts` withholds it); they rate the *delivery* and the
+attribution happens server-side. Do not undo either half.
+
+Five rules, each because the obvious version is wrong:
+
+- **`subject_type` and `target_type` are DIFFERENT axes.** The subject is what was reviewed; the
+  target is what carries the score. For a product they coincide; for a delivery the subject is a
+  shipment and the targets are the agent and the agency, both **snapshotted on the row** so a later
+  reassignment cannot move somebody else's reputation. `targetsOf` is the whole matrix, and it is
+  pure.
+- **An agency's review moves the AGENT's aggregate and never its own.** An agency's directory
+  rating comes from its *customers'*, so a business's public score can never be self-reported.
+- **A bare star publishes; prose is held for a moderator** (`initialStatusOf`). Everything-pends is
+  the reflexive design and it makes the moderation queue a single point of failure for a signal
+  that moves real cash exposure — and delivery ratings are overwhelmingly bare stars. A number
+  cannot be abusive, and eligibility has already proved the author bought the item or received the
+  parcel.
+- **The aggregate is RECOMPUTED, never incremented.** An `$inc` path must get publish and reject
+  right forever; one missed transition is a permanently drifted average nobody can detect without
+  recomputing anyway. Recompute makes "a rejected review counts for nothing, star included" a
+  property of the query rather than of a subtraction somebody remembered.
+- **`rating` is `null`, never `{average: 0, count: 0}`** — on the product row, the product detail
+  and the agency card. That is what closes `aggregateRating`: the frontend rule is *emit it iff
+  `rating` is non-null*, and a client cannot get it wrong because the server never sends a
+  zero-count summary. Invented review counts are a Google spam-policy violation.
+
+⚠ **One writer at every hop, and that is the rule the whole trust design rests on.**
+`ReviewService.refreshTargets` is the *only* function that refreshes an aggregate;
+`ReviewAggregateRepository` is the *only* writer of `review_aggregates`;
+`AgentTrustService.collectSignals` is its only reader; and the nightly worker is the only writer of
+`trust_signals`. **Nothing in `modules/reviews` touches `delivery_agents`**, and the trust collector
+never reads `reviews`. `test:reviews` asserts all of it by source scan.
+
+⚠ **`review_one_per_author_per_subject` is the ONLY thing enforcing one review per author.** The
+service pre-checks, and a pre-check is a race — two submissions in the same millisecond both read
+"none". `autoIndex` is off in production, so `migrate:review-indexes` is what creates it, and
+`verify:reviews` is the only place it is proven to **bind** rather than merely exist.
+
+Contracts: [api-doc/reviews.md](./api-doc/reviews.md) (cross-role) and
+[api-doc/admin/reviews.md](./api-doc/admin/reviews.md) (moderation). Covered by
+`npm run test:reviews` (62, no DB) and `npm run verify:reviews` (16, NEEDS Mongo).
+
 ### Stock reservation (`catalog/domain/services/pricing-inventory/` + `orders/services/order-stock.service.ts`)
 
 **Nothing in the order path used to touch `variant.stock`** — the `StockReservation` family
@@ -1474,7 +1652,7 @@ that distinction, and it decides where the money goes: `REFUND_GATEWAY_FAILED` i
 refusal. `REFUND_GATEWAY_NOT_SUPPORTED` is a documented `business_rule` outcome that
 `BookingRefundService` already routes to `refund_pending` + earnings reversal + a HIGH ticket.
 
-**`PaymentReconciliationWorker` is the safety net** (the 14th worker). A mobile-money confirmation
+**`PaymentReconciliationWorker` is the safety net** (the 14th worker to be built — the roster is 18 now; count it in `WORKER_INVENTORY`, never here). A mobile-money confirmation
 arrives minutes after the request that opened it, by which time the customer has closed the page —
 so the callback is the settlement path, not a supplement to polling. Nothing swept
 `payment_transaction` before this. It re-verifies through `verifyPayment`, never infers: an

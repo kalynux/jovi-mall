@@ -70,9 +70,11 @@ Each module is self-contained. Communication between modules happens via public 
 ### 7b. Agent
 - **Scope:** The delivery agent as a platform identity — profile, account status, availability,
   working state, device capabilities, preferences/settings, the tracking-allow business flag,
-  agent↔agency memberships, and assignment eligibility.
-- **Data:** `DeliveryAgents`, `AgentAgencyMemberships`, `AgentMembershipEvents`, `AgentInvites`.
-- **Owner:** Agent (own record), Agency (per-membership terms), Admin (account status, tracking, transfers).
+  agent↔agency **contracts**, the trust score, and assignment eligibility.
+- **Data:** `DeliveryAgents`, `AgentAgencyContracts`, `AgentMembershipEvents`,
+  `ContractStatusRequests`, `ContractTermsProposals`.
+- **Owner:** Agent (own record), Agency (per-contract terms — *negotiated*, not imposed),
+  Admin (account status, KYC, platform ban, tracking, transfers).
 - **Public surface:** `src/modules/agents/index.ts` — other modules import from the barrel, never
   from files inside it. Routes are the exception and are imported directly by the API layer (a
   router pulls in auth middleware, which imports the barrel — re-exporting routes closes a require
@@ -80,13 +82,36 @@ Each module is self-contained. Communication between modules happens via public 
 
 > **Why agents are their own context.** An agent is not owned by an agency: they sign up
 > independently and may serve **several agencies at once**. The original model carried a single
-> `DeliveryAgent.agency_id`, which cannot express "approved at A, suspended at B". Anything that
-> differs per agency (employment terms, COD exposure cap, approval state) therefore lives on
-> `AgentAgencyMembership`; anything true of the person regardless of employer (identity, trust score,
+> `DeliveryAgent.agency_id`, which cannot express "active at A, suspended at B". Anything that
+> differs per agency (employment terms, coverage, the fee split, this contract's COD threshold,
+> the relationship's own status) therefore lives on `AgentAgencyContract`; anything true of the
+> person regardless of employer (identity, the trust score, the COD **pool**, capacity,
 > availability, device, tracking permission) lives on the agent.
 >
 > **The rule for new agent fields:** if the value could differ per agency, it belongs on the
-> membership.
+> contract.
+
+> **The COD limit is a shared pool.** The agent owns one `cod.max_threshold`; each contract's
+> `cod.threshold` is a sub-allocation of it, and the sum across allocating contracts can never
+> exceed the agent's own limit. This replaced an *independent* per-agency cap
+> (`cod.max_exposure_override`), under which three agencies could each grant 1M to an agent
+> willing to hold 1M and the platform learned of the 3M of real exposure only when cash went
+> missing. A pool cannot be over-committed by construction.
+>
+> **Contract statuses:** `pending · rejected · withdrawn · active · paused · suspended ·
+> deactivated`. `approved` is an **action**, not a state — approving lands the row in `active`.
+> `paused` and `suspended` still consume the pool (the agent may still hold that agency's cash),
+> so reactivation can never fail a headroom check.
+>
+> **The email-invite subsystem is gone.** Agencies and agents find each other through a directory
+> and contract through a symmetric request → accept/reject/withdraw flow; `AgentInvites` no longer
+> exists as a collection or a concept.
+
+> **The trust score is one number with two implementations, and only one is live.**
+> `cod.trust_score` (delta model, written per event by `CodTrustService`) is what
+> `CodExposureService` turns into a cash limit. `trust_signals.composite_score` — the five-factor
+> nightly composite that is *meant* to replace it — is computed and stored but read by nothing that
+> decides anything. See `CLAUDE.md` § Agent trust score for why the cutover has not happened.
 
 #### Tracking ownership boundary (with the geo-tracker service)
 
@@ -108,9 +133,10 @@ is the emitter, geo-tracker's `/webhooks/agent-actions` the sink.
 
 #### Assignment eligibility
 
-An agent may receive a shipment only when **all** hold: `active` account · **approved** membership
-with the *dispatching* agency · `online` · tracking allowed · device location not disabled · under
-their concurrency ceiling.
+An agent may receive a shipment only when **all** hold: `active` account · an **`active` contract**
+with the *dispatching* agency · `verified` KYC · no platform ban · `online` · tracking allowed ·
+device location not disabled · under their concurrency ceiling. The contract rule is still keyed
+`approved` on the wire (`membership_not_approved`) — the old vocabulary, kept for clients.
 
 An agent may hold **several active shipments at once** — capacity bounds this, it does not forbid it,
 and the count spans all agencies (capacity is a property of the person, not of one agency's view).
@@ -182,12 +208,23 @@ stateDiagram-v2
     - `deliveries`
     - `delivery_agencies`
     - `delivery_agents`
-    - `agent_agency_memberships` — an agent may serve several agencies; one row per relationship
-    - `agent_membership_events` — append-only membership history (no update/delete by contract)
-    - `agent_invites`
+    - `agent_agency_contracts` — an agent may serve several agencies; one row per relationship.
+      Renamed from `agent_agency_memberships`; the model file and a few exported aliases still
+      say "membership", and they are the same thing
+    - `agent_membership_events` — append-only contract history (no update/delete by contract).
+      Kept its original name deliberately; renaming an append-only evidence table buys nothing
+    - `contract_status_requests` — the two-party approve/reject workflow for a status change
+    - `contract_terms_proposals` — stages a terms change against a LIVE contract, so the agreed
+      `fee_split` keeps applying while the change is pending
 
 5.  **Append-only collections.** `agent_membership_events` (and any audit trail) exposes no update or
     delete path, and deliberately does **not** use `BaseRepository` — its soft-delete filter has no
     business on evidence. A correction is a new event, not an edit.
+
+    ⚠ One event type is **declared and written by nothing**: `cod_limit_changed`.
+    `AgentCodThresholdService.setContractThreshold` takes no actor and appends no event, unlike
+    every other contract mutation — so a COD threshold change is the one contract write with no
+    audit trail. Giving it one needs an `Actor` parameter threaded to the call site; tracked in
+    `AGENT-CONTRACT-REFACTOR.md` § "Found while doing step 1".
 
 ---
