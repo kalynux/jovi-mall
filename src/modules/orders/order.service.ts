@@ -1061,10 +1061,39 @@ export class OrderService {
   private async markProductsOrdered(order: IOrder): Promise<void> {
     try {
       const now = new Date();
-      const productIds = [...new Set(order.items.map((i) => i.product_id.toString()))]
-        .map((id) => new mongoose.Types.ObjectId(id));
-      const variantIds = [...new Set(order.items.map((i) => i.variant_id.toString()))]
-        .map((id) => new mongoose.Types.ObjectId(id));
+
+      // ⚠ `OrderRepository.findById` does `.populate('items.product_id')`, so on
+      // that path `product_id` is a DOCUMENT, not an id — and `.toString()` on a
+      // Mongoose document yields its inspected form, which `new ObjectId(...)`
+      // then rejects with a BSONError. The catch below swallowed it, so this
+      // method threw on every paid order and `lastOrderedAt` was never stamped
+      // on anything. That field is the inactivity clock the file-cleanup sweep
+      // reads, so the products that sell were the ones most at risk of having
+      // their media detached.
+      //
+      // Reading through the populate rather than removing it: the populate has
+      // other consumers, and a method that must survive both shapes is the
+      // honest fix.
+      const idOf = (ref: unknown): mongoose.Types.ObjectId | null => {
+        const raw = ref && typeof ref === 'object' && '_id' in ref ? (ref as { _id: unknown })._id : ref;
+        if (raw instanceof mongoose.Types.ObjectId) return raw;
+        if (typeof raw === 'string' && mongoose.Types.ObjectId.isValid(raw)) {
+          return new mongoose.Types.ObjectId(raw);
+        }
+        return null;
+      };
+
+      const collect = (pick: (item: IOrder['items'][number]) => unknown): mongoose.Types.ObjectId[] => {
+        const seen = new Map<string, mongoose.Types.ObjectId>();
+        for (const item of order.items) {
+          const id = idOf(pick(item));
+          if (id) seen.set(id.toString(), id);
+        }
+        return [...seen.values()];
+      };
+
+      const productIds = collect((i) => i.product_id);
+      const variantIds = collect((i) => i.variant_id);
 
       await Promise.all([
         ProductModel.updateMany({ _id: { $in: productIds } }, { $set: { lastOrderedAt: now } }),
