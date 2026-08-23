@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth, requireRole } from '../../../api/middlewares/auth.middleware';
 import { uploadSingle } from '../../../api/middlewares/upload.middleware';
 import { VendorProductController } from '../controllers/vendor-product.controller';
+import { VendorProductShareController } from '../controllers/vendor-product-share.controller';
 import { VendorSimpleProductController } from '../controllers/vendor-simple-product.controller';
 import { VendorDigitalAssetController } from '../controllers/vendor-digital-asset.controller';
 import { VendorServiceCalendarController } from '../controllers/vendor-service-calendar.controller';
@@ -148,6 +149,19 @@ router.patch('/:id/default-variant', requireProductEditable, VendorProductContro
  * - slug = intelligent collision prevention (original-slug-copy, -copy-2, etc.)
  */
 router.post('/:id/duplicate', requireProductEditable, VendorProductController.duplicateProduct);
+
+/**
+ * POST /:id/share — body `{ channel: 'whatsapp' | 'telegram' }`.
+ *
+ * Sends the product, formatted for that chat app, to the vendor's OWN connected identity;
+ * they forward it. There is deliberately no recipient field — neither channel can address
+ * a stranger (WhatsApp needs an approved template outside its 24-hour window, Telegram
+ * needs a `chat_id` that only exists once somebody has started the bot).
+ *
+ * Not behind `requireProductEditable`: sharing reads a product, it does not edit one, and
+ * an `active` product is exactly the one a vendor wants to send.
+ */
+router.post('/:id/share', VendorProductShareController.share);
 
 /**
  * DELETE /api/vendor/products/:id
