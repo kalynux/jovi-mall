@@ -6,7 +6,7 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { ICustomer } from '../customer.model';
 import { UpdateCustomerProfileInput, AddCustomerAddressInput, UpdateCustomerAddressInput, AddCustomerPaymentMethodInput } from '../validators/customer-onboarding.validator';
 import { paymentMethodService } from '../../payment-methods/services/payment-method.service';
-import { toGeoAddress } from '../../../core/types/geo-address.types';
+import { toGeoAddress, dropNullLocation } from '../../../core/types/geo-address.types';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
 import { FileReferenceRepositoryMongo } from '../../catalog/repositories/mongo/file-reference.repository.mongo';
 import { FileReferenceService } from '../../catalog/domain/services/media/FileReferenceService';
@@ -112,8 +112,12 @@ export class CustomerProfileService {
         // Normalise the selected geocoding result into a persistable GeoAddress
         // (server-assigns resolved_at, null-fills absent components).
         const { geo, ...rest } = input;
+        // `dropNullLocation` is load-bearing, not tidiness: `saved_addresses` is
+        // 2dsphere-indexed on the deprecated bare `location`, and a stored null
+        // beside a real point on another address refuses EVERY write to this
+        // customer document from then on. See `dropNullLocation`.
         const address = {
-            ...rest,
+            ...dropNullLocation(rest),
             geo: geo ? toGeoAddress(geo) : null,
         } as ICustomer['saved_addresses'][number];
 

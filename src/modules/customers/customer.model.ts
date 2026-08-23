@@ -18,8 +18,16 @@ const SavedAddressSchema = new Schema(
     /**
      * @deprecated Bare coordinate kept for backward compatibility. Prefer `geo`
      * (the full GeoAddress); `geo.coordinates` is the canonical point.
+     *
+     * ⚠ `default: undefined`, never `default: null` — see `GeoPointSchema`. This
+     * array is 2dsphere-indexed, so an explicit `null` beside a real point makes
+     * the WHOLE customer document unwritable. That is not theoretical: the schema
+     * default used to be `null`, `addAddress` never sets the field, and every seeded
+     * customer has a geocoded first address — so adding a second address 500'd for
+     * exactly the people most likely to try, and took every other write to that
+     * customer down with it.
      */
-    location: { type: GeoPointSchema, default: null },
+    location: { type: GeoPointSchema, default: undefined },
     /**
      * Canonical geospatial address — formatted address + coordinates + provider
      * place id + structured admin components. Populated when the customer picks
@@ -78,8 +86,11 @@ export interface ICustomerSavedAddress {
   state: string | null;
   country: string;
   is_default: boolean;
-  /** @deprecated Prefer `geo.coordinates`. */
-  location: IGeoPoint | null;
+  /**
+   * @deprecated Prefer `geo.coordinates`.
+   * Optional because the key is OMITTED rather than stored null — see the schema.
+   */
+  location?: IGeoPoint | null;
   /** Canonical geospatial address; null on legacy/plain-text entries. */
   geo: IGeoAddress | null;
 }

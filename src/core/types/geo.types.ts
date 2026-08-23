@@ -11,6 +11,36 @@ import { z } from 'zod';
  *
  * @example
  *   location: { type: GeoPointSchema, index: '2dsphere' }
+ *
+ * ── ⚠ INSIDE AN ARRAY, EMBED IT WITH `default: undefined` ────────────────────
+ *
+ * `default: null` on a point sitting under a 2dsphere-indexed ARRAY path is a
+ * write-blocking bug that looks like nothing. MongoDB extracts index keys for the
+ * WHOLE array: the moment one element carries a real point and another carries an
+ * explicit `null`, key extraction fails and the write is refused —
+ *
+ *   Can't extract geo keys: {...} geo element must be an array or object: location: null
+ *
+ * And it is not only the write that touched the address: it is EVERY write to that
+ * document, whatever it touches, plus the index build itself. Measured against
+ * MongoDB on 2026-08-23 on `customers.saved_addresses[].location`, where it made
+ * "add a second delivery address" impossible for any customer whose first one was
+ * geocoded.
+ *
+ * An ABSENT key is fine — MongoDB emits no key for that element and indexes the
+ * rest. So the leaf must never be *stored* as null:
+ *
+ *   location: { type: GeoPointSchema, default: undefined }   // ✅ key omitted
+ *   location: { type: GeoPointSchema, default: null }        // ❌ breaks the document
+ *
+ * `sparse` and `partialFilterExpression` do NOT rescue this, and that is worth
+ * knowing before reaching for either: both select DOCUMENTS, and this document
+ * legitimately holds a point, so it is selected and then fails on the null sibling
+ * regardless. Both were measured; both still fail.
+ *
+ * A nested `GeoAddress` is immune — its `coordinates` is `required`, so `geo: null`
+ * puts the null one level ABOVE the indexed leaf and the path is simply absent.
+ * Only the bare legacy `location` field has this shape.
  */
 export const GeoPointSchema = new Schema(
     {

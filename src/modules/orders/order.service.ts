@@ -27,7 +27,21 @@ import { earningsSplitService } from '../earnings/services/earnings-split.servic
 import { codEligibilityService } from '../cod/services/cod-eligibility.service';
 import { orderStockService } from './services/order-stock.service';
 import { MagazinRepository } from '../magazin/repositories/magazin.repository';
-import { CustomerShipmentDto, toCustomerShipmentDto } from './dto/customer-shipment.dto';
+import {
+  AGENT_IDENTITY_VISIBLE_FROM,
+  CustomerShipmentDto,
+  agentIdentityVisibleAt,
+  toAgentDisplayName,
+  toCustomerShipmentDto,
+} from './dto/customer-shipment.dto';
+import { resolveAgencyIdentities } from '../magazin/read-models/agency-identity.resolver';
+import { resolveFileDetails } from '../catalog/read-models/file-detail.resolver';
+import { FileRepositoryMongo } from '../catalog/repositories/mongo/file.repository.mongo';
+import { getStorageProvider, IStorageProvider } from '../../core/storage';
+// The repository directly, never the agents barrel: that barrel pulls in the auth
+// middleware chain and closes a require cycle that crashes the boot — see the agent
+// domain's own note about why routes are excluded from it.
+import { AgentRepository } from '../agents/repositories/agent.repository';
 import { OrderModel } from './order.model';
 
 /**
@@ -89,6 +103,11 @@ export class OrderService {
   private vendorCustomerSync: VendorCustomerSyncService;
   /** An agency's business name lives on its Magazin, not on the DeliveryAgency. */
   private magazinRepo: MagazinRepository;
+  /** Agency logos and agent photos are File references, resolved to `FileDetail`. */
+  private fileRepository: FileRepositoryMongo;
+  private storageProvider: IStorageProvider;
+  /** Read-only, and only ever through `findPublicIdentitiesByIds` — see ADR-A06. */
+  private agentRepo: AgentRepository;
 
   constructor() {
     this.orderRepo = new OrderRepository();
@@ -101,6 +120,9 @@ export class OrderService {
     this.variantRepo = new VariantRepositoryMongo();
     this.vendorCustomerSync = new VendorCustomerSyncService();
     this.magazinRepo = new MagazinRepository();
+    this.fileRepository = new FileRepositoryMongo();
+    this.storageProvider = getStorageProvider();
+    this.agentRepo = new AgentRepository();
   }
 
   /**
@@ -246,8 +268,18 @@ export class OrderService {
    * `customer_id` mismatch is a `404 ORDER_NOT_FOUND`, the same answer as an order that does
    * not exist, so the endpoint cannot be used to probe whether an order id is real.
    *
-   * The agency's business name comes from its Magazin (the source of truth for an agency's
-   * business identity), batched across the order's shipments rather than looked up per row.
+   * The agency's identity comes from its Magazin (the source of truth for an agency's
+   * business identity) via the platform's shared `AgencyIdentity` read model, and the
+   * carrying agent's from `AgentRepository`. Both are batched across the order's shipments
+   * rather than looked up per row: one order's parcels routinely span several agencies, and
+   * after a reassignment they can span several agents too.
+   *
+   * ⚠ The agent block is a NARROW, REVOCABLE disclosure (ADR-A06). Two rules are enforced
+   * here rather than in the DTO, because here is where the ids exist:
+   *
+   *  1. Only shipments inside the window are even looked up — an agent outside it is not
+   *     fetched, so there is nothing in memory for a later projection to leak.
+   *  2. The stored full name never reaches the DTO; `toAgentDisplayName` reduces it first.
    */
   async listShipmentsForCustomer(customerId: string, orderId: string): Promise<CustomerShipmentDto[]> {
     if (!mongoose.Types.ObjectId.isValid(orderId)) {
@@ -262,16 +294,48 @@ export class OrderService {
     const shipments = await this.shipmentRepo.findByOrderId(orderId);
     if (shipments.length === 0) return [];
 
-    const namesByAgency = await this.magazinRepo.findNamesByAgencyIds(
-      shipments.map((s) => s.agency_id.toString()),
+    // Only the agents the customer is entitled to see, and only for the shipments that
+    // entitle them — see rule 1 above.
+    const disclosableAgentIds = shipments
+      .filter((s) => agentIdentityVisibleAt(s.status) && s.agent_id)
+      .map((s) => s.agent_id!.toString());
+
+    const [agencies, agentIdentities] = await Promise.all([
+      resolveAgencyIdentities(
+        shipments.map((s) => s.agency_id.toString()),
+        this.magazinRepo,
+        this.fileRepository,
+        this.storageProvider,
+      ),
+      this.agentRepo.findPublicIdentitiesByIds(disclosableAgentIds),
+    ]);
+
+    const agentPhotos = await resolveFileDetails(
+      [...agentIdentities.values()].map((a) => a.avatarFileId),
+      this.fileRepository,
+      this.storageProvider,
     );
 
-    return shipments.map((shipment) =>
-      toCustomerShipmentDto(
-        shipment,
-        namesByAgency.get(shipment.agency_id.toString())?.name ?? null,
-      ),
-    );
+    return shipments.map((shipment) => {
+      const agentId = shipment.agent_id?.toString();
+      const identity =
+        agentId && agentIdentityVisibleAt(shipment.status) ? agentIdentities.get(agentId) : undefined;
+      const displayName = identity ? toAgentDisplayName(identity.name) : null;
+
+      return toCustomerShipmentDto(shipment, {
+        agency: agencies.get(shipment.agency_id.toString()) ?? null,
+        // A nameless agent yields no block at all rather than an empty one — a card
+        // rendering a photo above a blank line is worse than no card.
+        agent:
+          identity && displayName
+            ? {
+              displayName,
+              photo: (identity.avatarFileId && agentPhotos.get(identity.avatarFileId)) || null,
+              visibleFrom: AGENT_IDENTITY_VISIBLE_FROM,
+            }
+            : null,
+      });
+    });
   }
 
   /**

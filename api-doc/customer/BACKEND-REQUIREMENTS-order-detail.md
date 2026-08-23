@@ -2,6 +2,21 @@
 
 Raised 2026-08-23, from device testing of the customer app.
 
+> ## ✅ ANSWERED 2026-08-23 — read [FRONTEND-CHANGELOG-order-detail.md](./FRONTEND-CHANGELOG-order-detail.md)
+>
+> This page is kept as the request. **The answers, and three corrections to it, are in the
+> changelog.** In short:
+>
+> | # | Outcome |
+> |---|---|
+> | 1 · Retry payment | Correct — nothing built. But the ⚠ was a **real backend bug** and is fixed: a refused gateway charge no longer marks the order `AWAITING_PAYMENT`. Your retry path is unaffected |
+> | 2 · Agency identity | **Built**, plus support contacts. ⚠ The field is `logo` (a `FileDetail`), not `logoUrl` |
+> | 3 · Agent identity | **Approved and built** — the decision was taken, not assumed: [ADR-A06](../../docs/ADR-A06-AGENT-IDENTITY-DISCLOSURE.md). ⚠ `visibleFrom` is `"shipped"`, **not** `"out_for_delivery"` — § 3 of the changelog explains why those are different things here |
+> | 4 · Null `location` | **Reproduced and fixed**, and it was worse than reported. ⚠ Your suggested fix #1 (sparse/partial) was measured and **does not work** |
+>
+> Two obligations came back to you with item 3: the privacy policy and the Play data-safety
+> declaration. No backend change can close either.
+
 Three asks. **One of them needs no backend work at all**, one is a small additive
 change, and one reverses a decision this codebase made on purpose and should not be
 built until somebody says so out loud. They are separated below so the cheap work is

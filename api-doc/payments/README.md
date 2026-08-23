@@ -111,6 +111,20 @@ one you mean.
 
 `success` is `false` when `status` is `FAILED`; the HTTP status is still `200`.
 
+⚠ **`status` is the thing to branch on, not the HTTP code.** A gateway that *refuses* the
+charge — wrong credentials, an operator it will not route, a provider 4xx — comes back as a
+`200` carrying `status: "FAILED"` and the provider's reason in `message`. Nothing was sent to
+the customer's handset and nothing is coming; a client that only checks the HTTP status shows
+"waiting for your payment" forever. Only a transport-level failure (the provider unreachable,
+an unhandled error) is a `502 PAYMENT_INITIATION_FAILED`.
+
+**A refused initiation leaves the order at `pending`, not `AWAITING_PAYMENT`** (changed
+2026-08-23). It used to advance regardless, which stated as fact that a gateway was waiting
+when none was. `pending` is equally payable — both `cartId` and `orderId` initiation accept it
+— so **retry is unaffected**; it just stops the order claiming a payment is in flight. The
+order is never written `failed` by this path: only `cancelOrder` does that, and a declined
+attempt that poisoned the order would make every retry impossible.
+
 ### The `instructions` object — branch on it, do not assume
 
 | Field | Present when | What the client must do |

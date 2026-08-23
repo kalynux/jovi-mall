@@ -291,8 +291,14 @@ export class CustomerOrderController {
    * response returned one except inside `codCollections`, which is undefined for every
    * online-paid order. A prepaid customer therefore had no way to confirm a delivery.
    *
-   * Statuses are collapsed to the five-word customer vocabulary and the agent's identity
-   * and the internal failure notes are never included — see `customer-shipment.dto.ts`.
+   * Statuses are collapsed to the five-word customer vocabulary, and the internal failure
+   * notes are never included — see `customer-shipment.dto.ts`.
+   *
+   * ⚠ This used to say the agent's identity is never included, and that changed on
+   * 2026-08-23 (`docs/ADR-A06-AGENT-IDENTITY-DISCLOSURE.md`): a **partial name and a photo,
+   * never a phone number**, and only while that agent is physically carrying the parcel.
+   * The window and its revocation are enforced in `OrderService.listShipmentsForCustomer`,
+   * before the agent is looked up at all — not in the projection.
    */
   static listOrderShipments = asyncHandler(async (req: Request, res: Response) => {
     const customerId = req.auth!.role_entity._id.toString();

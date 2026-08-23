@@ -134,8 +134,13 @@ const BusinessAddressSchema = new Schema(
     address_line2: { type: String, default: null, trim: true },
     city: { type: String, required: true, trim: true },
     state: { type: String, default: null, trim: true },
-    /** @deprecated Bare coordinate kept for backward compatibility. Prefer `geo`. */
-    location: { type: GeoPointSchema, default: null },
+    /**
+     * @deprecated Bare coordinate kept for backward compatibility. Prefer `geo`.
+     * ⚠ `default: undefined`, never `null` — this array is 2dsphere-indexed and a
+     * stored null beside a real point makes the whole vendor document unwritable.
+     * See `GeoPointSchema`.
+     */
+    location: { type: GeoPointSchema, default: undefined },
     /**
      * Canonical geospatial address (formatted address + coordinates + provider
      * place id + admin components). Populated when the vendor selects an
@@ -252,8 +257,11 @@ export interface IVendorBusinessAddress {
   address_line2: string | null;
   city: string;
   state: string | null;
-  /** @deprecated Prefer `geo.coordinates`. */
-  location: IGeoPoint | null;
+  /**
+   * @deprecated Prefer `geo.coordinates`.
+   * Optional because the key is OMITTED rather than stored null — see the schema.
+   */
+  location?: IGeoPoint | null;
   /** Canonical geospatial address; null on legacy/plain-text entries. */
   geo: IGeoAddress | null;
 }

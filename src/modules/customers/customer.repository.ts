@@ -99,20 +99,34 @@ export class CustomerRepository {
     updates: Partial<ICustomer['saved_addresses'][number]>,
   ): Promise<ICustomer | null> {
     const set: Record<string, unknown> = {};
+    const unset: Record<string, ''> = {};
     for (const [key, value] of Object.entries(updates)) {
       if (value === undefined) continue;
+      // ⚠ The deprecated bare `location` is 2dsphere-indexed across the whole
+      // array, and a stored `null` there beside a real point on ANOTHER address
+      // makes every subsequent write to this customer fail — see
+      // `dropNullLocation`. So clearing it is an `$unset`, never a `$set: null`.
+      // Every other field takes the null happily and means it.
+      if (key === 'location' && value === null) {
+        unset[`saved_addresses.$.${key}`] = '';
+        continue;
+      }
       set[`saved_addresses.$.${key}`] = value;
     }
 
+    const update: Record<string, unknown> = {};
+    if (Object.keys(set).length > 0) update.$set = set;
+    if (Object.keys(unset).length > 0) update.$unset = unset;
+
     // Nothing to write — return the document unchanged rather than sending an empty `$set`,
     // which MongoDB rejects outright ("'$set' is empty").
-    if (Object.keys(set).length === 0) {
+    if (Object.keys(update).length === 0) {
       return await CustomerModel.findById(customerId);
     }
 
     return await CustomerModel.findOneAndUpdate(
       { _id: customerId, 'saved_addresses._id': addressId },
-      { $set: set },
+      update,
       { new: true },
     );
   }

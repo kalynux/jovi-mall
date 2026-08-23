@@ -208,8 +208,23 @@ export class PaymentOrchestratorService {
 
       await transaction.save();
 
-      // 7. UPDATE ORDER STATUS
-      if (order.payment_status === 'pending') {
+      // 7. UPDATE ORDER STATUS — only if the gateway actually took the charge.
+      //
+      // ⚠ This used to advance unconditionally, and the failure mode is the one a
+      // shopper reports as "the app said it was waiting for my payment and my phone
+      // never rang". A refused initiation (bad credentials, an operator the gateway
+      // will not route, a provider 4xx) returns `success: false` here, and marking
+      // the order AWAITING_PAYMENT then states as fact something no gateway is
+      // waiting for — so nothing ever arrives and nothing ever times it out.
+      //
+      // `pending` is the honest answer, and it costs the customer nothing: it is
+      // equally payable (`initiatePayment` and `initiatePaymentForCart` both accept
+      // `pending` and `AWAITING_PAYMENT`), so the retry path is untouched.
+      //
+      // Deliberately NOT written as `failed`: only `cancelOrder` writes that, and a
+      // declined attempt that poisoned the order would make every retry impossible —
+      // see the storefront's own note in the order-detail requirements.
+      if (order.payment_status === 'pending' && gatewayResult.success) {
         order.payment_status = 'AWAITING_PAYMENT';
         await order.save();
       }

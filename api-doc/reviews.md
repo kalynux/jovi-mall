@@ -42,9 +42,17 @@ different aggregate:
 | `vendor` | the seller's — was my consignment collected and carried well? | the agent's **vendor** rating |
 | `agency` | the employer's — did my agent run this well? | the agent's **agency** rating |
 
-⚠ **The customer never learns which agent carried their parcel**, and this does not change
-that. `GET /api/customer/orders/:orderId/shipments` withholds the agent's identity
-deliberately; the customer rates the *delivery* and the platform performs the attribution.
+⚠ **The customer never CHOOSES which agent their review lands on** — they rate the *delivery*
+and the platform performs the attribution server-side. Nothing here takes an agent id.
+
+That is the part that matters for reviews, and it is unchanged. What *did* change, on
+2026-08-23, is a sentence this paragraph used to lead with: `GET
+/api/customer/orders/:orderId/shipments` no longer withholds the agent outright. It publishes
+a **partial name and photo, never a phone number**, and only while that agent is physically
+carrying the parcel — see
+[ADR-A06](../docs/ADR-A06-AGENT-IDENTITY-DISCLOSURE.md) and
+[customer/orders.md](./customer/orders.md#who-is-carrying-it--agent). A reviewer may now
+recognise who delivered to them; they still cannot aim a review at anybody.
 
 ⚠ **An agency's review moves the agent's aggregate and never its own.** An agency rating
 itself is not evidence of anything, and its own directory score would then be

@@ -318,6 +318,27 @@ a gap: both `…/shipments/:shipmentId/confirm-delivery` and `…/resend-deliver
       "status": "shipped",
       "trackingNumber": "FDO-260730-142309-K7Q2M",
       "agencyName": "WiExpress",
+      "agency": {
+        "id": "507f1f77bcf86cd799439200",
+        "name": "WiExpress",
+        "logo": {
+          "id": "507f1f77bcf86cd799439201",
+          "key": "agency-logos/wiexpress.png",
+          "url": "https://…/agency-logos/wiexpress.png",
+          "access": "public",
+          "mimeType": "image/png",
+          "size": 24118,
+          "originalName": "logo.png"
+        },
+        "supportPhone": "+237670000000",
+        "supportEmail": "support@wiexpress.cm",
+        "supportWhatsapp": "+237670000000"
+      },
+      "agent": {
+        "displayName": "Jean T.",
+        "photo": null,
+        "visibleFrom": "shipped"
+      },
       "itemIds": ["507f1f77bcf86cd799439055"],
       "statusHistory": [
         { "status": "shipped", "at": "2026-07-30T10:00:00.000Z" },
@@ -349,12 +370,62 @@ catalog already commits to**, plus one for "not moving yet" — so a customer wh
 them to the moment the state was entered — `picked_up → in_transit` is one "shipped" line,
 not two. A failed-then-retried journey keeps both the failure and the eventual success.
 
+### Who is delivering it — `agency`
+
+The delivery company's identity and its **published support contacts**, so a customer with a
+question about their own parcel can reach the business handling it. Present on every shipment
+whose agency has a Magazin on file; `null` (like `agencyName`) when it does not.
+
+| Field | Notes |
+|---|---|
+| `id` | The agency id |
+| `name` | The same string as `agencyName`, which is kept where it is and is not going away |
+| `logo` | `FileDetail \| null` — **not a URL string**, exactly like every other referenced file on this API. Render `agency.logo?.url ?? null`, and draw initials from `name` when it is null. Most agencies have no logo |
+| `supportPhone` · `supportEmail` · `supportWhatsapp` | The agency's own published business lines. Any of them may be `null` |
+
+This is the platform's shared `AgencyIdentity` block — byte-identical to the one the agent and
+agency surfaces serve. There is one answer to "who is this agency", not a customer-only copy.
+
+### Who is carrying it — `agent`
+
+The person on the parcel, **while they are on the parcel**. Design record:
+[`docs/ADR-A06-AGENT-IDENTITY-DISCLOSURE.md`](../../docs/ADR-A06-AGENT-IDENTITY-DISCLOSURE.md).
+
+| Field | Notes |
+|---|---|
+| `displayName` | Partial by design — `"Jean T."`, first name plus surname initial. Never the full legal name |
+| `photo` | `FileDetail \| null`, same convention as `agency.logo`. Commonly `null` |
+| `visibleFrom` | Always `"shipped"` — the customer status from which this block appears. Echoed so a client can explain the wait without hardcoding the policy |
+
+**`agent` is `null` far more often than it is set, and each `null` means something different
+to a screen:**
+
+| Customer status | `agent` | Why |
+|---|---|---|
+| `preparing` | `null` | Usually no agent is bound yet — an offer is still out. Naming someone the customer will never meet is worse than naming nobody |
+| `shipped` | **set** | The parcel is in their hands and moving |
+| `out_for_delivery` | **set** | Handover reported but unconfirmed — the one moment a customer disputing "I never received it" most needs to say who turned up |
+| `delivery_failed` (from `failed`) | **set** | Not terminal. The same agent still holds the parcel and is coming back |
+| `delivery_failed` (from `returned`) | `null` | End of the road |
+| `delivered` | `null` | **Revoked on settlement.** The disclosure is scoped to a live delivery, not stamped into order history |
+
+⚠ **`visibleFrom` is `"shipped"`, and the request that prompted this asked for
+`"out_for_delivery"`.** Those are the same English phrase and different things here: this
+API's `out_for_delivery` maps from the internal `agent_delivered`, i.e. the agent has
+*already* reported the handover. Opening the window there would show a customer who came to
+their door after they came. See ADR-A06 D-2.
+
 ### Never published
 
-The agent's identity or contact details, and the free-text internal `note` on a failed
-delivery. `delivery_failures[].note` is written by an agent for their agency ("gate locked,
-dog") and `reason` is an internal enum; the notification copy already rephrases both
-deliberately. Only `failedAttempts` — the count — is surfaced.
+**No phone number for the agent, ever** — a customer with a question contacts the *agency*
+(`agency.supportPhone`), a business line its owner chose to publish, never an individual
+worker's handset. Nor the agent's full legal name, nor any of their record beyond the two
+fields above.
+
+Nor the free-text internal `note` on a failed delivery: `delivery_failures[].note` is written
+by an agent for their agency ("gate locked, dog") and `reason` is an internal enum; the
+notification copy already rephrases both deliberately. Only `failedAttempts` — the count — is
+surfaced.
 
 `estimatedDelivery` is always `null` today and is present rather than omitted: nothing in the
 platform estimates a delivery date. The key is stable so the row does not change shape the

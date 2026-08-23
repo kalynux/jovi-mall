@@ -55,7 +55,12 @@ export function toPersistableHeadquarters(
 
   return entries.map((e) => {
     const geo = e.geo ? toGeoAddress(e.geo) : null;
-    const location = geo ? geo.coordinates : (e.location ?? null);
+    // ⚠ `undefined`, never `null`. `headquarters_addresses` is 2dsphere-indexed on
+    // this leaf, and MongoDB extracts keys for the WHOLE array — one stored null
+    // beside one real point refuses every subsequent write to the magazin, not just
+    // the one that touched the address. An absent key indexes fine. See
+    // `GeoPointSchema`; the key is dropped from the persisted entry below.
+    const location = geo ? geo.coordinates : (e.location ?? undefined);
 
     let id: mongoose.Types.ObjectId | undefined = e.id ? new mongoose.Types.ObjectId(e.id) : undefined;
     if (!id) {
@@ -77,7 +82,9 @@ export function toPersistableHeadquarters(
       city: geo?.components.city ?? e.city ?? null,
       address_description: e.address_description,
       support_contact: { phone: e.support_contact.phone, email: e.support_contact.email ?? null },
-      location,
+      // Spread-or-omit rather than `location,` — an explicit `location: undefined`
+      // is still a key Mongoose would cast, and the point is to not have one.
+      ...(location ? { location } : {}),
       geo,
     } as unknown as IAgencyHeadquartersAddress;
   });

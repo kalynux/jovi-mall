@@ -38,8 +38,17 @@ const HeadquartersAddressSchema = new Schema(
     city: { type: String, default: null, trim: true },
     address_description: { type: String, required: true, trim: true },
     support_contact: { type: SupportContactSchema, required: true },
-    /** Map coordinates. Derived from `geo.coordinates` on write; null only on legacy documents. */
-    location: { type: GeoPointSchema, default: null },
+    /**
+     * Map coordinates. Derived from `geo.coordinates` on write; ABSENT only on
+     * legacy documents.
+     *
+     * ⚠ `default: undefined`, never `null` — this array is 2dsphere-indexed and a
+     * stored null beside a real point makes the whole magazin unwritable, which
+     * would strand an agency mixing a geocoded depot with a legacy one. See
+     * `GeoPointSchema`. `toPersistableHeadquarters` omits the key for the same
+     * reason; do not reintroduce a `?? null` there.
+     */
+    location: { type: GeoPointSchema, default: undefined },
     /** Canonical geospatial address (from `/api/geo/search`); null on legacy/plain-text entries. */
     geo: { type: GeoAddressSchema, default: null },
   },
@@ -61,8 +70,11 @@ export interface IAgencyHeadquartersAddress {
   city: string | null;
   address_description: string;
   support_contact: IAgencySupportContact;
-  /** Map coordinates. Derived from `geo`; null only on legacy documents. */
-  location: IGeoPoint | null;
+  /**
+   * Map coordinates. Derived from `geo`; absent only on legacy documents.
+   * Optional because the key is OMITTED rather than stored null — see the schema.
+   */
+  location?: IGeoPoint | null;
   /** Canonical geospatial address; null on legacy/plain-text entries. */
   geo: IGeoAddress | null;
 }
