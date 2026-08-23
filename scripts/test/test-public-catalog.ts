@@ -176,6 +176,11 @@ const detail = (p: Product = product(), variants: Variant[] = [variant()]) =>
         variantImages: new Map(),
         currency: 'XAF',
         contentLanguage: 'fr',
+        // The default fixture is an unreviewed product, because that is the state
+        // every product starts in and the one whose projection matters most: `null`
+        // is what keeps `aggregateRating` out of the storefront's JSON-LD. The
+        // non-null case is asserted on its own below.
+        rating: null,
         store: storeBlock,
     });
 
@@ -344,6 +349,11 @@ assert('a simple-mode product returns options: [] and one variant', () => {
         variantImages: new Map(),
         currency: 'XAF',
         contentLanguage: 'fr',
+        // The default fixture is an unreviewed product, because that is the state
+        // every product starts in and the one whose projection matters most: `null`
+        // is what keeps `aggregateRating` out of the storefront's JSON-LD. The
+        // non-null case is asserted on its own below.
+        rating: null,
         store: storeBlock,
     });
     return dto.options.length === 0 && dto.variants.length === 1;
@@ -372,6 +382,11 @@ assert('options are sorted by position, not insertion order', () => {
         variantImages: new Map(),
         currency: 'XAF',
         contentLanguage: 'fr',
+        // The default fixture is an unreviewed product, because that is the state
+        // every product starts in and the one whose projection matters most: `null`
+        // is what keeps `aggregateRating` out of the storefront's JSON-LD. The
+        // non-null case is asserted on its own below.
+        rating: null,
         store: storeBlock,
     });
     return dto.options[0].name === 'Size' && dto.options[1].name === 'Colour';

@@ -35,6 +35,19 @@ router.get('/products', PublicCatalogController.listProducts);
  * constrained to 24-hex by its Zod schema rather than matching anything — a slug arriving
  * here is a `400`, which is a clearer answer than a `404` for what is really a wrong-URL-shape.
  */
+/**
+ * ⚠ **Declared BEFORE `/products/:productId`**, and this one is not a formality.
+ *
+ * Express matches in declaration order, but these two differ in segment count, so they
+ * cannot actually shadow each other today. The ordering is here because the comment on
+ * `/products/:productId` below says "there is no literal path under `/products/`" — and
+ * that stopped being true the moment this landed. Most-specific-first keeps the file
+ * honest about what is under that prefix, and keeps the next sibling safe by default.
+ *
+ * "Customers also bought" (Phase 6 · 6.E.3). A read: it records nothing about who asked.
+ */
+router.get('/products/:productId/related', PublicCatalogController.listRelatedProducts);
+
 router.get('/products/:productId', PublicCatalogController.getProductById);
 
 /** Distinct categories with counts, derived over the browse filter. */

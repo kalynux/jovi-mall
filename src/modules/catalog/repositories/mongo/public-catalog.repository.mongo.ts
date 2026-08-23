@@ -369,6 +369,40 @@ export class PublicCatalogRepositoryMongo {
         }
     }
 
+    /**
+     * Hydrate a SET of product ids into list rows, dropping anything unpublishable.
+     *
+     * The read behind wishlists, recently-viewed and related products (Phase 6 · 6.E). It
+     * runs the same publishable predicate and the same joins as `search`, so a product that
+     * has been unpublished, suspended, soft-deleted or whose vendor was suspended simply
+     * **is not in the result** — the caller sees a shorter array and degrades that entry,
+     * rather than 500ing or, far worse, rendering something that is off sale.
+     *
+     * ⚠ **The order of the result is NOT the order of the argument**, and every caller has
+     * its own ordering to impose (a wishlist is newest-saved-first, recently-viewed is by
+     * view time, related is by score). No `$sort` is applied here at all; callers reorder
+     * from the id list they already hold. Adding one would be a second opinion about
+     * ordering, silently wrong for two of the three.
+     *
+     * Bounded by the caller: this is fed a page of ids, never a whole collection.
+     */
+    async findPublishableByIds(productIds: string[]): Promise<PublicProductListRow[]> {
+        const ids = productIds
+            .filter((id) => Types.ObjectId.isValid(id))
+            .map((id) => new Types.ObjectId(id));
+        if (ids.length === 0) return [];
+
+        return this.model
+            .aggregate<PublicProductListRow>([
+                { $match: { _id: { $in: ids }, ...publishableProductFilter() } },
+                ...this.vendorJoinStages(),
+                ...this.storeJoinStages(),
+                ...this.variantJoinStages(),
+                this.listProjectionStage(),
+            ])
+            .exec();
+    }
+
     /** Resolve one publishable product id — the deep-link route. */
     async findPublishableId(productId: string): Promise<{ id: string; vendorId: string } | null> {
         if (!Types.ObjectId.isValid(productId)) return null;

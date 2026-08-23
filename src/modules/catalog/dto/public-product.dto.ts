@@ -41,6 +41,7 @@
 import { Product } from '../repositories/mappers/product.mapper';
 import { Variant } from '../repositories/mappers/variant.mapper';
 import { FileDetail } from '../read-models/product-detail.read-model';
+import type { RatingBreakdownDto, RatingSummaryDto } from '../../reviews/dto/review.dto';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Store, as it appears nested on a product
@@ -150,6 +151,22 @@ export interface PublicProductListItemDto {
 
     /** Thumbnail only. `null` when the product has no usable image. */
     image: FileDetail | null;
+
+    /**
+     * Customer rating, or **`null` when there are none** — never `{ average: 0,
+     * count: 0 }`.
+     *
+     * ⚠ That null is a contract, not a convenience, and it is what closes the
+     * `aggregateRating` question this DTO's neighbours have carried since the
+     * storefront shipped. `src/lib/seo/jsonld.ts` on the frontend omits
+     * `aggregateRating` deliberately, because publishing invented review counts is a
+     * Google review-snippet spam-policy violation that earns a manual action. Now
+     * that real aggregates exist, the rule becomes: **emit `aggregateRating` if and
+     * only if this field is non-null.** A client cannot get that wrong if the server
+     * never sends a zero-count summary, which is why the shape is nullable rather
+     * than always-present. See `api-doc/public/catalog.md`.
+     */
+    rating: RatingSummaryDto | null;
 
     store: PublicProductStoreDto;
 
@@ -270,6 +287,16 @@ export interface PublicProductDetailDto {
      * See BACKEND-SHOP-REQUIREMENTS §3.7.
      */
     contentLanguage: string;
+
+    /**
+     * Customer rating with its 1–5 histogram, or `null` when there are none.
+     *
+     * Same rule as the list row's `rating` and the same reason — see there. The
+     * detail carries the breakdown as well because the product page renders the bar
+     * chart above the review list, and asking for it separately would be a second
+     * request for data this response already had to read.
+     */
+    rating: RatingBreakdownDto | null;
 
     store: PublicProductDetailStoreDto;
 
@@ -454,6 +481,13 @@ export interface PublicProductDetailInput {
     currency: string;
     contentLanguage: string;
     store: PublicProductDetailStoreDto;
+    /**
+     * Already reduced to the DTO shape by the caller (`toRatingBreakdownDto`), so
+     * this mapper stays pure and `test:public-catalog` can assert it without a
+     * database. `null` means "no published reviews", and this function passes that
+     * through unchanged rather than re-deciding it.
+     */
+    rating: RatingBreakdownDto | null;
 }
 
 export function toPublicProductDetailDto(input: PublicProductDetailInput): PublicProductDetailDto {
@@ -506,6 +540,7 @@ export function toPublicProductDetailDto(input: PublicProductDetailInput): Publi
                 ? product.defaultVariantId
                 : null,
         contentLanguage: input.contentLanguage,
+        rating: input.rating,
         store: input.store,
         freeDelivery: product.delivery?.freeDelivery ?? false,
         createdAt: product.createdAt.toISOString(),

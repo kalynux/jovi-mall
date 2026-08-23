@@ -68,11 +68,33 @@ export interface VendorAgencyListItemDto {
     /** Coverage regions this agency can serve. Values are region keys from locations.json. */
     coverageAreas: string[];
     /**
-     * Agency rating (0–5 scale).
-     * Null until the rating system is implemented.
-     * @future Populate from ratings aggregation once available.
+     * Agency rating, 0–5, from its **customers'** delivery reviews. `null` when
+     * nobody has rated it — never `0`, which would read as "rated one star by
+     * everybody".
+     *
+     * ── Which reviews feed this, and why only those ──────────────────────────
+     * Three roles can review a delivery, and this number is the **customer**
+     * average alone. Mixing the three would produce a figure that answers no
+     * question — a vendor's rating of a carrier and a recipient's rating of the
+     * same delivery are measuring different things — and the customers' is both the
+     * largest sample and the one that describes what the agency actually sells.
+     * An agency's own reviews of its agents never appear here at all; `targetsOf`
+     * drops the agency target for `author_role: 'agency'` precisely so a business's
+     * public score cannot be self-reported.
      */
     rating: number | null;
+    /**
+     * How many customer delivery reviews `rating` is an average of. `0` when there
+     * are none.
+     *
+     * On the wire beside the average rather than folded into an object, so this
+     * stays a purely **additive** change: `rating` keeps its type and its meaning,
+     * and a client that never read a count still works. A rating shown without its
+     * count is not renderable honestly — 5.0 from one delivery and 4.6 from two
+     * hundred are not the same claim — so a card that prints the stars should print
+     * this too.
+     */
+    ratingCount: number;
     /**
      * Agency's policy summary — pricing models, return policy, damage policy.
      * Null only if the agency somehow has no policies (blocked by onboarding; should never be null for step-0 agencies).
@@ -134,6 +156,13 @@ export class VendorAgencyMapper {
         agency: IDeliveryAgency,
         magazin: AgencyMagazinSummary | null,
         logo: FileDetail | null = null,
+        /**
+         * This agency's customer delivery-review aggregate, batch-resolved by the
+         * caller. Optional and defaulting to nothing so the mapper stays usable
+         * from a call site that has not resolved one — the truthful answer there is
+         * the same `null` the field has always carried.
+         */
+        rating: { average: number; count: number } | null = null,
     ): VendorAgencyListItemDto {
         // Business name, coverage areas and HQ addresses live on the Magazin.
         const primaryHQ = magazin?.headquarters_addresses?.[0] ?? null;
@@ -152,12 +181,14 @@ export class VendorAgencyMapper {
                 : null,
             country: agency.country ?? null,
             coverageAreas: magazin?.coverage_areas ?? [],
-            // TODO(ratings, 2026-08-19, phase 6.E): always null — there is no ratings system,
-            // so there is nothing to populate this from. This is a BACKLOG item, not debt: the
-            // field is on the wire because the agency directory's card renders a rating slot,
-            // and 6.E owns whether that number ever exists. Until it does, `null` is the
-            // truthful answer and a computed placeholder would be a fabricated one.
-            rating: null,
+            // Closed by Phase 6 Step 10 (6.E.4). The TODO that stood here said "always
+            // null — there is no ratings system"; there is one now, and this is its
+            // customer aggregate. It is still `null` for an agency nobody has reviewed,
+            // which is the same truthful answer for a different reason — an average of
+            // zero reviews is not a rating, and rendering `0` would be the fabricated
+            // placeholder the TODO was written to refuse.
+            rating: rating && rating.count > 0 ? rating.average : null,
+            ratingCount: rating?.count ?? 0,
             policies: agency.policies
                 ? {
                       pricing: {

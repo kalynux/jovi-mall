@@ -44,6 +44,8 @@ import {
 } from '../dto/public-product.dto';
 import { PublicStoreDto, toPublicStoreDto } from '../../store/dto/public-store.dto';
 import { PublicProductListQuery, PublicStoreListQuery } from '../validators/public-catalog.validator';
+import { reviewAggregateRepository } from '../../reviews/repositories/review-aggregate.repository';
+import { toRatingBreakdownDto, toRatingSummaryDto } from '../../reviews/dto/review.dto';
 
 /**
  * The account currency.
@@ -103,6 +105,30 @@ export class PublicCatalogService {
     }
 
     /**
+     * The same list rows, for a set of ids the caller already holds (Phase 6 · 6.E).
+     *
+     * Returned as a **Map keyed by product id**, not an array, and that is the whole point:
+     * the three callers — wishlist, recently viewed, related — each have their own ordering
+     * and each needs to know which ids came back *missing*, because a missing id is not an
+     * error here. It is a product that has been unpublished, suspended or deleted since the
+     * row referencing it was written, and the correct rendering is a degraded entry rather
+     * than a 500 or, worse, a card for something that is off sale.
+     *
+     * Goes through `decorateRows`, so a wishlist card and a browse card are the same shape
+     * built by the same code. Inventing a second product DTO for these surfaces is the
+     * mistake `api-doc/public/catalog.md` warns about — its `inStock` is a boolean and never
+     * a count, and a second shape is how that becomes two answers.
+     */
+    async listByIds(productIds: string[]): Promise<Map<string, PublicProductListItemDto>> {
+        const unique = [...new Set(productIds)];
+        if (unique.length === 0) return new Map();
+
+        const rows = await this.repo.findPublishableByIds(unique);
+        const decorated = await this.decorateRows(rows);
+        return new Map(decorated.map((item) => [item.id, item]));
+    }
+
+    /**
      * Attach thumbnails to a page of rows in **one** file query.
      *
      * Resolved through `resolveProductImages` against the **default variant**, not the raw
@@ -119,11 +145,18 @@ export class PublicCatalogService {
      */
     private async decorateRows(rows: PublicProductListRow[]): Promise<PublicProductListItemDto[]> {
         const storage = getStorageProvider();
-        const imagesByKey = await resolveProductImages(
-            rows.map((r) => ({ productId: r.id, variantId: r.defaultVariantId })),
-            this.fileRepo,
-            storage,
-        );
+        // Two batch reads for the page, never one per row. The ratings join is the
+        // same shape as the images one and exists for the same reason: a grid renders
+        // a rating on every card, so a per-card query is an N+1 on the busiest
+        // unauthenticated endpoint the platform has.
+        const [imagesByKey, ratingByProductId] = await Promise.all([
+            resolveProductImages(
+                rows.map((r) => ({ productId: r.id, variantId: r.defaultVariantId })),
+                this.fileRepo,
+                storage,
+            ),
+            reviewAggregateRepository.findMany('product', rows.map((r) => r.id), 'customer'),
+        ]);
 
         return rows.map((row) => {
             const image = imagesByKey.get(productImageKey(row.id, row.defaultVariantId))?.[0] ?? null;
@@ -143,6 +176,9 @@ export class PublicCatalogService {
                     : {}),
                 inStock: row.inStock,
                 image,
+                // `null` when nothing is published — see the field's docstring for why
+                // that null is what keeps invented review counts out of the JSON-LD.
+                rating: toRatingSummaryDto(ratingByProductId.get(row.id)),
                 store: {
                     slug: row.storeSlug,
                     name: row.storeName,
@@ -192,9 +228,13 @@ export class PublicCatalogService {
         // so this is a should-never-happen that fails as a 404 rather than a broken page.
         if (!storeRow) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
 
-        const [variants, options] = await Promise.all([
+        const [variants, options, rating] = await Promise.all([
             this.variantRepo.findByProduct(productId),
             this.optionRepo.findByProduct(productId),
+            // The breakdown rather than the summary: the product page renders the 1–5
+            // histogram above its review list, and reading it here saves the client a
+            // second request for data this response already had to fetch.
+            reviewAggregateRepository.find({ targetType: 'product', targetId: productId, authorRole: 'customer' }),
         ]);
 
         const optionValues =
@@ -233,6 +273,7 @@ export class PublicCatalogService {
             variantImages,
             currency: DEFAULT_CURRENCY,
             contentLanguage: storeRow.vendorPreferredLanguage ?? DEFAULT_CONTENT_LANGUAGE,
+            rating: toRatingBreakdownDto(rating),
             store: {
                 slug: storeRow.slug,
                 name: storeRow.name,

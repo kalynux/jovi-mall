@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { publicCatalogService } from '../services/public-catalog.service';
+import { relatedProductsService } from '../services/related-products.service';
 import {
     PublicProductIdParamSchema,
     PublicProductListQuerySchema,
@@ -88,6 +89,28 @@ export class PublicCatalogController {
     static listCategories = asyncHandler(async (_req: Request, res: Response) => {
         const categories = await publicCatalogService.listCategories();
         cacheable(res).json({ success: true, data: categories });
+    });
+
+    /**
+     * GET /api/public/products/:productId/related
+     *
+     * "Customers also bought" (Phase 6 · 6.E.3). A read with no side effects — nothing here
+     * records that the strip was requested, so it is safe on a route anyone can call.
+     *
+     * ⚠ **`meta.source` is part of the contract, not diagnostics.** It says which signal
+     * produced the list: `co_purchase` (a real count of orders containing both products) or
+     * `same_category` (the fallback, when nothing has been bought alongside this yet). A
+     * client that heads both strips "customers also bought" is publishing a claim about
+     * other shoppers that the second one does not support — the "do not invent a metric"
+     * rule, which is why the label is published rather than kept server-side.
+     *
+     * An empty `data` is a `200`, never a 404: "nothing is related to this yet" is a
+     * successful answer, and a young catalogue produces it often.
+     */
+    static listRelatedProducts = asyncHandler(async (req: Request, res: Response) => {
+        const { productId } = PublicProductIdParamSchema.parse(req.params);
+        const result = await relatedProductsService.forProduct(productId);
+        cacheable(res).json({ success: true, data: result.data, meta: { source: result.source } });
     });
 
     /**

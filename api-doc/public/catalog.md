@@ -20,6 +20,7 @@ one. Nothing owner-scoped is reachable; see [the rule for this prefix](./README.
 | GET | `/api/public/products` | Browse, search, filter, sort — and the sitemap's product feed |
 | GET | `/api/public/stores/:storeSlug/products/:productSlug` | **The canonical product page** |
 | GET | `/api/public/products/:productId` | The same product, by id — for deep links |
+| GET | `/api/public/products/:productId/related` | **"Customers also bought"** — the related strip |
 | GET | `/api/public/categories` | Category chips, with counts |
 | GET | `/api/public/stores` | Store directory + the sitemap's store feed |
 | GET | `/api/public/stores/:slug` | One store |
@@ -146,6 +147,8 @@ you like) — the backend does not block the cart on it.
         "originalName": "cover.jpg"
       },
 
+      "rating": { "average": 4.25, "count": 12 },   // null when nobody has reviewed it
+
       "store": { "slug": "maison-bella", "name": "Maison Bella", "isOpen": true },
 
       "freeDelivery": false,
@@ -158,6 +161,9 @@ you like) — the backend does not block the cart on it.
 
 - `image` is `null` when the product has no usable image — the key is always present.
 - `priceRange` is **omitted** when there is one price, rather than sent as `{min: x, max: x}`.
+- `rating` is `null` when the product has no published reviews — **never**
+  `{ average: 0, count: 0 }`. The key is always present. That null is what governs
+  `aggregateRating` in your JSON-LD; see [SEO](#seo) and [reviews.md](../reviews.md).
 - An empty result is `data: []` with `meta.total: 0`. Never a 404.
 - Build the product URL as `/shop/stores/{store.slug}/products/{slug}` — see decision 1.
 
@@ -180,6 +186,14 @@ The product page. `GET /api/public/products/:productId` returns the identical bo
     "tags": ["wax", "handmade"],
     "seo": { "title": "…", "description": "…" },   // omitted when unset
     "contentLanguage": "fr",
+
+    // null when nobody has reviewed it. The detail adds the 1–5 histogram the
+    // reviews tab renders above the list, so it needs no second request for it.
+    "rating": {
+      "average": 4.25,
+      "count": 12,
+      "distribution": { "1": 0, "2": 1, "3": 1, "4": 4, "5": 6 }
+    },
 
     "images": [ /* full gallery, FileDetail objects, thumbnail first */ ],
 
@@ -303,6 +317,76 @@ defaults are invented.
 
 ---
 
+## GET /api/public/products/:productId/related
+
+The related-products strip for a product page. No auth, no side effects — nothing records that
+you asked.
+
+```jsonc
+{
+  "success": true,
+  "data": [
+    { "product": { "id": "68a2…", "slug": "black-belt", "title": "Black Belt", "...": "…" }, "orders": 14 },
+    { "product": { "...": "…" }, "orders": 9 }
+  ],
+  "meta": { "source": "co_purchase" }
+}
+```
+
+Each `product` is a **product list row** — the same shape as `GET /api/public/products` returns,
+documented in full there.
+
+### ⚠ `meta.source` is part of the contract, not diagnostics
+
+There are two signals behind this endpoint and they answer different questions. The response says
+which one produced the list, and **your headings must follow it**:
+
+| `meta.source` | What it means | `orders` | Suggested heading |
+|---|---|---|---|
+| `co_purchase` | Genuinely behavioural — a count of past **paid** orders that contained both products | a number | "Frequently bought together" |
+| `same_category` | The fallback: other products in the same category, most recently ordered first | **always `null`** | "More in this category" |
+
+A strip headed *"customers also bought"* that is really ordered by category recency is a claim
+about other shoppers that is not true. That is why the label is published rather than kept
+server-side — the platform will not make the claim for you, and it will not let you make it by
+accident.
+
+`same_category` is the common case on a young catalogue: most products have never been bought
+alongside anything yet.
+
+### What `orders` is, precisely
+
+The number of **distinct past orders** that contained this product and the subject together.
+Buying three of something in one order is one piece of evidence, not three.
+
+> ⚠ **It is computed from a bounded sample**, not from all of history: the most recent
+> `RELATED_PRODUCTS_ORDER_SAMPLE` (default 500) paid orders containing the subject, within
+> `RELATED_PRODUCTS_WINDOW_DAYS` (default 365). It is evidence of a pattern, not an audited total,
+> and should not be rendered as an exact lifetime figure ("bought together 14 times" is fine;
+> "14 customers" is not).
+
+### Other things worth knowing
+
+- **The subject is never in its own strip.**
+- **Nothing off sale ever appears.** The same publishable predicate as the rest of this document —
+  draft, archived, suspended, soft-deleted, and suspended-vendor products are all excluded, and a
+  product that goes off sale disappears from the strip immediately even though the ranking behind
+  it is cached.
+- Unlike a [wishlist entry](../customer/saved-and-viewed.md), an unavailable product is **dropped,
+  not degraded**. Nobody chose this list; a card that cannot be bought is just broken.
+- **An empty `data` is a `200`**, never a 404. "Nothing is related to this yet" is a successful
+  answer, and a young catalogue produces it often.
+- Up to `RELATED_PRODUCTS_LIMIT` (default 8) entries.
+- The **ranking** is cached for six hours; the **cards are not** — price, stock and store state are
+  read live on every request, so this endpoint never serves a stale price.
+
+| `error.code` | Status | Meaning |
+|---|---|---|
+| `CATALOG_PRODUCT_NOT_FOUND` | 404 | The *subject* is not public. Same 404-never-403 rule as everywhere here |
+| `VALIDATION_ERROR` | 400 | Malformed id |
+
+---
+
 ## GET /api/public/categories
 
 `Product.category` is a plain indexed string; there is no Category collection, model or
@@ -381,8 +465,15 @@ would say "this seller has nothing" about a suspended vendor.
 
 - `sku` **is** published per variant. It is already globally unique and already shown to the
   customer on cart and order lines, so `Offer.sku` is safe to emit.
-- `aggregateRating` stays **omitted**: there is no review system. Publishing invented review
-  counts is a Google spam-policy violation that earns a manual action.
+- `aggregateRating` — **emit it if and only if `rating` is non-null on the response.**
+  This line used to read "stays omitted: there is no review system". There is one now
+  (Phase 6 · 6.E.4, see [reviews.md](../reviews.md)), and the rule that replaced the
+  blanket omission is deliberately shaped so a client cannot get it wrong: the backend
+  **never sends a zero-count summary**. A product nobody has reviewed carries
+  `rating: null`, exactly as one with no rating data at all would, so there is nothing to
+  build an `aggregateRating` from and no branch to remember. Publishing invented review
+  counts is still a Google review-snippet spam-policy violation that earns a manual
+  action — do not synthesise `ratingValue: 0` / `reviewCount: 0` from a null.
 - `updatedAt` on every product row is a real `lastModified` for the sitemap.
 
 ## Rate limiting
@@ -397,9 +488,19 @@ See [rate-limits.md](../rate-limits.md).
 
 ## Not built (deliberately)
 
-- **Related products / "customers also bought"** — Tier 3. `Product.lastOrderedAt` exists
-  and nothing reads it.
-- **Reviews and ratings** — Tier 3, and the reason `aggregateRating` is omitted.
+- ~~**Related products / "customers also bought"**~~ — **built** (Phase 6 · 6.E.3).
+  `GET /api/public/products/:productId/related`, above. Note the line this replaces was wrong on
+  its own terms: `Product.lastOrderedAt` was already read, by the file-cleanup inactivity sweep,
+  and is stamped on every product of a freshly-paid order — which is what made it usable as the
+  fallback's ordering signal without inventing anything.
+- **A "customers who viewed this also viewed" strip** — not built, and not a small addition
+  disguised as one. Recently-viewed rows are per-customer and behind a session
+  ([customer/saved-and-viewed.md](../customer/saved-and-viewed.md)); deriving a public signal from
+  them means aggregating browsing behaviour across people, which is a privacy decision rather than
+  a query.
+- ~~**Reviews and ratings**~~ — **built** (Phase 6 · 6.E.4). `GET /api/public/products/:productId/reviews`
+  serves the published product reviews and the rating breakdown; every product row and
+  detail carries `rating`. Contract: [reviews.md](../reviews.md).
 - **A stock count** — see decision 3. `inStock` is the honest answer.
 - **`bargain`** — `ProductVariant` gained a negotiable price range while this surface was
   being built. It is **not published**, pending a decision about whether the range is
