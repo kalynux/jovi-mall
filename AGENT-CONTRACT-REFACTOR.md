@@ -1016,7 +1016,7 @@ only DB-free check that all four new situations carry copy in all five languages
    `migrate:agent-deposits`, which this line used to warn had to run before 3f deploys.
 7. ~~Tests, then E2E — the 7 named scenarios, the §1 worked example, the concurrent-allocation
    race, and the 8-step E2E against live Mongo.~~ **Done 2026-08-23.**
-   `npm run verify:agent-contract` (66) and `npm run verify:agent-e2e` (55), both against
+   `npm run verify:agent-contract` (81) and `npm run verify:agent-e2e` (55), both against
    real Mongo. They found and closed two silent order-path defects on their first run — see
    the close-out ledger at the top.
 

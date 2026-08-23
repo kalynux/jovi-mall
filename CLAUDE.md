@@ -15,17 +15,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 >    nightly and write `trust_signals.composite_score` **only**;
 >    `CodTrustService.applyEvent` is still the sole writer of `cod.trust_score`, the
 >    number `CodExposureService` turns into an agent's cash limit. See
->    [§ Agent trust score](#agent-trust-score-live-vs-shadow) for the two blockers
->    holding the flip and where the decision is recorded. **This is the only item
->    still open, and it is blocked on a product decision (O-7) plus rating data that
->    does not exist yet — not on anybody writing code.**
+>    [§ Agent trust score](#agent-trust-score-live-vs-shadow) for where the decision
+>    is recorded. **This is the only item still open, and ONE of its two blockers is
+>    now gone**: O-7 was answered 2026-08-23 with a persistent administrator override
+>    (`verify:agent-contract`'s last block is what proves a recompute cannot erase
+>    it). What remains is **data, not a decision** — `audit:trust-shadow` still
+>    reports **0 delivery reviews on 10 agents**, so all 50 rating weight resolves to
+>    the seed and the composite is structurally incapable of lowering anybody. Nobody
+>    can write code that fixes that; it needs real deliveries to be rated.
 > 2. ✅ **The collection rename and the `cod.outstanding_balance` backfill are
 >    CLOSED as not applicable pre-production** (owner decision D-5, 2026-08-21) —
 >    not forgotten. The code has been post-rename since before the decision;
 >    `agent_agency_memberships` appears nowhere in `src/`. The reasoning is in the
 >    handoff doc's § "Not built at all".
 > 3. ✅ **Both verification items are BUILT — 2026-08-23.** The 7 scenarios including
->    the concurrent-allocation race are `npm run verify:agent-contract` (**66**), and
+>    the concurrent-allocation race are `npm run verify:agent-contract` (**81**), and
 >    the 8-step E2E is `npm run verify:agent-e2e` (**55**). Both need Mongo as a
 >    replica set. `npm run test:agent-domain` (211) is still DB-free by construction
 >    and still covers neither — that is what these two are for.
