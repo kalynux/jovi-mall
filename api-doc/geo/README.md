@@ -197,6 +197,29 @@ Selected once at boot from env (see `.env.example`). Mirrors the storage-provide
 | `GEO_DEFAULT_COUNTRY_CODES` | `cm` | Comma-separated ISO-2 bias. Blank = worldwide. |
 | `GEO_NOMINATIM_BASE_URL` | public OSM | Or a self-hosted mirror. |
 | `GEO_NOMINATIM_USER_AGENT` | identifying UA | **Required by Nominatim's usage policy.** |
+| `GEO_CACHE_ENABLED` | `true` | The result cache — see below. |
+| `GEO_CACHE_TTL_SECONDS` | `86400` | How long a resolved result is kept. |
+| `GEO_CACHE_NEGATIVE_TTL_SECONDS` | `600` | How long an empty result is kept — deliberately shorter. |
+| `GEO_CACHE_REVERSE_PRECISION` | `4` | Decimals a reverse coordinate is rounded to (~11 m). |
+
+### Results are cached, and a client cannot tell
+
+Both endpoints are served through a Redis result cache
+([ADR-A04](../../docs/ADR-A04-GEOCODING.md) D-1). **Nothing about the contract changes** — the
+response shape, the `provider` field on every candidate, and the error codes are identical on a
+hit and on a miss, and there is no cache header, no `cached: true` flag and no way to bypass it
+from a request. Two things follow that are worth knowing anyway:
+
+- **A repeated search is fast and free.** Typing the same street twice, or two customers typing
+  it at all, costs one provider call. Do not build your own client-side cache on top of this one
+  unless you are trying to save a network round trip rather than a provider call.
+- **The cache fails open.** If Redis is unavailable the provider is called directly — an address
+  search never fails *because* of the cache, and never hangs on it.
+
+`GEO_CACHE_NEGATIVE_TTL_SECONDS` is the one number a client's behaviour can notice: an address
+that returns no candidates is remembered for ten minutes by default, so an address added to
+OpenStreetMap in the last few minutes may take that long to appear. It is short precisely so that
+window stays short.
 
 The seam is `IGeocodingProvider` (`src/core/geocoding/`). Adding Google/Mapbox/HERE/Geoapify is one
 adapter file + a factory case; **no consumer changes**. Because geocoding is an address concern and
