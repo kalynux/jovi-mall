@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { AuthController } from './auth.controller';
 import { requireAuth } from '../../api/middlewares/auth.middleware';
+import { ContactChangeController } from '../users/contact-change.controller';
 
 const router = Router();
 
@@ -21,6 +22,27 @@ router.get('/verify-email', AuthController.verifyEmail);
  */
 router.post('/forgot-password', AuthController.forgotPassword);
 router.post('/reset-password', AuthController.resetPassword);
+
+/**
+ * Confirm a change of login email (Phase 6 · 6.D.1).
+ *
+ * **Public on purpose, and it sits here rather than under `/api/me` for two reasons.** The
+ * token arrives in a mail client — routinely a different browser, often a different device
+ * — so requiring the session that *started* the change would fail the flow for exactly the
+ * people it is for. And it spends a bearer secret, which is what the `/auth` prefix's
+ * credential bucket (20/min/IP) exists to bound; `rate-limit/auth-paths.ts` is an
+ * allowlist, so **not** naming it there is how it gets the strict counter rather than the
+ * looser session one.
+ *
+ * The request half of the flow — which is what needs the account — is
+ * `PATCH /api/me/email`, behind `requireAuth`. `login_email` moves only here.
+ *
+ * A `POST`, not the `GET` its sibling `verify-email` uses above. `PasswordResetService`
+ * makes the argument in full: mail clients and chat apps *prefetch* URLs to build preview
+ * cards, so a `GET` that mutates is spent by a crawler before the person taps it. The link
+ * in the message points at the storefront, which POSTs here.
+ */
+router.post('/email-change/confirm', ContactChangeController.confirmEmail);
 
 // ─── Cookie Token Management ─────────────────────────────────────────────────
 /** Clear both auth cookies (always succeeds) */

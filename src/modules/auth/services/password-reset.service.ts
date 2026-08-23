@@ -239,6 +239,11 @@ export class PasswordResetService {
         if (!user) {
             throw createAppError(ERROR_CODES.AUTH_RESET_TOKEN_INVALID, 400);
         }
+        // A closed account cannot be reset back into, and says so distinctly: a reset link
+        // minted before the closure is exactly the credential somebody would try next.
+        if (user.status === 'closed') {
+            throw createAppError(ERROR_CODES.AUTH_ACCOUNT_CLOSED, 403);
+        }
         // Re-checked at redemption, not just at request: an account can be suspended in the
         // window between the two, and a valid token must not outlive that decision.
         if (user.status !== 'active') {

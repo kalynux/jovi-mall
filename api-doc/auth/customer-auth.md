@@ -199,7 +199,7 @@ way a customer session gets created, and support will ask about it.
 | A password field on the customer sign-in form | A customer who has never run a reset has no password; `POST /auth/login` will always refuse them | The code box, plus a "sign in with WhatsApp/Telegram" button |
 | Copy that says *"no account with that number"* | `MAGIC_CODE_INVALID` is deliberately one code for four situations — differentiating it would make the endpoint a registration oracle | *"That code did not work — send `/login` again for a new one."* |
 | Normalising the code before sending it | The server is already forgiving about case, spacing, `O`/`0` and `I`/`L`; client-side cleanup only introduces disagreements | Send it verbatim |
-| A bearer twin of these endpoints | Both set cookies, deliberately — the link opens the system browser and the code is typed on the website | If the customer app needs bearer delivery, ask for `/api/auth/mobile/magic/*` |
+| Calling the cookie endpoints from the customer app | A Capacitor WebView's origin makes our cookie third-party, and `Set-Cookie` is a forbidden response header it cannot read anyway — the session would appear to succeed and then every request would 401 | `POST /api/auth/mobile/magic/{link,code}`, which returns the pair in `data.tokens`. Same service, same errors, same strict rate-limit bucket — see [magic-login.md](./magic-login.md#bearer-clients--apiauthmobilemagic) |
 
 ---
 

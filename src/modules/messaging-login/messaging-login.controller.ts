@@ -15,12 +15,18 @@ import {
  * the same session model as `POST /auth/login`, minted by the same
  * `issueTokenPair`, with the same lifetimes and the same revocation.
  *
- * ── BEARER CLIENTS ARE OUT OF SCOPE, DELIBERATELY ────────────────────────────
- * The magic link opens the system browser and the code is typed on the website,
- * so cookies are right for both. A Capacitor WebView cannot use them — if the
- * customer app needs this it needs an `/api/auth/mobile/magic/*` twin returning
- * `data.tokens`, exactly as the mobile namespace does elsewhere. Not built until
- * asked for, rather than half-built now.
+ * ── BEARER CLIENTS HAVE THEIR OWN NAMESPACE NOW ──────────────────────────────
+ * This file used to say they were out of scope and would need an
+ * `/api/auth/mobile/magic/*` twin if the customer app ever wanted one. It does,
+ * and the twin is `mobile-messaging-login.controller.ts`, which returns the same
+ * pair in `data.tokens` and sets no cookie.
+ *
+ * Both call the same `messagingLoginService` methods, so a rule added there
+ * applies to both without anyone remembering. **Keep this file the cookie one.**
+ * The split exists so browser behaviour is unchanged by construction rather than
+ * by a check somebody could get wrong; adding a `tokens` block here would
+ * quietly hand every browser a copy of its own session in a readable body.
+ * `test:messaging-login` asserts that it does not.
  */
 export class MessagingLoginController {
   /**

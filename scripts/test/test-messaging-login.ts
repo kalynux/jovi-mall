@@ -998,6 +998,86 @@ async function main(): Promise<void> {
       && !/router\.get\(/.test(routes);
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log('\n▶ SOURCE SCAN: the bearer twin, for the customer app');
+
+  /**
+   * `/api/auth/mobile/magic/*` exists because the customer app cannot use the cookie pair: a
+   * Capacitor WebView's origin makes our cookie third-party, and `Set-Cookie` is a forbidden
+   * response header it could not read anyway. Since these two routes are the ONLY way a
+   * customer authenticates — the account password is system-generated and disclosed to nobody
+   * — the app signs nobody in without them.
+   *
+   * The invariants below are the same ones `test:mobile-auth` holds over the other bearer
+   * namespace. They are structural, and every one of them fails silently in behaviour.
+   */
+  const mobileMagicRoutes = stripComments(
+    read('modules/messaging-login/mobile-messaging-login.routes.ts'));
+  const mobileMagicController = stripComments(
+    read('modules/messaging-login/mobile-messaging-login.controller.ts'));
+
+  assert('the twin is mounted at /auth/mobile/magic', () => {
+    const api = read('api/index.ts');
+    return /router\.use\('\/auth\/mobile\/magic',\s*mobileMessagingLoginRoutes\)/.test(api);
+  });
+
+  assert('it is mounted BEHIND the auth rate-limit dispatcher', () => {
+    const api = read('api/index.ts');
+    return api.indexOf("router.use('/auth', authBucketDispatcher)")
+      < api.indexOf("router.use('/auth/mobile/magic'");
+  });
+
+  /**
+   * The anchored match in `auth-paths.ts` is what keeps this true: `/api/auth/mobile/refresh`
+   * and `/api/auth/mobile/auth-me` ARE in the loose bucket, and a prefix test written as a
+   * bare `startsWith('/api/auth/mobile')` would have swept these in with them — handing the
+   * one endpoint that redeems a sign-in credential a 300/min ceiling.
+   */
+  assert('neither bearer redeem path is in the loose auth_session bucket', () =>
+    !isAuthSessionPathname('/api/auth/mobile/magic/link')
+    && !isAuthSessionPathname('/api/auth/mobile/magic/code'));
+
+  assert('both bearer endpoints are POST, and there is no GET', () =>
+    /router\.post\('\/link'/.test(mobileMagicRoutes)
+    && /router\.post\('\/code'/.test(mobileMagicRoutes)
+    && !/router\.get\(/.test(mobileMagicRoutes));
+
+  assert('the bearer router declares no auth guard either', () =>
+    !mobileMagicRoutes.includes('requireAuth') && !mobileMagicRoutes.includes('requireRole'));
+
+  // The one rule of a bearer controller: setting a cookie the client provably cannot read is
+  // dead weight that makes every debugging session harder.
+  assert('the bearer controller never calls setAuthCookies', () =>
+    !mobileMagicController.includes('setAuthCookies'));
+  assert('it never calls res.cookie', () => !/res\.cookie\s*\(/.test(mobileMagicController));
+  assert('it does not even import from cookie.config', () =>
+    !mobileMagicController.includes('cookie.config'));
+
+  assert('both handlers return the pair through tokenEnvelope', () =>
+    (mobileMagicController.match(/tokenEnvelope\(/g) ?? []).length === 2);
+
+  /**
+   * The whole point of a parallel namespace rather than a flag on the shared handlers: the
+   * rules live in the service, so neither controller can drift from the other on the things
+   * that matter — the single-use token, the attempt counter, the collapsed error codes.
+   */
+  assert('both handlers call the SAME service the cookie twin calls', () =>
+    /messagingLoginService\.redeemLink\(/.test(mobileMagicController)
+    && /messagingLoginService\.redeemCode\(/.test(mobileMagicController));
+
+  assert('and the SAME validators, so the schemas cannot diverge', () =>
+    mobileMagicController.includes('RedeemMagicLinkSchema')
+    && mobileMagicController.includes('RedeemMagicCodeSchema'));
+
+  // The browser regression guard, mirroring test:mobile-auth's.
+  const cookieMagicController = stripComments(
+    read('modules/messaging-login/messaging-login.controller.ts'));
+  assert('the cookie twin still sets cookies on both routes', () =>
+    (cookieMagicController.match(/setAuthCookies\(/g) ?? []).length === 2);
+  assert('⚠ the cookie twin returns NO tokens in its body', () =>
+    !cookieMagicController.includes('tokenEnvelope')
+    && !/tokens\s*:/.test(cookieMagicController));
+
   console.log('\n▶ SOURCE SCAN: identity comes from the CONTEXT, never the payload');
 
   assert('no command reads an identity out of the payload', () => {

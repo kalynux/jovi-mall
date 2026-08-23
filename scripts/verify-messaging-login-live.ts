@@ -16,7 +16,10 @@
  *   3. **The connection is really PERSISTED**, through the real unique indexes, so a second
  *      `/login` really does take the fast path.
  *   4. **The HTTP surface**: a real `POST /api/auth/magic/*` really sets both auth cookies,
- *      and `GET /api/auth/me` really answers as a customer holding them.
+ *      and `GET /api/auth/me` really answers as a customer holding them. The bearer twin at
+ *      `/api/auth/mobile/magic/*` is checked the same way and one step further — the pair it
+ *      returns in the body is used against `requireAuth`, because a pair that parses but is
+ *      refused looks exactly like a working sign-in until the next request.
  *
  * Read-mostly: it writes its own `verify-login-*` fixtures and removes them, pass or fail,
  * in the same shape as `verify:connections` and `verify:storefront`.
@@ -428,6 +431,92 @@ async function main(): Promise<void> {
       return res.status === 200
         && body.data?.role === 'customer'
         && res.headers.getSetCookie().some((c) => c.startsWith('access_token='));
+    });
+
+    /**
+     * ── The bearer twin, which is the customer APP's only way in ─────────────
+     *
+     * Worth verifying over real HTTP rather than by source scan, because the two
+     * things that would break it are both invisible to a scan: the route being
+     * mounted somewhere the `/auth` rate-limit dispatcher does not reach, and
+     * the tokens in the body not actually being usable against `requireAuth`.
+     * The second is the one that matters — a pair that parses but is refused
+     * looks exactly like a working sign-in until the next request.
+     */
+    await assert('POST /api/auth/mobile/magic/code returns a usable token PAIR', async () => {
+      const forMobile = await mintFor('whatsapp', WA_PHONE_ID);
+      const res = await fetch(`${base}/api/auth/mobile/magic/code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: STORED_PHONE, code: forMobile.code }),
+      });
+      const body = await res.json() as {
+        success: boolean;
+        data?: {
+          role?: string;
+          tokens?: { accessToken?: string; refreshToken?: string; accessExpiresIn?: number };
+        };
+      };
+      const tokens = body.data?.tokens;
+
+      if (res.status !== 200 || body.data?.role !== 'customer') return false;
+      if (!tokens?.accessToken || !tokens?.refreshToken) return false;
+      // The lifetimes a bearer client sets its refresh timer from.
+      if (typeof tokens.accessExpiresIn !== 'number' || tokens.accessExpiresIn <= 0) return false;
+
+      // The claim that matters: the access token actually authenticates.
+      const me = await fetch(`${base}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${tokens.accessToken}` },
+      });
+      const meBody = await me.json() as { data?: { role?: string } };
+      return me.status === 200 && meBody.data?.role === 'customer';
+    });
+
+    await assert('⚠ the bearer twin sets NO cookie — the whole point of the namespace', async () => {
+      const forMobile = await mintFor('whatsapp', WA_PHONE_ID);
+      const res = await fetch(`${base}/api/auth/mobile/magic/code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: STORED_PHONE, code: forMobile.code }),
+      });
+      await res.text();
+      return res.headers.getSetCookie().length === 0;
+    });
+
+    await assert('POST /api/auth/mobile/magic/link returns a pair too', async () => {
+      const forMobileLink = await mintFor('whatsapp', WA_PHONE_ID);
+      const res = await fetch(`${base}/api/auth/mobile/magic/link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: forMobileLink.token }),
+      });
+      const body = await res.json() as {
+        data?: { role?: string; tokens?: { accessToken?: string; refreshToken?: string } };
+      };
+      return res.status === 200
+        && body.data?.role === 'customer'
+        && Boolean(body.data?.tokens?.accessToken)
+        && Boolean(body.data?.tokens?.refreshToken)
+        && res.headers.getSetCookie().length === 0;
+    });
+
+    await assert('the bearer twin collapses failures the same way the cookie one does', async () => {
+      const wrongCode = await fetch(`${base}/api/auth/mobile/magic/code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: STORED_PHONE, code: 'ZZZZZZZZ' }),
+      });
+      const unknownId = await fetch(`${base}/api/auth/mobile/magic/code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: '+237699999999', code: 'ZZZZZZZZ' }),
+      });
+      const a = await wrongCode.json() as { error?: { code?: string } };
+      const b = await unknownId.json() as { error?: { code?: string } };
+
+      return wrongCode.status === unknownId.status
+        && a.error?.code === 'MAGIC_CODE_INVALID'
+        && b.error?.code === 'MAGIC_CODE_INVALID';
     });
 
     await assert('a spent link answers 401 MAGIC_LINK_INVALID', async () => {

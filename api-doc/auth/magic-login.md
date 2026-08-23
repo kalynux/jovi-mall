@@ -367,12 +367,53 @@ one live credential rather than two.
 
 ---
 
-## Bearer clients are out of scope
+## Bearer clients — `/api/auth/mobile/magic/*`
 
-Both endpoints set cookies. The magic link opens the system browser and the code is typed on the
-website, so cookies are right for both. A Capacitor WebView cannot use them — if the customer app
-needs this it needs an `/api/auth/mobile/magic/*` twin returning `data.tokens`, exactly as the
-mobile namespace does elsewhere. **Deliberately not built until asked for.**
+The two endpoints above set cookies, which is right for the website: the magic link opens the
+system browser and the code is typed on a page. **A Capacitor WebView can use neither**, and
+neither fact is fixable in the client — its origin is `capacitor://localhost` (iOS) or
+`https://localhost` (Android), which makes our cookie third-party and blocked by default, and
+`Set-Cookie` is a *forbidden response-header name* in the Fetch standard, stripped from every
+`Response.headers` object in every engine, so it cannot scrape the token out either.
+
+So the customer app calls the bearer twin instead. Same service, same JWTs, same lifetimes, same
+error codes, same **strict 20/min credential bucket** — the only difference is delivery.
+
+| Cookie | Bearer |
+|---|---|
+| `POST /api/auth/magic/link` | `POST /api/auth/mobile/magic/link` |
+| `POST /api/auth/magic/code` | `POST /api/auth/mobile/magic/code` |
+
+Request bodies are identical. The response adds `data.tokens` and sets no cookie:
+
+```json
+{
+  "success": true,
+  "data": {
+    "role": "customer",
+    "user": { "…": "…" },
+    "tokens": {
+      "accessToken": "eyJ…",
+      "refreshToken": "eyJ…",
+      "accessExpiresIn": 900,
+      "refreshExpiresIn": 2592000
+    }
+  },
+  "message": "Signed in"
+}
+```
+
+> **This is the only way the customer app can sign anybody in.** A customer's password is
+> system-generated and disclosed to nobody, so `POST /api/auth/mobile/login` can never work for
+> one — these two routes are their entire authentication surface.
+
+From here the app holds the pair and sends `Authorization: Bearer <accessToken>` on every
+request; `requireAuth` prefers the bearer over any cookie. Rotate through
+`POST /api/auth/mobile/refresh`, and call `GET /api/auth/mobile/auth-me/customer` on launch —
+that is the endpoint that re-issues **both** tokens at full lifetime and so restarts the 30-day
+window. See [FRONTEND-CHANGELOG-mobile-auth.md](./FRONTEND-CHANGELOG-mobile-auth.md).
+
+The app's origin must be in `ALLOWED_ORIGINS`; both Capacitor origins already are.
 
 ---
 

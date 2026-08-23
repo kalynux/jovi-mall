@@ -129,6 +129,12 @@ export class AuthService {
     const user = await this.userRepo.findById(payload.userId);
     if (!user) throw createAppError(ERROR_CODES.AUTH_USER_NOT_FOUND, 401);
 
+    // A closed account, first and with its own code — see `requireAuth` for why the order
+    // matters. The 30-day refresh cookie outlives a closure by a month otherwise.
+    if (user.status === 'closed') {
+      throw createAppError(ERROR_CODES.AUTH_ACCOUNT_CLOSED, 403);
+    }
+
     // A refresh must not outlive a suspension. The refresh cookie lives 30 days, so
     // without this a suspended person keeps minting fresh access tokens from a
     // credential issued before they were suspended — the exact hole that makes
@@ -323,6 +329,13 @@ export class AuthService {
      */
     const isValid = await bcrypt.compare(input.password, user.password_hash);
     if (!isValid) throw createAppError(ERROR_CODES.AUTH_INVALID_CREDENTIALS, 401);
+
+    // A closed account, first and with its own code. Unreachable in practice — closure
+    // clears `login_email` and `login_phone`, so the lookup above cannot find the row — and
+    // kept because "unreachable" here rests on another file's behaviour, not on this one's.
+    if (user.status === 'closed') {
+      throw createAppError(ERROR_CODES.AUTH_ACCOUNT_CLOSED, 403);
+    }
 
     // Ordered AFTER the credential comparison on purpose: naming the suspension is only
     // safe for a caller who has already proved they hold the account, otherwise the
