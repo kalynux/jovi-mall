@@ -205,7 +205,12 @@ npm run test:agency-inventory                  # the agency stored-SKU roster AN
 npm run test:vehicle-profile                   # vehicle colour + photo merge (31, no DB needed)
 npm run test:payout-methods                    # the shared payout schema + switch (53, no DB needed)
 npm run test:booking-availability               # booking windows/timezones/seats (54, no DB needed)
-npm run test:customer-notifications             # customer catalog + balance settlement (30, no DB needed)
+npm run test:customer-notifications             # customer catalog + balance settlement (53, no DB) — plus
+                                               # GAP-012: the ticket situations, the pure status→situation
+                                               # policy, and the assertion that every customer_* template has
+                                               # APPROVAL COPY in whatsapp-templates.md. All 18 were registered
+                                               # in code and documented nowhere, which is the same as not
+                                               # existing: an unapproved template fails on send
 npm run test:blog                              # article blocks, slug keys, DTO projection (91, no DB
                                                # needed). Includes the CROSS-REPO fixture list that
                                                # wi-admin's test:content mirrors byte-for-byte — the
@@ -220,7 +225,7 @@ npm run test:rich-description                  # structured descriptions (149, n
                                                # endpoints while staying OUT of the $text index, the
                                                # vectoriser payload and every public DTO
 npm run test:public-catalog                    # the storefront's visibility rules and projections
-                                               # (86, no DB). Its core is a set of LEAK assertions:
+                                               # (100, no DB). Its core is a set of LEAK assertions:
                                                # DTOs are built from documents carrying vendorId,
                                                # suspension notes, pickup address ids and
                                                # vectorisation state, and the serialised output is
@@ -273,6 +278,15 @@ npm run test:connections                       # the unified messaging-connectio
                                                # explain what was deleted are the most useful thing in
                                                # that diff, and a scan that forces their removal has made
                                                # the codebase worse
+npm run test:email-verification                # the two emailed-token links (30, no DB) — that
+                                               # registration verification points at the STOREFRONT
+                                               # page rather than at this API, that POST and the
+                                               # LEGACY GET both answer /auth/verify-email, and that
+                                               # `app=` is stamped from the session-holding half of
+                                               # each flow. Mostly a SOURCE SCAN, because the thing
+                                               # guaranteed is a URL read by a browser somewhere
+                                               # else: a link nobody clicks reports success either
+                                               # way, which is how the raw-JSON envelope survived
 npm run test:password-epoch                    # password-change revocation: the iat-vs-epoch
                                                # predicate, the whole-second boundary that keeps the
                                                # caller's own replacement token valid, and a source
@@ -336,6 +350,38 @@ npm run verify:messaging-login                 # the same feature against real i
                                                # password, that the old one stops working, and that
                                                # a Telegram contact-share completes the RESET rather
                                                # than signing the person in
+npm run test:bot-surface                       # the curated bot surface (153, no DB) — the door the
+                                               # automation layer acts through. Its FIRST group is the
+                                               # contract copy: the route table asserted row-for-row
+                                               # against `api-doc/n8n/tools/catalog.json`, which the
+                                               # automation layer is GENERATED from, on method, path,
+                                               # `mutating` and `requires_customer_role`. There is no
+                                               # shared package, so that assertion IS the contract —
+                                               # the same position test:blog's fixture list holds for
+                                               # wi-admin's block union. Plus both Redis stores driven
+                                               # against a FAKE REDIS with real SET NX semantics (a
+                                               # replay is byte-identical, a REUSED key is refused
+                                               # rather than answered, a FAILURE releases the key), the
+                                               # identity refusal table incl. which refusals keep
+                                               # `details` past the Phase-16 boundary and which do not,
+                                               # and SOURCE SCANS for the three structural invariants:
+                                               # no session is ever minted, no controller reads
+                                               # req.auth, and no handler takes an identity out of a
+                                               # body or a path
+npm run verify:bot-surface                     # the same surface against real infrastructure (74) —
+                                               # NEEDS Mongo + Redis. Boots the app in-process and
+                                               # calls over real HTTP, which is the only way to prove
+                                               # five things: that BOTH credentials are wired in the
+                                               # right order on the real mount (a source scan sees the
+                                               # `router.use` lines, not the mount), that EXPRESS
+                                               # dispatches the table (a `/orders/list` arriving at
+                                               # orders_get_order is invisible to every DB-free
+                                               # assertion, and this service has been bitten by route
+                                               # order twice), that a BARE-DIGITS wa_phone_id really
+                                               # resolves an account stored as +237…, that a DELETE
+                                               # really carries its body, and that saving an address
+                                               # from a candidate handle writes NO `location` key — so
+                                               # a SECOND address can still be added
 npm run test:errors                            # Phase 16: the taxonomy, the exposure policy, the
                                                # envelope, the body-parser branch and the rate-limit
                                                # policy (69, no DB). Includes a CENSUS of all 1362
@@ -380,12 +426,16 @@ npm run verify:connections                     # messaging connections against r
                                                # `verify-conn-*` fixtures, pass or fail
 npm run verify:live-parity                     # agent↔agency smoke test — NEEDS Mongo
 npm run verify:blog                            # public reader + index builds + route order — NEEDS Mongo
-npm run verify:storefront                      # the storefront against real Mongo (28) — proves the
+npm run verify:storefront                      # the storefront against real Mongo (36) — proves the
                                                # indexes actually BUILD (incl. the $text one, and that
                                                # there is exactly one), that every public aggregation
                                                # RUNS, that a pending_verification vendor is published
                                                # while a suspended one is not, and that the route
-                                               # tables resolve. Writes then deletes its own
+                                               # tables resolve. Since GAP-003 it also proves the SKU
+                                               # lookup resolves a code typed in the WRONG CASE against
+                                               # the real unique index — a claim no fake can make — and
+                                               # that a draft product's SKU 404s exactly as its URL
+                                               # does. Writes then deletes its own
                                                # `verify-storefront-*` fixtures, pass or fail. NEEDS Mongo
 npm run verify:reviews                         # the review pipeline against real Mongo (16) — NEEDS
                                                # Mongo. Its first group is the point: it plants a
@@ -562,6 +612,10 @@ The revocation list is one field. `UserRepository.updatePassword` stamps `User.p
 **`JWT_SECRET` fails closed here too, and this note used to say otherwise.** `getJwtSecret()` (`config/secrets.config.ts`) throws `CONFIG_MISSING_JWT_SECRET` when unset and additionally refuses a value under 16 characters or a known placeholder in production, with `assertSigningSecrets()` running at boot — so a deploy without it does not start. The old `|| 'secret'` fallback is gone; the claim survived here long enough to be quoted back at us in a frontend spec, which is the argument for [verify-docs-against-code]. ⚠ This sentence used to end "…**exactly as geo-tracker's does not**", and that half was false for months: geo-tracker read `getEnv("JWT_SECRET", "secret")` and booted happily without the variable. It was made true on 2026-08-19 (Phase 3 step 3.E.2) rather than merely deleted — but note what the correction was: an unverified claim about a repository this file's author was not editing. Assert nothing here about the other service without opening its source.
 
 **`POST /auth/login` checks the password.** For a period `bcrypt.compare`'s verdict was computed and discarded — any password authenticated any account, for every role. Restored, with **no environment escape hatch**: a bypass whose failure direction is "open on a typo" is what `config/env.ts`'s own header argues against, and a seed that relied on the hole needs a real password rather than a flag. `test:mobile-auth` asserts both the check and the absence of any variable that could disable it.
+
+**Every emailed token link now points at a PAGE, and registration verification was the last one that did not.** Its link was `${API_PUBLIC_URL}/api/auth/verify-email?token=…`, so no frontend was ever involved: a person who clicked it got a raw JSON envelope, and — the part that actually breaks the flow — it was a **`GET` that mutates**, spent by whatever prefetched the mail (link scanners, corporate relays, the mail client's own preview) before they tapped it. That is the exact failure `PasswordResetService.buildResetLink` and `buildEmailChangeLink` each argue against at length; this one simply never got the same treatment. It is now `{STOREFRONT_URL}/verify-email?token=…&app={role}`, and the page POSTs to a **new `POST /api/auth/verify-email`**. ⚠ **The `GET` stays** — `EMAIL_VERIFY_EXPIRE` is 24 hours, so links minted the minute before a deploy must keep working for a day after it; deleting it is the tempting tidy-up and it silently breaks a day of registrations.
+
+**One page serves all four apps, and `app=` is the only thing that makes that possible.** Both confirm endpoints are genuinely **role-free** — neither reads `req.auth`, each resolves the account from the token, and the email-change one syncs the confirmed address onto *every* role profile the account holds — so a per-dashboard copy of the page would have nothing to do differently, and each copy would be one more place to get the POST-not-GET rule wrong. The one thing a role-free confirm cannot answer is **where to send the person afterwards**, so the requesting role travels in the link, stamped by the half of the flow that has a session (`actor.role` on the email change, the `role` parameter on verification). ⚠ **It is a role KEY, never a URL**: the page maps it through a compile-time table and ignores anything else. Do not "improve" it into a `?return=` parameter — these pages are reachable with no session, so a caller-supplied destination is an open redirect on the origin the sign-in pages live on. It is **optional** on the email-change link, because links already sitting in inboxes carry none. Covered DB-free by `npm run test:email-verification` (30).
 
 ### Configuration (`src/config/env.ts` + the module configs)
 
@@ -1127,7 +1181,16 @@ Same factory + strategy + singleton shape as storage. Active provider is `GEO_PR
 
 - **Order is load-bearing, and it is chosen on RELEVANCE rather than on rate limits.** `locationiq,geoapify`. The rate-limit argument says the opposite (Geoapify: 5 rps, *soft*; LocationIQ: 2 rps, *hard*) and it is aimed at the wrong failure: **the chain only consults the next provider when the first returns NOTHING**, so a confidently-wrong first answer is never corrected while a 429 always is. The failover absorbs the rate limit; nothing absorbs bad relevance. Measured on six real Cameroonian addresses (2026-08-23): LocationIQ's top result was within 10 km **6/6**, Geoapify **5/6** — and its miss returned *"Akwa, Akonolinga"* **267 km** away, ranking the exact street match third at `confidence: 0`. That is a ranking defect with no adapter-side fix; sorting by the provider's own confidence makes it worse. Accepted cost: more 429s on the front line, absorbed by the failover and by the cache.
 - **It falls over on a 429/outage AND on an empty result** — coverage genuinely differs on Cameroonian addresses. It does **not** fall over on `GEO_SEARCH_FAILED`: a malformed query is malformed everywhere, and a **401** must surface rather than be papered over by the reserve. Every provider failing re-throws; a 429 *then* an honest miss is a **miss**.
-- ⚠ **The chain is never stored.** `GEO_PROVIDERS` has `locationiq` and deliberately no `'chain'` — that value is persisted on every `GeoAddress.provider` and must name the *service* that resolved it, or `provider_place_id` stops being resolvable. Candidates pass through untouched.
+- ⚠ **The chain is never stored.** `GEO_PROVIDERS` has `locationiq` and deliberately no `'chain'` — that value is persisted on every `GeoAddress.provider` and must name the *service* that resolved it, or `provider_place_id` stops being resolvable. Candidates pass through the chain untouched.
+
+**Provider text is HTML-DECODED on the way out, and that is not cosmetic** (`geocoding.sanitize.ts`, 2026-08-26). Providers HTML-escape their strings because the data comes from OpenStreetMap, so a real LocationIQ result reads `École Bilingue la Pouponnière d&apos;AKWA, …`. Untouched, that entity reached a chat window, a delivery label and the stored `order.delivery_address.formatted_address` **as literal text** — not a rendering bug a frontend can fix, because the entity is in the stored value. Four properties:
+
+- **It wraps `createGeocodingProvider`'s return**, so every adapter is covered and so is a fourth written next year, whose author need not know the file exists. Same "the factory is the only door" argument as `resolveVirusScanner`. `test:geocoding-sanitize` asserts the wrap by source scan, because no behavioural test can observe an adapter that does not exist yet.
+- ⚠ **It sits INSIDE the cache**, so Redis stores decoded values and the work happens once rather than on every read. Do not move it outside — and do not wrap a second time, which would decode twice.
+- ⚠ **One regex pass, and the single pass IS the protection.** `&amp;apos;` must stay `&apos;` and never become `'`; a loop, or decoding `&amp;` separately, is the classic double-unescape bug. `String.replace` does not rescan its replacements.
+- ⚠ **`provider_place_id` is deliberately NOT decoded.** It is an opaque handle that must round-trip byte-identically or a stored address stops being re-resolvable; an `&` inside one is data, not markup.
+
+⚠ **The cache key version moved `v1 → v2` in the same change**, and the rule on `KEY_VERSION` was widened from "the SHAPE of a cached value" to shape **or content rules**. Nothing about the shape changed here — only the content — so a reader applying the old rule literally would have left it alone and shipped a fix that appeared not to work for 24 hours on exactly the most-searched addresses.
 - **A missing key skips its provider with a warning; a misspelt name is fatal.** The first lets one setting serve a keyless laptop and a two-key production host; the second stops a deployment running on its fallback while believing it runs on its primary.
 
 ✅ **Both adapters are live-verified** — `npm run verify:geocoding-providers` **28/0**, 2026-08-23: field mapping, the components the platform branches on, the `[lng, lat]` **order** (a swapped pair puts Douala in the Gulf of Guinea, and both halves stay plausible numbers), reverse, and that a no-match returns `[]` rather than throwing (Geoapify signals it with an empty `FeatureCollection`, LocationIQ with a **404**). ⚠ It asserts the **mapping** and only *reports* the **ranking** — pinning somebody else's relevance would make the suite fail on their release, and the printed top-result distance is the number that decides the chain order. It **skips green** without a key and says so loudly. `npm run test:geocoding-chain` (25, no DB, no network) covers the failover rules against fakes, because a real 429 cannot be produced without burning a day's quota. Use `getGeocodingProvider()`; the interface is `IGeocodingProvider` (`search` + `reverse`). **No business logic ever branches on the provider.** The HTTP surface is `src/modules/geo/` → `GET /api/geo/search` + `GET /api/geo/reverse` (any signed-in role), backing a Maps-style "type → search → select → store" flow.
@@ -1458,7 +1521,18 @@ write path may set a body that did not come through `ArticleBodySchema`.** Addin
 two-repo change — `ArticleBody.tsx` switches exhaustively over the union.
 
 **One article, many translations — not one document per language.** `hreflang` and the sitemap's
-language alternates are only reconstructible if the languages are one document. The corollary is
+language alternates are only reconstructible if the languages are one document.
+
+⚠ **The cover's alt text is per-locale (`translation.cover_alt`), and `IArticleCover` carries no
+`alt`** — changed 2026-08-25, in both repositories in one commit, which is the same-change rule
+this section warns about. One image serves five languages because `url`/`width`/`height` are
+properties of the file; the alt string is prose, read aloud by a screen reader and carried as the
+`og:image` description, so a shared one put English words on the French page. **The PUBLIC shape
+did not change** — `public-article.dto.ts` reassembles `{ url, alt, width, height }` from the
+translation being served, so the marketing frontend needed no edit. wi-admin refuses to publish a
+live language whose cover has no description, so the `?? translation.title` stand-in in `coverFor`
+is unreachable from this route and exists only so a legacy document renders a real sentence rather
+than `alt: ""` — which is the HTML for *decorative, skip me*, and a lie about a cover. The corollary is
 that **a missing translation is a 404, never a fallback**: serving English at a Portuguese URL
 publishes a page contradicting its own `lang` attribute and competing with its own original. The one
 deliberate fallback in the module is the **author bio** (`toPublicAuthorDto`), because a blank byline
@@ -1542,6 +1616,30 @@ DTO built from a document carrying all of them.
 an index and has no relevance score — so `sort=relevance` would have had nothing to rank by and
 public search would scan the collection. Trade: whole-word matching, and Mongo permits exactly
 one text index per collection. Built by `npm run migrate:storefront-indexes`.
+
+**`GET /variants/by-sku/:sku` is the one route here keyed on something a customer TYPES**
+(GAP-003). It exists precisely because the `$text` index above does **not** cover SKU: a
+customer typing a code off a package matched nothing, indistinguishably from "we do not sell
+that". Four properties, and each is the answer to an obvious wrong version:
+
+- **It starts at the variant, not the product.** `ProductVariant.sku` is a unique index, so
+  this is a point lookup; joining every product's variants and filtering afterwards would be
+  a collection scan on a world-readable route.
+- **Case is forgiven with an `$in`, never a regex.** As-typed, uppercase and lowercase go in
+  one indexed lookup and **the as-typed spelling wins** (`abc` and `ABC` can both be SKUs).
+  `$options: 'i'` would abandon the index and make every mistyped code a scan. ⚠ The accepted
+  cost: a SKU stored in **mixed** case resolves only when typed exactly.
+- **It answers a resolution, not a product card** — the *variant's* price and stock, plus the
+  ids. A SKU usually names a variant that is not the default one a card quotes, so a card
+  would misquote exactly the customer who typed a precise code.
+- **The publishable predicate is inside the product `$lookup`**, so a code is not a way past
+  it: a draft or suspended product's SKU 404s exactly as its URL does. `verify:storefront`
+  asserts both, after mutating the fixture.
+
+The pure halves — which spellings to try, and which row wins — are
+`catalog/domain/services/sku-resolution.ts`, so the judgement is testable with no database.
+Naming the variant goes through `buildVariantDisplayName`, shared with the product detail's
+variant list: one rule, so a variant is not called two different things on two screens.
 
 `/api/public/*` has its own IP-scoped rate-limit bucket on top of Layer A, so anonymous browse
 traffic cannot exhaust the global counter for the signed-in users behind the same NAT.
@@ -1653,7 +1751,7 @@ and a regression there is invisible to every other test — stock would just qui
 Gateway-agnostic orchestrator (`PaymentOrchestratorService`) over Stripe (cards), NotchPay and
 My-CoolPay (mobile money). **All three are real** as of Phase 1; the two mobile adapters used to
 make no HTTP call at all, fabricating a `PENDING` response with a hardcoded USSD code when
-unkeyed. Contract: `api-doc/payments/README.md`. Covered DB-free by `npm run test:payments` (92).
+unkeyed. Contract: `api-doc/payments/README.md`. Covered DB-free by `npm run test:payments` (113).
 
 **One registry, one lookup table.** `gateways/registry.ts` is the only place a gateway is
 constructed. There used to be three identical `Map`s — the orchestrator, `CreditTopupService` and
@@ -1764,7 +1862,17 @@ Services never enter the cart; they are booked. Availability → 15-min Redis ho
 ### Redis (`src/infra/redis/redis.factory.ts`)
 Uses dedicated DB indices per feature (email tokens, booking slot locks, download tokens, connection codes, etc.). Connects lazily — **never at boot**, which is why the readiness probe treats it as non-required (see System operations above).
 
-⚠ **4 and 9 are RETIRED, not free.** They held `wa_verify:{CODE}` and `tlgt:{token}` for the two account-linking mechanisms that `CONNECTION_CODE_DB` (13) replaced. They are left unassigned so a stale key from a pre-cutover deployment cannot be read back by whatever claims the number next.
+⚠ **4 and 9 are RETIRED, not free.** They held `wa_verify:{CODE}` and `tlgt:{token}` for the two account-linking mechanisms that `CONNECTION_CODE_DB` (13) replaced. They are left unassigned so a stale key from a pre-cutover deployment cannot be read back by whatever claims the number next. **10 and 16 were RECLAIMED in 2026-08-25 and that is a different thing** — 10 (`TELEGRAM_WINDOW_DB`) was reserved for a 24-hour service window *the Telegram Bot API does not have*, so nothing ever wrote it, and 16 was never a valid index at all.
+
+⛔ **THIS SERVICE MAY ONLY ASSIGN 5–15, and both halves of that are load-bearing.**
+
+**The ceiling is 16.** Redis's `databases` directive defaults to 16, so 0–15 are the only valid indices. Measured 2026-08-25: `CONFIG GET databases` → `16`, `SELECT 16` → `ERR invalid DB index`, and `CONFIG SET databases 32` → `ERR Unsupported CONFIG parameter` — it is **startup-only**, so raising it means editing a conf file and restarting every Redis this platform runs against. True of the compose stack too, whose three `redis:7-alpine` services carry no `command:` override. An index above the ceiling does **not** fail loudly: the connection opens, the `SELECT` errors, and any caller that fails open degrades to "never cached" with no symptom. That is exactly what had happened to `RECOMMENDATION_CACHE_DB = 16` — its cache had never once run since 2026-08-21, silently, because `related-products.cache.ts` correctly races a timeout and returns null.
+
+**The floor is 5, because wi-admin owns the low indices.** It claims `ADMIN_SESSION_DB = 1`, `ADMIN_RATE_LIMIT_DB = 2` and `PERMISSION_CACHE_DB = 3` on the SAME Redis whenever the two services share one — which the compose stack avoids by giving each its own instance, and which a developer machine does not: both `.env` files point at `redis://localhost:6379`. Verified 2026-08-25, DB 1 held twelve live `admin-sessions:*` keys. **Check `admin/src/infra/redis/redis.factory.ts` before assuming a number is yours.** ⚠ `EMAIL_VERIFY_DB = 3` already collides with wi-admin's permission cache and is left alone deliberately: both are exact gets so neither reads the other's keys, and moving it would invalidate every verification link in flight for a problem the separate-instance deployment already solves. `test:system` refuses anything above the ceiling or newly below 5, with 3 baselined.
+
+⚠ **TWO databases now hold two things each behind key prefixes, and that is a CONCESSION rather than the rule.** Eleven slots, thirteen things. `BOT_SURFACE_DB` (10) holds `bot:idem:` (DESTRUCTIVE — the duplicate-checkout guard) and `bot:geo:` (trivial); `CACHE_DB` (15) holds `geo:` (spends a rate-limited provider call to refill) and `related:` (free). What keeps it honest is that **the flush endpoint takes a prefix**, so each half stays independently clearable and each policy row states both radii rather than averaging them — and `BOT_SURFACE_DB` is prefix-only for exactly that reason. **A third pairing is not available**: the next feature wanting a logical database has to raise `databases` everywhere, or share one of these two.
+
+⚠ **DB 0 is used and is NOT catalogued.** `InboundCalendarSyncService` writes `calendar_sync_lock:{vendorId}` there with a `PX` TTL, fail-open. The factory header used to claim nothing uses DB 0 — corrected 2026-08-25; the readiness-probe argument that rested on it survives, because the calendar sync is one optional consumer and a probe still provisions a connection where it is idle. It stays out of `REDIS_DB_CATALOG` because everything in that table is flushable and `db: 0` is refused there outright.
 
 `REDIS_DB_CATALOG` is the table three separate features needed (`/system/dependencies`, `/system/cache`, the flush allowlist) and which previously existed only as trailing comments on the eight constants. The constants stay exported, so no call site changed.
 
@@ -1857,7 +1965,7 @@ Five things are load-bearing:
 
 - **It binds to the User, never a role entity.** One person has one WhatsApp number. `channel_connections` carries two unique compound indexes: `(user_id, channel)` — one connection per channel per account — and `(channel, external_id)` — one account per messaging identity, which is the constraint WhatsApp never had. `autoIndex` fails *silently*, so `npm run verify:connections` is the only place they are proven to build.
 - **Six characters is 2^30, which is NOT enough on its own.** Four guards make it safe: `issue()` revokes the identity's previous code so the guessable set never accumulates; `consume()` is atomic so a code cannot be spent twice; a per-account attempt counter (5 per 10 min) bounds guessing; and `CONNECTION_CODE_POLICY` — the service's **first Layer C limiter** — bounds it again at 30/min per **IP**. The last two key on different axes deliberately: accounts are free to mint, so an account-scoped limit alone bounds nothing. Remove one and the code length becomes the whole defence.
-- **The bot webhooks are authenticated now, and `/connect` is why.** They were open — no secret, no signature, unlike geo-tracker's HMAC and the payment gateways' — which was tolerable while they only *redeemed* a code somebody already held. `/connect` makes them **mint** one for whatever identity the request names, so an open endpoint lets anyone mint a code against a stranger's number and attach it to their own account. `BOT_WEBHOOK_SECRET` + `X-Webhook-Secret`, timing-safe; **unset refuses in production and warns in development**, and `reportBotWebhookGuard` prints the state at boot. Setting it means setting it on the automation layer too.
+- **The bot webhooks are authenticated now, and `/connect` is why.** They were open — no secret, no signature, unlike geo-tracker's HMAC and the payment gateways' — which was tolerable while they only *redeemed* a code somebody already held. `/connect` makes them **mint** one for whatever identity the request names, so an open endpoint lets anyone mint a code against a stranger's number and attach it to their own account. `BOT_WEBHOOK_SECRET` + `X-Webhook-Secret`, timing-safe. ⛔ **Unset REFUSES THE BOOT, in every environment, since GAP-011 (2026-08-26)** — `assertBotWebhookSecretConfigured()` runs beside `assertSigningSecrets()`, and `reportBotWebhookGuard` still prints the state. It used to refuse in production and warn in development, on the argument that an open dev webhook could at worst mint a connection code; GAP-002 removed that bound, because registration is dispatchable now with no consent step and an open webhook creates platform accounts against strangers' numbers. Setting it means setting it on the automation layer too.
 - **`/connect` reads the sender from the CONTEXT, never the payload.** The controller puts `wa_phone_id` / `chat_id` there from the webhook's own fields; the payload is caller-supplied and carries cosmetic name/handle only. The deleted `link` command read `payload.wa_data.wa_phone_id`, which is the same trust mistake one layer down. Source-scanned.
 - **The reply is RETURNED, not sent.** The command result carries `message` and the automation layer relays it. Sending from here would mean two outbound APIs, two failure modes, and a code minted whether or not anyone received it. It is also the one piece of outbound copy in this service that is **English only** — localisation reads `preferred_language` off a role entity, and at `/connect` time there is no account to read.
 - **`CONNECTION_CODE_EXPIRED` and `CONNECTION_CODE_INVALID` are different answers**, and the key TTL is what buys that: it is validity **plus a grace window**, with `expiresAt` in the record deciding redeemability. A store whose TTL *is* its validity can only ever say "invalid", which is the wrong thing to tell the common failure (a slow user). The bounded cost is a small oracle, accepted here because the code names no account — contrast `AUTH_RESET_TOKEN_INVALID`, which stays undifferentiated because a reset token does.
@@ -1995,6 +2103,348 @@ it drives the real store against a fake Redis) and `npm run verify:messaging-log
 Redis + Mongo — it boots the app in-process, redeems over real HTTP, and proves a bot-minted
 reset token really changes a **vendor's** password and that the old one stops working).
 
+### The curated bot surface (`src/modules/bot-surface/`) — GAP-001
+
+**The door the automation layer acts through**, and the only way anything can act *as a
+customer* without holding a customer session. Forty-five named operations at
+`/api/internal/bot/*`, each delegating to the same service the customer API calls, with a
+customer id the backend resolved from a **messaging identity**. Contract:
+`api-doc/n8n/bot-surface.md`; the plan it was built from is `api-doc/n8n/BACKEND-GAPS.md`
+§ GAP-001.
+
+**Not a proxy and not a session mint**, and the second is the load-bearing half. A route
+forwarding arbitrary paths would make whatever the customer API grows next reachable from a
+chat window with no decision taken. And **no customer bearer token is ever issued** — a
+passwordless customer has no session-revocation path at all (`password_changed_at` is this
+service's only lever and they have never set it), so a compromised automation layer must not
+be able to hold customer sessions. `test:bot-surface` scans the module for `issueTokenPair`,
+`setAuthCookies` and the login-session store.
+
+⚠ **TWO credentials guard it, not one.** `INTERNAL_SERVICE_TOKEN` *and* `BOT_WEBHOOK_SECRET`.
+A leaked service token already opens the agent and shipment surfaces; it must not also open
+every customer's cart, orders and addresses. The two secrets are held by different parts of
+the deployment and rotate on different schedules.
+
+⚠ **The identity is never a parameter.** No route takes a `customerId`, a `userId` or a
+token; the envelope is `.strict()`, so one sent anyway is a **400** rather than a silently
+stripped field. That is the rule `/connect` already enforces — the deleted `link` command let
+a caller name somebody else's number, and on a surface reaching carts and addresses a
+caller-supplied identity is account takeover rather than a leak.
+
+**It REUSES `LoginIdentityResolver` rather than reimplementing it**, which is what keeps the
+E.164 repair from being got wrong a second time: `wa_phone_id` arrives as bare digits while
+`login_phone` is strict E.164, and a hand-rolled `findByPhone(externalId)` here would match
+NOTHING, FOR EVERY USER, while looking perfectly implemented. Resolution binds the identity on
+success (as `/login` does) and binds nothing on a refusal.
+
+Five things are load-bearing:
+
+- **One route TABLE, four consumers** (`domain/bot-route-table.ts`, which imports *nothing*).
+  The router mounts from it, the idempotency guard reads its `mutating` column, `maintenance-
+  mode.ts` reads it to tell a bot read from a bot write, and `test:bot-surface` asserts it
+  against `api-doc/n8n/tools/catalog.json` row for row. A hand-kept list in any of the four
+  drifts from the other three, invisibly. Two guards run at IMPORT and refuse to boot: a
+  shadowed route (`/orders/:orderId` above `/orders/list` — this service has been bitten by
+  route order twice) and a handler registry that is not closed in both directions.
+- **`Idempotency-Key` is REQUIRED on every mutating route**, and `POST /checkout` is why: it
+  is not idempotent underneath, so a retried chat message creates a second set of orders and a
+  second thirty-minute stock hold. The record is scoped to `(resolved identity, key, request
+  fingerprint)` — a key reused for a *different* request is refused rather than answered — and
+  **only a 2xx is stored**, so a 422 releases the key and the caller may retry it.
+  ⚠ **This guard FAILS CLOSED**, unlike `FailOpenStore` and `withWorkerLock`. Their absence
+  costs one window of allowance or one overlapping sweep; this one's costs a second set of
+  orders on a money path, at exactly the moment retries are most likely.
+- **Every route is a POST, a PATCH or a DELETE — never a GET.** The identity envelope is a
+  body, and a messaging identifier in a query string is a real person's phone number written
+  into every access log on the path. ⚠ That is also why `readonly` maintenance needed its own
+  branch: this surface's *reads* are POSTs, so the ordinary safe-method rule refuses all of
+  them, and a window meant to leave reads working would 503 "where is my order?".
+- **Coordinates never leave the backend (GAP-005).** `/geo/search` returns an opaque
+  single-use `candidateRef` and `POST /addresses` takes only that. Two reasons, and the second
+  has already cost this platform something: a machine that can build a `geo` object can build a
+  wrong one, and **a null inside the 2dsphere-indexed saved-address array makes the whole
+  customer document unwritable**. The builder writes no `location` key at all.
+- **`codCollections[].deliveryCode` is stripped from BOTH order reads.** It is a payment
+  credential — what the customer hands the agent to prove they paid — and on the customer API
+  it rides along because a browser is showing it to its owner. Here it would land in a model's
+  context on every "where is my order?". Disclosure happens once, through the dedicated
+  `/orders/:orderId/cod-code`. GAP-001 named only the group read; both are built by the same
+  projection, so closing one alone would have been pointless.
+
+⚠ **ONE Redis database, `BOT_SURFACE_DB` (10)**, holding both stores behind key prefixes —
+`bot:idem:*` (24 h) and `bot:geo:*` (30 min) — and **prefix-only** in the flush policy, because
+a whole-database flush would take the duplicate-checkout guard along with the harmless half.
+That merge is a concession forced by the index budget (5–15, eleven slots), not the rule; the
+reasoning and the two pre-existing defects it surfaced — `RECOMMENDATION_CACHE_DB = 16` above
+the ceiling with a cache that had never run, and `EMAIL_VERIFY_DB = 3` colliding with
+wi-admin — are in `infra/redis/redis.factory.ts` and in the Redis section above.
+
+**Two gaps beside it are still OPEN and the surface is usable without them:** GAP-006 (rate
+limiting — the automation layer is a single IP for every customer and Layer A is IP-scoped at
+1200/min) and GAP-007 (a per-tool audit trail).
+
+#### Support routing (GAP-004, 2026-08-26)
+
+`POST /support/context` — **who the customer should be talking to.** Contract:
+`api-doc/n8n/bot-surface.md` § 12. Code: `services/support-context.service.ts`.
+
+⚠ **The one route on this surface that COMPOSES rather than delegates**, and the exception is
+the point: every input already existed (the store's contacts, the order list, the shipment's
+agency), but the *ladder that joins them* existed nowhere — so it lived in n8n, in three
+round-trips, as a routing policy nobody could test. That is what GAP-004 was on the list for.
+Every fact still comes from an existing repository; only the order of consultation is new.
+
+Four things are load-bearing:
+
+- **The rungs are not filtered by `scope`.** The subject resolves first (hint order → hint
+  product → most recent order → most recently viewed → `recentProductCode` → nothing) and the
+  scope narrows the answer afterwards. `scope: 'agency'` against a product is a legitimate
+  `409 BOT_SUPPORT_SCOPE_UNAVAILABLE`, never a reason to climb on looking for *some* order —
+  that would answer about a purchase the customer is not looking at.
+- **The two refusals answer different questions, and neither is reachable from `auto`.**
+  404 `BOT_SUPPORT_NO_CONTEXT` is "nothing to route from at all"; 409 is "there is a subject
+  and this party does not exist for it". `auto` and `platform` end at GAP-004's own last rung
+  — *nothing → platform only* — because a customer who says "I need help" having never
+  ordered should be offered a ticket, not told nothing was found. The spec's error table and
+  its ladder contradicted each other here; both are true now, on different requests.
+- ⚠ **The delivery company is read from the order's SHIPMENTS, never from
+  `items[].delivery.agency_id`.** The item carries an agency from checkout onward, but
+  `GET /api/customer/orders/:orderId/shipments` is the only place this platform has ever
+  disclosed which agency carries a parcel. Reading the item would make this the first door to
+  name one the customer has not been told about — and one that reassignment can still change.
+- **A hint that does not resolve is REFUSED** (`ORDER_NOT_FOUND` / `CATALOG_PRODUCT_NOT_FOUND`),
+  never fallen through to the recency ladder. The reply names its own subject, so a
+  fall-through produces a confident sentence about the wrong thing — which is what
+  `must_echo` exists to prevent. `hintOrderId` takes an order NUMBER as well as an id, and
+  wins over `hintProductId`.
+
+The ladder is unit-tested DB-free because every fact it reads comes from an injected port
+(`test:bot-surface` § 9) — the policy is the deliverable, so the policy is what is pinned.
+
+#### Registration on first contact (GAP-002 + GAP-011, 2026-08-26)
+
+**GAP-002 is BUILT**, and two of its five written design decisions were **reversed by the
+product owner** in the process. Contract: `api-doc/n8n/bot-surface.md` § 11. Code:
+`services/bot-registration.service.ts` + `domain/bot-onboarding.ts`. Verified by
+`npm run verify:bot-registration` (73, NEEDS Mongo + Redis).
+
+**`POST /identity/sync` is called on EVERY inbound message** and upserts the customer from
+the messaging identity — there is no `identity/register` and no `consentToken`.
+`POST /identity/onboarding` then collects the profile one step at a time. Both are the only
+rows in the route table flagged **`anonymous`**, which is a new column: on those,
+`requireBotIdentity` resolves *softly* and hands the handler `caller: null` plus the raw
+envelope rather than refusing. That column exists because `requiresCustomerRole` could not
+serve as the seam — `identity_resolve_sender` is `false` there and must still refuse an
+unresolved sender.
+
+⚠ **D-2 reversed: there is no consent step.** The account is created silently on the first
+message. The written argument against that — creating an account is a durable act with a
+data-protection footprint — is unchanged and was accepted as a **cost**, not settled.
+
+⚠ **D-3 reversed: a business account IS upgraded.** A vendor, agency or agent messaging the
+bot acquires a customer role and profile instead of the `not_customer` refusal, via a third
+**`register` intent** on `LoginIdentityResolver` whose gate checks only that the account is
+active. **The consequence reaches outside this surface**: once that role exists,
+`resolveForLogin` succeeds for them, so the bot `/login` command mints them a customer
+session where it used to refuse. `/reset-password` still resolves against their real roles.
+
+**The checklist is STORED on `Customer.bot_onboarding`, not derived** — four ordered steps
+(`phone` → `name` → `email` → `address`), the first two required. Field presence cannot tell
+"not asked yet" from "asked, and they declined", so a derived checklist would ask a customer
+for their email on every message for the rest of the account's life. `phone` is first because
+an unbound Telegram `chat_id` has no account to record anything on, so the contact share is
+the only actionable step in that state. It is a **separate axis from `onboarding_step`**,
+which stays `max: 0` and still means "no dashboard onboarding".
+
+⚠ **A suspended account is REFUSED, never routed around.** Without that branch the
+"no account" fallthrough creates a *second* account the moment the first is suspended — an
+administrator's decision undone by the suspended person sending one message.
+
+**GAP-011 shipped with it: `BOT_WEBHOOK_SECRET` is now REQUIRED IN EVERY ENVIRONMENT** and
+`assertBotWebhookSecretConfigured()` refuses the boot without it. Registration is
+dispatchable with no consent step, so an open webhook creates platform accounts against
+strangers' phone numbers at scale.
+
+⚠ **GAP-002's own abuse bounds (3/hour per identity, 10/hour per address) are NOT built.**
+They were part of the consent step's safety case and the consent step is gone. GAP-006 is
+where they belong.
+
+#### `error.customerMessage` — the one envelope change
+
+**Every `/api/internal/bot/*` failure now carries a second message, written for the customer,
+in their language** (`domain/bot-error-copy.ts`; `en · fr · pt · es · ar`). Added at the
+product owner's request 2026-08-26, and the premise it corrects is written into
+`DEFAULT_ERROR_MESSAGES`' own bot block: that block says its copy is for the AUTOMATION LAYER
+because n8n turns an outcome into words. **n8n has no copy table and no translator** — it can
+relay a string. So an error whose only human-readable half is *"No platform account is bound
+to this messaging identity"* reaches a customer as that sentence or as nothing.
+
+Four properties:
+
+- **It is ADDED, never a replacement for `message`.** Two audiences, two strings — an
+  operator reading *"Something went wrong. Please try again."* in an incident has been told
+  nothing.
+- **Always present, for all 541 codes.** Per-code copy exists only where being specific
+  changes what the customer *does*; everything else falls back to a sentence keyed on the
+  nine-value **category**, which is derived and always present. There is no path by which a
+  raw code reaches a chat window.
+- **The language is stamped on `req.bot` while the request is still HEALTHY** — from
+  `preferences.language`, or the envelope's hint before an account exists. Resolving it in
+  the error handler would mean a database query on the failure path, at the moment the
+  database is the most likely thing to be broken.
+- **Absent off the bot surface.** The four dashboards ship their own localised copy and
+  branch on `code`; a server-chosen sentence would be a second source of truth for wording
+  they already own.
+
+A half-translated entry **refuses the boot** (`assertBotErrorCopyComplete()`), the same
+completeness assert the four notification stacks run.
+
+#### `reply` — the channel-ready request body (2026-08-26)
+
+**Every bot response now carries a top-level `reply: { channel, method, body }`** — the
+complete Telegram / WhatsApp Cloud API request body, which the automation layer POSTs
+unmodified. Contract: `api-doc/n8n/bot-surface.md` § 14. Code:
+`domain/channel-reply.ts` (the renderer) + `domain/bot-chrome-copy.ts` (button labels) +
+`middlewares/bot-reply.middleware.ts` (the interceptor).
+
+**It is the THIRD time the same false premise has been corrected**, and that is the thing to
+notice. `error.customerMessage` moved failure copy server-side; `next.prompt` moved question
+copy; this moves the *request*. Each was reported as a defect, each rested on
+*"the automation layer will handle the presentation"*, and n8n has no copy table, no
+translator and no reason to know WhatsApp's twenty-character button cap.
+`ARCHITECTURE.md`'s "PLATFORM RENDERER … the ONLY place platform-specific code lives" is
+amended, not deleted: the box was right about the shape, wrong about the address.
+
+Six properties:
+
+- **Top-level, a sibling of `data`/`error`, on success and failure alike** — so one n8n
+  expression serves every response. Nested beside the copy it renders would have cost a
+  branch per shape, and `/geo/search` returns a bare array with nowhere to nest.
+- **Absent, never null, when the platform has nothing to say.** The common case is a
+  finished onboarding checklist: that turn belongs to the model answering what the customer
+  actually asked, and a cheerful "all done!" would talk over it.
+- ⚠ **`method` is a PATH SEGMENT** appended to a base URL the caller holds
+  (`…/bot<TOKEN>` · `…/v18.0/<PHONE_ID>`) — which is why no token, phone-number id or API
+  version appears in any response body. It also makes `sendPhoto` a new value rather than a
+  new n8n branch.
+- **The recipient is `identity.externalId` and there is no parameter for it**, so this
+  cannot become a send-to-anyone primitive on a surface reachable with a service token.
+- ⚠ **`attachBotReply` is mounted TWICE** — above `requireBotIdentity` (that guard refuses by
+  throwing, and `next(error)` skips everything below it) and below `botIdempotency` (the last
+  `res.json` wrapper installed runs first, so this is what puts `reply` in the body *before*
+  the idempotency guard captures it). Dropping either mount is silent: the first loses every
+  identity refusal, the second replays a 200 with nothing to send. Pinned by source scan.
+- ⚠ **`requireBotIdentity` now stamps `req.bot` BEFORE resolving**, which fixed a
+  pre-existing hole: `service.resolve` throws, so the three identity refusals
+  (`BOT_IDENTITY_UNRESOLVED` · `NEEDS_CONTACT` · `NOT_CUSTOMER`) carried **no
+  `customerMessage` either** despite the copy table having an entry for each. So
+  `BOT_IDENTITY_NEEDS_CONTACT` — whose copy says *"tap the button below"* — answered with an
+  English operator sentence and no button.
+
+Scope is deliberate: prompts, every error, the geo picker, the pay-link CTA. Carts, orders
+and products stay **data for the model to narrate**. Covered by `test:bot-surface` § 11 (the
+renderer, every branch, no DB) and `verify:bot-registration` § 9 (the wiring, over real
+HTTP — a renderer nothing calls is the shape of the defect this closed).
+
+##### ⭐ A determined answer is a BUTTON, never a typed word (2026-08-27)
+
+**The rule for every turn built from here on: if the set of valid answers is known in
+advance — skip · yes · no · which of these · which payment method — render buttons and put
+a token in the id. Free text is only for what nobody but the customer can supply.**
+Vocabulary and builders: `domain/bot-action-id.ts`.
+
+The reason is parsing, not ergonomics. The email prompt used to end *"just say \"skip\" if
+you would rather not"*, so a French customer typed *« passer »*, a Portuguese one `saltar`,
+an Arabic one `تخطٍّ` — and something on the path back had to know five spellings of one
+intent, **in the layer with no copy table**. It also forced the prose to teach an interface
+instead of asking a question, and made `Skip`, `skip.` and `Passer !` three strings for one
+meaning. A button fixes all three at once: **the label is translated, the id is not.**
+
+- **Token shape is `<verb>:<argument>`**, self-describing because a tap arrives with no
+  memory of the turn that produced it (the automation layer is stateless between turns by
+  design). One verb today, `skip:<step>` → `{ step, action: 'skip' }`.
+- ⚠ **Adding a verb means documenting its token → request-body mapping in
+  `api-doc/n8n/bot-surface.md` § 14.6 in the same change.** A token nobody can map is a
+  button that does nothing, and Telegram reports no error for an unhandled callback.
+- ⚠ **A geo picker row carries NO verb** — its id is the bare `candidateRef`. Deliberate,
+  and the same rule taken further: the ref *is* the value to post back, so the caller
+  forwards what it received and transforms nothing. Refs self-identify (`gc_`).
+- **`BotReplyIntent` grew `actions?` on the `text` kind** rather than a new intent. `choice`
+  still means *pick one of these and nothing else*; a skip is an action beside an open
+  question, and the customer may still type instead.
+- ⚠ **On WhatsApp actions are ALWAYS reply buttons, never a list** — a list hides its rows
+  behind a "Choose" tap, so the option would be invisible exactly while the customer is
+  deciding whether to answer or decline. A `choice` still picks its control by content.
+- ⚠ **Telegram cannot combine `inline_keyboard` with `remove_keyboard`** (`reply_markup` is
+  a union), so a reply carrying actions does not clear a lingering custom keyboard. Bounded:
+  the only one this service shows is the contact request, and the checklist order always
+  puts a plain `name` prompt between it and the first action turn.
+
+Three copy rules moved with it and one was **reversed**: `bot-onboarding-copy.ts` used to
+require that a skippable step's prompt SAY it is skippable, and `test:bot-surface` asserted
+that word was present. Both are inverted — the prompt is a plain question, and the test now
+fails if any skippable prompt in any language contains a skip vocabulary again.
+
+#### Proactive messaging and the card page (GAP-012 + GAP-008, 2026-08-26)
+
+Three routes: `messaging/window`, `messaging/notify`, and `payments/:id/pay-link`. Contract:
+`api-doc/n8n/bot-surface.md` § 13 and `api-doc/payments/README.md`.
+
+⚠ **The gap was NOT the window/template machinery, which had worked all along.**
+`customer-notification-event-handler.service.ts` has branched free-form-vs-template on
+`WhatsappService.canSendFreeMessage` since the customer stack shipped. Three other things
+were wrong, and the first is the one that made every template unreachable:
+
+- **A bot-registered customer had NO notification channel enabled.** `emailEnabled`,
+  `telegramEnabled` and `whatsappEnabled` all default to **false**, and GAP-002's
+  registration seeded none of them — so a customer created from a WhatsApp conversation got
+  an in-app row and a push to a device token they do not have, and nothing on the channel
+  they were writing from. `BotRegistrationService.seedNotificationChannel` now points them
+  at the channel they arrived on, on the two paths that CREATE a profile and never on the
+  backfill branch. Best-effort and self-catching: a preference is not worth failing a
+  registration over.
+- **`ticket.*` had no subscriber**, so "your support request was answered" reached nobody on
+  any channel. Three situations now exist — `ticket.replied`, `ticket.awaiting_customer`,
+  `ticket.resolved` — and `customerTicketSituationFor` is the pure policy (five of the eight
+  statuses stay silent; `waiting_on_admin` and friends mean "somebody else has it"). ⚠ The
+  gate that decides whether a ticket is a customer's is **`created_by_role`**, never "does
+  this user have a customer profile" — since the D-3 reversal every bot user has one, so the
+  weaker test would put a vendor's payout thread in their customer inbox.
+- **None of the 18 `customer_*` templates were documented**, which is the same as not
+  existing: an unapproved template fails on send and one nobody wrote down never gets
+  approved. All 22 are now in `api-doc/notifications/whatsapp-templates.md` § 13, and
+  `test:customer-notifications` fails if a situation is added without approval copy.
+
+  ⚠ **That pass surfaced a defect that is NOT fixed.** Five situations' `bodyParams` do not
+  cover their own copy — the missing placeholder is mid-sentence, so the approved body cannot
+  say what the in-window sentence says, and `booking.balance.due` stripped down to a claim
+  that is untrue about the money. Each carries a hand-written body and a ⚠ note. Widening
+  those five is a Business Manager operation and was deliberately not done blind from here.
+
+**`messaging/notify` takes a SITUATION from a closed set, never a message**, and the set has
+**one** member. A free-text route could send nothing at all outside the service window —
+which is the only situation it would be reached in — and would make ARCHITECTURE § 12's "no
+proactive marketing" unenforceable by anything but good intentions. Everything else proactive
+is a consequence of something the platform did, so the platform raises it itself.
+
+**The card page (GAP-008) is the backend half only** — the page is frontend work and is not
+in this repository. `payments/domain/pay-link.ts` holds the rules; three are load-bearing:
+
+- **An opaque handle, not the transaction id.** Opening `GET /payments/:transactionId` up was
+  declined on that route's own argument — ids are the only thing between one customer and
+  another's payment record, so an unauthenticated read on them is walkable.
+- ⚠ **It lives on the transaction, not in Redis**, unlike every other opaque handle here. A
+  link sits in a chat and must survive a deploy, a Redis restart and an operator's **cache
+  flush**; the 5–15 index budget is full besides. Revocation is not lost — the read
+  re-derives its verdict from the live status, so a settled payment stops disclosing a client
+  secret whatever its link says, and a re-mint overwrites the previous handle.
+- ⚠ **Status is checked BEFORE expiry.** A customer who paid and comes back reads `settled`,
+  never `expired` — the second reading invites them to pay twice.
+
+`STRIPE_PUBLISHABLE_KEY` is read by this service now, and `.env.example` used to state the
+opposite in as many words. A value starting `sk_`/`rk_` is refused and logged rather than
+published.
+
 ### Key external integrations
 - **Google Calendar** — OAuth 2.0 with encrypted token vault (`src/modules/integrations/calendar/`)
 - **WhatsApp** — Meta Cloud API v18.0 (`src/modules/whatsapp/`) — outbound messaging + the bot webhook. Account connection is **not** here (see above)
@@ -2015,6 +2465,8 @@ reset token really changes a **vendor's** password and that the old one stops wo
 | geo-tracker integration seam | `src/modules/agents/ports/device-location.port.ts` |
 | Agent domain config (all eligibility assumptions) | `src/modules/agents/config/agent.config.ts` |
 | Article block vocabulary (the blog's security boundary) | `src/modules/blog/validators/article-body.validator.ts` |
+| The bot surface's route table (four consumers, imports nothing) | `src/modules/bot-surface/domain/bot-route-table.ts` |
+| The bot surface's identity resolution + refusal table | `src/modules/bot-surface/services/bot-identity.service.ts` |
 | Error factory & AppError class | `src/core/errors.ts` |
 | Error code registry | `src/core/error-codes.ts` |
 | Base repository | `src/core/repositories/base.repository.ts` |

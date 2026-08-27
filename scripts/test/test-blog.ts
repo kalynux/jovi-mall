@@ -502,6 +502,48 @@ assert('metaTitle is present once set', () => {
 assert('wordCount comes from the translation being served', () => summary.wordCount > 0);
 assert('the author is resolved inline, not by id alone', () => summary.author?.name === 'The WiMall team');
 
+/**
+ * ⚠ **The cover's alt text is PER-LOCALE, and these assertions mirror wi-admin's.**
+ *
+ * `test:content` § 7 there holds the matching set — same input, same expected projection —
+ * the way § 2b above mirrors its block union. The stored `IArticleCover` carries no `alt`;
+ * this projection reassembles `{ url, alt, width, height }` from the translation being
+ * served, which is what kept the change invisible to the marketing frontend.
+ */
+const COVER = { url: '/covers/getting-paid.jpg', width: 1600, height: 900 };
+const covered = makeArticle({
+  cover: COVER,
+  translations: [
+    translation({ cover_alt: 'A market stall taking a mobile payment' }),
+    translation({
+      locale: 'fr',
+      slug: 'se-faire-payer-sur-whatsapp',
+      cover_alt: 'Un étal acceptant un paiement mobile',
+    }),
+  ],
+} as unknown as Partial<IArticle>);
+
+const enCover = toPublicArticleSummaryDto(covered, covered.translations[0], author).cover;
+const frCover = toPublicArticleSummaryDto(covered, covered.translations[1], author).cover;
+
+assert('the public cover still carries url, alt, width and height', () =>
+  JSON.stringify(Object.keys(enCover ?? {}).sort()) === JSON.stringify(['alt', 'height', 'url', 'width']));
+assert('the cover alt is the one written for the language being served', () =>
+  enCover?.alt === 'A market stall taking a mobile payment'
+  && frCover?.alt === 'Un étal acceptant un paiement mobile');
+assert('both languages share the one image', () => enCover?.url === frCover?.url);
+
+// Unreachable from this route — wi-admin refuses to publish a live language whose cover has
+// no alt — so this pins the DEFENSIVE branch: never blank, never the wrong language.
+assert('an unwritten alt falls back to the title in that same language, never to blank', () => {
+  const bare = makeArticle({
+    cover: COVER,
+    translations: [translation({ cover_alt: null })],
+  } as unknown as Partial<IArticle>);
+  const dto = toPublicArticleSummaryDto(bare, bare.translations[0], author);
+  return dto.cover?.alt === bare.translations[0].title && dto.cover?.alt !== '';
+});
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

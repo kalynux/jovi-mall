@@ -140,3 +140,18 @@ export const PublicProductSlugsParamSchema = z.object({
 
 /** `GET /api/public/stores/:slug` and `…/:slug/products` both key on this. */
 export const PublicSlugParamSchema = z.object({ slug: StoreSlugSchema });
+
+/**
+ * `GET /api/public/variants/by-sku/:sku` (GAP-003).
+ *
+ * **Bounded and trimmed, and deliberately not pattern-matched.** `ProductVariant.sku` carries
+ * no schema regex — it is whatever a vendor typed — so a pattern here would refuse codes that
+ * legitimately exist and are printed on real packages. What matters is the cap: the value
+ * reaches an `$in` on an indexed field as an exact string, never a regex, so length is the
+ * only bound that has anything to do.
+ *
+ * 64 matches the catalogue's own `maxLength` for this tool.
+ */
+export const PublicSkuParamSchema = z.object({
+    sku: z.string().trim().min(1).max(64),
+});

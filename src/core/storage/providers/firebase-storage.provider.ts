@@ -28,6 +28,23 @@ export class FirebaseStorageProvider implements IStorageProvider {
     this.initializeFirebase();
   }
 
+  /**
+   * ⚠ **False, and this is a real gap rather than a note about an unused method.**
+   *
+   * `getDownloadStream` throws below, and it is the mechanism behind BOTH private-file
+   * paths on this platform — the digital-product download (`download-execution.service.ts`)
+   * and the delivery-proof download (`delivery-proof.service.ts`). So a deployment that
+   * switches `STORAGE_PROVIDER` to `firebase` breaks both, immediately, with a 501 that
+   * reads as an internal fault rather than as a missing capability.
+   *
+   * `getSignedUrl` IS implemented here, so the fix when somebody needs it is to serve
+   * those routes from a short-lived signed URL minted *inside* them — never one minted in
+   * `getPublicUrl`, which has no idea who is asking (see `storage.factory.ts`).
+   */
+  supportsDownloadStream(): boolean {
+    return false;
+  }
+
   getDownloadStream(key: string): Promise<NodeJS.ReadableStream> {
     throw createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 501, 'getDownloadStream is not implemented for Firebase Storage provider');
   }

@@ -221,9 +221,21 @@ async function main(): Promise<void> {
         return !key.toLowerCase().includes('njo') && !key.toLowerCase().includes('douala');
     });
 
-    assert('the key is versioned, so a shape change cannot read old values back', () =>
-        buildSearchKey('douala', ['cm'], 'fr', 5).startsWith('geo:s:v1:')
-        && buildReverseKey(4.05, 9.7, 4).startsWith('geo:r:v1:'));
+    /**
+     * ⚠ Asserts the SHAPE of the version segment, not the number.
+     *
+     * It pinned `v1` literally until 2026-08-26, and then failed the moment the version was
+     * bumped for the entity decoder — a red suite for a change that was correct, which is
+     * the shape of assertion that teaches people to edit tests without reading them. What is
+     * worth guaranteeing is that both key spaces carry a version at all, and that the two
+     * agree; which number it currently is belongs to `geocoding.cache.ts`.
+     */
+    assert('the key is versioned, so a content or shape change cannot read old values back', () => {
+        const search = buildSearchKey('douala', ['cm'], 'fr', 5);
+        const reverse = buildReverseKey(4.05, 9.7, 4);
+        const version = /^geo:s:(v\d+):/.exec(search)?.[1];
+        return version !== undefined && reverse.startsWith(`geo:r:${version}:`);
+    });
 
     console.log('\n── Reverse keys are coarse, or they never hit ──────────────────────────\n');
 
@@ -437,17 +449,17 @@ async function main(): Promise<void> {
     const redisSrc = read('src/infra/redis/redis.factory.ts');
 
     assert('the cache has its OWN database', () =>
-        /export const GEO_CACHE_DB = 15;/.test(redisSrc));
+        /export const CACHE_DB = 15;/.test(redisSrc));
 
     // 4 and 9 held the two pre-cutover account-linking mechanisms. ADR-A04 D-1 names them
     // explicitly: a stale key from a pre-cutover deployment must never be read back as an address.
     assert('it is NOT 4 or 9, which are retired', () => {
-        const match = redisSrc.match(/export const GEO_CACHE_DB = (\d+);/);
+        const match = redisSrc.match(/export const CACHE_DB = (\d+);/);
         return match !== null && match[1] !== '4' && match[1] !== '9';
     });
 
     assert('it is in the catalogue, so /system/cache and the flush policy can see it', () =>
-        redisSrc.includes("constant: 'GEO_CACHE_DB'"));
+        redisSrc.includes("constant: 'CACHE_DB'"));
 
     // ADR-A04 D-2 defers self-hosting until "the hit rate stops rising". That is a measurement.
     assert('the hit rate is measurable', () =>

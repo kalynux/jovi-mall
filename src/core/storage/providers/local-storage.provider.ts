@@ -79,6 +79,11 @@ export class LocalStorageProvider implements IStorageProvider {
     return `${this.config.baseUrl}/${normalizedKey}`;
   }
 
+  /** Implemented below, off the local filesystem. */
+  supportsDownloadStream(): boolean {
+    return true;
+  }
+
   async getDownloadStream(key: string): Promise<NodeJS.ReadableStream> {
     const filePath = path.join(this.config.basePath, key);
     const fs = await import('fs');

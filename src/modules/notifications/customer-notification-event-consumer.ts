@@ -61,6 +61,21 @@ export function initializeCustomerNotificationEventConsumers(): void {
     // to ignore the channel that matters.
     eventBus.subscribe('shipment.status_changed', handler.handleShipmentStatusChanged.bind(handler));
 
+    // ── Support requests (GAP-012) ──────────────────────────────────────────
+    // Both events have been published since the tickets module shipped and had NO
+    // subscriber at all — they were two of the 32 names that collapse to
+    // `eventBusPublishedTotal{event_type="unhandled"}`. The consequence was the row of
+    // GAP-012's table with no notification behind it: a customer who asked a question was
+    // never told it had been answered, on any channel.
+    //
+    // Both handlers filter hard and drop most of what they receive: only PUBLIC notes by
+    // somebody other than the customer, and only three of the eight statuses. A ticket
+    // opened by a vendor, agency or agent is dropped outright — see `customerTicket`,
+    // which is where that gate lives and why it cannot be "does this user have a customer
+    // profile" since the GAP-002 D-3 reversal gave every bot user one.
+    eventBus.subscribe('ticket.note_created', handler.handleTicketNoteCreated.bind(handler));
+    eventBus.subscribe('ticket.status_changed', handler.handleTicketStatusChanged.bind(handler));
+
     console.log(
         `[CustomerNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`
     );

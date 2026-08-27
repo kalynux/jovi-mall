@@ -44,6 +44,7 @@
     "test:geocoding-cache": "ts-node scripts/test/test-geocoding-cache.ts",
     "test:geocoding-chain": "ts-node scripts/test/test-geocoding-chain.ts",
     "test:account-contact-change": "ts-node scripts/test/test-account-contact-change.ts",
+    "test:email-verification": "ts-node scripts/test/test-email-verification.ts",
     "test:clearable-validators": "ts-node scripts/test/test-clearable-validators.ts",
     "test:profile-mappers": "ts-node scripts/test/test-profile-mappers.ts",
     "test:contact-validation": "ts-node scripts/test/test-contact-validation.ts",
@@ -127,8 +128,12 @@
     "verify:connections": "node --max-old-space-size=4096 -r ts-node/register scripts/verify-connections-live.ts",
     "test:mobile-auth": "ts-node scripts/test/test-mobile-auth.ts",
     "test:messaging-login": "ts-node scripts/test/test-messaging-login.ts",
+    "test:bot-surface": "ts-node scripts/test/test-bot-surface.ts",
     "verify:messaging-login": "node --max-old-space-size=4096 -r ts-node/register scripts/verify-messaging-login-live.ts",
-    "verify:shutdown": "node --max-old-space-size=4096 -r ts-node/register scripts/test/verify-shutdown-live.ts"
+    "verify:bot-surface": "node --max-old-space-size=4096 -r ts-node/register scripts/verify-bot-surface-live.ts",
+    "verify:shutdown": "node --max-old-space-size=4096 -r ts-node/register scripts/test/verify-shutdown-live.ts",
+    "verify:bot-registration": "node --max-old-space-size=4096 -r ts-node/register scripts/verify-bot-registration-live.ts",
+    "test:geocoding-sanitize": "ts-node scripts/test/test-geocoding-sanitize.ts"
   },
   "keywords": [],
   "author": "",

@@ -8,6 +8,7 @@ import {
   AuthMeSchema,
   ForgotPasswordSchema,
   ResetPasswordSchema,
+  VerifyEmailSchema,
 } from './auth.schemas';
 import { passwordResetService } from './services/password-reset.service';
 import { setAuthCookies, clearAuthCookies } from '../../config/cookie.config';
@@ -129,11 +130,44 @@ export class AuthController {
     sendSuccess(res, result);
   });
 
+  /**
+   * `GET /auth/verify-email` — the LEGACY link, kept on purpose.
+   *
+   * ⚠ Do not delete it. Registration tokens live 24 hours (`EMAIL_VERIFY_EXPIRE`), so links
+   * minted before the deploy that moved the mail to the storefront page stay valid for a
+   * day after it. New mail points at that page, which POSTs to the sibling below.
+   *
+   * It is a `GET` that mutates, which is exactly why it is no longer what gets emailed —
+   * see the comment on `AuthService.sendEmailVerification`.
+   */
   static verifyEmail = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const { token } = req.query;
     if (!token || typeof token !== 'string') {
       return next(createAppError(ERROR_CODES.AUTH_VERIFY_TOKEN_INVALID, 400, 'Missing verification token'));
     }
+    const result = await authService.verifyEmail(token);
+    sendSuccess(res, result);
+  });
+
+  /**
+   * `POST /auth/verify-email` — spend the token deliberately.
+   *
+   * Same handler shape, same service call, different verb: the storefront page holds the
+   * token until a person acts, so a prefetcher cannot spend it first. That is the whole
+   * point of the pair, and it is the argument `PasswordResetService` and
+   * `ContactChangeController.confirmEmail` each make about their own tokens.
+   *
+   * Public, like its `GET` sibling — the token arrives from a mail client, routinely a
+   * different browser and often a different device, so requiring the session that started
+   * the verification would fail the flow for exactly the people it is for. The token is the
+   * credential and it names the account; this handler reads no `req.auth`.
+   *
+   * Both verbs inherit the `/auth` prefix's credential bucket (20/min/IP), which is what a
+   * bearer-secret spend should be counted against. `rate-limit/auth-paths.ts` is an
+   * allowlist, so **not** naming this route there is how it gets the strict counter.
+   */
+  static verifyEmailPost = asyncHandler(async (req: Request, res: Response) => {
+    const { token } = VerifyEmailSchema.parse(req.body);
     const result = await authService.verifyEmail(token);
     sendSuccess(res, result);
   });

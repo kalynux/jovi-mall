@@ -8,7 +8,22 @@ const router = Router();
 // ─── Public ──────────────────────────────────────────────────────────────────
 router.post('/register', AuthController.register);
 router.post('/login', AuthController.login);
-router.get('/verify-email', AuthController.verifyEmail);
+/**
+ * Registration email verification — TWO verbs on one path, and both must stay.
+ *
+ * The `POST` is what new mail reaches: the link now points at the storefront's
+ * `/verify-email` page, which holds the token until a person acts and then POSTs it here.
+ * The `GET` is a **mutating GET** and is therefore spent by anything that prefetches the
+ * mail; it is kept only because these tokens live 24 hours, so links minted before that
+ * deploy stay valid for a day after it. Same argument as `/email-change/confirm` below.
+ *
+ * Both are public — the token arrives in a mail client, which is routinely not the browser
+ * that registered — and both inherit the `/auth` prefix's credential bucket (20/min/IP),
+ * because each spends a bearer secret. `rate-limit/auth-paths.ts` is an allowlist, so not
+ * naming this path there is how it gets the strict counter rather than the session one.
+ */
+router.get('/verify-email', AuthController.verifyEmail);       // legacy links — keep
+router.post('/verify-email', AuthController.verifyEmailPost);  // what new mail points at
 
 /**
  * Forgotten-password recovery. Both public, and both must be.

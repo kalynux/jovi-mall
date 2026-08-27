@@ -170,14 +170,35 @@ Spend the token from the email and complete the change.
 > would fail the flow for exactly the people it is for. The token is the credential and it names
 > the account.
 >
-> It is a **POST**, unlike the older `GET /api/auth/verify-email`. Mail clients and chat apps
-> *prefetch* URLs to build preview cards, and a `GET` that mutates is spent by a crawler before
-> the person taps it. The emailed link therefore points at
-> **`<STOREFRONT_URL>/account/confirm-email?token=…`** — a page you serve, which reads the token
-> out of the query string and POSTs it here.
+> It is a **POST**, for the reason `POST /api/auth/verify-email` is one: mail clients and chat
+> apps *prefetch* URLs to build preview cards, and a `GET` that mutates is spent by a crawler
+> before the person taps it. The emailed link therefore points at a page you serve, which reads
+> the token out of the query string and POSTs it here:
+>
+> ```
+> <STOREFRONT_URL>/account/confirm-email?token=<64 hex>&app=<customer|vendor|agency|agent>
+> ```
 >
 > It sits under `/api/auth`, so it is bound by the **credential** rate-limit bucket
 > (20/min/IP) — see [rate-limits.md](../rate-limits.md).
+
+> [!NOTE]
+> **`app` names which app opened the change, and it is optional.**
+>
+> One page serves the storefront, both dashboards and the agent app, because this endpoint is
+> genuinely role-free: it reads no token of yours, resolves the account from the confirmation
+> token, and syncs the confirmed address onto **every** role profile the account holds. So the
+> response carries `{ email }` and no role — an account can hold several, and a `roles` array
+> would not identify one destination anyway.
+>
+> The only thing the page cannot work out for itself is **where to send the person afterwards**,
+> which is what `app` answers. It is stamped from the JWT by `PATCH /api/me/email` — the half of
+> the flow that has a session.
+>
+> **Treat it as a key, never a URL.** Map it through a compile-time table and ignore anything
+> else; this page is reachable with no session, so honouring a caller-supplied destination would
+> be an open redirect on the origin your sign-in pages live on. Links already in inboxes carry no
+> `app=`, so absence must be normal — fall back to your default destination.
 
 **Request**
 

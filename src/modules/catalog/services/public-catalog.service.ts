@@ -30,18 +30,22 @@ import { ProductRepositoryMongo } from '../repositories/mongo/product.repository
 import {
     publicCatalogRepository,
     PublicProductListRow,
+    PublicSkuResolutionRow,
     PublicStoreListRow,
 } from '../repositories/mongo/public-catalog.repository.mongo';
 import { resolveFileDetails } from '../read-models/file-detail.resolver';
 import { productImageKey, resolveProductImages } from '../read-models/product-image.resolver';
 import { FileDetail } from '../read-models/product-detail.read-model';
 import {
+    buildVariantDisplayName,
     PublicProductDetailDto,
     PublicProductListItemDto,
+    PublicSkuResolutionDto,
     toPublicCancellationPolicyDto,
     toPublicProductDetailDto,
     toPublicReturnPolicyDto,
 } from '../dto/public-product.dto';
+import { pickSkuMatch, skuCandidates } from '../domain/services/sku-resolution';
 import { PublicStoreDto, toPublicStoreDto } from '../../store/dto/public-store.dto';
 import { PublicProductListQuery, PublicStoreListQuery } from '../validators/public-catalog.validator';
 import { reviewAggregateRepository } from '../../reviews/repositories/review-aggregate.repository';
@@ -206,6 +210,79 @@ export class PublicCatalogService {
         const hit = await this.repo.findPublishableBySlugs(storeSlug, productSlug);
         if (!hit) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
         return this.buildDetail(hit.id, hit.vendorId);
+    }
+
+    /**
+     * `GET /api/public/variants/by-sku/:sku` — a printed product code → its variant (GAP-003).
+     *
+     * The gap this closes: `?q=` is a `$text` search over title, tags and description, and it
+     * does **not** index SKU — so a customer typing a code off a package matched nothing while
+     * looking like a search that had simply found nothing.
+     *
+     * ── THREE SPELLINGS, ONE INDEXED LOOKUP ─────────────────────────────────
+     * A code is typed by a person, from a package, on a phone keyboard that capitalises. So
+     * the as-typed value, its uppercase and its lowercase forms are tried **together**, in one
+     * `$in` on the unique index. The alternative — a case-insensitive regex — cannot use that
+     * index and turns every miss into a collection scan on an unauthenticated route.
+     *
+     * ⚠ **The as-typed spelling wins when more than one matches.** `abc` and `ABC` are two
+     * different SKUs as far as the unique index is concerned, so both can exist; answering
+     * with the one the customer actually typed is the only defensible rule, and it is stated
+     * here rather than left to the order a pipeline happened to return.
+     */
+    async resolveSku(sku: string): Promise<PublicSkuResolutionDto> {
+        const rows = await this.repo.findPublishableVariantsBySku(skuCandidates(sku));
+        const row = pickSkuMatch(rows, sku);
+        // Unknown, archived, draft, suspended, or a suspended vendor — one answer for all of
+        // them, exactly as the product reads do. See this file's header.
+        if (!row) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+
+        return {
+            productId: row.productId,
+            variantId: row.variantId,
+            sku: row.sku,
+            title: row.title,
+            variantName: await this.nameVariant(row),
+            price: row.price,
+            currency: DEFAULT_CURRENCY,
+            inStock: row.inStock,
+            store: { slug: row.storeSlug, name: row.storeName },
+        };
+    }
+
+    /**
+     * The variant's display name, resolving its option selection when it needs one.
+     *
+     * ⚠ **The two option queries run only when they can change the answer** — a vendor-set
+     * name wins outright, and a simple-mode variant carries no option values at all. So the
+     * common case (quick-add products, digital variants) costs nothing, and the two extra
+     * reads are paid only by a variant whose name genuinely *is* its selection.
+     *
+     * Naming itself is `buildVariantDisplayName`, shared with the product detail's variant
+     * list — one rule, so a variant is called the same thing on both surfaces.
+     */
+    private async nameVariant(row: PublicSkuResolutionRow): Promise<string> {
+        if (row.variantName || row.optionValueIds.length === 0) {
+            return buildVariantDisplayName(row.variantName, [], row.sku);
+        }
+
+        const options = await this.optionRepo.findByProduct(row.productId);
+        const values = options.length > 0
+            ? await this.optionValueRepo.findByOptions(options.map((o) => o.id))
+            : [];
+
+        const optionsById = new Map(options.map((o) => [o.id, o]));
+        const valuesById = new Map(values.map((v) => [v.id, v]));
+
+        const pairs = row.optionValueIds
+            .map((valueId) => {
+                const value = valuesById.get(valueId);
+                const option = value ? optionsById.get(value.optionId) : undefined;
+                return option && value ? { optionName: option.name, value: value.value } : null;
+            })
+            .filter((pair): pair is { optionName: string; value: string } => pair !== null);
+
+        return buildVariantDisplayName(null, pairs, row.sku);
     }
 
     /**

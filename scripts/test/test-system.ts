@@ -36,12 +36,11 @@ import {
     WA_WINDOW_DB,
     SLOT_LOCK_DB,
     DOWNLOAD_TOKEN_DB,
-    TELEGRAM_WINDOW_DB,
+    BOT_SURFACE_DB,
     RATE_LIMIT_DB,
     CONNECTION_CODE_DB,
     LOGIN_CODE_DB,
-    GEO_CACHE_DB,
-    RECOMMENDATION_CACHE_DB,
+    CACHE_DB,
 } from '../../src/infra/redis/redis.factory';
 import { describeSchedule, WorkerSchedule } from '../../src/core/jobs/worker-schedule';
 import { withWorkerLock, SWEEP_SKIPPED, __resetWorkerLocksForTest } from '../../src/core/jobs/worker-lock';
@@ -495,21 +494,83 @@ assert('every exported *_DB constant appears exactly once in the catalog', () =>
     // policy states consequences per DATABASE, and "in-flight sign-ins fail" is not
     // "in-flight connections fail".
     //
-    // 15 and 16 are Phase 6's, and both are pure OPTIMISATION caches — the first two in
-    // this catalogue whose entire contents are recomputable, which is why neither is
-    // `destructive` in the flush policy. They are separate databases rather than two
-    // prefixes on one for the same reason 13 and 14 are: the blast radius is stated per
-    // database, and "the next few address searches re-ask a rate-limited provider" is not
-    // "the next few product pages recompute a strip".
+    // ⚠ TWO databases hold TWO THINGS EACH behind key prefixes, and both pairings are a
+    // CONCESSION rather than the rule — see the factory's note above the catalogue. The
+    // rule is one database per blast radius; what forced the concession is that this
+    // service may only assign 5–15 (Redis's ceiling of 16, minus the low indices wi-admin
+    // claims on a shared instance), which is eleven slots for thirteen things.
+    //
+    //   BOT_SURFACE_DB (10)  `bot:idem:` + `bot:geo:`   — was TELEGRAM_WINDOW_DB, which was
+    //                        reserved for a 24-hour window the Telegram Bot API does not
+    //                        have and was therefore never written to by anything.
+    //   CACHE_DB (15)        `geo:` + `related:`        — was GEO_CACHE_DB; `related:` came
+    //                        off the invalid DB 16, where its cache had never once run.
+    //
+    // What keeps the concession honest is that the flush endpoint takes a PREFIX, so each
+    // half stays independently clearable and each policy row states both radii rather than
+    // averaging them. `BOT_SURFACE_DB` is prefix-only for exactly that reason.
     const exported = [
         EMAIL_VERIFY_DB, WA_IDEMPOTENCY_DB, WA_WINDOW_DB,
-        SLOT_LOCK_DB, DOWNLOAD_TOKEN_DB, TELEGRAM_WINDOW_DB,
+        SLOT_LOCK_DB, DOWNLOAD_TOKEN_DB, BOT_SURFACE_DB,
         RATE_LIMIT_DB, WORKER_LOCK_DB, CONNECTION_CODE_DB, LOGIN_CODE_DB,
-        GEO_CACHE_DB, RECOMMENDATION_CACHE_DB,
+        CACHE_DB,
     ];
     return exported.every((db) => REDIS_DB_CATALOG.filter((row) => row.db === db).length === 1)
         && REDIS_DB_CATALOG.length === exported.length;
 });
+
+/**
+ * ⛔ Redis's `databases` defaults to 16, so the only valid indices are 0–15.
+ *
+ * Measured 2026-08-25 on the development Redis (`CONFIG GET databases` → 16, `SELECT 16` →
+ * `ERR invalid DB index`, and `CONFIG SET databases 32` → `ERR Unsupported CONFIG parameter`,
+ * because it is startup-only) and true of the compose stack, whose `redis:7-alpine` services
+ * carry no `command:` override. An index above the ceiling does not fail loudly: the
+ * connection opens, the `SELECT` errors, and callers that fail open — which the caches
+ * correctly do — degrade to "never cached" with no symptom at all. That is exactly what had
+ * happened to `RECOMMENDATION_CACHE_DB = 16`, whose cache had never run since 2026-08-21.
+ *
+ * The baseline is EMPTY now, and it should stay empty: everything is in range.
+ */
+const REDIS_DB_CEILING = 16;
+
+assert('no logical database is above the Redis default ceiling (0-15)', () => {
+    const over = REDIS_DB_CATALOG
+        .filter((row) => row.db >= REDIS_DB_CEILING)
+        .map((row) => `${row.constant}=${row.db}`);
+    if (over.length) console.error('     ↳ unreachable on a stock Redis:', over.join(', '));
+    return over.length === 0;
+});
+
+/**
+ * ⚠ And 0–4 are not this service's to assign either, whatever this file says about them.
+ *
+ * `wi-admin` claims `ADMIN_SESSION_DB = 1`, `ADMIN_RATE_LIMIT_DB = 2` and
+ * `PERMISSION_CACHE_DB = 3` on the SAME Redis whenever the two services share one — which the
+ * compose stack avoids by giving each its own instance, and which a developer machine does
+ * not: both `.env` files point at `redis://localhost:6379`. DB 0 additionally holds
+ * `InboundCalendarSyncService`'s per-vendor lock.
+ *
+ * `EMAIL_VERIFY_DB = 3` is a KNOWN, pre-existing collision with wi-admin's permission cache
+ * and is baselined here rather than moved: nothing reads the other's keys (both are exact
+ * gets), and moving it would invalidate every verification link in flight for a problem the
+ * separate-instance deployment already solves. Anything NEW below 5 is a mistake this catches.
+ */
+const CROSS_SERVICE_RESERVED = 5;
+const KNOWN_LOW_INDEX = ['EMAIL_VERIFY_DB'];
+
+assert('nothing new is assigned below 5, where wi-admin and DB 0 already live', () => {
+    const low = REDIS_DB_CATALOG
+        .filter((row) => row.db < CROSS_SERVICE_RESERVED)
+        .filter((row) => !KNOWN_LOW_INDEX.includes(row.constant))
+        .map((row) => `${row.constant}=${row.db}`);
+    if (low.length) console.error('     ↳ collides with wi-admin or DB 0:', low.join(', '));
+    return low.length === 0;
+});
+
+assert('the low-index baseline has no stale entries', () =>
+    KNOWN_LOW_INDEX.every((constant) =>
+        REDIS_DB_CATALOG.some((row) => row.constant === constant && row.db < CROSS_SERVICE_RESERVED)));
 
 assert('no two catalog rows share an index', () =>
     new Set(REDIS_DB_CATALOG.map((row) => row.db)).size === REDIS_DB_CATALOG.length);

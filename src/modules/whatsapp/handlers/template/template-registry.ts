@@ -168,12 +168,31 @@ export class TemplateRegistry {
             ['customer_booking_refund_pending', 3, true, 'Customer: refund being sent manually'],
             ['customer_order_created', 4, true, 'Customer: order placed'],
             ['customer_order_payment_received', 3, true, 'Customer: order payment received'],
+            // GAP-008 + GAP-012: the card payment page, delivered outside the service
+            // window. Its URL button carries `pay/{token}`, so approve the button with a
+            // dynamic URL suffix exactly as the order templates do.
+            ['customer_order_payment_link', 4, true, 'Customer: a card payment page is waiting'],
             ['customer_order_shipped', 3, true, 'Customer: order on its way'],
             ['customer_order_out_for_delivery', 1, true, 'Customer: order out for delivery today'],
             ['customer_order_delivered', 1, true, 'Customer: order delivered'],
             ['customer_order_delivery_failed', 1, true, 'Customer: delivery attempt failed'],
             ['customer_order_cancelled', 1, true, 'Customer: order cancelled'],
-            ['customer_order_refunded', 3, true, 'Customer: order refunded']
+            ['customer_order_refunded', 3, true, 'Customer: order refunded'],
+
+            // ── Customer support requests (GAP-012) ─────────────────────────
+            // The three proactive templates GAP-012 asked for by name: "a ticket
+            // gets an answer next week" is outside Meta's 24-hour service window
+            // by definition, so free-form text cannot carry it and these are the
+            // only way the answer reaches a WhatsApp customer at all.
+            //
+            // ⚠ `customer_ticket_resolved` takes TWO body params. The second is a
+            // whole sentence (`reopenLine`) rather than a value, because whether
+            // the customer may still reply depends on resolved-vs-closed and
+            // baking either wording into the approved body makes one of the two a
+            // lie. Approve it with {{2}} as a free sentence.
+            ['customer_ticket_replied', 1, true, 'Customer: their support request got a reply'],
+            ['customer_ticket_awaiting_customer', 1, true, 'Customer: their support request is waiting on them'],
+            ['customer_ticket_resolved', 2, true, 'Customer: their support request was resolved or closed']
         ];
 
         for (const [name, body, hasButton, description] of notificationTemplates) {

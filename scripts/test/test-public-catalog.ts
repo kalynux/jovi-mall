@@ -23,6 +23,7 @@ import {
     VENDOR_PUBLISHABLE_MATCH,
 } from '../../src/modules/catalog/domain/services/public-catalog.filter';
 import {
+    buildVariantDisplayName,
     isSellableVariant,
     variantInStock,
     priceRangeOf,
@@ -37,11 +38,16 @@ import {
 import { toPublicStoreDto } from '../../src/modules/store/dto/public-store.dto';
 import {
     PublicProductListQuerySchema,
+    PublicSkuParamSchema,
     PublicStoreListQuerySchema,
     ProductSlugSchema,
     StoreSlugSchema,
     ObjectIdSchema,
 } from '../../src/modules/catalog/validators/public-catalog.validator';
+import {
+    pickSkuMatch,
+    skuCandidates,
+} from '../../src/modules/catalog/domain/services/sku-resolution';
 import {
     toCustomerShipmentStatus,
     toCustomerStatusHistory,
@@ -604,6 +610,73 @@ assert('a failed → retried → delivered journey keeps BOTH failure and succes
         { status: 'delivered', changed_at: new Date('2026-07-31T11:00:00.000Z') },
     ]);
     return history.map((h) => h.status).join(',') === 'shipped,delivery_failed,shipped,delivered';
+});
+
+// ─── 7. SKU resolution (GAP-003) ─────────────────────────────────────────────
+
+console.log('\n── SKU resolution ──');
+
+assert('a SKU param is trimmed and bounded at 64 — the catalogue\'s own cap', () =>
+    PublicSkuParamSchema.parse({ sku: '  DRESS-WAX-M ' }).sku === 'DRESS-WAX-M'
+    && rejects(PublicSkuParamSchema, { sku: '' })
+    && rejects(PublicSkuParamSchema, { sku: 'x'.repeat(65) }));
+
+assert('⚠ a SKU is NOT pattern-matched — the model has no regex and vendors type what they like', () =>
+    accepts(PublicSkuParamSchema, { sku: 'DRESS/WAX 12.5_v2' })
+    && accepts(PublicSkuParamSchema, { sku: 'قميص-1' }));
+
+assert('the candidates are as-typed first, then upper, then lower', () =>
+    JSON.stringify(skuCandidates('Dress-Wax-M')) === JSON.stringify(['Dress-Wax-M', 'DRESS-WAX-M', 'dress-wax-m']));
+
+assert('an already-uppercase code produces TWO candidates, not three', () =>
+    skuCandidates('DRESS-WAX-M').length === 2);
+
+assert('a blank code produces none — never an unbounded query', () =>
+    skuCandidates('   ').length === 0);
+
+assert('⚠ the code the customer TYPED wins when two spellings both exist', () => {
+    // `abc` and `ABC` are two different SKUs to a case-sensitive unique index, so a
+    // catalogue can hold both. Answering with the other one is the failure this rule exists
+    // to prevent.
+    const rows = [{ sku: 'ABC-1' }, { sku: 'abc-1' }];
+    return pickSkuMatch(rows, 'abc-1')?.sku === 'abc-1'
+        && pickSkuMatch(rows, 'ABC-1')?.sku === 'ABC-1';
+});
+
+assert('a lone case-variant still resolves — that is why more than one spelling is tried', () =>
+    pickSkuMatch([{ sku: 'DRESS-WAX-M' }], 'dress-wax-m')?.sku === 'DRESS-WAX-M');
+
+assert('no rows is null, never a throw — the service decides the 404', () =>
+    pickSkuMatch([], 'anything') === null);
+
+assert('the typed value is trimmed before it is compared', () =>
+    pickSkuMatch([{ sku: 'A' }, { sku: 'a' }], '  a  ')?.sku === 'a');
+
+assert('a vendor-set variant name wins over its option selection', () =>
+    buildVariantDisplayName('Deluxe', [{ optionName: 'Size', value: 'M' }], 'SKU-1') === 'Deluxe');
+
+assert('with no name, the selection is spelled out', () =>
+    buildVariantDisplayName(null, [
+        { optionName: 'Size', value: 'M' },
+        { optionName: 'Colour', value: 'Red' },
+    ], 'SKU-1') === 'Size: M, Colour: Red');
+
+assert('with neither, the SKU is the name — a simple-mode variant has nothing else', () =>
+    buildVariantDisplayName(null, [], 'SKU-1') === 'SKU-1');
+
+assert('⚠ the product detail and the SKU resolution name a variant IDENTICALLY', () => {
+    // One rule, two surfaces. Two copies of the expression would drift the day somebody
+    // changes the separator, and a variant would be called different things on two screens.
+    const optionsById = new Map([['o1', { id: 'o1', name: 'Size' }]]);
+    const valuesById = new Map([['v1', { id: 'v1', optionId: 'o1', value: 'M' }]]);
+    const dto = toPublicVariantDto(
+        variant({ name: undefined, optionValueIds: ['v1'], sku: 'DRESS-WAX-M' }),
+        'XAF',
+        optionsById,
+        valuesById,
+        [],
+    );
+    return dto.name === buildVariantDisplayName(null, [{ optionName: 'Size', value: 'M' }], 'DRESS-WAX-M');
 });
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

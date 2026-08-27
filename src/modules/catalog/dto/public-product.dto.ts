@@ -412,6 +412,55 @@ export function toPublicCancellationPolicyDto(
     };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  SKU resolution (GAP-003)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * What a product code resolves to — `GET /api/public/variants/by-sku/:sku`.
+ *
+ * **Deliberately not a product card.** A SKU names one specific variant, which is very often
+ * not the default one a card quotes, so answering with a card would show the wrong price to
+ * the one customer who typed a precise code. It is a *resolution*: enough to say what the
+ * code is and what it costs, and the ids to fetch the full product with.
+ *
+ * It carries **no vendor id, no stock count and no option ids** — a client that needs the
+ * option picker is looking at the product, and `productId` is right there.
+ */
+export interface PublicSkuResolutionDto {
+    productId: string;
+    variantId: string;
+    /** The SKU as **stored**, not as typed — the two can differ in case. */
+    sku: string;
+    title: string;
+    variantName: string;
+    price: number;
+    currency: string;
+    /** A boolean, never a count — the same rule the rest of this file follows. */
+    inStock: boolean;
+    store: { slug: string; name: string };
+}
+
+/**
+ * What to call a variant, in one place.
+ *
+ * A vendor-set name wins; otherwise the selection is spelled out ("Size: M, Colour: Red");
+ * and a simple-mode variant with neither falls back to its SKU, which is at least something
+ * the customer can read back to a seller.
+ *
+ * Exported because **two** surfaces name a variant now — the product detail's variant list
+ * and the SKU resolution (GAP-003), which names exactly one. Two copies of this expression
+ * would drift the day somebody changes the separator, and the drift would show up as one
+ * screen calling a variant something the other does not.
+ */
+export function buildVariantDisplayName(
+    name: string | null | undefined,
+    options: ReadonlyArray<{ optionName: string; value: string }>,
+    sku: string,
+): string {
+    return name ?? (options.map((o) => `${o.optionName}: ${o.value}`).join(', ') || sku);
+}
+
 export function toPublicVariantDto(
     variant: Variant,
     currency: string,
@@ -437,9 +486,7 @@ export function toPublicVariantDto(
     return {
         id: variant.id,
         sku: variant.sku,
-        // A vendor-set name wins; otherwise build one from the selection ("Size: M, Colour:
-        // Red"), and fall back to the SKU for a simple-mode variant that has neither.
-        name: variant.name ?? (options.map((o) => `${o.optionName}: ${o.value}`).join(', ') || variant.sku),
+        name: buildVariantDisplayName(variant.name, options, variant.sku),
         price: variant.price,
         compareAtPrice: variant.compareAtPrice ?? null,
         currency,

@@ -7,6 +7,7 @@ import { NominatimProvider } from './providers/nominatim.provider';
 import { GeoapifyProvider } from './providers/geoapify.provider';
 import { LocationIqProvider } from './providers/locationiq.provider';
 import { ChainedGeocodingProvider } from './geocoding.chain';
+import { SanitizedGeocodingProvider } from './geocoding.sanitize';
 
 /**
  * Geocoding Provider Factory
@@ -27,8 +28,25 @@ import { ChainedGeocodingProvider } from './geocoding.chain';
 export function createGeocodingProvider(config: GeocodingConfig): IGeocodingProvider {
     const { provider } = config;
 
-    if (provider === 'chain') return buildChain(config);
-    return buildOne(provider, config, { required: true })!;
+    const built = provider === 'chain'
+        ? buildChain(config)
+        : buildOne(provider, config, { required: true })!;
+
+    /**
+     * ⚠ **Every provider leaves through this wrapper, and that is the point.**
+     *
+     * Providers return HTML-ESCAPED strings — a real LocationIQ result reads
+     * `"École Bilingue la Pouponnière d&apos;AKWA, …"` — because their data comes from
+     * OpenStreetMap. Untouched, that entity reaches a chat window, a delivery label and the
+     * stored `order.delivery_address` as literal text.
+     *
+     * Wrapping HERE rather than in each adapter is what makes it structural: this function
+     * is documented above as the only place provider selection happens, so a fourth adapter
+     * inherits the fix without its author knowing this exists. It is also INSIDE the cache
+     * (which `geocoding.instance.ts` wraps around this return), so Redis stores decoded
+     * values and the work happens once rather than on every read.
+     */
+    return new SanitizedGeocodingProvider(built);
 }
 
 /**

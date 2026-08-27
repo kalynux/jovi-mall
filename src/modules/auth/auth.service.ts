@@ -534,7 +534,33 @@ export class AuthService {
     const value = JSON.stringify({ userId, role });
     await redis.set(`email_verify:${token}`, value, { EX: EMAIL_VERIFY_EXPIRE });
 
-    const verifyLink = `${API_PUBLIC_URL}/api/auth/verify-email?token=${token}`;
+    /**
+     * ⚠ **The link points at the STOREFRONT PAGE, not at this API.**
+     *
+     * It used to be `${API_PUBLIC_URL}/api/auth/verify-email?token=…`, so no frontend was
+     * ever involved, and that had three live consequences: a person who clicked it got a
+     * **raw JSON envelope** in their browser — no page, no branding, no way onward, for
+     * customers, vendors, agencies and agents alike; it was a **`GET` that mutates**, so
+     * the token was spent by whatever prefetched the mail (link scanners, corporate
+     * relays, the mail client's own preview) before the person ever tapped it; and the
+     * landing app's `/verify-email` page had nothing pointing at it.
+     *
+     * `PasswordResetService.buildResetLink` and `buildEmailChangeLink` each argue the
+     * prefetch case at length; registration verification simply never got the same
+     * treatment. The page POSTs to `POST /api/auth/verify-email`, and the `GET` still
+     * answers for links already in inboxes — these tokens live 24 hours, so one minted the
+     * minute before a deploy stays valid for a day after it.
+     *
+     * `role` travels as `app=` for the same reason it does on the email-change link: one
+     * page serves four audiences, and only the half of the flow holding a session knows
+     * which one asked. It is a **role key, never a URL** — the page maps it through a
+     * compile-time table and ignores anything else.
+     *
+     * The `API_PUBLIC_URL` fallback keeps a local box working with no `STOREFRONT_URL`
+     * set — the same precedence `confirmLinkBase()` and `buildResetLink` use.
+     */
+    const verifyBase = (process.env.STOREFRONT_URL || API_PUBLIC_URL).replace(/\/+$/, '');
+    const verifyLink = `${verifyBase}/verify-email?token=${token}&app=${encodeURIComponent(role)}`;
 
     await this.mailService.send({
       to: email,

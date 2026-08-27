@@ -8,7 +8,13 @@ import { assertInternalAdminToken } from './config/internal-admin.config';
 import { assertExposedConfigSafe } from './modules/system/domain/exposed-config';
 import { assertUploadScannerSafe } from './core/uploads/scanners';
 import { loadUploadConfig } from './core/uploads/upload-config';
-import { reportBotWebhookGuard } from './api/middlewares/bot-webhook.middleware';
+import {
+    assertBotWebhookSecretConfigured,
+    reportBotWebhookGuard,
+} from './api/middlewares/bot-webhook.middleware';
+import { assertBotErrorCopyComplete } from './modules/bot-surface/domain/bot-error-copy';
+import { assertBotOnboardingCopyComplete } from './modules/bot-surface/domain/bot-onboarding-copy';
+import { assertBotChromeCopyFits } from './modules/bot-surface/domain/bot-chrome-copy';
 import { initAggregationScheduler } from './core/jobs/aggregation-scheduler';
 import { awaitWorkerLocksReleased, locksHeldInProcess } from './core/jobs/worker-lock';
 import { stopAllWorkers } from './modules/dev-tools/worker-registry';
@@ -111,12 +117,27 @@ export async function startServer(): Promise<Server> {
     // or `mock` in production (which is what a deploy gets by forgetting the variable, since
     // it is the default) — would boot cleanly and be discovered by a vendor. Refuse here.
     assertUploadScannerSafe(loadUploadConfig(), (message) => console.log(message));
-    // Reports rather than asserts, because the guard's unset behaviour differs by
-    // environment: production refuses every bot webhook, development leaves them open.
-    // Either way an operator should read it in the boot log rather than discover it —
-    // `/connect` mints a credential, so "are the bot webhooks authenticated?" is now a
-    // question with a security answer. See api/middlewares/bot-webhook.middleware.ts.
+    // ⛔ ASSERTS now, in EVERY environment (GAP-011). It used to only report, because the
+    // guard's unset behaviour differed by environment and an open dev webhook could at
+    // worst mint a connection code. GAP-002 made registration dispatchable with no consent
+    // step, so an open webhook creates platform accounts against strangers' phone numbers
+    // — which is not a development convenience. The report still runs, for the log line.
+    assertBotWebhookSecretConfigured();
     reportBotWebhookGuard((message) => console.log(message));
+    // Same shape as the notification catalogs' startup completeness assert, and for the
+    // same reason: a half-translated error message is invisible until a customer who reads
+    // that language hits that exact error, gets English, and tells nobody.
+    assertBotErrorCopyComplete();
+    // The same assert for the SUCCESS path. A step added to the checklist with no prompt
+    // would produce a `next` the automation layer cannot voice — which is exactly the defect
+    // this pair was added to close, arriving again by a different door.
+    assertBotOnboardingCopyComplete();
+    // And the same assert for the CHROME — button labels, list headings. It additionally
+    // checks each string against its channel's cap, which is the half worth having: a
+    // missing label is loud the first time somebody reads that language, while one two
+    // characters over WhatsApp's twenty is silent forever and arrives cut in half to
+    // exactly the customers who read Portuguese.
+    assertBotChromeCopyFits();
 
     // Database Connection
     //

@@ -136,7 +136,8 @@ A user can hold **multiple roles** and log in under any of them independently.
 | `GET` | `/auth/auth-me/:role` | Required | Restore session **and switch role** + re-issue cookies |
 | `POST` | `/auth/add-role` | Required | Add a second role to an existing account |
 | `POST` | `/auth/send-email-verification` | Required | Send email verification link |
-| `GET` | `/auth/verify-email` | Public | Confirm email via token link |
+| `POST` | `/auth/verify-email` | Public | Confirm email — **what the emailed page calls** |
+| `GET` | `/auth/verify-email` | Public | Legacy link. Still answered; no longer emailed |
 | `POST` | `/auth/forgot-password` | Public | Start a password reset. **Always answers 200** |
 | `POST` | `/auth/reset-password` | Public | Redeem a reset token and set a new password |
 | `POST` | `/auth/browser/login` | Public | Browser-namespace login (JSON only) — see below |
@@ -230,8 +231,8 @@ here: `phone` is the required registration field and `email` is optional, so an 
 reset would be undeliverable for a large share of this audience.
 
 The link points at `STOREFRONT_URL/reset-password?token=…` — the **storefront**, not this API,
-because a reset needs a form for the new password and only the frontend has one. (Contrast
-email verification, whose link is a `GET` this service answers directly.)
+because a reset needs a form for the new password and only the frontend has one. Email
+verification now works the same way — see `POST /auth/verify-email`.
 
 The token lives **30 minutes** and is single-use.
 
@@ -832,6 +833,26 @@ Sends a verification link to the email on the user's **current role entity**. Va
 
 **Auth**: Required
 
+### Where the link points
+
+```
+{STOREFRONT_URL}/verify-email?token=<64 hex>&app=<customer|vendor|agency|agent>
+```
+
+A **page**, not this API. It used to be `{API_PUBLIC_URL}/api/auth/verify-email?token=…`, so a
+person who clicked it got a raw JSON envelope with no branding and no way onward, and — worse —
+a `GET` that mutates is spent by whatever prefetches the mail (link scanners, corporate relays,
+the mail client's own preview) before the person ever taps it. The page holds the token and
+POSTs it when a human acts.
+
+`app` is the role that requested verification, taken from the JWT. **One page serves all four
+apps**, because confirming an email is role-free; the only thing it cannot work out for itself
+is where to send the person afterwards, so the origin travels in the link. It is a **role key,
+never a URL** — the page maps it through a compile-time table and ignores anything else.
+
+`STOREFRONT_URL` falls back to `API_PUBLIC_URL` when unset, which keeps a local box working —
+the same precedence the password-reset and email-change links use.
+
 ### Request Body
 
 None. The `userId` and `role` are read from the JWT.
@@ -852,9 +873,51 @@ None. The `userId` and `role` are read from the JWT.
 
 ---
 
-## GET `/auth/verify-email`
+## POST `/auth/verify-email`
 
-Confirms the email address. Called automatically when the user clicks the verification link.
+> Frontend hand-off for this change:
+> [FRONTEND-CHANGELOG-email-verification.md](../FRONTEND-CHANGELOG-email-verification.md).
+
+Confirms the email address. **This is what the emailed page calls.**
+
+**Auth**: Public — the token arrives in a mail client, routinely a different browser and often a
+different device, so requiring a session would fail the flow for exactly the people it is for.
+The token is the credential and it names the account.
+
+### Request Body
+
+```json
+{ "token": "abc123def456..." }
+```
+
+`.strict()` — an unknown key is a `400` on the whole request. Bounded at 512 characters, which
+is generous on purpose: the token is 64 hex characters, and a mail client that wraps a URL is a
+real thing, so a near-miss should be told the token is *invalid*, not that it is *malformed*.
+
+### Response `200`
+
+```json
+{ "success": true, "data": { "message": "Email verified successfully" } }
+```
+
+The token is valid for **24 hours** and is single-use. It marks `email_verified` on the role
+entity the verification was requested for, and **signs nobody in**.
+
+### Errors
+
+| `error.code` | Status | Cause |
+|---|---|---|
+| `AUTH_VERIFY_TOKEN_INVALID` | `400` | Unknown, expired **or already spent** — one code for all three |
+
+---
+
+## GET `/auth/verify-email` — legacy
+
+Identical behaviour, different verb. **No new mail points here.**
+
+It survives only because tokens live 24 hours, so links minted before the cutover stay valid for
+a day after it. Prefer the `POST` in every new client: this is a `GET` that mutates, so the token
+is spent by whatever prefetches the URL.
 
 **Auth**: Public
 
@@ -865,15 +928,6 @@ Confirms the email address. Called automatically when the user clicks the verifi
 | `token` | string | ✅ |
 
 **Example**: `GET /api/auth/verify-email?token=abc123def456...`
-
-### Response `200`
-
-```json
-{ "success": true, "data": { "message": "Email verified successfully" } }
-```
-
-The link is valid for **24 hours** and is single-use. It marks `email_verified` on the role
-entity the verification was requested for, and signs nobody in.
 
 ### Errors
 
@@ -1183,11 +1237,13 @@ AUTH_ACCESS_TOKEN_TTL=900                # 15 minutes in seconds
 AUTH_REFRESH_TOKEN_TTL=2592000           # 30 days in seconds
 AUTH_ABSOLUTE_SESSION_CAP=7776000        # 90 days in seconds — the sign-in ceiling
 
-API_PUBLIC_URL=https://api.example.com   # Builds the email-verification link (a GET this
-                                         #   service answers directly)
-STOREFRONT_URL=https://shop.example.com  # Builds the password-reset link AND the magic
-                                         #   sign-in link. Both point at a PAGE, never here.
-                                         #   Unset ⇒ the bot reply falls back to the code alone
+API_PUBLIC_URL=https://api.example.com   # FALLBACK ONLY for the three links below, so a local
+                                         #   box works with no STOREFRONT_URL set
+STOREFRONT_URL=https://shop.example.com  # Builds the password-reset link, the magic sign-in
+                                         #   link, the email-CHANGE confirmation link AND the
+                                         #   registration-verification link. All four point at
+                                         #   a PAGE, never here. Unset ⇒ the bot reply falls
+                                         #   back to the code alone
 
 WA_BOT_NUMBER=237600000000               # Bot deep links. Unset ⇒ the deep link is null;
 TELEGRAM_BOT_NAME=JoviMallBot            #   the flow still works for anyone who knows the bot

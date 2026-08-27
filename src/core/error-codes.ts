@@ -230,6 +230,27 @@ export const ERROR_CODES = Object.freeze({
      */
     PAYMENT_OTP_ATTEMPTS_EXCEEDED: 'PAYMENT_OTP_ATTEMPTS_EXCEEDED',
 
+    // ── The hosted card page (GAP-008) ────────────────────────────────────────
+    /**
+     * The link is malformed, unknown, or superseded by a newer one.
+     *
+     * ⚠ **One code for all three, deliberately.** Any difference between them is an oracle
+     * telling an anonymous caller whether their guess had the right shape or hit a real
+     * row — the same reasoning `MAGIC_CODE_INVALID` gives for collapsing four situations.
+     * An EXPIRED link is NOT this code: it resolves normally with `state: 'expired'`, so
+     * the page can offer a fresh one rather than claim the payment does not exist.
+     */
+    PAYMENT_LINK_NOT_FOUND: 'PAYMENT_LINK_NOT_FOUND',
+    /**
+     * A hosted page was asked for on a gateway that completes on the handset.
+     *
+     * 422 rather than 400: the request is well-formed and the refusal is a rule about
+     * mobile money, which needs no browser at all.
+     */
+    PAYMENT_LINK_NOT_APPLICABLE: 'PAYMENT_LINK_NOT_APPLICABLE',
+    /** A link was asked for on a transaction that is already settled, failed or cancelled. */
+    PAYMENT_LINK_NOT_PAYABLE: 'PAYMENT_LINK_NOT_PAYABLE',
+
     // ── NOTCHPAY / MYCOOLPAY ──────────────────────────────────────────────────
     // Raised at 5xx only, so `INTEGRATION_PREFIXES` files them as `external_service`
     // and the boundary replaces the message and drops `details`. That is deliberate:
@@ -359,6 +380,143 @@ export const ERROR_CODES = Object.freeze({
     USER_LOGIN_LINK_ROLE_UNSUPPORTED: 'USER_LOGIN_LINK_ROLE_UNSUPPORTED',
     /** The channel accepted the request and did not deliver. A 502, not a 400. */
     MESSAGING_DELIVERY_FAILED: 'MESSAGING_DELIVERY_FAILED',
+
+
+    // ── THE BOT SURFACE (`/api/internal/bot/*`, GAP-001) ──────────────────────
+    // The curated door the automation layer acts through. Nothing here is raised
+    // anywhere else, and nothing else is raised BY the identity guard — a caller
+    // reading `BOT_*` knows the refusal came from that surface's own door rather
+    // than from the delegate underneath it, which matters because everything
+    // underneath is an ordinary customer-API error the bot relays unchanged.
+    //
+    // ⚠ The identity refusals are deliberately SEPARATE from the `MAGIC_*` family
+    // even though both are produced by the same resolver. `MAGIC_*` describes a
+    // human redeeming a credential; these describe a machine that could not be
+    // told which human it is acting for. A client branches on them differently:
+    // one asks the person to try again, the other stops the flow.
+    //
+    // The resolver's `account_inactive` maps to the platform-wide
+    // `AUTH_ACCOUNT_SUSPENDED` rather than to a `BOT_*` code of its own — a
+    // suspended account is a fact about the account, not about this door.
+
+    /** No platform account for this messaging identity. `details.state` says which. */
+    BOT_IDENTITY_UNRESOLVED: 'BOT_IDENTITY_UNRESOLVED',
+    /** Telegram, first contact: the chat is anonymous until a contact is shared. */
+    BOT_IDENTITY_NEEDS_CONTACT: 'BOT_IDENTITY_NEEDS_CONTACT',
+    /**
+     * The account exists and holds no customer role — or this messaging identity
+     * belongs to a different account. Both are 403 and both are ONE code, because
+     * distinguishing them would tell a caller that some *other* account owns the
+     * number they are writing from.
+     */
+    BOT_IDENTITY_NOT_CUSTOMER: 'BOT_IDENTITY_NOT_CUSTOMER',
+
+    // ── Idempotency (GAP-001's "required, not optional") ──────────────────────
+    // `POST /checkout` is not idempotent underneath — a retry creates a second set
+    // of orders and a second stock hold — and chat transports retry. These three
+    // are what make a retry safe rather than expensive.
+    /** A mutating bot route was called with no `Idempotency-Key`. */
+    BOT_IDEMPOTENCY_KEY_REQUIRED: 'BOT_IDEMPOTENCY_KEY_REQUIRED',
+    /** The first call carrying this key has not answered yet. Retry shortly. */
+    BOT_IDEMPOTENCY_IN_PROGRESS: 'BOT_IDEMPOTENCY_IN_PROGRESS',
+    /**
+     * The record store could not be consulted, so the mutation was NOT attempted.
+     *
+     * ⚠ A separate code from the one above, and `test:errors`' census is what insisted on
+     * it: the two are raised at different statuses (503 vs 409) and therefore derive
+     * different categories (`external_service` vs `conflict`), which that scan refuses.
+     * It is the better shape anyway — "another call is in flight" is simply untrue when
+     * Redis is down, and a caller that reads it as a race would retry on the wrong cadence.
+     *
+     * The mutating bot routes fail CLOSED here rather than open. See
+     * `bot-idempotency.middleware.ts` for why this one guard's arithmetic runs opposite to
+     * the rate limiter's and the worker lock's.
+     */
+    BOT_IDEMPOTENCY_STORE_UNAVAILABLE: 'BOT_IDEMPOTENCY_STORE_UNAVAILABLE',
+    /**
+     * This key was already spent by a DIFFERENT request. Never a retry — a caller
+     * bug, and answering the stored response would be worse than refusing.
+     */
+    BOT_IDEMPOTENCY_KEY_REUSED: 'BOT_IDEMPOTENCY_KEY_REUSED',
+
+    /**
+     * A geo candidate handle is unknown, spent or stale (GAP-005).
+     *
+     * The remedy is always to re-run the search — NEVER to re-send held
+     * coordinates, which is the whole reason the handle exists.
+     */
+    BOT_GEO_CANDIDATE_EXPIRED: 'BOT_GEO_CANDIDATE_EXPIRED',
+
+    // ── Registration and onboarding (GAP-002) ─────────────────────────────────
+    // The account is created on the sender's FIRST message, with nobody asked
+    // first, so these four describe the only ways that can go wrong. None of them
+    // is reachable from an ordinary tool call — the two routes that raise them are
+    // the only rows in the table flagged `anonymous`.
+
+    /**
+     * The messaging identity is bound to one account and the phone number just
+     * proved belongs to a DIFFERENT one.
+     *
+     * Refused, never transferred, and it names neither account — the caller
+     * already knows the identity they are writing from and must not learn who
+     * else holds it. Same position `ConnectionService.redeemCode` takes on
+     * `MESSAGING_IDENTITY_ALREADY_LINKED`, and the same reason
+     * `BOT_IDENTITY_NOT_CUSTOMER` swallows `identity_taken`.
+     */
+    BOT_REGISTRATION_IDENTITY_TAKEN: 'BOT_REGISTRATION_IDENTITY_TAKEN',
+    /**
+     * An onboarding step other than `phone` was submitted for a sender who has no
+     * account yet.
+     *
+     * Only reachable on Telegram, where a `chat_id` maps to no phone number and
+     * therefore to no account: there is nowhere to record a name or an email until
+     * the contact share creates one. `phone` is first in the checklist precisely
+     * so a flow following `next` in order can never hit this.
+     */
+    BOT_ONBOARDING_NOT_REGISTERED: 'BOT_ONBOARDING_NOT_REGISTERED',
+    /**
+     * A REQUIRED onboarding step was skipped.
+     *
+     * Raised rather than ignored, because a flow that believes it skipped the
+     * phone number will never ask for it again — a silent no-op here is an account
+     * permanently stuck one step from complete, with nothing anywhere saying why.
+     * `next.skippable` on every response is what a correct caller reads instead.
+     */
+    BOT_ONBOARDING_STEP_NOT_SKIPPABLE: 'BOT_ONBOARDING_STEP_NOT_SKIPPABLE',
+    /**
+     * `action: 'provide'` with the step's own field absent.
+     *
+     * A shape rule that Zod cannot state, because which field is required depends
+     * on which step is named — the same reason the bargain-price min/max ordering
+     * check is not in Zod either. 400 rather than 422: it is the request that is
+     * malformed, not a business rule that refused it.
+     */
+    BOT_ONBOARDING_VALUE_REQUIRED: 'BOT_ONBOARDING_VALUE_REQUIRED',
+
+    // ── Support routing (GAP-004) ─────────────────────────────────────────────
+    // Two refusals, two different questions, and only a NAMED party scope can
+    // reach either — `scope: 'auto'` ends at the platform rung and answers 200.
+
+    /**
+     * There is nothing to route from at all: no hint was given, and this customer
+     * has never ordered, viewed a product, or had one recorded against them.
+     *
+     * 404 rather than 200-with-nulls because the caller asked for a specific
+     * party. `scope: 'auto'` never raises it — GAP-004's ladder ends "nothing →
+     * platform only", which is also the better answer to give somebody who said
+     * "I need help".
+     */
+    BOT_SUPPORT_NO_CONTEXT: 'BOT_SUPPORT_NO_CONTEXT',
+    /**
+     * There IS a subject, and the party asked for does not exist for it.
+     *
+     * Overwhelmingly `agency` against a product, or against an order whose
+     * parcels have not been created yet — an agency attaches to a shipment, not
+     * to a product, so this is a legitimate empty answer rather than a fault.
+     * Deliberately distinct from the 404 above: the remedy differs, since here
+     * the flow can offer the OTHER party it was told about.
+     */
+    BOT_SUPPORT_SCOPE_UNAVAILABLE: 'BOT_SUPPORT_SCOPE_UNAVAILABLE',
 
     // ── GOOGLE / INTEGRATIONS ─────────────────────────────────────────────────
     GOOGLE_MISSING_CLIENT_ID: 'GOOGLE_MISSING_CLIENT_ID',
@@ -1243,6 +1401,18 @@ export const ERROR_CODES = Object.freeze({
     STORAGE_DELETE_FAILED: 'STORAGE_DELETE_FAILED',
     STORAGE_QUOTA_EXCEEDED: 'STORAGE_QUOTA_EXCEEDED',
     STORAGE_CLEANUP_FAILED: 'STORAGE_CLEANUP_FAILED',
+    /**
+     * The configured `STORAGE_PROVIDER` cannot serve bytes at all — `firebase` and
+     * `cloudinary` both throw 501 from `getDownloadStream` (see
+     * `supportsDownloadStream()` on `IStorageProvider`).
+     *
+     * ⚠ **A CONFIGURATION state, not an incident**, which is the entire reason it is not
+     * `INTERNAL_SERVER_ERROR`. A caller must be able to say "this deployment cannot show
+     * private files" rather than "something went wrong" — the second sends an operator
+     * hunting an outage that does not exist. Raised at **409**, never 5xx, so the
+     * `business_rule` category carries that meaning through the envelope.
+     */
+    STORAGE_DOWNLOAD_NOT_SUPPORTED: 'STORAGE_DOWNLOAD_NOT_SUPPORTED',
 
     // ── CATALOG EXTENDED ──────────────────────────────────────────────────────
     CATALOG_DIGITAL_ASSET_ACCESS_DENIED: 'CATALOG_DIGITAL_ASSET_ACCESS_DENIED',

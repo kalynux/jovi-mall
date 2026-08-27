@@ -9,8 +9,12 @@ import { PublicArticleController } from '../controllers/public-article.controlle
  * ⚠️ There is **no `requireAuth`** on this router, the same as `public-billing.routes.ts`.
  * Every handler mounted here must be a read of data that is already published on a
  * marketing page. Nothing owner-scoped, nothing that reads `req.auth`, nothing that writes.
- * The editor's endpoints live on `/api/admin/articles` behind `requireRole(['admin'])`, and
- * a preview belongs there — never here behind a flag.
+ * The editor's endpoints live in **wi-admin**, at `/api/v1/content`, and a preview belongs
+ * there — never here behind a flag.
+ *
+ * ⚠ This said `/api/admin/articles` behind `requireRole(['admin'])` until 2026-08-25. That
+ * mount was deleted at the Phase 5 Part A cutover and there is no `admin` role left in this
+ * service's auth enums to guard it with. `modules/blog/index.ts` is the accurate account.
  */
 const router = Router();
 

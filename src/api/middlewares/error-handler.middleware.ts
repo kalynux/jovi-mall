@@ -7,6 +7,8 @@ import { projectDetails, projectMessage } from '../../core/error-detail-policy';
 import { logger } from '../../core/logging';
 import { routeGroup } from '../../modules/system/domain/route-group';
 import { recordError } from '../../modules/system/metrics/metrics';
+import { customerMessageFor } from '../../modules/bot-surface/domain/bot-error-copy';
+import { botResponseLanguageOf } from '../../modules/bot-surface/middlewares/bot-identity.middleware';
 
 /**
  * Global Express error handler.
@@ -22,6 +24,7 @@ import { recordError } from '../../modules/system/metrics/metrics';
  *     message: string,
  *     statusCode: number,
  *     category: ErrorCategory,     // NEW in Phase 16, always present
+ *     customerMessage?: string,    // NEW in GAP-002, BOT SURFACE ONLY
  *     details?: Record<string, unknown>
  *   }
  * }
@@ -30,6 +33,25 @@ import { recordError } from '../../modules/system/metrics/metrics';
  * already conditionally present, so every existing consumer already tolerates a varying key
  * set. It is the one thing a frontend can branch on generically without a 541-entry switch
  * — "offer a retry on external_service, highlight the field on validation".
+ *
+ * ── `customerMessage` — the sentence a chat window can relay verbatim ─────────
+ * Present ONLY on `/api/internal/bot/*` responses, and absent everywhere else.
+ *
+ * `message` is written for a developer and an operator; the automation layer that calls the
+ * bot surface has no copy table and no translator, so relaying it would put *"No platform
+ * account is bound to this messaging identity"* in front of a customer. This service is the
+ * only place that knows the code, the category AND the customer's language, so it is the
+ * only place that can produce the sentence. `bot-surface/domain/bot-error-copy.ts` holds
+ * the copy and the reasoning; the language was stamped on `req.bot` while the request was
+ * still healthy, so no lookup happens on the failure path.
+ *
+ * ⚠ **It is ADDED, never a replacement for `message`.** An operator reading *"Something
+ * went wrong. Please try again."* in an incident has been told nothing, and a code alone
+ * does not say which of its several call sites fired. Two audiences, two strings.
+ *
+ * ⚠ **Scoped to the bot surface deliberately.** The four dashboards ship their own
+ * localised copy and branch on `code`; sending them a second, server-chosen sentence would
+ * be a second source of truth for wording they already own.
  *
  * ── What Phase 16 changed, and why it is here rather than at 1362 throw sites ─
  * Filtering happens HERE, keyed on category. `payment-orchestrator.service.ts` raises five
@@ -212,6 +234,18 @@ function respond(req: Request, res: Response, requestId: string, outcome: Outcom
     journal(req, requestId, outcome, clientMessage, masked);
     recordError(outcome.category, outcome.statusCode);
 
+    /**
+     * The customer-facing half — bot surface only.
+     *
+     * `botResponseLanguageOf` returns null off that surface, so the key is simply absent on
+     * every other response and no existing consumer sees a change. Nothing is queried here:
+     * the language was stamped on `req.bot` while the request was still healthy, precisely
+     * so a failure whose cause is an unreachable database can still be worded correctly.
+     */
+    const customerMessage = req.bot
+        ? customerMessageFor(outcome.code, outcome.category, botResponseLanguageOf(req))
+        : undefined;
+
     res.status(outcome.statusCode).json({
         success: false,
         requestId,
@@ -220,6 +254,7 @@ function respond(req: Request, res: Response, requestId: string, outcome: Outcom
             message: clientMessage,
             statusCode: outcome.statusCode,
             category: outcome.category,
+            ...(customerMessage !== undefined && { customerMessage }),
             ...(clientDetails !== undefined && { details: clientDetails }),
         },
     });

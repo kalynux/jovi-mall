@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { getRedisClient, GEO_CACHE_DB } from '../../infra/redis/redis.factory';
+import { getRedisClient, CACHE_DB } from '../../infra/redis/redis.factory';
 import { geocodingCacheEventsTotal } from '../../modules/system/metrics/metrics';
 import {
     GeoCandidate,
@@ -50,13 +50,26 @@ function record(event: CacheEvent): void {
 }
 
 /**
- * Key version. Bump it when the SHAPE of a cached value changes.
+ * Key version. Bump it when the SHAPE **or the CONTENT RULES** of a cached value change.
  *
  * Cheaper and safer than a migration: the old keys become unreadable, expire on their own TTL,
  * and nothing has to parse two shapes. It is in the key rather than only in the value because a
  * value-side version check still costs the round trip and the JSON parse.
+ *
+ * ── v1 → v2, 2026-08-26: the entity decoder ─────────────────────────────────
+ * `SanitizedGeocodingProvider` now decodes the HTML entities providers emit
+ * (`d&apos;AKWA` → `d'AKWA`), and it sits INSIDE this cache — so everything written from
+ * now on is already decoded. **Everything written BEFORE it was not**, and those entries
+ * live for `GEO_CACHE_TTL_SECONDS` (24 hours by default). Without a bump, a deploy would
+ * fix the defect for uncached addresses and go on serving the broken string for a day for
+ * exactly the popular ones — which is the worst possible distribution, because the popular
+ * addresses are the ones customers are looking at.
+ *
+ * ⚠ **The shape did not change here, only the content**, and that is precisely why this
+ * needed saying out loud: a reader applying the old rule literally would have left the
+ * version alone and shipped a fix that appeared not to work. The bump costs one cold cache.
  */
-const KEY_VERSION = 'v1';
+const KEY_VERSION = 'v2';
 
 /** Hard ceiling on any single Redis call. See the header — this is the fail-open guarantee. */
 const REDIS_OP_TIMEOUT_MS = 250;
@@ -240,7 +253,7 @@ export class CachedGeocodingProvider implements IGeocodingProvider {
         }
 
         try {
-            const client = await withTimeout(getRedisClient(GEO_CACHE_DB));
+            const client = await withTimeout(getRedisClient(CACHE_DB));
             if (client === TIMED_OUT) return this.markDown('read');
 
             const raw = await withTimeout(client.get(key));
@@ -269,7 +282,7 @@ export class CachedGeocodingProvider implements IGeocodingProvider {
         if (ttl <= 0) return;
 
         try {
-            const client = await withTimeout(getRedisClient(GEO_CACHE_DB));
+            const client = await withTimeout(getRedisClient(CACHE_DB));
             if (client === TIMED_OUT) {
                 this.markDown('write');
                 return;

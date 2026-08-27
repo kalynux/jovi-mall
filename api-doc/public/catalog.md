@@ -21,6 +21,7 @@ one. Nothing owner-scoped is reachable; see [the rule for this prefix](./README.
 | GET | `/api/public/stores/:storeSlug/products/:productSlug` | **The canonical product page** |
 | GET | `/api/public/products/:productId` | The same product, by id — for deep links |
 | GET | `/api/public/products/:productId/related` | **"Customers also bought"** — the related strip |
+| GET | `/api/public/variants/by-sku/:sku` | A printed product code → the variant it names |
 | GET | `/api/public/categories` | Category chips, with counts |
 | GET | `/api/public/stores` | Store directory + the sitemap's store feed |
 | GET | `/api/public/stores/:slug` | One store |
@@ -384,6 +385,75 @@ Buying three of something in one order is one piece of evidence, not three.
 |---|---|---|
 | `CATALOG_PRODUCT_NOT_FOUND` | 404 | The *subject* is not public. Same 404-never-403 rule as everywhere here |
 | `VALIDATION_ERROR` | 400 | Malformed id |
+
+---
+
+## GET /api/public/variants/by-sku/:sku
+
+A product code — off a package, a label, an advertisement, a WhatsApp message — resolved to
+the variant it names.
+
+**It exists because search cannot do this.** `?q=` is a MongoDB `$text` search over title,
+tags and description; it does **not** index SKU and will not match one. A customer typing a
+real code got an empty result indistinguishable from "we do not sell that".
+
+### ⚠ It answers a RESOLUTION, not a product card
+
+A SKU names one specific variant, and that is very often **not** the default variant a card
+quotes. Answering with a card would show the wrong price to precisely the customer who typed
+a precise code. So this returns the variant's own `price`, its own `inStock`, and the ids to
+fetch the full product with — nothing else.
+
+```jsonc
+// GET /api/public/variants/by-sku/CAPTURE-SKU-DOC-DRESS-WAX-M  →  200
+{
+  "success": true,
+  "data": {
+    "productId": "6a8f497787a554ec589db76c",
+    "variantId": "6a8f497787a554ec589db76d",
+    "sku": "CAPTURE-SKU-DOC-DRESS-WAX-M",
+    "title": "Ankara Wax Print Maxi Dress",
+    "variantName": "Size: M",
+    "price": 24000,
+    "currency": "XAF",
+    "inStock": true,
+    "store": { "slug": "capture-sku-doc-maison-bella", "name": "Maison Bella" }
+  }
+}
+```
+
+*(Captured from a running server, fixtures and all.)*
+
+`sku` is echoed **as stored**, which is not always what was sent — see the case rule below.
+`variantName` follows the same rule as the product page's variant list: the vendor's own name,
+else the option selection spelled out (`"Size: M, Colour: Red"`), else the SKU itself.
+
+### Case: three spellings are tried, and the one you sent wins
+
+`ProductVariant.sku` is a **case-sensitive** unique index and vendors type SKUs however they
+like, while a customer is reading a code into a phone keyboard that capitalises. So the value
+you send, its uppercase form and its lowercase form are all tried, in one indexed lookup, and
+if more than one exists **the spelling you sent is the one that answers**.
+
+⚠ **A mixed-case SKU only resolves when typed exactly.** `Dress-Wax-M` stored, `DRESS-WAX-M`
+typed, is a miss — the three candidates are as-typed, all-upper and all-lower, and none of
+them is the stored mixture. This is deliberate: a genuinely case-insensitive match cannot use
+the unique index, which would turn every mistyped code on an unauthenticated route into a
+collection scan. Vendors who want their codes to be typeable should keep them in one case.
+
+### Errors
+
+| Code | Status | When |
+|---|---|---|
+| `CATALOG_PRODUCT_NOT_FOUND` | 404 | Unknown code — **or** its product is draft, archived, suspended, deleted, or its vendor is suspended |
+| `VALIDATION_ERROR` | 400 | Empty, or longer than 64 characters |
+
+⚠ **The 404 is deliberately ambiguous**, exactly as it is on the product reads: a code that
+resolves to something withdrawn must be indistinguishable from a code that never existed, or
+the endpoint becomes an oracle for enumerating an unreleased catalogue.
+
+A SKU containing `/` cannot be addressed here — it would split the path. Percent-encode it
+(`%2F`); Express decodes the segment before the route sees it.
 
 ---
 

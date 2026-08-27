@@ -137,6 +137,14 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.PAYMENT_OTP_ATTEMPTS_EXCEEDED]:
         'Too many incorrect confirmation codes. Please start the payment again.',
 
+    // The hosted card page (GAP-008).
+    [ERROR_CODES.PAYMENT_LINK_NOT_FOUND]:
+        'This payment link is not valid. Ask for a new one.',
+    [ERROR_CODES.PAYMENT_LINK_NOT_APPLICABLE]:
+        'This payment is completed on your phone and does not need a payment page',
+    [ERROR_CODES.PAYMENT_LINK_NOT_PAYABLE]:
+        'This payment is already finished, so no new payment page can be opened for it',
+
     // The four below are `external_service`, so THESE strings are what the client
     // receives — the thrown message and `details` are dropped at the boundary.
     [ERROR_CODES.NOTCHPAY_REQUEST_FAILED]: 'The mobile money provider rejected this request',
@@ -211,6 +219,45 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.MAGIC_CONTACT_UNVERIFIED]:
         'Please use the "Share my phone number" button so Telegram can confirm the number is yours.',
     [ERROR_CODES.MAGIC_SESSION_GENERATION_FAILED]: 'Could not start a sign-in session',
+
+    // ── THE BOT SURFACE (`/api/internal/bot/*`) ───────────────────────────────
+    // Written for the AUTOMATION LAYER, not for a chat window. The bot surface
+    // never sends anything itself — the automation layer turns an outcome into
+    // copy, in the customer's own language — so a message here that read like a
+    // reply to a shopper would be a second, English, un-localised copy of a
+    // sentence n8n already owns. Compare `MAGIC_CONTACT_UNVERIFIED` above, which
+    // IS relayed verbatim and is written accordingly.
+    [ERROR_CODES.BOT_IDENTITY_UNRESOLVED]:
+        'No platform account is bound to this messaging identity',
+    [ERROR_CODES.BOT_IDENTITY_NEEDS_CONTACT]:
+        'This chat is anonymous — a verified contact must be shared before any customer-scoped operation',
+    [ERROR_CODES.BOT_IDENTITY_NOT_CUSTOMER]:
+        'This messaging identity does not resolve to a customer account',
+    [ERROR_CODES.BOT_IDEMPOTENCY_KEY_REQUIRED]:
+        'Idempotency-Key is required on every mutating bot route',
+    [ERROR_CODES.BOT_IDEMPOTENCY_IN_PROGRESS]:
+        'A request carrying this Idempotency-Key is still in flight',
+    // `external_service` at 503, so the boundary substitutes this registry default for
+    // whatever was thrown and drops `details` — which is correct here: the operator needs
+    // to know Redis is unreachable and the caller only needs to know to retry.
+    [ERROR_CODES.BOT_IDEMPOTENCY_STORE_UNAVAILABLE]:
+        'The idempotency store is unavailable, so the operation was not attempted',
+    [ERROR_CODES.BOT_IDEMPOTENCY_KEY_REUSED]:
+        'This Idempotency-Key was already spent by a different request',
+    [ERROR_CODES.BOT_GEO_CANDIDATE_EXPIRED]:
+        'That address candidate is unknown or has expired — run the search again',
+    [ERROR_CODES.BOT_REGISTRATION_IDENTITY_TAKEN]:
+        'This messaging identity is already bound to a different platform account',
+    [ERROR_CODES.BOT_ONBOARDING_NOT_REGISTERED]:
+        'This sender has no account yet — only the phone step can be submitted',
+    [ERROR_CODES.BOT_ONBOARDING_STEP_NOT_SKIPPABLE]:
+        'That onboarding step is required and cannot be skipped',
+    [ERROR_CODES.BOT_ONBOARDING_VALUE_REQUIRED]:
+        'That onboarding step was provided with no value',
+    [ERROR_CODES.BOT_SUPPORT_NO_CONTEXT]:
+        'Nothing recent to route support from — no hint, no orders, nothing viewed',
+    [ERROR_CODES.BOT_SUPPORT_SCOPE_UNAVAILABLE]:
+        'The requested support scope has no party in this context',
 
     [ERROR_CODES.GOOGLE_MISSING_CLIENT_ID]: 'GOOGLE_CLIENT_ID is not configured',
     [ERROR_CODES.GOOGLE_MISSING_CLIENT_SECRET]: 'GOOGLE_CLIENT_SECRET is not configured',
@@ -433,6 +480,8 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.AUTH_OAUTH_STATE_EXPIRED]: 'auth oauth state expired',
     [ERROR_CODES.STORAGE_FILE_NOT_FOUND]: 'storage file not found',
     [ERROR_CODES.STORAGE_DELETE_FAILED]: 'storage delete failed',
+    [ERROR_CODES.STORAGE_DOWNLOAD_NOT_SUPPORTED]:
+        'This deployment’s storage provider cannot serve file contents',
     [ERROR_CODES.CATALOG_DIGITAL_ASSET_ACCESS_DENIED]: 'catalog digital asset access denied',
     [ERROR_CODES.CATALOG_SHIPPING_NOT_FOUND]: 'catalog shipping not found',
     [ERROR_CODES.CATALOG_SHIPPING_ACCESS_DENIED]: 'catalog shipping access denied',

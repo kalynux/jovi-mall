@@ -267,19 +267,28 @@ Response: `{ matched, deleted, truncated, cursor, sample, blastRadius, destructi
 
 ### Blast radius per database
 
+> ⚠ **Generated from `cache-flush-policy.ts`, 2026-08-25.** The version before this one
+> listed `WA_VERIFY_DB` (4) and `TELEGRAM_LINK_TOKEN_DB` (9) — both RETIRED with the
+> account-linking cutover — and stopped at 10, omitting five live databases. If this table
+> and that file ever disagree again, the file is right.
+
 | DB | Constant | Whole-DB | What is lost |
 |---|---|---|---|
-| 3 | `EMAIL_VERIFY_DB` | yes | In-flight verification links. Users request a new one. Low. |
-| 4 | `WA_VERIFY_DB` | yes | In-flight WhatsApp codes. Users request a new one. Low. |
-| 5 | `WA_IDEMPOTENCY_DB` | **prefix only** | **DESTRUCTIVE.** These keys are the only thing stopping a retried send from becoming a **second WhatsApp message to a real person**. Reopens a duplicate-send window for the remainder of each key's TTL (24–72h). |
-| 6 | `WA_WINDOW_DB` | yes | Service-window state, recomputed on next inbound. Worst case a paid template where free-form would have done — low, but it costs money. |
-| 7 | `SLOT_LOCK_DB` | **prefix only** | **DESTRUCTIVE.** Drops live booking holds. **Degraded, not broken:** the actual double-sale guard is `createBooking`'s in-transaction overlap re-check, so what is lost is the reservation *courtesy* — two customers can reach checkout for the same slot and the second loses at commit — not the single-occupancy invariant. |
-| 8 | `DOWNLOAD_TOKEN_DB` | **prefix only** | **DESTRUCTIVE.** Invalidates every live download link. A paying customer mid-download gets a dead URL and must re-mint from their library. |
-| 9 | `TELEGRAM_LINK_TOKEN_DB` | yes | In-flight linking tokens. Users restart linking. Low. |
-| 10 | `TELEGRAM_WINDOW_DB` | yes | Per-chat send-window state. Low. |
+| 3 | `EMAIL_VERIFY_DB` | yes | In-flight email verification links stop working. Users request a new one. Low. |
+| 5 | `WA_IDEMPOTENCY_DB` | **prefix only** | DESTRUCTIVE. These keys are the only thing stopping a retried send from becoming a SECOND WhatsApp message to a real person. Clearing them reopens a duplicate-send window for the remainder of each key's TTL (24-72h). |
+| 6 | `WA_WINDOW_DB` | yes | Service-window state recomputes on the next inbound message. Worst case a paid template is sent where a free-form reply would have been allowed. Low, but it costs money. |
+| 7 | `SLOT_LOCK_DB` | **prefix only** | DESTRUCTIVE. Drops live booking holds. DEGRADED, NOT BROKEN: the actual double-sale guard is createBooking's in-transaction overlap re-check, so what is lost is the reservation courtesy — two customers can reach checkout for the same slot and the second loses at commit — not the single-occupancy invariant. |
+| 8 | `DOWNLOAD_TOKEN_DB` | **prefix only** | DESTRUCTIVE. Invalidates every live download link. A paying customer mid-download gets a dead URL and must re-mint from their library. Recoverable, visible, annoying. |
+| 10 | `BOT_SURFACE_DB` | **prefix only** | TWO PREFIXES, TWO RADII — name the one you mean. `bot:idem:` is DESTRUCTIVE: these records are the only thing stopping a retried chat message from creating a SECOND set of orders and a second stock hold, because POST /api/internal/bot/checkout is not idempotent underneath and chat transports retry. Clearing them reopens a duplicate-execution window for the remainder of each record's 24 hours. `bot:geo:` is harmless: every address flow in progress must run its search again — BOT_GEO_CANDIDATE_EXPIRED, a state the flow already handles because a handle is single-use and expires in 30 minutes anyway. No saved address is touched. |
+| 11 | `RATE_LIMIT_DB` | yes | Every caller gets a fresh allowance for the current window. Nothing durable is lost. Low — and it is the intended remedy for a ceiling set too tight. |
+| 12 | `WORKER_LOCK_DB` | yes | DESTRUCTIVE. Releases every background-sweep lock, so a sweep already running on another instance can be started a second time — the exact double-processing this database exists to prevent, and it reaches the money sweeps (earnings release, COD deposit deadlines). It is nevertheless the intended remedy for a lock orphaned by a hard kill, which otherwise blocks its sweep until the TTL expires. Prefer waiting out the TTL; flush when the wait costs more than one overlapping pass. |
+| 13 | `CONNECTION_CODE_DB` | yes | In-flight connection codes stop working. Nothing durable is lost — a connection already bound lives in Mongo, not here. Users send /connect again. Low. |
+| 14 | `LOGIN_CODE_DB` | yes | Every magic link and /login code in flight stops working, and sessions already issued are unaffected. Nothing durable is lost — users send /login again. Rated higher than CONNECTION_CODE_DB despite the identical mechanics: /login is the PRIMARY customer sign-in path (customers hold a generated password they have never been told), so everyone signing in at that moment fails and has no password to fall back on. Moderate, and worst during exactly the incident that tempts it. |
+| 15 | `CACHE_DB` | yes | TWO PREFIXES, and only one of them costs anything. `geo:` — address search re-asks the geocoding provider until the cache refills. Nothing durable is lost (a stored GeoAddress lives on the order or the profile, not here), but on the keyless default the cost is real: Nominatim's public instance permits roughly one request per second and bans for abuse. Low during ordinary traffic; do not do it repeatedly. `related:` — the next view of each affected product page recomputes its related-products strip, one aggregation over that product's past order lines. Nothing durable is lost and no third party is called. Negligible, and safe during an incident. A whole-database flush takes both, so it carries the geocoding cost above. |
 
-The three destructive rows require a prefix, so with `confirm` and `dryRun` they are effectively a
-two-step. The blast-radius note is echoed in every response, so it travels into wi-admin's audit row
+Three of the five destructive rows require a prefix, so with `confirm` and `dryRun` they are
+effectively a two-step. (`WORKER_LOCK_DB` and the `bot:idem:` half of `BOT_SURFACE_DB` are the
+exceptions, each argued in its own policy row.) The blast-radius note is echoed in every response, so it travels into wi-admin's audit row
 and reaches whoever reads the trail afterwards.
 
 `npm run test:system` asserts that **every catalogued Redis database has a policy row** — a database

@@ -47,8 +47,13 @@ import { normalizePhoneNumber, toE164 } from '../../../core/validation/phone';
 /**
  * What a chat is asking to do. Passed FIRST and never defaulted — a forgotten intent would
  * mint a sign-in session for somebody who asked to reset a password.
+ *
+ * `register` (GAP-002) is the third, and it is the one that LOCATES without judging: the
+ * bot surface uses it to tell "no account at all" from "an account with no customer
+ * profile", which are the two branches of creating-versus-upgrading and which every other
+ * intent collapses into one refusal.
  */
-export type MessagingAuthIntent = 'login' | 'reset';
+export type MessagingAuthIntent = 'login' | 'reset' | 'register';
 
 /** `/login`: minting a session needs the customer profile it will be scoped to. */
 export interface ResolvedLoginAccount {
@@ -91,8 +96,32 @@ export type IdentityResolution<TAccount> =
   /** This messaging identity already belongs to a different platform account. */
   | { status: 'identity_taken' };
 
+/**
+ * `register` (GAP-002): the account, and whether it already has a customer profile.
+ *
+ * ⚠ **`customerId` is NULLABLE here and non-null on `ResolvedLoginAccount`**, and that one
+ * difference is the whole reason this intent exists. `login` collapses "no account" and
+ * "an account with no customer profile" into two refusals a caller cannot act on
+ * differently; the bot surface has to act on them very differently indeed — the first is a
+ * CREATE and the second is an UPGRADE, and doing the first for the second would mint a
+ * duplicate account for every vendor who messages the shop.
+ *
+ * It also carries `roles`, because the caller decides whether to attach a customer role and
+ * must not re-read the user row to find out what is already there.
+ */
+export interface ResolvedRegistrationAccount {
+  userId: string;
+  /** Null when the account holds no customer profile yet. */
+  customerId: string | null;
+  roles: readonly string[];
+  channel: MessagingChannel;
+  externalIdentity: string;
+  identityHint: string | null;
+}
+
 export type LoginIdentityResolution = IdentityResolution<ResolvedLoginAccount>;
 export type ResetIdentityResolution = IdentityResolution<ResolvedResetAccount>;
+export type RegistrationIdentityResolution = IdentityResolution<ResolvedRegistrationAccount>;
 
 /**
  * A messaging-supplied phone number, in strict E.164 — or null.
@@ -168,6 +197,80 @@ export class LoginIdentityResolver {
     profile: { displayName?: string | null; handle?: string | null } = {}
   ): Promise<ResetIdentityResolution> {
     return this.resolve('reset', channel, externalIdentity, profile) as Promise<ResetIdentityResolution>;
+  }
+
+  /**
+   * GAP-002 — locate the account behind this chat, judging only whether it is usable.
+   *
+   * Same ladder, same E.164 repair, same `identity_taken` refusal. What differs is the
+   * gate, and it differs in one direction only: **no role is required and none is
+   * refused.** A vendor, an agency and an agent all resolve here, carrying
+   * `customerId: null`, and the caller decides what to do about it.
+   *
+   * ⚠ **That is a deliberate reversal of a rule three documents call settled** — GAP-002
+   * D-3, ARCHITECTURE §3.3 and the catalogue's own `when_not_to_use` all say a business
+   * account is never upgraded to a customer. The product owner's decision (2026-08-26) is
+   * that every inbound chat is a customer conversation, so a business account acquires a
+   * customer role and profile rather than being refused. The rule survives on the OTHER
+   * intents: `resolveForLogin` still answers `not_customer`, so nothing about
+   * `/login`'s session minting changed, and `/reset-password` still resolves the reset
+   * against whatever roles the account actually holds.
+   *
+   * ⚠ **It does NOT bind the connection**, unlike its two siblings. `resolve` binds on a
+   * resolved outcome, and here a "resolved" outcome may still be an account the caller is
+   * about to write a customer profile onto inside a transaction — binding first would
+   * leave a durable claim pointing at a half-built account if that transaction aborted.
+   * `BotRegistrationService` binds once, after its commit. See its header.
+   */
+  async resolveForRegistration(
+    channel: MessagingChannel,
+    externalIdentity: string
+  ): Promise<RegistrationIdentityResolution> {
+    const located = await this.locate(channel, externalIdentity);
+    if (located.status !== 'found') return located;
+
+    return this.gateForRegistration(located.user, {
+      channel,
+      externalIdentity,
+      identityHint: located.identityHint,
+    });
+  }
+
+  /**
+   * The same completion as `resolveFromVerifiedContact`, for the `register` intent.
+   *
+   * Split out rather than folded into that method's `intent` switch because its return type
+   * genuinely differs — it may resolve an account with no customer profile, which neither
+   * of the other two may ever do. Everything security-relevant is identical and is the
+   * caller's, exactly as it is there: **`contact.user_id === the sender` must already have
+   * been enforced**, and the `identity_taken` check below is the same refusal arriving by a
+   * different door.
+   */
+  async resolveRegistrationFromVerifiedContact(
+    chatId: string,
+    phoneNumber: string
+  ): Promise<RegistrationIdentityResolution> {
+    const phone = messagingPhoneToE164(phoneNumber);
+    if (!phone) return { status: 'no_account' };
+
+    const user = await this.userRepo.findByPhone(phone);
+    if (!user) return { status: 'no_account' };
+
+    /**
+     * This chat is already somebody else's. Refuse; never transfer — the same position
+     * `resolveFromVerifiedContact` takes, and for the same reason: silently re-pointing the
+     * row would hand this chat an account it has no claim to.
+     */
+    const existing = await this.connections.resolveIdentityOwner('telegram', chatId);
+    if (existing && existing.user_id.toString() !== user.id) {
+      return { status: 'identity_taken' };
+    }
+
+    return this.gateForRegistration(user, {
+      channel: 'telegram',
+      externalIdentity: chatId,
+      identityHint: maskIdentity('telegram', chatId, null),
+    });
   }
 
   /**
@@ -355,6 +458,43 @@ export class LoginIdentityResolver {
     return {
       status: 'resolved',
       account: { userId: user.id, customerId: customer._id.toString(), ...identity },
+    };
+  }
+
+  /**
+   * The `register` gate — one condition, and it is the only one that may live here.
+   *
+   * An inactive account is refused, exactly as it is for `login` and `reset`: a suspended
+   * or closed account must not be shopped from, and it must ESPECIALLY not be quietly
+   * sidestepped by creating a second account for the same person. That refusal is what
+   * stops `identity/sync` treating "we will not serve this account" as "there is no
+   * account here".
+   *
+   * Everything else is reported rather than judged. A missing customer profile is a
+   * `customerId: null` on a RESOLVED outcome, not a refusal — see
+   * `ResolvedRegistrationAccount` for why that distinction is the whole point of this
+   * intent.
+   */
+  private async gateForRegistration(
+    user: IUser,
+    identity: {
+      channel: MessagingChannel;
+      externalIdentity: string;
+      identityHint: string | null;
+    }
+  ): Promise<RegistrationIdentityResolution> {
+    if (user.status !== 'active') return { status: 'account_inactive' };
+
+    const customer = await this.customerRepo.findByUserId(user.id);
+
+    return {
+      status: 'resolved',
+      account: {
+        userId: user.id,
+        customerId: customer ? customer._id.toString() : null,
+        roles: user.roles,
+        ...identity,
+      },
     };
   }
 }

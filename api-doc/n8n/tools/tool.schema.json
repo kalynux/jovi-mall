@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jovimall.com/schemas/n8n-tool-catalog/v1",
+  "title": "n8n customer-agent tool catalog",
+  "description": "The format of catalog.json. Validate with `ajv validate -s tool.schema.json -d catalog.json`. This schema is the contract between the backend (which owns the endpoints) and the n8n MCP configuration (which owns the agent). It is deliberately free of n8n vocabulary: nothing here names a node, a credential or a workflow, so the same catalog drives a different orchestrator without edits.",
+  "type": "object",
+  "required": ["catalog_version", "generated_at", "defaults", "tools"],
+  "additionalProperties": false,
+  "properties": {
+    "catalog_version": {
+      "type": "string",
+      "description": "Semver. PATCH = wording. MINOR = tools added, or an optional parameter added. MAJOR = a tool renamed or removed, a required parameter added, or a response shape changed."
+    },
+    "generated_at": { "type": "string" },
+    "source_of_truth": { "type": "string", "description": "Repo-relative path to the api-doc tree these tools were derived from." },
+    "notes": { "type": "array", "items": { "type": "string" } },
+
+    "defaults": {
+      "type": "object",
+      "description": "Shared values every tool inherits, so no tool repeats a base URL or a header. A tool may override any of these.",
+      "required": ["services", "surfaces"],
+      "additionalProperties": false,
+      "properties": {
+        "services": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["base_url_env"],
+            "additionalProperties": false,
+            "properties": {
+              "base_url_env": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "surfaces": {
+          "type": "object",
+          "description": "An access surface: how a tool reaches the backend, and what credential it carries.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["authentication", "identity", "status"],
+            "additionalProperties": false,
+            "properties": {
+              "description": { "type": "string" },
+              "authentication": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "mode": { "enum": ["none", "service_token", "service_token_and_webhook_secret", "webhook_secret"] },
+                  "headers": { "type": "array", "items": { "type": "string" } },
+                  "notes": { "type": "string" }
+                }
+              },
+              "identity": {
+                "enum": ["none", "messaging_identity_required", "messaging_identity_optional"],
+                "description": "messaging_identity_required: the call MUST carry the resolved messaging identity envelope and the backend resolves the customer from it. A customer id, user id or access token is NEVER a tool parameter."
+              },
+              "status": { "enum": ["available", "gap"] }
+            }
+          }
+        },
+        "identity_envelope": {
+          "type": "object",
+          "description": "The shape every identity-bearing call carries, documented once here rather than repeated in every tool's parameters."
+        },
+        "response_envelope": { "type": "object" },
+        "pagination": { "type": "object" }
+      }
+    },
+
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/tool" }
+    }
+  },
+
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "required": [
+        "name", "version", "tier", "status", "service", "surface",
+        "description", "when_to_use", "operation", "parameters",
+        "response", "mutating", "requires_confirmation", "risk"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{2,47}$",
+          "description": "Stable identifier, shaped `domain_verb_object`. Never renamed in place: a rename is a MAJOR catalog version."
+        },
+        "version": { "type": "integer", "minimum": 1 },
+        "title": { "type": "string", "description": "Short human label for dashboards and logs. Not read by the model." },
+
+        "tier": {
+          "enum": ["core", "extended", "flow_only"],
+          "description": "core: always in the model's tool list. extended: loaded on demand, once the conversation is already in that domain. flow_only: NEVER exposed to the model, callable only by a deterministic flow step. Money, destructive and credential-adjacent operations live here."
+        },
+        "status": {
+          "enum": ["available", "gap"],
+          "description": "available: the endpoint exists today and was verified against the source. gap: it does not exist and must be built before this tool can be configured."
+        },
+        "gap_ref": { "type": "string", "pattern": "^GAP-[0-9]{3}$" },
+
+        "service": { "type": "string", "description": "Key into defaults.services." },
+        "surface": { "type": "string", "description": "Key into defaults.surfaces." },
+
+        "description": {
+          "type": "string",
+          "description": "Written FOR the model, describing what the customer gets. Not an HTTP description."
+        },
+        "when_to_use": { "type": "string" },
+        "when_not_to_use": {
+          "type": "string",
+          "description": "The highest-leverage field for selection accuracy. Name the tool that should be used instead."
+        },
+
+        "operation": {
+          "type": "object",
+          "required": ["method", "path"],
+          "additionalProperties": false,
+          "properties": {
+            "method": { "enum": ["GET", "POST", "PATCH", "PUT", "DELETE"] },
+            "path": { "type": "string", "description": "Path template; `{name}` placeholders are filled from parameters via request.path." },
+            "command": {
+              "type": "string",
+              "description": "CommandBus command name, for webhook_command tools only. It may differ from what the user types: `reset_password` against `/reset-password`."
+            }
+          }
+        },
+        "backing_endpoint": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The customer-facing endpoint this tool is equivalent to, when the tool goes through the bot surface rather than calling it directly. This field is what makes drift detectable: if the referenced api-doc changes and the tool does not, the catalog is stale.",
+          "properties": {
+            "method": { "type": "string" },
+            "path": { "type": "string" },
+            "doc": { "type": "string" }
+          }
+        },
+        "doc": { "type": "string", "description": "Repo-relative api-doc path, with anchor." },
+
+        "parameters": {
+          "type": "object",
+          "description": "A single JSON Schema for everything the model supplies. ONE flat object: the model must never be asked to know which value is a path segment, which is a query string and which is a body field. `request` does that mapping."
+        },
+        "request": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Where each parameter goes on the wire.",
+          "properties": {
+            "path": { "type": "array", "items": { "type": "string" } },
+            "query": { "type": "array", "items": { "type": "string" } },
+            "body": { "type": "array", "items": { "type": "string" } },
+            "body_literal": { "type": "object", "description": "Fixed body fields the model does not supply." },
+            "headers": { "type": "object" }
+          }
+        },
+
+        "response": {
+          "type": "object",
+          "required": ["source"],
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": ["body.data", "body", "body.transaction", "stream"],
+              "description": "Where the payload sits. Most jovi-mall routes use the {success,data} envelope; the bot webhook and the three payment routes deliberately do not."
+            },
+            "type": { "enum": ["object", "array", "null"] },
+            "paginated": { "type": "boolean" },
+            "important_fields": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "The fields the model should actually receive. Everything else is dropped before the model sees it — a full product detail is several kB of noise around six useful values."
+            },
+            "never_relay": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Fields that must never be echoed into the chat OR written to the conversation transcript."
+            },
+            "result_kind": {
+              "type": "string",
+              "description": "Key into the normalized result vocabulary; decides which platform renderer runs. See ARCHITECTURE.md section 6."
+            }
+          }
+        },
+
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["code", "status", "customer_action"],
+            "additionalProperties": false,
+            "properties": {
+              "code": { "type": "string" },
+              "status": { "type": "integer" },
+              "category": {
+                "enum": ["authentication", "authorization", "validation", "not_found", "conflict", "business_rule", "rate_limit", "external_service", "internal"]
+              },
+              "when": { "type": "string" },
+              "customer_action": {
+                "enum": ["explain", "reprompt", "disambiguate", "retry_with_backoff", "handoff_to_web", "require_login", "abandon_flow", "escalate_to_support", "silent_ignore"],
+                "description": "A closed vocabulary, so every tool's failures are handled uniformly. Semantics in errors.json."
+              },
+              "details_fields": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Fields inside error.details worth putting into the customer-facing sentence."
+              }
+            }
+          }
+        },
+
+        "mutating": { "type": "boolean" },
+        "idempotent": { "type": "boolean" },
+        "idempotency": { "type": "string", "description": "How repeat safety is achieved, or why it is absent." },
+        "requires_confirmation": {
+          "enum": [false, true, "out_of_band"],
+          "description": "false: execute directly. true: two-phase confirmation echoing the resolved subject. out_of_band: never confirmed or executed in chat — emit a link and let the customer complete it on the web."
+        },
+        "risk": { "enum": ["none", "low", "medium", "high", "critical"] },
+        "side_effects": { "type": "array", "items": { "type": "string" } },
+
+        "context_resolution": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "How this tool's subject may be resolved from conversation context rather than an explicit identifier. See ARCHITECTURE.md section 7.",
+          "properties": {
+            "subject": { "type": "string" },
+            "policy": { "enum": ["explicit_only", "single_unambiguous_focus", "focus_or_most_recent", "not_applicable"] },
+            "must_echo": { "type": "boolean", "description": "true: the resolved subject must be named back to the customer before or with the result." },
+            "notes": { "type": "string" }
+          }
+        },
+
+        "rate_limit": { "type": "object" },
+        "audit": { "type": "boolean" },
+        "requires_customer_role": {
+          "type": "boolean",
+          "description": "true: refuse when the resolved sender holds no customer role. A vendor, agency or agent messaging the bot must not reach it."
+        },
+        "platform_notes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "whatsapp": { "type": "string" },
+            "telegram": { "type": "string" }
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Command names in commands.json that reach this tool."
+        }
+      }
+    }
+  }
+}

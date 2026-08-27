@@ -1,12 +1,13 @@
 /**
  * Migration: build the Phase 1 payment indexes explicitly.
  *
- * Four indexes ship with the payments work, and two of them are correctness
+ * Six indexes ship with the payments work, and three of them are correctness
  * controls rather than performance ones:
  *
  *   payment_webhook_events   unique (gateway, eventId)   ← replay protection
  *   payment_webhook_events   TTL on receivedAt, 45 days  ← unbounded growth
  *   payment_transactions     unique sparse merchantRef   ← callback routing
+ *   payment_transactions     unique sparse payLink.token ← hosted card page (GAP-008)
  *   plan_purchases           unique sparse merchant_ref  ← callback routing
  *   credit_topups            unique sparse merchant_ref  ← callback routing
  *
@@ -84,6 +85,13 @@ const PLANNED: PlannedIndex[] = [
     key: { merchantRef: 1 },
     options: { unique: true, sparse: true },
     why: 'webhook lookup by OUR reference; sparse because pre-Phase-1 rows have none',
+  },
+  {
+    collection: COLLECTIONS.PAYMENT_TRANSACTION,
+    name: 'payment_pay_link_token',
+    key: { 'payLink.token': 1 },
+    options: { unique: true, sparse: true },
+    why: 'the hosted card page (GAP-008) resolves a transaction by its link handle, unauthenticated; sparse because most rows carry no link',
   },
   {
     collection: COLLECTIONS.PLAN_PURCHASE,

@@ -216,7 +216,10 @@ router.use('/public', publicBillingRoutes);
 // The blog, for the marketing site's article pages. Same prefix, same rules — published
 // prose only, five-minute cache, no identity. Two routers on one prefix is fine: their
 // paths do not overlap, and Express falls through the first when nothing matches.
-// The editor's side is /api/admin/articles, mounted below behind requireRole(['admin']).
+// The editor's side is NOT in this service: it is wi-admin's /api/v1/content, which writes
+// these collections directly (ADR-004 D-4). This line claimed it was "mounted below behind
+// requireRole(['admin'])" until 2026-08-25 — contradicting the comment at the old mount point
+// further down this same file, which correctly says the editor USED to mount there.
 import publicBlogRoutes from '../modules/blog/routes/public-blog.routes';
 router.use('/public', publicBlogRoutes);
 
@@ -406,6 +409,39 @@ router.use('/internal/agents', internalAgentRoutes);
 // ../CLAUDE.md); geo-tracker owns the road network. Read-only, deliberately:
 // there is no shipment write a service that has no shipment model should make.
 router.use('/internal/shipments', internalShipmentRoutes);
+
+/**
+ * The CURATED BOT SURFACE — the door the automation layer acts through (GAP-001).
+ *
+ * The third member of the `/internal` family, and the only one whose caller acts on a
+ * PERSON's behalf rather than on its own. geo-tracker asks about agents and shipments;
+ * wi-admin acts as an administrator. This one carries a messaging identity and the
+ * backend resolves the customer from it — so every route below reaches a cart, an order,
+ * an address or a support ticket that belongs to somebody.
+ *
+ * ⚠ **TWO credentials guard it, not one.** `INTERNAL_SERVICE_TOKEN` (the same value
+ * geo-tracker presents on the two mounts above) AND `BOT_WEBHOOK_SECRET` (the same value
+ * the bot webhooks require). A leaked service token alone opens the agent and shipment
+ * surfaces; it must not also open every customer's basket and order history. The two
+ * secrets are held by different parts of the deployment and rotate on different
+ * schedules. Both guards live inside `bot.routes.ts`, beside the identity resolution and
+ * the idempotency store, so the whole chain reads in one place.
+ *
+ * ⚠ **NO customer bearer token is ever issued to the automation layer**, and there is no
+ * endpoint here that could produce one. That is the load-bearing half of the design: a
+ * passwordless customer has no session-revocation path at all — `password_changed_at` is
+ * this service's only lever and a customer who never reset has never set it — so a
+ * compromised n8n must not be able to hold customer sessions.
+ *
+ * ⚠ **It is NOT on the maintenance exemption list**, unlike `/internal/agents`,
+ * `/internal/shipments` and `/tracking`. Those are exempt because blocking them turns a
+ * jovi-mall maintenance window into a geo-tracker outage. A chat bot has no such
+ * property, so it is blocked in `down` and read-only in `readonly` like the ordinary
+ * customer surface — see `modules/system/domain/maintenance-mode.ts`, which reads this
+ * module's route table to tell a bot read from a bot write.
+ */
+import botRoutes from '../modules/bot-surface/bot.routes';
+router.use('/internal/bot', botRoutes);
 
 // Service-to-service API consumed by the wi-admin backend. Same shape as the
 // geo-tracker door above, a SEPARATE secret (INTERNAL_ADMIN_SERVICE_TOKEN), and

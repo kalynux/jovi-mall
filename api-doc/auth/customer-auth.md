@@ -52,6 +52,13 @@ There is **no registration endpoint for the storefront to call.** Account creati
 contact is bot-side backend work, landing with the n8n integration; nothing about it is a
 frontend concern and no request shape is owed to you.
 
+> ⚠ **It is designed and it is NOT built** (2026-08-24). The shape — both channels, the Telegram
+> contact-share, the consent step, the reuse of the existing identity ladder — is
+> [GAP-002](../n8n/BACKEND-GAPS.md#gap-002). Until it lands, a new customer has **no route in
+> from either direction**: the bot refuses an unknown number, and this page is why the storefront
+> has no form to fall back on. That is the current state, not a transitional inconvenience, and
+> it is the reason the paragraph below is still headed "transitional copy".
+
 ### The deep links
 
 Two variables on the server, `WA_BOT_NUMBER` and `TELEGRAM_BOT_NAME`, produce these:

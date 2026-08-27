@@ -23,6 +23,8 @@
  *
  * Run: npm run test:customer-notifications
  */
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import {
     CUSTOMER_NOTIFICATION_CATALOG,
     assertCustomerCatalogComplete,
@@ -31,11 +33,15 @@ import {
     renderCustomerButton,
     customerWhatsAppTemplateName,
     deliveryFailureLine,
-    codReadyLine
+    codReadyLine,
+    ticketReopenLine
 } from '../../src/modules/notifications/catalog/customer-notification-catalog';
+import { customerTicketSituationFor } from '../../src/modules/notifications/services/customer-notification-event-handler.service';
 import { SHIPMENT_FAILURE_REASONS } from '../../src/modules/shipments/shipment.model';
 import {
+    CUSTOMER_AGGREGATE_TYPES,
     CUSTOMER_NOTIFICATION_TYPES,
+    CustomerNotificationModel,
     CustomerNotificationType
 } from '../../src/modules/notifications/models/customer-notification.model';
 import { AGENT_NOTIFICATION_TYPES } from '../../src/modules/notifications/models/agent-notification.model';
@@ -76,7 +82,19 @@ const UNMUTABLE: CustomerNotificationType[] = [
     'booking.refund.pending',
     'order.cancelled',
     'order.payment.received',
-    'order.refunded'
+    'order.refunded',
+    // The card payment page (GAP-008 + GAP-012). Money, so ungated on the same rule as
+    // the rest of this list — and a page the customer asked for in a chat must not be
+    // silenced by a setting about order progress.
+    'order.payment_link',
+    // The three GAP-012 support situations, and NOT on the counterparty argument the rest
+    // of this list rests on — a support request is the customer's own. Narrower: all three
+    // are the ANSWER to a question they asked, and `awaiting_customer` is the platform
+    // saying it is blocked on them. A preference silencing those would mute the reply to
+    // your own question and then hold the request open waiting for you.
+    'ticket.replied',
+    'ticket.awaiting_customer',
+    'ticket.resolved'
 ];
 
 /** Expected WhatsApp body-param counts, mirroring the template registry. */
@@ -98,7 +116,14 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     'order.delivered': 1,
     'order.delivery_failed': 1,
     'order.cancelled': 1,
-    'order.refunded': 3
+    'order.refunded': 3,
+    'order.payment_link': 4,
+    'ticket.replied': 1,
+    'ticket.awaiting_customer': 1,
+    // TWO, and the second is a whole sentence. Whether the customer may still reply
+    // depends on resolved-vs-closed, so it travels as a parameter rather than being baked
+    // into the approved template body — which would make one of the two outcomes a lie.
+    'ticket.resolved': 2
 };
 
 /** The settlement arithmetic, mirroring CompletionPricingService. */
@@ -148,10 +173,26 @@ function main(): void {
 
     console.log('\n── Catalog ↔ model enum (the drift that bit the agent stack) ──');
 
-    assert('catalog and model enum list the same 18 situations', () => {
+    // 22 = the 18 this stack shipped with, plus GAP-012's three `ticket.*` and the card
+    // payment page. The literal is kept rather than derived: this assertion's whole job is
+    // to notice a situation appearing on one side and not the other, and `catalog.length
+    // === model.length` would pass happily while both drifted away from what anybody meant.
+    assert('catalog and model enum list the same 22 situations', () => {
         const catalog = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).sort();
         const model = [...CUSTOMER_NOTIFICATION_TYPES].sort();
-        return catalog.length === 18 && JSON.stringify(catalog) === JSON.stringify(model);
+        return catalog.length === 22 && JSON.stringify(catalog) === JSON.stringify(model);
+    });
+
+    // The aggregate enum is spread from CUSTOMER_AGGREGATE_TYPES rather than hand-kept —
+    // it WAS a literal, and GAP-012's `ticket` is exactly the value that would have been
+    // added to the union and forgotten here, throwing a ValidationError on every ticket
+    // notification. Same drift, same stack, one situation later.
+    assert('the aggregate enum is spread from the array, not re-typed', () => {
+        const declared = CustomerNotificationModel.schema.path('aggregateType') as unknown as {
+            enumValues?: string[];
+        };
+        const enumValues = [...(declared.enumValues ?? [])].sort();
+        return JSON.stringify(enumValues) === JSON.stringify([...CUSTOMER_AGGREGATE_TYPES].sort());
     });
 
     assert('AGENT catalog and enum agree too (the regression that shipped)', () => {
@@ -178,6 +219,25 @@ function main(): void {
     assert('template names are all customer_-prefixed', () =>
         CUSTOMER_NOTIFICATION_TYPES.every(s =>
             customerWhatsAppTemplateName(s).startsWith('customer_')));
+
+    /**
+     * ⚠ **The approval doc is the difference between a template existing and WORKING.** All
+     * eighteen customer templates were registered in code and documented nowhere until
+     * 2026-08-26, which is the same thing as not existing: an unapproved template fails on
+     * send, and one nobody wrote down never gets approved. This assertion is what stops a
+     * situation being added with copy that no operator can act on.
+     */
+    assert('⚠ every customer template has approval copy in the templates doc', () => {
+        const doc = readFileSync(
+            join(__dirname, '..', '..', 'api-doc', 'notifications', 'whatsapp-templates.md'),
+            'utf8'
+        );
+        const missing = CUSTOMER_NOTIFICATION_TYPES
+            .map(customerWhatsAppTemplateName)
+            .filter(name => !doc.includes(`\`${name}\``));
+        if (missing.length) console.error('     ↳', missing.join(', '));
+        return missing.length === 0;
+    });
 
     assert('body-param counts match the registered templates', () => {
         for (const situation of CUSTOMER_NOTIFICATION_TYPES) {
@@ -353,6 +413,70 @@ function main(): void {
         });
         return rendered.message.includes('ACR-260810-143000-7Q2XZ');
     });
+
+    console.log('\n── Support requests (GAP-012) ──');
+
+    /**
+     * ⚠ **The row of GAP-012's table that had no notification at all.** `ticket.*` events
+     * were published from the day the tickets module shipped and NOTHING subscribed, so a
+     * customer who asked a question — through the bot or anywhere else — was never told it
+     * had been answered, on any channel.
+     */
+    assert('⚠ both ticket events are actually SUBSCRIBED — the defect was zero subscribers', () => {
+        const consumer = readFileSync(
+            join(__dirname, '..', '..', 'src', 'modules', 'notifications', 'customer-notification-event-consumer.ts'),
+            'utf8'
+        );
+        return /subscribe\('ticket\.note_created'/.test(consumer)
+            && /subscribe\('ticket\.status_changed'/.test(consumer);
+    });
+
+    assert('the platform is blocked on the customer → they are told', () =>
+        customerTicketSituationFor('waiting_on_customer') === 'ticket.awaiting_customer');
+
+    assert('both terminal statuses share one situation', () =>
+        customerTicketSituationFor('resolved') === 'ticket.resolved'
+        && customerTicketSituationFor('closed') === 'ticket.resolved');
+
+    assert('⚠ five of the eight statuses are silent — internal progress is not news', () =>
+        ['open', 'in_progress', 'waiting_on_admin', 'waiting_on_vendor', 'waiting_on_agency', 'waiting_on_agent']
+            .every(status => customerTicketSituationFor(status) === null));
+
+    assert('an unknown or missing status is silent rather than guessed at', () =>
+        customerTicketSituationFor(undefined) === null
+        && customerTicketSituationFor('escalated_to_legal') === null);
+
+    /**
+     * ⚠ **`resolved` and `closed` are terminal and are NOT interchangeable here.** A resolved
+     * request can be reopened by replying; a closed one cannot. Telling somebody to "reply if
+     * this is not sorted" on a closed request sends them to a route the platform has shut.
+     */
+    assert('⚠ the reopen sentence differs by outcome, and is never empty', () =>
+        SUPPORTED_LANGUAGES.every(lang => {
+            const reopenable = ticketReopenLine(false, lang);
+            const closed = ticketReopenLine(true, lang);
+            return reopenable.length > 0 && closed.length > 0 && reopenable !== closed;
+        }));
+
+    assert('the ticket copy never quotes the reply itself', () =>
+        // A note can be 5000 characters, may be written by a vendor about another customer's
+        // order, and a Meta template parameter cannot contain a newline at all — so a pasted
+        // reply would fail the send outright. `{{subject}}` is the customer's OWN words.
+        (['ticket.replied', 'ticket.awaiting_customer', 'ticket.resolved'] as CustomerNotificationType[])
+            .every(situation =>
+                SUPPORTED_LANGUAGES.every(lang => {
+                    const body = CUSTOMER_NOTIFICATION_CATALOG[situation].base[lang].body;
+                    return !/\{\{(note|noteContent|reply|body|message)\}\}/.test(body);
+                })));
+
+    assert('⚠ the copy says "request", never the platform word "ticket"', () =>
+        // Rule 2 of the catalog's header — no platform vocabulary. The Portuguese and Spanish
+        // words for `ticket` mean a travel or raffle ticket.
+        (['ticket.replied', 'ticket.awaiting_customer', 'ticket.resolved'] as CustomerNotificationType[])
+            .every(situation => {
+                const en = CUSTOMER_NOTIFICATION_CATALOG[situation].base.en;
+                return !/\bticket\b/i.test(`${en.subject} ${en.body}`);
+            }));
 
     console.log('\n── What a customer may NOT mute ──');
 

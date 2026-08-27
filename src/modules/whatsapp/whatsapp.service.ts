@@ -29,4 +29,28 @@ export class WhatsappService {
     const exists = await redis.exists(key);
     return exists === 1;
   }
+
+  /**
+   * The same verdict, plus WHEN it stops being true (GAP-012).
+   *
+   * `canSendFreeMessage` answers the only question the send path has — may this go now —
+   * and that is all it should answer. The automation layer has a different question: it is
+   * deciding whether a conversational flow can FINISH here, or has to end with "we will
+   * message you", and for that it needs the deadline rather than the boolean.
+   *
+   * ⚠ **`expiresAt` is OUR window, not Meta's, and it is deliberately earlier.** The key
+   * lives 23 hours against Meta's 24, so free-form sends stop a safe margin before the real
+   * boundary rather than racing it — see WINDOW_TTL above. A caller must treat this as
+   * "after this we send a template", never as "Meta closes at this instant".
+   *
+   * A missing or non-expiring key answers null, so a caller cannot mistake "no deadline
+   * known" for "closes now". `-1` (no TTL) and `-2` (no key) both land there.
+   */
+  async windowStatus(waPhoneId: string): Promise<{ open: boolean; expiresAt: Date | null }> {
+    const redis = await getRedisClient(WA_WINDOW_DB);
+    const key = `open_chat_window:${waPhoneId}`;
+    const ttl = await redis.ttl(key);
+    if (ttl < 0) return { open: false, expiresAt: null };
+    return { open: true, expiresAt: new Date(Date.now() + ttl * 1000) };
+  }
 }

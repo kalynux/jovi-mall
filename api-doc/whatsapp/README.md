@@ -172,3 +172,4 @@ the same 30 minutes and the same single use.
 - [../auth/magic-login.md](../auth/magic-login.md) — passwordless `/login`, both channels
 - [../notifications/whatsapp-templates.md](../notifications/whatsapp-templates.md) — approved templates
 - [../telegram/README.md](../telegram/README.md) — the Telegram bot bridge
+- [../n8n/README.md](../n8n/README.md) — **design only.** The full customer agent this bridge would carry: 34 commands, a 60-tool catalogue, and the twelve gaps it needs first. The three commands on this page are unchanged by it

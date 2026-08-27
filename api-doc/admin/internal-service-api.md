@@ -85,9 +85,9 @@ The **"was public"** column is kept because the difference is still legible in o
 `admin_action_log` row or a dashboard bug report from before the cutover names the public URL,
 and for `/billing` and `/agencies` that URL was shaped differently, not merely prefixed.
 
-**111 routes in fifteen groups**, counted from the route tables in the factory files on
-2026-08-20 (the previous figure here, 88 in thirteen, predated `/tickets`, `/files` and
-`/messaging`).
+**112 routes in fifteen groups**, counted from the route tables in the factory files on
+2026-08-20 and updated at BR-011 (the previous figures here were 111 in fifteen before the
+file-content route, and 88 in thirteen before `/tickets`, `/files` and `/messaging`).
 
 | Group | Routes | Was public at | Documented in |
 |---|---|---|---|
@@ -104,7 +104,7 @@ and for `/billing` and `/agencies` that URL was shaped differently, not merely p
 | `/shipments/*` | 2 | **never** | — see below |
 | `/system/*` | 12 | **never, deliberately** | [system.md](./system.md) |
 | `/dev-tools/*` | 7 | **never, deliberately** | [dev-tools.md](./dev-tools.md) |
-| `/files/*` | 3 | ~~2 of 3 on `/api/files/*`~~ — ported at **Phase 5 Part B** | see below |
+| `/files/*` | 4 | ~~2 of 4 on `/api/files/*`~~ — ported at **Phase 5 Part B**. `/:id/content` is net-new (BR-011) | see below |
 | `/messaging/*` | 1 | ~~`/api/webhooks/telegram/send`~~ — ported at **Phase 5 Part C** | see below |
 
 ### The groups with no public twin
@@ -164,6 +164,7 @@ kinds of operation.
 
 ```
 POST   /files/resolve      body { fileIds: string[] } (1..100) → { files: FileDetail[] }
+GET    /files/:id/content                    → the file's BYTES (not an envelope)
 GET    /files/orphans      ?olderThan=<ISO>  → { data: File[], meta: { count, olderThan } }
 DELETE /files/:id/permanent                  → { success, message }
 ```
@@ -178,6 +179,39 @@ provider.
 ⚠️ **It resolves; it must never enumerate.** Explicit id set in, matching files out. Ids that
 resolve to nothing are **absent** from the result rather than present-and-null — a record
 legitimately outlives a file the cleanup job swept.
+
+**`GET /:id/content` arrived at BR-011, and it is the only route on this whole surface that
+answers raw bytes rather than an envelope.** `/resolve` returns a URL, and a file in a private
+tree has none — `toFileDetail` gives `digital/` and `shipments/` `url: null,
+access: 'authorized'` (ADR-A01 D-2) — so the delivery-proof photograph, the single most useful
+image on the platform for settling a dispute, was the one an administrator could be told about
+and could not look at. The two byte paths that already existed are scoped to the **agent** and
+the **agency** (`GET /api/{agent,agency}/shipments/:id/delivery-proof/file`), and an
+administrator holds neither identity here.
+
+It streams through `storage.getDownloadStream`, which is what `storage.factory.ts`'s header
+already names as the correct way to serve a private tree. A signed URL was the alternative and
+was **not** taken: `STORAGE_PROVIDER` is `local`, which has no `getSignedUrl` at all, so signing
+would mean inventing a scheme *and* exposing a new unauthenticated route that serves private
+bytes to anyone holding the link for its lifetime — a smaller copy of the `express.static` hole
+D-2 was written to close.
+
+- **Any tree**, public included, streamed identically — so the caller needs one code path and
+  never has to know which tree a file is in. `digital/` is in scope deliberately.
+- **Nothing is audited on this side.** This service authenticates a *service*, not a person, so
+  a row here would attribute a disclosure to `X-Actor-Id`, a header the token holder sets.
+  wi-admin audits it, fail-closed, where the human is actually known — same reasoning as
+  ADR-020 D-5, and the same split the tracking data door uses.
+- ⚠ **`409 STORAGE_DOWNLOAD_NOT_SUPPORTED` when the provider cannot serve bytes**, asked via
+  the new `IStorageProvider.supportsDownloadStream()` *before* the file is looked up. `local`
+  answers true; `firebase` and `cloudinary` throw 501 from `getDownloadStream` and answer false.
+  409 rather than 501 because this is a **configuration state**, not an incident — a caller must
+  be able to say "this deployment cannot show private files" rather than "something went wrong".
+
+  ⚠ Note what that also means for the two **existing** private-file routes: they call
+  `getDownloadStream` unguarded, so on those two providers the digital download and the
+  delivery-proof download are **already broken today**. This route reports the condition; it
+  did not introduce it.
 
 The other two arrived at **Phase 5 Part B**, moved off the public `/api/files` router where they
 had been the only two `requireRole(['admin'])` routes. **The handlers are unchanged** — including

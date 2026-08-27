@@ -1,4 +1,4 @@
-import { getRedisClient, RECOMMENDATION_CACHE_DB } from '../../../infra/redis/redis.factory';
+import { getRedisClient, CACHE_DB } from '../../../infra/redis/redis.factory';
 import { RELATED_PRODUCTS_CONFIG } from '../config/related-products.config';
 
 /**
@@ -71,7 +71,7 @@ export class RelatedProductsCache {
     /** A previously computed ranking, or null for "recompute" — including on any failure. */
     async read(productId: string): Promise<CachedRelatedRanking | null> {
         const raw = await withDeadline(async () => {
-            const redis = await getRedisClient(RECOMMENDATION_CACHE_DB);
+            const redis = await getRedisClient(CACHE_DB);
             return redis.get(keyFor(productId));
         });
 
@@ -91,7 +91,7 @@ export class RelatedProductsCache {
     /** Store a ranking. A failure is not reported: the answer was already computed. */
     async write(productId: string, ranking: CachedRelatedRanking): Promise<void> {
         await withDeadline(async () => {
-            const redis = await getRedisClient(RECOMMENDATION_CACHE_DB);
+            const redis = await getRedisClient(CACHE_DB);
             return redis.set(keyFor(productId), JSON.stringify(ranking), {
                 EX: RELATED_PRODUCTS_CONFIG.CACHE_TTL_SECONDS,
             });

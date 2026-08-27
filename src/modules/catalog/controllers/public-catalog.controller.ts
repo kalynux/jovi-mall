@@ -6,6 +6,7 @@ import {
     PublicProductIdParamSchema,
     PublicProductListQuerySchema,
     PublicProductSlugsParamSchema,
+    PublicSkuParamSchema,
     PublicSlugParamSchema,
     PublicStoreListQuerySchema,
     PublicStoreProductListQuerySchema,
@@ -77,6 +78,28 @@ export class PublicCatalogController {
         const { storeSlug, productSlug } = PublicProductSlugsParamSchema.parse(req.params);
         const product = await publicCatalogService.getProductBySlugs(storeSlug, productSlug);
         cacheable(res).json({ success: true, data: product });
+    });
+
+    /**
+     * GET /api/public/variants/by-sku/:sku
+     *
+     * A product code — off a package, a label or an advertisement — resolved to the variant it
+     * identifies (GAP-003). It exists because `?q=` is a `$text` search over title, tags and
+     * description that does **not** index SKU: a customer typing a real code got an empty
+     * search result indistinguishable from "we do not sell that".
+     *
+     * ⚠ **Answers a resolution, not a product card.** A SKU names one variant, frequently not
+     * the default one a card quotes — so a card here would show the wrong price to precisely
+     * the customer who typed a precise code. `productId` is in the response for the client
+     * that wants the full product next.
+     *
+     * `404 CATALOG_PRODUCT_NOT_FOUND` covers unknown, draft, archived, suspended and
+     * suspended-vendor alike — the 404-never-403 rule this whole surface follows.
+     */
+    static resolveVariantBySku = asyncHandler(async (req: Request, res: Response) => {
+        const { sku } = PublicSkuParamSchema.parse(req.params);
+        const resolution = await publicCatalogService.resolveSku(sku);
+        cacheable(res).json({ success: true, data: resolution });
     });
 
     /**

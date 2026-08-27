@@ -163,3 +163,4 @@ connection answers `400` with `"No Telegram account connected"`.
 - [../connections/README.md](../connections/README.md) — connecting an account (the replacement for the old linking flow)
 - [../auth/magic-login.md](../auth/magic-login.md) — passwordless `/login`, both channels
 - [../whatsapp/README.md](../whatsapp/README.md) — the WhatsApp bot bridge
+- [../n8n/README.md](../n8n/README.md) — **design only.** The full customer agent this bridge would carry. ⚠ It records a live Telegram trap this page does not: the `bot_command` entity accepts only `[a-zA-Z0-9_]`, so **`/reset-password` is parsed by Telegram as `/reset`** and cannot be registered with BotFather. It works today only because the automation layer reads the raw message text — keep it that way

@@ -36,6 +36,8 @@ payment, a whole multi-vendor cart in one charge, or a service booking.
 | `POST` | `/payments/initiate` | **none** | Start a payment for a `cartId`, `orderId` or booking |
 | `POST` | `/payments/verify` | **none** | Re-check a transaction against the gateway (idempotent) |
 | `POST` | `/payments/:transactionId/authorize` | **none** | Submit the one-time code when `initiate` returned `requiresOtp` |
+| `GET` | `/payments/session/:token` | **none** | What a hosted **card** page needs to confirm a payment. Takes a link handle, never a transaction id |
+| `POST` | `/payments/:transactionId/pay-link` | **required, owner-scoped** | Mint (or replace) that link handle |
 | `GET` | `/payments/:transactionId` | **required, owner-scoped** | Read a transaction |
 
 Related surfaces that do **not** live here:
@@ -131,7 +133,7 @@ attempt that poisoned the order would make every retry impossible.
 |---|---|---|
 | `ussdCode` | Mobile money, ordinary flow | Show the code; the customer approves on the handset |
 | `requiresOtp: true` | **My-CoolPay Orange Money** | Collect the SMS code and POST it to `/payments/:transactionId/authorize`. There is **no** `ussdCode` on this branch. |
-| `clientSecret` | Stripe | Confirm with Stripe.js / Payment Element |
+| `clientSecret` | Stripe | Confirm with Stripe.js / Payment Element. **A browser is required** — see [The hosted card page](#the-hosted-card-page-gap-008) if you are not in one |
 | `chargedAmount` / `chargedCurrency` | Stripe | The amount actually charged, in the presentment currency (the order stays priced in XAF) |
 | `message` | Always | Human-readable copy, already localised for the customer |
 | `expiresAt` | Sometimes | When the payment session lapses |
@@ -315,6 +317,94 @@ confirms it on the handset, and the webhook settles it.
 
 Unauthenticated, like `initiate` and `verify`. What bounds it is the IP rate limit plus the
 per-transaction attempt counter, not a session.
+
+---
+
+## The hosted card page (GAP-008)
+
+**Mobile money completes where the customer is** — a USSD prompt or an OTP typed back into the
+chat — and needs nothing here. **A card cannot.** `initiate` with `gateway: "STRIPE"` answers a
+`clientSecret`, and only Stripe.js running in a browser can confirm one. These two endpoints are
+the door a standalone payment page reads through.
+
+⚠ **The page itself is frontend work and is not in this repository.** The backend mints the
+handle, serves the session, and does not care which page renders it.
+
+### `POST /payments/:transactionId/pay-link` — mint the handle
+
+**Authenticated and owner-scoped**, unlike its neighbours, and the asymmetry is the design:
+*reading* a link requires already holding one, while *creating* one turns a transaction id into a
+live payment page and must be attributable. The bot surface reaches the same operation as
+`payment_create_pay_link`, scoped to the resolved messaging identity instead.
+
+```jsonc
+// 200
+{ "success": true, "data": {
+    "token": "pl_9f3c…",                              // 64 hex characters
+    "url": "https://shop.example.com/pay/pl_9f3c…",   // null when STOREFRONT_URL is unset
+    "expiresAt": "2026-08-26T21:42:00.000Z" } }
+```
+
+| Code | Status | When |
+|---|---|---|
+| `PAYMENT_TRANSACTION_NOT_FOUND` | 404 | Unknown, malformed, or not the caller's — indistinguishable on purpose |
+| `PAYMENT_LINK_NOT_APPLICABLE` | 422 | A mobile-money transaction. It completes on the handset and needs no page |
+| `PAYMENT_LINK_NOT_PAYABLE` | 422 | Already settled, failed or cancelled |
+
+⚠ **A second mint REVOKES the first**, and that is the only revocation there is. At most one link
+per transaction is live, which is what makes "the customer lost the message, send it again" safe —
+and what stops a forwarded link outliving its purpose. Do not mint one per page load.
+
+⚠ **`url: null` is a real deployment state, not an error.** It means `STOREFRONT_URL` is unset, so
+this deployment has no payment page. Offer mobile money; do not send a message with a missing link
+in it.
+
+### `GET /payments/session/:token` — what the page reads
+
+**Unauthenticated**, by the same design that makes `initiate`, `verify` and `authorize`
+unauthenticated: a payment link is shareable and the person paying is often not the person who
+ordered.
+
+⚠ **This is deliberately not `GET /payments/:transactionId` opened up.** Transaction ids are the
+only thing between one customer and another's payment record, so an unauthenticated read on them
+is a record any caller can walk by incrementing. This route takes a 256-bit handle that exists
+only where somebody deliberately minted one, expires, and is superseded by the next mint.
+
+```jsonc
+// 200
+{ "success": true, "data": {
+    "transactionId": "68af…",       // poll POST /payments/verify with this
+    "state": "payable",             // payable | settled | closed | expired
+    "gateway": "STRIPE",
+    "amount": 24000, "currency": "XAF",          // what the customer agreed to
+    "chargedAmount": 40, "chargedCurrency": "usd", // what Stripe actually charges
+    "clientSecret": "pi_…_secret_…",  // ⚠ only while state is `payable`
+    "publishableKey": "pk_live_…",    // ⚠ only while state is `payable`; null if unconfigured
+    "expiresAt": "2026-08-26T21:42:00.000Z" } }
+```
+
+**Both amounts are sent, and a page must show both.** The Stripe account settles in USD while the
+catalogue is priced in XAF, so the number the Payment Element renders is not `amount`. Showing XAF
+alone contradicts the card statement; showing USD alone contradicts the order.
+
+| `state` | What the page does |
+|---|---|
+| `payable` | Mount the Payment Element with `publishableKey` + `clientSecret` and confirm |
+| `settled` | Show a receipt. **Never offer a second payment** |
+| `closed` | Failed, cancelled or refunded. Nothing to confirm |
+| `expired` | The link lapsed. Tell the customer to ask for a new one |
+
+⚠ **Status is decided BEFORE expiry.** A customer who paid and comes back an hour later reads
+`settled`, never `expired` — the second reading invites them to pay twice.
+
+⚠ **`state: "expired"` is a 200, not a 404.** The page's whole job at that point is to say the link
+lapsed and offer a fresh one. Everything else — a malformed token, an unknown one, one superseded
+by a re-mint — is the **same** `404 PAYMENT_LINK_NOT_FOUND`, indistinguishable on purpose: any
+difference is an oracle telling an anonymous caller whether their guess had the right shape.
+
+`publishableKey` comes from `STRIPE_PUBLISHABLE_KEY`. A value starting `sk_` or `rk_` is **refused
+and logged**, never published — cards then report as unconfigured until it is corrected.
+`PAYMENT_LINK_TTL_MINUTES` (default 30) sets the window, matched to the checkout stock hold.
 
 ---
 

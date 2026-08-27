@@ -25,6 +25,19 @@ import { DEFAULT_LANGUAGE } from '../../../core/constants/languages';
  * (generated cover art) rather than a field it skips.
  */
 
+/**
+ * The cover as a **reader** receives it: the shared image, plus the alt text for the one
+ * language being served.
+ *
+ * ⚠ **This shape is unchanged on the wire, and that is the point.** The stored
+ * `IArticleCover` lost its `alt` when alt text became per-locale, but a public consumer
+ * still gets exactly `{ url, alt, width, height }` — this projection reassembles it from the
+ * resolved translation. So the marketing frontend needed no change for that migration.
+ */
+export interface PublicArticleCover extends IArticleCover {
+  alt: string;
+}
+
 export interface PublicAuthorDto {
   id: string;
   name: string;
@@ -47,7 +60,7 @@ export interface PublicArticleSummaryDto {
   publishedAt: string;
   updatedAt?: string;
   featured: boolean;
-  cover: IArticleCover | null;
+  cover: PublicArticleCover | null;
   wordCount: number;
   /**
    * Exactly the locales this article is **published** in — what the frontend turns into
@@ -118,10 +131,28 @@ function baseSummary(
     publishedAt: (article.published_at ?? article.createdAt).toISOString(),
     ...(article.content_updated_at ? { updatedAt: article.content_updated_at.toISOString() } : {}),
     featured: article.featured,
-    cover: article.cover ?? null,
+    cover: coverFor(article, translation),
     wordCount: translation.word_count,
     availableLocales: availableLocalesOf(article),
   };
+}
+
+/**
+ * The shared cover image, described in the language being served.
+ *
+ * ── Why `title` stands in when `cover_alt` is unset ───────────────────────────
+ * On this public route it cannot be: wi-admin's `collectPublishBlockers` refuses to publish a
+ * translation going live with a cover and no alt text for it, so every published locale has
+ * one. The branch is defensive only — it exists so that an article written before alt text
+ * became per-locale renders a real description rather than `alt: ""`, which is not "missing"
+ * but the HTML for *this image is decorative, skip it*, and that is a lie about a cover.
+ *
+ * The stand-in is the article's own title in that **same** language, so it is never blank and
+ * never the wrong language — this is not the cross-locale fallback the module rules out.
+ */
+function coverFor(article: IArticle, translation: IArticleTranslation): PublicArticleCover | null {
+  if (!article.cover) return null;
+  return { ...article.cover, alt: translation.cover_alt ?? translation.title };
 }
 
 export function toPublicArticleSummaryDto(

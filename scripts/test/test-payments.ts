@@ -71,6 +71,16 @@ import {
   amountsEqual,
   currenciesEqual,
 } from '../../src/modules/payments/domain/money';
+import {
+  buildPayLinkUrl,
+  gatewayRequiresHostedPage,
+  isPayLinkToken,
+  mintPayLinkToken,
+  payLinkDisclosesSecret,
+  payLinkState,
+  payLinkTtlMinutes,
+  stripePublishableKey,
+} from '../../src/modules/payments/domain/pay-link';
 
 let passed = 0;
 let failed = 0;
@@ -694,7 +704,202 @@ assert('currency comparison is case-insensitive but never matches an absent side
 
 // ═══ 9. Source scans ═════════════════════════════════════════════════════════
 
-section('9. Source scans — the structural invariants');
+// ═══ 9. The hosted card page (GAP-008) ═══════════════════════════════════════
+
+section('9. The hosted card page — what a link may hand out, and to whom');
+
+assert('a minted token is prefixed, hex, and recognised by its own shape check', () => {
+  const token = mintPayLinkToken();
+  return token.startsWith('pl_') && isPayLinkToken(token);
+});
+
+assert('two mints never collide', () => {
+  const seen = new Set(Array.from({ length: 500 }, () => mintPayLinkToken()));
+  return seen.size === 500;
+});
+
+assert('a transaction id is NOT a pay-link token', () =>
+  !isPayLinkToken('507f1f77bcf86cd799439011'));
+
+assert('a truncated or re-cased token is refused', () =>
+  !isPayLinkToken('pl_abc') && !isPayLinkToken(mintPayLinkToken().toUpperCase()));
+
+/**
+ * ⚠ The one that decides whether somebody can be invited to pay twice. A settled
+ * transaction must read `settled` even on a link that has also expired — the status is
+ * checked first, deliberately, because "your link expired" invites a second attempt at a
+ * payment that already succeeded.
+ */
+assert('⚠ SUCCEEDED reads `settled` even when the link has also expired', () =>
+  payLinkState({
+    status: 'SUCCEEDED',
+    expiresAt: new Date(Date.now() - 60_000),
+    now: new Date(),
+  }) === 'settled');
+
+assert('a live link on a pending payment is payable', () =>
+  payLinkState({
+    status: 'PENDING',
+    expiresAt: new Date(Date.now() + 60_000),
+    now: new Date(),
+  }) === 'payable');
+
+assert('FAILED, CANCELLED and REFUNDED all read `closed`, never `payable`', () =>
+  (['FAILED', 'CANCELLED', 'REFUNDED'] as const).every(
+    (status) =>
+      payLinkState({
+        status,
+        expiresAt: new Date(Date.now() + 60_000),
+        now: new Date(),
+      }) === 'closed'
+  ));
+
+assert('an unfinished payment past its window reads `expired`', () =>
+  payLinkState({
+    status: 'INITIATED',
+    expiresAt: new Date(Date.now() - 1),
+    now: new Date(),
+  }) === 'expired');
+
+assert('the expiry boundary is inclusive — expiring exactly now is expired', () => {
+  const now = new Date();
+  return payLinkState({ status: 'PENDING', expiresAt: now, now }) === 'expired';
+});
+
+assert('⚠ ONLY a payable session discloses the credential that can move money', () =>
+  payLinkDisclosesSecret('payable') &&
+  !payLinkDisclosesSecret('settled') &&
+  !payLinkDisclosesSecret('closed') &&
+  !payLinkDisclosesSecret('expired'));
+
+assert('only STRIPE needs a hosted page — mobile money completes on the handset', () =>
+  gatewayRequiresHostedPage('STRIPE') &&
+  !gatewayRequiresHostedPage('NOTCHPAY') &&
+  !gatewayRequiresHostedPage('MYCOOLPAY'));
+
+/**
+ * ⚠ The refusal with an unbounded blast radius. `sk_live_…` in the publishable slot would
+ * be sent to every visitor of a payment page, and the two variables differ by a few
+ * characters in a `.env` file.
+ */
+assert('⚠ a SECRET key in the publishable slot is refused, not published', () => {
+  const before = process.env.STRIPE_PUBLISHABLE_KEY;
+  try {
+    process.env.STRIPE_PUBLISHABLE_KEY = 'sk_live_deadbeef';
+    const secretRefused = stripePublishableKey() === null;
+    process.env.STRIPE_PUBLISHABLE_KEY = 'rk_live_deadbeef';
+    const restrictedRefused = stripePublishableKey() === null;
+    process.env.STRIPE_PUBLISHABLE_KEY = 'pk_test_ok';
+    const publishableAccepted = stripePublishableKey() === 'pk_test_ok';
+    return secretRefused && restrictedRefused && publishableAccepted;
+  } finally {
+    if (before === undefined) delete process.env.STRIPE_PUBLISHABLE_KEY;
+    else process.env.STRIPE_PUBLISHABLE_KEY = before;
+  }
+});
+
+assert('an unset publishable key is null rather than an empty string', () => {
+  const before = process.env.STRIPE_PUBLISHABLE_KEY;
+  try {
+    delete process.env.STRIPE_PUBLISHABLE_KEY;
+    const unset = stripePublishableKey() === null;
+    process.env.STRIPE_PUBLISHABLE_KEY = '   ';
+    return unset && stripePublishableKey() === null;
+  } finally {
+    if (before === undefined) delete process.env.STRIPE_PUBLISHABLE_KEY;
+    else process.env.STRIPE_PUBLISHABLE_KEY = before;
+  }
+});
+
+assert('the link points at the STOREFRONT, and null when there is no storefront', () => {
+  const before = process.env.STOREFRONT_URL;
+  try {
+    process.env.STOREFRONT_URL = 'https://shop.example.com/';
+    const built = buildPayLinkUrl('pl_abc') === 'https://shop.example.com/pay/pl_abc';
+    delete process.env.STOREFRONT_URL;
+    return built && buildPayLinkUrl('pl_abc') === null;
+  } finally {
+    if (before === undefined) delete process.env.STOREFRONT_URL;
+    else process.env.STOREFRONT_URL = before;
+  }
+});
+
+assert('the TTL falls back to 30 minutes on a value that cannot be parsed', () => {
+  const before = process.env.PAYMENT_LINK_TTL_MINUTES;
+  try {
+    process.env.PAYMENT_LINK_TTL_MINUTES = 'thirty';
+    const bad = payLinkTtlMinutes() === 30;
+    process.env.PAYMENT_LINK_TTL_MINUTES = '0';
+    const zero = payLinkTtlMinutes() === 30;
+    process.env.PAYMENT_LINK_TTL_MINUTES = '45';
+    return bad && zero && payLinkTtlMinutes() === 45;
+  } finally {
+    if (before === undefined) delete process.env.PAYMENT_LINK_TTL_MINUTES;
+    else process.env.PAYMENT_LINK_TTL_MINUTES = before;
+  }
+});
+
+/**
+ * ⚠ The session is served to an ANONYMOUS caller holding only a link, so what it may NOT
+ * carry is the security boundary — the same position the public-catalog DTOs hold. A spread
+ * would publish whatever the transaction model gains next, silently.
+ */
+assert('⚠ the session projection names its fields and cannot spread the document', () => {
+  const service = PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code;
+  const leaks = ['userId', 'idempotencyKey', 'merchantRef', 'orderIds', 'rawGatewayPayloads'];
+  // The resolve builds its return object field by field; none of the above may appear
+  // inside it. `rawGatewayPayloads` is read via a helper, so it is checked separately below.
+  const resolveBody = service.slice(service.indexOf('async resolve('));
+  const returned = resolveBody.slice(resolveBody.indexOf('return {'), resolveBody.indexOf('};'));
+  return (
+    !/\.\.\.transaction/.test(service) &&
+    leaks.every((field) => !returned.includes(field))
+  );
+});
+
+assert('⚠ the anonymous read never selects the payer or our gateway-facing references', () => {
+  const service = PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code;
+  const select = service.match(/\.select\('([^']*payLink[^']*)'\)/);
+  if (!select) return false;
+  const fields = select[1].split(/\s+/);
+  return !fields.includes('userId') && !fields.includes('merchantRef') && !fields.includes('idempotencyKey');
+});
+
+assert('the mint refuses a gateway that needs no page, and a finished payment', () => {
+  const service = PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code;
+  return (
+    /PAYMENT_LINK_NOT_APPLICABLE/.test(service) &&
+    /PAYMENT_LINK_NOT_PAYABLE/.test(service) &&
+    /gatewayRequiresHostedPage\(/.test(service)
+  );
+});
+
+assert('⚠ the secret gate is `payLinkDisclosesSecret`, never a second copy of the rule', () => {
+  const service = PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code;
+  // The predicate is called, and the rule is not re-written as a bare state comparison.
+  return (
+    /payLinkDisclosesSecret\(state\)/.test(service) &&
+    !/state === 'payable'/.test(service)
+  );
+});
+
+assert('⚠ the public session route is NOT the owner-scoped transaction read reopened', () => {
+  const routes = PAYMENT_SOURCES.find(({ file }) => file.endsWith('payment.routes.ts'))!.code;
+  // `GET /:transactionId` keeps requireAuth; the session route deliberately has none.
+  return (
+    /router\.get\('\/:transactionId', requireAuth/.test(routes) &&
+    /router\.get\('\/session\/:token', asyncHandler/.test(routes)
+  );
+});
+
+assert('minting is authenticated on the customer route, unlike resolving', () => {
+  const routes = PAYMENT_SOURCES.find(({ file }) => file.endsWith('payment.routes.ts'))!.code;
+  return /router\.post\('\/:transactionId\/pay-link', requireAuth/.test(routes);
+});
+
+// ═══ 10. Source scans ════════════════════════════════════════════════════════
+
+section('10. Source scans — the structural invariants');
 
 /**
  * The ESLint ban on `throw new Error()` was switched off at the two sites that

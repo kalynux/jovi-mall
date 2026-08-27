@@ -27,6 +27,7 @@ import mongoose, { Types } from 'mongoose';
 import { COLLECTIONS } from '../../src/core/database/collections';
 import { ProductModel } from '../../src/modules/catalog/models';
 import { publicCatalogRepository } from '../../src/modules/catalog/repositories/mongo/public-catalog.repository.mongo';
+import { skuCandidates } from '../../src/modules/catalog/domain/services/sku-resolution';
 
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/jovi-mall';
 
@@ -60,7 +61,12 @@ async function cleanup(): Promise<void> {
     const db = mongoose.connection;
     await Promise.all([
         db.collection(COLLECTIONS.PRODUCT).deleteMany({ slug: { $regex: `^${MARKER}` } }),
-        db.collection(COLLECTIONS.PRODUCT_VARIANT).deleteMany({ sku: { $regex: `^${MARKER}` } }),
+        // ⚠ Case-INSENSITIVE, unlike its siblings. The SKU fixtures deliberately include an
+        // all-uppercase code (GAP-003 resolves a typed code by trying case variants, and that
+        // path only means anything against a stored SKU whose case differs) — and a
+        // case-sensitive sweep would leave it behind for the unique index to collide with on
+        // the next run. No real SKU carries this prefix in any case.
+        db.collection(COLLECTIONS.PRODUCT_VARIANT).deleteMany({ sku: { $regex: `^${MARKER}`, $options: 'i' } }),
         db.collection(COLLECTIONS.STORE).deleteMany({ slug: { $regex: `^${MARKER}` } }),
         db.collection(COLLECTIONS.VENDOR).deleteMany({ email: { $regex: `^${MARKER}` } }),
     ]);
@@ -173,6 +179,36 @@ async function main(): Promise<void> {
             updatedAt: new Date(),
         } as never);
 
+        /**
+         * A second sellable variant on the same product, for GAP-003.
+         *
+         * ⚠ **Its SKU is all-uppercase and its facts differ from the default variant's** —
+         * both deliberately. The case is what makes the candidate-spelling path mean
+         * anything (a stored code identical to the typed one proves nothing about it), and
+         * the price/stock difference is what proves the resolution answers about the
+         * VARIANT rather than about the product card, which is the whole design point.
+         *
+         * It does not disturb the browse assertions above: a list row quotes the DEFAULT
+         * variant, which is still the 12 000 one, and `inStock` is true if ANY variant is.
+         */
+        await db.collection(COLLECTIONS.PRODUCT_VARIANT).insertOne({
+            _id: new Types.ObjectId(),
+            productId,
+            sku: `${MARKER.toUpperCase()}-KETTLE-2`,
+            name: 'Large',
+            status: 'active',
+            optionSignature: 'size:large',
+            price: 15000,
+            stock: 0,
+            isInfiniteStock: false,
+            allow_oversell: false,
+            optionValueIds: [],
+            fileIds: [],
+            deletedAt: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        } as never);
+
         log('  ✅ fixtures inserted');
 
         // ─── 3. The pipelines actually run ────────────────────────────────────
@@ -253,6 +289,45 @@ async function main(): Promise<void> {
             return row?.slug === `${MARKER}-store` && row?.vendorCity === 'Douala';
         });
 
+        // ─── 3b. SKU resolution (GAP-003) ─────────────────────────────────────
+        log('\n── SKU resolution ──');
+
+        const resolveSku = (typed: string) =>
+            publicCatalogRepository.findPublishableVariantsBySku(skuCandidates(typed));
+
+        await assert('the SKU pipeline runs and resolves an exact code', async () => {
+            const rows = await resolveSku(`${MARKER}-KETTLE-1`);
+            return rows.length === 1
+                && rows[0].productId === productId.toString()
+                && rows[0].title === 'Verify Storefront Kettle'
+                && rows[0].storeSlug === `${MARKER}-store`;
+        });
+
+        await assert('⚠ a code typed in the WRONG CASE still resolves — against the real unique index', async () => {
+            // The stored SKU is upper; the customer types lower. This is the assertion the
+            // candidate spellings exist for, and it cannot be made without a real index.
+            const rows = await resolveSku(`${MARKER}-kettle-2`.toLowerCase());
+            return rows.length === 1 && rows[0].sku === `${MARKER.toUpperCase()}-KETTLE-2`;
+        });
+
+        await assert('⚠ it answers about the VARIANT, not the product card', async () => {
+            // The card quotes the default variant: 12 000, in stock. This variant is 15 000
+            // and sold out. A resolution that reported the card's facts would quote the
+            // wrong price to precisely the customer who typed a precise code.
+            const [row] = await resolveSku(`${MARKER.toUpperCase()}-KETTLE-2`);
+            return row?.price === 15000 && row?.inStock === false && row?.variantName === 'Large';
+        });
+
+        await assert('an unknown code resolves nothing — and never scans', async () => {
+            const rows = await resolveSku(`${MARKER}-NOTHING-HERE`);
+            return rows.length === 0;
+        });
+
+        await assert('a blank code issues no query at all', async () => {
+            const rows = await publicCatalogRepository.findPublishableVariantsBySku(skuCandidates('   '));
+            return rows.length === 0;
+        });
+
         // ─── 4. Visibility, against real data ─────────────────────────────────
         log('\n── Visibility ──');
 
@@ -267,12 +342,25 @@ async function main(): Promise<void> {
             return hit === null;
         });
 
+        await assert('⚠ nor by its SKU — a code is not a way past the publishable predicate', async () => {
+            // The whole point of applying the predicate inside the product `$lookup`: a SKU
+            // is a handle somebody may hold from before the product was withdrawn, and it
+            // must answer 404 exactly like the URL does.
+            const rows = await resolveSku(`${MARKER}-KETTLE-1`);
+            return rows.length === 0;
+        });
+
         await assert('suspending the VENDOR hides an otherwise-active product', async () => {
             await db.collection(COLLECTIONS.PRODUCT).updateOne({ _id: productId }, { $set: { status: 'active' } });
             await db.collection(COLLECTIONS.VENDOR).updateOne({ _id: vendorId }, { $set: { status: 'inactive' } });
             const { rows } = await publicCatalogRepository.search({ sort: 'newest', page: 1, limit: 50 });
             const store = await publicCatalogRepository.findStoreBySlug(`${MARKER}-store`);
             return !rows.some((r) => r.slug === `${MARKER}-kettle`) && store === null;
+        });
+
+        await assert('a suspended vendor\'s SKU does not resolve either', async () => {
+            const rows = await resolveSku(`${MARKER}-KETTLE-1`);
+            return rows.length === 0;
         });
 
         // ─── 5. Route table ───────────────────────────────────────────────────
@@ -294,6 +382,7 @@ async function main(): Promise<void> {
             '/products',
             '/products/:productId/related',
             '/products/:productId',
+            '/variants/by-sku/:sku',
             '/categories',
             '/stores',
             '/stores/:slug',

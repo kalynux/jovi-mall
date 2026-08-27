@@ -3,6 +3,11 @@ import { GeoPointSchema, IGeoPoint } from '../../core/types/geo.types';
 import { GeoAddressSchema, IGeoAddress } from '../../core/types/geo-address.types';
 import { FixedOnboardingStep } from '../../core/constants/onboarding-steps';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
+import {
+  BOT_ONBOARDING_STATES,
+  BOT_ONBOARDING_STEP_VALUES,
+  BotOnboardingRecord,
+} from '../bot-surface/domain/bot-onboarding';
 
 // ─── Saved Address Sub-Schema ─────────────────────────────────────────────────
 
@@ -140,11 +145,72 @@ export interface ICustomer extends Document {
   /**
    * Always 0 for customers — no onboarding flow.
    * Stored for API consistency with other roles.
+   *
+   * ⚠ Still true, and `bot_onboarding` below is NOT a contradiction of it: that field is
+   * a chat-collection checklist on a different axis. See its own comment.
    */
   onboarding_step: number;
+  /**
+   * The chat-collected profile checklist (GAP-002).
+   *
+   * Present only on accounts created from a messaging channel — null on every customer who
+   * registered through `POST /auth/register`, which collected name, phone and email at the
+   * form. Null therefore means "this account was never onboarded through a chat", not
+   * "nothing has been collected".
+   *
+   * ⚠ **`skipped` is why this is stored rather than derived.** Every other onboarding in
+   * this service recomputes its step from field presence, and that works because a
+   * dashboard can show the same form again for free. A chat cannot: a null email
+   * indistinguishable from a declined one means the bot asks for an email on every message
+   * for the rest of the account's life. See `bot-surface/domain/bot-onboarding.ts`.
+   */
+  bot_onboarding: ICustomerBotOnboarding | null;
   created_at: Date;
   updated_at: Date;
 }
+
+/**
+ * ── The `steps` ARRAY is deliberately not a keyed object ─────────────────────
+ * A `{ phone: ..., name: ... }` map would put the step vocabulary in the Mongoose paths,
+ * so adding a step would be a schema change and removing one would leave an orphan path
+ * nothing reads. As an array with an `enum`'d discriminator, the vocabulary lives in ONE
+ * declaration (`BOT_ONBOARDING_STEP_VALUES`) that both the enum and the domain spread from,
+ * and `normalizeOnboarding` completes whatever is stored into the current checklist.
+ */
+export interface ICustomerBotOnboarding {
+  /** Derived and stored together with `steps`, never written apart — see the repository. */
+  complete: boolean;
+  steps: BotOnboardingRecord[];
+  /** Which channel the account was created from. Audit only; nothing branches on it. */
+  source_channel: string | null;
+  started_at: Date;
+  /** Stamped the moment `complete` first becomes true; never cleared afterwards. */
+  completed_at: Date | null;
+}
+
+const BotOnboardingStepSchema = new Schema<BotOnboardingRecord>(
+  {
+    // Spread from the single declaration in `bot-surface/domain/bot-onboarding.ts`.
+    // Never type the literals here — the agent notification stack kept two copies of one
+    // vocabulary, they drifted, and every contract notification threw a ValidationError
+    // that nobody saw because the write was fire-and-forget.
+    step: { type: String, enum: [...BOT_ONBOARDING_STEP_VALUES], required: true },
+    state: { type: String, enum: [...BOT_ONBOARDING_STATES], required: true },
+    at: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
+const BotOnboardingSchema = new Schema<ICustomerBotOnboarding>(
+  {
+    complete: { type: Boolean, default: false },
+    steps: { type: [BotOnboardingStepSchema], default: [] },
+    source_channel: { type: String, default: null, trim: true },
+    started_at: { type: Date, required: true, default: () => new Date() },
+    completed_at: { type: Date, default: null },
+  },
+  { _id: false }
+);
 
 // ─── Mongoose Schema ──────────────────────────────────────────────────────────
 
@@ -186,6 +252,13 @@ const CustomerSchema = new Schema<ICustomer>(
       min: 0,
       max: 0, // Customers are always COMPLETED; enforced at app layer too
     },
+    /**
+     * `default: null`, never `default: () => ({})`. "Registered at the form" and "created
+     * from a chat and asked nothing yet" are different facts, and an empty sub-document
+     * would spell them the same way — which would make every pre-existing customer look
+     * like an abandoned chat onboarding to the surface that reads this.
+     */
+    bot_onboarding: { type: BotOnboardingSchema, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }
 );

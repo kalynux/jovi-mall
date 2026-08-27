@@ -4,6 +4,21 @@
 **Status:** handed off **2026-08-21** · Phase 6, Step 1 of
 [`PRODUCTION-READINESS/PHASE-6-UNBUILT-SCOPE-PLAN.md`](../../../PRODUCTION-READINESS/PHASE-6-UNBUILT-SCOPE-PLAN.md).
 
+> **This page is still the operative document for the three live commands, and nothing supersedes
+> it.** A larger customer agent — browsing, cart, orders, tracking, support — was **designed** on
+> 2026-08-24 in [`../n8n/`](../n8n/README.md). That is **design only**: no code, no workflow, and
+> it changes none of the seven items below. Two things in it are worth knowing here.
+>
+> **It does not work yet, and the reason is not n8n's.** There is no way for the automation layer
+> to *act as a customer* — every command on this page mints a credential for a human to redeem in
+> a browser, and `/api/internal/*` reaches agents, shipments and admin only. That is
+> [GAP-001](../n8n/BACKEND-GAPS.md#gap-001) and it is backend work.
+>
+> **Item 5's mapping is unchanged, and stays unchanged.** Registration on first contact
+> ([GAP-002](../n8n/BACKEND-GAPS.md#gap-002)) adds a *third* pending intent behind the same
+> `login_contact` post. Keep posting it for any inbound contact; the platform still decides which
+> command it completes.
+
 Everything on the platform side is **built, tested and deployed**: `npm run test:messaging-login`
 is **158 / 0**, and a live suite (`verify:messaging-login`) exercises the flow end to end against
 real Redis and Mongo. **The feature is inert until the seven items below land in n8n.** Nothing in

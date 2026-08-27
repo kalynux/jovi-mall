@@ -1,0 +1,168 @@
+{
+  "map_version": "1.0.0",
+  "generated_at": "2026-08-24",
+  "purpose": "How every backend failure becomes something a customer can act on. One table, shared by every tool, so a code the catalog does not enumerate still lands somewhere sensible. Prose reference: ../ARCHITECTURE.md section 9.",
+
+  "reading_order": [
+    "1. A tool's own `errors[]` entry in catalog.json wins — it is the specific handling.",
+    "2. Otherwise this file's `codes` table, keyed on error.code.",
+    "3. Otherwise this file's `categories` table, keyed on error.category, which is present on EVERY error from all three backend services.",
+    "4. Never branch on error.message. It is human copy and it changes."
+  ],
+
+  "customer_actions": {
+    "explain": {
+      "means": "Tell the customer what happened in their own language and stop. There is nothing to retry.",
+      "retry": false,
+      "keeps_flow": false,
+      "copy_rule": "Say what is true and what they can do next. Never quote the error code or the English message."
+    },
+    "reprompt": {
+      "means": "The customer supplied something the platform would not take. Ask again for that one value.",
+      "retry": true,
+      "keeps_flow": true,
+      "copy_rule": "Name the field and the constraint. `details.fields[]` is populated on VALIDATION_ERROR and each entry maps to one thing to ask about."
+    },
+    "disambiguate": {
+      "means": "More than one thing matched. Offer the candidates and let the customer choose.",
+      "retry": true,
+      "keeps_flow": true,
+      "copy_rule": "Never pick for them, and never pick the first."
+    },
+    "retry_with_backoff": {
+      "means": "A third party or a limiter refused. Wait and try again, bounded.",
+      "retry": true,
+      "keeps_flow": true,
+      "policy": "3 attempts, 2s / 8s / 30s. Respect Retry-After and details.retryAfterSeconds when present. Then fall through to escalate_to_support.",
+      "copy_rule": "Tell them it is being retried. Do not say 'error'; this is not their fault and not fixable by them."
+    },
+    "handoff_to_web": {
+      "means": "This cannot be done in a chat window. Send a link and say what to do there.",
+      "retry": false,
+      "keeps_flow": false,
+      "copy_rule": "Say why, in one clause. 'Cards are paid on the website' is better than an unexplained link."
+    },
+    "require_login": {
+      "means": "The sender is not resolvable, or holds no customer role. Offer the sign-in or registration path.",
+      "retry": false,
+      "keeps_flow": false,
+      "copy_rule": "For a Telegram chat with no contact shared, the answer is the contact prompt, not a link."
+    },
+    "abandon_flow": {
+      "means": "Something the flow was carrying is stale or wrong. Drop the flow state and start the step again from a clean read.",
+      "retry": false,
+      "keeps_flow": false,
+      "copy_rule": "Apologise once, briefly, and re-ask. Never re-send arguments the flow was holding."
+    },
+    "escalate_to_support": {
+      "means": "The platform cannot resolve this by itself. Offer to open a ticket, pre-filled.",
+      "retry": false,
+      "keeps_flow": false,
+      "copy_rule": "Always quote the requestId. On an internal or external_service failure it is the only handle anybody has."
+    },
+    "silent_ignore": {
+      "means": "The failure does not concern the customer. Log it and say nothing.",
+      "retry": false,
+      "keeps_flow": true,
+      "copy_rule": "Only for bookkeeping calls the customer never asked for, such as recording that a product card was shown."
+    }
+  },
+
+  "categories": {
+    "authentication": { "default_action": "require_login", "note": "Never retry. On the bot surface this almost always means the messaging identity could not be resolved, not that a token expired." },
+    "authorization": { "default_action": "explain", "note": "Signed in, but this is not theirs. Do not retry and do not hint that the thing exists." },
+    "validation": { "default_action": "reprompt", "note": "details.fields[] maps to what to ask about." },
+    "not_found": { "default_action": "explain", "note": "Treat as absent. NEVER infer existence from a 404 — the platform answers 404 for 'not yours' on purpose, so 'that is not your order' and 'no such order' are the same answer and must be phrased as one." },
+    "conflict": { "default_action": "abandon_flow", "note": "The state moved underneath the flow. Re-read, then let the customer decide again — never resend the same intent." },
+    "business_rule": { "default_action": "explain", "note": "Well-formed and refused on purpose. error.message explains which rule and is written to be shown. This is not a fault and must not be apologised for as one." },
+    "rate_limit": { "default_action": "retry_with_backoff", "note": "Respect Retry-After. Prefer the RateLimit: remaining= header to slow down before being refused." },
+    "external_service": { "default_action": "retry_with_backoff", "note": "message is a fixed generic sentence and details is omitted, in every environment. requestId is the only handle." },
+    "internal": { "default_action": "escalate_to_support", "note": "Same opacity as external_service. Show the requestId." }
+  },
+
+  "codes": {
+    "RATE_LIMIT_EXCEEDED": { "action": "retry_with_backoff", "details_fields": ["retryAfterSeconds"], "note": "Customers are bounded at 600/min per user and 1200/min per address. A chat bot reaching either is looping." },
+    "WEBHOOK_SECRET_INVALID": { "action": "escalate_to_support", "note": "Configuration, not a customer problem. It breaks /connect and sign-in together, so an outage here looks like several unrelated faults at once. Alert rather than retry." },
+
+    "AUTH_MISSING_TOKEN": { "action": "require_login" },
+    "AUTH_TOKEN_EXPIRED": { "action": "require_login" },
+    "AUTH_ROLE_NOT_FOUND": { "action": "explain", "note": "On the bot surface: the sender is a vendor, agency or agent. They keep /help, /connect and /reset-password and reach nothing customer-scoped. A customer role is never auto-provisioned." },
+    "AUTH_ACCOUNT_SUSPENDED": { "action": "escalate_to_support" },
+
+    "BOT_IDENTITY_UNRESOLVED": { "action": "require_login", "note": "No account for this messaging identity. Offer registration." },
+    "BOT_IDENTITY_NEEDS_CONTACT": { "action": "require_login", "note": "Telegram, first contact. The answer is the request_contact keyboard." },
+    "BOT_IDENTITY_NOT_CUSTOMER": { "action": "explain" },
+    "MAGIC_CONTACT_UNVERIFIED": { "action": "explain", "note": "Relay error.message verbatim. It is written for a chat window and does not read as an accusation, because the ordinary way to hit it is tapping the wrong contact." },
+    "MAGIC_CODE_INVALID": { "action": "explain", "note": "Deliberately one code for four situations. NEVER write copy that says 'no account with that number' — differentiating it would make the endpoint a registration oracle." },
+    "MAGIC_ATTEMPTS_EXCEEDED": { "action": "retry_with_backoff" },
+
+    "CATALOG_PRODUCT_NOT_FOUND": { "action": "explain", "note": "Absent, draft, archived, suspended, or its vendor is suspended — indistinguishable on purpose, so never speculate about which." },
+    "STORE_NOT_FOUND": { "action": "explain" },
+    "CATALOG_INSUFFICIENT_STOCK": { "action": "explain", "details_fields": ["sku", "requested", "available"], "note": "`available` is what the shopper can actually buy, after other in-flight checkouts. Offer the available quantity as a next step." },
+
+    "CART_MIXED_PRODUCT_TYPES": { "action": "explain", "note": "One basket holds physical OR digital, never both. Offer to check out what is there first — never clear it without asking." },
+    "CART_SERVICE_PRODUCT_NOT_ALLOWED": { "action": "handoff_to_web", "note": "Services are booked against a calendar, not carted." },
+    "CART_DIGITAL_LIMIT_REACHED": { "action": "explain" },
+    "CART_DIGITAL_QUANTITY_MUST_BE_ONE": { "action": "explain" },
+    "CART_ITEM_NOT_FOUND": { "action": "abandon_flow", "note": "A stale reference — re-read the cart before answering." },
+    "CART_NOT_FOUND": { "action": "explain" },
+    "CART_EMPTY_CHECKOUT": { "action": "explain" },
+    "CART_VARIANT_PRODUCT_MISMATCH": { "action": "abandon_flow", "note": "The flow built a bad pair. Re-read the product; never retry with the same ids." },
+
+    "ORDER_DELIVERY_ADDRESS_REQUIRED": { "action": "abandon_flow", "details_fields": ["reason"], "note": "reason `selected_address_not_geocoded` means an address the customer explicitly chose is unusable because it was typed rather than picked from address search. Take them into the address flow; do not just say 'invalid address'." },
+    "ORDER_NO_DELIVERY_AGENCY": { "action": "escalate_to_support", "note": "A platform-side gap, not the customer's doing." },
+    "ORDER_NOT_CANCELLABLE": { "action": "explain" },
+    "ORDER_CANCEL_REQUIRES_REFUND": { "action": "escalate_to_support", "note": "The order is paid. This endpoint refunds nothing; open a ticket." },
+    "CANCELLATION_NOT_ALLOWED": { "action": "explain", "details_fields": ["cancellable", "deadline"], "note": "The SELLER's policy, not the platform's. Quote their terms." },
+    "ORDER_ALREADY_CANCELLED": { "action": "explain" },
+    "ORDER_NOT_FOUND": { "action": "explain", "note": "Also returned when the order is somebody else's. Phrase as one answer." },
+
+    "COD_AGENCY_NOT_SUPPORTED": { "action": "explain", "details_fields": ["agencyName"], "note": "Offer online payment instead." },
+    "COD_ORDER_AMOUNT_EXCEEDS_LIMIT": { "action": "explain", "details_fields": ["agencyName", "maxOrderAmount", "orderTotal"], "note": "Quote the cap. It is actionable: a smaller basket, or online payment." },
+    "COD_NOT_AVAILABLE_FOR_DIGITAL": { "action": "explain" },
+    "COD_COLLECTION_NOT_FOUND": { "action": "explain", "note": "Not a cash order, not picked up yet, or already collected. Say which is likely from the shipment status rather than guessing." },
+    "COD_CODE_RESEND_TOO_SOON": { "action": "retry_with_backoff", "details_fields": ["retryInSeconds"] },
+
+    "SHIPMENT_CONFIRMATION_NOT_ALLOWED": { "action": "explain", "details_fields": ["paymentMethod"], "note": "When paymentMethod is cash_on_delivery the answer is the delivery code, not a confirmation. Offer that instead." },
+    "SHIPMENT_ALREADY_CONFIRMED": { "action": "explain" },
+    "SHIPMENT_ACCESS_DENIED": { "action": "explain" },
+
+    "PAYMENT_OPERATOR_UNDETERMINED": { "action": "reprompt", "note": "Ask MTN or Orange. Guessing reaches the customer as 'payment declined'." },
+    "PAYMENT_ORDER_IS_COD": { "action": "explain" },
+    "PAYMENT_ORDER_ALREADY_PAID": { "action": "explain" },
+    "PAYMENT_CART_NO_PAYABLE_ORDERS": { "action": "explain" },
+    "PAYMENT_CART_NOT_FOUND": { "action": "abandon_flow" },
+    "PAYMENT_CART_MIXED_CURRENCY": { "action": "escalate_to_support" },
+    "PAYMENT_INITIATION_FAILED": { "action": "retry_with_backoff", "note": "A 502 is transport-level. A gateway REFUSAL is not this — it is HTTP 200 with status FAILED, and must be read from the body." },
+    "PAYMENT_TRANSACTION_NOT_FOUND": { "action": "explain" },
+
+    "GEO_PROVIDER_UNAVAILABLE": { "action": "retry_with_backoff", "note": "Geocoding is off the critical path — checkout against an ALREADY-SAVED address still works. Say that rather than blocking the sale." },
+    "GEO_SEARCH_FAILED": { "action": "retry_with_backoff" },
+    "BOT_GEO_CANDIDATE_EXPIRED": { "action": "abandon_flow", "note": "Re-run the search; never re-send coordinates the flow was holding." },
+
+    "DIGITAL_DOWNLOAD_LIMIT_EXCEEDED": { "action": "escalate_to_support" },
+    "DIGITAL_ENTITLEMENT_EXPIRED": { "action": "escalate_to_support" },
+    "DIGITAL_ENTITLEMENT_REVOKED": { "action": "escalate_to_support" },
+    "DIGITAL_TOKEN_INVALID": { "action": "explain", "note": "Single-use and 15 minutes. Mint a fresh link." },
+
+    "WISHLIST_ITEM_NOT_FOUND": { "action": "explain" },
+    "REVIEW_ALREADY_EXISTS": { "action": "explain" },
+    "REVIEW_SUBJECT_NOT_REVIEWABLE": { "action": "explain" },
+    "BOOKING_NOT_CANCELLABLE": { "action": "explain" },
+    "CUSTOMER_ADDRESS_NOT_FOUND": { "action": "abandon_flow" },
+    "CUSTOMER_NOTIFICATION_CHANNEL_NOT_VERIFIED": { "action": "explain" },
+    "BOT_SUPPORT_NO_CONTEXT": { "action": "explain", "note": "Fall through to platform support rather than saying nothing." },
+    "BOT_SUPPORT_SCOPE_UNAVAILABLE": { "action": "explain", "note": "Most often /support:agency before an order has shipped. A legitimate empty answer." },
+    "VALIDATION_ERROR": { "action": "reprompt", "details_fields": ["fields"] }
+  },
+
+  "copy_rules": [
+    "Write in the customer's language, from customer.preferences.language, in one of en, fr, pt, es, ar.",
+    "Never show an error code, an HTTP status or a field path to a customer. requestId is the single exception, and only on internal and external_service.",
+    "Never say 'no account with that number', for any reason, on any path. It is a registration oracle and the platform is deliberately built not to be one.",
+    "Never explain WHY a product is unavailable. Draft, archived, suspended and deleted are one answer on purpose, so a competitor cannot enumerate a seller's unreleased catalogue.",
+    "Never turn a business_rule refusal into an apology. The rule is the answer; apologising for it implies it is a fault that might be waived.",
+    "Never promise a refund. Report the payment status the response carried — some gateways cannot refund at all and settle by hand.",
+    "Never claim a delivery outcome the platform did not state. estimatedDelivery is always null, and there are five customer-facing shipment words; anything else is invention."
+  ]
+}

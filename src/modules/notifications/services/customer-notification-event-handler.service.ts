@@ -26,7 +26,8 @@ import {
     renderCustomerButton,
     customerWhatsAppTemplateName,
     deliveryFailureLine,
-    codReadyLine
+    codReadyLine,
+    ticketReopenLine
 } from '../catalog/customer-notification-catalog';
 import type { ShipmentFailureReason } from '../../shipments/shipment.model';
 import { ChannelText } from '../catalog/notification-catalog';
@@ -61,8 +62,47 @@ const SITUATION_PREFERENCE: Partial<
     // Deliberately absent (always sent):
     //   booking.cancelled, booking.payment.received, booking.balance.due,
     //   booking.refunded, booking.refund.pending,
-    //   order.cancelled, order.payment.received, order.refunded
+    //   order.cancelled, order.payment.received, order.refunded,
+    //   ticket.replied, ticket.awaiting_customer, ticket.resolved
+    //
+    // ⚠ The three `ticket.*` situations are ungated, and the reason is NOT the
+    // counterparty argument the money and cancellation groups rest on — a support
+    // request is the customer's own. It is narrower: all three are the ANSWER to a
+    // question they asked, and `awaiting_customer` is the platform saying it is
+    // blocked on them. A preference that silenced those would mute the reply to your
+    // own question and then hold the request open waiting for you, which is not a
+    // setting anybody means to choose. No new preference key was added for them
+    // either — one that can only sensibly hold one value is a switch with a wrong
+    // position.
 };
+
+/**
+ * Which of the eight ticket statuses a customer is told about (GAP-012).
+ *
+ * Exported and PURE so `test:customer-notifications` can drive the whole table without a
+ * database — the same reason `deriveWorkingState` and `aggregatePaymentStatus` are extracted.
+ * The handler below does the I/O; this is the policy, and the policy is what a regression
+ * would silently change.
+ *
+ * ⚠ **Five of the eight are deliberately silent.** `in_progress` and the four
+ * `waiting_on_{admin,vendor,agency,agent}` all mean "somebody else has it" — internal
+ * progress, not news. This is the same rule `handleShipmentStatusChanged` applies to
+ * `assigned` and `handing_over`, and for the same reason: forwarding them trains people to
+ * ignore the channel that carries the answer.
+ *
+ * ⚠ **`open` is silent too, and that is not an oversight.** A customer arriving at `open` has
+ * either just created the request — they know — or had it REOPENED, which only happens
+ * because they replied. Both cases are the customer's own action.
+ */
+export function customerTicketSituationFor(
+    newStatus: string | undefined
+): CustomerNotificationType | null {
+    if (newStatus === 'waiting_on_customer') return 'ticket.awaiting_customer';
+    // Both terminal statuses share a situation. They do NOT share a sentence — only one can
+    // be reopened by replying, and `reopenLine` carries the difference.
+    if (newStatus === 'resolved' || newStatus === 'closed') return 'ticket.resolved';
+    return null;
+}
 
 interface DispatchParams {
     situation: CustomerNotificationType;
@@ -560,6 +600,132 @@ export class CustomerNotificationEventHandler {
         }
         if (!userId || !mongoose.Types.ObjectId.isValid(userId)) return null;
         return CustomerModel.findOne({ user_id: new mongoose.Types.ObjectId(userId) });
+    }
+
+    // ─── Support requests (GAP-012) ──────────────────────────────────────────
+
+    /**
+     * A note was added to a ticket.
+     *
+     * ── THREE GATES, AND EACH DROPS A DIFFERENT WRONG RECIPIENT ─────────────
+     * 1. **Public notes only.** A private note is visible to its author, admins and an
+     *    explicit list; telling the customer one arrived would disclose that a
+     *    conversation they cannot read is happening about them, which is the whole
+     *    distinction `NoteVisibility` exists to draw.
+     * 2. **Not the customer's own note.** Otherwise every message they send notifies
+     *    them about themselves — and on WhatsApp, inside their own service window,
+     *    immediately after they typed it.
+     * 3. **A ticket the customer opened AS a customer** (`created_by_role`). Since the
+     *    GAP-002 D-3 reversal every vendor, agency and agent who messages the bot holds a
+     *    customer profile too, so "does this user have a customer row" no longer means
+     *    "this is a customer's ticket". Without this gate a vendor's support thread about
+     *    their payout would arrive in their customer inbox, in customer vocabulary.
+     */
+    async handleTicketNoteCreated(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            ticketId: string;
+            noteId: string;
+            authorRole?: string;
+            visibility?: string;
+        };
+
+        if (p.visibility !== 'public') return;
+        if (p.authorRole === 'customer') return;
+
+        const ticket = await this.customerTicket(p.ticketId);
+        if (!ticket) return;
+
+        await this.notify({
+            situation: 'ticket.replied',
+            customerId: ticket.customer._id.toString(),
+            aggregateType: 'ticket',
+            aggregateId: p.ticketId,
+            // Keyed on the NOTE, not the ticket: a second reply is a second thing to be
+            // told about. Every other key on this handler is keyed on the aggregate
+            // because those situations happen once.
+            idempotencyKey: `customer.ticket.replied:${p.noteId}`,
+            context: { ticketId: p.ticketId, subject: ticket.subject }
+        });
+    }
+
+    /**
+     * A ticket changed status.
+     *
+     * Only three of the eight statuses reach the customer — `waiting_on_customer`, and the
+     * two terminal ones. The rest (`in_progress`, and waiting on admin/vendor/agency/agent)
+     * all mean "somebody else has it", which is the same reason the shipment handler drops
+     * `assigned` and `handing_over`.
+     *
+     * ⚠ **`resolved` and `closed` share a situation but not a sentence.** Both are terminal
+     * and only one can be reopened by replying, so `reopenLine` carries the difference —
+     * see `ticketReopenLine`. Collapsing them into one wording would have the platform
+     * promise a route it has shut.
+     */
+    async handleTicketStatusChanged(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            ticketId: string;
+            oldStatus?: string;
+            newStatus?: string;
+        };
+
+        const isClosed = p.newStatus === 'closed';
+        const situation = customerTicketSituationFor(p.newStatus);
+        if (!situation) return;
+
+        const ticket = await this.customerTicket(p.ticketId);
+        if (!ticket) return;
+
+        await this.notify({
+            situation,
+            customerId: ticket.customer._id.toString(),
+            aggregateType: 'ticket',
+            aggregateId: p.ticketId,
+            // The TRANSITION, not the ticket: `resolved → in_progress → resolved` is a
+            // legal cycle and each arrival is worth telling somebody about, exactly as
+            // `failed → in_transit → failed` is on a shipment.
+            idempotencyKey: `customer.ticket.status:${p.ticketId}:${p.oldStatus ?? 'unknown'}:${p.newStatus}`,
+            context: {
+                ticketId: p.ticketId,
+                subject: ticket.subject,
+                reopenLine: ticketReopenLine(isClosed, resolveLanguage(ticket.customer))
+            }
+        });
+    }
+
+    /**
+     * The ticket and its customer, or null when this ticket is not a customer's.
+     *
+     * ⚠ **The subject is TRUNCATED to 60 characters**, and that is not cosmetic. It is a
+     * customer-authored string up to 200 characters that reaches a lock-screen push, an
+     * email subject line and — the binding one — a WhatsApp template parameter. Meta caps a
+     * parameter's length and rejects the whole send if it is exceeded, so an untruncated
+     * subject would make long-titled requests silently undeliverable on the one channel
+     * GAP-012 is about. Newlines are collapsed for the same reason: a template parameter
+     * may not contain one at all.
+     */
+    private async customerTicket(
+        ticketId: string
+    ): Promise<{ customer: ICustomer; subject: string } | null> {
+        if (!ticketId || !mongoose.Types.ObjectId.isValid(ticketId)) return null;
+
+        // Lazily imported: the tickets module reaches back into notifications, and a
+        // top-level import here closes a require cycle at boot — the same reason
+        // `customerFromOrder` imports the order model this way.
+        const { TicketModel } = await import('../../tickets/models/ticket.model');
+        const ticket = await TicketModel.findById(ticketId)
+            .select('subject created_by_role created_by_user_id')
+            .lean();
+
+        if (!ticket || ticket.created_by_role !== 'customer') return null;
+
+        const customer = await CustomerModel.findOne({ user_id: ticket.created_by_user_id });
+        if (!customer) return null;
+
+        const subject = String(ticket.subject ?? '').replace(/\s+/g, ' ').trim();
+        return {
+            customer,
+            subject: subject.length > 60 ? `${subject.slice(0, 57)}…` : subject
+        };
     }
 
     private async loadCustomer(customerId: string | undefined): Promise<ICustomer | null> {

@@ -80,10 +80,31 @@ function confirmLinkBase(): string {
 
 /**
  * The confirmation URL. One builder, so the mail and the api-doc cannot drift on the path
- * or the query parameter.
+ * or the query parameters.
+ *
+ * ── `app` names WHICH APP asked, and it is optional on purpose ────────────────
+ *
+ * **One page serves all four apps**, because `confirmEmailChange` is genuinely role-free:
+ * it reads no `req.auth`, resolves the account from the token's digest, and syncs the
+ * confirmed address onto *every* role profile the account holds. A per-dashboard copy of
+ * that page would have nothing to do differently, and each copy would be one more place to
+ * get the POST-not-GET rule wrong.
+ *
+ * The one thing a role-free confirm cannot work out for itself is **where to send the
+ * person afterwards** — so the requesting role travels in the link, stamped by
+ * `requestEmailChange`, which is the half of the flow that has a session.
+ *
+ * **Optional** because links already sitting in inboxes carry no `app=`, and the page
+ * treats its absence as normal (it falls back to storefront destinations).
+ *
+ * ⚠ **A ROLE KEY, never a URL.** The page maps this through a compile-time table and
+ * ignores anything else. Do not "improve" it into a `?return=` parameter: this page is
+ * reachable with no session, so a caller-supplied destination would be an open redirect on
+ * the same origin as the sign-in pages.
  */
-export function buildEmailChangeLink(token: string): string {
-  return `${confirmLinkBase()}/account/confirm-email?token=${token}`;
+export function buildEmailChangeLink(token: string, app?: string): string {
+  const origin = app ? `&app=${encodeURIComponent(app)}` : '';
+  return `${confirmLinkBase()}/account/confirm-email?token=${token}${origin}`;
 }
 
 /**
@@ -189,7 +210,10 @@ export class ContactChangeService {
       subject: 'Confirm your new email address',
       template: 'verify-email-change',
       variables: {
-        link: buildEmailChangeLink(token),
+        // `actor.role` is one of customer | vendor | agency | agent — resolved from the
+        // verified token by `ContactChangeController.actorFrom`, never from a body, and
+        // exactly the enum the confirmation page accepts.
+        link: buildEmailChangeLink(token, actor.role),
         newEmail: email,
         hours: Math.max(1, Math.round(CONTACT_CHANGE_CONFIG.EMAIL_TOKEN_TTL_SECONDS / 3600)),
         year: new Date().getFullYear(),

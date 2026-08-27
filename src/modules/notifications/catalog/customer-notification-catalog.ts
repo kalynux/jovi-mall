@@ -78,6 +78,47 @@ const ORDER_BUTTON: ButtonDef = {
     urlSuffix: 'orders/{{orderId}}'
 };
 
+const PAY_NOW_LABEL: Record<Language, string> = {
+    en: 'Pay now',
+    fr: 'Payer maintenant',
+    pt: 'Pagar agora',
+    es: 'Pagar ahora',
+    ar: 'ادفع الآن'
+};
+
+/**
+ * The hosted card page (GAP-008).
+ *
+ * ⚠ **`{{payToken}}`, never `{{transactionId}}`.** The page is reachable without a session,
+ * so what travels in the URL has to be the opaque expiring handle rather than the
+ * transaction's id — the whole argument for the handle is in `payments/domain/pay-link.ts`,
+ * and putting an id here would quietly undo it.
+ */
+const PAY_LINK_BUTTON: ButtonDef = {
+    type: 'url',
+    label: PAY_NOW_LABEL,
+    urlSuffix: 'pay/{{payToken}}'
+};
+
+const VIEW_TICKET_LABEL: Record<Language, string> = {
+    en: 'View request',
+    fr: 'Voir la demande',
+    pt: 'Ver pedido de apoio',
+    es: 'Ver solicitud',
+    ar: 'عرض الطلب'
+};
+
+/**
+ * ⚠ **"Request", never "ticket".** Rule 2 of this catalog's header — no platform
+ * vocabulary. A customer opened a support *request*; `ticket` is what the system calls the
+ * row, and the Portuguese and Spanish words for it mean a travel or raffle ticket.
+ */
+const TICKET_BUTTON: ButtonDef = {
+    type: 'url',
+    label: VIEW_TICKET_LABEL,
+    urlSuffix: 'support/{{ticketId}}'
+};
+
 const TRACK_ORDER_LABEL: Record<Language, string> = {
     en: 'Track delivery',
     fr: 'Suivre la livraison',
@@ -225,6 +266,39 @@ export function codReadyLine(
         currency,
         amountFormatted: new Intl.NumberFormat('en-US').format(Math.round(amount))
     });
+}
+
+const REOPEN_LINE: Record<Language, string> = {
+    en: 'If that is not right, reply on the request and we will pick it back up.',
+    fr: 'Si ce n\'est pas réglé, répondez sur la demande et nous la reprendrons.',
+    pt: 'Se não estiver resolvido, responda no pedido e voltamos a tratá-lo.',
+    es: 'Si no es correcto, responde en la solicitud y la retomamos.',
+    ar: 'إذا لم يكن الأمر كذلك، فردّ على الطلب وسنعاود النظر فيه.'
+};
+
+const CLOSED_LINE: Record<Language, string> = {
+    en: 'This one is now closed — start a new request if you need anything else.',
+    fr: 'Celle-ci est désormais close — ouvrez une nouvelle demande si vous avez besoin d\'autre chose.',
+    pt: 'Este ficou fechado — abra um novo pedido se precisar de mais alguma coisa.',
+    es: 'Esta ya está cerrada — abre una nueva solicitud si necesitas algo más.',
+    ar: 'تم إغلاق هذا الطلب — افتح طلبًا جديدًا إذا احتجت أي شيء آخر.'
+};
+
+/**
+ * What a customer may still do with a request that just reached a terminal status.
+ *
+ * `resolved` and `closed` are both terminal and are NOT interchangeable here: a resolved
+ * request can be reopened by replying, a closed one cannot. Telling somebody to "reply if
+ * this is not sorted" on a closed request sends them somewhere that will not answer, which
+ * is worse than saying nothing — it is the platform promising a route it has shut.
+ *
+ * ⚠ **Returns a whole sentence, never an empty string** — unlike `codReadyLine`, whose
+ * absence is a legitimate state. This one always has something true to say, and an empty
+ * value would leave a WhatsApp template parameter blank, which Meta rejects outright.
+ */
+export function ticketReopenLine(isClosed: boolean, lang: Language): string {
+    const variants = isClosed ? CLOSED_LINE : REOPEN_LINE;
+    return variants[lang] ?? variants[DEFAULT_LANGUAGE];
 }
 
 // ─── The catalog ─────────────────────────────────────────────────────────────
@@ -645,6 +719,52 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
         button: ORDER_BUTTON
     },
 
+    // ⚠ **The only situation here the automation layer RAISES rather than observes**, and
+    // the only one whose button does not point at an order. It carries a card payment page
+    // (GAP-008) to a customer whose chat window has closed, which is the exact shape
+    // GAP-012 describes: a flow that cannot finish where it started.
+    //
+    // The copy says the amount and that the link expires, and deliberately does NOT say
+    // "your order is waiting" — a customer who has already paid by another route must not be
+    // told they owe money. The link's own page answers `state: 'settled'` in that case, but
+    // the message arrives first.
+    'order.payment_link': {
+        base: {
+            en: {
+                subject: 'Finish paying {{currency}} {{amountFormatted}}',
+                body: 'Open this page to pay {{currency}} {{amountFormatted}} for {{orderNumber}} by card. The link works for {{expiresInMinutes}} minutes — ask me for a new one if it runs out.'
+            },
+            fr: {
+                subject: 'Terminez le paiement de {{currency}} {{amountFormatted}}',
+                body: 'Ouvrez cette page pour payer {{currency}} {{amountFormatted}} pour {{orderNumber}} par carte. Le lien est valable {{expiresInMinutes}} minutes — demandez-m\'en un nouveau s\'il expire.'
+            },
+            pt: {
+                subject: 'Conclua o pagamento de {{currency}} {{amountFormatted}}',
+                body: 'Abra esta página para pagar {{currency}} {{amountFormatted}} de {{orderNumber}} com cartão. O link é válido durante {{expiresInMinutes}} minutos — peça-me um novo se expirar.'
+            },
+            es: {
+                subject: 'Termina el pago de {{currency}} {{amountFormatted}}',
+                body: 'Abre esta página para pagar {{currency}} {{amountFormatted}} de {{orderNumber}} con tarjeta. El enlace dura {{expiresInMinutes}} minutos — pídeme otro si caduca.'
+            },
+            ar: {
+                subject: 'أكمل دفع {{currency}} {{amountFormatted}}',
+                body: 'افتح هذه الصفحة لدفع {{currency}} {{amountFormatted}} مقابل {{orderNumber}} بالبطاقة. الرابط صالح لمدة {{expiresInMinutes}} دقيقة — اطلب مني رابطًا جديدًا إذا انتهت صلاحيته.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_payment_link',
+                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{orderNumber}}', '{{expiresInMinutes}}']
+            }
+        },
+        // ⚠ The ONE button in this catalog that does not lead to a record the customer
+        // already owns — it leads to a page that can take their money. That is why the
+        // token in it is single-purpose, expiring, and revoked by the next mint: see
+        // `payments/domain/pay-link.ts`.
+        button: PAY_LINK_BUTTON
+    },
+
     'order.shipped': {
         base: {
             en: {
@@ -843,6 +963,125 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             }
         },
         button: ORDER_BUTTON
+    },
+
+    // ══ Support requests (GAP-012) ═══════════════════════════════════════════
+    //
+    // ⚠ **The copy never quotes the reply, and that is a decision rather than an
+    // omission.** A ticket note can be 5000 characters, may be written by a
+    // vendor about another customer's order, and reaches a lock screen and a
+    // WhatsApp template with a fixed parameter budget. A Meta template parameter
+    // additionally cannot contain a newline, so a pasted reply would fail the
+    // send outright. The notification says an answer arrived and links to it.
+    //
+    // `{{subject}}` is the customer's OWN words — they wrote the request — so it
+    // is the one piece of content safe to echo. The handler truncates it.
+
+    'ticket.replied': {
+        base: {
+            en: {
+                subject: 'We replied about "{{subject}}"',
+                body: 'There is a new reply on your support request about "{{subject}}". Open it to read the answer.'
+            },
+            fr: {
+                subject: 'Nous avons répondu à « {{subject}} »',
+                body: 'Il y a une nouvelle réponse à votre demande d\'assistance concernant « {{subject}} ». Ouvrez-la pour lire la réponse.'
+            },
+            pt: {
+                subject: 'Respondemos sobre "{{subject}}"',
+                body: 'Há uma nova resposta ao seu pedido de apoio sobre "{{subject}}". Abra-o para ler a resposta.'
+            },
+            es: {
+                subject: 'Respondimos sobre "{{subject}}"',
+                body: 'Hay una nueva respuesta en tu solicitud de soporte sobre "{{subject}}". Ábrela para leer la respuesta.'
+            },
+            ar: {
+                subject: 'لقد رددنا بخصوص "{{subject}}"',
+                body: 'هناك رد جديد على طلب الدعم الخاص بك بخصوص "{{subject}}". افتحه لقراءة الرد.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_ticket_replied',
+                bodyParams: ['{{subject}}']
+            }
+        },
+        button: TICKET_BUTTON
+    },
+
+    'ticket.awaiting_customer': {
+        base: {
+            en: {
+                subject: 'We need something from you: "{{subject}}"',
+                body: 'We cannot go further with your request about "{{subject}}" until you reply. Open it and let us know.'
+            },
+            fr: {
+                subject: 'Nous avons besoin de vous : « {{subject}} »',
+                body: 'Nous ne pouvons pas avancer sur votre demande concernant « {{subject}} » tant que vous n\'avez pas répondu. Ouvrez-la pour nous répondre.'
+            },
+            pt: {
+                subject: 'Precisamos de algo de si: "{{subject}}"',
+                body: 'Não conseguimos avançar com o seu pedido sobre "{{subject}}" enquanto não responder. Abra-o e diga-nos.'
+            },
+            es: {
+                subject: 'Necesitamos algo de tu parte: "{{subject}}"',
+                body: 'No podemos avanzar con tu solicitud sobre "{{subject}}" hasta que respondas. Ábrela y cuéntanos.'
+            },
+            ar: {
+                subject: 'نحتاج منك شيئًا: "{{subject}}"',
+                body: 'لا يمكننا المتابعة في طلبك بخصوص "{{subject}}" حتى ترد علينا. افتحه وأخبرنا.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_ticket_awaiting_customer',
+                bodyParams: ['{{subject}}']
+            }
+        },
+        button: TICKET_BUTTON
+    },
+
+    // `{{reopenLine}}` is substituted by the handler, already localized, because
+    // whether a customer may still reply depends on which terminal status this
+    // is — `resolved` can be reopened, `closed` cannot — and telling them to
+    // "reply if this is not sorted" on a closed request sends them nowhere.
+    'ticket.resolved': {
+        base: {
+            en: {
+                subject: 'Sorted: "{{subject}}"',
+                body: 'We have marked your request about "{{subject}}" as done. {{reopenLine}}'
+            },
+            fr: {
+                subject: 'Résolu : « {{subject}} »',
+                body: 'Nous avons marqué votre demande concernant « {{subject}} » comme terminée. {{reopenLine}}'
+            },
+            pt: {
+                subject: 'Resolvido: "{{subject}}"',
+                body: 'Marcámos o seu pedido sobre "{{subject}}" como concluído. {{reopenLine}}'
+            },
+            es: {
+                subject: 'Resuelto: "{{subject}}"',
+                body: 'Hemos marcado tu solicitud sobre "{{subject}}" como terminada. {{reopenLine}}'
+            },
+            ar: {
+                subject: 'تم الحل: "{{subject}}"',
+                body: 'لقد وضعنا علامة على طلبك بخصوص "{{subject}}" بأنه منتهٍ. {{reopenLine}}'
+            }
+        },
+        whatsapp: {
+            text: {},
+            // ⚠ TWO params, and the second is `reopenLine`. A Meta template's parameter
+            // count must match what was approved, and `reopenLine` is a whole sentence
+            // that varies by outcome — so it travels as a parameter rather than being
+            // baked into the approved body, which would make one of the two outcomes a lie.
+            template: {
+                name: 'customer_ticket_resolved',
+                bodyParams: ['{{subject}}', '{{reopenLine}}']
+            }
+        },
+        button: TICKET_BUTTON
     }
 };
 

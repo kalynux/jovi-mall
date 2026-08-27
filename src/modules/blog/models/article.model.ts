@@ -11,10 +11,25 @@ import {
 } from '../blog.types';
 import { ArticleBody } from '../validators/article-body.validator';
 
-/** A cover image. Optional — see the note on generated cover art in `api-doc/public/articles.md`. */
+/**
+ * A cover image. Optional — see the note on generated cover art in `api-doc/public/articles.md`.
+ *
+ * ⚠ **The alt text is NOT here — it is per-locale, on the translation as `cover_alt`.** One
+ * article is published in up to five languages off this one image, and a single shared `alt`
+ * put English words into a French screen reader and onto the French page's `og:image`. The
+ * image itself stays shared: `url`, `width` and `height` are properties of the file rather
+ * than of the prose.
+ *
+ * **The PUBLIC shape did not change.** `PublicArticleSummaryDto.cover` still carries
+ * `{ url, alt, width, height }` — `dto/public-article.dto.ts` reassembles it from whichever
+ * translation is being served, so this migration was invisible to the marketing frontend.
+ *
+ * ⚠ Written by **wi-admin**, not here (ADR-004 D-4). Changing this interface is half a
+ * change: `admin/src/modules/content/domain/article.document.ts` holds the writer's copy and
+ * both suites pin the pair.
+ */
 export interface IArticleCover {
   url: string;
-  alt: string;
   /** Required, both of them: they reserve the box so a loading image does not shift the page. */
   width: number;
   height: number;
@@ -32,6 +47,17 @@ export interface IArticleTranslation {
   meta_title: string | null;
   excerpt: string;
   body: ArticleBody;
+  /**
+   * Alt text for the article's shared cover image, in **this** language.
+   *
+   * `null` while unwritten, which is legal on a draft and refused at publish by wi-admin's
+   * `collectPublishBlockers` — so on any article this public reader can serve, every
+   * published translation with a cover has one.
+   *
+   * Inline images inside `body` carry their own `alt` and always have: `body` is
+   * per-translation, so those were never the problem this field fixes.
+   */
+  cover_alt: string | null;
   /** Words in `body`, derived on write — never accepted from the editor. */
   word_count: number;
   /**
@@ -102,7 +128,6 @@ export interface IArticle extends IBaseDocument {
 const ArticleCoverSchema = new Schema<IArticleCover>(
   {
     url: { type: String, required: true, trim: true },
-    alt: { type: String, required: true, trim: true },
     width: { type: Number, required: true, min: 1 },
     height: { type: Number, required: true, min: 1 },
   },
@@ -121,6 +146,7 @@ const ArticleTranslationSchema = new Schema<IArticleTranslation>(
     // step. The rule that makes this safe: no write path may set a body that did not come
     // through that Zod schema.
     body: { type: Schema.Types.Mixed, required: true },
+    cover_alt: { type: String, default: null, trim: true, maxlength: 300 },
     word_count: { type: Number, required: true, default: 0, min: 0 },
     published: { type: Boolean, required: true, default: true },
     previous_slugs: { type: [String], default: [] },

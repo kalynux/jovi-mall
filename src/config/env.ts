@@ -212,7 +212,7 @@ const BOOLEAN_LITERALS = new Set(['true', 'false', '1', '0']);
 const ENUM_VARS: Readonly<Record<string, readonly string[]>> = Object.freeze({
     NODE_ENV: ['development', 'test', 'production'],
     STORAGE_PROVIDER: ['local', 'firebase', 'cloudinary'],
-    GEO_PROVIDER: ['nominatim', 'google', 'mapbox', 'here', 'geoapify'],
+    GEO_PROVIDER: ['chain', 'nominatim', 'geoapify', 'locationiq', 'google', 'mapbox', 'here'],
     MAIL_PROVIDER: ['console', 'smtp'],
     LOG_LEVEL: ['trace', 'debug', 'info', 'warn', 'error', 'fatal'],
     LOG_PERSIST_LEVEL: ['trace', 'debug', 'info', 'warn', 'error', 'fatal'],
@@ -409,8 +409,18 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
     }
 
     // ── Geocoding ────────────────────────────────────────────────────────────
-    // Only Nominatim has an adapter in this build; the factory throws for the rest. Catching
-    // it here means the failure lands at boot rather than on a customer's address search.
+    // THREE adapters ship in this build — nominatim, geoapify, locationiq — plus `chain`,
+    // which fails over between them and is the intended production setting (ADR-A04 D-3).
+    // The remaining names in GEO_PROVIDERS are type-level only and the factory throws for
+    // them. Catching that here means the failure lands at boot rather than on a customer's
+    // address search.
+    const GEO_ADAPTER_KEYS: Readonly<Record<string, string>> = Object.freeze({
+        geoapify: 'GEO_GEOAPIFY_API_KEY',
+        locationiq: 'GEO_LOCATIONIQ_API_KEY',
+        google: 'GEO_GOOGLE_API_KEY',
+        mapbox: 'GEO_MAPBOX_TOKEN',
+    });
+    const GEO_PROVIDER_NAMES = ['nominatim', 'geoapify', 'locationiq', 'google', 'mapbox', 'here'];
     const geoProvider = (get('GEO_PROVIDER') ?? 'nominatim').toLowerCase();
     if (geoProvider === 'google' && !has('GEO_GOOGLE_API_KEY')) {
         err('GEO_GOOGLE_API_KEY', 'is required when GEO_PROVIDER=google.');
@@ -418,8 +428,40 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
     if (geoProvider === 'mapbox' && !has('GEO_MAPBOX_TOKEN')) {
         err('GEO_MAPBOX_TOKEN', 'is required when GEO_PROVIDER=mapbox.');
     }
-    if (['google', 'mapbox', 'here', 'geoapify'].includes(geoProvider)) {
-        err('GEO_PROVIDER', `is "${geoProvider}", which has no adapter in this build — getGeocodingProvider() throws GEO_PROVIDER_NOT_CONFIGURED on first use. Only "nominatim" is implemented.`);
+    if (['google', 'mapbox', 'here'].includes(geoProvider)) {
+        err('GEO_PROVIDER', `is "${geoProvider}", which has no adapter in this build — getGeocodingProvider() throws GEO_PROVIDER_NOT_CONFIGURED on first use. Implemented: "chain", "nominatim", "geoapify", "locationiq".`);
+    }
+    // A SINGLE-provider setting is fatal without its key: the factory builds it with
+    // `required: true`, so the adapter cannot be built and every lookup throws.
+    if (geoProvider === 'geoapify' && !has('GEO_GEOAPIFY_API_KEY')) {
+        err('GEO_GEOAPIFY_API_KEY', 'is required when GEO_PROVIDER=geoapify. The adapter is built only when its key is present, so without it every lookup throws GEO_PROVIDER_NOT_CONFIGURED.');
+    }
+    if (geoProvider === 'locationiq' && !has('GEO_LOCATIONIQ_API_KEY')) {
+        err('GEO_LOCATIONIQ_API_KEY', 'is required when GEO_PROVIDER=locationiq. The adapter is built only when its key is present, so without it every lookup throws GEO_PROVIDER_NOT_CONFIGURED.');
+    }
+    if (geoProvider === 'chain') {
+        // Inside a chain the same missing key is a WARNING, not an error: buildChain()
+        // builds each link with `required: false`, skips the ones it cannot build, and
+        // always appends keyless nominatim — so the chain still resolves addresses. That
+        // is precisely the failure worth warning about, because it is silent: the
+        // deployment believes it runs on its primary and is actually running on
+        // Nominatim's ~1 rps public instance.
+        const chainNames = (get('GEO_PROVIDER_CHAIN') ?? 'locationiq,geoapify')
+            .split(',')
+            .map((name) => name.trim().toLowerCase())
+            .filter((name) => name.length > 0);
+        for (const name of chainNames) {
+            if (name === 'nominatim') continue;
+            if (!GEO_PROVIDER_NAMES.includes(name)) {
+                // buildOne()'s default branch throws on an unknown name even inside a
+                // chain, deliberately — a misspelt provider must not be silently skipped.
+                err('GEO_PROVIDER_CHAIN', `names "${name}", which is not a known provider. buildChain() refuses it on first use rather than skipping it.`);
+            } else if (name === 'here') {
+                warn('GEO_PROVIDER_CHAIN', 'names "here", which has no adapter in this build. That link is skipped and the chain falls through to the next provider.');
+            } else if (!has(GEO_ADAPTER_KEYS[name])) {
+                warn('GEO_PROVIDER_CHAIN', `names "${name}" but ${GEO_ADAPTER_KEYS[name]} is not set, so that link is skipped at build time and the chain silently falls through to the next one.`);
+            }
+        }
     }
     if (geoProvider === 'nominatim' && !has('GEO_NOMINATIM_USER_AGENT')) {
         warn('GEO_NOMINATIM_USER_AGENT', 'is not set, so the compiled-in default identifies every deployment identically. The OSM Nominatim usage policy requires an identifying User-Agent and blocks non-compliant callers.');

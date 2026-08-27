@@ -63,11 +63,13 @@ function loadGeocodingConfig(): GeocodingConfig {
         defaultLimit: Number(process.env.GEO_DEFAULT_LIMIT) || 5,
         // Default-bias to Cameroon (the platform's market); override to '' for worldwide.
         defaultCountryCodes: parseCountryCodes(process.env.GEO_DEFAULT_COUNTRY_CODES ?? 'cm'),
-        // Order matters and the default is not arbitrary: Geoapify first because its
-        // limits are SOFT and its burst ceiling is the higher (5 rps vs 2), LocationIQ
-        // second because its daily allowance is the larger (5 000 vs 3 000) and it is
-        // therefore the better reserve. Putting LocationIQ first would 429 on ordinary
-        // autocomplete typing — three keystrokes in a second is over its limit.
+        // Order matters, and the default order lives in buildChain() — NOT here: an unset
+        // value must reach the factory as `undefined` so one default is applied in one
+        // place. ⚠ That default is LocationIQ first, which is the reverse of what the rate
+        // limits alone suggest; it was reversed on 2026-08-23 by measurement (ADR-A04 D-3's
+        // amendment), because the chain only consults the second provider when the first
+        // returns EMPTY or errors — so a confidently wrong first answer is never corrected,
+        // while a 429 is. This comment previously argued the opposite and outlived it.
         chain: parseChain(process.env.GEO_PROVIDER_CHAIN),
         cache: {
             // ON by default, unlike most optional infrastructure here. The cache is what makes

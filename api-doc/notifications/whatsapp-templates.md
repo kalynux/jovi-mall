@@ -2,8 +2,9 @@
 
 This is the source-of-truth for the WhatsApp Business templates used by the
 platform — vendor notifications (§1–7), the customer-facing COD delivery
-code (§8), the cross-role **billing / plan-lifecycle** templates (§9), and the
-**agency** (§10) and **agent** (§11) notification templates. Create each template
+code (§8), the cross-role **billing / plan-lifecycle** templates (§9), the
+**agency** (§10) and **agent** (§11) notification templates, agency-warehoused
+stock (§12), and the **customer** notification stack (§13). Create each template
 in **WhatsApp Business Manager → Message Templates** exactly as
 specified, in **all 5 languages**. Until a template is approved, out-of-24h-window
 sends for that event will fail — for role notifications the failure is recorded on
@@ -361,6 +362,390 @@ of truth, and the in-app bodies and the template bodies must read the same.
 > **Suspension copy must state the consequence plainly.** `storage.product_suspended`
 > says "so customers can no longer buy it" in every language. A vendor who reads it as an
 > administrative note will not act, and the product stays unsellable.
+
+---
+
+
+---
+
+## 13. Customer templates (the fourth notification stack)
+
+⚠ **These twenty-two were registered in code and documented NOWHERE until 2026-08-26**, which
+is the same thing as not existing: an unapproved template fails on send, and a template nobody
+wrote down never gets approved. GAP-012's own warning is exactly this — *"a template registered
+in code but not approved in Business Manager still fails on send"* — so the customer stack had
+the machinery and no approved templates to use it with. Create all twenty-two, in all five
+languages, before relying on any proactive customer message.
+
+> **Button URL base:** `STOREFRONT_URL`, not `VENDOR_APP_URL` — these point a *customer* at
+> their own order, booking or support request. Configure each template's URL base as your
+> `STOREFRONT_URL` with a trailing `{{1}}`; the backend sends the path suffix shown under
+> **Button** as the button parameter.
+
+**Which of these actually matter.** Payments settle in minutes and stay inside the 24-hour
+service window, so their free-form copy usually does the work. The ones that *cannot* be
+delivered any other way are the ones whose event lands days later:
+`customer_order_shipped`, `customer_order_out_for_delivery`, `customer_order_delivered`,
+`customer_order_delivery_failed`, `customer_booking_reminder`, and the three
+`customer_ticket_*` templates. Approve those first.
+
+⚠ **The body below is the TEMPLATE body, and for eleven situations it is shorter than the
+in-window copy.** Those carry a handler-substituted clause — `{{confirmationLine}}`,
+`{{codLine}}`, `{{reasonLine}}`, `{{refundLine}}` and friends — that is **not** in
+`bodyParams` and therefore cannot travel in a template at all; Meta rejects a body containing
+an unbound placeholder. Out-of-window those customers get the shorter sentence, which is the
+accepted cost of the template mechanism rather than a defect.
+
+> ### ⚠ Five of those eleven had to be REWRITTEN rather than shortened, and it is a finding
+>
+> On six of the eleven the missing clause is trailing, so dropping it leaves a correct
+> sentence. On **five it sits mid-sentence**, and simply removing it produces copy that is
+> ungrammatical — *"We received your XAF 24000 payment for order ORD-1. is preparing it
+> now."* — or, on `booking.balance.due`, actively **wrong**: two different amounts collapse
+> onto one parameter and the sentence claims something untrue about the money.
+>
+> Those five carry a **⚠ Rewritten, not derived** note and a hand-written body that says as
+> much as its declared parameters allow. They are the five whose `bodyParams` do not cover
+> their own copy: `booking.reminder`, `booking.payment.received`, `booking.balance.due`,
+> `order.created`, `order.payment.received`.
+>
+> **The honest fix is to widen `bodyParams` on those five** so a template can say what the
+> in-window copy says. It was NOT done here, deliberately: changing an approved template's
+> parameter count is a Business Manager operation, and doing it blind — from a repository
+> that cannot see what is approved — risks breaking a template that already works. Raise it
+> as its own change, with the approval state in front of you.
+
+⚠ **`customer_order_payment_link` is the only one here that is not raised by a platform
+event.** The automation layer raises it through `messaging_notify_customer`, and its button
+points at a **payment page**, not at a record the customer already owns. See
+[n8n/bot-surface.md § 13](../n8n/bot-surface.md).
+
+⚠ **`{{2}}` on `customer_ticket_resolved` is a whole sentence, not a value** — whether the
+customer may still reply depends on resolved-vs-closed, so it travels as a parameter rather
+than being baked into the approved body, which would make one of the two outcomes a lie.
+
+The tables below are rendered from
+[customer-notification-catalog.ts](../../src/modules/notifications/catalog/customer-notification-catalog.ts).
+`npm run test:customer-notifications` asserts that every registered `customer_*` template
+name appears on this page, so a situation added without its approval copy fails the suite.
+
+### `customer_booking_created`
+
+- **Situation:** `booking.created`
+- **Body params:** `{{1}}`=serviceName, `{{2}}`=vendorName, `{{3}}`=startAt
+- **Button:** URL → `bookings/{{bookingId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Booking requested: {{1}} | You booked {{1}} with {{2}} for {{3}}. | View booking |
+| fr | Réservation demandée : {{1}} | Vous avez réservé {{1}} chez {{2}} pour le {{3}}. | Voir la réservation |
+| pt_PT | Reserva solicitada: {{1}} | Reservou {{1}} com {{2}} para {{3}}. | Ver reserva |
+| es | Reserva solicitada: {{1}} | Reservaste {{1}} con {{2}} para el {{3}}. | Ver reserva |
+| ar | تم طلب الحجز: {{1}} | لقد حجزت {{1}} مع {{2}} في {{3}}. | عرض الحجز |
+
+### `customer_booking_confirmed`
+
+- **Situation:** `booking.confirmed`
+- **Body params:** `{{1}}`=vendorName, `{{2}}`=serviceName, `{{3}}`=startAt
+- **Button:** URL → `bookings/{{bookingId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Booking confirmed: {{2}} | {{1}} accepted your booking for {{2}} on {{3}}. It is now confirmed — see you then. | View booking |
+| fr | Réservation confirmée : {{2}} | {{1}} a accepté votre réservation pour {{2}} le {{3}}. Elle est confirmée — à bientôt. | Voir la réservation |
+| pt_PT | Reserva confirmada: {{2}} | {{1}} aceitou a sua reserva de {{2}} em {{3}}. Está confirmada — até lá. | Ver reserva |
+| es | Reserva confirmada: {{2}} | {{1}} aceptó tu reserva de {{2}} el {{3}}. Está confirmada — nos vemos. | Ver reserva |
+| ar | تم تأكيد الحجز: {{2}} | قبلت {{1}} حجزك لـ {{2}} في {{3}}. تم التأكيد — نراك حينها. | عرض الحجز |
+
+### `customer_booking_rescheduled`
+
+- **Situation:** `booking.rescheduled`
+- **Body params:** `{{1}}`=serviceName, `{{2}}`=previousStartAt, `{{3}}`=startAt
+- **Button:** URL → `bookings/{{bookingId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Booking moved: {{1}} | Your {{1}} booking has moved from {{2}} to {{3}}. If that does not work for you, you can cancel or move it again. | View booking |
+| fr | Réservation déplacée : {{1}} | Votre réservation {{1}} est passée du {{2}} au {{3}}. Si cela ne vous convient pas, vous pouvez l'annuler ou la déplacer. | Voir la réservation |
+| pt_PT | Reserva alterada: {{1}} | A sua reserva de {{1}} passou de {{2}} para {{3}}. Se não lhe der jeito, pode cancelar ou alterar de novo. | Ver reserva |
+| es | Reserva movida: {{1}} | Tu reserva de {{1}} pasó del {{2}} al {{3}}. Si no te viene bien, puedes cancelarla o moverla otra vez. | Ver reserva |
+| ar | تم نقل الحجز: {{1}} | تم نقل حجزك لـ {{1}} من {{2}} إلى {{3}}. إذا لم يناسبك ذلك، يمكنك الإلغاء أو النقل مرة أخرى. | عرض الحجز |
+
+### `customer_booking_cancelled`
+
+- **Situation:** `booking.cancelled`
+- **Body params:** `{{1}}`=serviceName, `{{2}}`=startAt, `{{3}}`=cancelledBy
+- **Button:** URL → `bookings/{{bookingId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Booking cancelled: {{1}} | Your {{1}} booking on {{2}} was cancelled by {{3}}. | View booking |
+| fr | Réservation annulée : {{1}} | Votre réservation {{1}} du {{2}} a été annulée par {{3}}. | Voir la réservation |
+| pt_PT | Reserva cancelada: {{1}} | A sua reserva de {{1}} em {{2}} foi cancelada por {{3}}. | Ver reserva |
+| es | Reserva cancelada: {{1}} | Tu reserva de {{1}} del {{2}} fue cancelada por {{3}}. | Ver reserva |
+| ar | تم إلغاء الحجز: {{1}} | تم إلغاء حجزك لـ {{1}} في {{2}} بواسطة {{3}}. | عرض الحجز |
+
+### `customer_booking_completed`
+
+- **Situation:** `booking.completed`
+- **Body params:** `{{1}}`=serviceName, `{{2}}`=currency, `{{3}}`=finalPriceFormatted
+- **Button:** URL → `bookings/{{bookingId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Thanks for visiting | Your {{1}} booking is complete. Final price: {{2}} {{3}}. | View booking |
+| fr | Merci de votre visite chez | Votre réservation {{1}} est terminée. Prix final : {{2}} {{3}}. | Voir la réservation |
+| pt_PT | Obrigado por visitar | A sua reserva de {{1}} está concluída. Preço final: {{2}} {{3}}. | Ver reserva |
+| es | Gracias por visitar | Tu reserva de {{1}} está completa. Precio final: {{2}} {{3}}. | Ver reserva |
+| ar | شكرًا لزيارتك | اكتمل حجزك لـ {{1}}. السعر النهائي: {{2}} {{3}}. | عرض الحجز |
+
+### `customer_booking_reminder`
+
+- **Situation:** `booking.reminder`
+- **Body params:** `{{1}}`=serviceName, `{{2}}`=vendorName, `{{3}}`=startAt
+- **Button:** URL → `bookings/{{bookingId}}`
+
+⚠ **Rewritten, not derived.** The in-window copy carries `{{whenPhrase}}` ("tomorrow" / "later today"), which is not a body param — the template says the time plainly instead.
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Reminder: {{1}} | Your {{1}} booking with {{2}} is at {{3}}. If you cannot make it, please cancel so the slot can go to someone else. | View booking |
+| fr | Rappel : {{1}} | Votre réservation {{1}} chez {{2}} est prévue le {{3}}. Si vous ne pouvez pas venir, annulez pour libérer le créneau. | Voir la réservation |
+| pt_PT | Lembrete: {{1}} | A sua reserva de {{1}} com {{2}} é às {{3}}. Se não puder comparecer, cancele para libertar o horário. | Ver reserva |
+| es | Recordatorio: {{1}} | Tu reserva de {{1}} con {{2}} es el {{3}}. Si no puedes asistir, cancélala para liberar el horario. | Ver reserva |
+| ar | تذكير: {{1}} | حجزك لـ {{1}} مع {{2}} في {{3}}. إذا لم تتمكن من الحضور، يرجى الإلغاء ليستفيد شخص آخر من الموعد. | عرض الحجز |
+
+### `customer_booking_payment_received`
+
+- **Situation:** `booking.payment.received`
+- **Body params:** `{{1}}`=currency, `{{2}}`=amountFormatted, `{{3}}`=serviceName
+- **Button:** URL → `bookings/{{bookingId}}`
+
+⚠ **Rewritten, not derived.** The in-window copy names `{{startAt}}`, which is not a body param.
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Payment received: {{1}} {{2}} | We received your {{1}} {{2}} payment for {{3}}. Nothing else to do — see you then. | View booking |
+| fr | Paiement reçu : {{1}} {{2}} | Nous avons reçu votre paiement de {{1}} {{2}} pour {{3}}. Rien d'autre à faire — à bientôt. | Voir la réservation |
+| pt_PT | Pagamento recebido: {{1}} {{2}} | Recebemos o seu pagamento de {{1}} {{2}} para {{3}}. Nada mais a fazer — até lá. | Ver reserva |
+| es | Pago recibido: {{1}} {{2}} | Recibimos tu pago de {{1}} {{2}} por {{3}}. Nada más que hacer — nos vemos. | Ver reserva |
+| ar | تم استلام الدفعة: {{1}} {{2}} | استلمنا دفعتك بقيمة {{1}} {{2}} مقابل {{3}}. لا يوجد شيء آخر مطلوب — نراك حينها. | عرض الحجز |
+
+### `customer_booking_balance_due`
+
+- **Situation:** `booking.balance.due`
+- **Body params:** `{{1}}`=vendorName, `{{2}}`=serviceName, `{{3}}`=currency, `{{4}}`=balanceFormatted
+- **Button:** URL → `bookings/{{bookingId}}/pay-balance`
+
+⚠ **Rewritten, not derived, and this one was WRONG rather than merely incomplete.** The in-window copy names `{{finalPriceFormatted}}` and `{{reasonLine}}`, neither of which is a body param, and stripping them left `{{3}}` reading as two different amounts in one sentence. The template states only the balance, which is what the four parameters can actually say.
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Balance due: {{3}} {{4}} | {{1}} has settled your {{2}} booking, and {{3}} {{4}} is still owed. You can pay the balance here, or settle it directly with {{1}}. | Pay balance |
+| fr | Solde à payer : {{3}} {{4}} | {{1}} a clôturé votre réservation {{2}}, et il reste {{3}} {{4}} à régler. Vous pouvez payer le solde ici, ou directement auprès de {{1}}. | Payer le solde |
+| pt_PT | Saldo em dívida: {{3}} {{4}} | {{1}} concluiu a sua reserva de {{2}} e ainda faltam {{3}} {{4}}. Pode pagar o saldo aqui, ou diretamente a {{1}}. | Pagar saldo |
+| es | Saldo pendiente: {{3}} {{4}} | {{1}} ha cerrado tu reserva de {{2}} y aún faltan {{3}} {{4}}. Puedes pagar el saldo aquí, o directamente con {{1}}. | Pagar saldo |
+| ar | رصيد مستحق: {{3}} {{4}} | أنهت {{1}} حجزك لـ {{2}}، وما زال مستحقًا {{3}} {{4}}. يمكنك دفع الرصيد هنا، أو تسويته مباشرة مع {{1}}. | دفع الرصيد |
+
+### `customer_booking_refunded`
+
+- **Situation:** `booking.refunded`
+- **Body params:** `{{1}}`=currency, `{{2}}`=amountFormatted, `{{3}}`=serviceName
+- **Button:** URL → `bookings/{{bookingId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Refunded: {{1}} {{2}} | We have refunded {{1}} {{2}} for your cancelled {{3}} booking. It goes back to the way you paid, and usually appears within a few working days. | View booking |
+| fr | Remboursé : {{1}} {{2}} | Nous avons remboursé {{1}} {{2}} pour votre réservation {{3}} annulée. Le montant retourne par votre moyen de paiement et apparaît généralement sous quelques jours ouvrés. | Voir la réservation |
+| pt_PT | Reembolsado: {{1}} {{2}} | Reembolsámos {{1}} {{2}} pela sua reserva cancelada de {{3}}. Volta pelo mesmo meio de pagamento e costuma aparecer em poucos dias úteis. | Ver reserva |
+| es | Reembolsado: {{1}} {{2}} | Hemos reembolsado {{1}} {{2}} por tu reserva cancelada de {{3}}. Vuelve por tu medio de pago y suele aparecer en unos días hábiles. | Ver reserva |
+| ar | تم الاسترداد: {{1}} {{2}} | قمنا برد {{1}} {{2}} مقابل حجزك الملغى لـ {{3}}. يعود المبلغ بنفس طريقة الدفع وعادة ما يظهر خلال أيام عمل قليلة. | عرض الحجز |
+
+### `customer_booking_refund_pending`
+
+- **Situation:** `booking.refund.pending`
+- **Body params:** `{{1}}`=currency, `{{2}}`=amountFormatted, `{{3}}`=serviceName
+- **Button:** URL → `bookings/{{bookingId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Refund on the way: {{1}} {{2}} | We owe you {{1}} {{2}} for your cancelled {{3}} booking. This one needs to be sent by hand, so our team is processing it — you do not need to do anything, and we will confirm when it is done. | View booking |
+| fr | Remboursement en cours : {{1}} {{2}} | Nous vous devons {{1}} {{2}} pour votre réservation {{3}} annulée. Ce remboursement doit être envoyé manuellement : notre équipe s'en occupe. Vous n'avez rien à faire, nous confirmerons dès que c'est fait. | Voir la réservation |
+| pt_PT | Reembolso a caminho: {{1}} {{2}} | Devemos-lhe {{1}} {{2}} pela sua reserva cancelada de {{3}}. Este reembolso tem de ser enviado manualmente e a nossa equipa está a tratar disso — não precisa de fazer nada e confirmaremos quando estiver concluído. | Ver reserva |
+| es | Reembolso en camino: {{1}} {{2}} | Te debemos {{1}} {{2}} por tu reserva cancelada de {{3}}. Este reembolso debe enviarse a mano y nuestro equipo lo está gestionando — no tienes que hacer nada y te confirmaremos cuando esté listo. | Ver reserva |
+| ar | الاسترداد في الطريق: {{1}} {{2}} | ندين لك بمبلغ {{1}} {{2}} مقابل حجزك الملغى لـ {{3}}. يجب إرسال هذا المبلغ يدويًا وفريقنا يعمل عليه — لا داعي لفعل أي شيء وسنؤكد لك عند الانتهاء. | عرض الحجز |
+
+### `customer_order_created`
+
+- **Situation:** `order.created`
+- **Body params:** `{{1}}`=orderNumber, `{{2}}`=vendorName, `{{3}}`=currency, `{{4}}`=amountFormatted
+- **Button:** URL → `orders/{{orderId}}`
+
+⚠ **Rewritten, not derived.** The in-window copy names `{{itemCount}}` and a trailing `{{paymentLine}}`, neither of which is a body param.
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Order {{1}} placed | Your order {{1}} with {{2}} is placed, for {{3}} {{4}}. | View order |
+| fr | Commande {{1}} passée | Votre commande {{1}} chez {{2}} est enregistrée, pour {{3}} {{4}}. | Voir la commande |
+| pt_PT | Encomenda {{1}} efetuada | A sua encomenda {{1}} em {{2}} foi registada, no valor de {{3}} {{4}}. | Ver encomenda |
+| es | Pedido {{1}} realizado | Tu pedido {{1}} con {{2}} está registrado, por {{3}} {{4}}. | Ver pedido |
+| ar | تم تسجيل الطلب {{1}} | تم تسجيل طلبك {{1}} لدى {{2}} بقيمة {{3}} {{4}}. | عرض الطلب |
+
+### `customer_order_payment_received`
+
+- **Situation:** `order.payment.received`
+- **Body params:** `{{1}}`=currency, `{{2}}`=amountFormatted, `{{3}}`=orderNumber
+- **Button:** URL → `orders/{{orderId}}`
+
+⚠ **Rewritten, not derived.** The in-window copy names `{{vendorName}}`, which is not a body param — stripping it left "…{{3}}. is preparing it now."
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Payment received for {{3}} | We received your {{1}} {{2}} payment for order {{3}}. The seller is preparing it now. | View order |
+| fr | Paiement reçu pour {{3}} | Nous avons reçu votre paiement de {{1}} {{2}} pour la commande {{3}}. Le vendeur la prépare. | Voir la commande |
+| pt_PT | Pagamento recebido para {{3}} | Recebemos o seu pagamento de {{1}} {{2}} pela encomenda {{3}}. O vendedor está a prepará-la. | Ver encomenda |
+| es | Pago recibido para {{3}} | Recibimos tu pago de {{1}} {{2}} por el pedido {{3}}. El vendedor lo está preparando. | Ver pedido |
+| ar | تم استلام الدفعة للطلب {{3}} | استلمنا دفعتك بقيمة {{1}} {{2}} للطلب {{3}}. البائع يقوم بتجهيزه الآن. | عرض الطلب |
+
+### `customer_order_payment_link`
+
+- **Situation:** `order.payment_link`
+- **Body params:** `{{1}}`=currency, `{{2}}`=amountFormatted, `{{3}}`=orderNumber, `{{4}}`=expiresInMinutes
+- **Button:** URL → `pay/{{payToken}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Finish paying {{1}} {{2}} | Open this page to pay {{1}} {{2}} for {{3}} by card. The link works for {{4}} minutes — ask me for a new one if it runs out. | Pay now |
+| fr | Terminez le paiement de {{1}} {{2}} | Ouvrez cette page pour payer {{1}} {{2}} pour {{3}} par carte. Le lien est valable {{4}} minutes — demandez-m'en un nouveau s'il expire. | Payer maintenant |
+| pt_PT | Conclua o pagamento de {{1}} {{2}} | Abra esta página para pagar {{1}} {{2}} de {{3}} com cartão. O link é válido durante {{4}} minutos — peça-me um novo se expirar. | Pagar agora |
+| es | Termina el pago de {{1}} {{2}} | Abre esta página para pagar {{1}} {{2}} de {{3}} con tarjeta. El enlace dura {{4}} minutos — pídeme otro si caduca. | Pagar ahora |
+| ar | أكمل دفع {{1}} {{2}} | افتح هذه الصفحة لدفع {{1}} {{2}} مقابل {{3}} بالبطاقة. الرابط صالح لمدة {{4}} دقيقة — اطلب مني رابطًا جديدًا إذا انتهت صلاحيته. | ادفع الآن |
+
+### `customer_order_shipped`
+
+- **Situation:** `order.shipped`
+- **Body params:** `{{1}}`=orderNumber, `{{2}}`=vendorName, `{{3}}`=trackingNumber
+- **Button:** URL → `orders/{{orderId}}/tracking`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Order {{1}} is on its way | Your order {{1}} has left {{2}} and is on its way to you. Track it any time with {{3}}. | Track delivery |
+| fr | Commande {{1}} en route | Votre commande {{1}} a quitté {{2}} et est en route. Suivez-la à tout moment avec {{3}}. | Suivre la livraison |
+| pt_PT | Encomenda {{1}} a caminho | A sua encomenda {{1}} saiu de {{2}} e está a caminho. Acompanhe a qualquer momento com {{3}}. | Acompanhar entrega |
+| es | Pedido {{1}} en camino | Tu pedido {{1}} salió de {{2}} y está en camino. Síguelo cuando quieras con {{3}}. | Seguir la entrega |
+| ar | الطلب {{1}} في الطريق | غادر طلبك {{1}} من {{2}} وهو في طريقه إليك. تتبعه في أي وقت باستخدام {{3}}. | تتبع التوصيل |
+
+### `customer_order_out_for_delivery`
+
+- **Situation:** `order.out_for_delivery`
+- **Body params:** `{{1}}`=orderNumber
+- **Button:** URL → `orders/{{orderId}}/tracking`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Out for delivery: {{1}} | Your order {{1}} is out for delivery today. Please make sure someone can receive it. | Track delivery |
+| fr | En cours de livraison : {{1}} | Votre commande {{1}} est en cours de livraison aujourd'hui. Assurez-vous que quelqu'un puisse la réceptionner. | Suivre la livraison |
+| pt_PT | Em entrega: {{1}} | A sua encomenda {{1}} está em entrega hoje. Garanta que alguém a pode receber. | Acompanhar entrega |
+| es | En reparto: {{1}} | Tu pedido {{1}} está en reparto hoy. Asegúrate de que alguien pueda recibirlo. | Seguir la entrega |
+| ar | قيد التوصيل: {{1}} | طلبك {{1}} قيد التوصيل اليوم. يرجى التأكد من وجود شخص لاستلامه. | تتبع التوصيل |
+
+### `customer_order_delivered`
+
+- **Situation:** `order.delivered`
+- **Body params:** `{{1}}`=orderNumber
+- **Button:** URL → `orders/{{orderId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Delivered: {{1}} | Your order {{1}} has been delivered. If anything is wrong with it, open the order and tell us within the vendor's return window. | View order |
+| fr | Livrée : {{1}} | Votre commande {{1}} a été livrée. En cas de problème, ouvrez la commande et signalez-le pendant le délai de retour du vendeur. | Voir la commande |
+| pt_PT | Entregue: {{1}} | A sua encomenda {{1}} foi entregue. Se algo estiver errado, abra a encomenda e avise-nos dentro do prazo de devolução do vendedor. | Ver encomenda |
+| es | Entregado: {{1}} | Tu pedido {{1}} ha sido entregado. Si algo va mal, abre el pedido y avísanos dentro del plazo de devolución del vendedor. | Ver pedido |
+| ar | تم التسليم: {{1}} | تم تسليم طلبك {{1}}. إذا كان هناك أي خطأ، افتح الطلب وأخبرنا خلال فترة الإرجاع الخاصة بالبائع. | عرض الطلب |
+
+### `customer_order_delivery_failed`
+
+- **Situation:** `order.delivery_failed`
+- **Body params:** `{{1}}`=orderNumber
+- **Button:** URL → `orders/{{orderId}}/tracking`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Delivery attempt failed: {{1}} | We could not deliver order {{1}} today. We will try again — check the order for the next attempt, or contact us to arrange a better time. | Track delivery |
+| fr | Échec de livraison : {{1}} | Nous n'avons pas pu livrer la commande {{1}} aujourd'hui. Nous réessaierons — consultez la commande pour la prochaine tentative ou contactez-nous pour convenir d'un meilleur moment. | Suivre la livraison |
+| pt_PT | Tentativa de entrega falhou: {{1}} | Não conseguimos entregar a encomenda {{1}} hoje. Vamos tentar de novo — veja a encomenda para a próxima tentativa ou contacte-nos para combinar melhor horário. | Acompanhar entrega |
+| es | Entrega fallida: {{1}} | No pudimos entregar el pedido {{1}} hoy. Lo intentaremos otra vez — revisa el pedido para el próximo intento o contáctanos para acordar mejor hora. | Seguir la entrega |
+| ar | فشلت محاولة التوصيل: {{1}} | لم نتمكن من توصيل الطلب {{1}} اليوم. سنحاول مرة أخرى — راجع الطلب لمعرفة المحاولة التالية أو تواصل معنا لتحديد وقت أنسب. | تتبع التوصيل |
+
+### `customer_order_cancelled`
+
+- **Situation:** `order.cancelled`
+- **Body params:** `{{1}}`=orderNumber
+- **Button:** URL → `orders/{{orderId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Order {{1}} cancelled | Your order {{1}} has been cancelled. | View order |
+| fr | Commande {{1}} annulée | Votre commande {{1}} a été annulée. | Voir la commande |
+| pt_PT | Encomenda {{1}} cancelada | A sua encomenda {{1}} foi cancelada. | Ver encomenda |
+| es | Pedido {{1}} cancelado | Tu pedido {{1}} ha sido cancelado. | Ver pedido |
+| ar | تم إلغاء الطلب {{1}} | تم إلغاء طلبك {{1}}. | عرض الطلب |
+
+### `customer_order_refunded`
+
+- **Situation:** `order.refunded`
+- **Body params:** `{{1}}`=currency, `{{2}}`=amountFormatted, `{{3}}`=orderNumber
+- **Button:** URL → `orders/{{orderId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Refunded: {{1}} {{2}} | We have refunded {{1}} {{2}} for order {{3}}. It goes back to the way you paid, and usually appears within a few working days. | View order |
+| fr | Remboursé : {{1}} {{2}} | Nous avons remboursé {{1}} {{2}} pour la commande {{3}}. Le montant retourne par votre moyen de paiement et apparaît généralement sous quelques jours ouvrés. | Voir la commande |
+| pt_PT | Reembolsado: {{1}} {{2}} | Reembolsámos {{1}} {{2}} pela encomenda {{3}}. Volta pelo mesmo meio de pagamento e costuma aparecer em poucos dias úteis. | Ver encomenda |
+| es | Reembolsado: {{1}} {{2}} | Hemos reembolsado {{1}} {{2}} por el pedido {{3}}. Vuelve por tu medio de pago y suele aparecer en unos días hábiles. | Ver pedido |
+| ar | تم الاسترداد: {{1}} {{2}} | قمنا برد {{1}} {{2}} مقابل الطلب {{3}}. يعود المبلغ بنفس طريقة الدفع وعادة ما يظهر خلال أيام عمل قليلة. | عرض الطلب |
+
+### `customer_ticket_replied`
+
+- **Situation:** `ticket.replied`
+- **Body params:** `{{1}}`=subject
+- **Button:** URL → `support/{{ticketId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | We replied about "{{1}}" | There is a new reply on your support request about "{{1}}". Open it to read the answer. | View request |
+| fr | Nous avons répondu à « {{1}} » | Il y a une nouvelle réponse à votre demande d'assistance concernant « {{1}} ». Ouvrez-la pour lire la réponse. | Voir la demande |
+| pt_PT | Respondemos sobre "{{1}}" | Há uma nova resposta ao seu pedido de apoio sobre "{{1}}". Abra-o para ler a resposta. | Ver pedido de apoio |
+| es | Respondimos sobre "{{1}}" | Hay una nueva respuesta en tu solicitud de soporte sobre "{{1}}". Ábrela para leer la respuesta. | Ver solicitud |
+| ar | لقد رددنا بخصوص "{{1}}" | هناك رد جديد على طلب الدعم الخاص بك بخصوص "{{1}}". افتحه لقراءة الرد. | عرض الطلب |
+
+### `customer_ticket_awaiting_customer`
+
+- **Situation:** `ticket.awaiting_customer`
+- **Body params:** `{{1}}`=subject
+- **Button:** URL → `support/{{ticketId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | We need something from you: "{{1}}" | We cannot go further with your request about "{{1}}" until you reply. Open it and let us know. | View request |
+| fr | Nous avons besoin de vous : « {{1}} » | Nous ne pouvons pas avancer sur votre demande concernant « {{1}} » tant que vous n'avez pas répondu. Ouvrez-la pour nous répondre. | Voir la demande |
+| pt_PT | Precisamos de algo de si: "{{1}}" | Não conseguimos avançar com o seu pedido sobre "{{1}}" enquanto não responder. Abra-o e diga-nos. | Ver pedido de apoio |
+| es | Necesitamos algo de tu parte: "{{1}}" | No podemos avanzar con tu solicitud sobre "{{1}}" hasta que respondas. Ábrela y cuéntanos. | Ver solicitud |
+| ar | نحتاج منك شيئًا: "{{1}}" | لا يمكننا المتابعة في طلبك بخصوص "{{1}}" حتى ترد علينا. افتحه وأخبرنا. | عرض الطلب |
+
+### `customer_ticket_resolved`
+
+- **Situation:** `ticket.resolved`
+- **Body params:** `{{1}}`=subject, `{{2}}`=reopenLine
+- **Button:** URL → `support/{{ticketId}}`
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Sorted: "{{1}}" | We have marked your request about "{{1}}" as done. {{2}} | View request |
+| fr | Résolu : « {{1}} » | Nous avons marqué votre demande concernant « {{1}} » comme terminée. {{2}} | Voir la demande |
+| pt_PT | Resolvido: "{{1}}" | Marcámos o seu pedido sobre "{{1}}" como concluído. {{2}} | Ver pedido de apoio |
+| es | Resuelto: "{{1}}" | Hemos marcado tu solicitud sobre "{{1}}" como terminada. {{2}} | Ver solicitud |
+| ar | تم الحل: "{{1}}" | لقد وضعنا علامة على طلبك بخصوص "{{1}}" بأنه منتهٍ. {{2}} | عرض الطلب |
 
 ---
 

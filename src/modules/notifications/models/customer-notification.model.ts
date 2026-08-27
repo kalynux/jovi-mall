@@ -62,6 +62,21 @@ export type CustomerNotificationType =
     // ── Orders (physical/digital goods) ─────────────────────────────────────
     | 'order.created'
     | 'order.payment.received'
+    /**
+     * A card payment page is waiting to be opened (GAP-008 + GAP-012).
+     *
+     * ⚠ **The one situation in this catalog with no platform event behind it**, and the
+     * only one the automation layer triggers rather than observes. The platform cannot
+     * know that a customer chose "card" in a chat and then stopped writing — only the
+     * conversation knows that. Everything else here is the consequence of something the
+     * platform did.
+     *
+     * It exists because a card is the one payment method that CANNOT complete in chat: a
+     * client secret is confirmable only by Stripe.js in a browser. So the chat hands over
+     * a link, and if the service window has closed by then this is the approved template
+     * that carries it. Mobile money needs none of this and never raises it.
+     */
+    | 'order.payment_link'
     /** Left the vendor/depot and is on its way. */
     | 'order.shipped'
     /** An agent is carrying it now — the last useful "be around" signal. */
@@ -70,9 +85,28 @@ export type CustomerNotificationType =
     /** The delivery attempt failed; says what happens next. */
     | 'order.delivery_failed'
     | 'order.cancelled'
-    | 'order.refunded';
+    | 'order.refunded'
 
-export type CustomerAggregateType = 'booking' | 'order' | 'shipment' | 'payment';
+    // ── Support tickets (GAP-012) ───────────────────────────────────────────
+    // The one row of GAP-012's "flows that finish after the customer stops
+    // writing" table that had NO notification at all. `ticket.*` events have been
+    // published since the module shipped and nothing ever subscribed, so a
+    // customer who asked a question — through the bot or anywhere else — was
+    // never told it had been answered.
+    //
+    // Only three of the eight statuses reach the customer, and the omitted ones
+    // are omitted on the same rule the shipment handler follows: internal
+    // progress is not news. `in_progress` and `waiting_on_{admin,vendor,agency,
+    // agent}` all mean "somebody else is working on it", and forwarding them
+    // would train people to ignore the channel that carries the answer.
+    /** Somebody who is not the customer added a PUBLIC note. The answer arrived. */
+    | 'ticket.replied'
+    /** Now `waiting_on_customer` — the platform is blocked on them. */
+    | 'ticket.awaiting_customer'
+    /** Reached `resolved` or `closed`. */
+    | 'ticket.resolved';
+
+export type CustomerAggregateType = 'booking' | 'order' | 'shipment' | 'payment' | 'ticket';
 
 /**
  * Deep-link action for a notification, localized in the customer's language.
@@ -108,12 +142,30 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'booking.refund.pending',
     'order.created',
     'order.payment.received',
+    'order.payment_link',
     'order.shipped',
     'order.out_for_delivery',
     'order.delivered',
     'order.delivery_failed',
     'order.cancelled',
-    'order.refunded'
+    'order.refunded',
+    'ticket.replied',
+    'ticket.awaiting_customer',
+    'ticket.resolved'
+] as const;
+
+/**
+ * Every aggregate a customer notification can hang off, as a runtime array.
+ *
+ * Exists for the same reason `CUSTOMER_NOTIFICATION_TYPES` does — the schema enum below is
+ * spread from it rather than re-typed, so the union and the enum cannot drift.
+ */
+export const CUSTOMER_AGGREGATE_TYPES: readonly CustomerAggregateType[] = [
+    'booking',
+    'order',
+    'shipment',
+    'payment',
+    'ticket'
 ] as const;
 
 const DELIVERY_CHANNELS: readonly CustomerDeliveryChannel[] = [
@@ -157,7 +209,12 @@ const CustomerNotificationSchema = new Schema<ICustomerNotification>(
         message: { type: String, required: true, trim: true, maxlength: 1000 },
         aggregateType: {
             type: String,
-            enum: ['booking', 'order', 'shipment', 'payment'],
+            // Spread from the array, never re-typed. This enum WAS a hand-kept literal and
+            // GAP-012 is exactly the change that would have broken it: adding `ticket` to
+            // the union without adding it here throws a ValidationError on every ticket
+            // notification, which is the drift that left all eight `agent_contract.*`
+            // situations undeliverable in the agent stack. Same rule, same reason.
+            enum: [...CUSTOMER_AGGREGATE_TYPES],
             required: true
         },
         aggregateId: { type: Schema.Types.ObjectId, required: true },

@@ -11,6 +11,13 @@ export * from './geocoding.factory';
 // this: `getGeocodingProvider()` wraps it already, and a second wrap would double-cache.
 export * from './geocoding.cache';
 
+// The entity decoder (2026-08-26). Exported for the same reason the cache is: its pure half
+// is worth pinning directly against the real provider strings that prompted it, and
+// `test:geocoding-sanitize` does exactly that. Application code should NOT wrap with it —
+// `createGeocodingProvider` already does, and a second wrap would decode twice, turning a
+// literal `&amp;apos;` somebody typed into an apostrophe.
+export * from './geocoding.sanitize';
+
 // Centralized singleton instance (RECOMMENDED way to access geocoding)
 export * from './geocoding.instance';
 

@@ -6,8 +6,21 @@ import { createClient, RedisClientType } from 'redis';
  * ── The rule this file now enforces: a probe observes; it does not provision ──
  * Redis connects on first `getRedisClient()` call and NEVER at boot — `server.ts` does not
  * touch it. That makes the obvious diagnostics implementation wrong: a readiness probe that
- * pings Redis would *create* a connection the process never made, on DB 0, which nothing in
- * this codebase uses. It would change the thing it claims to measure, on every probe interval.
+ * pings Redis would *create* a connection the process may never have made, on DB 0. It would
+ * change the thing it claims to measure, on every probe interval.
+ *
+ * ⚠ **This paragraph used to end "on DB 0, which nothing in this codebase uses", and that
+ * half was false** (corrected 2026-08-25). `InboundCalendarSyncService` opens DB 0 in its
+ * constructor when `REDIS_URL` is set and writes `calendar_sync_lock:{vendorId}` there with a
+ * `PX` TTL — a real per-vendor lock, fail-open, released on completion. The argument above
+ * survives without that clause and is why it was only corrected rather than removed: the
+ * calendar sync is one optional consumer, so a probe still provisions a connection on a
+ * deployment where it is idle or unconfigured.
+ *
+ * ⚠ **DB 0 is deliberately NOT in `REDIS_DB_CATALOG`.** Everything in that table is
+ * addressable by the cache-flush endpoint, and `db: 0` is refused there outright as "a typo or
+ * a probe" — a rule worth more than making one lock flushable. The cost is that an orphaned
+ * calendar-sync lock waits out its own TTL, which is what the TTL is for.
  *
  * So there are two accessors and they are not interchangeable:
  *
@@ -26,30 +39,98 @@ export const WA_IDEMPOTENCY_DB = 5; // keep idempotency keys for whatsapp (24-72
 export const WA_WINDOW_DB = 6; // keep window status for whatsapp (24 hours)
 export const SLOT_LOCK_DB = 7; // keep slot locks for booking
 export const DOWNLOAD_TOKEN_DB = 8; // keep download tokens for digital delivery
-export const TELEGRAM_WINDOW_DB = 10; // keep window status for telegram (24 hours)
+export const BOT_SURFACE_DB = 10; // the bot surface's own ephemera — `bot:idem:*` + `bot:geo:*`
 export const RATE_LIMIT_DB = 11; // request counters for the rate limiter (Phase 16)
 export const WORKER_LOCK_DB = 12; // background-worker overlap locks (F-19)
 export const CONNECTION_CODE_DB = 13; // unified messaging connection codes (Phase 2/3)
 export const LOGIN_CODE_DB = 14; // passwordless /login sessions — link token + code
-export const GEO_CACHE_DB = 15; // geocoding results — forward search + reverse (ADR-A04 D-1)
-export const RECOMMENDATION_CACHE_DB = 16; // computed "also bought" / related lists (Phase 6 · 6.E.3)
+export const CACHE_DB = 15; // pure-optimisation caches — `geo:*` (ADR-A04 D-1) + `related:*`
 
 /**
- * ⚠ 4 and 9 are RETIRED, not free.
+ * ⛔ **THE CEILING IS 16, AND 0–15 IS NOT THE BUDGET — 5–15 IS.**
  *
- * They held `wa_verify:{CODE}` and `tlgt:{token}` for the two account-linking
- * mechanisms the unified connection domain replaced. Both are gone; the numbers
- * are left unassigned so a stale key from a pre-cutover deployment can never be
- * read back by a feature that has since claimed the database.
+ * Two constraints stack, and only the first is a Redis fact:
  *
- * The gap in the sequence is the point, not an oversight. **Do not close it** by
- * renumbering the constants below or by assigning 4 or 9 to the next feature: the
- * cost of two unused integers is nothing, and the cost of reading a pre-cutover
- * verification code back as something else entirely is a security incident.
- * Inspected and deliberately kept by the Phase 4 dead-and-orphaned sweep,
- * 2026-08-19 (plan step 4.A.6.4), which is the kind of pass most likely to take
- * them. 15 went to `GEO_CACHE_DB` and 16 to `RECOMMENDATION_CACHE_DB` (both 2026-08-21);
- * the next number to hand out is 17.
+ * **1 · Redis's `databases` directive defaults to 16**, so the only valid indices are
+ * **0–15**. Measured 2026-08-25 against the development Redis: `CONFIG GET databases` → `16`,
+ * `SELECT 16` → `ERR invalid DB index`, and `CONFIG SET databases 32` → `ERR Unsupported
+ * CONFIG parameter` — it is startup-only, so raising it means editing a conf file and
+ * restarting. True of the compose stack too, whose three `redis:7-alpine` services carry no
+ * `command:` override and therefore run the same default.
+ *
+ * **2 · ⚠ THIS SERVICE DOES NOT OWN THE LOW INDICES. `wi-admin` DOES.** It claims
+ * `ADMIN_SESSION_DB = 1`, `ADMIN_RATE_LIMIT_DB = 2` and `PERMISSION_CACHE_DB = 3`
+ * (`admin/src/infra/redis/redis.factory.ts`). The compose stack gives each service its own
+ * Redis instance precisely because of this — but a **developer machine runs one**, and both
+ * `.env` files point at `redis://localhost:6379`. Verified 2026-08-25: DB 1 on the local
+ * Redis holds twelve live `admin-sessions:*` keys.
+ *
+ * So an index below 4 is not free here even when this file says nothing about it. **Assign
+ * from 5–15 only**, and check `admin/src/infra/redis/redis.factory.ts` before assuming a
+ * number is yours.
+ *
+ * ⚠ **`EMAIL_VERIFY_DB = 3` ALREADY COLLIDES** with wi-admin's `PERMISSION_CACHE_DB`, and it
+ * is left alone deliberately. Nothing reads the other's keys — `auth:verify:*` against a
+ * permission verdict, both exact-gets — so the practical cost on a shared Redis is that a
+ * flush of one clears the other, and the separate-instance deployment has no cost at all.
+ * Moving it would invalidate every verification link in flight for a problem the compose
+ * stack already solves.
+ */
+
+/**
+ * ⚠ 4 and 9 are RETIRED, not free — and 10 and 16 are RECLAIMED, which is a different thing.
+ *
+ * **4 and 9** held `wa_verify:{CODE}` and `tlgt:{token}` for the two account-linking
+ * mechanisms the unified connection domain replaced. Both are gone; the numbers are left
+ * unassigned so a stale key from a pre-cutover deployment can never be read back by a feature
+ * that has since claimed the database. The gap in the sequence is the point, not an oversight.
+ * **Do not close it**: the cost of two unused integers is nothing, and the cost of reading a
+ * pre-cutover verification code back as something else entirely is a security incident.
+ * Inspected and deliberately kept by the Phase 4 dead-and-orphaned sweep, 2026-08-19 (plan
+ * step 4.A.6.4), which is the kind of pass most likely to take them. `test:connections` pins
+ * both numbers.
+ *
+ * **10 is different, and reassigning it was safe for a reason that does not extend to 4 or 9.**
+ * It was `TELEGRAM_WINDOW_DB`, reserved for a 24-hour service window — and **the Telegram Bot
+ * API has no such thing**; that constraint is Meta's alone. So nothing was ever written to it:
+ * no reader, no writer, no line of the telegram module touches Redis at all, verified by
+ * source scan, and the live database was empty. A number that never held a key cannot hand one
+ * back. (The merged bot store's keys are `bot:*` exact-gets besides, so even a stale key of
+ * another shape is unreadable by it.)
+ *
+ * **16 was never valid**, being above the ceiling — see above. Its `RECOMMENDATION_CACHE_DB`
+ * moved onto `CACHE_DB` as the `related:*` prefix, which is the first time that cache has
+ * worked.
+ *
+ * History: 15 went to the geocoding cache and 16 to the recommendation cache (both
+ * 2026-08-21); 2026-08-25 merged the two onto 15 as `CACHE_DB`, gave 10 to the bot surface,
+ * and released 1/2 back to wi-admin after briefly and wrongly taking them.
+ */
+
+/**
+ * ⚠ **TWO DATABASES HOLD TWO THINGS EACH, BEHIND KEY PREFIXES, AND THAT IS A CONCESSION.**
+ *
+ * The rule everywhere else in this table is one logical database per BLAST RADIUS, because
+ * the cache-flush policy states consequences per database and one note cannot honestly cover
+ * two. `LOGIN_CODE_DB` and `RECOMMENDATION_CACHE_DB` were both split out on exactly that
+ * argument. The ceiling above is what forced the concession: 5–15 is eleven slots and there
+ * were thirteen things.
+ *
+ * What makes it survivable is that **the flush endpoint takes a prefix**, so each half stays
+ * independently clearable and the policy row states both radii rather than averaging them:
+ *
+ *   `BOT_SURFACE_DB`  `bot:idem:` (DESTRUCTIVE — the duplicate-checkout guard)
+ *                     `bot:geo:`  (trivial — an address flow searches again)
+ *   `CACHE_DB`        `geo:`      (spends a rate-limited third-party call to refill)
+ *                     `related:`  (free — one aggregation per product page)
+ *
+ * `BOT_SURFACE_DB` is therefore **prefix-only** (`wholeDbAllowed: false`): its dangerous half
+ * already demanded that, and a whole-database flush would silently take it along with the
+ * harmless one.
+ *
+ * **A third pairing is not available.** The next feature that wants a logical database has to
+ * raise `databases` on every Redis this platform runs against, or share one of these two — and
+ * sharing is only honest when the blast radii can be stated separately, as above.
  */
 
 /**
@@ -109,11 +190,26 @@ export const REDIS_DB_CATALOG: readonly RedisDbSpec[] = Object.freeze([
     ttlHint: 'minutes to hours',
   },
   {
-    db: TELEGRAM_WINDOW_DB,
-    constant: 'TELEGRAM_WINDOW_DB',
-    label: 'Telegram service window',
-    purpose: 'Per-chat send-window state',
-    ttlHint: '24 hours',
+    db: BOT_SURFACE_DB,
+    constant: 'BOT_SURFACE_DB',
+    label: 'Bot-surface ephemera',
+    // TWO things behind two prefixes, and the flush policy states both radii separately —
+    // see the concession note above the catalogue.
+    //
+    // `bot:idem:*` is the fifth set of keys here that is load-bearing rather than an
+    // optimisation, and the argument is `WA_IDEMPOTENCY_DB`'s one level up: a record is the
+    // only thing between a retried chat message and a SECOND set of orders with a second
+    // stock hold. `POST /api/internal/bot/checkout` is not idempotent underneath, and chat
+    // transports retry — the automation layer retries, the network retries, and the customer
+    // taps twice.
+    //
+    // `bot:geo:*` holds the full geocoding candidate behind an opaque single-use handle, so
+    // the automation layer never carries coordinates and `POST /addresses` cannot be sent a
+    // hand-assembled `geo` object. That matters beyond tidiness: a null inside the 2dsphere-
+    // indexed saved-address array makes the WHOLE customer document unwritable — measured,
+    // and not fixed by a sparse or partial index. See `dropNullLocation`.
+    purpose: 'Idempotency records (bot:idem:) and address-candidate handles (bot:geo:) for /api/internal/bot/*',
+    ttlHint: '24 hours (idempotency) / 30 minutes (candidates)',
   },
   {
     db: RATE_LIMIT_DB,
@@ -166,32 +262,31 @@ export const REDIS_DB_CATALOG: readonly RedisDbSpec[] = Object.freeze([
     ttlHint: '10 minutes',
   },
   {
-    db: GEO_CACHE_DB,
-    constant: 'GEO_CACHE_DB',
-    label: 'Geocoding results',
-    // The THIRD database whose loss is harmless, and the only one that is purely an
-    // optimisation: every key here is reconstructible by asking the provider again. Flushing
-    // it costs one provider call per distinct address until it refills — which matters only
-    // because Nominatim's public instance is rate-limited at roughly one request per second.
-    // See ADR-A04 D-1 and `core/geocoding/geocoding.cache.ts`.
-    purpose: 'Address-search results, keyed by normalised query. Losing them re-asks the provider.',
-    ttlHint: 'hours to days (GEO_CACHE_TTL_SECONDS)',
-  },
-  {
-    db: RECOMMENDATION_CACHE_DB,
-    constant: 'RECOMMENDATION_CACHE_DB',
-    label: 'Product recommendation lists',
-    // The FOURTH harmless one, and like 15 it is purely an optimisation — every key is
-    // recomputable from `orders` and `products`. What it buys is that the co-occurrence
-    // aggregation (a `$match` on one product's order lines, then a `$group` over their
+    db: CACHE_DB,
+    constant: 'CACHE_DB',
+    label: 'Pure-optimisation caches',
+    // TWO caches behind two prefixes, and the ONLY two databases in this catalogue whose
+    // entire contents are recomputable — which is why neither half is `destructive` in the
+    // flush policy. They were split across 15 and 16 until 2026-08-25, on the argument that
+    // one flush is free and the other spends a rate-limited third-party call. That argument
+    // is intact: the flush endpoint takes a prefix, so each half stays independently
+    // clearable and the policy row states both costs rather than averaging them.
+    //
+    // `geo:*` — address-search and reverse results, keyed by normalised query (ADR-A04 D-1).
+    // Flushing is the correct remedy for the one real failure mode, a wrong or stale result
+    // cached for up to a day; the cost is provider load, and on the keyless default that is
+    // real — Nominatim's public instance permits roughly one request per second.
+    //
+    // `related:*` — computed co-occurrence lists, keyed by product id. What it buys is that
+    // the aggregation (a `$match` on one product's order lines, then a `$group` over their
     // siblings) does not run once per product-page view.
     //
-    // A SEPARATE database from 15 rather than a prefix on it, for the reason the LOGIN_CODE
-    // note above gives: the flush policy states consequences per database, and "the next
-    // few product pages recompute their related strip" is not "the next few addresses are
-    // re-geocoded". One is free, the other spends a rate-limited third-party call.
-    purpose: 'Computed related-product lists, keyed by product id. Losing them recomputes on the next view.',
-    ttlHint: 'hours (RELATED_PRODUCTS_CACHE_TTL_SECONDS)',
+    // ⚠ `related:*` lived on DB 16 from 2026-08-21 until 2026-08-25 and therefore NEVER
+    // WORKED — 16 is above the ceiling, so every `SELECT` errored, and `related-products.
+    // cache.ts` correctly fails open, so every read missed and every write was dropped with
+    // no symptom at all. Moving it here is the first time that cache has run.
+    purpose: 'Geocoding results (geo:) and related-product lists (related:). Both recomputable; losing them costs provider calls and CPU respectively.',
+    ttlHint: 'hours to days (GEO_CACHE_TTL_SECONDS / RELATED_PRODUCTS_CACHE_TTL_SECONDS)',
   },
 ]);
 

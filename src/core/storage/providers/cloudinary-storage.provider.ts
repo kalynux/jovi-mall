@@ -32,6 +32,19 @@ export class CloudinaryStorageProvider implements IStorageProvider {
     throw createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 501, "Method not implemented.");
   }
 
+  /**
+   * ⚠ **False — and unlike Firebase, this provider has NO byte path at all.**
+   *
+   * `getDownloadStream`, `getBuffer` and `getSignedUrl` all throw 501 here, so both
+   * private-file routes (digital download, delivery proof) are broken on `cloudinary` and
+   * there is no signed-URL fallback to serve them from either. Cloudinary does support
+   * signed delivery URLs; implementing `getSignedUrl` is the bounded piece of work that
+   * would make this provider usable for the private trees.
+   */
+  supportsDownloadStream(): boolean {
+    return false;
+  }
+
   getDownloadStream(key: string): Promise<NodeJS.ReadableStream> {
     throw createAppError(ERROR_CODES.INTERNAL_SERVER_ERROR, 501, "Method not implemented.");
   }

@@ -108,6 +108,29 @@ export interface IPaymentTransaction extends Document {
   merchantRef?: string;
 
   /**
+   * The hosted card page's handle, when one has been minted (GAP-008).
+   *
+   * A third opaque reference on this row, and it answers a third question. `idempotencyKey`
+   * dedups an initiate; `merchantRef` routes a gateway callback home; this one authorises an
+   * ANONYMOUS BROWSER to read exactly enough of this transaction to confirm a card — the
+   * amount, the currency, and Stripe's client secret.
+   *
+   * It is a field rather than a Redis key deliberately: a link pasted into a chat has to
+   * survive a deploy and an operator's cache flush. The full reasoning, and the rules that
+   * decide what a resolved link may disclose, are in `domain/pay-link.ts`.
+   *
+   * Optional and re-mintable: absent on every mobile-money row (those complete on the
+   * handset and need no page), and a fresh mint OVERWRITES rather than accumulating, so at
+   * most one link per transaction is ever live. Overwriting is the revocation — an old link
+   * stops resolving the moment a new one is issued.
+   */
+  payLink?: {
+    token: string;
+    issuedAt: Date;
+    expiresAt: Date;
+  } | null;
+
+  /**
    * Wrong OTP submissions on this transaction.
    *
    * My-CoolPay's Orange Money flow answers `REQUIRE_OTP`, and the endpoint
@@ -231,6 +254,24 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
     index: true
   },
 
+  // The hosted card page's handle. `sparse` for the same reason merchantRef is: most rows
+  // never carry one (mobile money needs no page), and a plain unique index would refuse the
+  // second null and fail every write. Built explicitly by `migrate:payment-indexes` —
+  // autoIndex is off in production, and without the index the resolve degrades to a
+  // collection scan on a collection that grows forever.
+  //
+  // `default: undefined` rather than null: a stored null is a value the sparse index
+  // INCLUDES, which would reintroduce exactly the collision sparse exists to avoid.
+  payLink: {
+    type: {
+      token: { type: String, required: true },
+      issuedAt: { type: Date, required: true },
+      expiresAt: { type: Date, required: true }
+    },
+    default: undefined,
+    _id: false
+  },
+
   otpAttempts: {
     type: Number,
     default: 0,
@@ -289,6 +330,13 @@ PaymentTransactionSchema.index({ orderIds: 1, status: 1 }); // Cart-group order 
 PaymentTransactionSchema.index({ bookingId: 1, status: 1 }); // Booking payment status
 PaymentTransactionSchema.index({ userId: 1, createdAt: -1 }); // Customer payment history
 PaymentTransactionSchema.index({ gateway: 1, status: 1, createdAt: -1 }); // Gateway analytics
+// The hosted card page resolves a transaction by its link handle, unauthenticated. Unique
+// so a mint collision is a write failure rather than two transactions answering one URL;
+// sparse because most rows carry no link at all. See domain/pay-link.ts.
+PaymentTransactionSchema.index(
+  { 'payLink.token': 1 },
+  { unique: true, sparse: true, name: 'payment_pay_link_token' }
+);
 
 // Virtual field: net amount after refunds
 PaymentTransactionSchema.virtual('netAmount').get(function () {

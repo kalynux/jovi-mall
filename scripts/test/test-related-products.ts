@@ -440,13 +440,13 @@ assert('the endpoint is a READ — no write, no counter, nothing recorded about 
   !/record|increment|\$inc|save\(\)/.test(serviceSrc));
 
 assert('the cache database is in the Redis catalog', () =>
-  REDIS_DB_CATALOG.some((row) => row.constant === 'RECOMMENDATION_CACHE_DB'));
+  REDIS_DB_CATALOG.some((row) => row.constant === 'CACHE_DB'));
 
 assert('…and it has a flush policy, so it is reachable from the ops surface', () =>
-  CACHE_FLUSH_POLICY.some((row) => row.spec.constant === 'RECOMMENDATION_CACHE_DB'));
+  CACHE_FLUSH_POLICY.some((row) => row.spec.constant === 'CACHE_DB'));
 
 assert('…and that policy says it is harmless, because it is', () => {
-  const policy = CACHE_FLUSH_POLICY.find((row) => row.spec.constant === 'RECOMMENDATION_CACHE_DB')!;
+  const policy = CACHE_FLUSH_POLICY.find((row) => row.spec.constant === 'CACHE_DB')!;
   return policy.destructive === false && policy.wholeDbAllowed === true && policy.blastRadius.length > 40;
 });
 

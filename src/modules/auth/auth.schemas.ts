@@ -202,6 +202,22 @@ export const MobileRefreshSchema = z.object({
   refreshToken: z.string().min(1, 'Refresh token required'),
 });
 
+/**
+ * `POST /auth/verify-email` — spend a registration-verification token deliberately.
+ *
+ * Mirrors `ConfirmEmailChangeSchema`, including the generous 512-character bound and for
+ * the same reason: the token this service mints is 64 hex characters, the bound is there so
+ * a pathological body is refused by the schema rather than reaching Redis, and a *near*
+ * miss should be told the token is **invalid** rather than **malformed** — a mail client
+ * that wraps a URL is a real thing.
+ *
+ * `.strict()`, so a client sending the token as a query parameter *and* a body key hears
+ * about it instead of having one silently ignored.
+ */
+export const VerifyEmailSchema = z
+  .object({ token: z.string().trim().min(1, 'A verification token is required').max(512) })
+  .strict();
+
 export type RegisterInput = z.infer<typeof RegisterSchema>;
 export type LoginInput = z.infer<typeof LoginSchema>;
 export type AuthMeInput = z.infer<typeof AuthMeSchema>;

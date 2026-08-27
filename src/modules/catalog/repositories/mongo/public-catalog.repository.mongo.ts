@@ -29,7 +29,7 @@
 import { PipelineStage, Types } from 'mongoose';
 import { COLLECTIONS } from '../../../../core/database/collections';
 import { buildSearchRegex } from '../../../../core/utils/regex.util';
-import { ProductModel } from '../../models';
+import { ProductModel, ProductVariantModel } from '../../models';
 import { ProductType } from '../../models/product.model';
 import {
     publishableProductFilter,
@@ -107,6 +107,29 @@ export interface PublicStoreListRow {
 export interface PublicCategoryRow {
     name: string;
     productCount: number;
+}
+
+/**
+ * One SKU resolution — the variant, its product and its store, before naming (GAP-003).
+ *
+ * Deliberately NOT a `PublicProductListRow`: that row is a product card quoting the DEFAULT
+ * variant's price, and a SKU names one specific variant which is frequently not the default.
+ * Returning a list row here would answer with the wrong price for exactly the customer who
+ * typed a precise code.
+ */
+export interface PublicSkuResolutionRow {
+    productId: string;
+    variantId: string;
+    sku: string;
+    title: string;
+    /** The vendor's own variant name, when they set one. Null on an option-derived variant. */
+    variantName: string | null;
+    /** Resolved to option/value names by the service — see `buildVariantDisplayName`. */
+    optionValueIds: string[];
+    price: number;
+    inStock: boolean;
+    storeSlug: string;
+    storeName: string;
 }
 
 export class PublicCatalogRepositoryMongo {
@@ -439,6 +462,122 @@ export class PublicCatalogRepositoryMongo {
             ])
             .exec();
         return row ? { id: row.id, vendorId: row.vendorId.toString() } : null;
+    }
+
+    /**
+     * Resolve a product code to its variant — GAP-003, `GET /api/public/variants/by-sku/:sku`.
+     *
+     * ── WHY THIS PIPELINE STARTS AT THE VARIANT ─────────────────────────────
+     * `ProductVariant.sku` carries a **unique** index, so this is a point lookup. Every other
+     * read here starts at the product because that is where the publishable predicate is
+     * indexed; starting there for a SKU would mean joining every product's variants and
+     * filtering afterwards — a collection scan on a world-readable endpoint.
+     *
+     * ⚠ **The join stages above are NOT reused, and that is not drift.** They are written
+     * against a pipeline whose root document is a *product* (`localField: 'vendorId'`); here
+     * the root is a variant and the vendor id lives at `product.vendorId`. What must not
+     * differ is the PREDICATE, and it does not: `publishableProductFilter()` and
+     * `VENDOR_PUBLISHABLE_MATCH` are the same two imports every other method applies. Never
+     * spell a status filter out inline here.
+     *
+     * ⚠ **`candidates` is an `$in` of case variants, never a case-insensitive regex.** A
+     * `$options: 'i'` match cannot use the unique index — it scans the whole collection, on
+     * an unauthenticated route, for every code that does not exist. Two or three exact values
+     * stay a point lookup. The caller decides which spellings to try and which wins.
+     *
+     * Returns every match (at most one per candidate spelling) rather than one row: picking
+     * between `abc` and `ABC` is the service's decision, and a repository that silently chose
+     * would make "the code you typed wins" impossible to state.
+     */
+    async findPublishableVariantsBySku(candidates: string[]): Promise<PublicSkuResolutionRow[]> {
+        const skus = [...new Set(candidates.map((s) => s.trim()).filter(Boolean))];
+        if (skus.length === 0) return [];
+
+        return ProductVariantModel
+            .aggregate<PublicSkuResolutionRow>([
+                // A sellable variant only. An archived one is not offered anywhere else on
+                // this surface, and `variantJoinStages` applies exactly this pair.
+                { $match: { sku: { $in: skus }, status: 'active', deletedAt: null } },
+                {
+                    $lookup: {
+                        from: COLLECTIONS.PRODUCT,
+                        let: { pid: '$productId' },
+                        pipeline: [
+                            {
+                                $match: {
+                                    $expr: { $eq: ['$_id', '$$pid'] },
+                                    ...publishableProductFilter(),
+                                },
+                            },
+                            { $project: { _id: 1, title: 1, vendorId: 1 } },
+                        ],
+                        as: 'product',
+                    },
+                },
+                { $unwind: { path: '$product', preserveNullAndEmptyArrays: false } },
+                {
+                    $lookup: {
+                        from: COLLECTIONS.VENDOR,
+                        let: { vid: '$product.vendorId' },
+                        // Projected to `status` alone. This read publishes no vendor facts at
+                        // all — it needs the vendor only to apply the predicate — so carrying
+                        // more would be carrying payout details and KYC into a pipeline whose
+                        // output is world-readable.
+                        pipeline: [
+                            { $match: { $expr: { $eq: ['$_id', '$$vid'] } } },
+                            { $project: { _id: 0, status: 1 } },
+                        ],
+                        as: 'vendor',
+                    },
+                },
+                { $unwind: { path: '$vendor', preserveNullAndEmptyArrays: false } },
+                { $match: { ...VENDOR_PUBLISHABLE_MATCH } },
+                {
+                    $lookup: {
+                        from: COLLECTIONS.STORE,
+                        let: { vid: '$product.vendorId' },
+                        pipeline: [
+                            { $match: { $expr: { $eq: ['$vendor_id', '$$vid'] } } },
+                            { $project: { _id: 0, slug: 1, name: 1 } },
+                        ],
+                        as: 'store',
+                    },
+                },
+                // A product whose vendor has no store cannot be addressed by the storefront's
+                // own URL scheme, so it is not resolvable — same rule as `storeJoinStages`.
+                { $unwind: { path: '$store', preserveNullAndEmptyArrays: false } },
+                {
+                    $project: {
+                        _id: 0,
+                        productId: { $toString: '$product._id' },
+                        variantId: { $toString: '$_id' },
+                        sku: 1,
+                        title: '$product.title',
+                        variantName: { $ifNull: ['$name', null] },
+                        optionValueIds: {
+                            $map: {
+                                input: { $ifNull: ['$optionValueIds', []] },
+                                as: 'v',
+                                in: { $toString: '$$v' },
+                            },
+                        },
+                        price: 1,
+                        // The same three-way rule `variantJoinStages` derives `_inStock` from,
+                        // and `variantInStock` states for a domain object. Note the document
+                        // spells it `allow_oversell` while the domain type says `allowOversell`.
+                        inStock: {
+                            $or: [
+                                { $eq: ['$isInfiniteStock', true] },
+                                { $eq: ['$allow_oversell', true] },
+                                { $gt: ['$stock', 0] },
+                            ],
+                        },
+                        storeSlug: '$store.slug',
+                        storeName: '$store.name',
+                    },
+                },
+            ])
+            .exec();
     }
 
     /**

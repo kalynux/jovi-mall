@@ -97,10 +97,26 @@ export const CACHE_FLUSH_POLICY: readonly CacheFlushPolicy[] = Object.freeze([
             + 'gets a dead URL and must re-mint from their library. Recoverable, visible, annoying.',
     },
     {
-        spec: specFor('TELEGRAM_WINDOW_DB'),
-        wholeDbAllowed: true,
-        destructive: false,
-        blastRadius: 'Per-chat send-window state recomputes on the next inbound message. Low.',
+        spec: specFor('BOT_SURFACE_DB'),
+        // PREFIX-ONLY, and it is the fourth database in this table to be refused a whole-DB
+        // flush — but the first refused because it holds TWO THINGS whose radii differ by an
+        // order of magnitude. `bot:idem:` IS the duplicate-checkout guard; `bot:geo:` is a
+        // handful of address candidates nobody has chosen yet. A whole-database flush would
+        // take the dangerous half along with the harmless one, silently, on every
+        // conversation at once — so an operator has to name which they mean.
+        wholeDbAllowed: false,
+        destructive: true,
+        blastRadius:
+            'TWO PREFIXES, TWO RADII — name the one you mean. '
+            + '`bot:idem:` is DESTRUCTIVE: these records are the only thing stopping a retried '
+            + 'chat message from creating a SECOND set of orders and a second stock hold, '
+            + 'because POST /api/internal/bot/checkout is not idempotent underneath and chat '
+            + "transports retry. Clearing them reopens a duplicate-execution window for the "
+            + "remainder of each record's 24 hours. "
+            + '`bot:geo:` is harmless: every address flow in progress must run its search '
+            + 'again — BOT_GEO_CANDIDATE_EXPIRED, a state the flow already handles because a '
+            + 'handle is single-use and expires in 30 minutes anyway. No saved address is '
+            + 'touched.',
     },
     {
         spec: specFor('RATE_LIMIT_DB'),
@@ -155,35 +171,32 @@ export const CACHE_FLUSH_POLICY: readonly CacheFlushPolicy[] = Object.freeze([
             + 'to fall back on. Moderate, and worst during exactly the incident that tempts it.',
     },
     {
-        spec: specFor('GEO_CACHE_DB'),
+        spec: specFor('CACHE_DB'),
+        // The safest row in the table, and saying so plainly matters as much as the warnings
+        // above — an operator who cannot tell which flushes are harmless treats them all as
+        // dangerous, or none of them. Nothing here is state: every key is an answer the
+        // provider or the aggregation will give again, which is why flushing is the correct
+        // remedy for this database's one real failure mode (a wrong or stale value cached for
+        // up to a day).
+        //
+        // Whole-database is allowed for the reason WORKER_LOCK_DB's row gives: an operator
+        // facing one bad address does not know its key — the key is a HASH of the address,
+        // precisely so nobody can go looking for it. The prefix path is there for the narrow
+        // case, and the two costs below are why an operator would use it.
         wholeDbAllowed: true,
-        // The first of the two pure-OPTIMISATION databases in this catalogue: nothing here is
-        // state, every key is an answer the provider will give again, and so flushing is the
-        // correct remedy for the one real failure mode — a wrong or stale result cached for up
-        // to a day. Whole-database is allowed for the same reason it is on WORKER_LOCK_DB: an
-        // operator facing one bad address does not know its key, and the key is a HASH of the
-        // address precisely so nobody can go looking for it.
         destructive: false,
         blastRadius:
-            'Address search re-asks the geocoding provider until the cache refills. Nothing '
-            + 'durable is lost — a stored GeoAddress lives on the order or the profile, not '
-            + 'here. The cost is provider load, and on the keyless default that is real: '
-            + "Nominatim's public instance permits roughly one request per second and bans for "
-            + 'abuse. Low during ordinary traffic; do not do it repeatedly.',
-    },
-    {
-        spec: specFor('RECOMMENDATION_CACHE_DB'),
-        wholeDbAllowed: true,
-        // Not destructive by ANY reading of this file's definition: nothing is duplicated,
-        // no customer work is lost, and every key is recomputed from `orders` and `products`
-        // on the next request that needs it. It is the safest row in the table, and saying
-        // so plainly matters as much as the warnings above — an operator who cannot tell
-        // which flushes are harmless treats them all as dangerous, or none of them.
-        destructive: false,
-        blastRadius:
-            'The next view of each affected product page recomputes its related-products '
-            + 'strip — one aggregation over that product\'s past order lines. Nothing durable '
-            + 'is lost and no third party is called. Negligible, and safe during an incident.',
+            'TWO PREFIXES, and only one of them costs anything. '
+            + '`geo:` — address search re-asks the geocoding provider until the cache refills. '
+            + 'Nothing durable is lost (a stored GeoAddress lives on the order or the profile, '
+            + "not here), but on the keyless default the cost is real: Nominatim's public "
+            + 'instance permits roughly one request per second and bans for abuse. Low during '
+            + 'ordinary traffic; do not do it repeatedly. '
+            + '`related:` — the next view of each affected product page recomputes its '
+            + "related-products strip, one aggregation over that product's past order lines. "
+            + 'Nothing durable is lost and no third party is called. Negligible, and safe '
+            + 'during an incident. '
+            + 'A whole-database flush takes both, so it carries the geocoding cost above.',
     },
 ]);
 

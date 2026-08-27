@@ -20,6 +20,8 @@
  * `/system/maintenance`, so the difference is visible rather than mysterious.
  */
 
+import { isBotReadRequest, isBotSurfacePath } from '../../bot-surface/domain/bot-route-table';
+
 export const MAINTENANCE_MODES = ['off', 'readonly', 'down'] as const;
 export type MaintenanceMode = (typeof MAINTENANCE_MODES)[number];
 
@@ -178,6 +180,39 @@ export function evaluateMaintenance(
     if (isUnder(path, rule.prefix)) {
       return { allowed: true, mode, exemption: rule.why };
     }
+  }
+
+  /**
+   * The BOT SURFACE — blocked in `down`, and READ-ONLY in `readonly` (GAP-001).
+   *
+   * ⚠ **It is deliberately NOT on the always-exempt list above**, and that is the decision
+   * rather than an omission. The four internal prefixes up there are exempt because blocking
+   * them turns a jovi-mall maintenance window into somebody else's outage — geo-tracker
+   * cannot answer "may this viewer track this agent", every live subscription fails
+   * authorization, and every watcher is dropped. A chat bot has no such property. A customer
+   * told "we are briefly down for maintenance" has been correctly served.
+   *
+   * The rule needs its own branch only because of one thing: **this surface's reads are
+   * POSTs**. The identity envelope is a body, and putting a messaging identifier in a query
+   * string writes a real person's phone number into every access log on the path — so `GET`
+   * is not available to it. The `SAFE_METHODS` test below therefore refuses every bot read,
+   * and a `readonly` window that was supposed to leave reads working would answer 503 to
+   * "where is my order?".
+   *
+   * `isBotReadRequest` consults the route table the router mounts from, so the answer here
+   * and the route that actually runs cannot disagree. It fails CLOSED on a path it cannot
+   * name — an unrecognised request under this prefix is on its way to a 404 anyway, and
+   * "it is a read" is the wrong guess to make about something we cannot identify.
+   *
+   * ⚠ The import is pure-to-pure: `bot-route-table.ts` imports nothing, so reading it here
+   * does not pull Express or forty controllers into a module `test:system` drives with no
+   * database and no server.
+   */
+  if (isBotSurfacePath(path)) {
+    if (mode === 'readonly' && isBotReadRequest(method, path)) {
+      return { allowed: true, mode, exemption: 'read-only window, and this bot route is a read' };
+    }
+    return { allowed: false, mode, exemption: null };
   }
 
   if (isUnder(path, WEBHOOK_PREFIX)) {

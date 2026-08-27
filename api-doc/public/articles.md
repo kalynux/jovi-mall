@@ -115,12 +115,27 @@ alongside `limit`/`offset` is what path-based pagination needs.
 | `publishedAt` | string | ISO 8601, UTC. Always present. |
 | `updatedAt` | string | ISO 8601, UTC. **Omitted when never revised.** Content revisions only — re-featuring or re-categorising an article does not move it. |
 | `featured` | boolean | At most one per locale; see below. |
-| `cover` | object \| null | Explicit `null` when absent (unlike the two above). `{ url, alt, width, height }`. |
+| `cover` | object \| null | Explicit `null` when absent (unlike the two above). `{ url, alt, width, height }`. ⚠ **`alt` is per-locale** — see below. |
 | `wordCount` | number | Derived from the body on write, so it cannot drift from the prose. |
 | `availableLocales` | string[] | Exactly the locales this article is **published** in, in the order `en, fr, pt, es, ar`. |
 
 `readingMinutes` is deliberately **not** sent — compute it from the body you are about to render, as
 `blog.format.ts` already does, so it cannot go stale after an edit.
+
+### `cover.alt` varies by locale — the image does not
+
+**The shape is unchanged and always has been**: `{ url, alt, width, height }`, exactly as before.
+What changed on 2026-08-25 is where the alt text comes from — it is now authored per language
+rather than once per article, and this endpoint resolves it for the locale you asked for.
+
+Two consequences for a client:
+
+- **`url`, `width` and `height` are identical across every locale of an article; `alt` is not.**
+  If you cache a cover, key it on `(id, locale)` — not on `id` alone, or the French page renders
+  the English description into its `alt` and its `og:image:alt`.
+- **`alt` is never empty and never in the wrong language.** An empty `alt` is the HTML for
+  *this image is decorative, skip it*, which is a lie about a cover, so the editor refuses to
+  publish a language whose cover has no description. You do not need a fallback of your own.
 
 ### `featured`
 

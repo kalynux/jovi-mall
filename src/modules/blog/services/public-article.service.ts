@@ -23,9 +23,15 @@ import {
  * defensive:
  *
  * 1. **Only `status: 'published'` is ever returned.** A preview for editors is a separate,
- *    authenticated concern (`GET /api/admin/articles/:id/preview`) — deliberately *not*
- *    solved by returning drafts with a flag, which is one forgotten filter away from
- *    publishing unfinished prose.
+ *    authenticated concern — deliberately *not* solved by returning drafts with a flag,
+ *    which is one forgotten filter away from publishing unfinished prose.
+ *
+ *    ⚠ That preview lives in **wi-admin**, at `GET /api/v1/content/articles/:articleId/preview`.
+ *    This comment named `GET /api/admin/articles/:id/preview` until 2026-08-25, a route
+ *    deleted at the Phase 5 Part A cutover — see `modules/blog/index.ts`, which has said so
+ *    correctly the whole time. wi-admin renders it through its own copy of the public DTO,
+ *    verified field-for-field identical to `dto/public-article.dto.ts` here (BR-019 § 3) and
+ *    now pinned by an assertion in wi-admin's `test:content` rather than by this sentence.
  * 2. **A missing translation is a 404, never a fallback.** `/pt/<english-slug>` must not
  *    exist. Substituting a default language publishes a page whose content contradicts its
  *    own `lang` attribute and competes with its own original.

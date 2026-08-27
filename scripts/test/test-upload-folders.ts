@@ -71,6 +71,10 @@ class RecordingStorageProvider implements IStorageProvider {
   async delete(): Promise<void> { /* not exercised */ }
   getPublicUrl(key: string): string { return `http://test/${key}`; }
   async getDownloadStream(): Promise<NodeJS.ReadableStream> { return null as unknown as NodeJS.ReadableStream; }
+  // `true` because this double impersonates the LOCAL provider (see `getProviderType`),
+  // which is the one that genuinely streams. Downloads are not exercised by this suite —
+  // it asserts which FOLDER an upload lands in — so the stub above is never read.
+  supportsDownloadStream(): boolean { return true; }
   async getBuffer(): Promise<Buffer> { return Buffer.alloc(0); }
   getProviderType(): 'local' { return 'local'; }
 }

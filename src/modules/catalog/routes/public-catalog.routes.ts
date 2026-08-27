@@ -3,7 +3,8 @@ import { PublicCatalogController } from '../controllers/public-catalog.controlle
 
 /**
  * Public catalog routes — the storefront's read side, readable without a session.
- * Mounted at `/api/public` → `/public/products`, `/public/categories`, `/public/stores`.
+ * Mounted at `/api/public` → `/public/products`, `/public/variants`, `/public/categories`,
+ * `/public/stores`.
  *
  * ⚠️ There is **no `requireAuth`** on this router, the same as `public-billing.routes.ts`
  * and `public-blog.routes.ts`. Every handler mounted here must be a read of data a vendor
@@ -17,8 +18,8 @@ import { PublicCatalogController } from '../controllers/public-catalog.controlle
  *
  * This is the **third** router on the `/public` prefix. That is fine and already the
  * established pattern (billing + blog): their paths do not overlap, and Express falls
- * through one router when nothing in it matches. `/products`, `/categories` and `/stores`
- * collide with neither `/plans`, `/credit-packs` nor `/articles*`.
+ * through one router when nothing in it matches. `/products`, `/variants`, `/categories`
+ * and `/stores` collide with neither `/plans`, `/credit-packs` nor `/articles*`.
  */
 const router = Router();
 
@@ -49,6 +50,20 @@ router.get('/products', PublicCatalogController.listProducts);
 router.get('/products/:productId/related', PublicCatalogController.listRelatedProducts);
 
 router.get('/products/:productId', PublicCatalogController.getProductById);
+
+// ─── Variants ────────────────────────────────────────────────────────────────
+
+/**
+ * SKU → variant (GAP-003), the one route on this router keyed on something a customer TYPES.
+ *
+ * ⚠ **`by-sku` is a literal segment and `:sku` is the parameter** — deliberately, rather than
+ * `/variants/:sku`. `ProductVariant.sku` is globally unique so a bare `/variants/:sku` would
+ * work today, and would leave the next sibling under `/variants/` (a variant by id, say) with
+ * nowhere to go that this parameter does not already swallow. The literal keeps the prefix
+ * open, which is the same lesson `/articles/index` behind `/articles/:slug` taught this
+ * service the hard way.
+ */
+router.get('/variants/by-sku/:sku', PublicCatalogController.resolveVariantBySku);
 
 /** Distinct categories with counts, derived over the browse filter. */
 router.get('/categories', PublicCatalogController.listCategories);
