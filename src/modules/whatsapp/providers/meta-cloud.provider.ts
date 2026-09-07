@@ -14,7 +14,7 @@ import { recordIntegrationCall } from '../../system/domain/integration-observati
  * This is provider-isolated, not provider-agnostic.
  * 
  * Environment Variables Required:
- * - WHATSAPP_API_URL (e.g., https://graph.facebook.com/v18.0)
+ * - WHATSAPP_API_URL (e.g., https://graph.facebook.com/v26.0)
  * - WHATSAPP_PHONE_NUMBER_ID
  * - WHATSAPP_ACCESS_TOKEN
  */
@@ -23,7 +23,12 @@ export class MetaWhatsAppCloudProvider implements WhatsAppProvider {
     private phoneNumberId: string;
 
     constructor() {
-        const apiUrl = process.env.WHATSAPP_API_URL || 'https://graph.facebook.com/v18.0';
+        // ⚠ This fallback is a VERSION PIN, and an unmaintained one expires silently. v18.0
+        // was the default here until 2026-09-07 and had expired on 2026-01-26 — Meta routes a
+        // call to an expired version to the oldest usable next one rather than refusing it, so
+        // no error is ever raised and the effective version drifts on Meta's schedule instead
+        // of ours. Check the changelog when touching this, do not merely preserve it.
+        const apiUrl = process.env.WHATSAPP_API_URL || 'https://graph.facebook.com/v26.0';
         const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
         this.phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
 

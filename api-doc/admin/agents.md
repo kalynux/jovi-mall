@@ -15,7 +15,7 @@
 > **If you are building a dashboard, this is not your document.** Call wi-admin's `/api/v1/agents` instead — it resolves the
 > administrator's tier and permissions, writes the audit row, and calls this surface on your
 > behalf. See [internal-service-api.md](./internal-service-api.md) for the door itself, and
-> `admin/docs/api/` in the wi-admin repository for the dashboard contract.
+> `admin/api-doc/api/` in the wi-admin repository for the dashboard contract.
 
 ---
 
@@ -64,7 +64,7 @@ control the tracking-allow flag, transfer an agent between agencies, and inspect
 > row and the membership-event history are the same code an agency desk runs. Their full
 > specification is in
 > [internal-service-api.md](./internal-service-api.md#added-in-the-dashboard-request-round); the
-> dashboard-facing contract is `admin/docs/api/contracts.md` in the wi-admin repository.
+> dashboard-facing contract is `admin/api-doc/api/contracts.md` in the wi-admin repository.
 
 > ⚠ **Added 2026-09-06** (DOC-PROGRAM F-17 class 6). This table listed 12 rows over a 15-route
 > surface. The three above were served, specified on a sibling page, and absent from the page a

@@ -7,7 +7,7 @@
 `src/app/[locale]/(marketing)/blog/` can run on real content instead of `blog.fixtures.ts`.
 
 The editor's side is **not in this service any more.** It moved to wi-admin at Phase 5 Part A and is
-documented there as `admin/docs/api/content.md` (`/api/v1/content`); `/api/admin/articles` and
+documented there as `admin/api-doc/api/content.md` (`/api/v1/content`); `/api/admin/articles` and
 `/api/admin/article-authors` no longer exist here. Same data — wi-admin writes these collections
 directly — and the schema and indexes below are still declared in this repository.
 

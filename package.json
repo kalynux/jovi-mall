@@ -123,6 +123,7 @@
     "seed:plans": "ts-node scripts/seed/seed-pricing-plans.ts",
     "seed:blog": "ts-node scripts/seed/seed-blog.ts",
     "seed:negotiation-playbook": "ts-node scripts/seed/seed-negotiation-playbook.ts",
+    "seed:bargain-windows": "ts-node scripts/seed/seed-bargain-windows.ts",
     "seed:cod-shipments": "ts-node scripts/seed/seed-cod-shipments.ts",
     "seed:cod-shipments:clean": "ts-node scripts/seed/seed-cod-shipments.ts --clean",
     "seed:customer": "ts-node scripts/seed/seed-customer-account.ts",
@@ -147,7 +148,8 @@
     "verify:shutdown": "node --max-old-space-size=4096 -r ts-node/register scripts/test/verify-shutdown-live.ts",
     "verify:bot-registration": "node --max-old-space-size=4096 -r ts-node/register scripts/verify-bot-registration-live.ts",
     "test:geocoding-sanitize": "ts-node scripts/test/test-geocoding-sanitize.ts",
-    "gen:mcp-workflow": "ts-node scripts/gen-mcp-workflow.ts"
+    "gen:mcp-workflow": "ts-node scripts/gen-mcp-workflow.ts",
+    "test:notification-deeplinks": "ts-node scripts/test/test-notification-deeplinks.ts"
   },
   "keywords": [],
   "author": "",

@@ -300,3 +300,124 @@ version history holds each step:
 | `wi-mall-bargain` | *Skeleton* → *Open + turn branches…* → *Error routing…* → *The seven tools* → *Design notes on canvas* → *An agent error is not a handback* → *Hand the agreed price back for the basket* |
 | `wi-mall-core` | *Hand price haggling to wi-mall-bargain* → *Bargaining hand-off: error routing + agent brief* → *The assistant can spend the agreed price* |
 | `wi-mall-mcp` | *cart_add_item carries the agreed price* |
+
+---
+
+## 10 · Measured on the live flow, 2026-09-07
+
+Everything above was designed; this section is what running it actually showed. Harness:
+**`wi-mall-bargain-smoke`** (`3XOEqsGzV51uNOjK`) — type the customer's line into its chat and a
+whole turn runs for real, with no WhatsApp conversation needed. The interesting data is always in
+the **sub-execution**, not in the harness.
+
+### ✅ The `$fromAI`-in-one-field pattern builds a real schema
+
+The doubt worth resolving before anything else: each tool node packs several `$fromAI()` calls
+into one `args` expression rather than one per field, and if n8n only saw one opaque string
+parameter the tools would be bad in a way no amount of description could fix.
+
+It does not. n8n collects **every** `$fromAI(` occurrence in a parameter and builds a typed
+per-argument schema from all of them. Measured with a throwaway probe:
+
+```
+input: { "query": "bluetooth speaker", "maxPrice": 40000, "limit": 3 }
+```
+
+Three named parameters, and `maxPrice` arrived as a **number**. So the model's view of these tools
+is exactly what an MCP server would give it, and the case for moving them onto one is
+architectural (a single source of truth in `tools/catalog.json`) rather than behavioural — see
+§ 7's closing note for the three things that would have to move with them.
+
+### ⛔ Nothing on the platform was negotiable, and that is now seeded
+
+Measured immediately after go-live: **thirty active products, twenty-nine vectorisation-enabled,
+and zero variants carrying a `bargain` window.** The window is vendor configuration and predates
+this effort; nobody had ever set one. So `open_negotiation` would have answered
+`negotiable: false` for every product, every customer, every time — a five-stream feature that
+looks broken while behaving exactly as designed.
+
+`npm run seed:bargain-windows` fixes it, and places the window the non-obvious way round: the
+current price becomes the **ask** (so no shelf price moves) and `variant.price` drops to become
+the **floor**. Twelve variants configured at 20% room; the `minPrice === price` invariant holds on
+all of them, because every window is built by `resolveBargainWrite` rather than assembled by hand.
+
+### The turn works end to end, and the gate holds
+
+Two turns against *Premium Sofa Set* (floor 48 000, ask 60 000):
+
+| | Customer | Tool loop | Sent |
+|---|---|---|---|
+| 1 | *"60 000 c'est trop cher. Tu peux faire 50 000 ? Je prends aujourd'hui."* | `negotiation_context` → `negotiation_record` (55 000, `lock: false`, traits) → **approved** | *"50 000 c'est trop bas pour moi, mais vu que tu prends aujourd'hui, je peux faire un geste : 55 000."* |
+| 2 | *"Mon budget maximum c'est 30 000. Sinon je laisse tomber."* | `negotiation_context` → `negotiation_record` (48 000) → **approved** | *"Je comprends, mais 30 000 je ne peux vraiment pas… Mon dernier prix, si tu prends aujourd'hui, c'est 48 000."* |
+
+`negotiation_context` was called first both times, unprompted, exactly as the playbook mandates;
+the floor reached the model; the sentence the customer received was the one the gate echoed. The
+concession in turn 1 was bought by *"je prends aujourd'hui"*, which is iron rule 2 working.
+
+⚠ **The gate's `revise` path is still unexercised**, and not for want of trying. Offered 30 000
+against a floor of 48 000, the model refused on its own rather than submitting a sub-floor price.
+That is the playbook holding — but it means `decide send`'s revise branch has never run outside a
+desk check.
+
+### ⚠ The margin, and this is the finding that matters
+
+Turn 1 gave 5 000. Turn 2 gave 7 000 more and landed **exactly on the floor**. Two rounds, and:
+
+- the vendor is at their bare minimum,
+- **the platform's D-5 cut is `30% × (P − floor)` = zero**, and
+- there is nothing left to concede if the customer pushes again.
+
+Nothing is broken. The gate did its job — 48 000 is a legal price — and D-5's arithmetic is
+correct. What happened is that the model spent its whole room in two moves, against the playbook's
+own rule 3 (*never give more than half your remaining room in one move, and make each step smaller
+than the last*): 60 000 → 55 000 → 48 000 is 5 000 then 7 000, an **increasing** step straight to
+the floor.
+
+**This is a playbook question, not a workflow one**, which is why it is reported here rather than
+fixed here: the model decides the price (the plan's first locked decision), the playbook is
+Stream A's file in Mongo, and retuning negotiation strategy from the automation layer is exactly
+the split this design exists to prevent. The lever is
+`src/modules/negotiation/playbook/negotiation.core.md` § 2, re-seeded with
+`npm run seed:negotiation-playbook`.
+
+### Latency: ~15 s for a two-tool turn, ~25 s for a five-call one
+
+Measured on turn 1 (15.4 s end to end):
+
+| | |
+|---|---|
+| `fetch playbook` | 1.32 s |
+| model call 1 (decide to open the context) | ~2.3 s |
+| `negotiation_context` (sub-workflow + HTTP) | 1.27 s |
+| model call 2 (decide the price, compose the reply) | ~5.6 s |
+| `negotiation_record` (sub-workflow + HTTP + 2 Redis) | 1.97 s |
+| model call 3 (final answer, **discarded** in favour of the gate's) | 1.41 s |
+| Redis reads + `decide send` | 0.03 s |
+| `send whatsapp` | 1.42 s |
+
+**Roughly 60% is the model**, in three sequential calls — inherent to the tool loop the playbook
+mandates, and not something the workflow can shorten. The sub-workflow hop is *not* the cost:
+a tool call is ~1.3–2.0 s including the round trip to jovi-mall, which is about what a bare HTTP
+node would cost, so switching the seven tools to `toolHttpRequest` for speed would buy nothing and
+would cost the typed arguments above.
+
+Two things were considered and **not** done:
+
+- **Caching the playbook in n8n's Redis** (would save the 1.32 s). Rejected for now: the n8n Redis
+  node's `set` has no TTL, so a bounded cache needs a parsed expiry and an inline `JSON.parse` in
+  an IF condition — four nodes and a fragile expression on the critical path, for 9%, where the
+  failure mode is "bargaining stops working". The backend already caches the document in-process
+  for 60 s.
+- **Shortening the discarded third model call.** Its output is thrown away by `decide send` — but
+  it is also what n8n writes into the **shared chat memory**, so making the model answer with a
+  token instead of the sentence would put `ok` in the transcript the main agent reads.
+
+`fetch playbook` did get `retryOnFail` (2 tries, 1 s apart): it is on the critical path of every
+turn and a transport failure there hands the whole turn back.
+
+⚠ **The customer waits those 15–25 seconds with no acknowledgement.** That is the real
+user-facing cost and it is bigger than any second saved above. A typing indicator before the agent
+runs (`sendChatAction` on Telegram; the Cloud API's typing indicator on WhatsApp) would change how
+it feels far more than the playbook cache would change how long it takes. Not built — it is a
+channel feature rather than a bargaining one, and it belongs on `wi-mall-core`'s send path where
+every slow turn would benefit, not just this one.

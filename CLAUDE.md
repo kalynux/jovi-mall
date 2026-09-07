@@ -1688,7 +1688,7 @@ model only** (`/api/public/articles`, no auth, `Cache-Control: public, max-age=3
 moved to wi-admin at Phase 5 Part A and serves `/api/v1/content` there (ADR-004 D-4).
 `/api/admin/articles` and `/api/admin/article-authors` no longer exist. Built to
 `api-doc/BACKEND-BLOG-REQUIREMENTS.md`; contract in `api-doc/public/articles.md`, the editor's in
-`../admin/docs/api/content.md`.
+`../admin/api-doc/api/content.md`.
 
 ⚠ **wi-admin WRITES a collection whose schema and indexes are declared here**, on the raw driver,
 which applies none of this schema's defaults or validators. That split is the thing to check before

@@ -14,7 +14,7 @@ administrator who asked in headers instead of impersonating them.
 >
 > **A dashboard does not call this door either.** It calls wi-admin's `/api/v1/*`, which resolves
 > the administrator's tier and permissions, writes the audit row, and then calls one of the
-> routes below on their behalf. See `admin/docs/api/` in the wi-admin repository.
+> routes below on their behalf. See `admin/api-doc/api/` in the wi-admin repository.
 >
 > The per-family pages this document links to are still accurate for request and response shapes
 > — they were rewritten to the internal prefix rather than deleted, because one factory always

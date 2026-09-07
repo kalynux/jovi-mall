@@ -141,4 +141,4 @@ unchanged in location:
 - [`api-doc/vendor/billing.md`](../vendor/billing.md) · [`api-doc/billing-plans-across-roles.md`](../billing-plans-across-roles.md)
 - [`api-doc/admin/orders.md`](../admin/orders.md) · [`api-doc/admin/system.md`](../admin/system.md)
 - [`api-doc/errors/README.md`](../errors/README.md) · [`api-doc/rate-limits.md`](../rate-limits.md)
-- wi-admin: `admin/docs/api/money.md`, `admin/docs/api/orders.md`, `admin/docs/api/system.md`
+- wi-admin: `admin/api-doc/api/money.md`, `admin/api-doc/api/orders.md`, `admin/api-doc/api/system.md`

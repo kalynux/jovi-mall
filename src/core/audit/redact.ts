@@ -46,13 +46,18 @@ export const SENSITIVE_FIELD_NAMES: ReadonlySet<string> = new Set([
     'totpsecret',
     'totp',
     'otp',
-    // wi-admin derives its set from the logger's pino paths, so two of its entries arrive
-    // as bracketed path fragments (`headers["x-service-token`). The drift test compares
-    // names, so both forms are listed — the bracketed ones can never match a real object
-    // key, and are here so the two lists provably agree.
+    // wi-admin derives its set from the logger's pino paths, so several of its entries
+    // arrive as bracketed path fragments (`headers["x-service-token`). The drift test
+    // compares names, so both forms are listed — the bracketed ones can never match a real
+    // object key, and are here so the two lists provably agree.
     'servicetoken',
     'headers["x-service-token',
     'headers["set-cookie',
+    // wi-admin's automation-report credential (ADR-022). This service never receives that
+    // header — the door is on wi-admin — but a redaction list is safe as a superset and
+    // the drift test is only worth having if it is kept exact.
+    'headers["x-automation-token',
+    'x-automation-token',
     'code_plain',
     'codeplain',
     'pan',

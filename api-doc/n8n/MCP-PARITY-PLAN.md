@@ -963,8 +963,8 @@ code for a chat to relay.
 
 | Workflow | What changed |
 |---|---|
-| `tg-adapter` | `is media?` → `fetch telegram file` (getFile + download) → `to base64`. `normalize` emits `kind: 'media'` with the caption as `text` |
-| `wa-adapter` | `is media?` → `wa media meta` → `wa media bytes` → `to base64`. Meta needs **two** calls: the id resolves to a short-lived URL, and that URL still requires the bearer token |
+| `wi-mall-tg-adapter` | `is media?` → `fetch telegram file` (getFile + download) → `to base64`. `normalize` emits `kind: 'media'` with the caption as `text` |
+| `wi-mall-wa-adapter` | `is media?` → `wa media meta` → `wa media bytes` → `to base64`. Meta needs **two** calls: the id resolves to a short-lived URL, and that URL still requires the bearer token |
 | `wi-mall-core` | `is media?` → `upload inbound file` → `compose agent input`, on the agent branch only |
 | `wi-mall-mcp` | `tickets_add_attachment` emitted; `files_receive_inbound` is flow_only and correctly absent |
 

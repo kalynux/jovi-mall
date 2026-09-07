@@ -20,7 +20,7 @@ import { WA_LIMITS, truncate } from '../../whatsapp/constants/whatsapp-limits';
  * It is appended to whatever base URL the automation layer has configured for the channel:
  *
  *   telegram   `https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>` + `/sendMessage`
- *   whatsapp   `https://graph.facebook.com/v18.0/<PHONE_NUMBER_ID>` + `/messages`
+ *   whatsapp   `https://graph.facebook.com/v26.0/<PHONE_NUMBER_ID>` + `/messages`
  *
  * Naming the segment rather than the whole URL is deliberate and is the reason no token,
  * phone-number id or API version appears in any response body. **A credential this service

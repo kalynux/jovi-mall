@@ -19,6 +19,12 @@
  *  - **`items[].delivery.status` and `shipment_id`.** Per-line delivery state, and the id
  *    that makes the shipment endpoints reachable.
  *  - **`updatedAt`.** "Last updated" on the order card.
+ *  - **`completion`.** Whether the order has already been confirmed. Orthogonal to
+ *    `fulfillment_status`, which does not move when a customer confirms — so without this a
+ *    client that re-reads the order after a successful confirm gets a byte-identical body and
+ *    cannot tell the click landed. That is exactly what happened: the storefront went on
+ *    offering "Confirm delivery" on an order it had just completed, into a guaranteed
+ *    `409 EARNINGS_ALREADY_COMPLETED`.
  *  - **`cartId`.** Not decoration: `POST /api/payments/initiate` takes a `cartId` to pay a
  *    whole checkout group, so surfacing it here is what makes an unpaid order *resumable*.
  *    A customer whose payment failed had lost their basket AND had no way back to the orders
@@ -92,6 +98,24 @@ export interface CustomerOrderDto {
     items: CustomerOrderItemDto[];
     /** COD only. Absent on prepaid orders — see the orders api-doc. */
     codCollections?: unknown[];
+    /**
+     * The escrow-release gate — `Order.completion`, projected.
+     *
+     * `confirmedAt` is null until the order is completed, and it is the ONLY reliable
+     * "has this already been confirmed" test a client has. Fulfilment does not move on
+     * confirmation — 'fulfilled' stays 'fulfilled', 'delivered' stays 'delivered' — so a UI
+     * gating a confirm action on `fulfillmentStatus` alone offers it forever.
+     *
+     * `confirmedBy` is not a synonym for "who clicked". COD completes as `'customer'` when
+     * the agent enters the customer's delivery code, because the code is the customer's act;
+     * `'system'` is the auto-confirm sweep. `auto` is what separates a real confirmation
+     * from an elapsed window, so a client can say which happened instead of guessing.
+     */
+    completion: {
+        confirmedAt: string | null;
+        confirmedBy: 'customer' | 'system' | null;
+        auto: boolean;
+    };
     createdAt: string;
     updatedAt: string;
 }
@@ -161,6 +185,17 @@ export function toCustomerOrderDto(input: CustomerOrderDtoInput): CustomerOrderD
         // existing contract distinguishes "not a COD order" from "COD with nothing collected
         // yet", and a client branches on the key's presence.
         ...(input.codCollections ? { codCollections: input.codCollections } : {}),
+        // Always present, never conditional — unlike `codCollections` above, whose absence
+        // is itself the signal. A client must be able to read "not confirmed yet" as a fact
+        // rather than infer it from a missing key. Orders predating the field project an
+        // all-null block, which is the right answer for them.
+        completion: {
+            confirmedAt: order.completion?.confirmed_at
+                ? new Date(order.completion.confirmed_at).toISOString()
+                : null,
+            confirmedBy: order.completion?.confirmed_by ?? null,
+            auto: order.completion?.auto ?? false,
+        },
         createdAt: new Date(order.created_at).toISOString(),
         updatedAt: new Date(order.updated_at).toISOString(),
     };

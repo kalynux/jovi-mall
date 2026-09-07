@@ -255,6 +255,7 @@ authenticated customer.
         "paymentMethod": "cash_on_delivery",
         "paymentStatus": "AWAITING_PAYMENT",
         "fulfillmentStatus": "pending",
+        "completion": { "confirmedAt": null, "confirmedBy": null, "auto": false },
         "codCollections": [
           {
             "shipmentId": "507f1f77bcf86cd799439100",
@@ -328,11 +329,25 @@ The projection was widened; all of this already existed on the model and simply 
 | `items[].image` | Live-resolved thumbnail (`FileDetail \| null`). Order history with no pictures is unreadable on a phone |
 | `items[].delivery` | `{ status, shipmentId }` — per-line delivery state, and the id the shipment endpoints need |
 | `updatedAt` | "Last updated" on the order card |
+| `completion` | `{ confirmedAt, confirmedBy, auto }` — the escrow-release gate. **The only way to tell an already-confirmed order from a confirmable one** — see below |
 
 > **Images are resolved live, not snapshotted.** Title, SKU and price are snapshotted because
 > they are terms of the sale and must not drift; an image is an aid to recognising the object,
 > so the *current* picture is the more useful one — and every existing order gets one with no
 > backfill.
+
+> 🔴 **`completion` is not `fulfillmentStatus`, and gating a confirm button on the latter is a
+> bug.** Confirming an order stamps `completion.confirmed_at` and leaves fulfilment exactly where
+> it was — `fulfilled` stays `fulfilled`, `delivered` stays `delivered`. So a client that
+> re-reads the order after a successful confirm gets a body identical to the one before it, and a
+> "Confirm delivery" action gated on `fulfillmentStatus === 'fulfilled'` is offered forever, into
+> a guaranteed `409 EARNINGS_ALREADY_COMPLETED`. **Offer the action only while
+> `completion.confirmedAt === null`.**
+>
+> `confirmedBy` is not "who clicked". A COD order completes as `'customer'` when the *agent*
+> enters the customer's delivery code, because the code is the customer's act; `'system'` is the
+> auto-confirm sweep. `auto` is what separates a real confirmation from an elapsed window — use
+> it, not `confirmedBy`, to decide between "you confirmed this" and "confirmed automatically".
 
 ---
 
@@ -610,6 +625,11 @@ already collected), `429 COD_CODE_RESEND_TOO_SOON` (`details.retryInSeconds`).
 Confirm receipt/satisfaction. Confirmable once fulfilment is `delivered` (physical) or
 `fulfilled` (digital) and the order has not already been completed. Completing the order
 starts the 7-day escrow hold before vendor funds become withdrawable.
+
+> **Already completed?** Read `completion.confirmedAt` on the order — it is non-null exactly
+> when this endpoint would answer `409 EARNINGS_ALREADY_COMPLETED`. Fulfilment does not move on
+> confirmation, so it cannot answer this question; see
+> [what every order object carries](#what-every-order-object-now-carries).
 
 > **Physical orders:** `fulfillment_status` only reaches `delivered` once every shipment of the
 > order has been individually confirmed via

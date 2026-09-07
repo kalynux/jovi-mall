@@ -15,7 +15,7 @@
 > **If you are building a dashboard, this is not your document.** Call wi-admin's `/api/v1/support/tickets` instead — it resolves the
 > administrator's tier and permissions, writes the audit row, and calls this surface on your
 > behalf. See [internal-service-api.md](./internal-service-api.md) for the door itself, and
-> `admin/docs/api/` in the wi-admin repository for the dashboard contract.
+> `admin/api-doc/api/` in the wi-admin repository for the dashboard contract.
 
 ---
 

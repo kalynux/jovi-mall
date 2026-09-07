@@ -42,7 +42,7 @@ geo-tracker about it.
 | **Agency / agent mobile app** | [agent/FRONTEND-CHANGELOG-phase-2-3.md](./agent/FRONTEND-CHANGELOG-phase-2-3.md) | [geo-tracker](../../geo-tracker/api-doc/FRONTEND-CHANGELOG-phase-2-3.md) |
 | **Customer app** | [customer/FRONTEND-CHANGELOG-phase-2-3.md](./customer/FRONTEND-CHANGELOG-phase-2-3.md) | [geo-tracker](../../geo-tracker/api-doc/FRONTEND-CHANGELOG-phase-2-3.md) — order tracking changed |
 | **Marketing landing + shop** | [public/FRONTEND-CHANGELOG-phase-2-3.md](./public/FRONTEND-CHANGELOG-phase-2-3.md) | this page |
-| **Admin dashboard** (wi-admin, `/api/v1/*`) | [`admin/docs/FRONTEND-CHANGELOG-phase-2-3.md`](../../admin/docs/FRONTEND-CHANGELOG-phase-2-3.md) | this page, for context only |
+| **Admin dashboard** (wi-admin, `/api/v1/*`) | [`admin/api-doc/FRONTEND-CHANGELOG-phase-2-3.md`](../../admin/api-doc/FRONTEND-CHANGELOG-phase-2-3.md) | this page, for context only |
 | **Any live-tracking client** | [`geo-tracker/api-doc/FRONTEND-CHANGELOG-phase-2-3.md`](../../geo-tracker/api-doc/FRONTEND-CHANGELOG-phase-2-3.md) | — |
 
 ---

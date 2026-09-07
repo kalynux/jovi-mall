@@ -31,7 +31,7 @@ Your slice of Phases **4** (Per-service hardening) and **5** (Legacy close-out) 
 
 `/api/admin/articles` and `/api/admin/article-authors` **no longer exist in jovi-mall.** Writes to
 `articles` and `article_authors` are wi-admin's now
-([`admin/docs/api/content.md`](../../../admin/docs/api/content.md), 14 routes at `/api/v1/content`).
+([`admin/api-doc/api/content.md`](../../../admin/api-doc/api/content.md), 14 routes at `/api/v1/content`).
 
 ### What did not move
 
@@ -82,7 +82,7 @@ a block type is added, ask wi-admin to hold the editor grant until your release 
 ### Doc pointers to fix
 
 `jovi-mall/api-doc/admin/articles.md` was **deleted**. If you have it bookmarked, the editor
-contract is now [`admin/docs/api/content.md`](../../../admin/docs/api/content.md). Everything you
+contract is now [`admin/api-doc/api/content.md`](../../../admin/api-doc/api/content.md). Everything you
 read is still [articles.md](./articles.md).
 
 ---
@@ -175,7 +175,7 @@ Detail: [../customer/FRONTEND-CHANGELOG-phase-4-5.md § 1](../customer/FRONTEND-
 |---|---|
 | The cross-role summary | [../FRONTEND-CHANGELOG-phase-4-5.md](../FRONTEND-CHANGELOG-phase-4-5.md) |
 | The public blog contract | [articles.md](./articles.md) |
-| The blog **editor** (wi-admin) | [`admin/docs/api/content.md`](../../../admin/docs/api/content.md) |
+| The blog **editor** (wi-admin) | [`admin/api-doc/api/content.md`](../../../admin/api-doc/api/content.md) |
 | The public catalog | [catalog.md](./catalog.md) · [FRONTEND-CHANGELOG-shop.md](./FRONTEND-CHANGELOG-shop.md) |
 | Plans and credit packs | [README.md](./README.md) · [../billing-plans-across-roles.md](../billing-plans-across-roles.md) |
 | Private files and `access` | [../FRONTEND-CHANGELOG-private-files.md](../FRONTEND-CHANGELOG-private-files.md) |

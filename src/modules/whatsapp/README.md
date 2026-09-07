@@ -106,7 +106,7 @@ The system supports **14 WhatsApp message types**, each with a dedicated handler
 ## Environment Variables
 
 ```bash
-WHATSAPP_API_URL=https://graph.facebook.com/v18.0
+WHATSAPP_API_URL=https://graph.facebook.com/v26.0
 WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
 WHATSAPP_ACCESS_TOKEN=your_access_token
 ```

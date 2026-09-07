@@ -1033,11 +1033,50 @@ recorded rather than built.
   next turn's `negotiation_context` default is stale until the model passes `quantity` itself.
   The context tool is authoritative, so nothing is mispriced; the default is simply wrong.
 
-**No jovi-mall `src/` was touched.** No route, model, error code, environment variable, npm
-script or `.env.example` row — nothing in § 5's shared registries. The repository changes are
-this section, the F row above, `bargaining-agent.md`, its index row in `api-doc/n8n/README.md`,
-and — from the close-out above — `api-doc/n8n/tools/catalog.json` plus the two regenerated files
-under `api-doc/n8n/generated/`.
+---
 
-Guards after the catalogue change: `test:bot-surface` **257/0** · `test:env` **38/0** ·
-`test:errors` **74/0** · `test:system` **231/0**.
+#### ⛔ Nothing on the platform was NEGOTIABLE — measured after go-live, and now seeded
+
+The feature shipped complete and **inert**. Measured the same day: thirty active products,
+twenty-nine vectorisation-enabled, **zero variants carrying a `bargain` window**. The window is
+vendor configuration and predates this whole effort; nobody had ever set one. So
+`open_negotiation` would have answered `negotiable: false` for every product and every customer,
+forever, and the assistant would have told each of them the price was fixed — correctly.
+
+`npm run seed:bargain-windows` (new) closes it, and places the window the **non-obvious way
+round**: the current price becomes the **ask**, so no shelf price moves, and `variant.price` drops
+to become the **floor**. The obvious seed — `maxPrice` above the current price — would re-price
+the storefront upward on everything it touched, because D-1 made the displayed price
+`bargain.maxPrice`. Twelve variants configured at 20% room; every window is built by
+`resolveBargainWrite`, so `minPrice === price` cannot be got wrong from out here. `--dry-run`,
+`--clean`, `--limit`, `--discount`.
+
+#### ✅ Verified end to end, and the one finding that needs an owner
+
+`wi-mall-bargain-smoke` (`3XOEqsGzV51uNOjK`) drives a real turn from a chat message. Two turns
+against a floor of 48 000 / ask of 60 000: `negotiation_context` called first unprompted both
+times, the floor reached the model, the gate approved, and **the sentence the customer received
+was the one the gate echoed**. Full transcript and timings in
+[bargaining-agent.md](./bargaining-agent.md) § 10.
+
+Also settled there: the `$fromAI`-in-one-field pattern **does** build a typed per-argument schema
+(so the tools are as legible to the model as an MCP server would make them), and the latency is
+~60% model — three sequential calls, inherent to the mandated tool loop, not the sub-workflow hop.
+
+⚠ **The finding that is not ours to fix: the model spent its whole margin in two rounds.**
+60 000 → 55 000 → 48 000, landing exactly on the floor — 5 000 then 7 000, an *increasing* step,
+against the playbook's own rule 3. Nothing is broken and the gate did its job, but at `P = floor`
+the vendor is at their minimum and **D-5's platform cut is zero**. The lever is
+`negotiation.core.md` § 2 and `seed:negotiation-playbook`; retuning negotiation strategy from the
+automation layer is exactly the split this plan exists to prevent.
+
+---
+
+**No jovi-mall `src/` was touched.** No route, model, error code, environment variable or
+`.env.example` row — nothing in § 5's shared registries. The repository changes are this section,
+the F row above, `bargaining-agent.md`, its index row in `api-doc/n8n/README.md`,
+`api-doc/n8n/tools/catalog.json` plus the two regenerated files under `api-doc/n8n/generated/`,
+and — for the seed above — `scripts/seed/seed-bargain-windows.ts` with its `package.json` script.
+
+Guards: `test:bot-surface` **257/0** · `test:env` **38/0** · `test:errors` **74/0** ·
+`test:system` **231/0** · `typecheck:scripts` · `lint` clean on every file added here.
