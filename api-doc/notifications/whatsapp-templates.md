@@ -1,5 +1,12 @@
 # WhatsApp Templates
 
+**Verified against source on 2026-09-08** — the registry census (**65** registered names), the
+five language codes, and `vendor_booking_created`'s five body params, against
+`jovi-mall/src/modules/whatsapp/handlers/template/template-registry.ts`,
+`src/core/constants/languages.ts` and the four catalogs under
+`src/modules/notifications/catalog/` (**94** distinct template names referenced, **30** of them
+never registered). Approval status is a Meta-side fact this page cannot verify.
+
 This is the source-of-truth for the WhatsApp Business templates used by the
 platform — vendor notifications (§1–7), the customer-facing COD delivery
 code (§8), the cross-role **billing / plan-lifecycle** templates (§9), the

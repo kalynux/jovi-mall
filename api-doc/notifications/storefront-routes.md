@@ -1,5 +1,12 @@
 # Where notification buttons point — and the pages behind them
 
+**Verified against source on 2026-09-08** — the backend half only: the pay-link session
+projection and its `paidFor` object, the four `state` values and their status-before-expiry
+ordering, the `PAYMENT_LINK_NOT_FOUND` conflation, and the `sk_`/`rk_` publishable-key refusal,
+against `jovi-mall/src/modules/payments/domain/pay-link.ts` and
+`src/modules/payments/services/pay-link.service.ts`. The **route addresses** on this page are
+facts about `frontend/landing`, which this backend cannot check — that is the point of the page.
+
 **Audience: whoever builds `frontend/landing`.** Backend readers want
 `src/modules/notifications/catalog/customer-notification-catalog.ts`, whose header
 carries the rules; this page is the cross-repository half.

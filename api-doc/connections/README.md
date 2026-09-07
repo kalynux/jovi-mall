@@ -1,5 +1,11 @@
 # Messaging Connections (WhatsApp / Telegram)
 
+**Verified against source on 2026-09-08** — the three routes and their mount, the `GET` / redeem
+response shapes, the six error codes with their statuses, the 6-character code, its 10-minute life,
+the 5-attempts-per-account counter and the 30/min per-IP limiter, against
+`jovi-mall/src/modules/channel-connections/` (routes, controller, service, DTO, validators,
+`domain/channel.ts`, `services/connection-code.store.ts`) and `src/api/rate-limit/policy.ts`.
+
 One mechanism connects **any** messaging channel to a platform account. It replaces the two
 separate flows that existed before (WhatsApp `/link:CODE` verification and the Telegram
 deep-link token), which disagreed on almost everything.

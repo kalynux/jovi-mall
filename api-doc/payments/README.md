@@ -1,5 +1,13 @@
 # Payments — gateway checkout (role-neutral)
 
+**Verified against source on 2026-09-08** — the six-route census and their auth, the `initiate` /
+`verify` / `authorize` request shapes, the pay-link mint and session projection, the OTP attempt
+ceiling and the per-gateway refund verdict, against
+`jovi-mall/src/modules/payments/routes/payment.routes.ts`,
+`src/modules/payments/validators/payment.validators.ts`,
+`src/modules/payments/domain/pay-link.ts`, `src/modules/payments/services/pay-link.service.ts`,
+`src/modules/payments/gateways/registry.ts` and `src/modules/payments/config/payments.config.ts`.
+
 One payment surface, shared by every flow that takes money from a **customer**: a single-order
 payment, a whole multi-vendor cart in one charge, or a service booking.
 

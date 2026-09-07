@@ -1,5 +1,11 @@
 # WhatsApp
 
+**Verified against source on 2026-09-08** — the single route and its `X-Webhook-Secret` guard,
+the request body, and the verbatim-relay response, against
+`jovi-mall/src/modules/whatsapp/whatsapp.routes.ts`,
+`src/api/middlewares/bot-webhook.middleware.ts` and `src/modules/whatsapp/whatsapp.controller.ts`.
+**Corrected:** this page said the webhook takes no authentication, in two places. It does.
+
 Account linking is **not on this page any more.** It moved to
 [`../connections/README.md`](../connections/README.md) — one mechanism for WhatsApp and
 Telegram alike, mounted at `/api/me/connections`. `GET /api/webhooks/whatsapp/link/status` and
@@ -9,7 +15,7 @@ What remains here is the bot bridge. It is not a frontend endpoint.
 
 | Endpoint | Auth |
 |---|---|
-| `POST /api/webhooks/whatsapp/` | none (public webhook) |
+| `POST /api/webhooks/whatsapp/` | **`X-Webhook-Secret`** — see below. Not a session; not open |
 
 ## ⚠ Authentication — `X-Webhook-Secret`
 
@@ -37,7 +43,9 @@ service window, then dispatches any `/`-command through the internal CommandBus 
 being the one that matters (see [../connections/README.md](../connections/README.md)).
 
 - **Endpoint:** `POST /api/webhooks/whatsapp/`
-- **Authentication:** none
+- **Authentication:** the `X-Webhook-Secret` header (`requireBotWebhookSecret`) — see the section
+  above. **Not "none":** this page said so until 2026-09-08 and it was wrong. No cookie and no
+  Bearer token is involved, which is what that claim was reaching for, but the route is guarded.
 - **Content-Type:** `application/json`
 
 ```json

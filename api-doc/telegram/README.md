@@ -1,5 +1,11 @@
 # Telegram
 
+**Verified against source on 2026-09-08** — the route census (one webhook route, plus the
+wi-admin send route), the `X-Webhook-Secret` gate and the four registered commands, against
+`jovi-mall/src/modules/telegram/telegram.routes.ts`,
+`src/modules/telegram/admin-messaging.routes.ts`, `src/api/routes/internal-admin.routes.ts` and
+the four `command_name` declarations under `src/modules/{channel-connections,messaging-login}/commands/`.
+
 Account linking is **not on this page any more.** It moved to
 [`../connections/README.md`](../connections/README.md) — one mechanism for WhatsApp and
 Telegram alike, mounted at `/api/me/connections`.
@@ -8,7 +14,7 @@ What remains here is the bot bridge and one admin endpoint. Neither is a fronten
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| `POST` | `/api/webhooks/telegram/webhook` | public (bot bridge) | Inbound bot messages — **not** a frontend endpoint |
+| `POST` | `/api/webhooks/telegram/webhook` | **`X-Webhook-Secret`** (not a session) | Inbound bot messages — **not** a frontend endpoint |
 | `POST` | `/api/internal/admin/messaging/telegram` | **wi-admin service token** | Send one Telegram message to one recipient |
 
 > ⚠ **`POST /api/webhooks/telegram/send` no longer exists.** `telegram.routes.ts:39` registers
@@ -49,6 +55,12 @@ by a slash command anybody types.
 `payload.name` and `payload.username` are optional and cosmetic — they become the display name
 and `@handle` on the connection. The **identity** is `chat_id`, read from the context the
 controller builds, never from `payload`.
+
+⚠ **`/reset-password` cannot be registered with BotFather, and must not be.** Telegram's
+`bot_command` entity accepts only `[a-zA-Z0-9_]`, so it parses `/reset-password` as the command
+`reset` followed by text. The flow works today only because the automation layer matches the raw
+message text rather than a registered command — keep it that way, and do not "fix" the command
+name to `/reset_password` in a client or a help message without changing the matcher first.
 
 Answers the automation layer, not a frontend, so it is one of the deliberate exceptions to the
 `{ success, data }` envelope — the CommandBus result is returned verbatim:
