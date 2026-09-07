@@ -54,7 +54,7 @@ export interface IEarningsLedger extends Document {
 const EarningsLedgerSchema = new Schema<IEarningsLedger>(
   {
     account_id: { type: Schema.Types.ObjectId, ref: MODELS.EARNINGS_ACCOUNT, required: true },
-    owner_type: { type: String, enum: ['vendor', 'agency', 'platform', 'agent'], required: true },
+    owner_type: { type: String, enum: ['vendor', 'agency', 'platform', 'agent', 'platform_ai'], required: true },
     owner_id: { type: Schema.Types.ObjectId, default: null },
     entry_type: {
       type: String,

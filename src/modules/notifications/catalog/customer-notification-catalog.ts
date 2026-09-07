@@ -5,6 +5,7 @@ import { Language, DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES } from './notification-
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { ChannelText, SituationMessages, ButtonDef } from './notification-catalog';
+import { storefrontPath } from '../../../core/utils/storefront-link.util';
 
 /**
  * Customer Notification Message Catalog (localized)
@@ -34,6 +35,35 @@ import { ChannelText, SituationMessages, ButtonDef } from './notification-catalo
  * Translations are maintained for: en, fr, pt, es, ar.
  */
 
+// ─── Where the buttons point ─────────────────────────────────────────────────
+
+/**
+ * ⚠ **A `urlSuffix` is a REAL ROUTE in `frontend/landing`, and nothing here can
+ * check that.** Every one of them was written as a bare noun — `orders/{{id}}`,
+ * `support/{{id}}` — before the shop's pages existed, and every one was wrong:
+ * the pages live under `/shop/account/`, so all 22 buttons in this catalogue
+ * pointed at a 404 in every email, WhatsApp message, Telegram message and inbox
+ * row for as long as they have existed. Nothing reported it, because a link is
+ * only ever wrong in the customer's browser.
+ *
+ * So when you add or move one, **open the storefront's route tree and read it**
+ * (`frontend/landing/src/app/[locale]/…`). The four rules that make these hold:
+ *
+ *  1. **No leading slash.** WhatsApp's approved template button is
+ *     `{STOREFRONT_URL}/{{1}}` and Meta supplies the separator — a leading
+ *     slash here produces `https://site//shop/…`.
+ *  2. **No locale.** `renderCustomerButton` adds it, once, per channel.
+ *     Baking `fr/` in here would double it on the bot's path.
+ *  3. **Everything owner-scoped lives under `shop/account/`.** The exception is
+ *     the pay page, which is deliberately reachable with no session.
+ *  4. **A route that does not exist yet is worse than no button.** Three were in
+ *     that state when the tails above were corrected; the storefront built all
+ *     three on 2026-09-07, and every suffix in this file now resolves on both
+ *     the web and the packaged app. `api-doc/notifications/storefront-routes.md`
+ *     is the cross-repository record and is the page to update — in BOTH copies
+ *     of the mirror — the next time one of these moves.
+ */
+
 // ─── Shared button label sets ────────────────────────────────────────────────
 
 const VIEW_BOOKING_LABEL: Record<Language, string> = {
@@ -47,7 +77,7 @@ const VIEW_BOOKING_LABEL: Record<Language, string> = {
 const BOOKING_BUTTON: ButtonDef = {
     type: 'url',
     label: VIEW_BOOKING_LABEL,
-    urlSuffix: 'bookings/{{bookingId}}'
+    urlSuffix: 'shop/account/bookings/{{bookingId}}'
 };
 
 const PAY_BALANCE_LABEL: Record<Language, string> = {
@@ -61,7 +91,7 @@ const PAY_BALANCE_LABEL: Record<Language, string> = {
 const PAY_BALANCE_BUTTON: ButtonDef = {
     type: 'url',
     label: PAY_BALANCE_LABEL,
-    urlSuffix: 'bookings/{{bookingId}}/pay-balance'
+    urlSuffix: 'shop/account/bookings/{{bookingId}}/balance'
 };
 
 const VIEW_ORDER_LABEL: Record<Language, string> = {
@@ -72,10 +102,26 @@ const VIEW_ORDER_LABEL: Record<Language, string> = {
     ar: 'عرض الطلب'
 };
 
+/**
+ * ✅ Built in the storefront on 2026-09-07 as `components/shop/account/OrderDetail.tsx`,
+ * with an app twin at `/shop/account/order/detail?id=`.
+ *
+ * ⚠ **`{{orderId}}` is one ORDER, and the storefront's `/shop/account/orders/:cartId` is a
+ * whole CHECKOUT GROUP** — one basket split into one order per vendor. So this button could
+ * not simply be re-pointed at the page that exists: it carries the id of the parcel the
+ * message is about, and that page looks up a group by the id it is given and finds nothing.
+ * Sending the *group* id instead was the alternative, and the owner chose the page — a
+ * message about one parcel should land on that parcel, not on a list containing it.
+ *
+ * ⚠ **The `detail` segment is load-bearing and must not be tidied away.** Its sibling
+ * `orders/[cartId]` is a dynamic segment at the same depth over there, and a static
+ * segment in front of the id is the only thing stopping it swallowing every single-order
+ * link and rendering the group screen against an id it cannot resolve.
+ */
 const ORDER_BUTTON: ButtonDef = {
     type: 'url',
     label: VIEW_ORDER_LABEL,
-    urlSuffix: 'orders/{{orderId}}'
+    urlSuffix: 'shop/account/orders/detail/{{orderId}}'
 };
 
 const PAY_NOW_LABEL: Record<Language, string> = {
@@ -93,6 +139,17 @@ const PAY_NOW_LABEL: Record<Language, string> = {
  * so what travels in the URL has to be the opaque expiring handle rather than the
  * transaction's id — the whole argument for the handle is in `payments/domain/pay-link.ts`,
  * and putting an id here would quietly undo it.
+ *
+ * ✅ Built in the storefront on 2026-09-07 as `components/pay/PayLink.tsx`, with a real
+ * Stripe Payment Element reading `GET /payments/session/:token`. This is the only suffix
+ * here deliberately NOT under `shop/account/`: the whole point of a pay link is that
+ * somebody without an account opens it — a mother orders, her son pays — so building it
+ * inside the signed-in tree would lock out the one person it is for. The storefront's
+ * middleware gates on a prefix list that `/pay` is not on, and it must stay off it.
+ *
+ * ⚠ **It has NO app twin, unlike every other suffix here, and that is deliberate.** A pay
+ * link is opened in whatever browser the recipient tapped it from, by somebody who very
+ * often has no app installed at all.
  */
 const PAY_LINK_BUTTON: ButtonDef = {
     type: 'url',
@@ -116,7 +173,7 @@ const VIEW_TICKET_LABEL: Record<Language, string> = {
 const TICKET_BUTTON: ButtonDef = {
     type: 'url',
     label: VIEW_TICKET_LABEL,
-    urlSuffix: 'support/{{ticketId}}'
+    urlSuffix: 'shop/account/support/{{ticketId}}'
 };
 
 const TRACK_ORDER_LABEL: Record<Language, string> = {
@@ -127,10 +184,16 @@ const TRACK_ORDER_LABEL: Record<Language, string> = {
     ar: 'تتبع التوصيل'
 };
 
+/**
+ * ✅ Built in the storefront on 2026-09-07, on its existing live-tracking stack, with an app
+ * twin at `/shop/account/order/tracking?id=`. It is nested under the single-order page
+ * rather than under the checkout-group page, because a customer tracks one parcel and a
+ * checkout group can be several going to several places.
+ */
 const TRACK_BUTTON: ButtonDef = {
     type: 'url',
     label: TRACK_ORDER_LABEL,
-    urlSuffix: 'orders/{{orderId}}/tracking'
+    urlSuffix: 'shop/account/orders/detail/{{orderId}}/tracking'
 };
 
 // ─── Composed lines ──────────────────────────────────────────────────────────
@@ -1171,21 +1234,50 @@ export function renderCustomerWhatsAppTemplateParams(
 
 /**
  * Resolve a situation's action button into a localized label + absolute URL.
- * Returns null when the situation has no button or no base URL is configured.
+ * Returns null when the situation has no button.
+ *
+ * ── Three addresses out, and they are NOT interchangeable ────────────────────
+ *
+ * The same button is delivered four ways and two of them prepend something of
+ * their own, so one string cannot serve all of them:
+ *
+ * | field | shape | who reads it |
+ * |---|---|---|
+ * | `url` | absolute, **locale-prefixed** | the email button, the Telegram button, and `action.url` on the inbox row |
+ * | `whatsappSuffix` | relative, **locale-prefixed**, no leading slash | the Meta template's dynamic URL suffix parameter |
+ * | `urlSuffix` | relative, **locale-FREE** | `action.path` on the inbox row |
+ *
+ * ⚠ **`urlSuffix` must stay locale-free.** It is stored as `action.path`, and
+ * the bot surface resolves that through `botStorefrontLink`, which adds the
+ * locale itself — so a prefix baked in here reaches a customer as `/fr/fr/…`.
+ *
+ * ⚠ **`whatsappSuffix` must stay leading-slash-free.** Meta's approved button
+ * URL is `{STOREFRONT_URL}/{{1}}` and Meta supplies the separator.
+ *
+ * The locale was missing from all of these until 2026-09-07: every button in
+ * every email, WhatsApp and Telegram message opened the ENGLISH page, whatever
+ * language the sentence beside it was written in. That fails nothing and logs
+ * nothing — the page renders, in the wrong language.
  */
 export function renderCustomerButton(
     situation: CustomerNotificationType,
     lang: Language,
     ctx: RenderContext,
     baseUrl: string | undefined
-): { label: string; url: string; urlSuffix: string } | null {
+): { label: string; url: string; urlSuffix: string; whatsappSuffix: string } | null {
     const button = CUSTOMER_NOTIFICATION_CATALOG[situation].button;
     if (!button) return null;
 
     const urlSuffix = renderTemplate(button.urlSuffix, ctx);
     const label = button.label[lang] ?? button.label[DEFAULT_LANGUAGE];
-    const trimmedBase = baseUrl ? baseUrl.replace(/\/+$/, '') : '';
-    const url = trimmedBase ? `${trimmedBase}/${urlSuffix}` : urlSuffix;
 
-    return { label, url, urlSuffix };
+    // `storefrontPath` always returns a leading slash; the WhatsApp parameter
+    // must not carry one, so it is stripped for that field alone.
+    const localizedPath = storefrontPath(urlSuffix, lang);
+    const whatsappSuffix = localizedPath.slice(1);
+
+    const trimmedBase = baseUrl ? baseUrl.replace(/\/+$/, '') : '';
+    const url = trimmedBase ? `${trimmedBase}${localizedPath}` : whatsappSuffix;
+
+    return { label, url, urlSuffix, whatsappSuffix };
 }

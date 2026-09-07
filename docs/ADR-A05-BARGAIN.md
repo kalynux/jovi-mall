@@ -59,7 +59,7 @@ something else.
    collection.** The source scan in `test:bargain-price` enforces this; treat a failure there as a
    product decision being made by accident.
 
-✅ **Resolved 2026-08-19 (Phase 4.A.6.2, [D-1](../PRODUCTION-READINESS/PHASE-4-HARDENING-PLAN.md#d-1)):
+✅ **Resolved 2026-08-19 (Phase 4.A.6.2, [D-1](../../PRODUCTION-READINESS/PHASE-4-HARDENING-PLAN.md#d-1)):
 `VariantPricingService` is deleted.** It was dead (barrel-only) and wrote `price` with no
 `minPrice` sync; its own header said it must call `resolveBargainWrite` before it was ever wired
 up. A dead service that documents the invariant it would break is a loaded gun — the header's

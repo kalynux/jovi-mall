@@ -1,6 +1,7 @@
 import { ObservableWorker, WorkerSchedule, describeSchedule } from '../../core/jobs/worker-schedule';
 import { planExpiryWorker } from '../billing/workers/plan-expiry.worker';
 import { agencyShipmentCapWorker } from '../billing/workers/agency-shipment-cap.worker';
+import { planQuotaReconcileWorker } from '../plan-quota/workers/plan-quota-reconcile.worker';
 import { fileCleanupWorker } from '../file-cleanup/workers/file-cleanup.worker';
 import { earningsReleaseWorker } from '../earnings/workers/earnings-release.worker';
 import { unpaidOrderCancelWorker } from '../orders/workers/unpaid-order-cancel.worker';
@@ -144,6 +145,15 @@ export const WORKER_REGISTRY = Object.freeze({
             () => agencyShipmentCapWorker.runSweep(),
             'Monthly shipment allowances recomputed',
         ),
+    },
+    // Counted rather than void, and the distinction is the useful one here: `0` means
+    // every owner's enforced state already matches their plan, while a refusal means
+    // another instance is mid-sweep. An operator investigating "why is this vendor's
+    // product still live" needs to tell those apart.
+    'plan-quota-reconcile': {
+        label: 'Plan quota reconcile',
+        worker: planQuotaReconcileWorker,
+        runOnce: () => runCountedSweep(() => planQuotaReconcileWorker.runSweep()),
     },
     'file-cleanup': {
         label: 'Orphaned file cleanup',

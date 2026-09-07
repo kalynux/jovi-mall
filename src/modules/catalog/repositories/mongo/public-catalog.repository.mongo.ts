@@ -35,6 +35,10 @@ import {
     publishableProductFilter,
     VENDOR_PUBLISHABLE_MATCH,
 } from '../../domain/services/public-catalog.filter';
+import {
+    displayCompareAtPriceExpr,
+    displayPriceExpr,
+} from '../../read-models/public-display-price';
 
 /** One row of the browse grid, before file resolution and DTO mapping. */
 export interface PublicProductListRow {
@@ -44,8 +48,13 @@ export interface PublicProductListRow {
     type: ProductType;
     category: string;
     tags: string[];
+    /**
+     * The **displayed** price of the default variant — its ask when it is bargainable, its
+     * `price` otherwise. Not the vendor's floor. See `read-models/public-display-price.ts`.
+     */
     price: number;
     compareAtPrice: number | null;
+    /** Min/max of the **displayed** prices across sellable variants, same rule as `price`. */
     priceMin: number;
     priceMax: number;
     inStock: boolean;
@@ -207,8 +216,31 @@ export class PublicCatalogRepositoryMongo {
      * one activation-gate invariant that can go stale underneath us.
      *
      * `inStock` is derived here rather than published as a count — see the DTO.
+     *
+     * ── EVERY PRICE FACT BELOW IS THE **DISPLAYED** PRICE ───────────────────
+     *
+     * A bargainable variant is shelved at its ask, not at `variant.price` (D-1). Rather than
+     * flip the four call sites downstream — the row's `price`, `_priceMin`, `_priceMax` and
+     * the filter band's `$match`, which is exactly the set that ships broken if one is missed
+     * — each sellable variant is decorated **once** with `displayPrice` (and its companion
+     * `displayCompareAtPrice`) in a stage of its own, and everything after that reads those.
+     * The sort needs no change at all: it runs after `listProjectionStage`, on the projected
+     * `price`, which is now the displayed one.
+     *
+     * ⚠ The decoration must be its OWN `$addFields`. `$addFields` computes every field
+     * against the stage's *input* document, so `_priceMin` in the same stage would still see
+     * the undecorated array and quote floors.
      */
     private variantJoinStages(): PipelineStage[] {
+        // The variant fields are reached through the `$map` variable; `vectorisationEnabled`
+        // lives on the product, which is the root document of this pipeline.
+        const displayPaths = {
+            vectorisationEnabled: '$vectorisationEnabled',
+            bargainMaxPrice: '$$v.bargain.maxPrice',
+            price: '$$v.price',
+            compareAtPrice: '$$v.compareAtPrice',
+        };
+
         return [
             {
                 $lookup: {
@@ -227,6 +259,18 @@ export class PublicCatalogRepositoryMongo {
                                 _id: 1,
                                 price: 1,
                                 compareAtPrice: 1,
+                                // ⚠ The ASK ALONE, never `bargain: 1`. `bargain.minPrice` is
+                                // the vendor's floor — their reserve in a negotiation the
+                                // shopper is the other side of — and projecting the whole
+                                // sub-document would carry it through the rest of the
+                                // pipeline, where a later `$project` could pick it up by
+                                // accident. That is the argument `vendorJoinStages` makes
+                                // about the vendor document, applied to a number.
+                                //
+                                // ⚠ Do not confuse this `minPrice` with `PublicProductQuery`'s
+                                // above: that one is the SHOPPER's filter floor and is
+                                // published in the query string. Two meanings, one word.
+                                'bargain.maxPrice': 1,
                                 stock: 1,
                                 isInfiniteStock: 1,
                                 allow_oversell: 1,
@@ -237,6 +281,25 @@ export class PublicCatalogRepositoryMongo {
                 },
             },
             { $match: { 'sellableVariants.0': { $exists: true } } },
+            {
+                $addFields: {
+                    sellableVariants: {
+                        $map: {
+                            input: '$sellableVariants',
+                            as: 'v',
+                            in: {
+                                $mergeObjects: [
+                                    '$$v',
+                                    {
+                                        displayPrice: displayPriceExpr(displayPaths),
+                                        displayCompareAtPrice: displayCompareAtPriceExpr(displayPaths),
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                },
+            },
             {
                 $addFields: {
                     // The default variant is what the row quotes; fall back to the first
@@ -255,8 +318,10 @@ export class PublicCatalogRepositoryMongo {
                             { $first: '$sellableVariants' },
                         ],
                     },
-                    _priceMin: { $min: '$sellableVariants.price' },
-                    _priceMax: { $max: '$sellableVariants.price' },
+                    // Over the DISPLAYED prices, so the band a shopper is shown is the band
+                    // the grid's own prices fall inside.
+                    _priceMin: { $min: '$sellableVariants.displayPrice' },
+                    _priceMax: { $max: '$sellableVariants.displayPrice' },
                     _inStock: {
                         $anyElementTrue: {
                             $map: {
@@ -288,8 +353,11 @@ export class PublicCatalogRepositoryMongo {
                 type: 1,
                 category: 1,
                 tags: { $ifNull: ['$tags', []] },
-                price: '$_defaultVariant.price',
-                compareAtPrice: { $ifNull: ['$_defaultVariant.compareAtPrice', null] },
+                // The DISPLAYED price and its companion "was" price, decorated onto every
+                // sellable variant by `variantJoinStages`. Never `_defaultVariant.price`,
+                // which is the vendor's floor on a bargainable variant.
+                price: '$_defaultVariant.displayPrice',
+                compareAtPrice: { $ifNull: ['$_defaultVariant.displayCompareAtPrice', null] },
                 priceMin: '$_priceMin',
                 priceMax: '$_priceMax',
                 inStock: '$_inStock',
@@ -343,8 +411,11 @@ export class PublicCatalogRepositoryMongo {
             if (query.minPrice !== undefined) priceMatch.$gte = query.minPrice;
             if (query.maxPrice !== undefined) priceMatch.$lte = query.maxPrice;
             // Matched against the price the row actually quotes, so a filtered result can
-            // never show a price outside the band the shopper asked for.
-            stages.push({ $match: { '_defaultVariant.price': priceMatch } });
+            // never show a price outside the band the shopper asked for. ⚠ That is
+            // `displayPrice`, not `price`: on a bargainable variant the two differ, and
+            // filtering on the floor while quoting the ask is precisely how "under 40 000"
+            // returns a product displaying 45 000.
+            stages.push({ $match: { '_defaultVariant.displayPrice': priceMatch } });
         }
 
         stages.push(this.listProjectionStage());
@@ -509,7 +580,13 @@ export class PublicCatalogRepositoryMongo {
                                     ...publishableProductFilter(),
                                 },
                             },
-                            { $project: { _id: 1, title: 1, vendorId: 1 } },
+                            // `vectorisationEnabled` is here for one reason: it is half of
+                            // the bargainable predicate, and this route quotes a price. A
+                            // SKU resolution that answered with the floor while the product
+                            // page answered with the ask would be the same defect as the
+                            // filter band's, on the surface a customer reaches by typing a
+                            // code off a package.
+                            { $project: { _id: 1, title: 1, vendorId: 1, vectorisationEnabled: 1 } },
                         ],
                         as: 'product',
                     },
@@ -561,7 +638,14 @@ export class PublicCatalogRepositoryMongo {
                                 in: { $toString: '$$v' },
                             },
                         },
-                        price: 1,
+                        // The DISPLAYED price. Same rule as the browse grid, different paths:
+                        // the root here is the VARIANT, so the window is at `$bargain` and
+                        // the product's flag comes through the `$lookup` above.
+                        price: displayPriceExpr({
+                            vectorisationEnabled: '$product.vectorisationEnabled',
+                            bargainMaxPrice: '$bargain.maxPrice',
+                            price: '$price',
+                        }),
                         // The same three-way rule `variantJoinStages` derives `_inStock` from,
                         // and `variantInStock` states for a domain object. Note the document
                         // spells it `allow_oversell` while the domain type says `allowOversell`.

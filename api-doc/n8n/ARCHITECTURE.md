@@ -65,7 +65,7 @@ Customer
 ONLY place platform-specific code lives"*.** Since 2026-08-26 jovi-mall composes the outbound
 request body itself and returns it as a top-level **`reply`** on every bot response; the
 automation layer POSTs it unmodified. Contract:
-[bot-surface.md § 14](./bot-surface.md#14--reply--the-request-body-you-post-to-the-channel-unmodified).
+[bot-surface.md § 14](./bot-surface.md#14---reply--the-request-body-you-post-to-the-channel-unmodified).
 
 The reason is the same one that moved the *copy* server-side twice already (`customerMessage`
 for failures, `next.prompt` for questions): **this layer relays, it does not render.** It has
@@ -429,7 +429,7 @@ Six things this flow must get right, each of which is a real trap in the backend
 
 Full table in [`tools/errors.json`](./tools/errors.json). The three rules that matter:
 
-**Branch on `code`, fall back to `category`.** `category` is present on every error from all three backend services and is one of nine values. The registry has 547 codes; the category is what lets the bot behave sensibly about the 500 it has no specific handling for.
+**Branch on `code`, fall back to `category`.** `category` is present on every error from all three backend services and is one of nine values. The registry has 623 codes; the category is what lets the bot behave sensibly about the ~600 it has no specific handling for.
 
 **A `business_rule` refusal is not a fault.** It is the answer. `error.message` explains which rule and is written to be shown. Apologising for it implies it might be waived.
 

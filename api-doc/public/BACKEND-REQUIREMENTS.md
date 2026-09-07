@@ -13,7 +13,7 @@ Pages: `/pricing`, `/vendors`, `/agencies`, `/agents`, `/faq`, `/cameroon`, and
 
 ## 1. Public, unauthenticated plan catalog — **the one that matters**
 
-**Status: ✅ BUILT (2026-08-07).** Contract: [public/README.md](./public/README.md).
+**Status: ✅ BUILT (2026-08-07).** Contract: [public/README.md](./README.md).
 
 ```
 GET /api/public/plans                                  → all roles, active tiers

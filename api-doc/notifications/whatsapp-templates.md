@@ -76,21 +76,72 @@ Languages are kept in sync with `SUPPORTED_LANGUAGES`
 
 ## 3. `vendor_booking_created`
 
-- **Body params:** `{{1}}`=booking number, `{{2}}`=service name, `{{3}}`=start date/time
+- **Body params:** `{{1}}`=booking number, `{{2}}`=service name, `{{3}}`=customer name, `{{4}}`=start date/time, `{{5}}`=action line
 - **Button:** URL → `bookings/{{bookingId}}`
+
+> [!CAUTION]
+> **CHANGED 2026-09-06 — 3 params → 5. This template must be EDITED AND RE-APPROVED in Business
+> Manager, in all five languages, before the change deploys.** Until it is, Meta rejects every
+> out-of-window send for this situation on a parameter-count mismatch and the failure is recorded
+> on the notification's `deliveryErrors` — in-app, push, email and Telegram carry the new copy
+> regardless, so the symptom is "WhatsApp specifically went quiet", one vendor at a time, in a log.
+> `template-registry.ts` already says 5.
+
+> [!NOTE]
+> **What was wrong, and why the copy grew.** All three of the old parameters rendered EMPTY on
+> every booking — the event never carried `bookingNumber`, `serviceName` or `startTime` under
+> those names, so vendors received *"New booking # for scheduled on Invalid Date."* over every
+> channel, and this template failed outright (Meta rejects an empty parameter). Fixing the three
+> made the message correct; `{{3}}` and `{{5}}` make it **useful**, which was the other half of
+> the ask. A vendor's first question is who booked, and their second is whether they have to do
+> anything — a `manual`-mode booking is sitting waiting for them to accept it and the old copy
+> never said so.
+
+> [!NOTE]
+> **`{{5}}` is a whole sentence, composed by the backend in the recipient's language.** It is one
+> of exactly two values: *"It is waiting for you to confirm or decline it."* (the booking landed
+> `pending`, i.e. the vendor's booking mode is `manual`) or *"It is already confirmed — nothing to
+> do."*. It cannot be static template copy because which one applies is per-booking. The full
+> wording for all five languages is in `vendor-notification-event-handler.service.ts`
+> (`handleBookingCreated`) — keep the approved body's sentence spacing so the two read as one
+> paragraph.
+
+> [!NOTE]
+> **Unlike five of the `customer_*` templates below, this body is DERIVED, not rewritten** — every
+> placeholder in the in-window copy is a body param, so the approved template says exactly what the
+> free-form message says. Keep it that way when editing: the moment a placeholder is added to the
+> copy without being added to `bodyParams`, this template needs a hand-written substitute body and
+> a ⚠ note like theirs. `npm run test:booking-notification` § 3 fails if that happens.
 
 | Lang | Header | Body | Button label |
 |---|---|---|---|
-| en | New booking | New booking #{{1}} for {{2}} scheduled on {{3}}. | View booking |
-| fr | Nouvelle réservation | Nouvelle réservation n°{{1}} pour {{2}} prévue le {{3}}. | Voir la réservation |
-| pt_PT | Nova reserva | Nova reserva nº{{1}} para {{2}} agendada para {{3}}. | Ver reserva |
-| es | Nueva reserva | Nueva reserva n.º{{1}} para {{2}} programada para el {{3}}. | Ver reserva |
-| ar | حجز جديد | حجز جديد رقم {{1}} لـ {{2}} مقرر في {{3}}. | عرض الحجز |
+| en | New booking | New booking #{{1}} — {{2}} for {{3}} on {{4}}. {{5}} | View booking |
+| fr | Nouvelle réservation | Nouvelle réservation n°{{1}} — {{2}} pour {{3}} le {{4}}. {{5}} | Voir la réservation |
+| pt_PT | Nova reserva | Nova reserva nº{{1}} — {{2}} para {{3}} em {{4}}. {{5}} | Ver reserva |
+| es | Nueva reserva | Nueva reserva n.º{{1}} — {{2}} para {{3}} el {{4}}. {{5}} | Ver reserva |
+| ar | حجز جديد | حجز جديد رقم {{1}} — {{2}} لصالح {{3}} في {{4}}. {{5}} | عرض الحجز |
+
+**Example `{{5}}` values, for the approval submission** (Meta asks for sample parameter values):
+
+| Lang | pending | confirmed |
+|---|---|---|
+| en | It is waiting for you to confirm or decline it. | It is already confirmed — nothing to do. |
+| fr | Elle attend que vous la confirmiez ou la refusiez. | Elle est déjà confirmée — rien à faire. |
+| pt_PT | Está à espera de que a confirme ou recuse. | Já está confirmada — não é preciso fazer nada. |
+| es | Está esperando a que la confirmes o la rechaces. | Ya está confirmada — no hace falta hacer nada. |
+| ar | في انتظار تأكيدك لها أو رفضها. | تم تأكيده بالفعل — لا حاجة لأي إجراء. |
 
 ## 4. `vendor_booking_cancelled`
 
 - **Body params:** `{{1}}`=booking number
 - **Button:** URL → `bookings/{{bookingId}}`
+
+> [!NOTE]
+> **Unchanged in Business Manager — no re-approval needed**, but it had the same defect as §3 and
+> is fixed by the same change. `{{1}}` is the only specific detail in this one sentence and the
+> event never carried it, so every vendor read *"Booking # has been cancelled."* — naming no
+> booking at all, which for a vendor holding several is indistinguishable from noise. The producer
+> carries `bookingNumber` now; the template's shape and param count did not move.
 
 | Lang | Header | Body | Button label |
 |---|---|---|---|

@@ -51,12 +51,15 @@ export class BotCartController {
      * a basket, and the customer would find out at checkout.
      */
     static addItem = asyncHandler(async (req: Request, res: Response) => {
-        const { productId, variantId, quantity } = BotCartAddItemSchema.parse(req.body ?? {});
+        const { productId, variantId, quantity, negotiationLockRef } =
+            BotCartAddItemSchema.parse(req.body ?? {});
         const cart = await cartService.addToCart(
             botCallerOf(req).customerId,
             productId,
             variantId,
             quantity,
+            undefined, // currency — the service's own default, as before
+            negotiationLockRef,
         );
         sendSuccess(res, cart);
     });

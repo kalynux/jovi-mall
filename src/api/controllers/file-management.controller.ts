@@ -19,6 +19,8 @@ import {
     StorageOwnerType,
 } from '../../modules/catalog/domain/services/media/MediaStorageService';
 import { entitlementService } from '../../modules/billing/services/entitlement.service';
+import { eventBus } from '../../core/events/event-bus';
+import { BILLING_OWNER_TYPES, BillingOwnerType } from '../../modules/billing/billing.types';
 
 /**
  * File Management Controller
@@ -30,6 +32,28 @@ import { entitlementService } from '../../modules/billing/services/entitlement.s
  * global error handler normalise the response. ZodError from `.parse()` is also
  * normalised by the global handler, so validation is not caught here.
  */
+/**
+ * Tell the plan-quota module that storage just came free for this owner.
+ *
+ * Only the three plan-metered owner types have a storage cap at all — a customer's or
+ * an administrator's upload is counted against nothing, so there is nothing to release
+ * and the event would be noise on every avatar change.
+ *
+ * See the call site for why this is an event rather than a direct call.
+ */
+function publishQuotaCapacityFreed(ownerType?: string, ownerId?: unknown): void {
+    if (!ownerType || !ownerId) return;
+    if (!BILLING_OWNER_TYPES.includes(ownerType as BillingOwnerType)) return;
+
+    const id = ownerId.toString();
+    void eventBus.publish('quota.capacity_freed', {
+        eventType: 'quota.capacity_freed',
+        aggregateId: id,
+        occurredAt: new Date(),
+        payload: { ownerType, ownerId: id },
+    }).catch((err) => console.error('[FileManagementController] capacity_freed publish failed:', err));
+}
+
 export class FileManagementController {
     /**
      * GET /api/files
@@ -577,6 +601,18 @@ export class FileManagementController {
             success: true,
             message: 'File deleted successfully',
         });
+
+        // Storage just came free — release the next-oldest quota-blocked file.
+        //
+        // Deleting is the remedy an owner over their storage cap is offered, and it
+        // changes neither their plan nor its limits, so `plan.activated` does not fire
+        // and nothing else would recompute. `PlanQuotaReconcileWorker` also sweeps
+        // everyone currently holding blocks, so a dropped event costs latency rather than
+        // correctness — this is what makes the release visible before tomorrow.
+        //
+        // An EVENT rather than a call into `plan-quota`: that module imports the file
+        // repository, so importing it from here would close a cycle.
+        publishQuotaCapacityFreed(file.ownerType, file.ownerId);
     });
 
     /**

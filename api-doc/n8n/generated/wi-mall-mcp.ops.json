@@ -1,0 +1,273 @@
+[
+  {
+    "type": "removeNode",
+    "nodeName": "Generated — do not edit nodes by hand"
+  },
+  {
+    "type": "addNode",
+    "node": {
+      "name": "Generated — do not edit nodes by hand",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2020,
+        -420
+      ],
+      "parameters": {
+        "content": "## wi-mall MCP server — GENERATED\n\nEvery tool node below is emitted by `jovi-mall/scripts/gen-mcp-workflow.ts` from\n`api-doc/n8n/tools/catalog.json`. **Edit the catalogue and re-run `npm run gen:mcp-workflow`;\na node edited by hand is overwritten on the next run.**\n\n**Identity is a tool ARGUMENT, not a URL.** Every `/api/internal/bot/*` tool takes\n`botToken` as a tool argument — a sealed, signed token `wi-mall-core` puts in the system prompt.\nThe model can echo it and cannot author one for somebody else. Nothing here has ever read\nidentity off the endpoint query string.\n\n⛔ **`flow_only` catalogue rows are never emitted** — money movements, destructive actions,\nthe slot-holding booking writes and every payment-method and address write. That tier is the\nboundary; `wi-mall-core` calls those with deterministic nodes.\n\n`neverError` is ON: a 4xx body carries `error.customerMessage` and reaches the agent instead\nof throwing.",
+        "color": 4,
+        "height": 460,
+        "width": 460
+      }
+    }
+  },
+  {
+    "type": "setWorkflowMetadata",
+    "description": "GENERATED from api-doc/n8n/tools/catalog.json by jovi-mall/scripts/gen-mcp-workflow.ts — edit the catalogue, not the nodes. Identity is a sealed botToken tool argument, never a URL. flow_only rows (money, destructive) are never emitted."
+  },
+  {
+    "type": "addNode",
+    "node": {
+      "name": "tickets_add_attachment",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.5,
+      "position": [
+        440,
+        928
+      ],
+      "parameters": {
+        "toolDescription": "Put a photo or PDF the customer just sent in this chat onto one of their support tickets. You do not upload anything — the file is already stored and you name it by the reference you were given when it arrived. USE IT WHEN: When the customer has sent a file in this conversation and it is evidence for a support request — a damaged item, a wrong delivery, a receipt. Open the ticket first if there is not one yet, then attach. NOT THIS TOOL: Never invent a reference. If you were not given one for a file in this conversation, the file is not available and the customer must send it again. Not for a file the customer sent in an earlier conversation — references expire after 30 minutes. ⚠ The reference is single-use — one call per file. `attachmentCount` and `attachmentLimit` come back on success; when they are equal, say so, because the next photo will be refused. You cannot see what is in the file: describe it as what the customer called it, never as what you assume it shows.",
+        "method": "POST",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/tickets/{{ $fromAI(\"ticketId\", \"The ticket id or the TKT- number the customer quoted.\", \"string\") }}/attachments",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $execution.id }}-tickets_add_attachment"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, ref: $fromAI(\"ref\", \"The file reference you were given when the customer sent the file, e.g. att_… . Copy it exactly; never construct one.\", \"string\") }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "lz5ivIop9DF8mPHa",
+          "name": "jovi-mall-Bearer Auth account"
+        }
+      }
+    }
+  },
+  {
+    "type": "addConnection",
+    "source": "tickets_add_attachment",
+    "target": "MCP Server Trigger",
+    "connectionType": "ai_tool"
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "wishlist_list",
+    "position": [
+      640,
+      928
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "wishlist_add",
+    "position": [
+      840,
+      928
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "wishlist_remove",
+    "position": [
+      1040,
+      928
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "recently_viewed_list",
+    "position": [
+      1240,
+      928
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "digital_list_entitlements",
+    "position": [
+      1440,
+      928
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "bookings_get_availability",
+    "position": [
+      40,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "bookings_list",
+    "position": [
+      240,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "bookings_get",
+    "position": [
+      440,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "bookings_get_balance",
+    "position": [
+      640,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "bookings_payment_status",
+    "position": [
+      840,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "payment_methods_list",
+    "position": [
+      1040,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "contact_get_state",
+    "position": [
+      1240,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "connections_list",
+    "position": [
+      1440,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "account_close_preview",
+    "position": [
+      40,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "reviews_check_eligibility",
+    "position": [
+      240,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "reviews_list_mine",
+    "position": [
+      440,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "notifications_get_preferences",
+    "position": [
+      640,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "notifications_list",
+    "position": [
+      840,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "notifications_unread_count",
+    "position": [
+      1040,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "notifications_mark_read",
+    "position": [
+      1240,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "payment_create_pay_link",
+    "position": [
+      1440,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "messaging_get_window",
+    "position": [
+      40,
+      1528
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "messaging_notify_customer",
+    "position": [
+      240,
+      1528
+    ]
+  },
+  {
+    "type": "setNodeParameter",
+    "nodeName": "MCP Server Trigger",
+    "path": "/instructions",
+    "value": "These tools act on ONE customer: the person currently chatting.\n\nTHE IDENTITY RULE\n- Every customer-scoped tool takes a `botToken` argument. Copy it VERBATIM from the `botToken:` line in your system prompt.\n- Never invent, edit, shorten or guess a botToken. Never use one from an earlier conversation. Never show it to the customer or mention that it exists.\n- If a tool answers BOT_IDENTITY_TOKEN_EXPIRED or BOT_IDENTITY_TOKEN_INVALID, do NOT retry with a different value. Tell the customer to send their message again.\n- Never ask the customer for a phone number or account id in order to use a tool.\n- The catalogue tools (catalog_*) take no botToken: they read the public shop and are the same for everybody.\n\nLISTS\n- A list answer carries at most 5 rows. That is a hard limit: asking for more is refused, so do not try, and do not page through a list to gather more.\n- Every list reports `meta.total`, `meta.hasMore` and `meta.moreUrl`. When `hasMore` is true, show the rows you were given, say how many there are in total, and give the customer `meta.moreUrl` exactly as written.\n- NEVER invent a link. If `meta.moreUrl` is null there is no page to send them to.\n\nRULES\n- Never invent product data, prices, stock, order status or delivery dates. If a tool did not return it, say you do not have it.\n- A tool response is JSON with success, data and sometimes error.customerMessage. On failure, relay error.customerMessage in the customer's language rather than inventing an explanation.\n- Do not call a mutating tool (anything that adds, changes, cancels or sends) unless the customer has just asked for that exact action in their own words."
+  }
+]

@@ -180,17 +180,36 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> =
         button: { type: 'url', label: VIEW_ORDER_LABEL, urlSuffix: 'orders/{{orderId}}' }
     },
 
+    // Five placeholders, and `bodyParams` lists ALL FIVE — the WhatsApp template
+    // therefore says exactly what the in-app, email and Telegram copy says, with
+    // no sentence rewritten for the approved version. That is deliberate: five of
+    // the customer templates DO diverge from their own copy because a placeholder
+    // was left out of `bodyParams`, and each needed a hand-written substitute body
+    // and a warning in the doc (see `api-doc/notifications/whatsapp-templates.md`).
+    //
+    // `{{customerName}}` and `{{actionLine}}` are new, and widening this template
+    // from 3 params to 5 is a Meta Business Manager operation — the template must
+    // be edited and re-approved in all five languages before out-of-window sends
+    // work again. Approved by the project owner; the doc carries the checklist.
+    //
+    // `{{actionLine}}` is a whole sentence passed as a parameter, composed in the
+    // recipient's language by the handler. It carries the one thing a vendor most
+    // needs from this message — whether a booking is waiting on them to accept it,
+    // which depends on their booking mode and so cannot be static copy.
     'booking.created': {
         base: {
-            en: { subject: 'New booking', body: 'New booking #{{bookingNumber}} for {{serviceName}} scheduled on {{startDate}}.' },
-            fr: { subject: 'Nouvelle réservation', body: 'Nouvelle réservation n°{{bookingNumber}} pour {{serviceName}} prévue le {{startDate}}.' },
-            pt: { subject: 'Nova reserva', body: 'Nova reserva nº{{bookingNumber}} para {{serviceName}} agendada para {{startDate}}.' },
-            es: { subject: 'Nueva reserva', body: 'Nueva reserva n.º{{bookingNumber}} para {{serviceName}} programada para el {{startDate}}.' },
-            ar: { subject: 'حجز جديد', body: 'حجز جديد رقم {{bookingNumber}} لـ {{serviceName}} مقرر في {{startDate}}.' }
+            en: { subject: 'New booking', body: 'New booking #{{bookingNumber}} — {{serviceName}} for {{customerName}} on {{startDate}}. {{actionLine}}' },
+            fr: { subject: 'Nouvelle réservation', body: 'Nouvelle réservation n°{{bookingNumber}} — {{serviceName}} pour {{customerName}} le {{startDate}}. {{actionLine}}' },
+            pt: { subject: 'Nova reserva', body: 'Nova reserva nº{{bookingNumber}} — {{serviceName}} para {{customerName}} em {{startDate}}. {{actionLine}}' },
+            es: { subject: 'Nueva reserva', body: 'Nueva reserva n.º{{bookingNumber}} — {{serviceName}} para {{customerName}} el {{startDate}}. {{actionLine}}' },
+            ar: { subject: 'حجز جديد', body: 'حجز جديد رقم {{bookingNumber}} — {{serviceName}} لصالح {{customerName}} في {{startDate}}. {{actionLine}}' }
         },
         whatsapp: {
             text: {},
-            template: { name: 'vendor_booking_created', bodyParams: ['{{bookingNumber}}', '{{serviceName}}', '{{startDate}}'] }
+            template: {
+                name: 'vendor_booking_created',
+                bodyParams: ['{{bookingNumber}}', '{{serviceName}}', '{{customerName}}', '{{startDate}}', '{{actionLine}}']
+            }
         },
         button: { type: 'url', label: VIEW_BOOKING_LABEL, urlSuffix: 'bookings/{{bookingId}}' }
     },

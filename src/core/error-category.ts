@@ -12,7 +12,7 @@ import { ErrorCode, ERROR_CODES } from './error-codes';
  * ── What a category is FOR ────────────────────────────────────────────────────
  * Exposure and telemetry. Nothing branches business logic on it, and nothing ever should:
  * that property is what makes a wrong derivation a degraded diagnostic rather than a
- * behaviour change, which is the only reason deriving 541 codes' categories from a table
+ * behaviour change, which is the only reason deriving 623 codes' categories from a table
  * is a safe thing to do at all.
  *
  * The same nine strings exist in wi-admin (`src/core/errors/error-category.ts`) and in
@@ -268,7 +268,7 @@ export function categoryFor(code: string, statusCode: number): ErrorCategory {
 /**
  * The one-line explanation a support agent reads instead of the internal message.
  *
- * Per category rather than per code — 541 hints would be 541 chances to write one that is
+ * Per category rather than per code — 623 hints would be 623 chances to write one that is
  * wrong, and the category is what actually determines what Support can DO about it.
  */
 export const SUPPORT_HINTS: Readonly<Record<ErrorCategory, string>> = Object.freeze({

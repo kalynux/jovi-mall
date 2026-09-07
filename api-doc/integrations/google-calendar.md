@@ -179,12 +179,33 @@ stranding a phone on the web dashboard. `reason` values:
 { "success": true, "data": { "ok": true } }
 ```
 
+> ⚠ **`ok` is never `false` — do not branch on it.** `testConnection` lists one calendar and
+> returns the literal `true`; any failure **throws** (`google.provider.ts:143-150`). So a `200`
+> always carries `ok: true`, and a client's `if (!data.ok)` branch is dead code. **The status is
+> the answer**, not the boolean.
+
 ### Errors
 
 | Status | `error.code` | When |
 |---|---|---|
 | 401 | `AUTH_MISSING_TOKEN` | Not authenticated |
-| 500 | `INTEGRATION_UNSUPPORTED_CALENDAR_PROVIDER` | Connection test failed |
+| 500 | `INTEGRATION_UNSUPPORTED_CALENDAR_PROVIDER` | **Every** failure, including "not connected" — see below |
+
+> ⚠ **A vendor who has never connected gets a 500 here, not a 400, and the reason is lost.**
+> `getAuthenticatedClient` raises `400 GOOGLE_CALENDAR_NOT_CONNECTED`
+> (`google.provider.ts:158-160`), but this route's `catch` re-wraps **everything** as
+> `INTEGRATION_UNSUPPORTED_CALENDAR_PROVIDER` at 500 (`google.routes.ts:308-310`). Two
+> consequences:
+>
+> - The route passes `error.message` through, but 500 derives category **`internal`**, so the
+>   boundary **replaces the message with the registry default and drops `details`** — in every
+>   environment. The original *"Google Calendar is not connected"* never reaches the client.
+> - So `/test` cannot distinguish "not connected" from "connected but broken". **Read
+>   `GET /integrations/google/status` first** — that is the endpoint that answers the first
+>   question, and it answers it without calling Google.
+>
+> This is a backend defect **documented, not fixed** (DOC-PROGRAM § 28): narrowing the catch is
+> a behavioural change to a live route and outside this documentation program's remit.
 
 ## Environment
 

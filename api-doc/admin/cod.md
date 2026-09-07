@@ -43,6 +43,7 @@
 - [`POST /api/internal/admin/cod/discrepancies/:id/resolve`](#resolve-discrepancy) — close a flag
 - [`GET /api/internal/admin/cod/agents`](#list-agents) — agents currently holding cash
 - [`POST /api/internal/admin/cod/agents/:id/trust-adjustment`](#adjust-trust) — manual trust correction
+- [`PUT /api/internal/admin/cod/agents/:id/trust-override`](#trust-override) — **pin** a score that outranks the computed one
 - [`GET /api/internal/admin/cod/agencies`](#list-agencies) — agencies owing the platform cash
 
 ---
@@ -282,12 +283,34 @@ agent's COD assignments). Trust restoration is a separate, deliberate act — se
       "cashHeld": 130000,
       "currency": "XAF",
       "trustScore": 95,
+      "computedTrustScore": 40,
+      "trustSource": "override",
       "codMaxThreshold": 500000
     }
   ],
   "meta": { "total": 23, "page": 1, "limit": 20, "pages": 2 }
 }
 ```
+
+> **⚠ `trustScore` is the EFFECTIVE score, and the two fields beside it are new.** This row used to
+> report `cod.trust_score` — the *computed* score — while every gate acts on an administrator's
+> pinned override when one exists (O-7). On exactly the agents where a human had overridden the
+> machine, this list showed the number the platform was **not** using.
+>
+> | Field | Meaning |
+> |---|---|
+> | `trustScore` | What every gate acts on: the override when pinned, the computed score otherwise |
+> | `computedTrustScore` | The derived score, always — what would apply if the override were released |
+> | `trustSource` | `"override"` or `"computed"`. Display only, never a branch |
+>
+> The example above is the interesting case: an agent pinned at 95 whose computed score is 40. A row
+> showing only one of those numbers cannot explain either the dispatches that succeed or the ones
+> that do not.
+
+> `cashHeld` is **not** an exposure figure — it omits the expected cash of COD packages already out
+> with the agent, which the assignment gate counts. For the full picture, and for why a dispatch was
+> refused, call
+> [`GET /internal/admin/agents/:agentId/assignability`](../admin/agents.md#get-internaladminagentsagentidassignability).
 
 `agencyIds` is a list, not a single id: an agent may hold contracts with several agencies at once, and
 every active one is reported.
@@ -315,7 +338,76 @@ the score in [0, 100] and appended to the agent's immutable trust history.
 { "success": true, "data": { "agentId": "507f...", "trustScore": 95 }, "message": "Trust score adjusted." }
 ```
 
-**Error Responses**: `404 DELIVERY_AGENT_NOT_FOUND`.
+**Error Responses**: `404 AGENT_NOT_FOUND`. ⚠ **Not ~~`DELIVERY_AGENT_NOT_FOUND`~~** — that code is registered and raised by nothing; every COD path uses `AGENT_NOT_FOUND` (`cod-trust.service.ts:49,75,118`).
+
+---
+
+<a name="trust-override"></a>
+### PUT /api/internal/admin/cod/agents/:id/trust-override
+
+> **Added to this document 2026-09-06** (DOC-PROGRAM). The route has existed since the O-7
+> close-out; it was described in `jovi-mall/CLAUDE.md` and in no API document, so wi-admin had no
+> contract for it. Found by the route-coverage sweep, not by reading.
+
+**Description**: **Pin** a trust score that **outranks** the computed one, or **release** the pin
+with `score: null`. This is the answer to open question O-7.
+
+⚠ **This is not `trust-adjustment` with a different verb, and the two must not be conflated.**
+
+| | `POST …/trust-adjustment` | `PUT …/trust-override` |
+|---|---|---|
+| writes | `cod.trust_score` — a **delta** applied to the computed number | `cod.trust_override` — a **separate field** |
+| survives a recompute? | **No.** The nightly recompute overwrites the computed score | **Yes.** No recompute writes this field at all |
+| shape | `{ delta, note }` | `{ score, reason }` |
+
+The reason the second exists: the computed score is *derived*, so a judgement written into it does
+not survive the night — which is precisely the failure that blocked the trust cutover. It was
+measured on the dev roster: an agent the platform had **blocked** at a live 35 scores **100** under
+the composite, so the next nightly recompute would have handed them full cash exposure.
+`resolveEffectiveTrustScore` is the single resolver, and `CodExposureService` reads **it** at both
+decision points — never `agent.cod.trust_score` — which is what makes the override behave
+identically before and after the cutover.
+
+**It wins in BOTH directions** — it is not a floor and not a ceiling.
+
+**Request Body**:
+```json
+{ "score": 35, "reason": "Repeated unexplained shortfalls; pinned pending investigation" }
+```
+
+| Field | Type | Required | Rule |
+|---|---|---|---|
+| `score` | integer `0`–`100`, or `null` | ✅ | `null` **releases** the pin. Deliberately `.nullable()` and **not** `clearable()`: an omitted `score` is a **400**, never a silent release of somebody else's pin |
+| `reason` | string, 1–500 chars | ✅ | This outranks the entire scoring system, so an unexplained pin is unreviewable |
+
+**Success Response** (`200 OK`) — **both numbers, always**, because a screen showing only the
+effective score cannot tell an operator what releasing the override would do:
+```json
+{
+  "success": true,
+  "data": {
+    "agentId": "507f1f77bcf86cd799439011",
+    "effectiveTrustScore": 35,
+    "computedTrustScore": 100,
+    "trustSource": "override",
+    "override": { "score": 35, "reason": "…", "setAt": "2026-09-06T10:00:00.000Z" }
+  },
+  "message": "Trust override set."
+}
+```
+
+`message` is `"Trust override released."` when `score` was `null`.
+
+**Notes**
+- The write appends a `CodTrustEvent` with **`delta: 0`** — truthfully, since the *computed* score
+  did not move.
+- **Releasing returns the agent to what the platform thinks TODAY**, not to what it thought when
+  they were pinned.
+- ⚠ Do not "tidy" this into a write to `cod.trust_score`. That is exactly what does not survive,
+  and it is the failure O-7 was raised about.
+
+**Error Responses**: `400 VALIDATION_ERROR` (missing `score`, missing/blank `reason`, score out of
+range) · `404 AGENT_NOT_FOUND` — ⚠ **not ~~`DELIVERY_AGENT_NOT_FOUND`~~**, which is raised by nothing.
 
 ---
 

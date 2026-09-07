@@ -11,10 +11,11 @@
  */
 
 // Price Resolution
-export { 
-  PriceResolverService, 
-  ResolvePriceCommand, 
-  ResolvedPrice 
+export {
+  PriceResolverService,
+  ResolvePriceCommand,
+  ResolvedPrice,
+  NegotiationLockCommand
 } from './PriceResolverService';
 
 // Stock Reservation (CRITICAL)

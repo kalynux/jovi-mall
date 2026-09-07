@@ -109,9 +109,15 @@ position, and is the client most likely to be on a bad connection retrying.
 
 ## Never limited
 
-Three path prefixes, matched on a segment boundary (`/api/healthcheck-bypass` does **not**
+**Six** path prefixes, matched on a segment boundary (`/api/healthcheck-bypass` does **not**
 inherit `/api/health`'s exemption) and on `req.path` only — a query string can never talk its
 way in. The list is closed; see `src/api/rate-limit/exempt-paths.ts`.
+
+> ⚠ **This said "three" and listed three until 2026-09-06.** `EXEMPT_PATHS`
+> (`exempt-paths.ts:21-76`) holds **six**, and the three that were missing are the entire
+> cross-service half — the reads and the push that carry the geo-tracker pipe. A reader
+> checking whether their new internal route needs an exemption would have concluded the
+> platform did not grant them to service callers, which is the opposite of the policy.
 
 - `/api/health` — and everything under it (`/live`, `/ready`), every method. geo-tracker
   registers `GET /api/health` as a **readiness** checker and treats any status ≥ 300 as an
@@ -122,6 +128,21 @@ way in. The list is closed; see `src/api/rate-limit/exempt-paths.ts`.
 - `/api/webhooks` — and everything under it (Stripe, NotchPay, MyCoolPay, WhatsApp, Telegram),
   every method, including the authenticated WhatsApp/Telegram link-management routes that share
   the prefix. A 429 to Stripe does not inconvenience a caller; it loses a payment notification.
+- `/api/internal/agents` — geo-tracker asking for a verdict, **as a service**. Every route under
+  it is behind `requireServiceToken`, so the caller is one authenticated peer, not a population.
+  A 429 breaks the tracking pipe **in both directions**: an unanswered eligibility or
+  tracking-policy read fails geo-tracker's authorization, and a refused tracking-state report is
+  dropped silently because that channel is best-effort. Same reasoning as the maintenance
+  exemption on this prefix — blocking it turns a jovi-mall load spike into a geo-tracker outage.
+- `/api/internal/shipments` — the same caller on the same token, pulling a shipment's geocoded
+  drop-off to route to it. Read-only, pulled **once per tracking session** and never on the
+  broadcast path. A 429 here is quieter than the prefix above — nobody is dropped, the session
+  simply opens with no ETA — which is exactly why it would be the one left un-exempt by mistake.
+- `/api/tracking/agent-state` — the reverse channel, also `requireServiceToken`: geo-tracker
+  pushing an agent's tracking state and last fix. ⚠ **Named precisely rather than exempting
+  `/api/tracking`**, because the other route under that mount — `GET /visible-agents` — runs
+  behind `requireAuth` and carries a real **user** identity forwarded by geo-tracker. Exempting
+  the whole mount would hand any authenticated caller an unlimited DB-touching endpoint.
 
 ## Behaviour worth relying on
 

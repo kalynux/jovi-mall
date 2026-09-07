@@ -41,7 +41,19 @@
 import { Product } from '../repositories/mappers/product.mapper';
 import { Variant } from '../repositories/mappers/variant.mapper';
 import { FileDetail } from '../read-models/product-detail.read-model';
+import { publicCompareAtPrice, publicDisplayPrice } from '../read-models/public-display-price';
 import type { RatingBreakdownDto, RatingSummaryDto } from '../../reviews/dto/review.dto';
+
+/**
+ * What every price mapper here needs from a variant's PRODUCT.
+ *
+ * `vectorisationEnabled` is half of the bargainable predicate (the other half is the window
+ * on the variant), so a variant cannot be priced without its parent. It is a **required**
+ * parameter everywhere below, never optional, for the reason `enrichVariant` gives about the
+ * same flag: an optional one is how a single call site ends up quoting the vendor's floor
+ * while the rest quote the ask, and nothing in the types would say so.
+ */
+export type PublicPricingParent = Pick<Product, 'vectorisationEnabled'>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Store, as it appears nested on a product
@@ -133,12 +145,22 @@ export interface PublicProductListItemDto {
     /**
      * Resolved from the default variant — the product itself has no price.
      * On a **service** product this is a UNIT RATE; see `priceUnit` on the detail DTO.
+     *
+     * ⚠ On a **bargainable** variant this is the vendor's **ask** (`bargain.maxPrice`), not
+     * `variant.price`, which after D-1 is their floor and is never published. The window's
+     * lower half is a negotiating position and stays server-side; see
+     * `read-models/public-display-price.ts`.
      */
     price: number;
-    /** `null` when not discounted. Explicit, because absent is a state the UI renders. */
+    /**
+     * `null` when not discounted. Explicit, because absent is a state the UI renders.
+     *
+     * A bargainable variant carries it only while it is strictly above the ask — otherwise
+     * the flip would render a strikethrough *below* the live price.
+     */
     compareAtPrice: number | null;
     currency: string;
-    /** Omitted entirely when every sellable variant is the same price. */
+    /** Omitted entirely when every sellable variant displays the same price. */
     priceRange?: { min: number; max: number };
 
     /**
@@ -209,6 +231,10 @@ export interface PublicVariantDto {
      */
     sku: string;
     name: string;
+    /**
+     * The **displayed** price — the ask on a bargainable variant, `variant.price` otherwise.
+     * See `PublicProductListItemDto.price`; the two surfaces resolve it through one rule.
+     */
     price: number;
     compareAtPrice: number | null;
     currency: string;
@@ -331,9 +357,18 @@ export function variantInStock(variant: Variant): boolean {
  *
  * Returns `undefined` when every variant costs the same, so the caller can omit the key
  * rather than send a degenerate `{ min: x, max: x }` the UI would have to special-case.
+ *
+ * ⚠ Over **displayed** prices, which is why it needs the parent. A band computed from floors
+ * beneath a grid quoting asks is the same class of defect as the filter band's — the range
+ * would not contain the price sitting next to it.
  */
-export function priceRangeOf(variants: Variant[]): { min: number; max: number } | undefined {
-    const prices = variants.filter(isSellableVariant).map((v) => v.price);
+export function priceRangeOf(
+    variants: Variant[],
+    parent: PublicPricingParent,
+): { min: number; max: number } | undefined {
+    const prices = variants
+        .filter(isSellableVariant)
+        .map((v) => publicDisplayPrice(parent.vectorisationEnabled, v));
     if (prices.length === 0) return undefined;
     const min = Math.min(...prices);
     const max = Math.max(...prices);
@@ -355,9 +390,15 @@ export function servicePriceUnit(durationMinutes: number): string {
  * shorter than that, so the floor is the rate itself. Peak hours only ever *add*
  * (`priceType` is a fixed amount or a percentage on top), so they cannot lower this — which
  * is what makes "from" truthful rather than optimistic.
+ *
+ * It reads the **displayed** rate, so `priceFrom === price` stays true by construction rather
+ * than by two expressions happening to agree. In practice the two are always the same number
+ * here: `resolveBargainWrite` refuses a window on a service product outright, and this is the
+ * belt to that braces — a legacy or hand-written variant carrying one must not be able to
+ * quote a rate its own "from" contradicts.
  */
-export function servicePriceFrom(variant: Variant): number {
-    return variant.price;
+export function servicePriceFrom(variant: Variant, parent: PublicPricingParent): number {
+    return publicDisplayPrice(parent.vectorisationEnabled, variant);
 }
 
 /**
@@ -461,12 +502,17 @@ export function buildVariantDisplayName(
     return name ?? (options.map((o) => `${o.optionName}: ${o.value}`).join(', ') || sku);
 }
 
+/**
+ * @param parent the variant's product. Required, not optional — see `PublicPricingParent`.
+ *   Every call site already holds it, so this costs no query.
+ */
 export function toPublicVariantDto(
     variant: Variant,
     currency: string,
     optionsById: Map<string, { id: string; name: string }>,
     valuesById: Map<string, { id: string; optionId: string; value: string }>,
     images: FileDetail[],
+    parent: PublicPricingParent,
 ): PublicVariantDto {
     const options: PublicVariantOptionDto[] = variant.optionValueIds
         .map((valueId) => {
@@ -487,8 +533,10 @@ export function toPublicVariantDto(
         id: variant.id,
         sku: variant.sku,
         name: buildVariantDisplayName(variant.name, options, variant.sku),
-        price: variant.price,
-        compareAtPrice: variant.compareAtPrice ?? null,
+        // ⚠ Never `variant.price` — that is the floor on a bargainable variant. The window's
+        // `minPrice` half is not published here or anywhere else public.
+        price: publicDisplayPrice(parent.vectorisationEnabled, variant),
+        compareAtPrice: publicCompareAtPrice(parent.vectorisationEnabled, variant),
         currency,
         inStock: variantInStock(variant),
         optionValueIds: [...variant.optionValueIds],
@@ -510,7 +558,7 @@ export function toPublicVariantDto(
                     bufferBeforeMinutes: variant.serviceConfig.bufferBeforeMinutes,
                     bufferAfterMinutes: variant.serviceConfig.bufferAfterMinutes,
                     priceUnit: servicePriceUnit(variant.serviceConfig.durationMinutes),
-                    priceFrom: servicePriceFrom(variant),
+                    priceFrom: servicePriceFrom(variant, parent),
                 },
             }
             : {}),
@@ -578,7 +626,14 @@ export function toPublicProductDetailDto(input: PublicProductDetailInput): Publi
                 values: valuesByOption.get(o.id) ?? [],
             })),
         variants: sellable.map((v) =>
-            toPublicVariantDto(v, currency, optionsById, valuesById, input.variantImages.get(v.id) ?? []),
+            toPublicVariantDto(
+                v,
+                currency,
+                optionsById,
+                valuesById,
+                input.variantImages.get(v.id) ?? [],
+                product,
+            ),
         ),
         // Only report a default the shopper can actually buy — a default pointing at an
         // archived variant would have the picker open on something that is not for sale.

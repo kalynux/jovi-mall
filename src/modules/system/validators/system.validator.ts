@@ -111,7 +111,7 @@ export type LogQueryInputDto = z.infer<typeof LogQuerySchema>;
  * reaches an equality filter, and it means a typo is a 400 rather than a silently empty
  * result somebody reads as "no errors".
  *
- * `code` is NOT enumerated — the registry has 541 entries and grows, and pinning it here
+ * `code` is NOT enumerated — the registry has 623 entries and grows, and pinning it here
  * would be a second copy of it. It is bounded by length and used as an equality match, so
  * an unknown value is simply an empty page.
  */

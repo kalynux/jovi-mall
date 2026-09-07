@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { formatInTimeZone } from 'date-fns-tz';
 import { VendorNotificationRepository } from '../repositories/vendor-notification.repository';
 import { VendorNotificationPreferenceRepository } from '../repositories/vendor-notification-preference.repository';
 import { FcmPushService } from './fcm-push.service';
@@ -28,7 +29,7 @@ import {
     whatsAppTemplateName,
     ChannelText
 } from '../catalog/notification-catalog';
-import { Language, resolveLanguage, META_LANGUAGE_CODE } from '../catalog/notification-i18n';
+import { Language, DEFAULT_LANGUAGE, resolveLanguage, META_LANGUAGE_CODE } from '../catalog/notification-i18n';
 import { RenderContext, toTelegramNotificationBody } from '../catalog/message-renderer';
 import { DomainEvent } from '../../../core/events/event-bus';
 import { createAppError } from '../../../core/errors';
@@ -141,13 +142,50 @@ export class VendorNotificationEventHandler {
         }
     }
 
-    /** Handle booking.created event */
+    /**
+     * Handle booking.created event.
+     *
+     * WARNING: EVERY FIELD READ HERE MUST BE ONE THAT
+     * `BookingService.emitBookingCreatedEvent` PUBLISHES. This handler used to read
+     * `bookingNumber`, `serviceName` and `startTime`; the producer has never sent
+     * any of those three names, so all three were `undefined` on every event.
+     * `renderTemplate` turns nullish into an empty string and `new Date(undefined)`
+     * stringifies to "Invalid Date", so the message every vendor actually received
+     * was:
+     *
+     *     "New booking # for scheduled on Invalid Date."
+     *
+     * — in all five languages, over in-app, email and Telegram. The WhatsApp send
+     * did not even get that far: Meta rejects an empty template parameter, so that
+     * channel failed into `deliveryErrors` on every single booking.
+     *
+     * Nothing could have caught it at compile time — `event.payload` is `any`, so
+     * both halves type-check perfectly while agreeing on nothing.
+     * `scripts/test/test-booking-notification.ts` now asserts the producer and this
+     * consumer name the same fields, by source scan, which is the only instrument
+     * that sees it.
+     */
     async handleBookingCreated(event: DomainEvent): Promise<void> {
         try {
-            const { bookingId, vendorId, bookingNumber, serviceName, startTime } = event.payload;
+            const {
+                bookingId,
+                vendorId,
+                bookingNumber,
+                productTitle,
+                customerName,
+                startAt,
+                vendorTimezone,
+                status
+            } = event.payload;
 
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.bookingCreated) return;
+
+            // Resolved here rather than in `dispatch` because four of the five
+            // context values below are localized, and they have to be composed in
+            // the same language `dispatch` will render the template in.
+            const vendor = await this.vendorRepo.findById(String(vendorId));
+            const lang = resolveLanguage(vendor);
 
             await this.dispatch({
                 situation: 'booking.created',
@@ -157,9 +195,36 @@ export class VendorNotificationEventHandler {
                 aggregateId: bookingId,
                 idempotencyKey: `booking.created:${bookingId}:${vendorId}`,
                 context: {
-                    bookingNumber,
-                    serviceName,
-                    startDate: new Date(startTime).toLocaleString(),
+                    // Each of these is the subject of a clause, so each gets a
+                    // localized fallback rather than a bare value. An empty one
+                    // leaves a sentence with a hole in it — which is precisely the
+                    // failure this handler exists to have fixed, and an empty
+                    // WhatsApp parameter is a rejected send.
+                    bookingNumber: bookingNumber || this.genericBookingRef(lang),
+                    serviceName: productTitle || this.genericService(lang),
+                    customerName: customerName || this.genericCustomer(lang),
+                    startDate: this.formatBookingMoment(startAt, vendorTimezone),
+                    // Whether the vendor has to DO something is the most useful
+                    // sentence in this message, and it is not in the payload as
+                    // text: a `manual`-mode booking lands `pending` and is waiting
+                    // on them, a `calendar` one is already settled. Composed here,
+                    // in their language, for the same reason the customer's copy
+                    // composes its own `confirmationLine`.
+                    actionLine: status === 'pending'
+                        ? this.line(lang, {
+                            en: 'It is waiting for you to confirm or decline it.',
+                            fr: 'Elle attend que vous la confirmiez ou la refusiez.',
+                            pt: 'Está à espera de que a confirme ou recuse.',
+                            es: 'Está esperando a que la confirmes o la rechaces.',
+                            ar: 'في انتظار تأكيدك لها أو رفضها.'
+                        })
+                        : this.line(lang, {
+                            en: 'It is already confirmed — nothing to do.',
+                            fr: 'Elle est déjà confirmée — rien à faire.',
+                            pt: 'Já está confirmada — não é preciso fazer nada.',
+                            es: 'Ya está confirmada — no hace falta hacer nada.',
+                            ar: 'تم تأكيده بالفعل — لا حاجة لأي إجراء.'
+                        }),
                     bookingId
                 }
             });
@@ -168,13 +233,104 @@ export class VendorNotificationEventHandler {
         }
     }
 
-    /** Handle booking.cancelled event */
+    /**
+     * A booking's start time, in the VENDOR's timezone.
+     *
+     * `yyyy-MM-dd HH:mm` deliberately: locale-neutral, no month names to translate
+     * across five languages, and no US/EU day-month ambiguity. Same format and the
+     * same reasoning as the customer stack's `formatMoment`.
+     *
+     * The ZONE matters more than the format. This used to be
+     * `new Date(startTime).toLocaleString()` — no zone and no locale, so it
+     * rendered in whatever zone the Node process runs in (UTC in a container) and
+     * whatever locale the host defaults to. A vendor in Douala reading a
+     * UTC-rendered appointment time is an hour early, and nothing in the message
+     * tells them so. Their availability rules are already authored in this zone
+     * (`availability-rule.model.ts`), so it is the zone they think in.
+     *
+     * Falls back to the platform zone rather than the process zone: a wrong guess
+     * that is the SAME wrong guess everywhere beats one that changes when the
+     * deployment moves. Mirrors the customer stack's default.
+     */
+    private formatBookingMoment(value: unknown, timezone: unknown): string {
+        const date = value instanceof Date ? value : new Date(String(value ?? ''));
+        if (isNaN(date.getTime())) return '';
+
+        const zone = typeof timezone === 'string' && timezone ? timezone : 'Africa/Douala';
+        try {
+            return formatInTimeZone(date, zone, 'yyyy-MM-dd HH:mm');
+        } catch {
+            // An unrecognised IANA name. A UTC-truncated ISO string is at least a
+            // real instant, which "Invalid Date" never was.
+            return date.toISOString().slice(0, 16).replace('T', ' ');
+        }
+    }
+
+    /** Pick one pre-written localized line. Mirrors the customer handler's. */
+    private line(lang: Language, variants: Record<Language, string>): string {
+        return variants[lang] ?? variants[DEFAULT_LANGUAGE];
+    }
+
+    /**
+     * Stands in for a missing booking number.
+     *
+     * Only legacy bookings have none — everything created since
+     * `BookingNumberGenerator` landed carries one, and D-5 leaves the legacy rows
+     * un-backfilled. Says so, rather than leaving a "#" pointing at nothing.
+     */
+    private genericBookingRef(lang: Language): string {
+        return this.line(lang, {
+            en: '(no number)',
+            fr: '(sans numéro)',
+            pt: '(sem número)',
+            es: '(sin número)',
+            ar: '(بدون رقم)'
+        });
+    }
+
+    /** Stands in for a service title the event could not resolve. */
+    private genericService(lang: Language): string {
+        return this.line(lang, {
+            en: 'a service',
+            fr: 'un service',
+            pt: 'um serviço',
+            es: 'un servicio',
+            ar: 'خدمة'
+        });
+    }
+
+    /**
+     * Stands in for a customer with no profile name — a booking placed by a user
+     * who never completed a customer profile, which the storefront allows.
+     */
+    private genericCustomer(lang: Language): string {
+        return this.line(lang, {
+            en: 'a customer',
+            fr: 'un client',
+            pt: 'um cliente',
+            es: 'un cliente',
+            ar: 'عميل'
+        });
+    }
+
+    /**
+     * Handle booking.cancelled event.
+     *
+     * `bookingNumber` had the same defect as `booking.created` and the same cause:
+     * the producer never sent it. This message is one sentence whose ONLY specific
+     * detail is the number, so it rendered "Booking # has been cancelled." —
+     * naming no booking at all, which for a vendor holding several is
+     * indistinguishable from noise. The producer carries it now.
+     */
     async handleBookingCancelled(event: DomainEvent): Promise<void> {
         try {
             const { bookingId, vendorId, bookingNumber } = event.payload;
 
             const prefs = await this.preferenceRepo.getByVendor(vendorId);
             if (!prefs.preferences.bookingCancelled) return;
+
+            const vendor = await this.vendorRepo.findById(String(vendorId));
+            const lang = resolveLanguage(vendor);
 
             await this.dispatch({
                 situation: 'booking.cancelled',
@@ -183,7 +339,7 @@ export class VendorNotificationEventHandler {
                 aggregateType: 'booking',
                 aggregateId: bookingId,
                 idempotencyKey: `booking.cancelled:${bookingId}:${vendorId}`,
-                context: { bookingNumber, bookingId }
+                context: { bookingNumber: bookingNumber || this.genericBookingRef(lang), bookingId }
             });
         } catch (error) {
             console.error('[NotificationHandler] Failed to handle booking.cancelled:', error);

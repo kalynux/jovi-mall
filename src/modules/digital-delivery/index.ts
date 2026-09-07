@@ -5,7 +5,7 @@
  * 
  * CORE GUARANTEES:
  * - Idempotent entitlement granting (webhook-safe via unique index)
- * - Atomic single-use tokens (Redis GETDEL)
+ * - Atomic single-use tokens (Lua read-and-delete; see DownloadTokenHelper)
  * - Mathematically impossible to exceed download limits (conditional atomic updates)
  * - No public file access (all downloads through backend validation)
  */

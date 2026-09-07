@@ -60,7 +60,7 @@ Only vendors with `status ≠ "inactive"` and completed onboarding (`onboardingS
       "id": "507f1f77bcf86cd799439aaa",
       "businessName": "Acme Store",
       "displayName": "Acme",
-      "logo": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/acme-logo.png", "url": "https://cdn.example.com/logos/acme.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
+      "logo": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/acme-logo.png", "url": "https://cdn.example.com/logos/acme.png", "access": "public", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
       "kycVerified": true,
       "primaryAddress": { "label": "Main Shop", "addressLine1": "12 Rue de la Paix", "city": "Douala", "state": "Littoral" },
       "policies": {

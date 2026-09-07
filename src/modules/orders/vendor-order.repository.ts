@@ -1,6 +1,7 @@
 import { OrderModel, IOrder } from './order.model';
 import { FilterQuery, Types } from 'mongoose';
 import { PaginationOptions, Page } from '../../core/repositories/base.repository';
+import { buildSearchRegex } from '../../core/utils/regex.util';
 
 /**
  * Vendor Order Repository
@@ -77,8 +78,18 @@ export class VendorOrderRepository {
         }
 
         if (filters.q) {
-            // Search in order number (exact match or prefix)
-            query.order_number = { $regex: filters.q, $options: 'i' };
+            /**
+             * Search in order number, case-insensitive substring.
+             *
+             * ⚠ Fixed 2026-09-07 (DOC-PROGRAM § 30). This was
+             * `{ $regex: filters.q, $options: 'i' }` — the raw, caller-supplied string
+             * compiled as a pattern, which this repository's own ESLint rule bans on the
+             * `new RegExp()` form for exactly this reason. Two problems, not one: a term
+             * containing regex metacharacters silently matches the wrong orders, and a
+             * crafted one (`(a+)+$` and friends) is a ReDoS against a vendor-authenticated
+             * endpoint. `buildSearchRegex` escapes and trims.
+             */
+            query.order_number = buildSearchRegex(filters.q);
         }
 
         // Pagination

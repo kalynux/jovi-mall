@@ -152,7 +152,8 @@ attempts). Resets the attempt counter. Rate-limited (min 60s between sends).
     "currency": "XAF",
     "currentExposure": 182000,
     "effectiveExposureLimit": 300000,
-    "trustScore": 100
+    "trustScore": 100,
+    "trustSource": "computed"
   }
 }
 ```
@@ -161,8 +162,23 @@ attempts). Resets the attempt counter. Rate-limited (min 60s between sends).
 |---|---|---|
 | `cashHeld` | `number` | Cash you have collected and not yet deposited with your agency. Minor units. |
 | `currentExposure` | `number` | `cashHeld` + expected cash of your assigned, not-yet-collected COD shipments. |
-| `effectiveExposureLimit` | `number` | Your cap after trust scaling. New COD assignments are blocked when exceeded. |
-| `trustScore` | `number` | 0–100. See [Risk controls](#risk-controls). |
+| `effectiveExposureLimit` | `number` | Your cap after trust scaling, computed from **your own COD pool**. ⚠ See the warning below — this is **not** the limit any single agency's dispatch is checked against. |
+| `trustScore` | `number` | 0–100. The **effective** score. See [Risk controls](#risk-controls). |
+| `trustSource` | `string` | `"computed"`, or `"override"` when an administrator has pinned your score. |
+
+> **⚠ `trustScore` is the EFFECTIVE score, and `trustSource` is new.** It used to report the
+> *computed* score while `effectiveExposureLimit` beside it had always honoured an administrator's
+> pinned override — so the two fields in this one response could disagree about the same agent, and
+> the limit appeared to be scaled by a number the response did not show. The override's *reason* is
+> deliberately **not** returned: that is an administrator's internal note.
+
+> **⚠ This limit is not the one that gates a dispatch.** `effectiveExposureLimit` here is scaled from
+> **your whole COD pool** (`cod.max_threshold`), because a self-view has one honest limit and it is
+> yours. Each agency's dispatch is checked against **that contract's slice** of the pool, scaled by
+> the same trust tier — which is smaller, often much smaller. So it is entirely normal to see plenty
+> of headroom on this screen and still have one agency's assignment refused with
+> `COD_AGENT_EXPOSURE_EXCEEDED`. `GET /api/agent/cod/allocation` shows the per-agency slices, and is
+> the screen that explains it.
 
 ---
 

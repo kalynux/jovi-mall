@@ -10,6 +10,19 @@ Reference for changing the **email address or phone number an account signs in w
 > role profile the account has (customer, vendor, agency, agent), so the profile a notification
 > reads and the identifier the sign-in resolves can never disagree.
 
+> [!NOTE]
+> **There is a SECOND door onto these five verbs, and it is not a proxy.** Since MCP parity
+> step 6 the bot surface serves them at `/api/internal/bot/contact*` for a customer resolved
+> from a messaging identity — same services, same rules, one addition and one absence:
+>
+> - it reports **`phoneChangeProved`**, which answers whether the pending phone change can be
+>   completed at all (see the phone proof below). The customer API does not, so a browser
+>   client finds out from the `422` after trying;
+> - there is **no bot equivalent of the email confirm**, because that endpoint is
+>   unauthenticated by design and its token arrives in a mail client.
+>
+> Contract: `api-doc/n8n/bot-surface.md` § 15.
+
 ---
 
 ## The one rule that shapes everything below

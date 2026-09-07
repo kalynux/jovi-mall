@@ -110,6 +110,73 @@ export class FileRepositoryMongo extends BaseRepository<IFile, File> implements 
     return docs.map(doc => this.mapper.toDomain(doc));
   }
 
+  /**
+   * Every one of an owner's live files, **oldest first** — the order the plan-quota
+   * sweep fills the storage allowance in, and therefore the order it blocks against.
+   *
+   * Projected deliberately narrow (`size`, `createdAt`, `quotaBlockedAt`, `mimeType`)
+   * rather than mapped to the domain entity: this runs over an owner's entire library,
+   * which for a 100 GB plan is tens of thousands of rows, and hydrating Mongoose
+   * documents for all of them to read three fields is the difference between a sweep
+   * that finishes and one that does not.
+   *
+   * ⚠ **`createdAt` ASC then `_id` ASC.** The `_id` tie-break is load-bearing for the
+   * same reason as on products: a multi-file upload lands several rows in one
+   * millisecond, an unstable sort would move the cut-off between runs, and the files
+   * either side of it would flip between visible and blocked on every sweep.
+   *
+   * ⚠ Digital-product assets are NOT excluded here — the caller does that, because
+   * "which files are metered" is `MediaStorageService`'s rule (vendors have their
+   * digital assets subtracted; agencies and agents do not) and it must not be
+   * reimplemented at a second site.
+   */
+  async listOwnedOldestFirst(
+    ownerType: string,
+    ownerId: string,
+    options?: RepositoryOptions,
+  ): Promise<Array<{ id: string; size: number; mimeType: string; createdAt: Date; quotaBlockedAt: Date | null }>> {
+    if (!Types.ObjectId.isValid(ownerId)) return [];
+
+    const docs = await this.model
+      .find({ ownerType, ownerId: new Types.ObjectId(ownerId), deletedAt: null })
+      .select('size mimeType createdAt quotaBlockedAt')
+      .sort({ createdAt: 1, _id: 1 })
+      .session(options?.session ?? null)
+      .lean()
+      .exec();
+
+    return (docs as any[]).map(d => ({
+      id: d._id.toString(),
+      size: d.size ?? 0,
+      mimeType: d.mimeType ?? '',
+      createdAt: d.createdAt as Date,
+      quotaBlockedAt: (d.quotaBlockedAt ?? null) as Date | null,
+    }));
+  }
+
+  /**
+   * Stamp or clear `quotaBlockedAt` on a set of files in one write.
+   *
+   * ⚠ **This is not a delete and must never become one.** The row, the bytes and the
+   * file's contribution to the owner's used-bytes total all survive — that is the whole
+   * promise the feature makes ("we do not delete your data, we stop serving it"), and it
+   * is what lets an upgrade restore the identical set. Nothing here touches `deletedAt`
+   * or `orphanedAt`; in particular the lonely-file cleanup clock is untouched, so a
+   * blocked file is not one day silently swept.
+   */
+  async setQuotaBlocked(fileIds: string[], blocked: boolean, options?: RepositoryOptions): Promise<number> {
+    const ids = fileIds.filter(id => Types.ObjectId.isValid(id)).map(id => new Types.ObjectId(id));
+    if (ids.length === 0) return 0;
+
+    const result = await this.model.updateMany(
+      { _id: { $in: ids }, deletedAt: null },
+      { $set: { quotaBlockedAt: blocked ? new Date() : null } },
+      options?.session ? { session: options.session } : {},
+    ).exec();
+
+    return result.modifiedCount ?? 0;
+  }
+
   async update(id: string, updates: Partial<File>, options?: RepositoryOptions): Promise<File | null> {
     if (!Types.ObjectId.isValid(id)) return null;
 

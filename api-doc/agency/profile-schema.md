@@ -430,7 +430,7 @@ export interface DeliveryAgencyProfile {
   emailVerified: boolean;
   phone: string | null;
   phoneVerified: boolean;
-  logo: FileDetail | null;   // { id, key, url, mimeType, size, originalName } — same shape as product media
+  logo: FileDetail | null;   // { id, key, url, access, mimeType, size, originalName } — same shape as product media
   timezone: string;
   coverageAreas: string[];
   headquartersAddresses: HeadquartersAddress[];

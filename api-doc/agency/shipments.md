@@ -17,6 +17,16 @@
 - [`PATCH /api/agency/shipments/:id/status`](#status) — advance a shipment (picked up, in transit, delivered by agent, failed/retry)
 - [`POST /api/agency/shipments/:id/reject`](#reject) — decline an assigned shipment
 - [`PATCH /api/agency/shipments/:id/assign-agent`](#assign-agent) — **offer** the shipment to one of this agency's agents (agent-acceptance workflow)
+- `GET /api/agency/shipments/:id/delivery-proof/file` — the proof photograph's **bytes**, scoped exactly like `GET /:id` (not yours, or no proof: **404**, never 403)
+
+> ⚠ **The agency has ONE delivery-proof route, not the agent's four.** The bytes are readable;
+> the *metadata* is not a separate endpoint on this side — it arrives as `deliveryProof` on
+> [`GET /api/agency/shipments/:id`](#detail). Attaching and removing a proof are the agent's
+> (`agent.routes.ts`), and there is no agency equivalent by design: the agency did not take the
+> photograph. See [agent/delivery-proof.md](../agent/delivery-proof.md) for the full shape.
+>
+> Added here **2026-09-06** (DOC-PROGRAM F-17 class 6): the route was served and appeared on
+> neither this page nor [assignment.md](assignment.md), only in a changelog.
 
 > **The tracking number is generated, not recorded.** `PATCH /api/agency/shipments/:id/tracking-number`
 > **no longer exists** — see [Tracking number](#tracking-number) below. Every shipment is stamped with
@@ -104,9 +114,29 @@ the whole cash chain), three rules change:
    COD cash-exposure/trust gate is enforced when the offer is made and re-checked on acceptance
    (see [assignment.md](assignment.md)). The customer's delivery code is issued **at acceptance**
    (not at pickup) — they hold it before the agent reaches the door.
-3. **`agent_delivered` is rejected; `delivered` happens via the delivery code.** The agent submits
-   the customer's code (`POST /api/agent/shipments/:id/cod/collect`), which atomically records the
-   cash and marks the shipment `delivered`. There is no customer app confirmation step for COD.
+3. **`agent_delivered` is ACCEPTED and expected; only `delivered` is refused.** `agent_delivered`
+   means *"I am at the door"*, not *"this is delivered"* — for a COD shipment it is a deliberate
+   **dead end**, and reaching it is what raises the customer's delivery-code prompt
+   (`shipment.service.ts:1421`). From there only the code moves it on: the agent submits it via
+   `POST /api/agent/shipments/:id/cod/collect`, which atomically records the cash and marks the
+   shipment `delivered`. (A 7-day sweep past the dispute window is the only other exit, and it is
+   keyed on a COD shipment *sitting at* `agent_delivered`.) There is no customer app confirmation
+   step for COD.
+
+   > ⚠ **This rule read *"`agent_delivered` is rejected"* until 2026-09-06 and was inverted**
+   > (DOC-PROGRAM F-43). A dashboard that hid or disabled the `agent_delivered` action for COD
+   > shipments — the obvious reading — removed a legitimate agency action **and** removed the very
+   > transition that causes the customer's code prompt to be raised, stalling the delivery.
+   > `agent_delivered` is in `COLLECTIBLE_SHIPMENT_STATUSES`
+   > (`cash-collection.service.ts:58`) alongside `picked_up` and `in_transit`.
+   >
+   > ⚠ **The refusal of `delivered` is real but its bespoke message is UNREACHABLE**
+   > (DOC-PROGRAM F-44, a backend defect left unfixed). `shipment.service.ts:1219` throws
+   > *"COD shipments are delivered by the agent submitting the customer delivery code"*, but two
+   > layers refuse `delivered` first: it is absent from the Zod `z.enum` on both status endpoints
+   > and from every `TRIGGERABLE_TRANSITIONS` value. A client sending `{"status":"delivered"}`
+   > therefore gets a **generic** validation error that does not mention the delivery code. The
+   > instruction has to come from this page, which is why it is spelled out above.
 
 Both the [list](#list) and the [detail](#detail) carry a `cod` block for these shipments:
 `{ expectedAmount, currency, status: "pending" | "collected" | "cancelled" | null, collectedAt }`
@@ -166,7 +196,7 @@ agency-scoped data; `agencyEarning.agentCut` is the agency's view of the same nu
       "customer": { "id": "507f1f77bcf86cd799439ccc", "name": "Jane Doe", "phone": "+237670000002" },
       "itemCount": 2,
       "itemImages": [
-        { "id": "...", "key": "products/abc.jpg", "url": "https://…/products/abc.jpg", "mimeType": "image/jpeg", "size": 84213, "originalName": "tshirt.jpg" }
+        { "id": "...", "key": "products/abc.jpg", "url": "https://…/products/abc.jpg", "access": "public", "mimeType": "image/jpeg", "size": 84213, "originalName": "tshirt.jpg" }
       ],
       "pickup": {
         "address": {
@@ -242,7 +272,7 @@ which is a real answer and exactly what the split will do.
 
 **`itemImages`** is a thumbnail preview of what is in the parcel: **one picture per item**,
 deduplicated and capped at **3** — `itemCount` remains the true number of items. Each entry is the
-standard file shape `{ id, key, url, mimeType, size, originalName }`; always an array, `[]` when
+standard file shape `{ id, key, url, access, mimeType, size, originalName }`; always an array, `[]` when
 nothing on the shipment has a picture. The picture is the **variant's** own image where the variant
 has one, otherwise the product's first image, and it is read **live** rather than snapshotted onto
 the order — a vendor who replaces their photo changes what you see. The full per-item gallery is on
@@ -307,8 +337,8 @@ who supplied the goods does not depend on where you collect them.
         "sku": "TSHIRT-RED-L",
         "variantTitle": "Size: Large, Color: Red",
         "images": [
-          { "id": "...", "key": "products/abc.jpg", "url": "https://…/products/abc.jpg", "mimeType": "image/jpeg", "size": 84213, "originalName": "tshirt.jpg" },
-          { "id": "...", "key": "products/def.jpg", "url": "https://…/products/def.jpg", "mimeType": "image/jpeg", "size": 91002, "originalName": "tshirt-back.jpg" }
+          { "id": "...", "key": "products/abc.jpg", "url": "https://…/products/abc.jpg", "access": "public", "mimeType": "image/jpeg", "size": 84213, "originalName": "tshirt.jpg" },
+          { "id": "...", "key": "products/def.jpg", "url": "https://…/products/def.jpg", "access": "public", "mimeType": "image/jpeg", "size": 91002, "originalName": "tshirt-back.jpg" }
         ],
         "pickupLocation": {
           "mode": "pickup_based",
@@ -334,7 +364,7 @@ who supplied the goods does not depend on where you collect them.
     "agency": {
       "id": "507f1f77bcf86cd799439099",
       "name": "Douala Express Logistics",
-      "logo": { "id": "...", "key": "images/2026/07/logo.png", "url": "https://…/logo.png", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
+      "logo": { "id": "...", "key": "images/2026/07/logo.png", "url": "https://…/logo.png", "access": "public", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
       "supportPhone": "+237670000009",
       "supportEmail": "support@douala-express.cm",
       "supportWhatsapp": null

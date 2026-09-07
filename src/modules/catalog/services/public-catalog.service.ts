@@ -34,7 +34,7 @@ import {
     PublicStoreListRow,
 } from '../repositories/mongo/public-catalog.repository.mongo';
 import { resolveFileDetails } from '../read-models/file-detail.resolver';
-import { productImageKey, resolveProductImages } from '../read-models/product-image.resolver';
+import { isRenderableImage, productImageKey, resolveProductImages } from '../read-models/product-image.resolver';
 import { FileDetail } from '../read-models/product-detail.read-model';
 import {
     buildVariantDisplayName,
@@ -330,10 +330,11 @@ export class PublicCatalogService {
             storage,
         );
 
+        // The SAME predicate the batch gallery resolver uses — genuine images only, and
+        // never a quota-blocked one. A second copy here is how the storefront ends up
+        // rendering a picture the vendor's plan no longer covers.
         const imagesOf = (ids: string[]): FileDetail[] =>
-            ids
-                .map((id) => fileById.get(id))
-                .filter((f): f is FileDetail => !!f && !!f.mimeType?.startsWith('image/'));
+            ids.map((id) => fileById.get(id)).filter(isRenderableImage);
 
         const variantImages = new Map<string, FileDetail[]>();
         for (const variant of variants) {

@@ -1,5 +1,9 @@
 # Agency Connections (Vendor-Facing)
 
+**Verified against source on 2026-09-07** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
+
 ## Base Path
 
 ```
@@ -28,8 +32,22 @@ their policies (`Vendor.policies` or `DeliveryAgency.policies`); the side that d
 change is the one who must reapprove (`POST .../:id/approve` again). While paused, any of your
 **active** products depending on that agency (as default or override) are auto-suspended
 (drafts are untouched — they can't go live without an active agency anyway, and stay editable),
-and are auto-restored the moment the connection goes back to `active`. From `active` or
-`paused_reapproval`, either side may also `terminate` the connection outright.
+and are auto-restored the moment the connection goes back to `active`.
+
+> ⚠ **When the agency is your DEFAULT, "depending on that agency" means EVERY active physical
+> product — override or not**, and this page said otherwise until 2026-09-07. The sweep filters
+> on `{ vendorId, type: 'physical', status: 'active', deletedAt: null }` and nothing else
+> (`product.repository.mongo.ts:409-415`): it does not look at
+> `delivery.agencyId`, so a product pointing at a *different*, perfectly healthy agency is
+> suspended too. That is deliberate — the vendor default is what an unset product falls back to
+> — but it means one paused connection can take a whole catalogue off sale.
+>
+> ⚠ **A product mid-vectorisation is SKIPPED, not queued.** The same filter excludes
+> `vectorisationStatus: 'pending'`, so a product being indexed at that moment **stays on sale**
+> and no later pass picks it up. Restoration has the same blind spot in reverse. If a suspension
+> looks incomplete, that is the reason — re-run it once indexing settles.
+
+From `active` or `paused_reapproval`, either side may also `terminate` the connection outright.
 
 A rejected/withdrawn/terminated connection can be re-requested — this reuses the same
 underlying record (there is only ever one connection document per vendor↔agency pair), resetting
@@ -61,7 +79,7 @@ current connection state to that agency (if any), so the UI can render the right
     {
       "id": "683abc1234567890abcdef01",
       "agencyName": "Swift Deliveries Cameroon",
-      "logo": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
+      "logo": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "access": "public", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
       "kycVerified": true,
       "headquartersAddress": { "region": "Littoral", "city": "Douala", "address_description": "4th Floor, Immeuble Ndokotti, Akwa" },
       "country": "CM",
@@ -296,3 +314,16 @@ Toggle these as a group via the `connectionUpdated` flag on
 [notification preferences](./notifications.md) (default: on). Agencies receive the symmetric
 notification when you (the vendor) are the actor — see
 [Agency Notifications — Events](../agency/notifications.md#events).
+
+> ⚠ **Those four are the WHOLE list — `withdraw` and `terminate` notify NOBODY.** There is no
+> `connection.withdrawn` and no `connection.terminated` situation in the catalog
+> (`connection.service.ts:90`, `:108` — the union has exactly four members). So a connection
+> ending is silent on both sides: **poll or re-read; do not wait for a notification that never
+> arrives.** This page listed the four correctly and never said what was absent.
+>
+> ⚠ **`connection.rejected` is CONDITIONAL, and `connection.approved` is not.** The rejection
+> notifications fire only `if (agencyName)` / `if (vendorName)`
+> (`connection.service.ts:346`, `:349`), so a vendor whose **Store name does not resolve** — no
+> store yet, or an unnamed one — is simply never told their request was rejected. The approval
+> path takes the opposite branch, `?? ''` (`:308`, `:310`), and fires with an empty name rather
+> than being skipped. A client must treat "no rejection notification" as uninformative.

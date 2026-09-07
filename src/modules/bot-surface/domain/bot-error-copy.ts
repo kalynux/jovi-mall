@@ -32,7 +32,7 @@ import { ERROR_CODES, ErrorCode } from '../../../core/error-codes';
  * call sites fired.
  *
  * ── THE FALLBACK IS THE DESIGN, NOT THE GAP ─────────────────────────────────
- * There are 541 error codes and any of them can surface through a delegated call. Localising
+ * There are 623 error codes and any of them can surface through a delegated call. Localising
  * all of them in five languages is 2 705 strings that would go stale the week after they
  * were written. So the catalogue below is **specific where being specific changes what the
  * customer does**, and everything else falls back to a sentence keyed on the nine-value
@@ -73,7 +73,7 @@ export function toBotCopyLanguage(raw: string | null | undefined): BotCopyLangua
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The category fallback — nine sentences, and they cover all 541 codes
+// The category fallback — nine sentences, and they cover all 623 codes
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -218,6 +218,27 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         ar: 'انتهت صلاحية البحث عن هذا العنوان. أخبرني بالعنوان مرة أخرى وسأبحث عنه.',
     },
 
+    // ── Inbound files and ticket attachments (Step 7b) ───────────────────────
+    // Both earn an entry, and both for the reason stated above: the remedy is an ACTION
+    // the customer takes, and the category sentence would send them nowhere. The
+    // `not_found` fallback ("I could not find that") is actively misleading for a stale
+    // file handle — nothing is missing, the window closed — and the `conflict` fallback
+    // ("try again") is wrong for a full ticket, where trying again fails identically.
+    [ERROR_CODES.BOT_INBOUND_FILE_EXPIRED]: {
+        en: 'I no longer have that file. Please send the photo again.',
+        fr: "Je n'ai plus ce fichier. Veuillez renvoyer la photo.",
+        pt: 'Já não tenho esse ficheiro. Envie a foto novamente, por favor.',
+        es: 'Ya no tengo ese archivo. Envía la foto otra vez, por favor.',
+        ar: 'لم يعد هذا الملف متاحًا لديّ. من فضلك أرسل الصورة مرة أخرى.',
+    },
+    [ERROR_CODES.TICKET_ATTACHMENT_LIMIT_EXCEEDED]: {
+        en: 'That request already has the maximum of five files. Open a new one if you need to send more.',
+        fr: "Cette demande contient déjà le maximum de cinq fichiers. Ouvrez-en une nouvelle si vous devez en envoyer d'autres.",
+        pt: 'Esse pedido já tem o máximo de cinco ficheiros. Abra um novo se precisar de enviar mais.',
+        es: 'Esa solicitud ya tiene el máximo de cinco archivos. Abre una nueva si necesitas enviar más.',
+        ar: 'يحتوي هذا الطلب بالفعل على الحد الأقصى وهو خمسة ملفات. افتح طلبًا جديدًا إذا احتجت إلى إرسال المزيد.',
+    },
+
     // ── Support routing (GAP-004) ────────────────────────────────────────────
     // Both earn an entry because both remedies are ACTIONS the customer takes,
     // and both category sentences ("I could not find that" / "that has already
@@ -237,6 +258,64 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         ar: 'لا تتوفر لديّ بيانات التواصل هذه بعد لهذه الحالة. يمكنني إعطاؤك ما لديّ، أو تحويلك إلى فريق الدعم.',
     },
 
+    // ── Bookings (MCP parity step 4) ─────────────────────────────────────────
+    //
+    // ⚠ **The `conflict` category fallback is "That has already changed. Let me check
+    // where things stand and try again." — and for this family it is WRONG in two
+    // different ways.** For a slot that is gone it invites a retry that cannot succeed
+    // however many times it runs; for a live charge it invites a SECOND payment prompt on
+    // somebody's handset. Both earn an entry by the test above: the customer does
+    // something different, and what the fallback tells them to do is the wrong thing.
+    [ERROR_CODES.BOOKING_SLOT_UNAVAILABLE]: {
+        en: 'That time was taken while we were talking. Shall I show you what is still free?',
+        fr: "Ce créneau a été pris pendant notre conversation. Voulez-vous voir ce qui reste ?",
+        pt: 'Esse horário foi ocupado enquanto conversávamos. Quer ver o que ainda está livre?',
+        es: 'Esa hora se ocupó mientras hablábamos. ¿Le muestro lo que queda libre?',
+        ar: 'حُجز هذا الموعد أثناء حديثنا. هل أعرض عليك المواعيد المتاحة؟',
+    },
+    [ERROR_CODES.BOOKING_SLOT_LOCKED]: {
+        en: 'Someone else is booking that time right now. Shall I show you another?',
+        fr: "Quelqu'un d'autre est en train de réserver ce créneau. Voulez-vous en voir un autre ?",
+        pt: 'Outra pessoa está reservando esse horário agora. Quer ver outro?',
+        es: 'Otra persona está reservando esa hora ahora mismo. ¿Le muestro otra?',
+        ar: 'هناك شخص آخر يحجز هذا الموعد الآن. هل أعرض عليك موعدًا آخر؟',
+    },
+    [ERROR_CODES.BOOKING_SLOT_FULL]: {
+        en: 'The last place at that time has gone. Shall I show you another?',
+        fr: "La dernière place à ce créneau est partie. Voulez-vous en voir un autre ?",
+        pt: 'A última vaga nesse horário acabou. Quer ver outro?',
+        es: 'Se ha ido la última plaza a esa hora. ¿Le muestro otra?',
+        ar: 'نفد آخر مكان في هذا الموعد. هل أعرض عليك موعدًا آخر؟',
+    },
+    [ERROR_CODES.BOOKING_NOT_RESCHEDULABLE]: {
+        en: 'That appointment can no longer be moved. I can help you book a new one.',
+        fr: "Ce rendez-vous ne peut plus être déplacé. Je peux vous aider à en réserver un nouveau.",
+        pt: 'Esse agendamento não pode mais ser movido. Posso ajudar a marcar um novo.',
+        es: 'Esa cita ya no se puede mover. Puedo ayudarle a reservar una nueva.',
+        ar: 'لم يعد بالإمكان تغيير موعد هذا الحجز. يمكنني مساعدتك في حجز موعد جديد.',
+    },
+    // ⚠ The dangerous one. "Try again" here is a second charge on a real handset.
+    [ERROR_CODES.PAYMENT_BOOKING_IN_PROGRESS]: {
+        en: 'A payment for that is already going through. Please check your phone rather than paying again.',
+        fr: "Un paiement est déjà en cours pour cela. Vérifiez votre téléphone plutôt que de payer à nouveau.",
+        pt: 'Já existe um pagamento em andamento para isso. Verifique o seu telefone em vez de pagar de novo.',
+        es: 'Ya hay un pago en curso para eso. Revise su teléfono en lugar de volver a pagar.',
+        ar: 'هناك عملية دفع جارية بالفعل لهذا الحجز. يرجى التحقق من هاتفك بدلًا من الدفع مرة أخرى.',
+    },
+    [ERROR_CODES.PAYMENT_BOOKING_ALREADY_PAID]: {
+        en: 'That appointment is already paid for. There is nothing left to pay.',
+        fr: "Ce rendez-vous est déjà payé. Il n'y a plus rien à régler.",
+        pt: 'Esse agendamento já está pago. Não há mais nada a pagar.',
+        es: 'Esa cita ya está pagada. No queda nada por pagar.',
+        ar: 'تم دفع قيمة هذا الحجز بالفعل. لا يوجد ما يستوجب الدفع.',
+    },
+    [ERROR_CODES.BOOKING_NO_BALANCE_DUE]: {
+        en: 'There is nothing outstanding on that appointment.',
+        fr: "Il n'y a rien à régler sur ce rendez-vous.",
+        pt: 'Não há nada pendente nesse agendamento.',
+        es: 'No hay nada pendiente en esa cita.',
+        ar: 'لا يوجد أي مبلغ مستحق على هذا الحجز.',
+    },
     // ── Retryable machinery ──────────────────────────────────────────────────
     // The three idempotency refusals are the automation layer's business, not the
     // customer's — but if one does reach a chat window it must not read as a rejection of
@@ -254,6 +333,85 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         pt: 'Não consegui concluir isso agora. Tente novamente em instantes.',
         es: 'No he podido completar eso ahora. Inténtalo de nuevo en un momento.',
         ar: 'لم أتمكن من إتمام ذلك الآن. يرجى المحاولة مرة أخرى بعد قليل.',
+    },
+
+    // ── Contact changes (MCP parity step 6) ──────────────────────────────────
+    //
+    // ⚠ **Three of the six contact-change codes earn an entry and three do not**, by the
+    // test at the top of this table. `CONTACT_CHANGE_SAME_IDENTIFIER` and
+    // `CONTACT_CHANGE_IDENTIFIER_TAKEN` are `validation`/`conflict` and their fallbacks
+    // already say the only true thing ("that does not look right" / "that has already
+    // changed"); `CONTACT_CHANGE_TOKEN_INVALID` is raised on a path a chat never touches,
+    // because the email confirm is a storefront page. The three below are the ones where
+    // the fallback would send a customer to do the WRONG thing.
+
+    /**
+     * The `business_rule` fallback is *"that is not something I can do right now"* — which
+     * invites waiting, and waiting is exactly what will not help: the number is proved by
+     * CONNECTING it, and nothing happens until the customer does.
+     */
+    [ERROR_CODES.CONTACT_CHANGE_PHONE_UNPROVEN]: {
+        en: 'I cannot confirm that number yet. Write to us on WhatsApp from it and connect it first, then ask me again.',
+        fr: "Je ne peux pas encore confirmer ce numéro. Écrivez-nous sur WhatsApp depuis ce numéro et connectez-le, puis redemandez-moi.",
+        pt: 'Ainda não posso confirmar esse número. Escreva-nos no WhatsApp a partir dele e ligue-o primeiro, depois peça-me de novo.',
+        es: 'Todavía no puedo confirmar ese número. Escríbenos por WhatsApp desde él y conéctalo primero, luego pídemelo de nuevo.',
+        ar: 'لا أستطيع تأكيد ذلك الرقم بعد. راسلنا على واتساب منه واربطه أولًا، ثم اطلب مني مرة أخرى.',
+    },
+    /**
+     * The `conflict` fallback is *"that has already changed — let me check where things
+     * stand and try again"*, and a retry here can never succeed: there is nothing pending,
+     * so the remedy is to START one.
+     */
+    [ERROR_CODES.CONTACT_CHANGE_NOT_PENDING]: {
+        en: 'There is no change waiting on your account. Tell me the new address or number and I will start one.',
+        fr: "Aucun changement n'est en attente sur votre compte. Donnez-moi la nouvelle adresse ou le nouveau numéro et je le lance.",
+        pt: 'Não há nenhuma alteração pendente na sua conta. Diga-me o novo e-mail ou número e eu inicio uma.',
+        es: 'No hay ningún cambio pendiente en tu cuenta. Dime el nuevo correo o número y lo empiezo.',
+        ar: 'لا يوجد تغيير قيد الانتظار على حسابك. أخبرني بالبريد أو الرقم الجديد وسأبدأ العملية.',
+    },
+    [ERROR_CODES.CONTACT_CHANGE_EXPIRED]: {
+        en: 'That change took too long and has expired. Tell me the new address or number again and I will start over.',
+        fr: "Ce changement a expiré. Redonnez-moi la nouvelle adresse ou le nouveau numéro et je recommence.",
+        pt: 'Essa alteração demorou demasiado e expirou. Diga-me de novo o e-mail ou número e eu recomeço.',
+        es: 'Ese cambio ha tardado demasiado y ha caducado. Dime otra vez el correo o el número y vuelvo a empezar.',
+        ar: 'استغرق ذلك التغيير وقتًا طويلًا وانتهت صلاحيته. أخبرني بالبريد أو الرقم الجديد مرة أخرى وسأبدأ من جديد.',
+    },
+
+    // ── Connections and account closure (MCP parity step 7) ──────────────────
+
+    /**
+     * The one refusal this surface adds over the customer API. It earns an entry because
+     * the remedy is a DIFFERENT PLACE — the storefront, where the session does not depend
+     * on the connection being removed — and no category sentence can say that.
+     */
+    [ERROR_CODES.BOT_CONNECTION_ACTIVE_CHANNEL]: {
+        en: 'I cannot disconnect the app we are talking in — I would not be able to reach you. You can do it from your account page on the website.',
+        fr: "Je ne peux pas déconnecter l'application dans laquelle nous discutons — je ne pourrais plus vous joindre. Vous pouvez le faire depuis votre compte sur le site.",
+        pt: 'Não posso desligar a aplicação em que estamos a falar — deixaria de conseguir contactá-lo. Pode fazê-lo na sua conta no site.',
+        es: 'No puedo desconectar la aplicación en la que estamos hablando — dejaría de poder contactarte. Puedes hacerlo desde tu cuenta en la web.',
+        ar: 'لا يمكنني فصل التطبيق الذي نتحدث فيه — لن أستطيع الوصول إليك بعدها. يمكنك فعل ذلك من صفحة حسابك على الموقع.',
+    },
+    /**
+     * Both closure refusals earn an entry, and for the same reason: a customer who asked to
+     * close their account and is told *"that is not something I can do right now"* has been
+     * told nothing about a decision that is theirs to make. The details are deliberately
+     * NOT interpolated — `details.blockingRoles` and `details.activeOrderCount` ride the
+     * envelope for the flow to use, and a sentence with a number in it is a sentence that
+     * needs five plural rules.
+     */
+    [ERROR_CODES.ACCOUNT_CLOSURE_ROLE_NOT_ELIGIBLE]: {
+        en: 'This account also sells or delivers on the platform, so I cannot close it from here. Our support team can help.',
+        fr: "Ce compte sert aussi à vendre ou à livrer sur la plateforme, je ne peux donc pas le fermer d'ici. Notre support peut vous aider.",
+        pt: 'Esta conta também vende ou entrega na plataforma, por isso não a posso encerrar aqui. A nossa equipa de apoio pode ajudar.',
+        es: 'Esta cuenta también vende o entrega en la plataforma, así que no puedo cerrarla desde aquí. Nuestro equipo de soporte puede ayudarte.',
+        ar: 'يُستخدم هذا الحساب أيضًا للبيع أو التوصيل على المنصة، لذا لا يمكنني إغلاقه من هنا. يمكن لفريق الدعم مساعدتك.',
+    },
+    [ERROR_CODES.ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT]: {
+        en: 'You still have orders on the way. I can close your account once they have arrived — otherwise we would have no way to reach you about them.',
+        fr: "Vous avez encore des commandes en cours. Je pourrai fermer votre compte une fois qu'elles seront arrivées — sinon nous n'aurions aucun moyen de vous joindre à leur sujet.",
+        pt: 'Ainda tem encomendas a caminho. Posso encerrar a sua conta assim que chegarem — de outro modo não teríamos como o contactar sobre elas.',
+        es: 'Todavía tienes pedidos en camino. Puedo cerrar tu cuenta cuando hayan llegado — de lo contrario no tendríamos forma de contactarte sobre ellos.',
+        ar: 'لا تزال لديك طلبات في الطريق. يمكنني إغلاق حسابك بعد وصولها — وإلا فلن تكون لدينا وسيلة للتواصل معك بشأنها.',
     },
 });
 

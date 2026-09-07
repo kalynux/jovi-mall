@@ -25,12 +25,10 @@ import {
   AgentAvailabilityService,
   agentAvailabilityService,
   IDeliveryAgent,
-  contractCoversRegion,
-  contractAllowsShipmentValue,
 } from '../../../agents';
 import { CashCollectionService, cashCollectionService } from '../../../cod/services/cash-collection.service';
-import { CodExposureService, codExposureService } from '../../../cod/services/cod-exposure.service';
 import { ICashCollection } from '../../../cod/models/cash-collection.model';
+import { ContractPolicyService, contractPolicyService } from './contract-policy.service';
 
 import {
   ShipmentAssignmentOfferRepository,
@@ -143,7 +141,7 @@ export class ShipmentAssignmentService {
     private readonly capacity: AgentCapacityService = agentCapacityService,
     private readonly availability: AgentAvailabilityService = agentAvailabilityService,
     private readonly cashCollection: CashCollectionService = cashCollectionService,
-    private readonly exposure: CodExposureService = codExposureService,
+    private readonly contractPolicy: ContractPolicyService = contractPolicyService,
     private readonly candidates: AssignmentCandidateService = assignmentCandidateService,
     private readonly shipmentSvc: ShipmentService = new ShipmentService(),
     private readonly handoverPickup: HandoverPickupService = handoverPickupService,
@@ -988,9 +986,14 @@ export class ShipmentAssignmentService {
    * enforces, which is worse than not enforcing them at all: the rule would
    * appear to work.
    *
-   * Order is deliberate — coverage, then value, then cash. It runs cheapest and
-   * most-explanatory first, and an operator reading "outside their coverage"
-   * learns more than one reading "over their COD limit" for the same shipment.
+   * ── The rules moved; this is now a one-line delegation ──────────────────────
+   *
+   * They live in `ContractPolicyService`, which evaluates them without throwing
+   * and lets `assert` throw the first failure. That extraction was made so the
+   * admin assignability diagnostic could report EVERY gate and every number
+   * without a second implementation of any rule — see that service's header for
+   * why a drifted diagnostic is worse than none. Behaviour here is unchanged:
+   * same order (contract, coverage, value, cash), same codes, same `details`.
    */
   private async assertContractPolicy(
     agent: IDeliveryAgent,
@@ -998,61 +1001,7 @@ export class ShipmentAssignmentService {
     shipment: IShipment,
     order: IOrder
   ): Promise<void> {
-    const contract = await this.contracts.requireActive(agent._id.toString(), agencyId);
-
-    const deliveryRegion = order.delivery_address?.components?.region ?? null;
-    const countryCode = order.delivery_address?.components?.country_code ?? null;
-    if (!contractCoversRegion(contract.coverage, deliveryRegion, countryCode)) {
-      throw createAppError(ERROR_CODES.CONTRACT_COVERAGE_REGION_NOT_COVERED, 422, undefined, {
-        deliveryRegion,
-        coveredRegions: contract.coverage?.regions ?? [],
-        hint: 'This delivery is outside the regions this contract covers.',
-      });
-    }
-
-    const shipmentValue = this.resolveShipmentValue(order, shipment);
-    if (!contractAllowsShipmentValue(contract.shipment_value_ceiling, shipmentValue)) {
-      throw createAppError(ERROR_CODES.CONTRACT_SHIPMENT_VALUE_EXCEEDED, 422, undefined, {
-        shipmentValue,
-        ceiling: contract.shipment_value_ceiling,
-        hint: 'This shipment is worth more than this contract allows for a single delivery.',
-      });
-    }
-
-    if (order.payment_method === 'cash_on_delivery') {
-      await this.exposure.assertCanTakeCodShipment(
-        agent,
-        shipmentValue ?? 0,
-        contract.cod?.threshold ?? 0
-      );
-    }
-  }
-
-  /**
-   * A shipment's monetary value, or null when it cannot be determined.
-   *
-   * `computeExpectedAmount` THROWS `ORDER_ITEM_NOT_FOUND` (500) when a shipment
-   * references an order item that no longer exists. On the COD path that throw
-   * was always reachable and is arguably right — no cash figure, no collection.
-   * Now that every payment method consults it for the value ceiling, an
-   * unguarded call would turn a corrupt prepaid shipment into a 500 on accept
-   * and would kill an entire `buildRanking`, leaving a shipment with no
-   * candidates and no explanation.
-   *
-   * So it fails open, loudly. A bookkeeping inconsistency must not be able to
-   * block a delivery through a cap that was never about it.
-   */
-  private resolveShipmentValue(order: IOrder, shipment: IShipment): number | null {
-    try {
-      return this.cashCollection.computeExpectedAmount(order, shipment);
-    } catch (error) {
-      console.error(
-        `[ShipmentAssignmentService] Could not value shipment ${shipment._id.toString()} ` +
-          `on order ${order._id.toString()} — value-ceiling and COD checks will be skipped:`,
-        error
-      );
-      return null;
-    }
+    await this.contractPolicy.assert(agent, agencyId, shipment, order);
   }
 
   private async requireAgent(agentId: string): Promise<IDeliveryAgent> {

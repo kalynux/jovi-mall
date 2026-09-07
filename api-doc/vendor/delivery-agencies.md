@@ -1,5 +1,9 @@
 # Delivery Agencies (Vendor-Facing)
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
+
 ## Base Path
 
 ```
@@ -40,7 +44,7 @@ Only agencies that meet **both** of the following conditions are returned:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `page` | integer | `1` | Page number (1-indexed) |
-| `limit` | integer | `20` | Items per page (max: 50) |
+| `limit` | integer | `20` | Items per page. ⚠ **Clamped, not validated** — see below |
 | `search` | string | — | Free-text search. Matches against: agency name, coverage areas, headquarters city, headquarters region, headquarters address description. Case-insensitive. |
 | `region` | string | — | Filter by coverage area. Case-insensitive partial match on the region key (e.g. `"littoral"`, `"centre"`). Only agencies that serve this region are returned. |
 | `hq_city` | string | — | Filter by primary headquarters city. Case-insensitive partial match (e.g. `"Douala"`, `"Yaoundé"`). |
@@ -48,6 +52,17 @@ Only agencies that meet **both** of the following conditions are returned:
 | `pickup_based` | `"true"` | — | When set to `"true"`, only return agencies that have **pickup-based** pricing enabled (agency picks up from vendor location). |
 | `returns_payer` | `"vendor"` \| `"agency"` \| `"customer"` | — | Filter by who bears the cost of return shipping. |
 | `min_claim_deadline_days` | integer | — | Filter for agencies whose damage claim window is **at least** this many days (e.g. `7` filters out agencies with a 3-day window). |
+
+> ⚠ **`page` and `limit` are CLAMPED, never rejected** — `Math.max(1, parseInt(page) || 1)` and
+> `Math.min(50, Math.max(1, parseInt(limit) || 20))`
+> (`vendor-profile.controller.ts:85-86`). So `limit=500` silently answers **50**, `limit=0`
+> answers **1**, and `limit=abc` answers the default **20** — all with a `200`. The table said
+> "max: 50", which reads as a validated ceiling. **Do not paginate by trusting the value you
+> sent**; read `meta.limit` in the response, which reports the value actually used.
+>
+> ⚠ **The boolean filters are ONE-WAY.** `storage_based` and `pickup_based` apply only on the
+> exact string `"true"`; `"false"` is not "show me the others", it is ignored entirely and the
+> filter does not apply. There is no way to ask for agencies *without* a given pricing mode.
 
 > **Note on combined filters**: All provided query params are applied as AND conditions. `search` and `region` can be used together — for example, search for `"swift"` within region `"littoral"`.
 
@@ -64,7 +79,7 @@ Only agencies that meet **both** of the following conditions are returned:
     {
       "id": "683abc1234567890abcdef01",
       "agencyName": "Swift Deliveries Cameroon",
-      "logo": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
+      "logo": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "access": "public", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
       "kycVerified": true,
       "headquartersAddress": {
         "region": "Littoral",
@@ -107,9 +122,9 @@ Only agencies that meet **both** of the following conditions are returned:
 
 | Status | Code | Description |
 |--------|------|-------------|
-| `401` | `UNAUTHORIZED` | Missing or invalid auth token |
-| `403` | `FORBIDDEN` | Valid token but not a vendor |
-| `500` | `INTERNAL_ERROR` | Unexpected server error |
+| `401` | `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` | Missing or invalid auth token |
+| `403` | `AUTH_ROLE_NOT_FOUND` | Valid token but not a vendor |
+| `500` | `INTERNAL_SERVER_ERROR` | Unexpected server error |
 
 ---
 
@@ -121,7 +136,7 @@ Only agencies that meet **both** of the following conditions are returned:
 |-------|------|-------------|
 | `id` | `string` | Agency MongoDB ObjectId as string. Use this as `default_delivery_agency_id` in Step 2 of onboarding. |
 | `agencyName` | `string` | Registered agency name. |
-| `logo` | `FileDetail \| null` | Agency logo as a resolved file object (`{ id, key, url, mimeType, size, originalName }`). `null` if not set. |
+| `logo` | `FileDetail \| null` | Agency logo as a resolved file object (`{ id, key, url, access, mimeType, size, originalName }`). `null` if not set. |
 | `kycVerified` | `boolean` | Whether admin has verified the agency's business documents (KYC). `true` = verified. |
 | `headquartersAddress` | `object \| null` | Primary headquarters address (always index 0). See below. |
 | `country` | `string \| null` | 🆕 ISO-2 country the agency operates in (e.g. `"CM"`), set once at their onboarding. What scopes `coverageAreas` to a region catalogue. `null` on legacy agencies. |
@@ -238,8 +253,8 @@ Returned in the agency's own order; the first entry is the primary.
 | Code | HTTP | Description |
 |------|------|-------------|
 | `VALIDATION_ERROR` | 400 | `agencyId` is not a valid ObjectId |
-| `UNAUTHORIZED` | 401 | Missing or invalid JWT token |
-| `FORBIDDEN` | 403 | Wrong role |
+| `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` | 401 | Missing or invalid JWT token |
+| `AUTH_ROLE_NOT_FOUND` | 403 | Wrong role |
 | `DELIVERY_AGENCY_NOT_FOUND` | 404 | No such agency |
 | `CONNECTION_NOT_ACTIVE` | 422 | No active, approved connection with this agency |
 

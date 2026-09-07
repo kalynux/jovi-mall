@@ -49,7 +49,7 @@ caller's role:
       "fulfillmentStatus": "processing",
       "createdAt": "2026-08-02T09:11:00.000Z",
       "customerName": "Jane Doe",
-      "customerAvatar": { "id": "…", "key": "…", "url": "https://…", "mimeType": "image/png",
+      "customerAvatar": { "id": "…", "key": "images/2026/07/customer.png", "url": "https://…/images/2026/07/customer.png", "access": "public", "mimeType": "image/png",
                           "size": 24576, "originalName": "avatar.png" },
       "shipments": [
         { "shipmentId": "664shp...", "agencyId": "664agy...", "agencyName": "FastTrack Logistics",

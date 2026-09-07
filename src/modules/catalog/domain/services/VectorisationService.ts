@@ -1,8 +1,32 @@
 /**
  * VectorisationService
  *
- * Responsible for all interactions with the external vectoriser at
- * https://the8n.fante.cloud/vectoriser.
+ * Responsible for all interactions with the external vectoriser — the n8n
+ * `wi-mall-vectoriser` workflow, at `vectoriserConfig.baseUrl`.
+ *
+ * ── The submit path is ASYNCHRONOUS, and that is the thing to know ───────────
+ *
+ * `POST <baseUrl>` answers **202** with `{ job_id, accepted[], rejected[] }` and
+ * has embedded nothing yet. The per-product outcome arrives minutes later on
+ * `POST /api/internal/vectoriser/callback`. So this service no longer learns
+ * whether a product was indexed; it learns only whether the work was *taken on*.
+ *
+ * That splits the old single write into two, in two different requests:
+ *
+ *   here     — `pending` + a `vectorisationJob` claim ticket on the product
+ *   callback — `completed` (+ `vectorisedDataId`) or `failed` (+ the refund)
+ *
+ * ⚠ **Both lists in the 202 must be read.** `accepted` means *genuinely pending,
+ * wait for the callback*. `rejected` — and equally, silence: an id in neither
+ * list — means *this one is already over*, because no callback will ever mention
+ * it. Treating a 202 as success is how a product sits at `pending` forever with
+ * the vendor's credit spent, and `pending` also locks the product against
+ * editing (`require-product-editable.middleware`).
+ *
+ * Why async at all: Voyage plus a pgvector write for a few hundred products does
+ * not fit inside `VECTORISER_TIMEOUT_BULK_MS`, and under the old synchronous
+ * design a dropped connection lost the whole batch with every product left
+ * `pending`. See `api-doc/n8n/vectoriser/README.md` § 2–4.
  *
  * Design principles:
  *  - All public methods are safe to call fire-and-forget from controllers.
@@ -30,21 +54,66 @@ import { VendorModel } from '../../../vendors/vendor.model';
 import { StoreModel } from '../../../store/models/store.model';
 import { creditWalletService } from '../../../billing/services/credit-wallet.service';
 import { VECTORISATION_COST } from '../../../billing/config/credit.config';
-import { isPrivateStorageKey } from '../../../../core/storage/storage-trees';
+import { toFileDetail } from '../../read-models/file-detail.resolver';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export interface VectoriserSingleResponse {
-  product_id: string;
-  vectorised_id: string;
+/**
+ * The **202** answered by `POST <baseUrl>` — the only thing a submit returns now.
+ *
+ * `accepted` and `rejected` are the whole contract: an id in `accepted` gets a
+ * callback, an id anywhere else does not. A `rejected` entry may carry
+ * `product_id: null` — that is the vectoriser naming a payload entry it could not
+ * link back to a product at all ("no product_id on entry 2").
+ */
+export interface VectoriserAcceptedResponse {
+  success?: boolean;
+  job_id: string | number;
+  accepted?: string[];
+  rejected?: Array<{ product_id: string | null; reason: string }>;
+  callback_url?: string;
 }
 
-export interface VectoriserBulkResponse {
-  results: VectoriserSingleResponse[];
+/** One product's outcome inside a callback report. */
+export interface VectoriserCallbackResult {
+  product_id: string;
+  status: string;
+  vectorised_id?: string | null;
+  error?: string | null;
+}
+
+/** The body of `POST /api/internal/vectoriser/callback` — README § 3. */
+export interface VectoriserCallbackReport {
+  job_id: string;
+  finished_at?: string;
+  total?: number;
+  succeeded?: number;
+  failed?: number;
+  results: VectoriserCallbackResult[];
+}
+
+/** What `applyCallbackReport` did, per product and in total. */
+export interface CallbackApplyResult {
+  jobId: string;
+  /** Rows whose claim ticket matched and whose outcome was written. */
+  applied: number;
+  /** Marked `completed` (a subset of `applied`). */
+  completed: number;
+  /** Marked `failed` (a subset of `applied`). */
+  failed: number;
+  /** Credits actually returned to a vendor wallet. */
+  refunded: number;
+  /**
+   * Results whose claim ticket did NOT match — a duplicate or late report, a
+   * product deleted meanwhile, or an attempt already resolved. Not an error.
+   */
+  ignored: string[];
+  /** Results carrying a status this service does not know. Written nowhere, logged loudly. */
+  unknown: Array<{ product_id: string; status: string }>;
 }
 
 /** Shape of one entry in the bulk-vectorise payload array */
-interface VectoriserPayloadEntry {
+export interface VectoriserPayloadEntry {
   product_id: string;
   title: string;
   description: string;
@@ -67,12 +136,30 @@ interface VectoriserPayloadEntry {
   digitalConfig?: Record<string, unknown>;
 }
 
-/** Result returned from vectoriseBulk to callers (e.g. reconciliation script) */
+/**
+ * Result returned from vectoriseBulk to callers (the admin endpoint and the
+ * reconciliation script).
+ *
+ * ⚠ The first field was `succeeded` until the vectoriser went async, and the
+ * rename is the point: nothing here has been indexed yet. `accepted` counts
+ * products the vectoriser **took on** — their real outcome lands later, on the
+ * callback. Keeping the old name would have left every caller reporting
+ * "N succeeded" about work that had not started.
+ */
 export interface BulkVectorisationResult {
-  succeeded: number;
+  /** Taken on by the vectoriser and now `pending` a callback. NOT "indexed". */
+  accepted: number;
+  /** Over already: ineligible, not found, payload build failed, or rejected at the gate. */
   failed: number;
   total: number;
   errors: Array<{ productId: string; reason: string }>;
+}
+
+/** What `buildPayloadsFor` answers — the body of `POST /internal/vectoriser/payloads`. */
+export interface PayloadBatch {
+  products: VectoriserPayloadEntry[];
+  /** Ids that produced no payload: not found, or the build threw. */
+  missing: string[];
 }
 
 /** Snapshot of a product's vectorisation columns — returned by prepareForVectorisation. */
@@ -116,7 +203,7 @@ function delay(ms: number): Promise<void> {
 
 /**
  * Thin fetch wrapper that:
- *  - Attaches the T8N-API-KEY auth header.
+ *  - Attaches the VECTORISER_API_KEY auth header.
  *  - Enforces a request timeout via AbortController.
  *  - Returns the parsed JSON body on success.
  *  - Throws a typed error on non-2xx or timeout, preserving the status code.
@@ -134,7 +221,7 @@ async function vectoriserFetch<T>(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(vectoriserConfig.apiKey ? { 'T8N-API-KEY': vectoriserConfig.apiKey } : {}),
+        ...(vectoriserConfig.apiKey ? { 'VECTORISER_API_KEY': vectoriserConfig.apiKey } : {}),
       },
       body: JSON.stringify(payload),
       signal: controller.signal,
@@ -296,18 +383,34 @@ export class VectorisationService {
     if (allFileIds.length > 0) {
       const fileDocs = await FileModel.find({ _id: { $in: allFileIds }, deletedAt: null }).lean();
       for (const f of fileDocs) {
+        // The payload shape is the vectoriser's own, not a `FileDetail` — but the URL
+        // DECISION is the platform's, so it is taken from the shared resolver and the
+        // fields this service wants are picked off the result.
+        //
+        // ⚠ This used to re-implement that decision inline, and the copy went stale in
+        // exactly the way a copy does: it grew the private-tree rule (ADR-A01 D-2) and
+        // would have had to grow the plan-quota rule separately, so an owner over their
+        // storage cap would have had blocked images published to an external service —
+        // the one place on the platform still handing them out. `test:uploads` now
+        // refuses any `getPublicUrl` call outside the resolver, which is what makes a
+        // third copy impossible rather than merely discouraged.
+        const detail = toFileDetail(
+          {
+            id: f._id.toString(),
+            key: f.key,
+            mimeType: f.mimeType,
+            size: f.size,
+            originalName: f.originalName,
+            quotaBlockedAt: f.quotaBlockedAt,
+          },
+          storage,
+        );
         fileMap.set(f._id.toString(), {
-          id: f._id.toString(),
-          // Not a `FileDetail` — this is the vectoriser's own payload shape, sent to an
-          // external service. It still asks the same question, and must give the same answer:
-          // since ADR-A01 D-2 the private trees are off `express.static`, so a public URL for
-          // one is a link that 404s. In practice these are product gallery images and always
-          // public; `null` is what keeps that "in practice" from becoming a dead link the day
-          // it stops being true.
-          url: isPrivateStorageKey(f.key) ? null : storage.getPublicUrl(f.key),
-          mimeType: f.mimeType,
-          size: f.size,
-          originalName: f.originalName ?? null,
+          id: detail.id,
+          url: detail.url,
+          mimeType: detail.mimeType,
+          size: detail.size,
+          originalName: detail.originalName ?? null,
         });
       }
     }
@@ -521,7 +624,7 @@ export class VectorisationService {
       // status so the frontend can offer "Enable" once the product is ready.
       await ProductModel.updateOne(
         { _id: productId },
-        { $set: { vectorisationEnabled: false, vectorisationStatus: 'not_started' } },
+        { $set: { vectorisationEnabled: false, vectorisationStatus: 'not_started', vectorisationJob: null } },
       );
       log('info', 'prepareForVectorisation: ineligible — vectorisation disabled', {
         ...ctx,
@@ -539,12 +642,19 @@ export class VectorisationService {
     }
 
     // Mark pending now — concurrent edits are locked out by requireProductEditable
-    // from this point forward.
-    await ProductModel.updateOne({ _id: productId }, { $set: { vectorisationStatus: 'pending' } });
+    // from this point forward. The claim ticket goes with it: a new attempt is
+    // starting, so a late callback for the PREVIOUS job must no longer match.
+    await ProductModel.updateOne(
+      { _id: productId },
+      { $set: { vectorisationStatus: 'pending', vectorisationJob: null } },
+    );
 
     const payload = await this.buildPayload(productId);
     if (!payload) {
-      await ProductModel.updateOne({ _id: productId }, { $set: { vectorisationStatus: 'failed' } });
+      await ProductModel.updateOne(
+        { _id: productId },
+        { $set: { vectorisationStatus: 'failed', vectorisationJob: null } },
+      );
       log('error', 'prepareForVectorisation: payload build failed', ctx);
       return {
         payload: null,
@@ -569,7 +679,13 @@ export class VectorisationService {
 
   /**
    * Execute a previously-prepared vectorisation: POST the payload to the
-   * external service and persist the result.
+   * vectoriser and record what it SAID — which is not what it did.
+   *
+   * The answer is a 202. On `accepted` this writes the claim ticket and leaves
+   * the product `pending`; the outcome, the `vectorisedDataId` and (on failure)
+   * the refund all land later in `applyCallbackReport`. On `rejected` — or on an
+   * id the 202 mentions in neither list — the attempt is over now, because no
+   * callback will ever name it, so it is failed and refunded here.
    *
    * IMPORTANT: Fire-and-forget — swallows all errors internally and never rejects.
    * Pair with prepareForVectorisation().
@@ -596,24 +712,27 @@ export class VectorisationService {
         if (err?.code === ERROR_CODES.BILLING_INSUFFICIENT_CREDITS) {
           await ProductModel.updateOne(
             { _id: productId },
-            { $set: { vectorisationStatus: 'skipped_no_credits' } },
+            { $set: { vectorisationStatus: 'skipped_no_credits', vectorisationJob: null } },
           ).catch(() => undefined);
           log('warn', 'executePreparedVectorisation: skipped — insufficient credits', { ...ctx, vendorId });
           return;
         }
         await ProductModel.updateOne(
           { _id: productId },
-          { $set: { vectorisationStatus: 'failed' } },
+          { $set: { vectorisationStatus: 'failed', vectorisationJob: null } },
         ).catch(() => undefined);
         log('error', 'executePreparedVectorisation: credit debit failed', { ...ctx, error: err.message });
         return;
       }
     }
 
+    const billed = VECTORISATION_COST > 0;
+
+    let response: VectoriserAcceptedResponse;
     try {
-      const response = await withRetry(
+      response = await withRetry(
         () =>
-          vectoriserFetch<VectoriserSingleResponse>(
+          vectoriserFetch<VectoriserAcceptedResponse>(
             vectoriserConfig.baseUrl,
             payload,
             vectoriserConfig.timeoutSingleMs,
@@ -622,47 +741,109 @@ export class VectorisationService {
         vectoriserConfig.retryBaseDelayMs,
         ctx,
       );
-
-      await ProductModel.updateOne(
-        { _id: productId },
-        {
-          $set: {
-            vectorisedDataId: response.vectorised_id,
-            vectorisationStatus: 'completed',
-          },
-        },
-      );
-
-      log('info', 'executePreparedVectorisation: completed', {
-        ...ctx,
-        vectorisedDataId: response.vectorised_id,
-      });
     } catch (err: any) {
-      // The vendor shouldn't pay for a failed vectorisation — refund the credit
-      // (only when vectorisation is actually billed).
-      if (VECTORISATION_COST > 0) {
-        await creditWalletService
-          .credit('vendor', vendorId, VECTORISATION_COST, 'refund', 'vectorisation', productId)
-          .catch(() => undefined);
-      }
-      try {
-        await ProductModel.updateOne(
-          { _id: productId },
-          { $set: { vectorisationStatus: 'failed' } },
-        );
-      } catch (dbErr: any) {
-        log('error', 'executePreparedVectorisation: failed to write failure status to DB', {
-          ...ctx,
-          dbError: dbErr.message,
-        });
-      }
-
-      log('error', 'executePreparedVectorisation: failed', {
+      await this.failAndRefund(productId, vendorId, billed, `Request failed: ${err.message}`, {
         ...ctx,
-        error: err.message,
         stack: err.stack,
       });
+      return;
     }
+
+    const jobId = String(response?.job_id ?? '');
+    const accepted = new Set((response?.accepted ?? []).map(String));
+
+    if (!accepted.has(productId)) {
+      // Rejected at the gate, or simply absent from both lists. Either way no
+      // callback is coming, so this attempt is over NOW.
+      //
+      // One entry was sent, so any rejection reason in the answer is this
+      // product's — including one the vectoriser could not attach to an id and
+      // reported as `product_id: null`.
+      const reason =
+        response?.rejected?.find(r => String(r?.product_id ?? '') === productId)?.reason ??
+        response?.rejected?.[0]?.reason ??
+        'Vectoriser accepted no products and gave no reason';
+      await this.failAndRefund(productId, vendorId, billed, `Rejected by the vectoriser: ${reason}`, ctx);
+      return;
+    }
+
+    if (!jobId) {
+      // Accepted with no job id is unusable: the callback matches on it, so
+      // nothing could ever resolve this product. Fail it here rather than leave
+      // it pending forever — `pending` also locks the product against editing.
+      await this.failAndRefund(
+        productId,
+        vendorId,
+        billed,
+        'Vectoriser accepted the product but returned no job_id',
+        ctx,
+      );
+      return;
+    }
+
+    await ProductModel.updateOne(
+      { _id: productId },
+      {
+        $set: {
+          vectorisationStatus: 'pending',
+          vectorisationJob: { jobId, billed, requestedAt: new Date() },
+        },
+      },
+    );
+
+    log('info', 'executePreparedVectorisation: accepted — awaiting callback', {
+      ...ctx,
+      jobId,
+      billed,
+    });
+  }
+
+  /**
+   * Mark an attempt failed and return the credit if this attempt paid for one.
+   *
+   * The single exit for every failure VISIBLE BEFORE THE 202 — the request
+   * itself, a rejection at the gate, an unusable answer. It exists as a method
+   * rather than a catch block because the not-accepted case is not an exception:
+   * the vectoriser answered, correctly, that it would not do the work.
+   *
+   * ⚠ **It must never run for an attempt that was accepted.** An accepted
+   * product's failure is reported on the callback and refunded by
+   * `applyCallbackReport` off the stored `billed` flag; both firing for one
+   * attempt pays the vendor twice.
+   */
+  private async failAndRefund(
+    productId: string,
+    vendorId: string,
+    billed: boolean,
+    reason: string,
+    ctx: Record<string, unknown>,
+  ): Promise<void> {
+    if (billed) {
+      await creditWalletService
+        .credit('vendor', vendorId, VECTORISATION_COST, 'refund', 'vectorisation', productId)
+        .catch((creditErr: any) => {
+          log('error', 'executePreparedVectorisation: REFUND FAILED — credit owed to vendor', {
+            ...ctx,
+            vendorId,
+            amount: VECTORISATION_COST,
+            error: creditErr?.message,
+          });
+        });
+    }
+
+    try {
+      await ProductModel.updateOne(
+        { _id: productId },
+        { $set: { vectorisationStatus: 'failed', vectorisationJob: null } },
+      );
+    } catch (dbErr: any) {
+      log('error', 'executePreparedVectorisation: failed to write failure status to DB', {
+        ...ctx,
+        dbError: dbErr.message,
+      });
+    }
+
+    log('error', 'executePreparedVectorisation: failed', { ...ctx, reason, refunded: billed });
   }
 
   // ── Set enabled (consolidated toggle) ─────────────────────────────────────
@@ -801,13 +982,16 @@ export class VectorisationService {
         log('info', 'deleteVectorisation: no vectorisedDataId — local reset only', ctx);
       }
 
-      // Always reset local state.
+      // Always reset local state — including the claim ticket, so a callback for
+      // an attempt that was in flight when the vendor switched vectorisation off
+      // cannot write `completed` back onto a product that no longer wants it.
       await ProductModel.updateOne(
         { _id: productId },
         {
           $set: {
             vectorisedDataId: null,
             vectorisationStatus: 'not_started',
+            vectorisationJob: null,
           },
         },
       );
@@ -880,8 +1064,13 @@ export class VectorisationService {
    * Flow:
    *  1. Filter to only eligible products.
    *  2. Build payloads for all eligible products in parallel.
-   *  3. POST array payload to /vectoriser.
-   *  4. Bulk-write the returned vectorised IDs into MongoDB.
+   *  3. POST the array to the vectoriser and read its 202.
+   *  4. Write a claim ticket for every ACCEPTED product; fail the rest.
+   *
+   * ⚠ **Nothing here is indexed when this returns.** Step 4 used to write the
+   * returned vectorised ids; there are none now. Accepted products are left
+   * `pending`, and `applyCallbackReport` finishes them minutes later. The result
+   * field is named `accepted` rather than `succeeded` for exactly that reason.
    *
    * Unlike vectoriseSingle, this method returns a result object (callers
    * such as the reconciliation script and the admin endpoint need the summary).
@@ -893,6 +1082,11 @@ export class VectorisationService {
    * funnels through executePreparedVectorisation, which IS debited, so no
    * vendor-accessible route bypasses credits.
    *
+   * ⚠ That is why each claim ticket below is written with `billed: false`. The
+   * callback refunds off that flag, and the callback body is IDENTICAL for both
+   * paths — so a `true` here would hand a vendor a credit they never spent every
+   * time an admin sweep failed on their product.
+   *
    * @param productIds - Array of product IDs to attempt vectorisation for.
    */
   async vectoriseBulk(productIds: string[]): Promise<BulkVectorisationResult> {
@@ -902,7 +1096,7 @@ export class VectorisationService {
     log('info', 'vectoriseBulk: starting', ctx);
 
     if (productIds.length === 0) {
-      return { succeeded: 0, failed: 0, total: 0, errors: [] };
+      return { accepted: 0, failed: 0, total: 0, errors: [] };
     }
 
     // 1. Fetch all requested products and filter eligible ones
@@ -930,13 +1124,15 @@ export class VectorisationService {
 
     if (eligibleProducts.length === 0) {
       log('info', 'vectoriseBulk: no eligible products', { ...ctx, skipped: skippedIds.length });
-      return { succeeded: 0, failed: errors.length, total: productIds.length, errors };
+      return { accepted: 0, failed: errors.length, total: productIds.length, errors };
     }
 
-    // 2. Mark all eligible products as pending
+    // 2. Mark all eligible products as pending, and drop any stale claim ticket
+    // from an earlier attempt — a late callback for the OLD job must not be able
+    // to resolve the new one.
     await ProductModel.updateMany(
       { _id: { $in: eligibleProducts.map(p => p._id) } },
-      { $set: { vectorisationStatus: 'pending' } },
+      { $set: { vectorisationStatus: 'pending', vectorisationJob: null } },
     );
 
     // 3. Build payloads in parallel (individual failures are caught per-product)
@@ -956,7 +1152,10 @@ export class VectorisationService {
           productId,
           reason: result.status === 'rejected' ? result.reason?.message ?? 'Payload build error' : 'Payload build returned null',
         });
-        await ProductModel.updateOne({ _id: productId }, { $set: { vectorisationStatus: 'failed' } });
+        await ProductModel.updateOne(
+          { _id: productId },
+          { $set: { vectorisationStatus: 'failed', vectorisationJob: null } },
+        );
       } else {
         payloads.push(result.value);
         payloadIdMap.push(productId);
@@ -965,15 +1164,15 @@ export class VectorisationService {
 
     if (payloads.length === 0) {
       log('error', 'vectoriseBulk: all payload builds failed', ctx);
-      return { succeeded: 0, failed: errors.length, total: productIds.length, errors };
+      return { accepted: 0, failed: errors.length, total: productIds.length, errors };
     }
 
     // 4. POST batch to vectoriser with retry
-    let responses: VectoriserSingleResponse[];
+    let response: VectoriserAcceptedResponse;
     try {
-      const raw = await withRetry(
+      response = await withRetry(
         () =>
-          vectoriserFetch<VectoriserSingleResponse[] | VectoriserBulkResponse>(
+          vectoriserFetch<VectoriserAcceptedResponse>(
             vectoriserConfig.baseUrl,
             payloads,
             vectoriserConfig.timeoutBulkMs,
@@ -982,71 +1181,301 @@ export class VectorisationService {
         vectoriserConfig.retryBaseDelayMs,
         { ...ctx, operation: 'bulk' },
       );
-
-      // Accept both array and { results: [] } shapes from the vectoriser
-      responses = Array.isArray(raw) ? raw : (raw as VectoriserBulkResponse).results ?? [];
     } catch (err: any) {
       // Entire batch failed — mark all pending products as failed
       await ProductModel.updateMany(
         { _id: { $in: payloadIdMap } },
-        { $set: { vectorisationStatus: 'failed' } },
+        { $set: { vectorisationStatus: 'failed', vectorisationJob: null } },
       );
       for (const id of payloadIdMap) {
         errors.push({ productId: id, reason: `Batch request failed: ${err.message}` });
       }
       log('error', 'vectoriseBulk: batch request failed', { ...ctx, error: err.message });
-      return { succeeded: 0, failed: errors.length, total: productIds.length, errors };
+      return { accepted: 0, failed: errors.length, total: productIds.length, errors };
     }
 
-    // 5. Bulk-write the returned vectorised IDs
-    let succeeded = 0;
-    await Promise.allSettled(
-      responses.map(async entry => {
-        try {
-          await ProductModel.updateOne(
-            { _id: entry.product_id },
-            {
-              $set: {
-                vectorisedDataId: entry.vectorised_id,
-                vectorisationStatus: 'completed',
-              },
-            },
-          );
-          succeeded++;
-        } catch (dbErr: any) {
-          errors.push({
-            productId: entry.product_id,
-            reason: `DB write failed: ${dbErr.message}`,
-          });
-        }
-      }),
-    );
+    // 5. Split the 202 into "now genuinely pending" and "already over".
+    //
+    // Rejection reasons are keyed by product id where the vectoriser could read
+    // one. Entries with `product_id: null` are payloads it could not link back to
+    // a product at all — they cannot be attributed to any id here, so they are
+    // counted and logged rather than pinned on an arbitrary victim.
+    const jobId = String(response?.job_id ?? '');
+    const acceptedIds = new Set((response?.accepted ?? []).map(String));
+    const rejectionReasons = new Map<string, string>();
+    let unattributedRejections = 0;
+    for (const entry of response?.rejected ?? []) {
+      const id = entry?.product_id == null ? '' : String(entry.product_id);
+      if (id) rejectionReasons.set(id, entry.reason);
+      else unattributedRejections++;
+    }
 
-    // Mark any products that the vectoriser did not return a result for as failed
-    const returnedIds = new Set(responses.map(r => r.product_id));
-    const missingIds = payloadIdMap.filter(id => !returnedIds.has(id));
-    if (missingIds.length > 0) {
+    // No job id means no callback can ever be matched to these products, so an
+    // "accepted" list without one is not something to wait on.
+    const acceptedSet = new Set(jobId ? payloadIdMap.filter(id => acceptedIds.has(id)) : []);
+    const acceptedForThisJob = [...acceptedSet];
+    const notAccepted = payloadIdMap.filter(id => !acceptedSet.has(id));
+
+    if (acceptedForThisJob.length > 0) {
+      // billed: false — this path never debits. See the BILLING note above.
       await ProductModel.updateMany(
-        { _id: { $in: missingIds } },
-        { $set: { vectorisationStatus: 'failed' } },
+        { _id: { $in: acceptedForThisJob } },
+        {
+          $set: {
+            vectorisationStatus: 'pending',
+            vectorisationJob: { jobId, billed: false, requestedAt: new Date() },
+          },
+        },
       );
-      for (const id of missingIds) {
-        errors.push({ productId: id, reason: 'Vectoriser did not return a result for this product' });
+    }
+
+    if (notAccepted.length > 0) {
+      await ProductModel.updateMany(
+        { _id: { $in: notAccepted } },
+        { $set: { vectorisationStatus: 'failed', vectorisationJob: null } },
+      );
+      const fallback = jobId
+        ? 'Not in the accepted list — no callback will ever report this product'
+        : 'Vectoriser returned no job_id, so no callback could be matched';
+      for (const id of notAccepted) {
+        errors.push({ productId: id, reason: rejectionReasons.get(id) ?? fallback });
       }
     }
 
-    log('info', 'vectoriseBulk: completed', {
+    log('info', 'vectoriseBulk: submitted — outcomes arrive on the callback', {
       ...ctx,
-      succeeded,
+      jobId: jobId || null,
+      accepted: acceptedForThisJob.length,
       failed: errors.length,
+      unattributedRejections,
     });
 
     return {
-      succeeded,
+      accepted: acceptedForThisJob.length,
       failed: errors.length,
       total: productIds.length,
       errors,
     };
+  }
+
+  // ── The internal door: payload fetch + the async callback ─────────────────
+
+  /**
+   * Build payloads for a list of product ids — the body of
+   * `POST /api/internal/vectoriser/payloads`.
+   *
+   * ⚠ **No eligibility filter, deliberately.** This serves the SPREADSHEET path:
+   * a human named these ids in a file, and a row silently dropped because the
+   * product is a draft is a row they will never learn about. `buildPayload`
+   * either produces a payload or it does not, and everything else comes back in
+   * `missing` for the caller to report. Eligibility is a jovi-mall-initiated
+   * concern (`prepareForVectorisation`), not a lookup concern.
+   *
+   * ⚠ **It writes nothing.** No status, no credit, no claim ticket. A product
+   * only becomes `pending` when the vectoriser's 202 says it was accepted, and
+   * that answer comes back to `applyCallbackReport`, not here.
+   *
+   * Chunked rather than one `Promise.all` over the whole list: `buildPayload`
+   * runs the better part of a dozen queries per product, so a 500-id sheet
+   * unbounded is several thousand concurrent reads against a pool of 100.
+   */
+  async buildPayloadsFor(productIds: string[]): Promise<PayloadBatch> {
+    const products: VectoriserPayloadEntry[] = [];
+    const missing: string[] = [];
+
+    const CONCURRENCY = 25;
+    for (let i = 0; i < productIds.length; i += CONCURRENCY) {
+      const chunk = productIds.slice(i, i + CONCURRENCY);
+      const settled = await Promise.allSettled(chunk.map(id => this.buildPayload(id)));
+
+      settled.forEach((result, idx) => {
+        const productId = chunk[idx];
+        if (result.status === 'fulfilled' && result.value) {
+          products.push(result.value);
+        } else {
+          missing.push(productId);
+          if (result.status === 'rejected') {
+            log('warn', 'buildPayloadsFor: payload build threw', {
+              productId,
+              error: result.reason?.message ?? String(result.reason),
+            });
+          }
+        }
+      });
+    }
+
+    log('info', 'buildPayloadsFor: done', {
+      requested: productIds.length,
+      built: products.length,
+      missing: missing.length,
+    });
+
+    return { products, missing };
+  }
+
+  /**
+   * Apply the vectoriser's asynchronous report — the body of
+   * `POST /api/internal/vectoriser/callback`.
+   *
+   * This is where a product's vectorisation actually FINISHES. The submit paths
+   * only ever record that the work was taken on.
+   *
+   * ── Idempotency, and why it is a compare-and-set ────────────────────────────
+   *
+   * Every write is `findOneAndUpdate({ _id, 'vectorisationJob.jobId': jobId })`,
+   * which CLAIMS the attempt and reports the pre-update document in one round
+   * trip. A duplicate report, a report for an attempt already superseded by a
+   * newer submit, or one for a product whose vendor switched vectorisation off
+   * meanwhile all match zero documents and land in `ignored`. That is the whole
+   * mechanism — there is no separate seen-job store.
+   *
+   * ⚠ **The claim happens BEFORE the refund, and the order is load-bearing.**
+   * Refunding first and claiming second lets two deliveries of the same report
+   * pay a vendor twice. This way the worst case is a refund that fails after the
+   * claim — one credit not returned, logged at error level — rather than credits
+   * minted by a retry. Same direction as every other money path here: never pay
+   * twice, and make the miss loud.
+   *
+   * ⚠ **`billed` comes off the claim ticket, never off `VECTORISATION_COST`.**
+   * The admin bulk path debits nothing and produces a byte-identical callback
+   * body, so reading the current cost instead would refund credits that were
+   * never spent.
+   *
+   * An unrecognised `status` is recorded in `unknown` and written nowhere.
+   * Guessing between "completed" and "failed" on a value we do not know is how a
+   * product ends up marked indexed with no row behind it — the exact failure the
+   * vectoriser's own `RETURNING` guard exists to prevent on the other side.
+   */
+  async applyCallbackReport(report: VectoriserCallbackReport): Promise<CallbackApplyResult> {
+    const jobId = String(report.job_id);
+    const out: CallbackApplyResult = {
+      jobId,
+      applied: 0,
+      completed: 0,
+      failed: 0,
+      refunded: 0,
+      ignored: [],
+      unknown: [],
+    };
+
+    for (const result of report.results) {
+      const productId = String(result.product_id ?? '');
+      const status = String(result.status ?? '');
+
+      // A malformed id would make Mongoose throw a CastError on the claim, which
+      // would abandon the rest of the report. Treat it as unmatchable instead.
+      if (!productId || !Types.ObjectId.isValid(productId)) {
+        out.unknown.push({ product_id: productId, status });
+        log('warn', 'applyCallbackReport: unusable product_id in report', { jobId, productId });
+        continue;
+      }
+
+      if (status !== 'completed' && status !== 'failed') {
+        out.unknown.push({ product_id: productId, status });
+        log('error', 'applyCallbackReport: unrecognised result status — nothing written', {
+          jobId,
+          productId,
+          status,
+        });
+        continue;
+      }
+
+      const $set =
+        status === 'completed'
+          ? {
+              // `vectorised_id` IS the product id by design (README § 3) — one
+              // logical document per product, so there is no second identity to
+              // invent. Falling back to the product id keeps the "has been
+              // indexed at least once" flag true even if the field is omitted.
+              vectorisedDataId: result.vectorised_id ? String(result.vectorised_id) : productId,
+              vectorisationStatus: 'completed' as const,
+              vectorisationJob: null,
+            }
+          : { vectorisationStatus: 'failed' as const, vectorisationJob: null };
+
+      let claimed;
+      try {
+        claimed = await ProductModel.findOneAndUpdate(
+          { _id: productId, 'vectorisationJob.jobId': jobId },
+          { $set },
+          { new: false, projection: { vendorId: 1, vectorisationJob: 1 } },
+        ).lean();
+      } catch (dbErr: any) {
+        // A DB failure is NOT "ignored" — nothing was claimed, so the product is
+        // still pending and a re-delivery of this report would still resolve it.
+        out.unknown.push({ product_id: productId, status });
+        log('error', 'applyCallbackReport: claim write failed', {
+          jobId,
+          productId,
+          error: dbErr.message,
+        });
+        continue;
+      }
+
+      if (!claimed) {
+        out.ignored.push(productId);
+        log('info', 'applyCallbackReport: no matching claim — ignored', { jobId, productId, status });
+        continue;
+      }
+
+      out.applied++;
+      if (status === 'completed') {
+        out.completed++;
+        continue;
+      }
+
+      out.failed++;
+
+      const wasBilled = claimed.vectorisationJob?.billed === true;
+      if (wasBilled && VECTORISATION_COST > 0) {
+        const vendorId = claimed.vendorId?.toString();
+        if (!vendorId) {
+          log('error', 'applyCallbackReport: refund owed but product has no vendorId', { jobId, productId });
+        } else {
+          try {
+            await creditWalletService.credit(
+              'vendor',
+              vendorId,
+              VECTORISATION_COST,
+              'refund',
+              'vectorisation',
+              productId,
+            );
+            out.refunded++;
+          } catch (creditErr: any) {
+            // Loud on purpose: the claim is already spent, so this credit is not
+            // coming back on a retry of the same report. It needs a human.
+            log('error', 'applyCallbackReport: REFUND FAILED — credit owed to vendor', {
+              jobId,
+              productId,
+              vendorId,
+              amount: VECTORISATION_COST,
+              error: creditErr.message,
+            });
+          }
+        }
+      }
+
+      log('info', 'applyCallbackReport: product failed upstream', {
+        jobId,
+        productId,
+        refunded: wasBilled && VECTORISATION_COST > 0,
+        error: result.error ?? null,
+      });
+    }
+
+    log('info', 'applyCallbackReport: report applied', {
+      jobId,
+      reported: report.results.length,
+      applied: out.applied,
+      completed: out.completed,
+      failed: out.failed,
+      refunded: out.refunded,
+      ignored: out.ignored.length,
+      unknown: out.unknown.length,
+    });
+
+    return out;
   }
 }
 

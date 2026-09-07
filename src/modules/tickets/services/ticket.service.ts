@@ -238,6 +238,25 @@ export class TicketService {
             throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
         }
 
+        /**
+         * Validate the ASSIGNER has permission — must be a follower, or an admin.
+         *
+         * ⚠ Added 2026-09-07 (DOC-PROGRAM § 30). This method had **no ownership check of any
+         * kind**: any authenticated caller who knew a ticket id could reassign that ticket,
+         * and — because the branch below adds the target as a follower — could thereby give
+         * themselves or anyone else read access to a ticket they were never party to.
+         *
+         * Same shape as `updateStatus` and `updateTicket`, deliberately: one rule, one code,
+         * one message pattern. Admins bypass, exactly as they do there — an administrator's
+         * scope is wi-admin's decision, not a follower row here.
+         */
+        if (assignerRole !== ActorRole.ADMIN) {
+            const isFollower = await this.followerService.isFollower(ticketId, assignerUserId);
+            if (!isFollower) {
+                throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Only ticket followers can assign tickets');
+            }
+        }
+
         // Validate assignment rules
         if (targetRole === ActorRole.ADMIN) {
             // Admin assignment: userId is always null here — the pool. A named administrator
@@ -387,6 +406,23 @@ export class TicketService {
         const ticket = await this.ticketRepo.findById(ticketId);
         if (!ticket) {
             throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
+        }
+
+        /**
+         * Validate the caller has permission — must be a follower, or an admin.
+         *
+         * ⚠ Added 2026-09-07 (DOC-PROGRAM § 30). This method checked only `priority_locked`
+         * and `CLOSED`, so on any ticket whose priority an administrator had **not** yet
+         * locked — which is every ticket by default — **any authenticated caller who knew the
+         * id could change its priority**. The lock below is a rule about *which* actor may
+         * re-set an admin-set priority; it was never an ownership check, and nothing else
+         * here was one either.
+         */
+        if (role !== ActorRole.ADMIN) {
+            const isFollower = await this.followerService.isFollower(ticketId, userId);
+            if (!isFollower) {
+                throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Only ticket followers can update priority');
+            }
         }
 
         // Closed tickets are terminal; priority cannot be modified until reopened

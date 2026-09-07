@@ -13,6 +13,14 @@ Reference for closing — and anonymising — the authenticated **customer's** o
 > policy — may describe this as satisfying a legal right. It satisfies a reasonable
 > expectation. Use the word **close**, and say what is kept.
 
+> [!NOTE]
+> **A customer can also close their account from a chat**, since MCP parity step 7 — as a
+> deliberate **two step**: `account_close_preview` (a read) answers `canClose`, the two
+> blockers, and the anonymise-and-retain sentence **already localised**, and only then does
+> `account_close` run. The sentence is written on the backend for the reason this whole
+> paragraph exists: the automation layer has no copy table, and "deleted" is exactly the word
+> it would reach for. Contract: `api-doc/n8n/bot-surface.md` § 16.3.
+
 ---
 
 ## Authentication

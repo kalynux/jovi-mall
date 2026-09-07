@@ -13,6 +13,19 @@ export const AddToCartSchema = z.object({
   variantId: z.string().min(1, 'variantId is required'),
   quantity: z.coerce.number().int().min(1).default(1),
   currency: z.string().min(1).optional(),
+  /**
+   * A negotiated-price lock, minted by the bargaining agent when a haggle closed.
+   *
+   * Opaque here on purpose: it is validated by the negotiation module through the
+   * `negotiated-price` port, not by a shape rule in this file. All that matters at
+   * the edge is that it is a non-empty string somebody presented — a bad one is
+   * refused with a `NEGOTIATION_LOCK_*` code the chat can act on, which is more
+   * useful than a 400 saying it did not match a regex.
+   *
+   * ⚠ Presenting one SETS the line to `quantity` rather than incrementing it; the
+   * lock is bound to a quantity. See `CartService.addToCart`.
+   */
+  negotiationLockRef: z.string().trim().min(1).max(200).optional(),
 });
 
 export type AddToCartInput = z.infer<typeof AddToCartSchema>;

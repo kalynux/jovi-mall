@@ -27,6 +27,8 @@ import { closeRedisClients } from './infra/redis/redis.factory';
 import { planExpiryWorker } from './modules/billing/workers/plan-expiry.worker';
 import { agencyShipmentCapWorker } from './modules/billing/workers/agency-shipment-cap.worker';
 import { registerAgentPlanCapacityConsumer } from './modules/agents/events/agent-plan-capacity.consumer';
+import { registerPlanQuotaConsumer } from './modules/plan-quota/events/plan-quota.consumer';
+import { planQuotaReconcileWorker } from './modules/plan-quota/workers/plan-quota-reconcile.worker';
 import { initializeVendorNotificationEventConsumers } from './modules/notifications/vendor-notification-event-consumer';
 import { initializeAgencyNotificationEventConsumers } from './modules/notifications/agency-notification-event-consumer';
 import { initializeAgentNotificationEventConsumers } from './modules/notifications/agent-notification-event-consumer';
@@ -338,6 +340,16 @@ function startBackgroundWork(): void {
     // and the agency unterminated-shipment soft-cap monitor (alert only, never blocks).
     registerAgentPlanCapacityConsumer();
     agencyShipmentCapWorker.start();
+
+    // Plan quota: bring an owner's catalog and media library inside their plan after a
+    // downgrade — products suspended and files blocked oldest-first-survives, never
+    // deleted. TWO registrations, and both are needed: the consumer is the fast path
+    // (immediate, but on the lossy in-memory bus), the worker is the durability
+    // guarantee (it recomputes wherever the stamped plan disagrees with the live one,
+    // which also catches an admin editing a plan in place — that changes no plan_id and
+    // emits no event at all). Dropping either leaves a real hole.
+    registerPlanQuotaConsumer();
+    planQuotaReconcileWorker.start();
 
     // Vendor notifications: in-app + multi-channel dispatch (incl. storage alerts)
     initializeVendorNotificationEventConsumers();

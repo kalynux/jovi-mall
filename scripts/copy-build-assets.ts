@@ -44,6 +44,10 @@ const ROOT = join(__dirname, '..');
 const ASSET_DIRS: readonly string[] = [
     // Handlebars email bodies, read by `MailService.renderTemplate`.
     'modules/mail/templates',
+    // The negotiation agent's playbook, read at runtime and served to the bargaining
+    // sub-agent as its system prefix. Markdown, and therefore the one asset extension
+    // `test:system` used to skip wholesale - see NON_RUNTIME_EXTENSIONS there.
+    'modules/negotiation/playbook',
 ];
 
 let copied = 0;

@@ -1,5 +1,9 @@
 # Variant Management API
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–26). Corrections are marked inline with ⚠ and a source citation.
+
 > Bargainable pricing (`bargain` / `bargainable`) is new. Dashboard hand-off:
 > [Front-end changelog](../FRONTEND-CHANGELOG-bargainable-pricing.md).
 
@@ -16,7 +20,18 @@ Variants are the SKU-level entities that hold **price**, **stock**, **physical a
 When the **first** variant is created for any product, the backend automatically sets `product.defaultVariantId` to that variant's ID and sets `product.hasVariants = true`. Use `PATCH /products/:id/default-variant` to manually reassign afterward.
 
 **Default Variant on Archive:**
-When the current `defaultVariantId` variant is archived, the backend automatically reassigns `defaultVariantId` to the next active variant (ordered by creation), or clears it if none remain.
+When the current `defaultVariantId` variant is archived, the backend automatically reassigns `defaultVariantId` to another active variant.
+
+> ⚠ **Two details of that sentence were wrong, and both matter.** (1) **The replacement is
+> arbitrary, not the oldest.** `variantRepository.findByProduct` is a bare
+> `find({ productId, deletedAt: null })` with **no `.sort()`**
+> (`variant.repository.mongo.ts:72`), and the controller takes the first `active` row it
+> returns (`vendor-variant.controller.ts:511-512`) — Mongo’s natural order, which is not a
+> promise about `createdAt`. (2) **It is never cleared.** With no active variant left,
+> `nextActive?.id` is `undefined`, and Mongoose drops `undefined` values from a `$set`
+> (`product.repository.mongo.ts:82-86`), so `defaultVariantId` keeps pointing at the variant
+> you just archived. `hasVariants` *is* written correctly to `false`, so **that** is the
+> field to branch on — a non-null `defaultVariantId` is not evidence of a live default.
 
 ---
 
@@ -70,6 +85,7 @@ This is the full shape of a variant object returned by all read endpoints:
       "id": "507f1f77bcf86cd799439040",
       "key": "products/variant-img.jpg",
       "url": "https://storage.example.com/products/variant-img.jpg",
+      "access": "public",
       "mimeType": "image/jpeg",
       "size": 123456,
       "originalName": "red-medium.jpg"
@@ -144,7 +160,7 @@ For the single variant of a `type: "service"` product, read endpoints also retur
 | `status` | `"active"` \| `"archived"` | Archived variants are excluded from listings. For digital variants, `active` requires an uploaded asset |
 | `digital` | object \| undefined | Digital variants only. `{ asset?, maxDownloads, expiresAfterDays }`. `asset` is `{ id, originalName, mimeType, size }` once uploaded; the raw download URL is never exposed here |
 | `serviceConfig` | object \| undefined | Service variant only. `{ durationMinutes, bufferBeforeMinutes, bufferAfterMinutes, bookingMode, maxBookings?, peakHours? }`. `price` is the base price per `durationMinutes`. `maxBookings` is the seats-per-slot, present only for capacity mode |
-| `optionSignature` | string | System-generated — pipe-joined sorted optionValueIds. Empty string `""` for variants with no options |
+| `optionSignature` | string | System-generated at CREATE and never recomputed. Pipe-joined sorted `optionValueIds` when there are options; **the variant’s own `sku`** when there are none; the constant `DEFAULT_VARIANT_SIGNATURE` for a **service** variant (`vendor-variant.controller.ts:178-182`). ⚠ **Never the empty string** — `{ productId, optionSignature }` is a unique index and a product may hold several option-less variants, so a shared constant like `""` would make the second one impossible |
 | `price` | number | Selling price |
 | `compareAtPrice` | number \| undefined | Original/MSRP price — show as "was" price if > price |
 | `bargain` | object \| undefined | The haggling window, `{ minPrice, maxPrice }`. Absent when not configured. **`minPrice` always equals `price`** — it is not a second price. `maxPrice` is the ceiling bargaining may reach and is unrelated to `compareAtPrice`. Still returned when `bargainable` is `false`. See [Bargainable pricing](#bargainable-pricing) |
@@ -332,7 +348,22 @@ Create a new variant for a product.
 | 403 | `CATALOG_PRODUCT_ACCESS_DENIED` | A `fileId` is not owned by this vendor |
 | 404 | `CATALOG_FILE_NOT_FOUND` | A referenced `fileId` does not exist |
 | 409 | `CATALOG_VARIANT_SKU_EXISTS` | SKU already in use by another variant globally |
+| 409 | `CATALOG_PRODUCT_SIMPLE_MODE_LOCKED` | **The product uses the simple editor**, which is single-variant by definition, so a second variant cannot be added |
 | 400 | `VALIDATION_ERROR` | Request body fails schema validation (includes duplicate `fileIds`) |
+
+> ⚠ **`CATALOG_PRODUCT_SIMPLE_MODE_LOCKED` was absent from this page entirely until 2026-09-06**,
+> and it is the refusal a client is most likely to meet on this route: `assertNotSimpleMode`
+> runs before anything else in `VendorVariantController.createVariant`
+> (`vendor-variant.controller.ts:61`, guard at `simple/mode-guard.ts:17-31`).
+>
+> **It is the one error here that carries its own remedy.** `details` is
+> `{ mode: "simple", convertEndpoint: "POST /api/vendor/products/{id}/convert-to-advanced" }`,
+> and the message completes the sentence *"…so adding another variant is not available"*. Render
+> the conversion as an action rather than showing a generic 409 — the vendor is one call away
+> from the thing they were trying to do.
+>
+> The same guard also fires on `PATCH /products/:id/default-variant` (*"choosing a default
+> variant"*) and on the option endpoints (*"adding options"*), for the same reason.
 
 ---
 
@@ -543,7 +574,18 @@ Update a variant. All fields are optional — only provided fields are changed.
 >
 > Conversely, `digitalConfig` is rejected (400) on non-digital variants.
 
-**Cannot be modified:** `productId`, `optionSignature`, `optionValueIds` (changing options requires re-creating the variant)
+**Cannot be modified:** `productId`, `optionSignature`.
+
+> ⚠ **`optionValueIds` IS writable on `PATCH`, and this page said it was not.** The update
+> schema declares it (`variant.validator.ts:133`) and the controller spreads the whole parsed
+> body into the `$set` — only `serviceConfig` and `bargain` are destructured out
+> (`vendor-variant.controller.ts:414-416`). So a PATCH carrying `optionValueIds` rewrites the
+> combination. **`optionSignature` is NOT recomputed** — it is derived once at create
+> (`:180-181`) and never again — so after such a PATCH the variant's stored signature
+> describes a combination it no longer has, and two variants can end up claiming the same one.
+> **Do not send it on a PATCH.** Archive the variant and create a new one, which is what this
+> page has always advised and is still the right advice; what changed is that the platform no
+> longer stops you.
 
 **Success Response `200`:**
 
@@ -569,6 +611,7 @@ Update a variant. All fields are optional — only provided fields are changed.
         "id": "507f1f77bcf86cd799439040",
         "key": "products/variant-img.jpg",
         "url": "https://storage.example.com/products/variant-img.jpg",
+        "access": "public",
         "mimeType": "image/jpeg",
         "size": 123456,
         "originalName": "red-medium.jpg"
@@ -639,7 +682,7 @@ Sending the variant's **current** status is a no-op and returns `200` with `"Var
 
 **Side Effects:**
 
-- **Archiving:** If the archived variant was `product.defaultVariantId`, the backend reassigns `defaultVariantId` to the next active variant (lowest `createdAt`) or clears it if none remain. `product.hasVariants` is updated accordingly.
+- **Archiving:** If the archived variant was `product.defaultVariantId`, the backend reassigns `defaultVariantId` to **an arbitrary** remaining active variant — not the oldest — and **does not clear it** when none remain. `product.hasVariants` is updated correctly and is the reliable signal. See the note in § 1.
 - **Both transitions:** The parent product is re-validated against its activation gate. If the product was `active` and the change leaves it without a valid default variant (or otherwise breaks the activation invariant), the product is demoted to `draft`.
 
 **Success Response `200`:**
@@ -690,7 +733,7 @@ Archive a variant (soft delete). Sets `status` to `"archived"`. Data is preserve
 | `variantId` | string | Variant ObjectId |
 
 **Side Effects:**
-- If the archived variant was `product.defaultVariantId`, the backend automatically reassigns `defaultVariantId` to the next active variant (lowest `createdAt`), or clears it if no other active variants remain
+- If the archived variant was `product.defaultVariantId`, the backend reassigns `defaultVariantId` to **an arbitrary** remaining active variant (the query is unsorted), and **leaves the stale pointer in place** when none remain. Branch on `hasVariants`, not on `defaultVariantId` — see the note in § 1
 - `product.hasVariants` is set to `false` if no active variants remain after archiving
 
 > [!NOTE]
@@ -770,7 +813,7 @@ SKU values must be **globally unique across all variants in the system** — not
 The `optionSignature` field is auto-generated by the backend. It is a pipe-joined (`|`) string of sorted `optionValueIds`. It is used to prevent duplicate option combinations for the same product. **Frontend must never send this field.** It exists solely for the backend to detect and reject duplicate variants within a product.
 
 Examples:
-- Variant with no options: `optionSignature = ""`
+- Variant with no options: `optionSignature` is **the variant’s `sku`**, not `""` — it has to be unique per product because of the `{ productId, optionSignature }` unique index. A **service** variant instead gets the shared `DEFAULT_VARIANT_SIGNATURE` constant, which is why a service product has exactly one variant
 - Variant with options `["id-A", "id-B"]`: `optionSignature = "id-A|id-B"` (sorted alphabetically)
 
 ### Stock Management
@@ -930,25 +973,34 @@ All error responses:
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "CATALOG_VARIANT_SKU_EXISTS",
     "message": "A variant with this SKU already exists",
+    "statusCode": 409,
+    "category": "conflict",
     "details": { "sku": "TSHIRT-RED-M" }
   }
 }
 ```
 
-Validation errors include a `details` array:
+Validation errors carry `details.fields[]`, where `path` is the dot-joined location and `code` is
+the Zod issue kind:
 
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Request validation failed",
-    "details": [
-      { "field": "price", "message": "Price must be a positive number" }
-    ]
+    "statusCode": 400,
+    "category": "validation",
+    "details": {
+      "fields": [
+        { "path": "price", "message": "Price must be positive", "code": "too_small" }
+      ]
+    }
   }
 }
 ```

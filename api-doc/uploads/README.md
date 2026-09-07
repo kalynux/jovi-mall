@@ -186,7 +186,23 @@ and sorting.
 ## Business rules & notes
 
 - The active storage backend is selected by `STORAGE_PROVIDER` (`local` | `firebase` | `cloudinary`);
-  `url` shape varies by provider. For `local`, files are additionally served under `/api/files/<path>`.
+  `url` shape varies by provider. For `local`, files are additionally served under
+  `/api/files/<tree>/<path>` — but **only for the eleven PUBLIC trees**, and the mount is
+  per-tree, not a single static mount over `storage/` (`api/index.ts:580-582`, derived from
+  `PUBLIC_STORAGE_TREES`). Public: `images`, `videos`, `audio`, `documents`, `archives`,
+  `other`, `products`, `variants`, `vendor-policy-documents`, `agency-policy-documents`,
+  `system`. **Private, and served by no static path at all:** `digital`, `shipments`,
+  `ticket-attachments` — a `FileDetail` for one of those carries `url: null` and
+  `access: "authorized"`, and the bytes come from the owning entity's own route. An unknown
+  tree is treated as private.
+- **`access` has a THIRD value, `"quota_blocked"`** (see
+  [../FRONTEND-CHANGELOG-plan-quota.md](../FRONTEND-CHANGELOG-plan-quota.md)). The owner is over
+  their plan's storage allowance and this file falls outside it, so `url` is `null` and the
+  owning entity's authorized route will not help either — it is a **billing** state, not a
+  privacy one and not a missing file. It outranks `"authorized"`: a blocked file in a private
+  tree reports `quota_blocked`. Render a placeholder and a link to the plan page — never a
+  broken image, and never "file deleted", because nothing was deleted and the file returns
+  unchanged the moment the owner upgrades or frees room.
 - Files are **soft-deleted**; a daily cleanup worker performs detach → delete → alert.
 - Upload a file first, then pass its returned `id` where a file is referenced (products, branding,
   KYC, ticket attachments).

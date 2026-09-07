@@ -613,10 +613,18 @@ assertions, no DB) and `npm run verify:bot-surface` (§10, NEEDS Mongo + Redis).
 
 > ### What was built, and the three decisions the section below does not settle
 >
-> **Option 1 was taken, minus the page.** `GET /api/payments/session/:token` serves what a
-> payment page needs — amount, currency, the charged USD figure, `clientSecret`,
-> `publishableKey`, and a `state`. `POST /payments/:transactionId/pay-link` mints the handle;
-> the bot reaches the same operation as `payment_create_pay_link`. The page renders it.
+> **Option 1 was taken — and since 2026-09-07 the page exists too.** This paragraph read
+> *"minus the page"* until then, which was true when written and had become the kind of
+> stale claim that costs somebody an afternoon: `payment_create_pay_link` was described as
+> handing out a link to nothing. The storefront built `/pay/:token` (top level, no session,
+> a real Stripe Payment Element); the cross-repository record is
+> `api-doc/notifications/storefront-routes.md` § 3.
+>
+> `GET /api/payments/session/:token` serves what that page needs — amount, currency, the
+> charged USD figure, `clientSecret`, `publishableKey`, a `state`, and (added at the
+> storefront's request, same day) `paidFor`: what the money is actually for, in the only
+> terms safe to hand a stranger. `POST /payments/:transactionId/pay-link` mints the handle;
+> the bot reaches the same operation as `payment_create_pay_link`.
 >
 > **1 · It takes an opaque HANDLE, not the transaction id.** The obvious move — opening
 > `GET /payments/:transactionId` up — was declined on that route's own written argument:

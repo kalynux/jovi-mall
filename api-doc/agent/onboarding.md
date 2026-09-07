@@ -103,7 +103,7 @@ This step captures the avatar and timezone. Since it is optional, the user can c
 > While set, that file counts as *in use* — it appears under `usage.references` on `GET /api/files/:id`
 > with `entityType: "agent", field: "avatar"`, and cannot be deleted until you detach it
 > (`avatar_file_id: null`). Profile reads return `avatar` as a **resolved file object** —
-> `{ id, key, url, mimeType, size, originalName }` (the same shape product images use) — or `null`; never
+> `{ id, key, url, access, mimeType, size, originalName }` (the same shape product images use) — or `null`; never
 > a bare URL string. See [File Management — the `usage` object](../vendor/file-management.md#get-apifilesid).
 
 #### Request Body (Skipping Step)
@@ -145,15 +145,21 @@ If validation fails, the API responds with a `400 Bad Request` containing detail
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Request validation failed",
-    "details": [
-      {
-        "field": "vehicle_info.vehicle_type",
-        "message": "Required"
-      }
-    ]
+    "statusCode": 400,
+    "category": "validation",
+    "details": {
+      "fields": [
+        {
+          "path": "vehicle_info.vehicle_type",
+          "message": "Required",
+          "code": "invalid_type"
+        }
+      ]
+    }
   }
 }
 ```
@@ -162,9 +168,13 @@ If an invalid step is provided:
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "DELIVERY_ONBOARDING_STEP_INVALID",
-    "message": "Unknown onboarding step: 3"
+    "message": "Invalid onboarding step",
+    "statusCode": 400,
+    "category": "business_rule",
+    "details": { "step": 3, "allowed": [1, 2] }
   }
 }
 ```
@@ -179,9 +189,12 @@ closed**: any submission to `PATCH /api/agent/onboarding/step` returns `409`.
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "AGENT_ONBOARDING_ALREADY_COMPLETED",
-    "message": "Agent onboarding is already completed. Update your details from profile settings instead."
+    "message": "Agent onboarding is already completed. Update your details from profile settings instead.",
+    "statusCode": 409,
+    "category": "conflict"
   }
 }
 ```

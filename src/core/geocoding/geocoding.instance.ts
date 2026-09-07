@@ -14,7 +14,9 @@ import { CachedGeocodingProvider } from './geocoding.cache';
  * - GEO_PROVIDER            : 'chain' | 'nominatim' | 'geoapify' | 'locationiq' | 'google' |
  *                             'mapbox' | 'here' (default 'nominatim'). **'chain' is the
  *                             intended production setting** — see the factory.
- * - GEO_PROVIDER_CHAIN      : failover order for 'chain' (default 'geoapify,locationiq').
+ * - GEO_PROVIDER_CHAIN      : failover order for 'chain' (default 'locationiq,geoapify' —
+ *                             LocationIQ FIRST, reversed by measurement 2026-08-23; see
+ *                             `buildChain` in the factory for why relevance beats rate limits).
  *                             `nominatim` is always appended as the keyless last resort.
  * - GEO_REQUEST_TIMEOUT_MS  : per-request timeout (default 5000)
  * - GEO_DEFAULT_LIMIT       : default search result count (default 5)

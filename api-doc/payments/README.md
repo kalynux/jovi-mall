@@ -380,12 +380,45 @@ only where somebody deliberately minted one, expires, and is superseded by the n
     "chargedAmount": 40, "chargedCurrency": "usd", // what Stripe actually charges
     "clientSecret": "pi_…_secret_…",  // ⚠ only while state is `payable`
     "publishableKey": "pk_live_…",    // ⚠ only while state is `payable`; null if unconfigured
-    "expiresAt": "2026-08-26T21:42:00.000Z" } }
+    "expiresAt": "2026-08-26T21:42:00.000Z",
+    "paidFor": {                      // what the money is for — never null
+      "kind": "order",                // order | booking
+      "reference": "ORD-2026-000046", // the handle the payer can match; null on a legacy row
+      "orderCount": 1,                // >1 when one payment settles a multi-vendor basket
+      "itemCount": 3,                 // null for a booking
+      "sellers": ["Boutique Ndogbong"] // always [] for a booking — see below
+    } } }
 ```
 
 **Both amounts are sent, and a page must show both.** The Stripe account settles in USD while the
 catalogue is priced in XAF, so the number the Payment Element renders is not `amount`. Showing XAF
 alone contradicts the card statement; showing USD alone contradicts the order.
+
+#### `paidFor` — and why it is fields rather than a sentence
+
+Added 2026-09-07, at the storefront's request. The page read, in full, *"Amount due —
+24 000 FCFA."* The payer is **by design** often not the person who ordered, which makes this the
+one payment screen where they have no other way to know what they are paying for — and the one
+screen where they are about to type card details, so a page naming no merchant is shaped exactly
+like a phishing page.
+
+⚠ **The storefront asked for a rendered `description: "3 items from Boutique Ndogbong"` and it
+was declined.** This is the one reader this API cannot localise for: every other page is served
+to somebody with an account and a `preferred_language`, while the holder of a pay link has
+neither and may not exist in the database at all. A sentence composed server-side would be
+English on a page otherwise translated into five languages — English in the very line that says
+what the money is for. **The page composes; this endpoint sends facts.**
+
+⚠ **`sellers` is always empty for a booking, and that asymmetry is deliberate.** A shop's name is
+already a public storefront page, so naming it tells a stranger only that somebody bought
+something. A *service provider's* name is frequently the sensitive fact itself — a clinic, a
+lawyer — and the platform cannot tell which vendors are which. A booking travels as its reference
+and its amount.
+
+**Never in this object, and none of it an oversight:** the buyer (no name, email, phone or
+delivery address), the line items (no titles, SKUs or per-item prices — a count is a fact about
+the basket, a title is a fact about the person who filled it), and the service on a booking.
+`test:payments` asserts each by source scan, because the failure mode is a field *appearing*.
 
 | `state` | What the page does |
 |---|---|

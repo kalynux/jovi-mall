@@ -117,6 +117,19 @@ export const MODELS = Object.freeze({
    */
   SCHEMA_MIGRATION: 'SchemaMigration',
 
+  /**
+   * Monotonic named sequences. One document per sequence key, `_id` IS the key,
+   * and the only write is an upserting `$inc` — so "give me the next number" is a
+   * single atomic round trip rather than a read-then-write race.
+   *
+   * Exists because a human-readable number has to be UNIQUE, and the counting
+   * approach `OrderNumberGenerator` uses (`countDocuments() + 1`) is NOT: two
+   * bookings committed in the same instant both count N and both claim N+1, and
+   * the second loses to the unique index — a failed booking for a customer who
+   * did nothing wrong.
+   */
+  SEQUENCE_COUNTER: 'SequenceCounter',
+
   // Payments
   PAYMENT_TRANSACTION: 'PaymentTransaction',
   REFUND_TRANSACTION: 'RefundTransaction',
@@ -171,6 +184,7 @@ export const MODELS = Object.freeze({
   CREDIT_TRANSACTION: 'CreditTransaction',
   CREDIT_TOPUP: 'CreditTopup',
   PLAN_PURCHASE: 'PlanPurchase',
+  PLAN_QUOTA_STATE: 'PlanQuotaState',
   BILLING_SETTINGS: 'BillingSettings',
 
   // Earnings (commission, escrow & payout ledger)
@@ -211,6 +225,18 @@ export const MODELS = Object.freeze({
   AGENCY_REMITTANCE: 'AgencyRemittance',
   COD_DISCREPANCY: 'CodDiscrepancy',
   COD_TRUST_EVENT: 'CodTrustEvent',
+
+  /**
+   * The bargaining agent's playbook — the instructions served to the negotiation
+   * sub-agent as its system prefix. Authored as a SKILL.md in git and SEEDED here;
+   * the database is what the running service reads, so the wording can change from
+   * a dashboard without a deploy. Append-only versions, one active row per key.
+   */
+  NEGOTIATION_PLAYBOOK: 'NegotiationPlaybook',
+  /** One haggle over one (customer, variant, quantity) line. A ledger, not a policy. */
+  NEGOTIATION_SESSION: 'NegotiationSession',
+  /** How a customer bargains — model-authored traits that outlive the chat memory. */
+  NEGOTIATION_PROFILE: 'NegotiationProfile',
 } as const);
 
 export const COLLECTIONS = Object.freeze({
@@ -282,6 +308,9 @@ export const COLLECTIONS = Object.freeze({
   /** The migration ledger. See the MODELS entry above. */
   SCHEMA_MIGRATION: 'schema_migrations',
 
+  /** Named sequences for human-readable numbers. See the MODELS entry above. */
+  SEQUENCE_COUNTER: 'sequence_counters',
+
   // Payments
   PAYMENT_TRANSACTION: 'payment_transactions',
   REFUND_TRANSACTION: 'refund_transactions',
@@ -332,6 +361,7 @@ export const COLLECTIONS = Object.freeze({
   CREDIT_TRANSACTION: 'credit_transactions',
   CREDIT_TOPUP: 'credit_topups',
   PLAN_PURCHASE: 'plan_purchases',
+  PLAN_QUOTA_STATE: 'plan_quota_states',
   BILLING_SETTINGS: 'billing_settings',
 
   // Earnings (commission, escrow & payout ledger)
@@ -369,6 +399,11 @@ export const COLLECTIONS = Object.freeze({
    * Deleted with the legacy surface at cutover.
    */
   ADMIN_ACTION_LOG: 'admin_action_log',
+
+  // The bargaining agent's playbook. See MODELS.NEGOTIATION_PLAYBOOK.
+  NEGOTIATION_PLAYBOOK: 'negotiation_playbooks',
+  NEGOTIATION_SESSION: 'negotiation_sessions',
+  NEGOTIATION_PROFILE: 'negotiation_profiles',
 } as const);
 
 export type ModelName = (typeof MODELS)[keyof typeof MODELS];

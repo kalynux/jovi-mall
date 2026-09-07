@@ -29,7 +29,9 @@ import { PublicCatalogService, publicCatalogService } from '../../catalog/servic
  * for a product is its **id** — a slug is unique per vendor, not globally, which is why the
  * canonical storefront URL nests products under their store. So `record()` writes the
  * product id, the `PATCH` route still accepts anything, and clients wanting more than one
- * entry should read this list instead. Documented in `api-doc/customer/recently-viewed.md`.
+ * entry should read this list instead. Documented in `api-doc/customer/saved-and-viewed.md` —
+ * one page covering both lists. (This said `recently-viewed.md`, which has never existed,
+ * until 2026-09-07; DOC-PROGRAM F-33.)
  *
  * ── The three properties `test:recently-viewed` pins ─────────────────────────
  *

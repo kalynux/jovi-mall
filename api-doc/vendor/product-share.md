@@ -1,5 +1,9 @@
 # Vendor · Share a product to a chat app
 
+**Verified against source on 2026-09-07** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
+
 `POST /api/vendor/products/:id/share`
 
 Sends one of your products — title, storefront link, and the description with its
@@ -57,15 +61,44 @@ never arrives with a half-open `*` or a severed `</b>`.
 
 ## Responses
 
+**WhatsApp** — `sentTo` is always `null` on this channel:
+
 ```json
 {
   "success": true,
-  "data": { "channel": "whatsapp", "sentTo": "••••3456" },
+  "data": { "channel": "whatsapp", "sentTo": null },
   "message": "Product sent to your whatsapp."
 }
 ```
 
-`sentTo` is a masked hint, never the raw identifier.
+**Telegram** — the vendor's own `@username`, unmasked:
+
+```json
+{
+  "success": true,
+  "data": { "channel": "telegram", "sentTo": "@janes_shop" },
+  "message": "Product sent to your telegram."
+}
+```
+
+> ⚠ **This said *"`sentTo` is a masked hint, never the raw identifier"* and showed `"••••3456"`
+> until 2026-09-07. Both halves were wrong.** The controller returns `target.handle` verbatim
+> (`vendor-product-share.controller.ts:53`), which is `connection.handle` off the messaging
+> connection (`ProductShareService.ts:139`) — **no masking is applied anywhere on this path**.
+>
+> - **Telegram**: the vendor's real `@username`, unmasked.
+> - **WhatsApp**: **always `null`.** The model's own comment is explicit — *"Telegram
+>   `@username`. Always null for WhatsApp, which has no handle."*
+>   (`channel-connection.model.ts:63`). WhatsApp identities are phone ids and no handle is
+>   stored, so there was never a `••••3456` to show.
+>
+> **A client must handle `null`**, and a UI that rendered the masked string as confirmation
+> (*"sent to ••••3456"*) printed nothing at all on the more common channel. The masking helper
+> that produces `••••1234` is real but lives on a different surface
+> (`channel-connections/domain/identity-mask.ts`) and is not called here.
+>
+> This is disclosure in the harmless direction — the handle is the **vendor's own**, returned to
+> the vendor who owns it — but do not carry "sentTo is masked" into any other page.
 
 | `error.code` | Status | When | What to do |
 |---|---|---|---|

@@ -100,6 +100,7 @@ Unknown query parameters are rejected (`400 VALIDATION_ERROR`).
         "id": "6f1a2b3c4d5e6f7a8b9c0d1e",
         "key": "products/abc.jpg",
         "url": "https://cdn.example.com/products/abc.jpg",
+        "access": "public",
         "mimeType": "image/jpeg",
         "size": 245678,
         "originalName": "airmax.jpg"
@@ -330,8 +331,8 @@ same variant at two depots is two rows and this drills into one shelf.
 | Code | HTTP | Meaning |
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | Bad query param, or `:id` is not an ObjectId |
-| `UNAUTHORIZED` | 401 | Missing or invalid token |
-| `FORBIDDEN` | 403 | Wrong role |
+| `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` | 401 | Missing or invalid token |
+| `AUTH_ROLE_NOT_FOUND` | 403 | Wrong role |
 | `INVENTORY_STOCK_LEVEL_NOT_FOUND` | 404 | No such row **for this agency** — another agency's row 404s rather than 403s |
 
 ---
@@ -424,7 +425,7 @@ delivery-agency cascade follows. Hide the button unless `productStatus === "acti
 
 The product's rows **stay on this screen** with `suspension` populated. The goods are
 still in your building, so the row still counts toward
-[depot-deletion protection](#6-how-rows-appear-and-disappear) and toward your storage
+[depot-deletion protection](#8-how-rows-appear-and-disappear) and toward your storage
 fee.
 
 ### Unsuspend
@@ -440,10 +441,12 @@ anything blocks it you get:
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "INVENTORY_PRODUCT_UNSUSPEND_BLOCKED",
-    "statusCode": 422,
     "message": "This product cannot go back on sale yet — the vendor has to resolve the issues below first.",
+    "statusCode": 422,
+    "category": "business_rule",
     "details": {
       "blockers": [
         { "code": "CATALOG_PRODUCT_NO_DELIVERY_AGENCY", "message": "Your connection with this delivery agency needs to be approved (or reapproved) before this product can be activated." }

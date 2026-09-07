@@ -1,12 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { ProductRepositoryMongo } from '../repositories/mongo/product.repository.mongo';
-import { VariantRepositoryMongo } from '../repositories/mongo/variant.repository.mongo';
-import { ProductBookingService } from '../domain/services/booking/ProductBookingService';
-import { SlotLockFacade } from '../domain/services/booking/SlotLockFacade';
-import { AvailabilityService } from '../../booking/services/availability.service';
-import { SlotGeneratorService } from '../../booking/services/slot-generator.service';
-import { BookingService } from '../../booking/services/booking.service';
-import { BookingPriceResolver } from '../domain/services/booking/BookingPriceResolver';
+import { productBookingService } from '../domain/services/booking/product-booking.instance';
 import { requireAuth } from '../../../api/middlewares/auth.middleware';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { createAppError } from '../../../core/errors';
@@ -14,24 +7,13 @@ import { ERROR_CODES } from '../../../core/error-codes';
 
 const router = Router();
 
-// Initialize services
-const productRepository = new ProductRepositoryMongo();
-const variantRepository = new VariantRepositoryMongo();
-const availabilityService = new AvailabilityService();
-const slotGenerator = new SlotGeneratorService();
-const bookingService = new BookingService();
-const priceResolver = new BookingPriceResolver(variantRepository);
-const slotLockFacade = new SlotLockFacade();
-
-const productBookingService = new ProductBookingService(
-  productRepository,
-  availabilityService,
-  slotGenerator,
-  bookingService,
-  priceResolver,
-  variantRepository,
-  slotLockFacade
-);
+/**
+ * ⚠ The seven-dependency assembly that used to sit here moved to
+ * `product-booking.instance.ts` when the bot surface needed the same service. Two
+ * hand-wired copies is two chances to hand it a differently-configured
+ * `AvailabilityService`, which would surface as the two doors disagreeing about when a
+ * product is free.
+ */
 
 /**
  * GET /api/products/:productId/availability

@@ -191,7 +191,7 @@ from `POST /vendor/credits/topups/:id/verify`.
 - [ ] **3-D Secure / redirects**: pass a `return_url` to `confirmPayment`; handle the
       return route by resuming the verify poll for that purchase/top-up id.
 - [ ] **Declines**: a declined card surfaces as a failed initiation/verify
-      (`PAYMENT_CARD_DECLINED` / `PAYMENT_INITIATION_FAILED`) — show the message and a
+      (`PAYMENT_INITIATION_FAILED`) — show the message and a
       retry. See [../errors/README.md](../errors/README.md).
 - [ ] **Tiny amounts**: Stripe enforces a ~**$0.50** minimum charge. A very cheap
       pack may convert below that and fail on Stripe — steer such purchases to mobile

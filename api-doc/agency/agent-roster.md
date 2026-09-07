@@ -230,7 +230,7 @@ than losing them from the list.
     {
       "id": "507f1f77bcf86cd799439011",
       "name": "Jean Bakari",
-      "avatar": { "id": "665f...", "key": "images/2026/07/jean.jpg", "url": "https://cdn.example.com/jean.jpg", "mimeType": "image/jpeg", "size": 20481, "originalName": "me.jpg" },
+      "avatar": { "id": "665f...", "key": "images/2026/07/jean.jpg", "url": "https://cdn.example.com/jean.jpg", "access": "public", "mimeType": "image/jpeg", "size": 20481, "originalName": "me.jpg" },
       "vehicleType": "bike",
       "homeBase": { "label": "Douala — Akwa", "coordinates": [9.7043, 4.0511], "serviceRadiusKm": 12 },
       "trustScore": 92,
@@ -372,7 +372,7 @@ is working today. Filter by `status`, or use `GET /eligible`, for the live view.
         "name": "Jean Bakari",
         "email": "jean@example.com",
         "phone": "+237670000001",
-        "avatar": { "id": "665f...", "key": "images/2026/07/jean.jpg", "url": "https://cdn.example.com/jean.jpg", "mimeType": "image/jpeg", "size": 20481, "originalName": "me.jpg" },
+        "avatar": { "id": "665f...", "key": "images/2026/07/jean.jpg", "url": "https://cdn.example.com/jean.jpg", "access": "public", "mimeType": "image/jpeg", "size": 20481, "originalName": "me.jpg" },
         "status": "active",
         "vehicleInfo": { "vehicle_type": "bike", "plate_number": "LT-4412", "color": "red" },
         "availability": "online",
@@ -409,7 +409,7 @@ rejects an amount above it with `CONTRACT_SETTLEMENT_EXCEEDS_OUTSTANDING`.
 **Success Response** (`200 OK`): `{ "success": true, "data": { "membership": AgentMembershipDto, "agent": AgentProfileDto | null } }`
 
 > `agent.vehicleInfo` here is the **full** shape, including `photo` — a resolved file object
-> (`{ id, key, url, mimeType, size, originalName }`) or `null`. The roster *list* above returns the
+> (`{ id, key, url, access, mimeType, size, originalName }`) or `null`. The roster *list* above returns the
 > photo-less summary instead, so it never reports `photo: null` for a file it did not look up.
 > `color` is a lowercase English token (see [agent/profile.md](../agent/profile.md) for the palette);
 > render your own localized label and swatch.

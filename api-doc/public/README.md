@@ -191,12 +191,12 @@ There is no `401`/`403` path — the routes carry no guard.
 ## Not built (deliberately)
 
 `GET /api/public/authors` was sketched in
-[BACKEND-BLOG-REQUIREMENTS.md](../BACKEND-BLOG-REQUIREMENTS.md) §5d and is **not** implemented —
+[BACKEND-BLOG-REQUIREMENTS.md](./BACKEND-BLOG-REQUIREMENTS.md) §5d and is **not** implemented —
 authors are resolved inline on every article, so while there are two house bylines a separate
 round-trip buys nothing. See [articles.md](./articles.md).
 
 `GET /api/public/coverage` and `GET /api/public/stats` were sketched in
-[BACKEND-REQUIREMENTS.md](../BACKEND-REQUIREMENTS.md) §3 and are **not** implemented. Both carry an
+[BACKEND-REQUIREMENTS.md](./BACKEND-REQUIREMENTS.md) §3 and are **not** implemented. Both carry an
 open product decision (how an uncovered region reads; whether a small count helps or hurts), and
 neither is a correctness risk the way a stale price is. They are additions to this router when those
 decisions are made.

@@ -1,5 +1,9 @@
 # Vendor Google Calendar Connection
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
+
 How a vendor connects their Google Calendar, inspects what was granted, and disconnects. This is part of the **service product / booking** setup.
 
 > **Booking system docs:** [Implementation guide](../booking-implementation-guide.md) · [Service product setup](./products.md#service-products) · [Availability rules](./availability-rules.md) · **Google Calendar connection** (this doc) · [Vendor booking management](./bookings.md) · [Customer booking flow](../customer/bookings.md)
@@ -11,10 +15,24 @@ How a vendor connects their Google Calendar, inspects what was granted, and disc
 | Capability | Calendar required? |
 |------------|--------------------|
 | Fetch available slots (`GET /api/products/:id/availability`) | **No** — works from availability rules alone. Without a connected calendar the vendor's external busy times are simply not subtracted, so slots reflect only the configured rules. |
-| Create a booking (`POST /api/products/:id/book`) | **Yes** — booking creation writes an event to the vendor's Google Calendar. Without a connection this step fails. |
+| Create a booking (`POST /api/products/:id/book`) | **No** — the booking is committed first and the calendar event is mirrored afterwards, best-effort. A vendor with no calendar connected still sells correctly. |
 | Accurate availability (busy times blocked) | **Recommended** — connecting lets the system subtract the vendor's existing Google events from offered slots. |
 
-**Bottom line:** connect the calendar during service-product setup, before customers book.
+> ⚠ **This row said "**Yes** — … Without a connection this step fails" until 2026-09-06, and it
+> was false in the direction that costs a sale.** The calendar write is **Step 5, after the
+> commit, inside a `try`** (`booking.service.ts:130-135`), and a vendor with no calendar
+> connected is caught by name and logged as a warning — *"Booking … created without a calendar
+> event"* (`:158-162`). Nothing is rolled back and no error reaches the customer.
+>
+> **The reason it is safe to be best-effort is worth knowing before anyone "restores" the
+> coupling:** availability derives this product's own occupancy from the **booking rows**, not
+> from the calendar (same comment, `:134-135`). The calendar only ever *adds* the vendor's other
+> commitments on top. Make the booking depend on the write again and a Google outage starts
+> rejecting confirmed sales.
+
+**Bottom line:** connect the calendar during service-product setup — not because booking needs
+it, but because without it the vendor's *other* commitments are invisible and the platform will
+happily book over them.
 
 ---
 
@@ -72,9 +90,20 @@ When that env var is set (e.g. `http://localhost:5173/dashboard/services`), the 
 | Success | `…/dashboard/services?calendar=connected` |
 | Missing `code` | `…?calendar=error&reason=missing_code` |
 | Missing `state` | `…?calendar=error&reason=missing_state` |
-| `state` user mismatch | `…?calendar=error&reason=state_mismatch` |
 | Invalid/expired `state` | `…?calendar=error&reason=invalid_state` |
-| Token exchange failed | `…?calendar=error&reason=connection_failed` |
+| **Vendor pressed Cancel on Google's consent screen** | `…?calendar=error&reason=access_denied` |
+| Token exchange failed, or any other Google error | `…?calendar=error&reason=connection_failed` |
+
+> ⚠ **Two corrections here, 2026-09-06.** `state_mismatch` was listed and **is unreachable** —
+> the callback carries no session to disagree with, and the source says so at
+> `google.routes.ts:189-191`: *"there is no second identity to disagree with. Callers may keep
+> the string; nothing emits it."* A client branching on it never matched.
+>
+> And **`access_denied` was missing**, which is the one a vendor actually hits: Google reports a
+> refusal as `?error=access_denied` with no code, and it is mapped to itself deliberately
+> (`:226-228`) rather than falling through to `missing_code` — *"which tells someone who just
+> pressed Cancel that Google failed to send a code: true, and useless."* Treat it as "the vendor
+> changed their mind", not as an error to report.
 
 The frontend should read `calendar` / `reason` on its landing route, then call `GET /api/vendor/calendar/status` to refresh the panel.
 
@@ -155,8 +184,20 @@ GET /api/vendor/products/:id/service/calendar-status
 ```
 
 The same connection, answered **in the context of one service product**, so a product editor can
-show "this service cannot take bookings until you connect a calendar" without a second lookup of
-which product it is talking about. Auth: `vendor`; the product must belong to the caller.
+prompt for a calendar without a second lookup of which product it is talking about. Auth:
+`vendor`; the product must belong to the caller.
+
+> ⚠ **Do not render this as "this service cannot take bookings until you connect a calendar"** —
+> that sentence was suggested here until 2026-09-06 and it is **false**, for the reason in
+> § "Why connect a calendar?" above: booking creation is committed before the calendar is touched
+> and succeeds without one (`booking.service.ts:130-135`). Prompt with what is actually true —
+> *"connect a calendar so we don't book over your other commitments"*.
+>
+> ⚠ **The route's own source comment calls this endpoint a STUB returning a "placeholder
+> response"** (`vendor-products.routes.ts:545-546`). It is not: `VendorServiceCalendarController`
+> reads the real `ConnectedCalendarAccount`, which is what the shapes below describe. The comment
+> is stale and is **documented rather than edited** here — but do not let it persuade you the
+> endpoint is unfinished.
 
 **Response — connected:** `200 OK`
 

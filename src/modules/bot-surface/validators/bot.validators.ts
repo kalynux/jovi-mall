@@ -2,6 +2,14 @@ import { z } from 'zod';
 import { CONNECTION_CHANNELS } from '../../channel-connections';
 import { TICKET_TYPE_VALUES, TICKET_STATUS_VALUES } from '../../tickets/types/ticket.types';
 import { BOT_ONBOARDING_STEP_VALUES } from '../domain/bot-onboarding';
+import { BOT_CHAT_LIST_MAX } from '../domain/bot-list-window';
+import { PhoneNumberSchema } from '../../../core/validation/phone';
+import { EmailAddressSchema } from '../../../core/validation/email';
+import { ACCOUNT_CLOSURE_CONFIRMATION } from '../../users/user.validator';
+import {
+    CUSTOMER_AGGREGATE_TYPES,
+    CustomerAggregateType,
+} from '../../notifications/models/customer-notification.model';
 
 /**
  * Every body and path parameter the bot surface accepts.
@@ -44,17 +52,24 @@ const quotedReference = z.string().trim().min(1).max(64);
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * ⚠ **There is no `customerId`, `userId` or token field here, and there never may be.**
+ * ⚠ **There is no `customerId` or `userId` field here, and there never may be.**
  *
  * `.strict()` is what makes that structural rather than a convention: a caller that adds
  * one gets a 400 naming the key, instead of a 200 and the quiet belief that it worked.
  * See `bot-identity.service.ts` for why a caller-supplied identity on this surface is
  * account takeover rather than a leak.
  *
+ * ⚠ **`token` is not a counter-example to that rule, and the union below is what keeps it
+ * from becoming one.** A sealed token is not an identity a caller CHOSE; it is one this
+ * service issued, signed, and will verify before believing a word of it — see
+ * `domain/bot-identity-token.ts`. The two forms are mutually exclusive (`.strict()` on
+ * both halves), so a body carrying `channel` AND `token` is a 400 rather than a silent
+ * decision about which one wins. `test:bot-surface` § 9 pins exactly that.
+ *
  * `displayName` and `handle` are cosmetic and go no further than a new
  * `channel_connections` row's display fields. They are NOT used to resolve anybody.
  */
-export const BotIdentityEnvelopeSchema = z
+export const BotRawIdentityEnvelopeSchema = z
     .object({
         channel: z.enum(CONNECTION_CHANNELS),
         externalId: z.string().trim().min(1).max(128),
@@ -73,6 +88,34 @@ export const BotIdentityEnvelopeSchema = z
         language: z.string().trim().max(16).nullish(),
     })
     .strict();
+
+/**
+ * The sealed form — the only one an MCP transport can send.
+ *
+ * ⚠ **This exists because n8n's MCP Server Trigger gives a connected tool node no
+ * per-request context at all** (measured 2026-09-06; the trigger runs *after* the tool).
+ * The model's arguments are the only channel, so the envelope has to survive a trip
+ * through a model — and a raw one there is an account-takeover primitive. The whole
+ * argument is in `domain/bot-identity-token.ts`.
+ *
+ * Bounded at 2048 so a caller cannot make this service HMAC an unbounded string.
+ */
+export const BotSealedIdentityEnvelopeSchema = z
+    .object({ token: z.string().trim().min(1).max(2048) })
+    .strict();
+
+/**
+ * Either form, never a blend.
+ *
+ * ⚠ **Order matters only for the error message, not the outcome** — both halves are
+ * `.strict()`, so exactly one can ever match and a body carrying fields from both matches
+ * neither. The sealed form is tried first because it is the shorter shape and produces the
+ * more legible union error for the caller most likely to get this wrong.
+ */
+export const BotIdentityEnvelopeSchema = z.union([
+    BotSealedIdentityEnvelopeSchema,
+    BotRawIdentityEnvelopeSchema,
+]);
 
 /**
  * The wrapper every request body satisfies.
@@ -97,6 +140,19 @@ export const BotCartAddItemSchema = z
         variantId: objectId,
         /** ADDS to the line. `cart_set_item_quantity` is what sets an absolute value. */
         quantity: z.number().int().min(1).max(999).default(1),
+        /**
+         * The lock the bargaining sub-agent minted when a haggle closed. This is the
+         * door that price actually arrives through — bargaining is chat-only (D-6),
+         * so the storefront has no control that produces one.
+         *
+         * ⚠ It changes the ADDS semantics above: a locked add SETS the line to
+         * `quantity`, because the lock is bound to a quantity and incrementing would
+         * produce one nobody agreed a price for. See `CartService.addToCart`.
+         *
+         * Not an identity and not a price — it names a deal the backend already
+         * validated, so nothing here lets a caller choose what a customer pays.
+         */
+        negotiationLockRef: z.string().trim().min(1).max(200).optional(),
     })
     .strict();
 
@@ -140,15 +196,25 @@ export const BotTransactionParamSchema = z.object({ transactionId: z.string().tr
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * `limit` defaults to 5, not 20.
+ * `limit` defaults to 5, not 20 — and since 2026-09-06 it is also CAPPED at 5.
  *
  * The catalogue's `chat_default_limit`. A chat reply that lists twenty orders is a wall
  * of text nobody reads, and the model paying for those tokens summarises them badly.
  * Every list on this surface defaults the same way.
+ *
+ * ⚠ **The `max` was 100, and a default is not a cap.** A model that decided it needed
+ * "all" of something could ask for a hundred and get them, and on the MCP transport the
+ * only thing telling it not to is a sentence in the server's `instructions` — which is a
+ * rule the model breaks under exactly the pressure that makes it matter. The ceiling is
+ * `BOT_CHAT_LIST_MAX` now, and asking for more is a **400 rather than a silent clamp**:
+ * a caller that believes it requested fifty rows and was handed five would report the
+ * five as the whole answer.
+ *
+ * `domain/bot-list-window.ts` carries the reasoning and the "see the rest" link.
  */
 const chatPage = {
     page: z.number().int().min(1).default(1),
-    limit: z.number().int().min(1).max(100).default(5),
+    limit: z.number().int().min(1).max(BOT_CHAT_LIST_MAX).default(BOT_CHAT_LIST_MAX),
 };
 
 export const BotOrderListSchema = z
@@ -194,6 +260,36 @@ export const BotOrderCancelSchema = z
  * so this surface may only choose from what exists. The list is the same one every
  * notification catalog asserts completeness against at boot.
  */
+/**
+ * `PATCH /profile` — the ONE profile field a chat may write.
+ *
+ * ⚠ **Deliberately narrower than `PATCH /api/customer/profile`, and every omission is a
+ * decision rather than an oversight.** The customer API takes seven fields; six of them are
+ * refused here:
+ *
+ *   - `preferences.language` has its OWN route (`profile_set_language`), and two writers of
+ *     one field is how the narrow one's five-language guard gets bypassed by the wide one.
+ *   - `preferences.marketing_opt_in` overlaps the notification preferences this surface
+ *     already exposes. Same argument.
+ *   - `preferences.currency` — the platform prices in XAF; a customer-chosen currency here
+ *     changes no total and would be a setting that appears to work.
+ *   - `preferences.{ai_tone, compact_mode, ads_compact_mode}` describe a web UI. There is
+ *     no web UI in a chat.
+ *   - `avatarFileId` / `avatarUrl` need an upload path this surface does not have yet.
+ *   - `bio` and `dateOfBirth` are **dropped by `toBotProfileSummary`**, so writing them
+ *     from a chat would let a customer set something they can never read back here.
+ *   - ⛔ `recentProductCode` is SERVER-MANAGED by `recentlyViewedService`, whose own
+ *     docstring explains why a caller-chosen value is a caller-chosen position in a bounded
+ *     list. It must never appear on this surface.
+ *
+ * What is left is the field a customer actually asks to change in a chat: the name the bot
+ * greets them by, most often because onboarding captured a messaging-profile name they do
+ * not use.
+ */
+export const BotProfileUpdateSchema = z
+    .object({ name: z.string().trim().min(1).max(100) })
+    .strict();
+
 export const BOT_LANGUAGES = ['en', 'fr', 'pt', 'es', 'ar'] as const;
 
 export const BotSetLanguageSchema = z.object({ language: z.enum(BOT_LANGUAGES) }).strict();
@@ -222,6 +318,39 @@ export const BotAddAddressSchema = z
     .strict();
 
 export const BotAddressParamSchema = z.object({ addressId: objectId });
+
+/**
+ * `PATCH /addresses/:addressId` — rename it, re-describe it, or re-point it.
+ *
+ * ⚠ **The no-coordinates rule holds here exactly as it does on the add**, and this is the
+ * route where forgetting it would be easiest: the customer API's `PATCH` takes the whole
+ * address including a `geo` object, and mirroring that shape would put the 2dsphere null
+ * back within reach of a caller. Re-pointing an address means naming a **new candidate
+ * handle**, which the controller resolves and rebuilds from — the same path `addresses_add`
+ * takes, so there is one way to write a `geo` on this surface rather than two.
+ *
+ * ⚠ **`isDefault` is absent, and it is absent from the customer API's PATCH too.** It is a
+ * relationship BETWEEN addresses — exactly one may hold it — so setting it means clearing
+ * every sibling. `addresses_set_default` owns that clear-then-set; accepting the flag here
+ * would be a second way to write it, and the one that forgets the other half.
+ *
+ * ⚠ **At least one field is required.** A `.strict()` object of all-optional fields accepts
+ * `{}`, which would spend an idempotency key, write nothing, and answer 200 — a caller
+ * that built the body wrong would read that as success.
+ */
+export const BotAddressUpdateSchema = z
+    .object({
+        label: z.string().trim().min(1).max(50).optional(),
+        /** ⚠ Clearable: `null` removes the line, `undefined` leaves it alone. */
+        addressLine2: z.string().trim().max(200).nullish(),
+        /** Re-point the address at a different place. Same single-use handle as the add. */
+        geoCandidateRef: z.string().trim().min(1).max(128).optional(),
+    })
+    .strict()
+    .refine(
+        (v) => v.label !== undefined || v.addressLine2 !== undefined || v.geoCandidateRef !== undefined,
+        { message: 'Name at least one field to change' },
+    );
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Registration and onboarding (GAP-002)
@@ -304,7 +433,13 @@ export const BotOnboardingSubmitSchema = z
 export const BotGeoSearchSchema = z
     .object({
         q: z.string().trim().min(1).max(300),
-        limit: z.number().int().min(1).max(10).default(5),
+        /**
+         * ⚠ **The second of the two limits, and it was `max(10)` rather than `max(100)`.**
+         * Worth capping with the rest anyway: the address picker renders one row per
+         * candidate as a tappable control, and WhatsApp's list message caps its rows —
+         * so ten candidates is a picker that cannot be drawn, not merely a long one.
+         */
+        limit: z.number().int().min(1).max(BOT_CHAT_LIST_MAX).default(BOT_CHAT_LIST_MAX),
     })
     .strict();
 
@@ -370,6 +505,53 @@ export const BotTicketNoteSchema = z
     .object({ body: z.string().trim().min(1).max(5000) })
     .strict();
 
+/**
+ * ⚠ **`ref`, and there is deliberately no way to send a file id.**
+ *
+ * The same rule `geoCandidateRef` follows one section up, for the same reason and with a
+ * sharper edge. A caller that could name a `files` row directly could attach any file the
+ * customer has ever uploaded — an avatar, a receipt from another ticket — to any ticket
+ * they follow, and nothing downstream would find that odd. A handle is minted by
+ * `/files/inbound`, owned by one account, single-use and thirty minutes old at most.
+ */
+export const BotTicketAttachmentSchema = z
+    .object({ ref: z.string().trim().min(1).max(128) })
+    .strict();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inbound files (Step 7b)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A file the customer sent in the chat, delivered by the automation layer as bytes.
+ *
+ * ⚠ **`contentBase64` is the ONE field on this whole surface that carries a payload rather
+ * than a reference**, and it is why this route needs its own body-parser ceiling in
+ * `app.ts`.
+ *
+ * ⚠ **The cap here sits AT that parser ceiling, deliberately, and must never drop below it.**
+ * It is a character count and the real limit is `BOT_INBOUND_FILE_MAX_BYTES`, applied to the
+ * DECODED buffer in the controller — the only length that means anything. A lower cap here
+ * looks tidier and is wrong: it fires *before* the controller and turns an honest
+ * "that file is too large" into a generic validation failure, for every file between the two
+ * numbers. Set at the parser's ceiling, anything the parser admitted reaches the controller,
+ * so there is exactly one size refusal and it is the one a chat can relay. Measured by
+ * `verify:bot-surface` § 12, which is what caught the narrow band the first version left.
+ *
+ * ⚠ **`mimeType` is what the CALLER claims**, and the upload pipeline re-derives the real
+ * type from the bytes and refuses a mismatch. Nothing here trusts it beyond deciding
+ * whether to spend the pipeline on it at all.
+ */
+export const BotInboundFileSchema = z
+    .object({
+        fileName: z.string().trim().min(1).max(255),
+        mimeType: z.string().trim().min(1).max(128),
+        // 12 MB of characters — `BOT_FILE_BODY_LIMIT`'s own ceiling, so a body the parser
+        // accepted always reaches the controller's decoded-byte check.
+        contentBase64: z.string().min(1).max(12 * 1024 * 1024),
+    })
+    .strict();
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Support routing (GAP-004)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -420,6 +602,96 @@ export const BotBookingCancelSchema = z
     .object({ reason: z.string().trim().max(500).optional() })
     .strict();
 
+/**
+ * `POST /bookings/availability` — a service product's bookable slots.
+ *
+ * ⚠ **The date range is OPTIONAL here and REQUIRED on the customer API**, and that is the
+ * deliberate difference. `GET /api/products/:productId/availability` 400s without both
+ * `fromDate` and `toDate` because a calendar widget always knows which fortnight it is
+ * rendering. A model does not: asking it to compute two ISO-8601 instants is asking it to
+ * do date arithmetic, which is a thing models get wrong quietly — an off-by-one month
+ * answers "no availability" for a product with plenty.
+ *
+ * Omitted, the handler uses now → +`BOT_AVAILABILITY_WINDOW_DAYS`, the same 21 days the
+ * storefront's own booking panel opens with.
+ *
+ * `slotId` is NOT an ObjectId. It is `slot_<startMs>_<endMs>`, minted by
+ * `SlotGeneratorService` and parsed back by it — so it is validated by shape here rather
+ * than by the `objectId` regex every other id on this surface uses.
+ */
+export const BotBookingAvailabilitySchema = z
+    .object({
+        productId: objectId,
+        /** ISO-8601. Defaults to now. */
+        from: z.string().datetime({ offset: true }).optional(),
+        /** ISO-8601. Defaults to `from` + 21 days. */
+        to: z.string().datetime({ offset: true }).optional(),
+        ...chatPage,
+    })
+    .strict()
+    .refine((d) => !(d.from && d.to && new Date(d.from) > new Date(d.to)), {
+        message: 'from must be before or equal to to',
+        path: ['from'],
+    });
+
+/** `slot_<startMs>_<endMs>` — see `SlotGeneratorService.parseSlotId`. */
+const slotId = z
+    .string()
+    .trim()
+    .regex(/^slot_\d{1,15}_\d{1,15}$/, 'Must be a slot id of the form slot_<startMs>_<endMs>');
+
+/**
+ * `POST /bookings` — book a slot.
+ *
+ * ⚠ **There is no `metadata`, and the customer API has one.** `POST /api/products/:id/book`
+ * forwards `req.body.metadata` onto the booking document, and `createBooking` renders
+ * `metadata.notes` into the vendor's Google Calendar event description. A free-form object
+ * authored by a model, landing in a real business's calendar, is not something the customer
+ * asked for — so this surface offers the ONE key that has a defined destination, as a
+ * capped string, and drops the rest.
+ *
+ * ⚠ **There is no `slotId` lock step either.** This route takes the hold itself; see
+ * `BotBookingController.create` for why a chat must never hold one across a turn.
+ */
+export const BotBookingCreateSchema = z
+    .object({
+        productId: objectId,
+        slotId,
+        /** The customer's own words about the appointment. Reaches the vendor's calendar. */
+        notes: z.string().trim().min(1).max(500).optional(),
+    })
+    .strict();
+
+/** `PATCH /bookings/:bookingId/reschedule` — move it to another slot the bot will hold. */
+export const BotBookingRescheduleSchema = z
+    .object({ slotId })
+    .strict();
+
+/**
+ * The money pair, `POST /bookings/:bookingId/{pay,pay-balance}`.
+ *
+ * Mirrors `InitiateBookingPaymentSchema` rather than importing it, for the reason every
+ * other schema here is restated: the customer API's `channel` carries `cardToken`, and a
+ * card token has no business arriving from a chat transport. `customerName` goes too — the
+ * platform knows the customer's name and does not need a model's version of it.
+ *
+ * ⚠ **`phoneOperator` must be ASKED, never guessed.** Sending MTN for an Orange number
+ * reaches the customer as "payment declined", and the catalogue says so on
+ * `payment_initiate` for the same reason.
+ */
+export const BotBookingPaySchema = z
+    .object({
+        gateway: z.enum(['NOTCHPAY', 'MYCOOLPAY', 'STRIPE']),
+        phoneNumber: z.string().trim().min(1).max(20).optional(),
+        phoneOperator: z.enum(['MTN', 'ORANGE', 'MOOV']).optional(),
+        customerEmail: z.string().trim().email().max(254).optional(),
+    })
+    .strict()
+    .refine((d) => d.gateway === 'STRIPE' || Boolean(d.phoneNumber), {
+        message: 'phoneNumber is required for mobile money payments',
+        path: ['phoneNumber'],
+    });
+
 /** ⚠ `delivery` takes a SHIPMENT id, never an order id. Same rule as the customer API. */
 export const BotReviewEligibilitySchema = z
     .object({
@@ -449,6 +721,29 @@ export const BotReviewCreateSchema = z
     })
     .strict();
 
+/**
+ * `POST /reviews/list` — the customer's own reviews, every status by default.
+ *
+ * ⚠ **Every status is the point of this list, not a permissive default.** A customer who
+ * wrote a review and cannot find it on the product page has no other way to learn it is
+ * simply waiting for a moderator — which is the reason the storefront's own page exists
+ * too. Narrowing to `published` by default would hide exactly the row somebody asks about.
+ *
+ * `status` is nonetheless offered, because "did mine go up?" is a real question and
+ * answering it by listing everything for the model to filter is four rows to discard.
+ *
+ * ⚠ There is no `subjectType` filter and it would be a trap if there were: a delivery
+ * review's `status` does not mean what it says (see `toBotReviewDto`), so a filter pairing
+ * the two would invite `{ subjectType: 'delivery', status: 'published' }` — a query whose
+ * name promises a page nothing will ever appear on.
+ */
+export const BotReviewListSchema = z
+    .object({
+        status: z.enum(['pending', 'published', 'rejected']).optional(),
+        ...chatPage,
+    })
+    .strict();
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Notification preferences
 // ─────────────────────────────────────────────────────────────────────────────
@@ -469,6 +764,37 @@ export const BotReviewCreateSchema = z
  * customer is the counterparty to somebody else's action there, not the owner of a
  * dashboard. Only progress reporting is gated.
  */
+/**
+ * `POST /notifications/list` — the inbox.
+ *
+ * ⚠ **`aggregateType` is DERIVED from `CUSTOMER_AGGREGATE_TYPES`, never re-typed**, which
+ * is the rule the notification model states about its own Mongoose enum and the reason the
+ * agent stack's eight `agent_contract.*` situations were once undeliverable.
+ *
+ * It is not academic here: the customer API's own list filter hardcoded
+ * `['booking','order','shipment','payment']` and GAP-012 added `ticket` to the union
+ * without it, so a customer on the website could not filter to their ticket notifications
+ * at all. Copying that literal would have reproduced the defect on a second surface.
+ */
+export const BotNotificationListSchema = z
+    .object({
+        /** `true` narrows to unread. There is deliberately no "read only" — nobody asks. */
+        unreadOnly: z.boolean().optional(),
+        /**
+         * ⚠ Cast to a non-empty tuple **of the union type**, not of `string`. The looser
+         * `as [string, ...string[]]` (used elsewhere in this file for the ticket enums)
+         * compiles and then infers `string`, so every call site needs its own cast back —
+         * and a cast back is a place to write the wrong type. This keeps the literals.
+         */
+        aggregateType: z
+            .enum(CUSTOMER_AGGREGATE_TYPES as unknown as readonly [CustomerAggregateType, ...CustomerAggregateType[]])
+            .optional(),
+        ...chatPage,
+    })
+    .strict();
+
+export const BotNotificationParamSchema = z.object({ notificationId: objectId });
+
 export const BotNotificationPreferencesSchema = z
     .object({
         channel: z.enum(['email', 'telegram', 'whatsapp', 'none']).optional(),
@@ -518,3 +844,122 @@ export const BotMessagingNotifySchema = z
 
 /** Routes that take no arguments at all still reject a stray key. */
 export const BotNoArgsSchema = z.object({}).strict();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Saved payment methods
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The three mobile-money networks the storefront offers, and the only values this surface
+ * will save.
+ *
+ * ⚠ **Copied from `frontend/landing`'s own `MOMO_PROVIDERS`**, which is a hand-typed list
+ * there too — the backend column is a free `String`, so nothing checks either side. A
+ * fourth network added on the website is a value this schema will refuse until it is added
+ * here as well.
+ */
+export const BOT_WALLET_PROVIDERS = ['mtn_momo', 'orange_money', 'moov_money'] as const;
+
+/**
+ * `POST /payment-methods` — save a mobile-money wallet.
+ *
+ * ── WHY THERE IS NO CARD PATH, AND WHY THAT IS NOT CAUTION ──────────────────
+ * `POST /api/me/payment-methods` requires `gateway_customer_id` and
+ * `gateway_instrument_id`. For a CARD those are produced by the payment gateway's own SDK
+ * running in a browser, after the shopper types a number the platform never sees. A chat
+ * has no browser and no SDK, so there is no honest way for a chat caller to hold one — a
+ * model asked for those two fields would supply something invented.
+ *
+ * For a WALLET they are not tokens at all: the storefront sends the customer's E.164 number
+ * as **both** values, because for mobile money the customer and the instrument are the same
+ * thing. So this route takes the number and composes the rest server-side.
+ *
+ * ⚠ **`display_label` and `last4` are composed here too, not accepted.** They are what a
+ * chat will read back out to the customer, and a model that wrote its own label could
+ * produce a wallet named after the wrong network — which is then the label the customer
+ * picks at checkout.
+ */
+export const BotPaymentMethodAddSchema = z
+    .object({
+        provider: z.enum(BOT_WALLET_PROVIDERS),
+        /**
+         * The wallet's own number.
+         *
+         * ⚠ `PhoneNumberSchema` rather than a loose string, and it is the platform's own —
+         * it normalises formatting away and then REFUSES anything that is not strict E.164.
+         * The value is stored as the thing a gateway will later be asked to debit, so a
+         * locally-formatted number saved today is a payment that fails at checkout weeks
+         * later with nothing to point at. Refusing at the door is the only cheap moment.
+         */
+        phoneNumber: PhoneNumberSchema,
+        /** Make it the one checkout reaches for first. */
+        makeDefault: z.boolean().optional(),
+    })
+    .strict();
+
+export const BotPaymentMethodParamSchema = z.object({ methodId: objectId });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Contact changes — what the account signs in with (MCP parity step 6)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `PATCH /contact/email` — open a change of login email.
+ *
+ * ⚠ **`EmailAddressSchema`, the platform's own, rather than a loose string.** It normalises
+ * and then REFUSES anything that is not RFC-shaped, which is the only cheap moment: the
+ * value becomes what `POST /auth/login` resolves the account by, and an address that this
+ * door accepts and login cannot resolve is an account nobody can sign into. The same
+ * argument `BotPaymentMethodAddSchema` makes about E.164.
+ *
+ * ⚠ **The address is NOT clearable here, and that is the customer API's rule inherited
+ * whole** (`user.validator.ts`): clearing a login identifier is an administrator's
+ * operation, because a self-service path that could remove the last one lets a person lock
+ * themselves out with no way back. `clearable()` would be exactly the wrong helper.
+ */
+export const BotContactEmailSchema = z.object({ email: EmailAddressSchema }).strict();
+
+/**
+ * `PATCH /contact/phone` — open a change of login phone.
+ *
+ * ⚠ **Requesting is not confirming, and on this surface the gap is wider than it looks.**
+ * The proof the platform accepts is a WhatsApp connection whose identity IS the new number
+ * (`ContactChangeService.assertPhoneProved`) — there is no SMS provider in this service and
+ * a template message to a stranger's number would need a credit wallet a customer does not
+ * have. So a customer chatting on Telegram, or on WhatsApp from their OLD number, cannot
+ * complete this from where they are standing. See `BotContactController.changePhone`.
+ */
+export const BotContactPhoneSchema = z.object({ phone: PhoneNumberSchema }).strict();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Messaging connections and account closure (MCP parity step 7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `DELETE /connections/:channel`.
+ *
+ * The enum is `CONNECTION_CHANNELS`, imported rather than spelled out, so a third channel
+ * added to that module is accepted here without an edit — and, more to the point, so this
+ * schema cannot come to disagree with the ladder that resolves the caller.
+ */
+export const BotConnectionParamSchema = z.object({ channel: z.enum(CONNECTION_CHANNELS) });
+
+/**
+ * `POST /account/close` — irreversible, and the phrase is the whole guard.
+ *
+ * ⚠ **The literal is the platform's own `ACCOUNT_CLOSURE_CONFIRMATION`, imported**, so this
+ * surface cannot come to demand a different phrase from the storefront. It is deliberately
+ * NOT translated: it is a token rather than a sentence — the thing the flow sends after the
+ * customer has tapped a button, exactly as `bot-action-id.ts` argues a determined answer
+ * must be an untranslated id and never a typed word. What the CUSTOMER reads is the
+ * localised consequence in `botChrome('accountClosurePrompt')`, which the flow shows first.
+ *
+ * ⚠ **Not the password, and that is the customer API's reasoning inherited whole**
+ * (`user.validator.ts`): customers on this platform are passwordless by default and sign in
+ * through this very bot, so a password gate would make closure impossible for most of the
+ * people entitled to it. The phrase does the one job a confirmation can do — it makes the
+ * request impossible to send by accident.
+ */
+export const BotAccountCloseSchema = z
+    .object({ confirm: z.literal(ACCOUNT_CLOSURE_CONFIRMATION) })
+    .strict();

@@ -1,5 +1,11 @@
 # Vendor Product Management API
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation. Re-opened on
+the same date to take `product-upload-flow.md`'s five inherited rows, which name endpoints this
+page owns — the retry error list and the `pending` write lock.
+
 Complete API reference for managing products in the Jovi Mall multi-vendor platform.
 
 > [!IMPORTANT]
@@ -34,6 +40,27 @@ Complete API reference for managing products in the Jovi Mall multi-vendor platf
 - [Activation Requirements](#activation-requirements)
 - [Error Codes](#error-codes)
 
+### Product routes documented on their own page
+
+`/api/vendor/products/*` is served by one router and documented across seven pages. These are
+the ones **not** below, so that a reader on this page can find them:
+
+| Routes | Page |
+|---|---|
+| `POST` · `GET` · `DELETE /:id/shipping` | [shipping.md](./shipping.md) — parcel weight and dimensions |
+| `POST /:id/share` | [product-share.md](./product-share.md) — send a product to **your own** WhatsApp or Telegram |
+| `POST /simple` · `PATCH /:id/simple` · `POST /:id/convert-to-advanced` | [simple-products.md](./simple-products.md) |
+| `POST` · `GET /:id/variants`, `GET` · `PATCH` · `DELETE /:productId/variants/:variantId`, `PATCH …/status`, `…/service/config` | [variants.md](./variants.md) |
+| `POST` · `GET /:id/availability-rules`, `PATCH` · `DELETE /availability-rules/:ruleId`, `PATCH …/toggle` | [availability-rules.md](./availability-rules.md) |
+| `GET /:id/service/calendar-status` | [calendar.md](./calendar.md) |
+| `POST` · `PUT` · `DELETE /:productId/variants/:variantId/digital/asset`, `PATCH …/digital/config` | [digital-products.md](./digital-products.md) |
+
+> ⚠ **Added 2026-09-06** (DOC-PROGRAM F-17 class 6). Five of the seven pages were already
+> linked from somewhere in the prose below; **`shipping.md` and `product-share.md` were not**,
+> and there is no `vendor/README.md` index to fall back on. `product-share.md` had **no inbound
+> link anywhere in `api-doc/`** — a fully specified page for a live endpoint, reachable only by
+> listing the directory.
+
 ---
 
 ## Product Object Shape
@@ -61,6 +88,7 @@ This is the full shape of a product object returned by all read endpoints.
       "id": "507f1f77bcf86cd799439030",
       "key": "products/abc123.jpg",
       "url": "https://storage.example.com/products/abc123.jpg",
+      "access": "public",
       "mimeType": "image/jpeg",
       "size": 245678,
       "originalName": "cover.jpg"
@@ -76,14 +104,14 @@ This is the full shape of a product object returned by all read endpoints.
 }
 ```
 
-> **Note:** The `GET /api/vendor/products/:id` endpoint returns fully populated `files` objects (id, key, url, mimeType, size, originalName) instead of bare `fileIds`. The list endpoint (`GET /api/vendor/products`) also returns populated file objects, but under the field name `fileIds` and with a **trimmed payload shape tailored to the products grid/list UI** — see [List Products](#list-products) for the exact response.
+> **Note:** The `GET /api/vendor/products/:id` endpoint returns fully populated `files` objects (id, key, url, access, mimeType, size, originalName) instead of bare `fileIds`. The list endpoint (`GET /api/vendor/products`) also returns populated file objects, but under the field name `fileIds` and with a **trimmed payload shape tailored to the products grid/list UI** — see [List Products](#list-products) for the exact response.
 
 **Vectorisation fields:**
 
 | Field | Type | Values | Description |
 |-------|------|--------|-------------|
 | `vectorisationEnabled` | boolean | `true` / `false` | Opt-in flag. Vendor must set this to `true` for vectorisation to run. Defaults to `false`. |
-| `vectorisationStatus` | string | `not_started` / `pending` / `completed` / `failed` | Current pipeline state. Read-only from the frontend — managed by the backend. |
+| `vectorisationStatus` | string | `not_started` / `pending` / `completed` / `failed` / `skipped_no_credits` | Current pipeline state. Read-only from the frontend — managed by the backend. |
 | `vectorisedDataId` | string \| null | — | External ID returned by the vectoriser service once `vectorisationStatus` is `completed`. `null` until then. |
 
 > **Note on async behaviour:** Vectorisation never blocks the API response. After a create or update call, the product is saved first and the response is returned immediately. The vectorisation pipeline runs in the background. Poll `GET /api/vendor/products/:id` to check `vectorisationStatus` if you need to know when it completes.
@@ -188,7 +216,7 @@ GET /api/vendor/products
 > **The list endpoint returns a trimmed payload tailored to the products grid/list UI.**
 > Only the fields the grid/list view and row actions consume are included. To get the full product object — `vendorId`, `slug`, `description`, `tags`, `seo`, `defaultVariantId`, `digitalConfig`, `delivery` (`{ agencyId, freeDelivery }`), `vectorisedDataId`, `createdAt`, `updatedAt`, etc. — call `GET /api/vendor/products/:id`. (Service config + price live on the variant.)
 >
-> File performance: `fileIds` is populated with full `FileDetail` objects (id, key, url, mimeType, size, originalName), resolved in a **single batched query** across the whole page — no N+1 lookups.
+> File performance: `fileIds` is populated with full `FileDetail` objects (id, key, url, access, mimeType, size, originalName), resolved in a **single batched query** across the whole page — no N+1 lookups.
 
 **Response item shape:**
 
@@ -198,11 +226,12 @@ GET /api/vendor/products
 | `title` | string | Product display name. |
 | `type` | `"physical" \| "digital" \| "service"` | Drives placeholder icon choice and type label. |
 | `status` | `"draft" \| "active" \| "archived" \| "pending_review" \| "suspended"` | Passed to `StatusBadge`; used for client-side filtering. |
+| `mode` | `"simple" \| "advanced"` | ⚠ **Present on every row and missing from this table until 2026-09-06** (`ProductListService.ts:87`). It decides which edit route the row action opens: a `simple` product **rejects** the variant and option endpoints, so sending a row into the advanced editor is a dead end. |
 | `category` | string | Category label/badge text. |
 | `fileIds` | `FileDetail[]` | Populated product images. Empty array when none. Each entry: `{ id, key, url, mimeType, size, originalName? }`. The frontend's `ProductThumbnail` shows the first entry. |
 | `hasVariants` | boolean | Drives the "Has variants" / "Variants" badge. |
 | `vectorisationEnabled` | boolean | Vendor opt-in flag. Passed to `VectorisationBadge`. |
-| `vectorisationStatus` | `"not_started" \| "pending" \| "completed" \| "failed"` | Indexing state. Passed to `VectorisationBadge`; row edit menu is locked while `pending`. |
+| `vectorisationStatus` | `"not_started" \| "pending" \| "completed" \| "failed" \| "skipped_no_credits"` | Indexing state. Passed to `VectorisationBadge`; row edit menu is locked while `pending`. |
 
 **Response `200`:**
 
@@ -215,12 +244,14 @@ GET /api/vendor/products
       "title": "Blue T-Shirt",
       "type": "physical",
       "status": "active",
+      "mode": "advanced",
       "category": "Apparel",
       "fileIds": [
         {
           "id": "507f1f77bcf86cd799439030",
           "key": "products/abc123.jpg",
           "url": "https://storage.example.com/products/abc123.jpg",
+          "access": "public",
           "mimeType": "image/jpeg",
           "size": 245678,
           "originalName": "cover.jpg"
@@ -336,10 +367,21 @@ All products start in `draft` status. The `type` cannot be changed after creatio
 > **Vectorisation on create:** The product is saved first and the `201` response is returned immediately. Vectorisation then runs asynchronously in the background — no action required from the frontend. `vectorisationStatus` will be `not_started` on fresh drafts (vectorisation only triggers once the product is active and `vectorisationEnabled` is `true`).
 
 **Error Responses:**
+- `403 CATALOG_PRODUCT_ACCESS_DENIED` — the vendor does not own this product
+- `403 BILLING_LIMIT_EXCEEDED` — **the plan's active-product cap is reached.** `details` carries
+  `{ limit, current }` and the message names the plan: *"Your 'starter' plan allows up to N active
+  products. Upgrade to add more."*
 - `400 VALIDATION_ERROR` — Request body failed schema validation (includes duplicate `fileIds`)
 - `400 CATALOG_IMAGE_LIMIT_EXCEEDED` — More images than the per-type cap (physical/service 7, digital 1)
 
----
+> ⚠ **`BILLING_LIMIT_EXCEEDED` was absent from this list until 2026-09-06, and it is the refusal
+> a vendor is most likely to hit.** The two `400`s are malformed-request cases a working client
+> never produces; this `403` is a *correct* request refused by the plan, and it is checked
+> **before** the product is created — `assertCanAddProduct` runs against
+> `countActiveByVendor` at `vendor-product.controller.ts:158-159` (and identically for simple
+> products at `vendor-simple-product.controller.ts:129`). Show the upgrade path, not a generic
+> error. The cap itself is `max_active_products` on the plan; `null` means unlimited and skips
+> the check entirely (`entitlement.service.ts:80-91`).
 
 ### Update Product
 
@@ -555,6 +597,25 @@ PATCH /api/vendor/products/:id/status
 | `CATALOG_DIGITAL_VARIANT_LIMIT_EXCEEDED` | Digital product has more than 5 active variants |
 | `CATALOG_PRODUCT_SERVICE_NO_DURATION` | Service product has no `durationMinutes` |
 | `CATALOG_PRODUCT_SERVICE_NO_CAPACITY` | Service product in `capacity` mode has no `maxBookings` (≥ 1) |
+| `CATALOG_PRODUCT_SERVICE_NO_AVAILABILITY` | Service product has no availability rule. **Pairs with the one above** — setting a duration is not enough |
+| `CATALOG_PRODUCT_VENDOR_SUSPENDED` | The owning **vendor** is suspended. Universal, every product type, and nothing the vendor can do — an administrator must reinstate the account |
+| `CATALOG_PRODUCT_AGENCY_STORAGE_INFINITE_STOCK` | The product is fulfilled from agency storage and a variant still allows unlimited stock |
+
+> ⚠ **The last three were missing from this table until 2026-09-06.** The activation gate is one
+> function — `ProductStatusValidationService.collectActivationBlockers`, which `validate()`
+> delegates to — and it raises **thirteen** distinct codes; this table listed ten of them.
+> **[Activation Requirements](#activation-requirements) below was corrected to all thirteen
+> earlier the same day and this table was not**, so the page carried the complete list in its
+> summary section and an incomplete one at the endpoint that actually returns them.
+>
+> `CATALOG_PRODUCT_VENDOR_SUSPENDED` is the costly omission: it is **universal**, it is not
+> something the vendor can clear, and a client pre-validating against this table would show a
+> suspended vendor a checklist of things to fix that would never let the product activate.
+>
+> ⚠ Note `CATALOG_PRODUCT_INVALID_STATE` and `CATALOG_PRODUCT_INVALID_PICKUP_LOCATION` are in
+> this table but are **not** activation blockers — they are transition and write-time
+> validations. This table is the endpoint's whole `422` surface, which is a superset of the
+> thirteen.
 
 ---
 
@@ -665,6 +726,7 @@ Sets which variant is used for display, pricing preview, and as the starting sel
 **Error Responses:**
 - `404 CATALOG_PRODUCT_NOT_FOUND` — Product not found
 - `404 CATALOG_VARIANT_NOT_FOUND` — Variant not found, is archived, or belongs to a different product
+- `409 CATALOG_PRODUCT_SIMPLE_MODE_LOCKED` — **the product uses the simple editor**, which has exactly one variant, so there is no default to choose. ⚠ **Absent from this list until 2026-09-06** — `assertNotSimpleMode(product, 'choosing a default variant')` runs first (`vendor-product.controller.ts:302`). `details` carries `{ mode: "simple", convertEndpoint: "POST /api/vendor/products/{id}/convert-to-advanced" }`, so offer the conversion rather than a generic 409.
 
 ---
 
@@ -1107,6 +1169,15 @@ Both routes share the same backend logic — they run the same eligibility check
 | `pending` | The backend has accepted the job and is calling the vectoriser |
 | `completed` | Successfully vectorised. `vectorisedDataId` is populated. |
 | `failed` | All retry attempts failed. An admin can trigger re-vectorisation via the reconciliation script or the admin bulk endpoint. |
+| `skipped_no_credits` | The vendor's credit balance was too low, so the product **saved normally** and was never sent to the vectoriser. Not an error — the write returned `200`/`201`. Surface a *"top up to enable AI search"* hint and retry after a top-up. |
+
+> [!WARNING]
+> **`skipped_no_credits` is TERMINAL and this page listed only four states until 2026-09-06.**
+> `VectorisationStatus` (`product.model.ts:26`) has **five**. The omission mattered in two
+> directions: `billing.md` and `billing-overview.md` both already told clients to detect this exact
+> value, so the two pages contradicted each other; and the polling helper below treats only
+> `completed` and `failed` as terminal, so a `skipped_no_credits` product polls for a full 60
+> seconds and then throws **"Vectorisation timed out"** — a credit problem reported as an outage.
 
 ### Polling for Completion
 
@@ -1120,6 +1191,8 @@ async function waitForVectorisation(productId) {
     const { data } = await res.json();
     if (data.vectorisationStatus === 'completed') return data.vectorisedDataId;
     if (data.vectorisationStatus === 'failed') throw new Error('Vectorisation failed');
+    // Terminal too — the product saved fine, it was simply never indexed. Do NOT keep polling.
+    if (data.vectorisationStatus === 'skipped_no_credits') throw new Error('Insufficient credits');
     await new Promise(r => setTimeout(r, 5000));
   }
   throw new Error('Vectorisation timed out');
@@ -1135,6 +1208,29 @@ The backend automatically re-vectorises on:
 - `vectorisationEnabled` flipped from `false` to `true` (via either `PATCH /:id` or `PATCH /:id/vectorisation`) — runs the enable flow immediately
 
 It does **not** automatically retry a `failed` product. Vendors can manually trigger a retry via the dedicated retry endpoint (`POST /:id/vectorisation/retry`), or admins can use the bulk-vectorise endpoint.
+
+### ⚠ `pending` LOCKS THE WHOLE PRODUCT — `409 CATALOG_PRODUCT_VECTORISATION_PENDING`
+
+While `vectorisationStatus === 'pending'`, **every write on that product is refused with a
+`409`**, not just the vectorisation toggle. The guard is one middleware,
+`requireProductEditable` (`require-product-editable.middleware.ts:49-53`), attached to **more
+than twenty routes** on the vendor product router — the product `PATCH`, `PATCH /:id/simple`,
+`POST /:id/convert-to-advanced`, `PATCH /:id/status`, `PATCH /:id/default-variant`,
+`POST /:id/duplicate`, `DELETE /:id`, both vectorisation routes, and **every variant, option and
+option-value write**.
+
+> ⚠ **This was documented in only two places until 2026-09-06** — the bargain editor note and
+> the vectorisation-toggle error list — and was absent from the error table of every route
+> above. A dashboard that surfaces the 409 on the toggle and lets a vendor edit a variant during
+> the same window shows an unexplained failure on a screen that never mentions vectorisation.
+>
+> **It is short-lived and it is not an error condition** — treat it as *busy*, not *broken*.
+> Poll `GET /:id/vectorisation/status` and re-enable the form, rather than surfacing a hard
+> failure.
+>
+> ⚠ **Two routes are deliberately NOT behind it**: `GET`s (reads never lock) and
+> `POST /:id/share`, because sharing reads a product rather than editing one
+> (`vendor-products.routes.ts:161`).
 
 ### Vectorisation Endpoints
 
@@ -1257,20 +1353,50 @@ Manually resubmit the product payload to the vectoriser. This is useful when the
     "vectorisationStatus": "pending",
     "vectorisedDataId": null
   },
-  "message": "Retry scheduled. The vectoriser will be called in the background."
+  "message": "Retry scheduled. The vectoriser is being called in the background."
 }
 ```
 
-**Error Responses `422` (`CATALOG_PRODUCT_VECTORISATION_NOT_ELIGIBLE`):**
+**Error Responses:**
+
+| Status | `error.code` | When |
+|---|---|---|
+| `404` | `CATALOG_PRODUCT_NOT_FOUND` | No such product, or it is not this vendor's (`vendor-product.controller.ts:519-520`) |
+| `422` | `CATALOG_PRODUCT_VECTORISATION_NOT_ELIGIBLE` | The product failed the eligibility check — see the ⚠ below, because this one **changes state** |
+
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "CATALOG_PRODUCT_VECTORISATION_NOT_ELIGIBLE",
-    "message": "Product is not eligible for vectorisation. Ensure it is active, vectorisation is enabled, and the title/description/category are set."
+    "message": "Product is not eligible for vectorisation. Vectorisation has been disabled — ensure the product is active and has a title, description, and category, then re-enable vectorisation.",
+    "statusCode": 422,
+    "category": "business_rule",
+    "details": {
+      "state": {
+        "vectorisationEnabled": false,
+        "vectorisationStatus": "not_started",
+        "vectorisedDataId": null
+      }
+    }
   }
 }
 ```
+
+> ⚠ **THIS 422 IS NOT A NO-OP — it has already switched `vectorisationEnabled` OFF**, and this
+> section documented it as a plain refusal until 2026-09-06. `prepareForVectorisation` flips the
+> flag and resets the status when it finds the product ineligible, *before* the controller
+> raises (`vendor-product.controller.ts:522-534`). So a client that shows this error and leaves
+> its toggle rendered as "on" is now out of sync with the server: **re-read the product, or read
+> `error.details.state`**, which is the post-flip row and is carried for exactly this reason.
+>
+> Two smaller corrections in the same pass: the `404` row above was missing entirely, and the
+> success message said *"will be called"* where the server sends *"**is being** called"*
+> (`:539`) — the retry is dispatched after the response, so the present tense is the accurate one.
+>
+> ⚠ **The `409`-while-`pending` rule in "Business Rules" above is real but is enforced on
+> `PATCH /:id/vectorisation`, not here** — this handler has no pending check.
 
 ---
 
@@ -1278,13 +1404,31 @@ Manually resubmit the product payload to the vectoriser. This is useful when the
 
 Summary of what the backend validates when changing status to `active`. Frontend should pre-validate these before calling the status endpoint.
 
+> [!WARNING]
+> **This section listed 11 requirements and the gate enforces 13 — four were missing until
+> 2026-09-06** (DOC-PROGRAM F-17 class 8). The authority is one function,
+> `ProductStatusValidationService.collectActivationBlockers`, and it is the *only* place the rule
+> list lives — `validate()` delegates to it. The four that were absent:
+> `CATALOG_PRODUCT_NO_DESCRIPTION` and `CATALOG_PRODUCT_VENDOR_SUSPENDED` (both universal), and
+> `CATALOG_PRODUCT_SERVICE_NO_CAPACITY` + `CATALOG_PRODUCT_SERVICE_NO_AVAILABILITY`.
+>
+> **The service pair is the one that cost something**: this page named a single service
+> requirement, so a vendor pre-validating against it would set a duration, call the status
+> endpoint, and be refused for an availability rule the documentation never mentioned.
+>
+> ⚠ **Every failing rule is reported at once**, not just the first — the response carries the whole
+> checklist in `meta.activation.blockers[]` (or `details.blockers[]` on an unsuspend). Pre-validate
+> against all thirteen, and render the list you get back rather than the first entry.
+
 **Universal (all product types):**
 
 | Requirement | Error Code | Description |
 |-------------|------------|-------------|
+| `description` is non-empty after trimming | `CATALOG_PRODUCT_NO_DESCRIPTION` | Set `description`. ⚠ The plain-text field is what the gate reads — clearing it while keeping `descriptionRich` still blocks activation |
 | At least one variant | `CATALOG_PRODUCT_NO_VARIANTS` | Create at least one variant first |
 | All active variants have `price > 0` | `CATALOG_PRODUCT_VARIANT_ZERO_PRICE` | Update variant price |
 | `defaultVariantId` points to an active variant | `CATALOG_PRODUCT_NO_DEFAULT_VARIANT` | First variant is auto-set; use `/default-variant` to reassign |
+| The owning **vendor** is not suspended | `CATALOG_PRODUCT_VENDOR_SUSPENDED` | Nothing the vendor can do — an administrator must reinstate the account. Applies to **every** product type, and it is what stops the delivery-agency and agency-storage restore paths walking a suspended vendor's catalogue back onto the storefront |
 
 **Physical products only:**
 
@@ -1325,6 +1469,13 @@ Summary of what the backend validates when changing status to `active`. Frontend
 | Requirement | Error Code | Description |
 |-------------|------------|-------------|
 | The default variant has `serviceConfig.durationMinutes` | `CATALOG_PRODUCT_SERVICE_NO_DURATION` | Create the service variant (with `serviceConfig`) via `POST /products/:id/variants` |
+| **`bookingMode: 'capacity'` only:** `serviceConfig.maxBookings >= 1` | `CATALOG_PRODUCT_SERVICE_NO_CAPACITY` | A capacity service sells seats, so it needs a seat count. Not checked for `calendar` or `manual` |
+| At least one **active** availability rule | `CATALOG_PRODUCT_SERVICE_NO_AVAILABILITY` | Create one via `POST /products/:id/availability-rules` — see [availability-rules.md](./availability-rules.md). Without one, availability is empty and nothing is bookable. ⚠ `isActive` defaults to **`false`** on create, so a rule that exists is not yet a rule that counts |
+
+> [!NOTE]
+> **The first two are skipped when there is no default variant**, because `serviceConfig` lives on
+> it — the universal `CATALOG_PRODUCT_NO_DEFAULT_VARIANT` blocker already names the fix, and
+> restating it as three would be noise. The availability check runs regardless.
 
 ---
 
@@ -1335,25 +1486,34 @@ All errors use this response shape:
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "CATALOG_PRODUCT_NOT_FOUND",
     "message": "Human-readable description",
+    "statusCode": 404,
+    "category": "not_found",
     "details": { "...additional context..." }
   }
 }
 ```
 
-Validation errors include a `details` array:
+Validation errors carry `details.fields[]`, where `path` is the dot-joined location and `code` is
+the Zod issue kind:
 
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Request validation failed",
-    "details": [
-      { "field": "title", "message": "Title must be at least 3 characters" }
-    ]
+    "statusCode": 400,
+    "category": "validation",
+    "details": {
+      "fields": [
+        { "path": "title", "message": "Title must be at least 3 characters", "code": "too_small" }
+      ]
+    }
   }
 }
 ```
@@ -1379,6 +1539,6 @@ Validation errors include a `details` array:
 | `CATALOG_DIGITAL_ASSET_ALREADY_EXISTS` | 409 | Attempted `POST` upload when the variant already has an asset; use `PUT` |
 | `CATALOG_DIGITAL_ASSET_MISSING` | 404 | Attempted `PUT`/`DELETE` when the variant has no asset |
 | `CATALOG_DIGITAL_ASSET_MISSING_FILE` | 400 | No file included in the upload request |
-| `CATALOG_FILE_TOO_LARGE` | 400 | Upload exceeds size limit |
+| `CATALOG_FILE_TOO_LARGE` | **413** | Upload exceeds the route’s multer ceiling. Raised by the multer branch of the error handler, never at 400. |
 | `CATALOG_FILE_TYPE_INVALID` | 400 | MIME type is not in the allowed list |
 | `VALIDATION_ERROR` | 400 | Zod schema validation failed |

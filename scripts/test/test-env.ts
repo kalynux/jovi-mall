@@ -4,7 +4,7 @@
  * Follows the scripts/test convention (plain ts-node, hand-rolled asserts, no framework).
  * DB-free. It does two unrelated jobs, and only the first is a normal unit test.
  *
- *   1. **A source CENSUS**, in the shape `test:errors` already uses for its 1362
+ *   1. **A source CENSUS**, in the shape `test:errors` already uses for its ~1517
  *      `createAppError` sites. It re-derives the set of variables `src/` reads — including the
  *      ~120 that reach `process.env` through a helper (`intEnv('COD_BATCH_SIZE', 200)`) and are
  *      therefore invisible to a `process.env.X` grep — and asserts `.env.example` documents
@@ -24,7 +24,7 @@
  *
  * Run: npm run test:env
  */
-import { readFileSync, readdirSync, statSync } from 'fs';
+import { readFileSync, readdirSync, statSync, existsSync } from 'fs';
 import { join, relative } from 'path';
 import { validateEnv, formatEnvProblems, EnvProblem } from '../../src/config/env';
 
@@ -149,6 +149,52 @@ for (const line of envExample.split('\n')) {
 }
 
 assert(documented.size > 200, `.env.example declares only ${documented.size} variables — the template looks truncated`);
+
+// ── No variable may be ASSIGNED twice, here or in a real .env ────────────────
+//
+// ⚠ This exists because of a live misconfiguration, not a hypothetical one.
+// `.env` carried VECTORISER_BASE_URL and VECTORISER_API_KEY twice: once with the
+// real values, and again several hundred lines later in a stale section. dotenv
+// lets the LAST occurrence win, so the stale pair was the one in force — the base
+// URL pointed at a path that no longer exists and the key was still the literal
+// placeholder `your-t8n-api-key-here`. Nothing failed at boot, nothing logged,
+// and every vectorisation request 404'd against n8n's own Express handler.
+//
+// The census above cannot see this: a duplicate name is documented, and it is
+// read, so both of its checks pass. Only counting ASSIGNMENTS finds it.
+//
+// Commented lines are excluded on purpose — `# NAME=` beside an active `NAME=` is
+// the normal way this template documents a default next to a chosen value.
+function activeAssignments(text: string): Map<string, number[]> {
+    const seen = new Map<string, number[]>();
+    text.split('\n').forEach((line, index) => {
+        const match = /^([A-Z][A-Z0-9_]*)=/.exec(line);
+        if (!match) return;
+        const at = seen.get(match[1]) ?? [];
+        at.push(index + 1);
+        seen.set(match[1], at);
+    });
+    return seen;
+}
+
+function reportDuplicates(text: string, label: string): void {
+    const duplicated = [...activeAssignments(text).entries()].filter(([, lines]) => lines.length > 1);
+    assert(
+        duplicated.length === 0,
+        `${label} assigns the same variable more than once — dotenv silently takes the LAST one:\n` +
+            duplicated.map(([name, lines]) => `      ${name} (lines ${lines.join(', ')})`).join('\n'),
+    );
+}
+
+reportDuplicates(envExample, '.env.example');
+
+// The real .env is not in the repository, so this half only runs where one exists
+// — a developer's machine and any CI job that writes one. That is exactly where
+// the bug above lived, and where it would have been caught.
+const LOCAL_ENV = join(__dirname, '..', '..', '.env');
+if (existsSync(LOCAL_ENV)) {
+    reportDuplicates(readFileSync(LOCAL_ENV, 'utf8'), '.env');
+}
 
 // ── Every variable read must be documented ───────────────────────────────────
 const undocumented = [...readBy.keys()]

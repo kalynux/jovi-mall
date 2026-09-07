@@ -26,6 +26,23 @@ export type ProductMode = 'simple' | 'advanced';
 export type VectorisationStatus = 'not_started' | 'pending' | 'completed' | 'failed' | 'skipped_no_credits';
 
 /**
+ * One in-flight vectorisation attempt — see `IProduct.vectorisationJob`.
+ *
+ * Written when the vectoriser answers 202 with this product in `accepted`,
+ * cleared by the callback that reports the attempt's outcome. It exists because
+ * that report arrives minutes later, in a different request, carrying nothing
+ * but a job id and a product id.
+ */
+export interface IVectorisationJob {
+  /** `job_id` from the vectoriser's 202. Stored as a string — n8n sends it as one. */
+  jobId: string;
+  /** Was a credit debited for this attempt? Decides whether `failed` owes a refund. */
+  billed: boolean;
+  /** When the 202 was accepted. Diagnostic only — nothing sweeps on it today. */
+  requestedAt: Date;
+}
+
+/**
  * Reason a product was suspended. Scopes which suspended products a given
  * restoration cascade is allowed to touch — other reasons must be left alone.
  *
@@ -51,6 +68,19 @@ export type VectorisationStatus = 'not_started' | 'pending' | 'completed' | 'fai
  *
  * That last exclusion is the load-bearing one: a vendor suspended and then restored
  * must not silently republish a listing an administrator took down on its merits.
+ *
+ * `plan_quota_exceeded` is the FIFTH set and the only one that is neither a human
+ * act nor a fault: the vendor's plan simply does not have room for this listing any
+ * more (see `modules/plan-quota/`). It is scoped to the quota sweep exactly as the
+ * others are scoped to theirs — **it is not in `DELIVERY_AGENCY_REASONS`, and no
+ * vendor, agency or administrator restore path may clear it**, because none of them
+ * buys the vendor a bigger plan. Only `PlanQuotaEnforcementService` writes or lifts
+ * it, and it lifts strictly oldest-first as room reappears.
+ *
+ * It is also the only reason that can attach to a product which is not `active` —
+ * a `draft` occupies a catalogue slot too (see `countActiveByVendor`), so the sweep
+ * suspends drafts as well. That is why it cannot use the shared `suspendProduct`
+ * primitive, which compare-and-sets on `status: 'active'`.
  */
 export const PRODUCT_SUSPENSION_REASONS = [
   'default_delivery_agency_removed',
@@ -59,7 +89,16 @@ export const PRODUCT_SUSPENSION_REASONS = [
   'agency_storage_suspended',
   'vendor_suspended',
   'platform_oversight',
+  'plan_quota_exceeded',
 ] as const;
+
+/**
+ * The plan-quota set — a closed list of one, declared for the same reason
+ * `DELIVERY_AGENCY_REASONS` is: a restore sweep must name the reasons it owns rather
+ * than matching on `suspension != null`. Do not widen it, and do not add this member
+ * to any other set.
+ */
+export const PLAN_QUOTA_REASONS = ['plan_quota_exceeded'] as const;
 
 /**
  * Derived from the array above, never hand-maintained beside it — the schema `enum`
@@ -204,7 +243,39 @@ export interface IProduct extends IBaseDocument {
   vectorisationStatus: VectorisationStatus;
   /** External ID returned by the vectoriser service once completed. Null until then. */
   vectorisedDataId: string | null;
+  /**
+   * The vectorisation attempt currently in flight, or null when none is.
+   *
+   * The vectoriser answers **202 and reports the outcome later** over
+   * `POST /api/internal/vectoriser/callback`, so between the request and the
+   * report there is a window in which this product's fate is unknown. This field
+   * is what that callback resolves against, and it carries the two things the
+   * callback cannot otherwise know:
+   *
+   *  - `jobId` — the claim ticket. The callback matches on it, so a duplicate or
+   *    late report for an attempt that is already resolved matches nothing and is
+   *    ignored. That is the whole idempotency mechanism.
+   *  - `billed` — whether a credit was debited for THIS attempt, which decides
+   *    whether a `failed` result owes a refund. The vendor paths debit; the admin
+   *    bulk path deliberately does not (see `vectoriseBulk`), and the callback
+   *    body is identical for both — so the fact has to be recorded here at
+   *    request time or it is not recoverable when the report arrives.
+   */
+  vectorisationJob: IVectorisationJob | null;
 }
+
+/**
+ * Sub-schema for `vectorisationJob`. `_id: false` — it is a value on the product,
+ * not a document anyone addresses.
+ */
+const VectorisationJobSchema = new Schema<IVectorisationJob>(
+  {
+    jobId: { type: String, required: true },
+    billed: { type: Boolean, required: true, default: false },
+    requestedAt: { type: Date, required: true, default: Date.now },
+  },
+  { _id: false },
+);
 
 const ProductSchema = new Schema<IProduct>({
   vendorId: { type: Schema.Types.ObjectId, ref: MODELS.VENDOR, required: true, index: true },
@@ -267,6 +338,10 @@ const ProductSchema = new Schema<IProduct>({
     index: true,
   },
   vectorisedDataId: { type: String, default: null },
+  // The in-flight attempt. Deliberately NOT indexed: the callback resolves it
+  // with { _id, 'vectorisationJob.jobId' }, and _id alone already selects a
+  // single document — the job id is a GUARD on that document, not a search key.
+  vectorisationJob: { type: VectorisationJobSchema, default: null },
 
   // Service configuration + pricing live on the single service variant
   // (ProductVariant.serviceConfig) — not on the product.
@@ -370,6 +445,12 @@ ProductSchema.index({ vendorId: 1, slug: 1 }, { unique: true });
 // Cross-vendor lookup of products by their own delivery-agency override —
 // used by the agency deactivate/reactivate cascade (ProductDeliveryAgencySuspensionService).
 ProductSchema.index({ 'delivery.agency_id': 1 });
+// The plan-quota sweep's ordering index (`modules/plan-quota/`). `createdAt` ASC is not
+// a sort applied after a filter here — it IS the rule: slots are kept oldest-first and
+// suspended newest-first, so the sweep walks this index in order. `{ vendorId, slug }`
+// above cannot serve it, and without this every recompute scans the vendor's catalog.
+// Built by `migrate:plan-quota-indexes`; autoIndex is off in production.
+ProductSchema.index({ vendorId: 1, deletedAt: 1, createdAt: 1 });
 // ProductSchema.index({ fileIds: 1 }); // Optional: for finding products by file
 // ProductSchema.index({ deletedAt: 1 });
 

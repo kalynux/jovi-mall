@@ -5,14 +5,20 @@ import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { GeoCandidate } from '../../../core/geocoding';
 import { CustomerProfileService } from '../../customers/services/customer-profile.service';
-import { AddCustomerAddressInput } from '../../customers/validators/customer-onboarding.validator';
+import {
+    AddCustomerAddressInput,
+    UpdateCustomerAddressInput,
+} from '../../customers/validators/customer-onboarding.validator';
 import { geoCandidateStore } from '../services/geo-candidate.store';
-import { botCallerOf } from '../middlewares/bot-identity.middleware';
+import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { toBotAddressList, toBotProfileSummary } from '../dto/bot-projections';
+import { windowForChat } from '../domain/bot-list-window';
 import {
     BotAddAddressSchema,
     BotAddressParamSchema,
+    BotAddressUpdateSchema,
     BotNoArgsSchema,
+    BotProfileUpdateSchema,
     BotSetLanguageSchema,
 } from '../validators/bot.validators';
 
@@ -49,11 +55,49 @@ export class BotProfileController {
         sendSuccess(res, { preferences: { language: profile.preferences.language } });
     });
 
+    /**
+     * `PATCH /profile` — the one profile field a chat may write.
+     *
+     * See `BotProfileUpdateSchema` for why the other six the customer API accepts are
+     * refused here. Answers the same masked summary `profile_get_summary` does, so a caller
+     * needs one shape for both and cannot end up rendering a stale name it just changed.
+     */
+    static update = asyncHandler(async (req: Request, res: Response) => {
+        const { name } = BotProfileUpdateSchema.parse(req.body ?? {});
+        const profile = await customerProfileService.updateProfile(botCallerOf(req).customerId, {
+            name,
+        });
+        sendSuccess(res, toBotProfileSummary(profile));
+    });
+
     /** `POST /addresses/list` — saved addresses, each with its `deliverable` verdict. */
     static listAddresses = asyncHandler(async (req: Request, res: Response) => {
         BotNoArgsSchema.parse(req.body ?? {});
         const profile = await customerProfileService.getProfile(botCallerOf(req).customerId);
-        sendSuccess(res, toBotAddressList(profile.savedAddresses));
+
+        /**
+         * ⚠ **Unpaginated, like the digital library — the slice is the cap.**
+         *
+         * ⚠ **The default address is pinned to the front, and that is a correctness fix
+         * rather than a nicety.** `toBotAddressList` is a plain `map` in stored order, so
+         * capping the list at five could drop the customer's DEFAULT address — the one a
+         * chat answer is most likely to be about, and the one checkout falls back to. A
+         * truncation that hides the most important row is worse than no truncation.
+         *
+         * `sort` is stable in every runtime this targets, so everything else keeps its
+         * stored order and only the default moves.
+         */
+        const ordered = [...toBotAddressList(profile.savedAddresses)]
+            .sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
+
+        const chat = windowForChat({
+            items: ordered,
+            total: ordered.length,
+            surface: 'addresses',
+            language: botResponseLanguageOf(req),
+        });
+
+        sendSuccess(res, chat.items, { meta: { ...chat.window } });
     });
 
     /**
@@ -95,6 +139,91 @@ export class BotProfileController {
         // The address that was just written is the newest one, and `addAddress` pushes.
         const addresses = toBotAddressList(profile.savedAddresses);
         sendSuccess(res, addresses[addresses.length - 1], { status: 201 });
+    });
+
+    /**
+     * `PATCH /addresses/:addressId` — rename, re-describe, or re-point a saved address.
+     *
+     * ⚠ **Re-pointing goes through a candidate handle, never a `geo` object**, so this
+     * route writes a `geo` by exactly the path `addAddress` does — `toSavedAddressInput`,
+     * which writes no `location` key at all. That is what keeps the 2dsphere trap closed on
+     * a second write path; see `BotAddressUpdateSchema` and the helper's own header.
+     *
+     * ⚠ **The handle is spent BEFORE the write**, same ordering and same reasoning as the
+     * add: two concurrent edits both holding a live handle would both write, where spending
+     * first means the loser is told to search again having changed nothing.
+     *
+     * A re-point rewrites the derived loose fields (`address_line1`, `city`, `state`,
+     * `country`) alongside `geo`, because leaving them describing the OLD place is how an
+     * address ends up printing one street on a label and routing to another.
+     */
+    static updateAddress = asyncHandler(async (req: Request, res: Response) => {
+        const { addressId } = BotAddressParamSchema.parse(req.params);
+        const input = BotAddressUpdateSchema.parse(req.body ?? {});
+        const caller = botCallerOf(req);
+
+        const updates: UpdateCustomerAddressInput = {};
+        if (input.label !== undefined) updates.label = input.label;
+        // `null` clears the line, `undefined` leaves it alone — the clearable convention.
+        if (input.addressLine2 !== undefined) updates.address_line2 = input.addressLine2;
+
+        if (input.geoCandidateRef !== undefined) {
+            const stored = await geoCandidateStore.consume(caller.userId, input.geoCandidateRef);
+            if (!stored) {
+                throw createAppError(ERROR_CODES.BOT_GEO_CANDIDATE_EXPIRED, 400, undefined, {
+                    candidateRef: input.geoCandidateRef,
+                });
+            }
+
+            const rebuilt = toSavedAddressInput({
+                // `label` is required by the add's input shape but is not what a re-point
+                // changes; the caller's own label wins, and the stored one stands otherwise.
+                label: input.label ?? 'Address',
+                addressLine2: input.addressLine2 ?? null,
+                isDefault: false,
+                candidate: stored.candidate,
+                rawInput: stored.rawInput,
+            });
+
+            updates.address_line1 = rebuilt.address_line1;
+            updates.city = rebuilt.city;
+            updates.state = rebuilt.state;
+            updates.country = rebuilt.country;
+            updates.geo = rebuilt.geo;
+        }
+
+        const profile = await customerProfileService.updateAddress(
+            caller.customerId,
+            addressId,
+            updates,
+        );
+
+        const updated = toBotAddressList(profile.savedAddresses).find((a) => a.id === addressId);
+        sendSuccess(res, updated ?? null);
+    });
+
+    /**
+     * `DELETE /addresses/:addressId` — forget a saved address.
+     *
+     * ⚠ **Removing the DEFAULT address leaves the customer without one**, and this route
+     * does not elect a replacement. That is the customer API's behaviour and it stays: the
+     * platform picking which of the remaining addresses a parcel goes to is a worse failure
+     * than checkout asking. `addresses_list` reports the state, and `addresses_set_default`
+     * is how a customer fixes it.
+     */
+    static removeAddress = asyncHandler(async (req: Request, res: Response) => {
+        const { addressId } = BotAddressParamSchema.parse(req.params);
+        BotNoArgsSchema.parse(req.body ?? {});
+        const profile = await customerProfileService.removeAddress(
+            botCallerOf(req).customerId,
+            addressId,
+        );
+        sendSuccess(res, {
+            removed: true,
+            remaining: profile.savedAddresses.length,
+            // Stated rather than left to be inferred from a list the caller may not re-read.
+            hasDefault: profile.savedAddresses.some((a) => a.is_default === true),
+        }, { message: 'Address removed.' });
     });
 
     /**

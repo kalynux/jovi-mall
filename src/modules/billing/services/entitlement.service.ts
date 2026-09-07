@@ -78,14 +78,38 @@ export class EntitlementService {
    * exceed the plan cap. `currentActiveCount` is the vendor's existing count.
    */
   async assertCanAddProduct(vendorId: string, currentActiveCount: number): Promise<void> {
+    return this.assertCanAddProducts(vendorId, currentActiveCount, 1);
+  }
+
+  /**
+   * The same gate for a batch — `adding` more catalog slots on top of
+   * `currentActiveCount`.
+   *
+   * ⚠ **Bulk paths must use this rather than looping the single-product version**, and
+   * the reason is that the single version is a *threshold* test, not an arithmetic one:
+   * called once per item against an unchanged `currentActiveCount`, it answers "is there
+   * room for one more?" identically for every item in the batch, so a vendor with one
+   * free slot un-archives fifty products and every check passes. The count only moves
+   * after the write.
+   *
+   * The refusal is all-or-nothing rather than partial. A bulk status change that
+   * silently applied to the first N and skipped the rest would report success for an
+   * operation the vendor cannot see the shape of; `details` carries the numbers so a
+   * dashboard can say exactly how many slots are free.
+   */
+  async assertCanAddProducts(vendorId: string, currentActiveCount: number, adding: number): Promise<void> {
+    if (adding <= 0) return;
     const { maxActiveProducts, planCode } = await this.getEntitlements(vendorId);
     if (maxActiveProducts === null) return; // unlimited
-    if (currentActiveCount >= maxActiveProducts) {
+    if (currentActiveCount + adding > maxActiveProducts) {
+      const available = Math.max(0, maxActiveProducts - currentActiveCount);
       throw createAppError(
         ERROR_CODES.BILLING_LIMIT_EXCEEDED,
         403,
-        `Your '${planCode}' plan allows up to ${maxActiveProducts} active products. Upgrade to add more.`,
-        { limit: maxActiveProducts, current: currentActiveCount }
+        adding === 1
+          ? `Your '${planCode}' plan allows up to ${maxActiveProducts} products. Upgrade to add more.`
+          : `Your '${planCode}' plan allows up to ${maxActiveProducts} products, and you have room for ${available} more. Upgrade, or archive some first.`,
+        { limit: maxActiveProducts, current: currentActiveCount, requested: adding, available }
       );
     }
   }

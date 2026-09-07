@@ -1,5 +1,9 @@
 # Digital Products API — Multi-Variant Guide
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
+
 > **Audience:** Frontend developers building the vendor "manage digital product" UI.
 > **Status:** Current as of the multi-variant digital upgrade (2026-05). This supersedes the old single-asset-per-product model.
 
@@ -281,8 +285,9 @@ await fetch(
 |--------|------|--------|
 | 409 | `CATALOG_DIGITAL_ASSET_ALREADY_EXISTS` | Variant already has an asset — use `PUT` to replace. |
 | 400 | `CATALOG_DIGITAL_ASSET_MISSING_FILE` | No `file` field in request. |
-| 400 | `CATALOG_FILE_TOO_LARGE` | Exceeds 500 MB. |
+| **413** | `CATALOG_FILE_TOO_LARGE` | Exceeds `MAX_DIGITAL_ASSET_SIZE` (default **500 MB**). ⚠ **413, not 400** — multer's `limits.fileSize` aborts the upload and the error handler answers `413` (`error-handler.middleware.ts:173-176`). The controller's own `400` branch (`vendor-digital-asset.controller.ts:53`) is **unreachable**: it compares against the same env var multer is configured with, so multer always fires first. |
 | 400 | `CATALOG_FILE_TYPE_INVALID` | Declared `Content-Type` is not in the accepted set (first gate). |
+| 400 | `UPLOAD_POLICY_VIOLATION` | The **per-format** ceiling was exceeded — 100 MB for `application/pdf` and `application/epub+zip`, 500 MB for the archive types (`upload-config.ts:255-263`). A 200 MB PDF is under the 500 MB request limit and still refused here, with `details.violations`. |
 | 400 | `UPLOAD_POLICY_VIOLATION` | The file's **detected** (magic-byte) type is not an accepted format (second gate). `details.violations` lists the reason. |
 | 400 | `CATALOG_PRODUCT_INVALID_TYPE` | Product is not `type: "digital"`. |
 | 404 | `CATALOG_PRODUCT_NOT_FOUND` / `CATALOG_VARIANT_NOT_FOUND` | Product or variant not found / mismatched. |
@@ -303,7 +308,8 @@ Same `file` field and constraints as upload. Atomically swaps the file; the old 
 | Status | Code | Reason |
 |--------|------|--------|
 | 404 | `CATALOG_DIGITAL_ASSET_MISSING` | Variant has no asset to replace — use `POST`. |
-| 400 | `CATALOG_FILE_TOO_LARGE` / `CATALOG_FILE_TYPE_INVALID` | File validation failed. |
+| **413** | `CATALOG_FILE_TOO_LARGE` | Exceeds `MAX_DIGITAL_ASSET_SIZE`. See the note on the `POST` above — this is a `413`, from multer. |
+| 400 | `CATALOG_FILE_TYPE_INVALID` / `UPLOAD_POLICY_VIOLATION` | Declared type refused (first gate), or sniffed type / per-format ceiling refused (second gate). |
 
 ### 5.4 Remove a variant's digital asset
 
@@ -444,12 +450,12 @@ When `isActive` is `false`, purchases of any variant will **not** grant a downlo
 | `CATALOG_DIGITAL_ASSET_MISSING_FILE` | 400 | No `file` field on a multipart upload. |
 | `CATALOG_DIGITAL_ASSET_NOT_FOUND` | 404 | Asset id invalid / not found. |
 | `CATALOG_DIGITAL_ASSET_ACCESS_DENIED` | 403 | Asset belongs to another vendor. |
-| `CATALOG_FILE_TOO_LARGE` | 400 | File exceeds the size limit. |
+| `CATALOG_FILE_TOO_LARGE` | **413** | File exceeds `MAX_DIGITAL_ASSET_SIZE` (default 500 MB). Raised by multer, not by the controller. |
 | `CATALOG_FILE_TYPE_INVALID` | 400 | MIME type not allowed. |
 | `CATALOG_PRODUCT_INVALID_TYPE` | 400 | Endpoint used on a non-digital product, or physical-only field on a digital variant. |
 | `CATALOG_VARIANT_NOT_FOUND` | 404 | Variant not found or not under the given product. |
 
-> `CATALOG_PRODUCT_DIGITAL_NO_ASSET` (the old product-level check) is no longer emitted. The per-variant `CATALOG_VARIANT_NO_DIGITAL_ASSET` replaces it.
+> ~~`CATALOG_PRODUCT_DIGITAL_NO_ASSET`~~ (the old product-level check) is no longer emitted — it is registered, carries a default message, and is raised by nothing. The per-variant `CATALOG_VARIANT_NO_DIGITAL_ASSET` replaces it.
 
 ---
 

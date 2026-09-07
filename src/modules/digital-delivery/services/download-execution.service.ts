@@ -12,7 +12,7 @@ import { ERROR_CODES } from '../../../core/error-codes';
  * DownloadExecutionService - Token validation and file streaming
  *
  * CRITICAL GUARANTEES:
- * - Token consumption via Redis GETDEL is atomic (single-use)
+ * - Token consumption is atomic (single-use) via a Lua read-and-delete
  * - Download counter increment uses conditional atomic update with guard
  * - Mathematically impossible to exceed maxDownloads even under extreme concurrency
  * - No MongoDB transactions needed - each operation is self-contained and atomic
@@ -24,7 +24,7 @@ export class DownloadExecutionService {
    * Consume a download token and stream the file
    *
    * ATOMIC OPERATIONS:
-   * 1. Redis GETDEL - only one request gets the token (single-use)
+   * 1. Lua read-and-delete - only one request gets the token (single-use)
    * 2. MongoDB conditional update with $expr guard - prevents over-increment
    *
    * @param token - Download token

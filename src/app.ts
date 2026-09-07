@@ -11,7 +11,7 @@ import { metricsRoutes } from './modules/system/metrics/metrics.routes';
 import { errorHandlerMiddleware } from './api/middlewares/error-handler.middleware';
 import { ERROR_CODES } from './core/error-codes';
 import { createAppError } from './core/errors';
-import { ALLOWED_ORIGINS, JSON_BODY_LIMIT, TRUST_PROXY, WEBHOOK_BODY_LIMIT } from './config/http.config';
+import { ALLOWED_ORIGINS, BOT_FILE_BODY_LIMIT, JSON_BODY_LIMIT, TRUST_PROXY, WEBHOOK_BODY_LIMIT } from './config/http.config';
 import { logger } from './core/logging';
 import { globalRateLimiter } from './api/rate-limit/rate-limit.middleware';
 
@@ -143,6 +143,19 @@ app.use(
 // decision rather than a default, and the handler's new body-parser branch
 // turns the rejection into a 413 a caller can act on instead of a 500 blaming
 // the server for their payload.
+// ─── One path with a wider JSON ceiling, mounted BEFORE the global parser ─────
+//
+// `POST /api/internal/bot/files/inbound` carries a photo a customer sent in a chat, as
+// base64 — the automation layer holds the channel tokens and this service must not, so
+// the bytes have to arrive in a body. Base64 inflates by a third and the global ceiling
+// is 1 MB, which refuses every real image.
+//
+// Order matters and is the same reason the raw webhook parsers sit above: body-parser
+// marks a request it has already read, so the global `express.json` below sees this one
+// parsed and does nothing. Mounted the other way round, the 1 MB limit would fire first
+// and this would never be reached.
+app.use('/api/internal/bot/files/inbound', express.json({ limit: BOT_FILE_BODY_LIMIT }));
+
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
 app.use(cookieParser()); // Required for session authentication

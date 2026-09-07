@@ -119,6 +119,190 @@ const PAY_BUTTON: Copy = {
 };
 
 /**
+ * What to say when the ASSISTANT cannot answer — the model errored, timed out, or came back
+ * with nothing.
+ *
+ * ⚠ **This is a sentence, not a control**, like `choosePrompt` and `payPrompt` beside it. It
+ * is here rather than in `bot-error-copy.ts` because that table is keyed on an error CODE
+ * this service raised, and this failure happens in the automation layer — there is no code,
+ * no request and no response to attach it to. It reaches the caller on the sync payload
+ * (`BotSyncDto.fallback`) precisely so the one layer that cannot translate does not have to.
+ *
+ * ⚠ **It is NOT the "onboarding finished" turn.** That one deliberately says nothing at all
+ * — see `setOnboardingReply`, which explains why a cheerful "all done!" would talk over the
+ * model. This is the opposite situation: the model is what failed, so something must be said
+ * in its place.
+ */
+const ASSISTANT_UNAVAILABLE: Copy = {
+    en: 'Sorry, I could not answer that just now. Please try again in a moment.',
+    fr: "Désolé, je n'ai pas pu répondre à l'instant. Veuillez réessayer dans un moment.",
+    pt: 'Desculpe, não consegui responder agora. Tente novamente dentro de momentos.',
+    es: 'Lo siento, no he podido responder ahora. Inténtalo de nuevo en un momento.',
+    ar: 'عذرًا، لم أتمكّن من الإجابة الآن. يُرجى المحاولة بعد قليل.',
+};
+
+/**
+ * The Telegram `request_location` button.
+ *
+ * ⚠ **Telegram only.** WhatsApp's `location_request_message` draws its own button and takes
+ * no label at all, so this string is never sent there — the same asymmetry `contactButton`
+ * has, one control further on.
+ */
+const LOCATION_BUTTON: Copy = {
+    en: '📍 Send my location',
+    fr: '📍 Envoyer ma position',
+    pt: '📍 Enviar localização',
+    es: '📍 Enviar mi ubicación',
+    ar: '📍 إرسال موقعي',
+};
+
+/**
+ * What to say when an address search matched NOTHING.
+ *
+ * ⚠ **This closes a real silence.** `pickerFor` returns `null` on zero candidates, so the
+ * turn carried no `reply` at all and the customer — who had just been asked where to deliver
+ * — was answered with nothing. Observed live on 2026-09-06: a customer typed *"My address"*,
+ * got five unrelated districts, said so, and the conversation stopped dead.
+ *
+ * It names what to do differently rather than apologising, because the customer usually typed
+ * something a geocoder cannot use ("my address", "home") and the remedy is specificity.
+ */
+const ADDRESS_NOT_FOUND: Copy = {
+    en: 'I could not find that. Try a street and city, or a nearby landmark.',
+    fr: "Je n'ai pas trouvé. Essayez une rue et une ville, ou un point de repère proche.",
+    pt: 'Não encontrei. Tente uma rua e cidade, ou um ponto de referência próximo.',
+    es: 'No lo he encontrado. Prueba con una calle y ciudad, o un punto de referencia cercano.',
+    ar: 'لم أعثر على ذلك. جرّب اسم شارع ومدينة، أو معلمًا قريبًا.',
+};
+
+/**
+ * The question above what a customer's LOCATION PIN resolved to.
+ *
+ * ⚠ **A separate string from `choosePrompt`, and the difference is not cosmetic.** That one
+ * labels a choice between things the customer described; this one labels a single row the
+ * platform derived from coordinates they sent. *"Which one is right?"* asks somebody to pick
+ * between alternatives that are not there — `reverse` returns exactly one candidate or none
+ * (`IGeocodingProvider.reverse` is `Promise<GeoCandidate | null>`) — and a customer who
+ * cannot tell whether a street name they have never written down is "right" simply stops.
+ *
+ * So it states what the row IS (the closest match to their pin) and tells an unsure customer
+ * what to do. It stays true if reverse ever returns several: the top row is the nearest.
+ */
+const CONFIRM_PIN_PROMPT: Copy = {
+    en: 'Here is the closest match to your pin. Not sure? Pick the first one.',
+    fr: "Voici l'adresse la plus proche de votre position. Vous hésitez ? Choisissez la première.",
+    pt: 'Esta é a morada mais próxima do seu ponto. Na dúvida, escolha a primeira.',
+    es: 'Esta es la dirección más cercana a tu ubicación. ¿No estás seguro? Elige la primera.',
+    ar: 'هذا أقرب عنوان إلى موقعك. إن لم تكن متأكدًا، اختر الأول.',
+};
+
+/**
+ * What to say after `contact_change_email` has opened a change.
+ *
+ * ⚠ **Names no address, on purpose.** The customer typed it a moment ago, so repeating it
+ * buys nothing — and a sentence with a value in it needs interpolation, which this table
+ * deliberately does not do: a placeholder is one more thing to get wrong in five languages,
+ * and a half-filled one reaches the customer as `{{email}}`.
+ *
+ * ⚠ **The second half is the load-bearing one.** `login_email` does NOT move until the link
+ * is opened, and a customer who is not told that will believe they have already changed how
+ * they sign in — and then find the old address still works, which reads as a broken change.
+ */
+const CONTACT_EMAIL_CHANGE_STARTED: Copy = {
+    en: 'I have sent a confirmation link to that address. Open it to finish the change — until you do, you still sign in with your current email.',
+    fr: "J'ai envoyé un lien de confirmation à cette adresse. Ouvrez-le pour terminer le changement — d'ici là, vous vous connectez toujours avec votre adresse actuelle.",
+    pt: 'Enviei um link de confirmação para esse endereço. Abra-o para concluir a alteração — até lá, continua a entrar com o seu e-mail atual.',
+    es: 'He enviado un enlace de confirmación a esa dirección. Ábrelo para completar el cambio — hasta entonces, sigues entrando con tu correo actual.',
+    ar: 'أرسلت رابط تأكيد إلى ذلك العنوان. افتحه لإتمام التغيير — وحتى ذلك الحين تسجّل الدخول ببريدك الحالي.',
+};
+
+/**
+ * What to say after `contact_change_phone` has opened a change.
+ *
+ * ⚠ **This is the sentence the whole step turns on, and it states a CONSEQUENCE rather than
+ * a next step.** The platform proves a new number by requiring a WhatsApp connection whose
+ * identity IS that number — there is no SMS provider here, and a template message to a
+ * number that has not written to us needs a credit wallet a customer does not have. So
+ * "connect that number on WhatsApp" is not a nicety: it is the only path, and a customer who
+ * is not told it is holding a pending change they cannot complete.
+ *
+ * The second half is the same guarantee the email copy makes, for the same reason:
+ * `login_phone` does not move until it is proved.
+ */
+const CONTACT_PHONE_CHANGE_STARTED: Copy = {
+    en: 'Now write to us on WhatsApp from that number and connect it, then confirm the change here. Until you do, you still sign in with your current number.',
+    fr: "Écrivez-nous maintenant sur WhatsApp depuis ce numéro et connectez-le, puis confirmez le changement ici. D'ici là, vous vous connectez toujours avec votre numéro actuel.",
+    pt: 'Agora escreva-nos no WhatsApp a partir desse número e ligue-o, depois confirme a alteração aqui. Até lá, continua a entrar com o seu número atual.',
+    es: 'Ahora escríbenos por WhatsApp desde ese número y conéctalo, luego confirma el cambio aquí. Hasta entonces, sigues entrando con tu número actual.',
+    ar: 'راسلنا الآن على واتساب من ذلك الرقم واربطه، ثم أكّد التغيير هنا. وحتى ذلك الحين تسجّل الدخول برقمك الحالي.',
+};
+
+/** What to say once `login_phone` has actually moved. */
+const CONTACT_PHONE_CHANGED: Copy = {
+    en: 'Your number has been changed. Use it to sign in from now on.',
+    fr: 'Votre numéro a été modifié. Utilisez-le pour vous connecter désormais.',
+    pt: 'O seu número foi alterado. Use-o para entrar a partir de agora.',
+    es: 'Tu número ha sido cambiado. Úsalo para entrar a partir de ahora.',
+    ar: 'تم تغيير رقمك. استخدمه لتسجيل الدخول من الآن فصاعدًا.',
+};
+
+/**
+ * One sentence for BOTH cancels, and that is deliberate rather than lazy.
+ *
+ * The customer knows which one they just abandoned; naming it would need either
+ * interpolation or two near-identical strings in five languages, and two strings that must
+ * stay in step is how one of them goes stale.
+ */
+const CONTACT_CHANGE_CANCELLED: Copy = {
+    en: 'That change has been cancelled. Nothing about how you sign in has moved.',
+    fr: "Ce changement a été annulé. Rien n'a changé dans votre façon de vous connecter.",
+    pt: 'Essa alteração foi cancelada. Nada mudou na forma como entra na sua conta.',
+    es: 'Ese cambio se ha cancelado. Nada ha cambiado en cómo entras a tu cuenta.',
+    ar: 'تم إلغاء ذلك التغيير. لم يتغيّر شيء في طريقة تسجيل دخولك.',
+};
+
+/** What to say once a messaging app has been unbound from the account. */
+const CONNECTION_DISCONNECTED: Copy = {
+    en: 'That app is no longer connected to your account.',
+    fr: "Cette application n'est plus connectée à votre compte.",
+    pt: 'Essa aplicação já não está ligada à sua conta.',
+    es: 'Esa aplicación ya no está conectada a tu cuenta.',
+    ar: 'لم يعد ذلك التطبيق مرتبطًا بحسابك.',
+};
+
+/**
+ * ⭐ **The sentence a customer must read BEFORE an account is closed** — the second half of
+ * ADR-A02 D-2, and the reason `account_close_preview` exists as a route at all.
+ *
+ * ⚠ **It says "closed" and "removed", never "deleted".** ADR-A02 D-2 is explicit that no
+ * erasure obligation has been established in this market and that nothing may be described
+ * to a customer as satisfying one. It also refuses to let the retention go unsaid: a person
+ * who believes their orders vanish and later finds a delivery record has been misled by
+ * omission, which is the failure this string exists to make impossible.
+ *
+ * ⚠ **Written here rather than left to the flow.** This is the single most consequential
+ * sentence in the product, and the automation layer has no copy table and no translator —
+ * the same argument that put `error.customerMessage` and the whole `reply` body on this
+ * side of the wire, arriving for the fifth time on the one turn that cannot be taken back.
+ */
+const ACCOUNT_CLOSURE_PROMPT: Copy = {
+    en: 'Closing your account removes your name, phone number, email address and saved addresses. Your past orders are kept as business records, without your details. This cannot be undone.',
+    fr: "La fermeture de votre compte supprime votre nom, votre numéro de téléphone, votre adresse e-mail et vos adresses enregistrées. Vos commandes passées sont conservées comme documents commerciaux, sans vos coordonnées. C'est irréversible.",
+    pt: 'Encerrar a sua conta remove o seu nome, número de telefone, e-mail e moradas guardadas. As suas encomendas anteriores são mantidas como registos comerciais, sem os seus dados. Isto não pode ser desfeito.',
+    es: 'Cerrar tu cuenta elimina tu nombre, número de teléfono, correo electrónico y direcciones guardadas. Tus pedidos anteriores se conservan como registros comerciales, sin tus datos. Esto no se puede deshacer.',
+    ar: 'إغلاق حسابك يحذف اسمك ورقم هاتفك وبريدك الإلكتروني وعناوينك المحفوظة. تُحفظ طلباتك السابقة كسجلات تجارية دون بياناتك. لا يمكن التراجع عن هذا.',
+};
+
+/** The same promise in the past tense, once the closure has committed. */
+const ACCOUNT_CLOSED: Copy = {
+    en: 'Your account is closed and your personal details have been removed. Your past orders are kept as business records, without your name or contact details.',
+    fr: 'Votre compte est fermé et vos données personnelles ont été supprimées. Vos commandes passées sont conservées comme documents commerciaux, sans votre nom ni vos coordonnées.',
+    pt: 'A sua conta está encerrada e os seus dados pessoais foram removidos. As suas encomendas anteriores são mantidas como registos comerciais, sem o seu nome nem os seus contactos.',
+    es: 'Tu cuenta está cerrada y tus datos personales se han eliminado. Tus pedidos anteriores se conservan como registros comerciales, sin tu nombre ni tus datos de contacto.',
+    ar: 'أُغلق حسابك وحُذفت بياناتك الشخصية. تُحفظ طلباتك السابقة كسجلات تجارية دون اسمك أو بيانات تواصلك.',
+};
+
+/**
  * Every chrome string, and the cap each one has to satisfy.
  *
  * The cap travels WITH the string rather than being applied at the call site, which is what
@@ -134,6 +318,21 @@ const CHROME = Object.freeze({
     skipButton: { copy: SKIP_BUTTON, cap: 20 },
     payPrompt: { copy: PAY_PROMPT, cap: null },
     payButton: { copy: PAY_BUTTON, cap: 20 },
+    assistantUnavailable: { copy: ASSISTANT_UNAVAILABLE, cap: null },
+    locationButton: { copy: LOCATION_BUTTON, cap: 24 },
+    confirmPinPrompt: { copy: CONFIRM_PIN_PROMPT, cap: null },
+    addressNotFound: { copy: ADDRESS_NOT_FOUND, cap: null },
+    // ── Contact changes and account closure (MCP parity steps 6 and 7) ───────
+    // All bodies, so all uncapped. Two of them are deliberately long: the phone-change
+    // instruction and the closure prompt each state a consequence that cannot be shortened
+    // without dropping the half that matters.
+    contactEmailChangeStarted: { copy: CONTACT_EMAIL_CHANGE_STARTED, cap: null },
+    contactPhoneChangeStarted: { copy: CONTACT_PHONE_CHANGE_STARTED, cap: null },
+    contactPhoneChanged: { copy: CONTACT_PHONE_CHANGED, cap: null },
+    contactChangeCancelled: { copy: CONTACT_CHANGE_CANCELLED, cap: null },
+    connectionDisconnected: { copy: CONNECTION_DISCONNECTED, cap: null },
+    accountClosurePrompt: { copy: ACCOUNT_CLOSURE_PROMPT, cap: null },
+    accountClosed: { copy: ACCOUNT_CLOSED, cap: null },
 } as const);
 
 export type BotChromeKey = keyof typeof CHROME;

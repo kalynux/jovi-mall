@@ -605,7 +605,7 @@ After this call, `GET /products/:id/variants/:variantId` shows `digital.asset` p
 | Status | Code | Cause |
 |--------|------|-------|
 | 409 | `CATALOG_DIGITAL_ASSET_ALREADY_EXISTS` | Variant already has an asset — use `PUT` to replace |
-| 400 | `CATALOG_FILE_TOO_LARGE` | File exceeds 500MB |
+| **413** | `CATALOG_FILE_TOO_LARGE` | File exceeds the multer ceiling for this route. ⚠ **413, not 400** — multer aborts the multipart parse and `error-handler.middleware.ts:173-176` maps `LIMIT_FILE_SIZE` to `413`. The only `createAppError(CATALOG_FILE_TOO_LARGE, 400)` in `src/` is unreachable (see `digital-products.md` § 5.2). |
 | 400 | `CATALOG_FILE_TYPE_INVALID` | MIME type not in allowed list |
 | 400 | `CATALOG_DIGITAL_ASSET_MISSING_FILE` | No file attached to request |
 

@@ -6,6 +6,10 @@ import { ERROR_CODES } from '../../../core/error-codes';
 import { TicketService } from '../../tickets/services/ticket.service';
 import { TicketNoteService } from '../../tickets/services/ticket-note.service';
 import { TicketFollowerService } from '../../tickets/services/ticket-follower.service';
+import {
+    TICKET_ATTACHMENT_LIMIT,
+    TicketAttachmentService,
+} from '../../tickets/services/ticket-attachment.service';
 import { TicketEnrichmentService } from '../../tickets/services/ticket-enrichment.service';
 import {
     ActorRole,
@@ -15,12 +19,16 @@ import {
     TicketStatus,
     TicketType,
 } from '../../tickets/types/ticket.types';
-import { botCallerOf } from '../middlewares/bot-identity.middleware';
+import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
+import { windowForChat } from '../domain/bot-list-window';
+import { inboundFileStore } from '../services/inbound-file.store';
+import { toBotTicketAttachmentDto } from '../dto/bot-projections';
 import {
     BotNoArgsSchema,
     BotTicketCreateSchema,
     BotTicketListSchema,
     BotTicketNoteSchema,
+    BotTicketAttachmentSchema,
     BotTicketParamSchema,
 } from '../validators/bot.validators';
 
@@ -28,6 +36,7 @@ const ticketService = new TicketService();
 const noteService = new TicketNoteService();
 const followerService = new TicketFollowerService();
 const enrichmentService = new TicketEnrichmentService();
+const attachmentService = new TicketAttachmentService();
 
 /**
  * Support tickets, from a chat.
@@ -45,11 +54,18 @@ const enrichmentService = new TicketEnrichmentService();
  * step earlier.
  *
  * ⚠ **`ticket_number` does not exist.** The catalogue's `important_fields` name it for
- * three of these tools and `api-doc/{customer,agent}/tickets.md` show it in their example
- * bodies — but `TicketSchema` has no such path and no code in `src/` writes one, verified
- * by source scan. It is a documentation defect inherited by the catalogue, not a field
- * this surface declined to project. Tickets are addressed by `_id`, and
+ * three of these tools — but `TicketSchema` has no such path and no code in `src/` writes
+ * one, verified by source scan. It is a documentation defect inherited by the catalogue,
+ * not a field this surface declined to project. The two api-doc pages that showed it were
+ * corrected 2026-09-06; the catalogue is the remaining half.
  * `api-doc/n8n/bot-surface.md` records the finding.
+ *
+ * ⚠ **A ticket is addressed by `id`, NOT `_id`** — this comment used to say `_id`, and that
+ * is wrong for `close`. `Ticket` is on `BaseSchemaOptions`, whose `toJSON` deletes `_id` and
+ * exposes the `id` virtual. The four enriched responses here carry BOTH, because
+ * `TicketEnrichmentService` uses `toObject({ virtuals: true })`, which applies no transform;
+ * `close` returns the raw document and carries `id` alone. `id` is the only identifier
+ * present on all five.
  */
 export class BotTicketController {
     /**
@@ -72,7 +88,33 @@ export class BotTicketController {
         );
 
         const enriched = await enrichmentService.enrichTickets(result.data);
-        res.status(200).json({ success: true, data: enriched, pagination: result.pagination });
+
+        const chat = windowForChat({
+            items: enriched,
+            total: result.pagination.total,
+            offset: (query.page - 1) * query.limit,
+            surface: 'tickets',
+            language: botResponseLanguageOf(req),
+        });
+
+        /**
+         * ⚠ **`pagination` STAYS, and `meta` is ADDED beside it rather than replacing it.**
+         *
+         * The three ticket tools answering `{ success, data, pagination }` instead of
+         * `meta` is a deliberate, documented deviation — it is the ticket module's shape on
+         * every role's mount, and `bot-surface.md` § 6 promises it. Renaming the key here
+         * would silently break a caller reading the documented field.
+         *
+         * But a client should not have to know which lists put their window under which
+         * key, so the window goes under `meta` exactly as it does on every other list. Both
+         * are present, `data` is untouched, and nothing that reads either one breaks.
+         */
+        res.status(200).json({
+            success: true,
+            data: chat.items,
+            pagination: result.pagination,
+            meta: chat.window,
+        });
     });
 
     /**
@@ -173,5 +215,74 @@ export class BotTicketController {
 
         const ticket = await ticketService.closeTicket(ticketId, caller.userId, ActorRole.CUSTOMER);
         sendSuccess(res, ticket);
+    });
+
+    /**
+     * `POST /tickets/:ticketId/attachments` — put a file the customer sent onto a ticket.
+     *
+     * ── THE MODEL NAMES A HANDLE, NEVER A FILE ──────────────────────────────
+     * The bytes arrived on `/files/inbound`, which stored them and answered with a
+     * thirty-minute, owner-scoped, single-use `ref`. That is the only thing this accepts.
+     * A `fileId` here would let a caller attach any file the customer has ever uploaded to
+     * any ticket they follow, and nothing downstream would find it odd.
+     *
+     * ── ACCESS IS THE FOLLOWER CHECK, REPRODUCED ────────────────────────────
+     * The same one `get` above applies, and for the same reason: the service exposes the
+     * pieces and not the composite, and reproducing it is what keeps a bot request from
+     * writing to a ticket a browser could not read. **It runs BEFORE the handle is spent** —
+     * a wrong ticket id must not also cost the customer their photo.
+     */
+    static addAttachment = asyncHandler(async (req: Request, res: Response) => {
+        const { ticketId } = BotTicketParamSchema.parse(req.params);
+        const { ref } = BotTicketAttachmentSchema.parse(req.body ?? {});
+        const caller = botCallerOf(req);
+
+        const ticket = await ticketService.getTicketById(ticketId);
+        if (!ticket) throw createAppError(ERROR_CODES.TICKET_NOT_FOUND, 404);
+
+        const isFollower = await followerService.isFollower(ticketId, caller.userId);
+        if (!isFollower) {
+            throw createAppError(ERROR_CODES.TICKET_ACCESS_DENIED, 403, 'Access denied to this ticket');
+        }
+
+        const file = await inboundFileStore.consume(caller.userId, ref);
+        if (!file) throw createAppError(ERROR_CODES.BOT_INBOUND_FILE_EXPIRED, 404);
+
+        let attachment;
+        try {
+            attachment = await attachmentService.attachFile(
+                ticketId,
+                file.fileId,
+                caller.userId,
+                // From the MOUNT, never from the body — the same rule the rest of this
+                // controller follows. `customerId` is the actor entity the file's
+                // `ownerId` was stamped with at intake, so the service's ownership check
+                // passes by construction rather than by luck.
+                ActorRole.CUSTOMER,
+                caller.customerId,
+                // PUBLIC is hardcoded, as `addNote` hardcodes its visibility. A customer
+                // has no use for an attachment support cannot see, and offering the field
+                // would only give a caller a chance to ask for one and be refused.
+                'PUBLIC',
+            );
+        } catch (error) {
+            /**
+             * ⚠ **Put the handle back.** The attach can fail for reasons that are the
+             * customer's to fix and not the file's — the five-per-ticket limit above all —
+             * and burning the handle on those turns "that ticket already has five files"
+             * into "…and now send the photo again", for a file sitting in storage,
+             * correct and unused. Only the caller that WON `consume` reaches this, so a
+             * concurrent second attempt has already been refused.
+             */
+            await inboundFileStore.restore(caller.userId, ref, file);
+            throw error;
+        }
+
+        const count = await attachmentService.getAttachmentCount(ticketId);
+        sendSuccess(
+            res,
+            toBotTicketAttachmentDto(attachment, { count, limit: TICKET_ATTACHMENT_LIMIT }),
+            { status: 201 },
+        );
     });
 }

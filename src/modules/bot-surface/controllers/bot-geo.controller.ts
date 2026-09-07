@@ -5,7 +5,7 @@ import { getGeocodingProvider } from '../../../core/geocoding';
 import { geoCandidateStore } from '../services/geo-candidate.store';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
-import { botChrome } from '../domain/bot-chrome-copy';
+import { botChrome, BotChromeKey } from '../domain/bot-chrome-copy';
 import { BotReplyIntent } from '../domain/channel-reply';
 import { BotGeoCandidateDto, toBotGeoCandidateDto } from '../dto/bot-projections';
 import { BotGeoReverseSchema, BotGeoSearchSchema } from '../validators/bot.validators';
@@ -75,6 +75,14 @@ export class BotGeoController {
 
         const candidate = await getGeocodingProvider().reverse(lat, lng);
         if (!candidate) {
+            // ⚠ A 200 with a `null` body is still a TURN. Leaving it wordless is what made an
+            // empty search silent (see `pickerFor`), and a pin that resolved to nothing is the
+            // same situation reached from the other direction — the customer did exactly what
+            // was asked and must not be met with nothing.
+            setBotReply(req, {
+                kind: 'text',
+                text: botChrome('addressNotFound', botResponseLanguageOf(req)),
+            });
             sendSuccess(res, null);
             return;
         }
@@ -88,7 +96,7 @@ export class BotGeoController {
         // ONE address and the customer still has to say it is the right one — a confirmation
         // is the same widget with one row, and reusing it means the answer comes back through
         // exactly the path a multi-candidate answer does.
-        setBotReply(req, pickerFor([dto], req));
+        setBotReply(req, pickerFor([dto], req, 'confirmPinPrompt'));
         sendSuccess(res, dto);
     });
 }
@@ -110,13 +118,38 @@ export class BotGeoController {
  * row's 24-character title), `description` the whole address again (that row's 72-character
  * subtitle). See `BotReplyOption`.
  */
-function pickerFor(candidates: readonly BotGeoCandidateDto[], req: Request): BotReplyIntent | null {
-    if (candidates.length === 0) return null;
-
+function pickerFor(
+    candidates: readonly BotGeoCandidateDto[],
+    req: Request,
+    /**
+     * Which question sits above the rows. A typed search asks the customer to choose between
+     * things they described (`choosePrompt`); a pin asks them to confirm one the platform
+     * derived from their coordinates (`confirmPinPrompt`), which is a different question and
+     * needs a different sentence. See `bot-chrome-copy.ts`.
+     */
+    promptKey: BotChromeKey = 'choosePrompt',
+): BotReplyIntent {
     const language = botResponseLanguageOf(req);
+
+    /**
+     * ⚠ **Zero candidates is a SENTENCE, not a null, and that is a fix rather than a
+     * refinement.** This returned `null` — no `reply` at all — which was correct only for a
+     * caller that treats "nothing to send" as "say nothing". Observed live 2026-09-06: a
+     * customer asked where to deliver typed *"My address"*, got five unrelated districts,
+     * objected, and the bot went silent for the rest of the conversation. The step stayed
+     * pending and nothing said so.
+     *
+     * `addressNotFound` names the remedy (a street and a city) rather than apologising,
+     * because the input a geocoder cannot use is almost always a phrase like "my address" or
+     * "home", and the customer has no way to know that is the problem.
+     */
+    if (candidates.length === 0) {
+        return { kind: 'text', text: botChrome('addressNotFound', language) };
+    }
+
     return {
         kind: 'choice',
-        text: botChrome('choosePrompt', language),
+        text: botChrome(promptKey, language),
         listButton: botChrome('chooseListButton', language),
         sectionTitle: botChrome('chooseSectionTitle', language),
         options: candidates.map((c) => ({

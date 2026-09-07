@@ -2,7 +2,7 @@ import { Types } from 'mongoose';
 import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product.repository.mongo';
 import { VariantRepositoryMongo } from '../../catalog/repositories/mongo/variant.repository.mongo';
 import { PriceResolverService } from '../../catalog/domain/services/pricing-inventory/PriceResolverService';
-import { CartModel, ICart } from '../models/cart.model';
+import { CartModel, ICart, ICartItem } from '../models/cart.model';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 
@@ -42,9 +42,32 @@ export interface CartResponse {
     quantity: number;
     price: number;
     currency: string;
+
+    /**
+     * Present only on a line whose price was haggled. Same number as `price` —
+     * it exists so a client can say "your agreed price" rather than "price".
+     */
+    negotiatedUnitPrice?: number;
+    /** The lock this line will spend at checkout. The customer's own handle. */
+    negotiationLockRef?: string;
   }>;
   totalItems: number;
 }
+
+/**
+ * ⚠ `floor_price_snapshot` is deliberately ABSENT from `CartResponse`, and must
+ * stay absent.
+ *
+ * It is the vendor's floor — the same secret `bargain.minPrice` is on the public
+ * catalogue, and the number the bargaining agent is trusted with precisely
+ * because it never leaves the negotiation. This DTO is returned verbatim by
+ * `GET /customer/cart` and by every bot cart route, so a field added here is a
+ * field published to the customer.
+ *
+ * Order creation does not need it from here either: `consume` returns the floor
+ * as of the verdict, which is the authoritative one (D-10). Nothing downstream
+ * has a reason to read the cart's copy.
+ */
 
 /**
  * How an anonymous cart is reconciled with a signed-in one.
@@ -106,7 +129,19 @@ export class CartService {
     productId: string,
     variantId: string,
     quantity: number,
-    currency: string = 'XAF'  // Default currency
+    currency: string = 'XAF',  // Default currency
+    /**
+     * A negotiated-price lock minted by the bargaining agent (optional).
+     *
+     * Presenting one changes two things and nothing else: the line is priced at
+     * the agreed price rather than the shelf price, and the line is SET to
+     * `quantity` rather than incremented — see the block below.
+     *
+     * It is only PEEKED here (D-12). The lock is spent at order creation, so a
+     * customer may remove the line and add it again, or leave the basket
+     * overnight, without losing what they haggled for.
+     */
+    negotiationLockRef?: string,
   ): Promise<CartResponse> {
     // 1. ENFORCE: variantId is REQUIRED (variant-first architecture)
     if (!variantId) {
@@ -136,12 +171,15 @@ export class CartService {
       throw createAppError(ERROR_CODES.CART_VARIANT_PRODUCT_MISMATCH, 400, 'Variant does not belong to this product');
     }
 
-    // Resolve price using PriceResolverService 
+    // Resolve price using PriceResolverService
     const resolvedPrice = await this.priceResolverService.execute({
       productId,
       variantId,
       vendorId: product.vendorId,
-      quantity
+      quantity,
+      ...(negotiationLockRef
+        ? { negotiation: { lockRef: negotiationLockRef, customerId: userId, mode: 'peek' as const } }
+        : {}),
     });
 
     // 5. FAIL-FAST: Digital products must have quantity = 1
@@ -183,12 +221,33 @@ export class CartService {
       (item) => item.variantId.toString() === variantId
     );
 
+    const negotiated = resolvedPrice.negotiated ?? null;
+
     if (existingItemIndex !== -1) {
       // Variant already in cart
       if (product.type === 'digital') {
         // Digital: quantity remains 1, no change
         // Just return current cart
         return this.formatCartResponse(cart);
+      } else if (negotiated) {
+        /**
+         * A LOCKED add SETS the line; it does not increment it.
+         *
+         * The lock is bound to (customer, variant, quantity), so incrementing an
+         * existing line produces a quantity nobody agreed a price for — and the
+         * mismatch would be silent, because the peek above validated the
+         * REQUESTED quantity rather than the resulting one. The negotiation was
+         * about "three of these at 41 000"; that is the line.
+         *
+         * The discarded quantity is a real cost and it is the lesser one: the
+         * alternative leaves a basket whose stated price is not the price
+         * anything will honour.
+         */
+        cart.items[existingItemIndex].quantity = quantity;
+        cart.items[existingItemIndex].price = resolvedPrice.unitPrice;
+        cart.items[existingItemIndex].negotiated_unit_price = resolvedPrice.unitPrice;
+        cart.items[existingItemIndex].floor_price_snapshot = negotiated.floorPrice;
+        cart.items[existingItemIndex].negotiation_lock_ref = negotiated.lockRef;
       } else {
         // Physical: increment quantity
         cart.items[existingItemIndex].quantity += quantity;
@@ -208,10 +267,15 @@ export class CartService {
         vendorId: new Types.ObjectId(product.vendorId),
         productType: product.type as 'physical' | 'digital',
 
-        // Pricing
+        // Pricing. `price` carries the agreed number on a negotiated line, so
+        // every existing reader — the quote, the totals, the order build — is
+        // right with no edit; the three fields beside it are the provenance.
         quantity,
         price: resolvedPrice.unitPrice,
         currency,
+        negotiated_unit_price: negotiated ? resolvedPrice.unitPrice : null,
+        floor_price_snapshot: negotiated ? negotiated.floorPrice : null,
+        negotiation_lock_ref: negotiated ? negotiated.lockRef : null,
       });
     }
 
@@ -236,13 +300,28 @@ export class CartService {
    *   - **The snapshot price is not refreshed.** `addToCart` only resolves a price when it
    *     *inserts* a line; incrementing an existing one leaves the original. Re-resolving
    *     here would mean the same button changes the price on one path and not the other,
-   *     which is worse than either rule on its own. The price a cart quotes is re-resolved
-   *     at checkout, which is the moment that actually binds.
+   *     which is worse than either rule on its own.
+   *
+   *     ⚠ This bullet used to end "The price a cart quotes is re-resolved at checkout,
+   *     which is the moment that actually binds." **That was false, and had been for as
+   *     long as it was written.** `order.service.ts` reads `cartItem.price` — the snapshot
+   *     — and never called `PriceResolverService` at all; the only other call site is
+   *     `mergeCart`. Order creation now DOES re-resolve, but only the lines carrying a
+   *     negotiation lock (BARGAINING-AGENT-PLAN D-12): re-resolving every line would
+   *     change ordinary checkout behaviour, which nobody has asked for. So for an ordinary
+   *     line the snapshot still binds, and this bullet is the whole of the rule.
    *   - **Digital lines stay at 1.** The rule is the product type's, not the endpoint's.
    *
    * `quantity: 0` is rejected rather than treated as a delete: two different intentions
    * should not share one call, and a client that computes its way to zero has a bug worth
    * surfacing. Use `DELETE /items/:variantId`.
+   *
+   * ⚠ **Changing the quantity DROPS a negotiated price**, and that is the one place this
+   * method does refresh something. A lock is bound to (customer, variant, quantity), so
+   * carrying the haggled unit price onto a quantity nobody agreed it for is exactly the
+   * silent overcharge — or undercharge — the binding exists to prevent. The lock is not
+   * consumed (that happens at order creation), so the customer can re-add at the agreed
+   * quantity and get their price back.
    */
   async setItemQuantity(
     userId: string,
@@ -274,10 +353,38 @@ export class CartService {
       );
     }
 
+    // A quantity change invalidates the lock's binding — see the ⚠ above. Only
+    // an actual change drops it, so a client re-sending the same number (a
+    // stepper double-fire, an idempotent retry) keeps the haggled price.
+    if (cart.items[index].quantity !== quantity) {
+      this.dropNegotiatedPrice(cart.items[index]);
+    }
+
     cart.items[index].quantity = quantity;
     await cart.save();
 
     return this.formatCartResponse(cart);
+  }
+
+  /**
+   * Strip a line back to an ordinary, un-negotiated one — used wherever the
+   * lock's (customer, variant, quantity) binding stops holding.
+   *
+   * It deliberately does NOT re-resolve `price` to the list price. That would
+   * make a quantity change silently more expensive at the moment the customer is
+   * looking at the total, and the shelf price for a bargainable variant is a
+   * question Stream D owns. The line keeps the number it was quoted and simply
+   * stops claiming a negotiation produced it; the earnings split then computes
+   * no uplift and no AI margin, which is the correct outcome for a line the
+   * platform can no longer prove was haggled.
+   *
+   * Written as explicit `null`s rather than `delete`s so the sub-document is
+   * written back cleared instead of keeping whatever Mongoose already had.
+   */
+  private dropNegotiatedPrice(item: ICartItem): void {
+    item.negotiated_unit_price = null;
+    item.floor_price_snapshot = null;
+    item.negotiation_lock_ref = null;
   }
 
   /**
@@ -459,6 +566,12 @@ export class CartService {
         // `sum` is the default because it matches what a shopper means: the two carts are
         // both theirs, and two of a thing in each is four.
         if (product.type !== 'digital') {
+          // ⚠ Summing changes the quantity, which breaks a lock's binding exactly as
+          // `setItemQuantity` does — so the server line's negotiated price goes with it.
+          // An incoming line can never CARRY one: it comes from localStorage, which is
+          // client-controlled, and honouring a price from there would let anyone name
+          // their own (the same argument the pricing comment below makes).
+          this.dropNegotiatedPrice(cart.items[existingIndex]);
           cart.items[existingIndex].quantity += quantity;
         }
       } else {
@@ -476,6 +589,9 @@ export class CartService {
           // is client-controlled data: trusting its price would let anyone name their own.
           price: unitPrice,
           currency: 'XAF',
+          negotiated_unit_price: null,
+          floor_price_snapshot: null,
+          negotiation_lock_ref: null,
         });
         cart.productType = product.type as 'physical' | 'digital';
       }
@@ -569,10 +685,15 @@ export class CartService {
         vendorId: item.vendorId.toString(),
         productType: item.productType,
 
-        // Pricing
+        // Pricing. Note what is NOT here: `floor_price_snapshot`. See the note
+        // on CartResponse — this object reaches the customer verbatim.
         quantity: item.quantity,
         price: item.price,
         currency: item.currency,
+        ...(item.negotiated_unit_price != null
+          ? { negotiatedUnitPrice: item.negotiated_unit_price }
+          : {}),
+        ...(item.negotiation_lock_ref ? { negotiationLockRef: item.negotiation_lock_ref } : {}),
       })),
       totalItems: cart.items.reduce((sum, item) => sum + item.quantity, 0),
     };

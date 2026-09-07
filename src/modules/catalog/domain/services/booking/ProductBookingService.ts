@@ -6,6 +6,7 @@ import { Product } from '../../../repositories/mappers/product.mapper';
 import { AvailabilityService } from '../../../../booking/services/availability.service';
 import { SlotGeneratorService } from '../../../../booking/services/slot-generator.service';
 import { BookingService } from '../../../../booking/services/booking.service';
+import { groupBookingService as groupBookingServiceSingleton } from '../../../../booking/services/group-booking.service';
 import { IBooking } from '../../../../booking/models/booking.model';
 import { Slot } from '../../../../booking/types/booking.types';
 import { BookedWindow, fullWindows, spotsRemainingFor } from '../../../../booking/utils/availability-windows.util';
@@ -34,7 +35,8 @@ export class ProductBookingService {
     private readonly bookingService: BookingService,
     private readonly priceResolver: BookingPriceResolver,
     private readonly variantRepository: IVariantRepository,
-    private readonly slotLockFacade: SlotLockFacade = new SlotLockFacade()
+    private readonly slotLockFacade: SlotLockFacade = new SlotLockFacade(),
+    private readonly groupBookingService = groupBookingServiceSingleton
   ) { }
 
   /**
@@ -263,11 +265,21 @@ export class ProductBookingService {
     return this.slotLockFacade.releaseSlot(slotId, userId, scopeToOwner);
   }
 
-  /** Whether the product's active service variant is in capacity booking mode. */
+  /**
+   * Whether the product's active service variant is in capacity booking mode — i.e.
+   * whether a hold on its slots is owner-scoped.
+   *
+   * Delegates to `GroupBookingService`, which is the single definition of "is this a
+   * group service". It used to decide independently here, and `BookingService.reschedule`
+   * did not ask at all: three call sites, two answers, and a customer who could not move a
+   * class booking (KI-1). One definition is what stops that recurring.
+   *
+   * The swallow-to-`false` is kept: a product with no usable service variant simply falls
+   * back to exclusive locking, and the booking path raises the real error a moment later.
+   */
   private async isCapacityProduct(productId: string): Promise<boolean> {
     try {
-      const variant = await this.getServiceVariant(productId);
-      return variant.serviceConfig!.bookingMode === 'capacity';
+      return await this.groupBookingService.isGroupService(productId);
     } catch {
       // No usable service variant → not capacity; fall back to exclusive locking.
       return false;

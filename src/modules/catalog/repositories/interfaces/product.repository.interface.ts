@@ -13,6 +13,41 @@ export interface IProductRepository {
   findByStatus(status: string, vendorId: string, pagination: PaginationOptions, options?: RepositoryOptions): Promise<Page<Product>>;
   existsBySlug(slug: string, vendorId: string, options?: RepositoryOptions): Promise<boolean>;
 
+  /**
+   * How many catalog slots the vendor occupies, for plan-limit enforcement — every
+   * non-archived, non-deleted product EXCEPT those the plan-quota sweep has suspended.
+   * That exclusion is what lets the sweep converge; see the implementation.
+   */
+  countActiveByVendor(vendorId: string, options?: RepositoryOptions): Promise<number>;
+
+  /**
+   * Every slot-occupying product, oldest first — the order the plan-quota sweep
+   * suspends and restores along. Includes quota-suspended rows (the sweep must see the
+   * whole candidate set); it is the count above that excludes them.
+   */
+  listQuotaSlotsOldestFirst(vendorId: string, options?: RepositoryOptions): Promise<
+    Array<{ id: string; status: ProductStatus; createdAt: Date; suspensionReason: ProductSuspensionReason | null }>
+  >;
+
+  /**
+   * Suspend the named products for `plan_quota_exceeded`, whatever their current
+   * (non-archived) status — drafts included, because a draft occupies a slot. Returns
+   * the ids actually moved.
+   */
+  suspendProductsForQuota(vendorId: string, productIds: string[], options?: RepositoryOptions): Promise<string[]>;
+
+  /**
+   * Lift a `plan_quota_exceeded` suspension back to `targetStatus`. Pinned to that
+   * reason, so an upgrade can never republish a listing an administrator or an agency
+   * took down.
+   */
+  restoreProductFromQuota(
+    productId: string,
+    vendorId: string,
+    targetStatus: Exclude<ProductStatus, 'suspended'>,
+    options?: RepositoryOptions,
+  ): Promise<boolean>;
+
   update(id: string, vendorId: string, updates: Partial<Product>, options?: RepositoryOptions): Promise<Product | null>;
 
   softDelete(id: string, vendorId: string, options?: RepositoryOptions, purgeAt?: Date): Promise<void>;

@@ -34,6 +34,41 @@ export interface ICartItem {
   quantity: number;                   // Quantity in cart
   price: number;                      // Unit price snapshot
   currency: string;                   // Currency code (e.g., 'XAF', 'USD')
+
+  // === NEGOTIATED PRICE (bargaining agent — optional, absent on an ordinary line) ===
+  /**
+   * The price the customer haggled to, and the marker that this line WAS
+   * haggled. `price` above carries the same number so every existing reader
+   * (the cart quote, the order build, the totals) is correct with no edit; this
+   * field is what says the number came from a negotiation rather than a shelf.
+   *
+   * Absent = an ordinary line at the list price.
+   */
+  negotiated_unit_price?: number | null;
+  /**
+   * The vendor's floor at the moment the lock was honoured — the number the
+   * platform's AI margin is a share of the uplift OVER.
+   *
+   * ⚠ Snapshotted rather than re-read: the vendor may edit `variant.price` at
+   * any time, and re-reading at split time would compute a share of an uplift
+   * nobody agreed to. Note the ORDER item's copy is taken from the consume
+   * verdict rather than from here (see `order.service.ts`) — this one is the
+   * add-to-cart record, and the two can legitimately differ if the vendor moved
+   * the window in between.
+   *
+   * ⚠ Never surfaced to a customer. It is the vendor's floor, the same secret
+   * `bargain.minPrice` is on the public catalogue.
+   */
+  floor_price_snapshot?: number | null;
+  /**
+   * The lock this line is spending, carried so order creation can CONSUME it
+   * (D-12 — add-to-cart only peeks).
+   *
+   * The line keeps it after checkout fails, which is the point: a failed order
+   * has not burned the lock, so the customer's next attempt still gets their
+   * price.
+   */
+  negotiation_lock_ref?: string | null;
 }
 
 export interface ICart {
@@ -96,10 +131,29 @@ const CartItemSchema = new Schema<ICartItem>({
     required: true, 
     min: 0 
   },
-  currency: { 
-    type: String, 
+  currency: {
+    type: String,
     required: true,
     default: 'XAF'  // Default currency
+  },
+
+  // Negotiated price — see ICartItem. All three are absent on an ordinary line;
+  // `default: null` rather than `undefined` so a line that LOSES its negotiation
+  // (a quantity change — see setItemQuantity) is written back as explicitly
+  // un-negotiated rather than leaving a stale value behind.
+  negotiated_unit_price: {
+    type: Number,
+    default: null,
+    min: 0
+  },
+  floor_price_snapshot: {
+    type: Number,
+    default: null,
+    min: 0
+  },
+  negotiation_lock_ref: {
+    type: String,
+    default: null
   },
 }, { _id: false });
 

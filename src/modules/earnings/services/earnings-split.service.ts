@@ -31,6 +31,10 @@ import {
   resolveEarnedFee,
   ShipmentDeliveryOutcome,
 } from './earnings-quote.service';
+// Pure, DB-free, and separate for the same reason EarningsQuoteService is: the
+// arithmetic has to be testable without a Mongo connection. See its header for
+// why `vendorGross` is `P×qty − aiMargin` and never `floor×qty + 0.7·U`.
+import { computeOrderAiMargin, NegotiatedLineInput } from './negotiation-margin.service';
 
 // The pure fee arithmetic lives in `EarningsQuoteService` — see its header. Both
 // halves of every division are defined there (`applyFeeSplit` for the agent,
@@ -39,6 +43,34 @@ import {
 // drift. Re-exported here because this is where callers historically found them.
 export { resolveEarnedFee };
 export type { ShipmentDeliveryOutcome };
+
+/**
+ * One order item, as the AI-margin arithmetic sees it — and the single place
+ * D-5's **"only on orders carrying a negotiation lock"** is enforced.
+ *
+ * ⚠ That condition does real work; it is not a description of an edge case.
+ * Since D-1 flipped the storefront, a bargainable variant is sold at its ASK and
+ * `variant.price` is the vendor's floor — so an ORDINARY, un-haggled sale of one
+ * also has `P > floor` and therefore a non-zero uplift. Keying the margin on the
+ * uplift alone would take 30% of it on a sale no model touched, which is the
+ * opposite of what D-5 says and would quietly reduce every such vendor's payout.
+ *
+ * The gate is `negotiated_unit_price`, which is written ONLY when
+ * `PriceResolverService` honoured a lock at order creation. `floor_price_snapshot`
+ * alone would be a weaker test — it is written in the same breath today, but they
+ * are two columns and a future writer could set one without the other.
+ *
+ * Returning a `null` floor is what makes the line arithmetically ordinary: zero
+ * uplift, zero margin, and the vendor keeps the whole line.
+ */
+function negotiatedLineOf(item: IOrderItem): NegotiatedLineInput {
+  const locked = item.negotiated_unit_price != null;
+  return {
+    unitPrice: item.price,
+    floorPrice: locked ? item.floor_price_snapshot : null,
+    quantity: item.quantity,
+  };
+}
 
 /**
  * EarningsSplitService - splits a paid order/booking into per-beneficiary
@@ -108,7 +140,16 @@ export class EarningsSplitService {
    * actually happens and the agent is known.
    *
    * The gross therefore reconciles across two moments, not one:
-   *   gross = commission + vendorNet + Σ(agency + agent + vendor-refund per shipment)
+   *   gross = aiMargin + commission + vendorNet
+   *              + Σ(agency + agent + vendor-refund per shipment)
+   *
+   * ⚠ `aiMargin` is the newest term (BARGAINING-AGENT-PLAN D-5) and it comes off
+   * FIRST, before commission and delivery. It is the platform's 30% of the
+   * uplift the bargaining agent won on a negotiated line — zero on every
+   * ordinary order, which is why the reconciliation above still describes one.
+   * Commission is then a percentage of `vendorGross` (gross minus the AI margin)
+   * rather than of the gross: the platform does not take commission on money it
+   * has already taken as margin.
    *
    * Digital orders have no shipments, so there is no delivery fee and nothing is
    * deferred. COD orders never reach this method at all — they have no payment to
@@ -122,8 +163,15 @@ export class EarningsSplitService {
     const gross = order.total_amount;
     const currency = order.currency;
 
+    // The platform's share of the bargaining uplift, summed over the lines that
+    // carry one. An order may mix negotiated and ordinary lines, and the total is
+    // the sum of the PER-LINE margins — never a margin on the summed uplift, which
+    // would round differently and leave the reconciliation a franc short.
+    const aiMargin = computeOrderAiMargin(order.items.map(negotiatedLineOf));
+    const vendorGross = gross - aiMargin;
+
     const { commissionPercent } = await this.entitlements.getEntitlements(vendorId);
-    const commission = Math.floor((gross * commissionPercent) / 100);
+    const commission = Math.floor((vendorGross * commissionPercent) / 100);
 
     // Per-shipment, policy-driven agency delivery fee (physical orders only —
     // digital orders have no shipments). See computeAgencyDeliveryFees for the
@@ -134,10 +182,11 @@ export class EarningsSplitService {
         : { byAgency: new Map<string, number>(), byShipment: new Map<string, number>() };
     const deliveryTotal = [...byAgency.values()].reduce((sum, v) => sum + v, 0);
 
-    const vendorNet = gross - commission - deliveryTotal;
+    const vendorNet = vendorGross - commission - deliveryTotal;
     if (vendorNet < 0) {
       throw createAppError(ERROR_CODES.EARNINGS_INVALID_SPLIT, 422, undefined, {
         gross,
+        aiMargin,
         commission,
         deliveryTotal,
       });
@@ -170,12 +219,27 @@ export class EarningsSplitService {
         amount: commission,
         currency,
       },
+      // The bargaining agent's share. A singleton account like `platform`, kept
+      // separate from it so "what did the AI earn us" stays an answerable
+      // question. `persist` skips a zero-value row, so an ordinary order writes
+      // nothing here.
+      {
+        source_type: 'order',
+        source_id: sourceId,
+        beneficiary_type: 'platform_ai',
+        beneficiary_id: null,
+        gross_snapshot: gross,
+        commission_percent_snapshot: commissionPercent,
+        amount: aiMargin,
+        currency,
+      },
     ];
 
     await this.persist(allocations);
 
     await this.emitSplit('order', sourceId, vendorId, {
       gross,
+      aiMargin,
       commission,
       // Charged to the vendor now, allocated to the agency/agent at delivery.
       deliveryDeferred: deliveryTotal,
@@ -290,6 +354,17 @@ export class EarningsSplitService {
    *  - The agency's `additional_fees.cod_handling_fee` is charged here
    *    (percentage of the collected amount, or fixed per collection), paid by
    *    the vendor like the delivery fee.
+   *
+   * The reconciliation, with the AI margin (BARGAINING-AGENT-PLAN D-5):
+   *   gross = aiMargin + commission + agency + agent + vendorNet
+   *
+   * ⚠ **The AI margin here is computed over THIS SHIPMENT'S lines, not the
+   * order's.** `gross` is `collection.expected_amount`, which is
+   * `Σ orderItem.price × shipmentItem.quantity` — one shipment's slice of the
+   * order, and an order item can be split across shipments. Using the order
+   * items' own quantities would allocate the whole order's margin once per
+   * collection, over-allocating on a multi-shipment order and potentially driving
+   * `vendorNet` negative. `computeShipmentAiMargin` is the join.
    */
   async splitCodCollection(order: IOrder, collection: ICashCollection): Promise<void> {
     const sourceId = collection._id.toString();
@@ -299,9 +374,6 @@ export class EarningsSplitService {
     const gross = collection.expected_amount;
     const currency = collection.currency;
     const agencyId = collection.agency_id.toString();
-
-    const { commissionPercent } = await this.entitlements.getEntitlements(vendorId);
-    const commission = Math.floor((gross * commissionPercent) / 100);
 
     const [shipment, agency] = await Promise.all([
       this.shipmentRepo.findById(collection.shipment_id.toString()),
@@ -314,6 +386,15 @@ export class EarningsSplitService {
     }
 
     const orderItemsById = new Map(order.items.map((i) => [(i._id as any).toString(), i]));
+
+    // Per-shipment, for the reason in the docstring above. Computed before the
+    // commission because the commission is a percentage of what is left after it.
+    const aiMargin = this.computeShipmentAiMargin(shipment, orderItemsById);
+    const vendorGross = gross - aiMargin;
+
+    const { commissionPercent } = await this.entitlements.getEntitlements(vendorId);
+    const commission = Math.floor((vendorGross * commissionPercent) / 100);
+
     const deliveryFee = this.computeShipmentDeliveryFee(
       shipment,
       agency?.policies ?? null,
@@ -339,10 +420,11 @@ export class EarningsSplitService {
     const agentId = collection.agent_id.toString();
     const agentCut = await this.computeAgentCut(agentId, agencyId, deliveryFee);
 
-    const vendorNet = gross - commission - deliveryFee - codFee;
+    const vendorNet = vendorGross - commission - deliveryFee - codFee;
     if (vendorNet < 0) {
       throw createAppError(ERROR_CODES.EARNINGS_INVALID_SPLIT, 422, undefined, {
         gross,
+        aiMargin,
         commission,
         deliveryFee,
         codFee,
@@ -392,18 +474,55 @@ export class EarningsSplitService {
       // an agent must not be able to withdraw a cut of money they are still
       // holding, or never handed back.
       { ...codDefaults, beneficiary_type: 'agent', beneficiary_id: agentId, amount: agentCut },
+      // The bargaining agent's share of THIS shipment's uplift — see the
+      // docstring. Zero on an ordinary collection, and `persist` skips a
+      // zero-value row, so nothing is written for one.
+      { ...codDefaults, beneficiary_type: 'platform_ai', beneficiary_id: null, amount: aiMargin },
     ];
 
     await this.persist(allocations);
 
     await this.emitSplit('cod_collection', sourceId, vendorId, {
       gross,
+      aiMargin,
       commission,
       deliveryFee,
       codFee,
       agentCut,
       vendorNet,
     });
+  }
+
+  /**
+   * The AI margin owed on ONE shipment's slice of an order.
+   *
+   * Joins each `IShipmentItem` back to its order item — the same join
+   * `CashCollectionService.computeExpectedAmount` does to derive the cash to
+   * collect — and takes the price and floor from the order item while taking the
+   * **quantity from the shipment item**. That pairing is the whole point: it is
+   * what makes this margin a share of exactly the uplift inside
+   * `collection.expected_amount`, so the two reconcile.
+   *
+   * An unknown `order_item_id` is SKIPPED rather than thrown on, unlike
+   * `computeExpectedAmount`, which hard-throws. The asymmetry is deliberate:
+   * there, a missing join means the platform does not know how much cash to
+   * collect, and guessing is worse than failing. Here it means the platform
+   * cannot prove that line was negotiated — so it takes nothing, the vendor keeps
+   * the whole line, and the money still reconciles. Failing the split instead
+   * would strand a delivered COD collection nobody is ever paid for.
+   */
+  private computeShipmentAiMargin(
+    shipment: IShipment,
+    orderItemsById: Map<string, IOrderItem>
+  ): number {
+    return computeOrderAiMargin(
+      shipment.items.flatMap((shipmentItem) => {
+        const orderItem = orderItemsById.get(shipmentItem.order_item_id.toString());
+        if (!orderItem) return [];
+        // Same lock gate as the prepaid path, with the SHIPMENT's quantity.
+        return [{ ...negotiatedLineOf(orderItem), quantity: shipmentItem.quantity }];
+      })
+    );
   }
 
   /**

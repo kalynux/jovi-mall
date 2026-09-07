@@ -49,6 +49,23 @@ router.get('/products', PublicCatalogController.listProducts);
  */
 router.get('/products/:productId/related', PublicCatalogController.listRelatedProducts);
 
+/**
+ * ⚠ **Declared BEFORE `/products/:productId`, and here the ordering is LOAD-BEARING.**
+ *
+ * Unlike `/products/:productId/related` above — which is safe because it has one more
+ * segment — this route has exactly the same segment count as `/products/:productId`.
+ * Express matches in declaration order, so declaring it second means `by-ids` is read as a
+ * product id, fails the 24-hex schema, and every hydration request answers `400` with a
+ * message about a malformed id. Most-specific-first is not a style preference on this pair.
+ *
+ * `by-ids` is a literal segment for the same reason `variants/by-sku/:sku` is: it keeps the
+ * `/products/` prefix open for the next sibling instead of letting a parameter swallow it.
+ *
+ * Batch hydration of ids the caller already holds — see the controller for why order and
+ * `missing` are part of the contract.
+ */
+router.get('/products/by-ids', PublicCatalogController.listProductsByIds);
+
 router.get('/products/:productId', PublicCatalogController.getProductById);
 
 // ─── Variants ────────────────────────────────────────────────────────────────

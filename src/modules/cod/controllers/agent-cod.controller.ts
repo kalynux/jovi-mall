@@ -13,6 +13,7 @@ import {
   AgentRaiseDiscrepancySchema,
 } from '../validators/cod.validators';
 import { IDeliveryAgent, agentCodThresholdService } from '../../agents';
+import { resolveEffectiveTrustScore } from '../../agents/domain/services/agent-trust-override';
 import {
   agentActionAuditService,
   outcomeFromError,
@@ -109,6 +110,13 @@ export class AgentCodController {
       codExposureService.currentExposure(agentId),
     ]);
 
+    // ⚠ The EFFECTIVE score, not `cod.trust_score`. `effectiveExposureLimit`
+    // beside it has ALWAYS honoured an administrator's pinned override, so
+    // reporting the computed score here put two numbers in one body that
+    // disagreed about the same agent — the limit scaled by a score the response
+    // did not show.
+    const trust = resolveEffectiveTrustScore(agent);
+
     res.json({
       success: true,
       data: {
@@ -116,7 +124,10 @@ export class AgentCodController {
         currency,
         currentExposure: exposure,
         effectiveExposureLimit: codExposureService.effectiveLimit(agent, agent.cod?.max_threshold ?? 0),
-        trustScore: agent.cod?.trust_score ?? 100,
+        trustScore: trust.score,
+        // Deliberately NOT the override's reason: that is an administrator's
+        // internal note about this agent, and this is the agent's own view.
+        trustSource: trust.source,
       },
     });
   });

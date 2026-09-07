@@ -236,7 +236,7 @@ The list is now enough to render a full job card — no detail fetch needed to s
 what it pays, or what it looks like.
 
 `itemImages` is a capped thumbnail stack (one picture per item, deduped, ≤3) — `itemCount` stays the
-true item count. Each entry is `{ id, key, url, mimeType, size, originalName }`. The picture is the
+true item count. Each entry is `{ id, key, url, access, mimeType, size, originalName }`. The picture is the
 sold **variant's** image where it has one, else the product's first image, and it is resolved **live**
 from the catalog rather than snapshotted onto the order — so a vendor replacing their photo changes
 what the agent sees, and an item whose media was removed simply has none.

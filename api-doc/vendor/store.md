@@ -1,5 +1,9 @@
 # Store Profile Management API Documentation
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–26). Corrections are marked inline with ⚠ and a source citation.
+
 ## Overview
 
 The Store Profile Management API allows vendors to manage their public storefront - the commercial surface of their business on the platform. Each vendor has exactly one store, **auto-created on first access** (and provisioned during onboarding Step 1). Vendors can view and update store details and manage vacation mode, but cannot modify the immutable `slug`.
@@ -54,6 +58,7 @@ Authorization: Bearer <jwt_token>
       "id": "507f1f77bcf86cd799439030",
       "key": "images/2026/07/logo-techsolutions.png",
       "url": "https://cdn.example.com/logos/techsolutions.png",
+      "access": "public",
       "mimeType": "image/png",
       "size": 24576,
       "originalName": "logo.png"
@@ -62,6 +67,7 @@ Authorization: Bearer <jwt_token>
       "id": "507f1f77bcf86cd799439031",
       "key": "images/2026/07/banner-techsolutions.jpg",
       "url": "https://cdn.example.com/banners/techsolutions.jpg",
+      "access": "public",
       "mimeType": "image/jpeg",
       "size": 184320,
       "originalName": "banner.jpg"
@@ -72,7 +78,7 @@ Authorization: Bearer <jwt_token>
     "supportPhone": "+237612345678",
     "supportWhatsapp": "+237612345678",
     "isOpen": true,
-    "publicUrl": "https://yourdomain.com/store/techsolutions",
+    "publicUrl": "https://yourdomain.com/shop/stores/techsolutions",
     "version": 5,
     "createdAt": "2024-01-15T10:30:00.000Z",
     "updatedAt": "2024-01-28T14:22:00.000Z"
@@ -93,19 +99,34 @@ from the business name given at signup (else the vendor's display name), slug au
 
 #### Error Responses
 
-**Unauthorized (401)**:
+**Unauthorized (401)** — no credential presented (`auth.middleware.ts:126`):
 
 ```json
 {
-  "error": "Unauthorized: Missing token"
+  "success": false,
+  "requestId": "req_01J…",
+  "error": {
+    "code": "AUTH_MISSING_TOKEN",
+    "message": "Authentication token required",
+    "statusCode": 401,
+    "category": "authentication"
+  }
 }
 ```
 
-**Forbidden (403)**:
+**Forbidden (403)** — signed in as the wrong role (`requireRole`, `auth.middleware.ts:365`):
 
 ```json
 {
-  "error": "Forbidden: Insufficient permissions"
+  "success": false,
+  "requestId": "req_01J…",
+  "error": {
+    "code": "AUTH_ROLE_NOT_FOUND",
+    "message": "Insufficient permissions",
+    "statusCode": 403,
+    "category": "authorization",
+    "details": { "required": ["vendor"], "actual": "customer" }
+  }
 }
 ```
 
@@ -152,7 +173,7 @@ Content-Type: application/json
 **Fields** (all optional except `version`):
 
 - `name` (string, 2-100 chars): Store display name — **not clearable** (required field)
-- `logoFileId` (string, MongoDB ObjectId, *clearable*): Id of a logo file previously uploaded via `POST /api/files/upload`. The response returns the resolved `logo` file object (`{ id, key, url, mimeType, size, originalName }` | null). Registers a `file_references` row so the file is not garbage-collected while set.
+- `logoFileId` (string, MongoDB ObjectId, *clearable*): Id of a logo file previously uploaded via `POST /api/files/upload`. The response returns the resolved `logo` file object (`{ id, key, url, access, mimeType, size, originalName }` | null). Registers a `file_references` row so the file is not garbage-collected while set.
 - `bannerFileId` (string, MongoDB ObjectId, *clearable*): Id of a banner/hero file uploaded via `POST /api/files/upload`. The response returns the resolved `banner` file object (same shape as `logo`).
 - `description` (string, max 1000 chars, *clearable*): Store description
 - `supportEmail` (string, valid email, lowercased, *clearable*): Support contact email
@@ -185,7 +206,9 @@ and
 are equivalent: both remove the logo. A non-empty invalid value (e.g. `"logoFileId": "not-an-id"`) is still rejected with `VALIDATION_ERROR`.
 
 > [!IMPORTANT]
-> **Immutable Fields**: `slug` cannot be updated, and `country` is not stored on the store at all (it lives on the vendor profile, set-once). Attempts to send either are rejected.
+> **Immutable Fields**: `slug` cannot be updated, and `country` is not stored on the store at all (it lives on the vendor profile, set-once).
+>
+> ⚠ **Sending either is SILENTLY STRIPPED — it is not rejected, and you get a `200`.** `UpdateStoreProfileSchema` is a plain `z.object` (not `.strict()`), so Zod removes both keys before the controller passes the parsed value on (`store.controller.ts:57`). The service's two guards read `rawInput.slug` / `rawInput.country` on that already-stripped object (`store-profile.service.ts:147-153`), so they are **dead code and neither 403 can be raised.** A client that sends a new slug is told the save succeeded and the slug is unchanged.
 
 #### Response
 
@@ -203,6 +226,7 @@ are equivalent: both remove the logo. A non-empty invalid value (e.g. `"logoFile
       "id": "507f1f77bcf86cd799439030",
       "key": "images/2026/07/new-logo.png",
       "url": "https://cdn.example.com/logos/new-logo.png",
+      "access": "public",
       "mimeType": "image/png",
       "size": 24576,
       "originalName": "new-logo.png"
@@ -211,6 +235,7 @@ are equivalent: both remove the logo. A non-empty invalid value (e.g. `"logoFile
       "id": "507f1f77bcf86cd799439031",
       "key": "images/2026/07/new-banner.jpg",
       "url": "https://cdn.example.com/banners/new-banner.jpg",
+      "access": "public",
       "mimeType": "image/jpeg",
       "size": 184320,
       "originalName": "new-banner.jpg"
@@ -221,7 +246,7 @@ are equivalent: both remove the logo. A non-empty invalid value (e.g. `"logoFile
     "supportPhone": "+237698765432",
     "supportWhatsapp": "+237698765432",
     "isOpen": true,
-    "publicUrl": "https://yourdomain.com/store/techsolutions",
+    "publicUrl": "https://yourdomain.com/shop/stores/techsolutions",
     "version": 6,
     "createdAt": "2024-01-15T10:30:00.000Z",
     "updatedAt": "2024-01-29T09:15:00.000Z"
@@ -237,49 +262,62 @@ are equivalent: both remove the logo. A non-empty invalid value (e.g. `"logoFile
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Request validation failed",
-    "details": [
-      {
-        "field": "name",
-        "message": "Name must be at least 2 characters"
-      },
-      {
-        "field": "logoFileId",
-        "message": "logoFileId must be a valid file id"
-      }
-    ]
+    "statusCode": 400,
+    "category": "validation",
+    "details": {
+      "fields": [
+        {
+          "path": "name",
+          "message": "Name must be at least 2 characters",
+          "code": "too_small"
+        },
+        {
+          "path": "logoFileId",
+          "message": "logoFileId must be a valid file id",
+          "code": "invalid_string"
+        }
+      ]
+    }
   }
 }
 ```
 
-**Slug Immutability (403)**:
+**~~Slug Immutability (403)~~ — UNREACHABLE**:
 
 > [!IMPORTANT]
-> Slug is READ-ONLY in vendor API. Only admin can change slugs (future feature with URL redirects). This prevents SEO disasters and support nightmares.
+> Slug is READ-ONLY in the vendor API. Only an admin can change slugs (a future feature, with URL redirects). ⚠ **The body below is never sent** — the key is stripped before the check that would produce it (see the note under "Immutable Fields" above). It is kept here, struck through in the heading, because a shipped client may still branch on `AUTH_FORBIDDEN` here; that branch is dead.
 
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "FORBIDDEN",
-    "message": "Slug cannot be modified. Contact support if you need to change your store URL."
+    "code": "AUTH_FORBIDDEN",
+    "message": "Slug cannot be modified. Contact support if you need to change your store URL.",
+    "statusCode": 403,
+    "category": "authorization"
   }
 }
 ```
 
-**Country Not Stored Here (403)**:
+**~~Country Not Stored Here (403)~~ — UNREACHABLE**:
 
 > [!IMPORTANT]
-> The store has no country field. The country lives on the vendor profile — set once during onboarding, immutable afterwards.
+> The store has no country field. The country lives on the vendor profile — set once during onboarding, immutable afterwards. ⚠ **The body below is never sent**, for the same reason as the slug case above: `country` is stripped by the schema before the guard reads it.
 
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "PROFILE_COUNTRY_IMMUTABLE",
-    "message": "Country is not stored on the store. It lives on your vendor profile and is set once during onboarding."
+    "message": "Country is not stored on the store. It lives on your vendor profile and is set once during onboarding.",
+    "statusCode": 403,
+    "category": "authorization"
   }
 }
 ```
@@ -289,12 +327,22 @@ are equivalent: both remove the logo. A non-empty invalid value (e.g. `"logoFile
 > [!IMPORTANT]
 > This error occurs when the store was modified by another request between when you loaded it and when you tried to save it. The client should refresh the store profile and retry the update.
 
+> [!WARNING]
+> **Do not branch on the `code` here.** The version check raises `STORE_SLUG_TAKEN`
+> (`store-profile.service.ts:175,247`) — the code is **misnamed on the wire** and says nothing
+> about a slug; no slug was involved. Branch on `statusCode === 409 && category === 'conflict'`
+> instead. Same defect class as `VENDOR_FISCAL_CALENDAR_INVALID` on the vendor profile
+> ([`profile.md`](./profile.md)); renaming either is a breaking wire change and has not been made.
+
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "CONFLICT",
-    "message": "Store was modified by another request. Please refresh and try again."
+    "code": "STORE_SLUG_TAKEN",
+    "message": "Store was modified by another request. Please refresh and try again.",
+    "statusCode": 409,
+    "category": "conflict"
   }
 }
 ```
@@ -346,7 +394,7 @@ Content-Type: application/json
     "name": "TechSolutions Premium",
     "slug": "techsolutions",
     "isOpen": true,
-    "publicUrl": "https://yourdomain.com/store/techsolutions",
+    "publicUrl": "https://yourdomain.com/shop/stores/techsolutions",
     "version": 7,
     ...
   },
@@ -365,7 +413,7 @@ Content-Type: application/json
     "name": "TechSolutions Premium",
     "slug": "techsolutions",
     "isOpen": false,
-    "publicUrl": "https://yourdomain.com/store/techsolutions",
+    "publicUrl": "https://yourdomain.com/shop/stores/techsolutions",
     "version": 7,
     ...
   },
@@ -380,15 +428,21 @@ Content-Type: application/json
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Request validation failed",
-    "details": [
-      {
-        "field": "isOpen",
-        "message": "isOpen must be a boolean"
-      }
-    ]
+    "statusCode": 400,
+    "category": "validation",
+    "details": {
+      "fields": [
+        {
+          "path": "isOpen",
+          "message": "isOpen must be a boolean",
+          "code": "invalid_type"
+        }
+      ]
+    }
   }
 }
 ```
@@ -398,9 +452,12 @@ Content-Type: application/json
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "CONFLICT",
-    "message": "Store was modified by another request. Please refresh and try again."
+    "code": "STORE_SLUG_TAKEN",
+    "message": "Store was modified by another request. Please refresh and try again.",
+    "statusCode": 409,
+    "category": "conflict"
   }
 }
 ```
@@ -453,7 +510,7 @@ All store updates use **optimistic locking** to prevent data loss from concurren
 **Error if attempted**:
 ```json
 {
-  "code": "FORBIDDEN",
+  "code": "AUTH_FORBIDDEN",
   "message": "Slug cannot be modified. Contact support if you need to change your store URL."
 }
 ```
@@ -487,12 +544,12 @@ publicUrl = `${STORE_PUBLIC_URL_BASE}/${encodeURIComponent(slug)}`
 
 **Configuration**:
 ```env
-STORE_PUBLIC_URL_BASE=https://yourdomain.com/store
+STORE_PUBLIC_URL_BASE=https://yourdomain.com/shop/stores
 ```
 
 **Example**:
 - Slug: `techsolutions`
-- Public URL: `https://yourdomain.com/store/techsolutions`
+- Public URL: `https://yourdomain.com/shop/stores/techsolutions`
 
 **Future enhancements**:
 - Custom domains (`https://store.techsolutions.com`)
@@ -545,7 +602,7 @@ eventBus.publish('store.slug.changed', {
     vendorId,
     oldSlug: 'old-store',
     newSlug: 'new-store',
-    redirectUrl: 'https://yourdomain.com/store/new-store'
+    redirectUrl: 'https://yourdomain.com/shop/stores/new-store'
   },
   occurredAt: new Date()
 });
@@ -625,11 +682,11 @@ The system is designed for future multi-store support:
 | Code | HTTP Status | Description |
 |------|-------------|-------------|
 | `VALIDATION_ERROR` | 400 | Request body failed validation |
-| `UNAUTHORIZED` | 401 | Missing or invalid JWT token |
-| `FORBIDDEN` | 403 | Business rule violation (immutable field modification) |
-| `NOT_FOUND` | 404 | Store not found (system bug) |
-| `CONFLICT` | 409 | Optimistic locking version mismatch |
-| `INTERNAL_ERROR` | 500 | Unexpected server error |
+| `AUTH_MISSING_TOKEN` / `AUTH_TOKEN_EXPIRED` / `AUTH_TOKEN_INVALID` | 401 | Missing, expired or malformed token. ⚠ There is no `UNAUTHORIZED` code in the registry |
+| `AUTH_ROLE_NOT_FOUND` / `AUTH_VENDOR_SUSPENDED` | 403 | Not signed in as an active vendor. ⚠ There is no `FORBIDDEN` code in the registry, and the immutable-field 403s above are unreachable |
+| ~~`NOT_FOUND`~~ | ~~404~~ | **Not raised here.** The store is created on demand (`ensureStoreForVendor`), so there is no missing-store path. `NOT_FOUND` is reserved for unmatched routes |
+| `STORE_SLUG_TAKEN` | 409 | Optimistic-locking version mismatch. ⚠ The code really is `STORE_SLUG_TAKEN` — see the warning above; there is no `CONFLICT` in the registry |
+| `INTERNAL_SERVER_ERROR` | 500 | Unexpected server error. ⚠ Not `INTERNAL_ERROR` |
 
 ---
 

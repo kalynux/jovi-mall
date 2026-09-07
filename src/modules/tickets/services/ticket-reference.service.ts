@@ -7,7 +7,7 @@ import { AgencyMagazinModel } from '../../magazin/models/magazin.model';
 import { FileModel } from '../../catalog/models/file.model';
 import { getStorageProvider } from '../../../core/storage/storage.instance';
 import { FileRepositoryMongo } from '../../catalog/repositories/mongo/file.repository.mongo';
-import { resolveFileDetails } from '../../catalog/read-models/file-detail.resolver';
+import { resolveFileDetails, toFileDetail } from '../../catalog/read-models/file-detail.resolver';
 
 /**
  * Ticket Reference Service
@@ -218,21 +218,39 @@ export class TicketReferenceService {
             .map(p => (p.fileIds && p.fileIds.length ? p.fileIds[0] : null))
             .filter(Boolean) as Types.ObjectId[];
         const files = firstFileIds.length
-            ? await FileModel.find({ _id: { $in: firstFileIds } }).select('key').lean()
+            // `key` alone is no longer enough: the shared resolver decides on the key AND
+            // on `quotaBlockedAt`, and it needs the rest of the shape to answer at all.
+            ? await FileModel.find({ _id: { $in: firstFileIds } })
+                .select('key mimeType size originalName quotaBlockedAt')
+                .lean()
             : [];
-        const fileKeyMap = new Map(files.map(f => [f._id.toString(), (f as any).key]));
+        const fileById = new Map(files.map(f => [f._id.toString(), f as any]));
         const storage = getStorageProvider();
 
         const data = products.map(p => {
             const firstFileId = p.fileIds && p.fileIds.length ? p.fileIds[0].toString() : null;
-            const key = firstFileId ? fileKeyMap.get(firstFileId) : null;
+            const file = firstFileId ? fileById.get(firstFileId) : null;
             return {
                 id: p._id.toString(),
                 title: p.title,
                 slug: p.slug,
                 category: p.category ?? null,
                 tags: p.tags ?? [],
-                firstFileUrl: key ? storage.getPublicUrl(key) : null
+                // Built through the shared resolver rather than `getPublicUrl` directly:
+                // the field name `firstFileUrl` is what hid this site from
+                // `test:uploads`' guard scan, and it was missing BOTH the private-tree
+                // rule (ADR-A01 D-2) and the plan-quota one.
+                firstFileUrl: file ? toFileDetail(
+                    {
+                        id: file._id.toString(),
+                        key: file.key,
+                        mimeType: file.mimeType,
+                        size: file.size,
+                        originalName: file.originalName,
+                        quotaBlockedAt: file.quotaBlockedAt,
+                    },
+                    storage,
+                ).url : null
             };
         });
 

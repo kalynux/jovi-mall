@@ -59,8 +59,19 @@ The `shipments/` tree left the static mount. Every `FileDetail` for a file in it
 ### Where it shows on your screens
 
 - `deliveryProof` on `GET /api/agency/shipments/:id`
-- `GET /api/agency/shipments/:id/delivery-proof` (the metadata read — **still useful**, it is how
-  you know there *is* one, and it carries `originalName` and `size`)
+
+> 🔴 **Corrected 2026-09-06** (DOC-PROGRAM F-17 class 6). A second bullet here read
+> *"`GET /api/agency/shipments/:id/delivery-proof` (the metadata read — **still useful**…)"*.
+> **That route is not served on the agency side and never was.** `agency.routes.ts` registers
+> exactly one delivery-proof route, `/shipments/:id/delivery-proof/file`; the metadata read is
+> the **agent's** (`agent.routes.ts:139`). An agency dashboard that followed this bullet got a
+> 404. The way an agency learns there *is* a proof — including `originalName` and `size` — is
+> the `deliveryProof` object on `GET /api/agency/shipments/:id`, which is the bullet above and
+> was always correct.
+>
+> It survived `route-coverage.js` and `phantom-routes.js` because both match a path SHAPE
+> against the whole tree, and `/shipments/:id/delivery-proof` really is served — on the other
+> role's mount. **A route claim is only checkable against the mount it is written under.**
 
 ### The fix
 
@@ -100,7 +111,7 @@ change, so your compiler produces the migration list instead of your users.
 
 ## 2 · 🔴 The 90-day absolute session cap
 
-Full explanation in [the cross-role page § 2](../FRONTEND-CHANGELOG-phase-4-5.md#2--a-sign-in-is-now-bounded-at-90-days-whatever-it-does-in-between).
+Full explanation in [the cross-role page § 2](../FRONTEND-CHANGELOG-phase-4-5.md#2---a-sign-in-is-now-bounded-at-90-days-whatever-it-does-in-between).
 
 | | |
 |---|---|

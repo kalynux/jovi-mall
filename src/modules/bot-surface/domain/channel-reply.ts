@@ -103,6 +103,41 @@ export type BotReplyIntent =
      * client will never draw.
      */
     | { kind: 'contact_request'; text: string; buttonLabel: string }
+    /**
+     * Ask for a map pin — with typing still allowed.
+     *
+     * ⚠ **The one intent BOTH platforms draw natively**, and they draw it differently enough
+     * that the difference reaches the caller. Telegram uses a reply keyboard
+     * (`request_location`); WhatsApp uses `interactive.location_request_message`, which
+     * renders its own button and takes no label — so `buttonLabel` is Telegram-only, exactly
+     * as `contact_request`'s is.
+     *
+     * ⚠ **`skipLabel` is a REPLY-KEYBOARD button, so its press arrives as TEXT.** Telegram's
+     * `reply_markup` is a union: a message asking for a location cannot also carry an inline
+     * keyboard, so the Skip that a skippable step is entitled to has to ride the same custom
+     * keyboard — and a custom-keyboard button sends its own label as an ordinary message.
+     *
+     * That is NOT a return to the magic-word parsing §14.6 abolished, and the distinction is
+     * worth stating because the shapes look identical. The old design asked the automation
+     * layer to know that `skip`, `passer`, `saltar`, `omitir` and `تخطٍّ` are one intent — a
+     * translation table in the one layer with no copy table. Here the caller is HANDED the
+     * exact string, per turn, in the customer's language, as `onboarding.next.skipLabel`, and
+     * compares it for equality. It never has to know what the word means, only that this turn
+     * said this string.
+     *
+     * ⚠ **WhatsApp cannot render it at all** — `location_request_message` permits one action
+     * and no buttons — so a skippable step is not skippable by tapping on WhatsApp. Stated
+     * rather than worked around: the alternative is dropping the native location button on
+     * that channel, which is the more useful of the two.
+     */
+    | {
+          kind: 'location_request';
+          text: string;
+          /** Telegram's keyboard button label. Ignored on WhatsApp, which draws its own. */
+          buttonLabel: string;
+          /** A second keyboard button meaning "skip this step". Telegram only. */
+          skipLabel?: string;
+      }
     /** Pick one of a short list. */
     | {
           kind: 'choice';
@@ -229,6 +264,27 @@ function renderTelegram(intent: BotReplyIntent, chatId: string): BotChannelReply
                     text: truncate(intent.text, TG_LIMITS.TEXT) as string,
                     reply_markup: {
                         keyboard: [[{ text: intent.buttonLabel, request_contact: true }]],
+                        one_time_keyboard: true,
+                        resize_keyboard: true,
+                    },
+                },
+            };
+
+        case 'location_request':
+            return {
+                channel: 'telegram',
+                method: 'sendMessage',
+                body: {
+                    chat_id: chatId,
+                    text: truncate(intent.text, TG_LIMITS.TEXT) as string,
+                    reply_markup: {
+                        // One button per ROW, and the order is deliberate: the useful action
+                        // is on top, the refusal underneath. A skippable step that renders
+                        // Skip first invites the tap that ends the conversation.
+                        keyboard: [
+                            [{ text: intent.buttonLabel, request_location: true }],
+                            ...(intent.skipLabel ? [[{ text: intent.skipLabel }]] : []),
+                        ],
                         one_time_keyboard: true,
                         resize_keyboard: true,
                     },
@@ -413,6 +469,23 @@ function renderWhatsApp(intent: BotReplyIntent, to: string): BotChannelReply {
         // written to be typed at, so relaying it plainly is the whole correct behaviour.
         case 'contact_request':
             return whatsappText(to, intent.text);
+
+        /**
+         * ⚠ **`location_request_message` takes ONE action and no buttons**, so `skipLabel`
+         * is not rendered here. A skippable step is therefore not skippable by tapping on
+         * WhatsApp — the customer answers, or types something else and the step is asked
+         * again. The alternative was dropping the native location button on this channel to
+         * keep a Skip reply-button, and the location button is the more useful of the two on
+         * the one step that has ever needed either.
+         */
+        case 'location_request':
+            return waEnvelope(to, 'interactive', {
+                interactive: {
+                    type: 'location_request_message',
+                    body: { text: truncate(intent.text, WA_LIMITS.INTERACTIVE_BODY) as string },
+                    action: { name: 'send_location' },
+                },
+            });
 
         case 'choice':
             return intent.options.length === 0

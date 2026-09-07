@@ -36,7 +36,7 @@ document. An agent can only ever act on their own record.
 
 > **`/agent/dispatch-settings` is not `/agent/settings`.** `/agent/settings` belongs to the
 > **billing** router (the plan-expiry notice window) and is documented in
-> [billing.md](./billing.md#patch-agentsettings). The two are different resources that happened
+> [billing.md](./billing.md#credit-wallet--settings). The two are different resources that happened
 > to want the same name; the agent-domain one moved rather than shadow billing's.
 
 > **`/agent/preferences` is not `/agent/notification-preferences`.** This endpoint does not control
@@ -65,8 +65,9 @@ document. An agent can only ever act on their own record.
     "phoneVerified": true,
     "avatar": {
       "id": "664fil...",
-      "key": "agents/664agt.../avatar.jpg",
+      "key": "images/2026/07/avatar.jpg",
       "url": "http://localhost:8022/api/files/agents/664agt.../avatar.jpg",
+      "access": "public",
       "mimeType": "image/jpeg",
       "size": 84213,
       "originalName": "me.jpg"
@@ -77,8 +78,9 @@ document. An agent can only ever act on their own record.
       "color": "red",
       "photo": {
         "id": "665f1c2a9b1e4a0012a3b4ee",
-        "key": "agents/664agt.../vehicle.jpg",
+        "key": "images/2026/07/vehicle.jpg",
         "url": "http://localhost:8022/api/files/agents/664agt.../vehicle.jpg",
+        "access": "public",
         "mimeType": "image/jpeg",
         "size": 284119,
         "originalName": "van.jpg"
@@ -129,7 +131,7 @@ document. An agent can only ever act on their own record.
 
 | Field | Notes |
 |---|---|
-| `avatar` | A resolved file object `{ id, key, url, mimeType, size, originalName }`, or `null` — **never a bare URL string**. Written as `avatar_file_id`. |
+| `avatar` | A resolved file object `{ id, key, url, access, mimeType, size, originalName }`, or `null` — **never a bare URL string**. Written as `avatar_file_id`. |
 | `capacity` | **Read-only.** `maxActiveShipments` comes from the agent's billing plan, not from any profile write. `remaining` is `max - active`, floored at 0. See [Capacity](#capacity-is-read-only). |
 | `workingState.active_shipment_count` | A derived label input. For the count the dispatcher actually admits against, use `capacity.activeShipmentCount` — the two can drift, and only `capacity` is compare-and-set on accept. |
 | `tracking.allowed` | **Read-only here.** Whether the platform permits live tracking of this agent; written by an admin. See [Not settable here](#not-settable-here). |
@@ -162,7 +164,7 @@ document. An agent can only ever act on their own record.
 
 > **Profile avatar is a file reference.** Upload the image via `POST /api/files/upload`, then send the
 > returned file `id` as `avatar_file_id`. Reads return `avatar` as a **resolved file object** — the same
-> `{ id, key, url, mimeType, size, originalName }` shape product images use — or `null` when unset; never
+> `{ id, key, url, access, mimeType, size, originalName }` shape product images use — or `null` when unset; never
 > a bare URL string.
 
 > **`vehicle_info` is merged, not replaced.** `vehicle_type` and `color` are required whenever the
@@ -171,7 +173,7 @@ document. An agent can only ever act on their own record.
 
 > **The vehicle photo is a file reference**, exactly like the avatar. Upload via
 > `POST /api/files/upload`, send the returned `id` as `vehicle_info.photo_file_id`, and reads return
-> `vehicle_info.photo` as a resolved `{ id, key, url, mimeType, size, originalName }` object or
+> `vehicle_info.photo` as a resolved `{ id, key, url, access, mimeType, size, originalName }` object or
 > `null` — never a bare id or URL. The file must be an **image**; anything else is rejected with
 > `400 CATALOG_FILE_TYPE_INVALID` at attach time. Attaching reference-counts the file (it cannot be
 > deleted while in use) and releases the photo it replaced.
@@ -215,6 +217,7 @@ Returns the same shape as `GET /agent/profile`.
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Validation failed",
+    "category": "validation",
     "statusCode": 400,
     "details": [{ "path": "vehicle_info.vehicle_type", "message": "Invalid enum value" }]
   }
@@ -369,7 +372,7 @@ carries a card number or CVV).
 | `error.code` | Status | When |
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | Body failed schema validation, or no field was provided |
-| `AUTH_UNAUTHORIZED` | 401 | Missing or expired token |
+| `AUTH_MISSING_TOKEN` / `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` | 401 | Missing, malformed or expired token. There is **no** `AUTH_UNAUTHORIZED` — this row named it until 2026-09-06, so a client branching on that string never matched |
 | `AUTH_FORBIDDEN` | 403 | Caller is not an `agent` |
 | `AGENT_NOT_FOUND` | 404 | No agent record for this user |
 

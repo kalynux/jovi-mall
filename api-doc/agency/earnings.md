@@ -132,8 +132,8 @@ balance.
 | `currency` | `string` | Currency code for all balances. |
 
 **Error Responses**:
-- `401` – `UNAUTHORIZED` – Missing or invalid auth token.
-- `403` – `FORBIDDEN` – Valid token but not an agency.
+- `401` – `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` – Missing or invalid auth token.
+- `403` – `AUTH_ROLE_NOT_FOUND` – Valid token but not an agency.
 
 ---
 
@@ -202,7 +202,7 @@ Check `origin` on the request (see below) to tell manual (`"manual"`) from autom
 ```
 
 **Error Responses**:
-- `401` – `UNAUTHORIZED` / `403` – `FORBIDDEN`
+- `401` – `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` / `403` – `AUTH_ROLE_NOT_FOUND`
 - `409` – `EARNINGS_PAYOUT_ALREADY_PENDING` – A request is already pending.
 - `409` – `EARNINGS_PAYOUT_METHOD_MISSING` – No payout method configured yet.
 - `409` – `EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE` – `available` is `0` — nothing to request.

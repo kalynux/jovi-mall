@@ -483,6 +483,8 @@ While `isActive: false`, purchases of any variant do not grant download entitlem
 **❌ Sending `optionSignature` in the request body**
 The `optionSignature` field is system-generated. Never send it — it is computed from `optionValueIds` automatically.
 
+> ⚠ **"Automatically" means AT CREATE ONLY — it is never recomputed** (`vendor-variant.controller.ts:178-182`). On a variant `PATCH` this matters, because that page's other rule turns out to be false: **`optionValueIds` IS writable on PATCH** and the signature does not follow it, leaving the stored signature describing a combination the variant no longer has. Change a combination by archiving the variant and creating a new one — see [Option / Value / Variant Management](./option-variant-management.md#-never-try-to-update-optionvalueids-via-patch) and [variants.md](./variants.md).
+
 **❌ Sending physical-only fields for digital variants**
 ```json
 // WRONG for type: "digital"

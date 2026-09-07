@@ -3,6 +3,7 @@ import { requireAdminCaller } from '../middlewares/admin-caller.middleware';
 import { buildAdminCodRouter } from '../../modules/cod/admin-cod.routes';
 import { buildAdminUserRouter } from '../../modules/users/admin-user.routes';
 import { buildAdminAgentRouter } from '../../modules/agents/routes/admin-agent.routes';
+import { buildAdminAssignabilityRouter } from '../../modules/shipment-assignment/admin-assignability.routes';
 import { buildAdminAgencyRouter } from '../../modules/delivery/admin-agency.routes';
 import { buildAdminVendorRouter } from '../../modules/vendors/admin-vendor.routes';
 import { buildAdminOrderRouter } from '../../modules/orders/admin-order.routes';
@@ -106,6 +107,25 @@ router.use('/users', buildAdminUserRouter([requireAdminCaller]));
  * unused internal surface is cheaper than a second copy of the route table.
  */
 router.use('/agents', buildAdminAgentRouter([requireAdminCaller]));
+
+/**
+ * A FOURTH delegated verdict, on the same prefix and deliberately in its own router:
+ * `GET /agents/:agentId/assignability`.
+ *
+ * `eligibility` above answers only half the assignment question — the platform half
+ * (banned · KYC · active · available · tracking · device · capacity). The other half is
+ * the CONTRACT terms (coverage region · per-shipment value ceiling · COD exposure), which
+ * was diagnosable nowhere: an agency refused on `COD_AGENT_EXPOSURE_EXCEEDED` could see
+ * its own COD threshold on every screen and neither the agent's actual exposure nor the
+ * trust multiplier that had halved that threshold. This composes both families.
+ *
+ * It is a separate router because the handler lives in shipment-assignment, which already
+ * imports agents — putting the route in `admin-agent.routes.ts` would close that cycle
+ * and leave a singleton undefined at module-init. See that file's header. Express tries
+ * routers at a shared prefix in order, and `/:agentId` never matches two segments.
+ */
+router.use('/agents', buildAdminAssignabilityRouter([requireAdminCaller]));
+
 router.use('/agencies', buildAdminAgencyRouter([requireAdminCaller]));
 
 /**

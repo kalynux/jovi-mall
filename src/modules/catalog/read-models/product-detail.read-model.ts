@@ -38,8 +38,24 @@ export interface FileDetail {
    * every client would keep rendering it and silently show nothing.
    */
   url: string | null;
-  /** Which of the two the `url` above is. `authorized` ⇒ `url` is null and `id` is the handle. */
-  access: 'public' | 'authorized';
+  /**
+   * Which of the three the `url` above is. Anything but `public` ⇒ `url` is null.
+   *
+   *   `public`        served by `express.static`; `url` is a real, fetchable address.
+   *   `authorized`    a private tree (ADR-A01 D-2); `id` is the handle and the bytes come
+   *                   from the owning entity's own authorized read.
+   *   `quota_blocked` the owner is over their plan's storage cap and this file falls
+   *                   outside it (`modules/plan-quota/`). Not deleted, not private, and
+   *                   not the owner's fault at upload time — it comes back, unchanged, the
+   *                   moment they upgrade or free room. A client should render a
+   *                   placeholder and an upgrade prompt, never a broken image and never
+   *                   "file missing".
+   *
+   * ⚠ `quota_blocked` outranks `authorized`: a blocked file in a private tree is blocked
+   * first. Reporting it as merely `authorized` would send a client to an authorized route
+   * to find out, which is a worse answer than the true one.
+   */
+  access: 'public' | 'authorized' | 'quota_blocked';
   mimeType: string;
   size: number;
   originalName?: string;

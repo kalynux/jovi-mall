@@ -411,6 +411,18 @@ export const ERROR_CODES = Object.freeze({
      */
     BOT_IDENTITY_NOT_CUSTOMER: 'BOT_IDENTITY_NOT_CUSTOMER',
 
+    // ── The sealed identity token (the MCP transport) ─────────────────────────
+    // Both 401, so both derive `authentication` from the status rule and neither
+    // needs an entry in `error-category.ts`. They are TWO codes rather than one
+    // because the correct client response differs: an expired token means "re-read
+    // the one you were given this turn", an invalid one means the caller authored
+    // something it had no business authoring. Neither carries details — see
+    // `bot-identity-token.ts` on why a refusal here says nothing probeable.
+    /** The token's signature did not verify, or its shape is not one we mint. */
+    BOT_IDENTITY_TOKEN_INVALID: 'BOT_IDENTITY_TOKEN_INVALID',
+    /** The signature verified and the token is past its `exp`. */
+    BOT_IDENTITY_TOKEN_EXPIRED: 'BOT_IDENTITY_TOKEN_EXPIRED',
+
     // ── Idempotency (GAP-001's "required, not optional") ──────────────────────
     // `POST /checkout` is not idempotent underneath — a retry creates a second set
     // of orders and a second stock hold — and chat transports retry. These three
@@ -446,6 +458,16 @@ export const ERROR_CODES = Object.freeze({
      * coordinates, which is the whole reason the handle exists.
      */
     BOT_GEO_CANDIDATE_EXPIRED: 'BOT_GEO_CANDIDATE_EXPIRED',
+    /**
+     * An inbound-file handle is unknown, spent or stale (Step 7b).
+     *
+     * Same shape and same reasoning as `BOT_GEO_CANDIDATE_EXPIRED` above: the bytes of a
+     * photo a customer sent in chat never travel as a tool argument, so what a caller holds
+     * is a handle the backend minted when the automation layer delivered the file. The
+     * remedy is always for the customer to send the file again — NEVER for a caller to
+     * supply a file id, which it has no honest way to obtain.
+     */
+    BOT_INBOUND_FILE_EXPIRED: 'BOT_INBOUND_FILE_EXPIRED',
 
     // ── Registration and onboarding (GAP-002) ─────────────────────────────────
     // The account is created on the sender's FIRST message, with nobody asked
@@ -517,6 +539,25 @@ export const ERROR_CODES = Object.freeze({
      * the flow can offer the OTHER party it was told about.
      */
     BOT_SUPPORT_SCOPE_UNAVAILABLE: 'BOT_SUPPORT_SCOPE_UNAVAILABLE',
+
+    // ── Messaging connections, from a chat (MCP parity step 7) ────────────────
+
+    /**
+     * The caller asked to disconnect the CHANNEL THIS REQUEST ARRIVED ON.
+     *
+     * Refused, and it is the one rule `connections_disconnect` adds over the customer
+     * API's own verb. A `channel_connections` row is step 1 of the identity ladder and it
+     * wins outright, so cutting it mid-conversation leaves this surface unable to resolve
+     * the very sender it is talking to — and the remedy (send `/connect` to the bot, then
+     * redeem the code while signed in) is not reachable from the chat that has just lost
+     * its binding. The customer can still do it from the storefront, where the session
+     * does not depend on the connection being removed.
+     *
+     * ⚠ **Not a blanket refusal of the verb.** Disconnecting TELEGRAM from a WhatsApp
+     * conversation is permitted and stays permitted: the binding the request arrived on
+     * survives, so nothing the customer is currently using breaks.
+     */
+    BOT_CONNECTION_ACTIVE_CHANNEL: 'BOT_CONNECTION_ACTIVE_CHANNEL',
 
     // ── GOOGLE / INTEGRATIONS ─────────────────────────────────────────────────
     GOOGLE_MISSING_CLIENT_ID: 'GOOGLE_MISSING_CLIENT_ID',
@@ -746,6 +787,89 @@ export const ERROR_CODES = Object.freeze({
     CATALOG_VARIANT_BARGAIN_NOT_SUPPORTED: 'CATALOG_VARIANT_BARGAIN_NOT_SUPPORTED',
     CATALOG_VARIANT_BARGAIN_RANGE_INVALID: 'CATALOG_VARIANT_BARGAIN_RANGE_INVALID',
     CATALOG_VARIANT_BARGAIN_PRICE_MISMATCH: 'CATALOG_VARIANT_BARGAIN_PRICE_MISMATCH',
+
+    // ── The bargaining agent ─────────────────────────────────────────────────
+    /**
+     * No playbook is published, so the negotiation sub-agent has no instructions.
+     *
+     * 503 and a REFUSAL rather than a fallback. The sub-agent is given the vendor's
+     * real floor in its context, and the playbook is the whole set of rules about
+     * what it may do with that number — a model holding a floor and no instructions
+     * is an unbounded bargainer, not a degraded one. `no instructions` must mean
+     * `do not negotiate`. See negotiation/services/negotiation-playbook.service.ts.
+     */
+    NEGOTIATION_PLAYBOOK_NOT_PUBLISHED: 'NEGOTIATION_PLAYBOOK_NOT_PUBLISHED',
+
+    /**
+     * The five ways a presented price lock is refused (Stream C).
+     *
+     * The VERDICT is the negotiation module's — it owns the lock and does the
+     * checking, behind `catalog/domain/ports/negotiated-price.port.ts`. These
+     * codes are the catalog side's rendering of that verdict, one per `reason`,
+     * and the mapping is the whole of what `catalog` decides. Never re-derive a
+     * lock's validity here to raise one: two modules interpreting one lock is
+     * the drift the port exists to prevent.
+     *
+     * Every one of them is a CLIENT-SAFE category (404 not_found, 422
+     * business_rule, 409 conflict), which is deliberate rather than incidental —
+     * the bargaining agent has to be able to say what happened and reopen the
+     * negotiation. A refusal filtered down to "An unexpected error occurred"
+     * dead-ends a customer mid-haggle.
+     */
+    /** The reference names no lock at all. Re-negotiate; nothing is recoverable. */
+    NEGOTIATION_LOCK_INVALID: 'NEGOTIATION_LOCK_INVALID',
+    /** The agreed price aged out (`NEGOTIATION_LOCK_TTL_MINUTES`). Re-negotiate. */
+    NEGOTIATION_LOCK_EXPIRED: 'NEGOTIATION_LOCK_EXPIRED',
+    /** Single-use, and already spent on an order. 409: the state moved. */
+    NEGOTIATION_LOCK_CONSUMED: 'NEGOTIATION_LOCK_CONSUMED',
+    /** Real, but bound to a different customer, variant or quantity. */
+    NEGOTIATION_LOCK_VARIANT_MISMATCH: 'NEGOTIATION_LOCK_VARIANT_MISMATCH',
+    /**
+     * The vendor moved their window since the price was agreed, and the agreed
+     * price now falls outside it (D-10). The customer did nothing wrong and
+     * neither did the vendor — which is exactly why this is its own code rather
+     * than a bare 422: the chat says "the seller just changed this price, let me
+     * re-check" and reopens the negotiation.
+     */
+    NEGOTIATION_LOCK_WINDOW_MOVED: 'NEGOTIATION_LOCK_WINDOW_MOVED',
+
+    /**
+     * The gate's refusals (BARGAINING-AGENT-PLAN D-3). All 422: each is a business
+     * rule about a price, never a malformed request — the shape is Zod's job.
+     *
+     * ⚠ These are answered to the bargaining SUB-AGENT, which re-drafts and tries
+     * again. They are not customer copy and must never reach a chat window; the
+     * service returns a `revise` instruction alongside, in English, for the model.
+     */
+    NEGOTIATION_SESSION_NOT_FOUND: 'NEGOTIATION_SESSION_NOT_FOUND',
+    NEGOTIATION_SESSION_EXPIRED: 'NEGOTIATION_SESSION_EXPIRED',
+    NEGOTIATION_SESSION_CLOSED: 'NEGOTIATION_SESSION_CLOSED',
+    NEGOTIATION_PRICE_BELOW_FLOOR: 'NEGOTIATION_PRICE_BELOW_FLOOR',
+    NEGOTIATION_PRICE_ABOVE_ASK: 'NEGOTIATION_PRICE_ABOVE_ASK',
+    NEGOTIATION_PRICE_INCREASED: 'NEGOTIATION_PRICE_INCREASED',
+    /** The variant carries no bargain window, or its product is not vectorised. */
+    NEGOTIATION_NOT_BARGAINABLE: 'NEGOTIATION_NOT_BARGAINABLE',
+    /**
+     * A tool on `/internal/negotiation/tools` was called without naming a product.
+     *
+     * **400 at every site**, and a code of its own rather than a Zod refinement, because
+     * the caller is a language model: `VALIDATION_ERROR` describes a field shape, which a
+     * model retries verbatim, where this describes the actionable thing — *you did not say
+     * which product*. `details.accepts` lists the identifiers the tool would have taken.
+     * See negotiation/domain/negotiation-tool-subject.ts.
+     */
+    NEGOTIATION_TOOL_SUBJECT_REQUIRED: 'NEGOTIATION_TOOL_SUBJECT_REQUIRED',
+    /**
+     * `check_promotion` was handed a discount code to validate. **422.**
+     *
+     * There is no coupon model on this platform — `CartQuoteService` pins `discount` to a
+     * literal `0` — so no code can be checked and none can be valid. This is raised
+     * instead of answering `{ available: false }` because that answer, to a *named* code,
+     * reads as "that code is not valid": a verdict on a specific code nobody checked, and
+     * exactly the invented fact the tool exists to prevent. The message below is worded so
+     * it cannot be rendered as "your code expired".
+     */
+    NEGOTIATION_PROMOTIONS_UNAVAILABLE: 'NEGOTIATION_PROMOTIONS_UNAVAILABLE',
     CATALOG_VARIANT_LIMIT_EXCEEDED: 'CATALOG_VARIANT_LIMIT_EXCEEDED',
     CATALOG_VARIANT_NO_OPTIONS: 'CATALOG_VARIANT_NO_OPTIONS',
     CATALOG_VARIANT_OPTION_EMPTY: 'CATALOG_VARIANT_OPTION_EMPTY',

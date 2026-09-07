@@ -85,26 +85,41 @@ The **"was public"** column is kept because the difference is still legible in o
 `admin_action_log` row or a dashboard bug report from before the cutover names the public URL,
 and for `/billing` and `/agencies` that URL was shaped differently, not merely prefixed.
 
-**112 routes in fifteen groups**, counted from the route tables in the factory files on
-2026-08-20 and updated at BR-011 (the previous figures here were 111 in fifteen before the
-file-content route, and 88 in thirteen before `/tickets`, `/files` and `/messaging`).
+**120 routes in sixteen groups**, re-measured from the live router on 2026-09-06 (the previous
+figures here were 112 in fifteen, 111 in fifteen before the file-content route, and 88 in
+thirteen before `/tickets`, `/files` and `/messaging`).
+
+```bash
+# every figure in the table below, re-measured — run from backend/
+grep -E '^(GET|POST|PUT|PATCH|DELETE) /api/internal/admin/' DOC-PROGRAM/evidence/jovi-routes.txt \
+  | awk '{print $2}' | awk -F/ '{print $5}' | sort | uniq -c        # per group
+grep -cE '^(GET|POST|PUT|PATCH|DELETE) /api/internal/admin/' DOC-PROGRAM/evidence/jovi-routes.txt  # → 120
+```
+
+> ⚠ **Corrected 2026-09-06** (DOC-PROGRAM F-17 class 6). This table said *112 in fifteen*
+> and was wrong in five separate ways: four counts had drifted (`/cod` 13, `/agents` 14,
+> `/agencies` 5, `/files` 4) and **`/reviews/*` was missing entirely** — four live routes,
+> a page of their own, and no row here. The counts were "counted from the route tables in
+> the factory files", which is a measurement nobody can repeat later; the command above is,
+> and it is now printed beside the figure.
 
 | Group | Routes | Was public at | Documented in |
 |---|---|---|---|
-| `/cod/*` | 13 | ~~`/api/admin/cod/*`~~ | [cod.md](./cod.md) |
-| `/agents/*` | 14 | ~~`/api/admin/agents/*`~~ | [agents.md](./agents.md) |
-| `/agencies/*` | 5 | ~~`/api/admin/delivery-agencies/*`~~ — **different name** | [delivery-agencies.md](./delivery-agencies.md) |
+| `/cod/*` | 14 | ~~`/api/admin/cod/*`~~ | [cod.md](./cod.md) |
+| `/agents/*` | 15 | ~~`/api/admin/agents/*`~~ | [agents.md](./agents.md) |
+| `/agencies/*` | 6 | ~~`/api/admin/delivery-agencies/*`~~ — **different name** | [delivery-agencies.md](./delivery-agencies.md) |
 | `/billing/*` | 8 | ~~`/api/admin/{plans,entitlements,vendors,agencies,agents}/…`~~ — **no `/billing` segment** | [billing.md](./billing.md) |
 | `/earnings/*` | 4 | ~~`/api/admin/earnings/*`~~ | [earnings.md](./earnings.md) |
 | `/payout-requests/*` | 4 | ~~`/api/admin/payout-requests/*`~~ | [payout-requests.md](./payout-requests.md) |
 | `/orders/*` | 6 | **partial** — only `GET /disputes` and `POST /:id/dispute/resolve` ever were | [orders.md](./orders.md) |
+| `/reviews/*` | 4 | **never** — moderation was always service-token only | [reviews.md](./reviews.md) |
 | `/tickets/*` | 19 | ~~`/api/admin/tickets/*`~~ — deleted earlier, at **Phase 17**. 18 rows moved; `POST /:ticketId/claim` is net-new | [tickets.md](./tickets.md) |
 | `/vendors/*` | 8 | **never** | — see below |
 | `/users/*` | 5 | **never** | — see below |
 | `/shipments/*` | 2 | **never** | — see below |
 | `/system/*` | 12 | **never, deliberately** | [system.md](./system.md) |
 | `/dev-tools/*` | 7 | **never, deliberately** | [dev-tools.md](./dev-tools.md) |
-| `/files/*` | 4 | ~~2 of 4 on `/api/files/*`~~ — ported at **Phase 5 Part B**. `/:id/content` is net-new (BR-011) | see below |
+| `/files/*` | 5 | ~~2 of 4 on `/api/files/*`~~ — ported at **Phase 5 Part B**. `/:id/content` is net-new (BR-011), `/upload` net-new (BR-015) | see below |
 | `/messaging/*` | 1 | ~~`/api/webhooks/telegram/send`~~ — ported at **Phase 5 Part C** | see below |
 
 ### The groups with no public twin
@@ -163,11 +178,39 @@ POST   /orders/:orderId/refund                 ← internal only
 kinds of operation.
 
 ```
+POST   /files/upload       multipart/form-data, field `files` (1..10) → { data: File[], meta }
 POST   /files/resolve      body { fileIds: string[] } (1..100) → { files: FileDetail[] }
 GET    /files/:id/content                    → the file's BYTES (not an envelope)
 GET    /files/orphans      ?olderThan=<ISO>  → { data: File[], meta: { count, olderThan } }
 DELETE /files/:id/permanent                  → { success, message }
 ```
+
+**`POST /upload`** — an administrator's own upload, for the media library (BR-015). It was
+**undocumented on this page and everywhere else in this tree until 2026-09-06**; the group was
+described as four routes and served five.
+
+Three properties are load-bearing and none of them is guessable from the path:
+
+- **The handler is the public route's, mounted unchanged** — `uploadMultiple` +
+  `FileUploadController.uploadFiles`. Virus scanning, MIME sniffing, image transformation,
+  provider write, quota and the `files` row are one pipeline with one entry point, not two.
+- **It lands PUBLIC, and the blog depends on that.** `folder: 'by-type'` resolves through
+  `resolveTypeFolder` onto one of six categories that `storage-trees.ts` classifies **all
+  public** — so an article cover comes back with `access: 'public'` and a working `url`. A
+  caller cannot ask for a private tree here.
+- **The response is the raw `File[]`, not `FileDetail[]`** — `{ success, data: File[], meta }`,
+  a `key` and **no `url`**, because it never runs through `resolveFileDetails`. That is the
+  shape every vendor, agency, agent and customer upload already receives, and changing it here
+  would be a breaking wire change on four other clients. wi-admin builds the `FileDetail`
+  itself (BR-015 decision L-3) — see the storage-configuration pair in the workspace
+  `CLAUDE.md`, which is why the four `STORAGE_*` names must match on both sides.
+
+The ceiling is 2 GB (`ROLE_UPLOAD_LIMITS.admin`, reached because `requireAdminCaller`
+synthesises `role: 'admin'` rather than falling back to the customer figure) and it is a
+**backstop, never the binding limit** — wi-admin declares `ADMIN_UPLOAD_MAX_BYTES` (32 MiB) and
+refuses past it before streaming. **Nothing is audited on this side**, for the `/:id/content`
+reason: this service authenticates a *service*, so `X-Actor-Id` is a header its holder sets.
+wi-admin audits it, where the human is known (ADR-020 D-5).
 
 `POST /resolve` exists because wi-admin ships every file reference as an opaque id and states
 that it resolves no file URLs — correctly, because a URL is `storage.getPublicUrl(key)` and
@@ -259,11 +302,24 @@ mints, **customer-only** by a literal in that service). A third entrance, not a 
 read from the party's own record; a caller who could name one could mail themselves a working
 credential for another person's account. Rate-limited per party *and* per administrator.
 
-### Still to come
+### Still to come — **nothing. This section is closed.**
 
-**Telegram** is the last one — `POST /api/webhooks/telegram/send` has no internal mount, and
-wi-admin reaches it through the public path. Adding one is a matter of repeating the same factory
-pattern per router (Phase 5 Part C).
+> ⚠ **Corrected 2026-09-06** (DOC-PROGRAM P-8). This section said *"**Telegram** is the last one —
+> `POST /api/webhooks/telegram/send` has no internal mount, and wi-admin reaches it through the
+> public path."* **Both halves are false now.** The internal mount exists —
+> `POST /api/internal/admin/messaging/telegram` (`telegram/admin-messaging.routes.ts`) — and the
+> public path is **gone**: `telegram.routes.ts:39` registers exactly one route, `/webhook`. So
+> wi-admin does not reach it through the public path, because there is no public path to reach.
+>
+> This mattered more than an ordinary stale line. It described the *old* route as the live one on
+> the page that tells wi-admin which internal mounts exist, and the old route's guard was
+> `requireRole(['admin'])` on a platform `users` row — the second authorization model the Phase 5
+> cutover deleted. Acting on it means writing a call to a path that 404s, against a credential
+> that no longer exists.
+>
+> wi-admin gates the surviving route on `messaging.telegram.send`, and it is **one message to one
+> recipient** — not a broadcast, which is why that permission family was renamed
+> `broadcast` → `messaging` (Phase 5 D-11).
 
 Tickets gained theirs (`/tickets`, above). The **blog** never will: ownership of `articles` and
 `article_authors` MOVED to wi-admin at Phase 5 Part A (ADR-004 D-4), so there is no jovi-mall

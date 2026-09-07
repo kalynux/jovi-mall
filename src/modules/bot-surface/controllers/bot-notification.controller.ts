@@ -2,12 +2,110 @@ import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { sendSuccess } from '../../../core/responses';
 import { CustomerNotificationService } from '../../notifications/services/customer-notification.service';
-import { botCallerOf } from '../middlewares/bot-identity.middleware';
-import { BotNoArgsSchema, BotNotificationPreferencesSchema } from '../validators/bot.validators';
+import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
+import { botStorefrontLink, windowForChat } from '../domain/bot-list-window';
+import { toBotNotificationDto } from '../dto/bot-projections';
+import {
+    BotNoArgsSchema,
+    BotNotificationListSchema,
+    BotNotificationParamSchema,
+    BotNotificationPreferencesSchema,
+} from '../validators/bot.validators';
 
 const service = new CustomerNotificationService();
 
 export class BotNotificationController {
+    /**
+     * `POST /notifications/list` — the customer's own inbox, newest first.
+     *
+     * ⚠ **Projected, not relayed.** Three fields on the stored document must not reach a
+     * model — `idempotencyKey`, `deliveryErrors[]` (raw provider error strings) and
+     * `customerId` — so this is one of the few routes here that builds its own shape rather
+     * than passing the customer API's through. See `toBotNotificationDto`.
+     *
+     * `meta.unreadCount` is carried through from the service beside the chat window,
+     * because "you have 3 unread" is the sentence a customer actually wants and it is
+     * already computed on this call.
+     */
+    static list = asyncHandler(async (req: Request, res: Response) => {
+        const query = BotNotificationListSchema.parse(req.body ?? {});
+        const caller = botCallerOf(req);
+        const language = botResponseLanguageOf(req);
+
+        const result = await service.listNotifications(
+            caller.customerId,
+            { page: query.page, limit: query.limit },
+            { unreadOnly: query.unreadOnly, aggregateType: query.aggregateType },
+        );
+
+        const chat = windowForChat({
+            items: result.notifications.map((n) =>
+                toBotNotificationDto(n, (path) => botStorefrontLink(path, language))),
+            total: result.meta.total,
+            offset: (query.page - 1) * query.limit,
+            surface: 'notifications',
+            language,
+        });
+
+        sendSuccess(res, chat.items, {
+            meta: { ...result.meta, unreadCount: result.unreadCount, ...chat.window },
+        });
+    });
+
+    /**
+     * `POST /notifications/unread-count` — the badge number alone.
+     *
+     * Worth its own route rather than reading `meta.unreadCount` off the list: answering
+     * "anything new?" should not cost a page of rows, a product hydration and a model
+     * narrating five items nobody asked for.
+     */
+    static unreadCount = asyncHandler(async (req: Request, res: Response) => {
+        BotNoArgsSchema.parse(req.body ?? {});
+        const unreadCount = await service.countUnread(botCallerOf(req).customerId);
+        sendSuccess(res, { unreadCount });
+    });
+
+    /**
+     * `PATCH /notifications/:notificationId/read` — acknowledge one.
+     *
+     * ⚠ **One-way: there is no mark-UNREAD route anywhere on this platform.** That is why
+     * `mark_all_read` is `flow_only` while this one is not — reading a single notification
+     * aloud to the customer IS them seeing it, so acknowledging it is honest. Doing that to
+     * a whole inbox on the model's initiative is not.
+     *
+     * A notification belonging to somebody else is a `404`, never a `403`: the repository
+     * scopes by `customerId` in the query, so a caller learns nothing about whether the id
+     * exists.
+     */
+    static markRead = asyncHandler(async (req: Request, res: Response) => {
+        const { notificationId } = BotNotificationParamSchema.parse(req.params);
+        BotNoArgsSchema.parse(req.body ?? {});
+        const language = botResponseLanguageOf(req);
+
+        const notification = await service.markAsRead(notificationId, botCallerOf(req).customerId);
+        sendSuccess(
+            res,
+            toBotNotificationDto(notification, (path) => botStorefrontLink(path, language)),
+        );
+    });
+
+    /**
+     * `PATCH /notifications/read-all` — acknowledge the whole inbox.
+     *
+     * ⚠ **`flow_only`, and it is the tier that matters more than the code here.** Nothing
+     * can undo it — no mark-unread exists — and the unread flag is how a customer finds
+     * what they have not seen. A model tidying up on its own reading of "yeah I know about
+     * those" would silently hide everything the platform had tried to tell them.
+     *
+     * Answers how many rows actually moved, so a flow can say "cleared 4" rather than
+     * asserting something it did not measure.
+     */
+    static markAllRead = asyncHandler(async (req: Request, res: Response) => {
+        BotNoArgsSchema.parse(req.body ?? {});
+        const updated = await service.markAllAsRead(botCallerOf(req).customerId);
+        sendSuccess(res, { updated }, { message: 'All notifications marked as read' });
+    });
+
     /**
      * `POST /notifications/preferences` — where notifications go, and which are on.
      *

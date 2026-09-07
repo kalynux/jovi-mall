@@ -295,26 +295,146 @@ function main(): void {
         const button = renderCustomerButton(
             'booking.confirmed', 'en', { bookingId: 'B1' }, 'https://shop.example'
         );
-        return button?.url === 'https://shop.example/bookings/B1';
+        return button?.url === 'https://shop.example/shop/account/bookings/B1';
     });
 
     assert('the balance-due button points at the payment page, not the booking', () => {
         const button = renderCustomerButton(
             'booking.balance.due', 'en', { bookingId: 'B1' }, 'https://shop.example'
         );
-        return button?.url === 'https://shop.example/bookings/B1/pay-balance';
+        return button?.url === 'https://shop.example/shop/account/bookings/B1/balance';
     });
 
     assert('a missing base URL yields a relative path, not "undefined/..."', () => {
         const button = renderCustomerButton('order.delivered', 'en', { orderId: 'O1' }, undefined);
-        return button?.url === 'orders/O1';
+        return button?.url === 'shop/account/orders/detail/O1';
     });
 
     assert('a trailing slash on the base URL does not double up', () => {
         const button = renderCustomerButton(
             'order.delivered', 'en', { orderId: 'O1' }, 'https://shop.example/'
         );
-        return button?.url === 'https://shop.example/orders/O1';
+        return button?.url === 'https://shop.example/shop/account/orders/detail/O1';
+    });
+
+    /**
+     * ── The addresses themselves ────────────────────────────────────────────────
+     *
+     * Every button in this catalogue pointed at a page that does not exist until
+     * 2026-09-07: the tails were bare nouns (`orders/{{id}}`) while the shop serves
+     * `/shop/account/orders/…`. Nothing could catch it — a wrong link is only ever
+     * wrong in the customer's browser, and the four assertions above were written
+     * against the broken values and passed.
+     *
+     * ⚠ **This group cannot prove the storefront serves these paths** (different
+     * repository, no shared package). What it CAN do is refuse the two shapes that
+     * are wrong on their face — a bare tail with no section, and a leading slash —
+     * and pin the two addresses the storefront still owes, so re-pointing one is a
+     * deliberate edit rather than a silent drift.
+     */
+    console.log('\n── Button addresses vs the storefront route tree ──');
+
+    /** Every distinct suffix in the catalogue, deduplicated. */
+    const allSuffixes = [...new Set(
+        CUSTOMER_NOTIFICATION_TYPES
+            .map((t) => CUSTOMER_NOTIFICATION_CATALOG[t].button?.urlSuffix)
+            .filter((s): s is string => typeof s === 'string')
+    )];
+
+    assert('every button carries a suffix and there are six distinct ones', () =>
+        allSuffixes.length === 6);
+
+    assert('no suffix has a leading slash (Meta supplies the separator)', () =>
+        allSuffixes.every((s) => !s.startsWith('/')));
+
+    assert('no suffix carries a locale prefix (renderCustomerButton adds it)', () =>
+        allSuffixes.every((s) => !/^(en|fr|pt|es|ar)\//.test(s)));
+
+    assert('every owner-scoped suffix sits under shop/account/', () =>
+        allSuffixes
+            .filter((s) => !s.startsWith('pay/'))
+            .every((s) => s.startsWith('shop/account/')));
+
+    assert('the pay link stays OUTSIDE shop/account — it is opened with no session', () =>
+        allSuffixes.includes('pay/{{payToken}}'));
+
+    assert('the order button points at ONE order, not at the checkout group page', () => {
+        const button = renderCustomerButton('order.created', 'en', { orderId: 'O1' }, 'https://s.example');
+        // `/shop/account/orders/O1` would be read as a cartId by the group page.
+        return button?.url === 'https://s.example/shop/account/orders/detail/O1';
+    });
+
+    console.log('\n── The locale prefix (next-intl "as-needed") ──');
+
+    assert('a French customer gets the French tree', () => {
+        const button = renderCustomerButton(
+            'booking.confirmed', 'fr', { bookingId: 'B1' }, 'https://shop.example'
+        );
+        return button?.url === 'https://shop.example/fr/shop/account/bookings/B1';
+    });
+
+    assert('English stays on the unprefixed tree', () => {
+        const button = renderCustomerButton(
+            'booking.confirmed', 'en', { bookingId: 'B1' }, 'https://shop.example'
+        );
+        return !button?.url.includes('/en/');
+    });
+
+    assert('all four non-English locales are prefixed', () =>
+        (['fr', 'pt', 'es', 'ar'] as const).every((lang) => {
+            const button = renderCustomerButton(
+                'booking.confirmed', lang, { bookingId: 'B1' }, 'https://shop.example'
+            );
+            return button?.url === `https://shop.example/${lang}/shop/account/bookings/B1`;
+        }));
+
+    /**
+     * ⚠ The three outputs are NOT interchangeable, and each consumer prepends
+     * something different. Getting these two rows the wrong way round produces
+     * `/fr/fr/shop/…` on the inbox row and `//shop/…` on WhatsApp.
+     */
+    assert('urlSuffix stays locale-FREE — it is stored as action.path and re-prefixed', () => {
+        const button = renderCustomerButton(
+            'booking.confirmed', 'fr', { bookingId: 'B1' }, 'https://shop.example'
+        );
+        return button?.urlSuffix === 'shop/account/bookings/B1';
+    });
+
+    assert('whatsappSuffix is locale-prefixed and has NO leading slash', () => {
+        const button = renderCustomerButton(
+            'booking.confirmed', 'fr', { bookingId: 'B1' }, 'https://shop.example'
+        );
+        return button?.whatsappSuffix === 'fr/shop/account/bookings/B1';
+    });
+
+    assert('the WhatsApp send site sends whatsappSuffix, never urlSuffix', () => {
+        const source = readFileSync(
+            join(__dirname, '../../src/modules/notifications/services/customer-notification-event-handler.service.ts'),
+            'utf8'
+        );
+        return source.includes('text: button.whatsappSuffix')
+            && !source.includes('text: button.urlSuffix');
+    });
+
+    /**
+     * The rule this whole group exists to enforce, as a source scan: there is ONE
+     * implementation of the `as-needed` prefix. Two copies is how the notification
+     * half was wrong for months while the bot half was right.
+     */
+    assert('the locale rule has exactly one implementation', () => {
+        const catalog = readFileSync(
+            join(__dirname, '../../src/modules/notifications/catalog/customer-notification-catalog.ts'),
+            'utf8'
+        );
+        const botWindow = readFileSync(
+            join(__dirname, '../../src/modules/bot-surface/domain/bot-list-window.ts'),
+            'utf8'
+        );
+        return catalog.includes("from '../../../core/utils/storefront-link.util'")
+            && botWindow.includes("from '../../../core/utils/storefront-link.util'")
+            // neither may re-derive the prefix itself
+            && !catalog.includes("=== 'en' ? '' :")
+            && !botWindow.includes("=== 'en' ? '' :");
     });
 
     console.log('\n── The three composed lines (previously rendered empty) ──');

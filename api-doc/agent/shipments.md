@@ -19,6 +19,15 @@
 - [`POST /api/agent/shipments/:id/cancel`](#cancel) — cancel a shipment mid-delivery (with reason)
 - `POST /api/agent/shipments/:id/cod/collect` — submit the customer's delivery code (see [cod-cash.md](./cod-cash.md#collect))
 - `POST /api/agent/shipments/:id/cod/resend-code` — resend the delivery code (see [cod-cash.md](./cod-cash.md#resend))
+- `POST /api/agent/shipments/:id/delivery-proof` — attach the proof photograph (see [delivery-proof.md](./delivery-proof.md#post-apiagentshipmentsiddelivery-proof))
+- `GET /api/agent/shipments/:id/delivery-proof` — the proof's **metadata**, or `null` (see [delivery-proof.md](./delivery-proof.md#get-apiagentshipmentsiddelivery-proof))
+- `GET /api/agent/shipments/:id/delivery-proof/file` — the image **bytes** (see [delivery-proof.md](./delivery-proof.md#get-apiagentshipmentsiddelivery-prooffile))
+- `DELETE /api/agent/shipments/:id/delivery-proof` — remove it (see [delivery-proof.md](./delivery-proof.md#delete-apiagentshipmentsiddelivery-proof))
+
+> ⚠ **The four delivery-proof rows were added 2026-09-06** (DOC-PROGRAM F-17 class 6). They are
+> served under `/api/agent/shipments` and this page did not contain the string `delivery-proof`
+> **once**, nor a link to the page that specifies them — while the two COD routes beside them
+> had carried exactly this treatment all along.
 
 > You drive your own shipment's **status transitions** — see
 > [`POST /shipments/:id/status`](#status) — with exactly the same rights as your agency's dashboard,
@@ -89,7 +98,7 @@ customers or products is capped at the first 500 of each.
       "customer": { "id": "...", "name": "Jane D.", "phone": "+2376..." },
       "itemCount": 2,
       "itemImages": [
-        { "id": "...", "key": "products/abc.jpg", "url": "https://…/products/abc.jpg", "mimeType": "image/jpeg", "size": 84213, "originalName": "headphones.jpg" }
+        { "id": "...", "key": "products/abc.jpg", "url": "https://…/products/abc.jpg", "access": "public", "mimeType": "image/jpeg", "size": 84213, "originalName": "headphones.jpg" }
       ],
       "pickup": {
         "address": {
@@ -126,7 +135,7 @@ customers or products is capped at the first 500 of each.
 **`itemImages`** is what is in the parcel, so a queue can be scanned by sight: **one thumbnail per
 item**, deduplicated (two variants of the same product share a cover shot) and capped at **3**. The
 row still reports `itemCount` for the true number of items — a 10-item shipment shows 3 pictures.
-Each entry is the standard file shape `{ id, key, url, mimeType, size, originalName }`; always an
+Each entry is the standard file shape `{ id, key, url, access, mimeType, size, originalName }`; always an
 array, `[]` when nothing on the shipment has a picture. The full per-item gallery is on the
 [detail](#detail).
 
@@ -206,8 +215,8 @@ multi-agency timeline — and, for cash-on-delivery orders, the **cash to collec
         "sku": "WH-BLK-01",
         "variantTitle": "Black",
         "images": [
-          { "id": "...", "key": "products/abc.jpg", "url": "https://…/products/abc.jpg", "mimeType": "image/jpeg", "size": 84213, "originalName": "headphones.jpg" },
-          { "id": "...", "key": "products/def.jpg", "url": "https://…/products/def.jpg", "mimeType": "image/jpeg", "size": 91002, "originalName": "headphones-side.jpg" }
+          { "id": "...", "key": "products/abc.jpg", "url": "https://…/products/abc.jpg", "access": "public", "mimeType": "image/jpeg", "size": 84213, "originalName": "headphones.jpg" },
+          { "id": "...", "key": "products/def.jpg", "url": "https://…/products/def.jpg", "access": "public", "mimeType": "image/jpeg", "size": 91002, "originalName": "headphones-side.jpg" }
         ],
         "pickupLocation": {
           "mode": "pickup_based",
@@ -220,7 +229,7 @@ multi-agency timeline — and, for cash-on-delivery orders, the **cash to collec
     "agency": {
       "id": "507f1f77bcf86cd799439099",
       "name": "Douala Express Logistics",
-      "logo": { "id": "...", "key": "images/2026/07/logo.png", "url": "https://…/logo.png", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
+      "logo": { "id": "...", "key": "images/2026/07/logo.png", "url": "https://…/logo.png", "access": "public", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
       "supportPhone": "+2376...",
       "supportEmail": "support@douala-express.cm",
       "supportWhatsapp": "+2376..."

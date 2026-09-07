@@ -35,7 +35,7 @@ describe.
 
 ## 1 · 🔴 The 90-day absolute session cap — the change most visible in a native app
 
-Full explanation in [the cross-role page § 2](../FRONTEND-CHANGELOG-phase-4-5.md#2--a-sign-in-is-now-bounded-at-90-days-whatever-it-does-in-between)
+Full explanation in [the cross-role page § 2](../FRONTEND-CHANGELOG-phase-4-5.md#2---a-sign-in-is-now-bounded-at-90-days-whatever-it-does-in-between)
 and [`docs/ADR-A03-SESSION-CAP.md`](../../docs/ADR-A03-SESSION-CAP.md).
 
 ### What changed

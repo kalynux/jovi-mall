@@ -1,5 +1,9 @@
 # Availability Rules
 
+**Verified against source on 2026-09-07** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
+
 > **Booking system docs:** [Implementation guide](../booking-implementation-guide.md) · [Service product setup](./products.md#service-products) · **Availability rules** (this doc) · [Google Calendar](./calendar.md) · [Customer booking flow](../customer/bookings.md) · [Vendor booking management](./bookings.md)
 
 ## Base Path
@@ -89,12 +93,21 @@ The body may be sent in any of these three forms:
 Status: `201 Created`
 
 `data` is always an **array** of the created rules (even when a single rule object was sent):
+
+> ⚠ **These responses are the raw persisted documents, not a projection**, so they carry the
+> soft-delete bookkeeping (`deletedAt`, `purgeAt`) and the `vendorId` you already know. The
+> controller answers `res.json({ success: true, data: rules })` with no DTO
+> (`vendor-availability.controller.ts:168`). The one thing the base schema's `toJSON` does strip
+> is `_id`/`__v`, replacing them with the `id` virtual (`core/base.schema.ts:17-24`) — which is
+> why the key below is **`id`**, not `_id`. `purgeAt` was missing from these examples until
+> 2026-09-07; ignore it and `deletedAt`, and do not model either as meaningful.
+
 ```json
 {
   "success": true,
   "data": [
     {
-      "_id": "string",
+      "id": "string",
       "productId": "string",
       "vendorId": "string",
       "dayOfWeek": 1,
@@ -103,11 +116,12 @@ Status: `201 Created`
       "timezone": "Africa/Douala",
       "isActive": false,
       "deletedAt": null,
+      "purgeAt": null,
       "createdAt": "2026-02-09T23:54:00.000Z",
       "updatedAt": "2026-02-09T23:54:00.000Z"
     },
     {
-      "_id": "string",
+      "id": "string",
       "productId": "string",
       "vendorId": "string",
       "dayOfWeek": 2,
@@ -116,6 +130,7 @@ Status: `201 Created`
       "timezone": "Africa/Douala",
       "isActive": false,
       "deletedAt": null,
+      "purgeAt": null,
       "createdAt": "2026-02-09T23:54:00.000Z",
       "updatedAt": "2026-02-09T23:54:00.000Z"
     }
@@ -159,7 +174,7 @@ Body:
   "success": true,
   "data": [
     {
-      "_id": "string",
+      "id": "string",
       "productId": "string",
       "vendorId": "string",
       "dayOfWeek": 1,
@@ -213,7 +228,7 @@ Body:
 {
   "success": true,
   "data": {
-    "_id": "string",
+    "id": "string",
     "productId": "string",
     "vendorId": "string",
     "dayOfWeek": 1,
@@ -267,7 +282,7 @@ Body:
 {
   "success": true,
   "data": {
-    "_id": "string",
+    "id": "string",
     "productId": "string",
     "vendorId": "string",
     "dayOfWeek": 1,
@@ -327,16 +342,19 @@ Body:
 
 ## Error Responses
 
-All error responses follow this format:
+All error responses follow this format. `category` is one of the nine values listed in
+[`errors/README.md`](../errors/README.md) and is **always present**; `details` is omitted
+entirely when absent.
 
 ```json
 {
   "success": false,
   "requestId": "f3a1...",
   "error": {
-    "code": "ERROR_CODE",
+    "code": "AVAILABILITY_RULE_NOT_FOUND",
     "message": "Human-readable error description",
-    "statusCode": 400
+    "statusCode": 404,
+    "category": "not_found"
   }
 }
 ```
@@ -350,6 +368,7 @@ For validation errors (`VALIDATION_ERROR`), `details.fields` lists each offendin
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Validation failed",
+    "category": "validation",
     "statusCode": 400,
     "details": {
       "fields": [
@@ -369,9 +388,12 @@ Only **service products** can have availability rules. Attempting to create rule
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "AVAILABILITY_INVALID_PRODUCT_TYPE",
-    "message": "Only service products can have availability rules"
+    "message": "Only service products can have availability rules",
+    "statusCode": 400,
+    "category": "validation"
   }
 }
 ```
@@ -430,7 +452,7 @@ Example of overlap:
 ### Buffer Time
 
 - Buffer time is **not** configured on availability rules. It lives on the service variant's
-  `serviceConfig` (`bufferBeforeMinutes` / `bufferAfterMinutes`) — see [variants.md](./variants.md#service-config).
+  `serviceConfig` (`bufferBeforeMinutes` / `bufferAfterMinutes`) — see [variants.md](./variants.md#variant-object-shape).
 - Those buffers pad each busy slot when computing availability, preventing back-to-back bookings
   and allowing setup/cleanup time across the whole service.
 

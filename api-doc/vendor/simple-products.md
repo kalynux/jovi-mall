@@ -1,5 +1,9 @@
 # Simple Products — Vendor API Reference
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
+
 > **Document Purpose**: Frontend-consumable reference for the one-shot product editor.
 >
 > **Intended Audience**: Frontend engineers building the "quick add" product flow.
@@ -45,10 +49,12 @@ Every one of those 409s carries the escape hatch in `details`:
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "CATALOG_PRODUCT_SIMPLE_MODE_LOCKED",
     "statusCode": 409,
     "message": "This product uses the simple editor, so adding another variant is not available. Convert it to the advanced editor first.",
+    "category": "conflict",
     "details": {
       "mode": "simple",
       "convertEndpoint": "POST /api/vendor/products/507f.../convert-to-advanced"
@@ -194,6 +200,27 @@ A first-time vendor usually has no delivery agency configured. That does **not**
 
 **`blockers` is the complete checklist, not the first failure.** Render it as a to-do list. Each `message` is written for a vendor to read — display it directly.
 
+> ⚠ **The messages in the example above are the REGISTRY DEFAULTS, and no call site sends them.**
+> Every blocker `ProductStatusValidationService` raises passes its own message, so what a vendor
+> actually reads is the override, not the default in `core/errors.ts`. **Do not key any logic on
+> the message text, and do not build a client-side copy table from this example** — branch on
+> `code` and render the `message` you were given.
+>
+> ⚠ **`CATALOG_PRODUCT_NO_DELIVERY_AGENCY` alone has FIVE distinct messages**, because one code
+> covers five different situations (`ProductStatusValidationService.ts:211, 219, 231, 247, 259`):
+>
+> | Situation | Message |
+> |---|---|
+> | No vendor default agency | *"Physical products require an active default delivery agency on your vendor profile."* |
+> | Vendor default is not `active` | *"Your default delivery agency is not currently active. …"* |
+> | Connection to the vendor default not approved | *"Your connection with this delivery agency needs to be approved (or reapproved) …"* |
+> | The **product's own** override agency is not `active` | *"This product's own delivery agency is not currently active."* |
+> | Connection to the **override** agency not approved | *"Your connection with this product's delivery agency needs to be approved (or reapproved) …"* |
+>
+> The last two are reachable only when the product carries its own `delivery.agencyId`, and they
+> are the pair a vendor finds most confusing — the code is identical to the profile-level one, so
+> a UI that maps code → its own sentence sends them to the wrong settings screen.
+
 Once the vendor fixes their setup, publish with either `PATCH /products/:id/status {"status":"active"}` or `PATCH /products/:id/simple {"publish": true}`.
 
 ---
@@ -201,6 +228,13 @@ Once the vendor fixes their setup, publish with either `PATCH /products/:id/stat
 ## Auto-derived pickup location
 
 Omit `pickupLocation` and the backend works it out from the vendor's profile and their delivery agency's policy. `meta.activation.pickupReason` says what happened:
+
+> ⚠ **`pickupReason` is a CREATE-only field — it is never present on `PATCH /products/:id/simple`.**
+> Only `SimpleProductCreateService` resolves and returns it (`:228`, surfaced at
+> `vendor-simple-product.controller.ts:143`); `SimpleProductUpdateService` never sets it. The
+> PATCH response is otherwise the same shape, which is exactly why this is easy to miss — a
+> client reading `meta.activation.pickupReason` after an edit gets `undefined`, not a stale
+> value, and must not treat that as "the pickup location was cleared".
 
 | `pickupReason` | Outcome | What the UI should do |
 |---|---|---|

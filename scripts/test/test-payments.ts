@@ -4,7 +4,7 @@
  * ── WHY THIS FILE IS THE POINT OF PHASE 1 ────────────────────────────────────
  * Four audit findings lived in this one module, and B-4 — "there is no test" —
  * is the reason the other three survived. `tsc` and `eslint` pass over a gateway
- * that makes no HTTP call. `test:errors`' census of 1362 `createAppError` sites
+ * that makes no HTTP call. `test:errors`' census of ~1517 `createAppError` sites
  * could not see the two stubs, because they did not use `createAppError`. So
  * every check the repository had said the module was fine while the webhook
  * endpoints accepted any body from any caller.
@@ -22,6 +22,9 @@
  *   7. Operator resolution            — MTN/Orange, or an honest refusal
  *   8. Money                          — zero-decimal, and the callback cross-check
  *   9. Source scans                   — the structural invariants
+ *  11. The initiate row               — it is written before it has a gateway reference
+ *  12. The retry                      — a dead attempt hands its idempotency key back
+ *  13. Paying twice                   — the four ways, and what bounds each
  *
  * DB-free. Run: npm run test:payments
  */
@@ -39,6 +42,7 @@ process.env.MYCOOLPAY_PUBLIC_KEY = 'fixture-public-key-uuid';
 process.env.MYCOOLPAY_PRIVATE_KEY = 'fixture-private-key';
 
 import crypto from 'crypto';
+import { Types } from 'mongoose';
 import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { originalConsole } from '../../src/core/logging/sink-guard';
@@ -81,6 +85,9 @@ import {
   payLinkTtlMinutes,
   stripePublishableKey,
 } from '../../src/modules/payments/domain/pay-link';
+// Imported for its SCHEMA only, and section 11 is its only user — `validateSync()` runs
+// entirely offline, so this stays a DB-free suite.
+import { PaymentTransactionModel } from '../../src/modules/payments/models/payment-transaction.model';
 
 let passed = 0;
 let failed = 0;
@@ -865,6 +872,104 @@ assert('⚠ the anonymous read never selects the payer or our gateway-facing ref
   return !fields.includes('userId') && !fields.includes('merchantRef') && !fields.includes('idempotencyKey');
 });
 
+/**
+ * ── `paidFor`: what the money is for, read by a stranger ─────────────────────
+ *
+ * The page said only "Amount due — 24 000 FCFA", and the payer is by design not the
+ * buyer, so they had no way to know what they were paying for. What was added is bounded
+ * by one question — **does this survive being read by whoever the link was forwarded to?**
+ * These assertions are that boundary, and most of them are source scans because the
+ * failure they guard is a FIELD APPEARING, which no behavioural test can be written
+ * against in advance.
+ */
+assert('⚠ the source ids are selected for the lookup and NEVER returned', () => {
+  const service = PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code;
+  const select = service.match(/\.select\('([^']*payLink[^']*)'\)/);
+  if (!select) return false;
+  const fields = select[1].split(/\s+/);
+  // Selected — describePaidFor needs them to resolve what this is for…
+  const selected = ['orderId', 'bookingId', 'cartId', 'orderIds'].every((f) => fields.includes(f));
+
+  // …and absent from the returned literal. An id in the response is an id a stranger
+  // holding a forwarded link can take somewhere else.
+  const resolveBody = service.slice(service.indexOf('async resolve('));
+  const returned = resolveBody.slice(resolveBody.indexOf('return {'), resolveBody.indexOf('};'));
+  const leaked = ['orderId', 'bookingId', 'cartId', 'orderIds'].some((f) => returned.includes(f));
+
+  return selected && !leaked;
+});
+
+assert('⚠ nothing identifying the BUYER is ever projected', () => {
+  const service = PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code;
+  const describe = service.slice(service.indexOf('private async describePaidFor('));
+  const body = describe.slice(0, describe.indexOf('\n    }\n'));
+  /**
+   * The buyer's identity and where they live. None of it may be read here — a pay link is
+   * held by somebody the platform has never authenticated.
+   *
+   * ⚠ **NO word boundaries, deliberately, and it took two tries to get here.** The first
+   * version was `\b(customer|user|…)\b` and did not flip when handed
+   * `.select('customer_id')` — `_` is a word character, so the trailing `\b` never
+   * matched. Dropping it to a leading `\b` fixed that and still missed
+   * `delivery_address`, for the same reason at the other end. Every real field name on
+   * these models is snake_case or camelCase, so a boundary anywhere is a hole. This
+   * matches the substring and fails closed: a comment that happens to contain "address"
+   * trips it, which costs a rewording and is the direction to be wrong in.
+   */
+  return !/(customer|user|email|phone|address|shipping|firstname|lastname|buyer|recipient)/i.test(body);
+});
+
+assert('⚠ line-item TITLES never travel — a count is a fact about the basket, a title is not', () => {
+  const service = PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code;
+  const describe = service.slice(service.indexOf('private async describePaidFor('));
+  const body = describe.slice(0, describe.indexOf('\n    }\n'));
+  // `items` is selected, but only ever measured with `.length`.
+  const measuresOnly = /items\?\.length/.test(body) && !/items\[|items\.map|item\.title|\.sku\b/.test(body);
+  return measuresOnly;
+});
+
+assert('⚠ a BOOKING discloses no seller — the service provider IS often the sensitive fact', () => {
+  const service = PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code;
+  const describe = service.slice(service.indexOf('private async describePaidFor('));
+  // The booking branch runs first and returns before any store lookup exists.
+  const bookingBranch = describe.slice(0, describe.indexOf('const orderIds'));
+  return (
+    /kind: 'booking'/.test(bookingBranch) &&
+    /sellers: \[\]/.test(bookingBranch) &&
+    !/StoreModel/.test(bookingBranch) &&
+    // and it reads only the number off the booking — never the service it is for
+    /\.select\('bookingNumber'\)/.test(bookingBranch)
+  );
+});
+
+assert('⚠ no rendered SENTENCE is composed here — the reader has no language on this side', () => {
+  const service = PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code;
+  const describe = service.slice(service.indexOf('private async describePaidFor('));
+  const body = describe.slice(0, describe.indexOf('\n    }\n'));
+  // The storefront composes; this side sends facts. A template literal or a joined
+  // phrase here would be English on a page translated into five languages — and English
+  // in the one line that says what the money is for.
+  return !/`.*\$\{/.test(body) && !/\.join\(' /.test(body) && !/description:/.test(body);
+});
+
+assert('the multi-vendor reference is STABLE across reads', () => {
+  const service = PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code;
+  const describe = service.slice(service.indexOf('private async describePaidFor('));
+  // `$in` does not promise document order, so an unsorted `[0]` names a different order
+  // on each refresh — which reads as a fault on a payment page.
+  return /\.sort\(\);/.test(describe) && /numbers\[0\] \?\? null/.test(describe);
+});
+
+assert('describePaidFor imports MODELS only — a service here closes an import cycle', () => {
+  const service = PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code;
+  const imports = service.slice(0, service.indexOf('/**'));
+  // orders/ and booking/ both import payments back, so only leaf models are safe.
+  return (
+    /import \{ OrderModel \}/.test(imports) &&
+    !/OrderService|OrderRepository|BookingService/.test(imports)
+  );
+});
+
 assert('the mint refuses a gateway that needs no page, and a finished payment', () => {
   const service = PAYMENT_SOURCES.find(({ file }) => file.endsWith('pay-link.service.ts'))!.code;
   return (
@@ -1026,6 +1131,183 @@ assert('the reconciliation worker takes the shared overlap lock', () => {
     file.endsWith('payment-reconciliation.worker.ts')
   )!;
   return /withWorkerLock\(/.test(worker.code);
+});
+
+section('11. The initiate row — written BEFORE it has a gateway reference');
+
+// All four initiate paths in `payment-orchestrator.service.ts` commit the transaction
+// FIRST and fill `gatewayRef` in from the gateway's answer, so every row spends a window
+// carrying `''` — and keeps it forever when the initiation failed without ever being given
+// one. Mongoose rejects '' for a `required` String, so marking that field required makes
+// EVERY initiate die on validation before the gateway is even called: a 500 on the first
+// step of paying for anything. Nothing the repository had could see it — the schema and
+// the orchestrator are each valid alone, and the contradiction exists only between them —
+// so it is asserted against the real model.
+
+const initiateRow = (source: Record<string, unknown>) =>
+  new PaymentTransactionModel({
+    ...source,
+    userId: new Types.ObjectId(),
+    gateway: 'NOTCHPAY',
+    method: 'MOBILE',
+    status: 'INITIATED',
+    gatewayRef: '',
+    amountSnapshot: 5000,
+    currencySnapshot: 'XAF',
+    idempotencyKey: `fixture-${crypto.randomUUID()}`,
+    merchantRef: mintMerchantRef('pt'),
+    rawGatewayPayloads: [],
+  } as any);
+
+assert('a cart-group row validates with an EMPTY gatewayRef', () =>
+  initiateRow({ cartId: new Types.ObjectId(), orderIds: [new Types.ObjectId()] })
+    .validateSync() === undefined);
+
+assert('a single-order row validates with an EMPTY gatewayRef', () =>
+  initiateRow({ orderId: new Types.ObjectId() }).validateSync() === undefined);
+
+assert('a booking row validates with an EMPTY gatewayRef', () =>
+  initiateRow({ bookingId: new Types.ObjectId() }).validateSync() === undefined);
+
+// The premise the three above rest on: they are worth something only while the
+// orchestrator really does write that placeholder. If it ever stops, they go green for
+// the wrong reason — so pin the placeholder rather than trusting it.
+assert('the orchestrator still creates its rows with a placeholder gatewayRef', () => {
+  const orchestrator = PAYMENT_SOURCES.find(({ file }) =>
+    file.endsWith('payment-orchestrator.service.ts')
+  )!;
+  return /gatewayRef: ''/.test(orchestrator.code);
+});
+
+// The other half of that window: a callback must never land on a row that has not got
+// its reference yet, which an empty-ref query would do to whichever one Mongo returned
+// first. `merchantRef` is what routes a callback until `gatewayRef` exists.
+assert('a webhook lookup refuses to query an empty gatewayRef', () => {
+  const orchestrator = PAYMENT_SOURCES.find(({ file }) =>
+    file.endsWith('payment-orchestrator.service.ts')
+  )!;
+  return /if \(!event\.gatewayRef\) return null;/.test(orchestrator.code);
+});
+
+section('12. The retry — a dead attempt must hand its key back');
+
+// `idempotencyKey` is unique and derived from (source id, user, amount), so a retry of the
+// same intent computes the SAME key. All four initiate paths answer a SUCCEEDED or still-live
+// attempt from the existing row, and fall through on a dead one to open a fresh transaction —
+// which the unique index refuses, with a 409 the customer cannot get past at any price. That
+// branch had never once run: initiate died earlier still (§ 11), so the entire retry path
+// shipped unexercised. These pin the shape it now has.
+
+const ORCHESTRATOR = PAYMENT_SOURCES.find(({ file }) =>
+  file.endsWith('payment-orchestrator.service.ts')
+)!.code;
+const countOf = (needle: string) => ORCHESTRATOR.split(needle).length - 1;
+
+assert('every idempotency check that falls through releases the dead attempt', () => {
+  // Not a bare `findOne({ idempotencyKey })` — openAttempt makes one of those too, to find
+  // the winner of a race, and counting it would let a path lose its release and stay green.
+  const checks = countOf('const existingTx = await PaymentTransactionModel.findOne({ idempotencyKey });');
+  const releases = countOf('await this.releaseDeadAttempt(existingTx);');
+  return checks === 4 && releases === checks;
+});
+
+assert('the key is retired only from inside the release check', () => {
+  const callers = countOf('this.retireDeadAttempt(');
+  const release = ORCHESTRATOR.split('private async releaseDeadAttempt')[1]?.slice(0, 2200) ?? '';
+  const fromRelease = release.split('await this.retireDeadAttempt(').length - 1;
+  // Three exits clear a retry — no reference, a gateway that confirms the charge is dead,
+  // and a provider refusal — and all three are inside the check. Nothing else may retire.
+  return callers === 3 && fromRelease === 3;
+});
+
+assert('the retired key carries the row id, so it cannot collide with another attempt', () =>
+  ORCHESTRATOR.includes(
+    'idempotencyKey: `${transaction.idempotencyKey}:retired:${transaction._id}`'
+  ));
+
+// The one thing retiring must NOT touch. `merchantRef` is how a webhook for a charge we had
+// given up on still finds its row, so a retry that disturbed it would orphan that money.
+assert('retiring changes the key and nothing else on the row', () => {
+  const body = ORCHESTRATOR.split('private async retireDeadAttempt')[1]?.slice(0, 400) ?? '';
+  return body.includes('idempotencyKey') &&
+    !/merchantRef|gatewayRef|status|orderIds|deleteOne/.test(body);
+});
+
+// The gateway's own account of a refusal — NotchPay's 422 body, Stripe's decline code — comes
+// back inside an AppError's `details`, and the boundary drops `details` from the client
+// response for every `external_service` category, in every environment. If the row does not
+// keep it, the reason a payment was refused exists nowhere at all.
+assert('a failed initiation records what the gateway actually said', () => {
+  const body = ORCHESTRATOR.split('private errorPayload')[1]?.slice(0, 500) ?? '';
+  return body.includes('error instanceof AppError') && body.includes('details: error.details');
+});
+
+assert('no initiate path still records the one-line summary alone', () =>
+  countOf('error: error.message') === 0);
+
+section('13. Paying twice — every way one impatient customer could');
+
+// The unique index on `idempotencyKey` bounds ONE of the four ways, and only that one. It
+// keys on (source, user, amount), so it cannot see the same order reached through a second
+// route, and it cannot see a charge that may still be live behind a local `FAILED`. Order
+// level idempotency downstream does not save this: `OrderService.handlePaymentSuccess`
+// no ops on an already paid order, so a second charge settles silently against nothing and
+// the customer is simply out the money.
+
+assert('every initiate path looks for a live attempt before opening one', () =>
+  countOf('await this.findLiveAttempt(') === 4);
+
+assert('live means INITIATED or PENDING — the two states a charge can complete from', () => {
+  const body = ORCHESTRATOR.split('private async findLiveAttempt')[1]?.slice(0, 400) ?? '';
+  return body.includes("status: { $in: ['INITIATED', 'PENDING'] }");
+});
+
+// The cart path and the single-order path are two routes to the same order, and they compute
+// different keys for it. The guard has to ask about the ORDERS, not about the request.
+assert('the cart guard covers both routes to the same order', () => {
+  const guard = ORCHESTRATOR.split('const liveElsewhere = await this.findLiveAttempt({')[2] ?? '';
+  const scope = guard.slice(0, 260);
+  return scope.includes('cartId') && scope.includes('orderId') && scope.includes('orderIds');
+});
+
+// One door to `create`, so the race recovery and the source-field union type cannot be
+// bypassed by a fifth path added later.
+assert('nothing opens a transaction except openAttempt', () =>
+  countOf('PaymentTransactionModel.create(') === 1);
+
+assert('a lost create race answers with the winner, not a database error', () => {
+  const body = ORCHESTRATOR.split('private async openAttempt')[1]?.slice(0, 900) ?? '';
+  return body.includes('11000') && body.includes('{ raced: winner }');
+});
+
+// The heart of it. A retry may only proceed once the dead attempt is CONFIRMED dead: the
+// gateway is asked, its answer outranks ours, and not being able to ask is not a yes.
+assert('a retry asks the gateway before charging again', () => {
+  const body = ORCHESTRATOR.split('private async releaseDeadAttempt')[1]?.slice(0, 2200) ?? '';
+  return body.includes('gatewayInstance.verifyPayment(') &&
+    body.includes('return transaction;');
+});
+
+assert('an attempt that settled after looking failed is adopted, never charged again', () => {
+  const body = ORCHESTRATOR.split('private async releaseDeadAttempt')[1]?.slice(0, 2200) ?? '';
+  return body.includes("if (verified === 'SUCCEEDED')") &&
+    body.includes('await this.handlePaymentSuccess(transaction);');
+});
+
+// PENDING has two causes that look identical — a charge waiting on the customer, and a
+// record opened but never charged. Only a 4xx tells them apart, because only a 4xx is the
+// provider DECIDING. A timeout records no status, and must never read as permission.
+assert('only a provider refusal clears a retry, never a timeout', () => {
+  const body = ORCHESTRATOR.split('private lastFailureWasRefused')[1]?.slice(0, 700) ?? '';
+  return body.includes('status >= 400 && status < 500') && body.includes('return false;');
+});
+
+// …which is worth nothing unless the reference actually survives the failure that loses it.
+assert('a failed charge keeps the reference the gateway had already issued', () => {
+  const notchpay = PAYMENT_SOURCES.find(({ file }) => file.endsWith('notchpay.gateway.ts'))!.code;
+  const carried = notchpay.includes('...(error.details ?? {}),') && notchpay.includes('gatewayRef,');
+  const landed = ORCHESTRATOR.split('private async recordFailedAttempt')[1]?.slice(0, 600) ?? '';
+  return carried && landed.includes('error.details?.gatewayRef');
 });
 
 originalConsole.log(`\n${'═'.repeat(76)}`);

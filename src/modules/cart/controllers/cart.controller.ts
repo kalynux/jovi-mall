@@ -31,8 +31,16 @@ export class CartController {
   /** POST /customer/cart/items — add a variant to the cart (or increment it). */
   static addItem = asyncHandler(async (req: Request, res: Response) => {
     const userId = req.auth!.role_entity._id.toString();
-    const { productId, variantId, quantity, currency } = AddToCartSchema.parse(req.body ?? {});
-    const cart = await cartService.addToCart(userId, productId, variantId, quantity, currency);
+    const { productId, variantId, quantity, currency, negotiationLockRef } =
+      AddToCartSchema.parse(req.body ?? {});
+    const cart = await cartService.addToCart(
+      userId,
+      productId,
+      variantId,
+      quantity,
+      currency,
+      negotiationLockRef,
+    );
     res.status(200).json({ success: true, data: cart });
   });
 

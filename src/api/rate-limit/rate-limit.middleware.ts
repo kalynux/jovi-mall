@@ -40,7 +40,7 @@ import { AUTH_POLICY, AUTH_SESSION_POLICY, ceilingFor, CONNECTION_CODE_POLICY, G
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * The stores are built ONCE and swapped, not rebuilt per request.
+ * The limiters are built ONCE and swapped, not rebuilt per request.
  *
  * Constructing a limiter inside a request handler is what express-rate-limit's
  * `ERR_ERL_CREATED_IN_REQUEST_HANDLER` warns about: the instance built there can end up
@@ -48,12 +48,25 @@ import { AUTH_POLICY, AUTH_SESSION_POLICY, ceilingFor, CONNECTION_CODE_POLICY, G
  * looking exactly like a working one. wi-admin's `auth-rate-limit.middleware.ts` solved
  * this first and this is the same shape — build at app assembly with the memory store, swap
  * in Redis during boot once the connection exists.
+ *
+ * ⚠ The CONNECTION is shared; the STORE is not, and must not be. express-rate-limit keeps a
+ * WeakSet of every store object handed to a limiter and throws `ERR_ERL_STORE_REUSE` on the
+ * second — so one `FailOpenStore` passed to all six policies builds the first limiter and
+ * then throws inside the request that first touches any other one. Each policy therefore
+ * gets its own `FailOpenStore` over its own `RedisStore`, all sharing the single Redis
+ * client. Nothing about the counters changes: they were already separated by
+ * `keyGenerator`, and are now separated by the key prefix as well.
  */
 const built = new Map<string, RequestHandler>();
-let sharedStore: FailOpenStore | null = null;
+
+/** Mints a virgin store per limiter. `null` until `initRateLimiters` installs Redis. */
+let storeFactory: ((policy: RateLimitPolicy) => FailOpenStore) | null = null;
+
+/** Every store handed to a live limiter, so degradation stays observable across all of them. */
+let stores: FailOpenStore[] = [];
 
 /**
- * Install the Redis-backed store. Called from `startServer()` after Mongo connects.
+ * Install the Redis-backed stores. Called from `startServer()` after Mongo connects.
  *
  * Falls back to the in-memory store if Redis is unreachable, and says so. A per-process
  * limit still bounds an attacker — N instances multiply the effective ceiling by N, which
@@ -63,14 +76,21 @@ let sharedStore: FailOpenStore | null = null;
 export async function initRateLimiters(): Promise<void> {
     try {
         const client = (await getRedisClient(RATE_LIMIT_DB)) as RedisClientType;
-        sharedStore = new FailOpenStore(
-            new RedisStore({
-                prefix: 'rl:',
-                sendCommand: (...args: string[]) => client.sendCommand(args),
-            }),
-        );
+        storeFactory = (policy) =>
+            new FailOpenStore(
+                new RedisStore({
+                    // Per-policy prefix as well as a per-policy store instance. The
+                    // `keyGenerator` below already namespaces by `policy.key` — it has to,
+                    // because the MemoryStore fallback has no prefix at all — so this is
+                    // belt and braces, and it makes the isolation structural rather than a
+                    // property of a key format someone could later simplify.
+                    prefix: `rl:${policy.key}:`,
+                    sendCommand: (...args: string[]) => client.sendCommand(args),
+                }),
+            );
+        stores = [];
         built.clear();
-        logger().info('rate limiters using the shared Redis store');
+        logger().info('rate limiters using the shared Redis connection');
     } catch (error) {
         logger().error(
             { err: error instanceof Error ? error.message : String(error) },
@@ -82,12 +102,18 @@ export async function initRateLimiters(): Promise<void> {
 /** Test-only: drop the built handlers so a new ceiling or a fresh counter takes effect. */
 export function resetRateLimiters(): void {
     built.clear();
-    sharedStore = null;
+    storeFactory = null;
+    stores = [];
 }
 
-/** True once the backing store has failed. Surfaced on the operations endpoint. */
+/**
+ * True once a backing store has failed. Surfaced on the operations endpoint.
+ *
+ * Any one of them is evidence for all of them — they share a single Redis client, so the
+ * store that noticed is simply the one that happened to issue the next command.
+ */
 export function rateLimitStoreDegraded(): boolean {
-    return sharedStore?.isDegraded ?? false;
+    return stores.some((store) => store.isDegraded);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,6 +121,11 @@ export function rateLimitStoreDegraded(): boolean {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function build(policy: RateLimitPolicy): RequestHandler {
+    // A store of this limiter's own — see the note above `built`. `null` before
+    // `initRateLimiters` has run, which leaves express-rate-limit's own MemoryStore.
+    const store = storeFactory?.(policy) ?? null;
+    if (store) stores.push(store);
+
     return rateLimit({
         windowMs: policy.windowSeconds * 1000,
 
@@ -118,11 +149,11 @@ function build(policy: RateLimitPolicy): RequestHandler {
             if (isExemptPath(req)) return true;
             // A dead store means every command is a doomed round trip. `FailOpenStore`
             // already admits the request; this stops us paying for the attempt.
-            if (sharedStore?.isDegraded) return true;
+            if (rateLimitStoreDegraded()) return true;
             return ceilingFor(policy, resolveCallerClass(req)) === 'exempt';
         },
 
-        ...(sharedStore ? { store: sharedStore } : {}),
+        ...(store ? { store } : {}),
 
         handler: (req, _res, next) => {
             const callerClass = resolveCallerClass(req);

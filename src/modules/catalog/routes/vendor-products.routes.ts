@@ -540,10 +540,13 @@ router.delete('/availability-rules/:ruleId', VendorAvailabilityController.delete
 
 /**
  * GET /api/vendor/products/:id/service/calendar-status
- * Get calendar integration status
- * 
- * STUB: Returns placeholder response
- * Future integration point for Google Calendar sync
+ * Get calendar integration status, in the context of one service product.
+ *
+ * ⚠ NOT a stub. This said "STUB: Returns placeholder response" until 2026-09-07 and was
+ * wrong: `VendorServiceCalendarController.getCalendarStatus` reads the real
+ * `ConnectedCalendarAccount`. The controller's own header was corrected on 2026-08-19 and
+ * this one was missed — the same half-corrected-page failure mode, one file over.
+ * Contract: `api-doc/vendor/calendar.md` § Per-product calendar status.
  */
 router.get('/:id/service/calendar-status', VendorServiceCalendarController.getCalendarStatus);
 

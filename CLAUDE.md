@@ -124,6 +124,14 @@ npm run migrate:drop-agent-invites       # ⚠ the ONLY DESTRUCTIVE one: DROPS a
 npm run migrate:booking-rule-timezones   # clear the legacy 'UTC' default off availability rules so
                                          # they inherit the vendor's zone; reports every rule whose
                                          # effective hours would move (idempotent, --dry-run)
+npm run migrate:booking-number-index     # the PARTIAL unique index on bookings.bookingNumber.
+                                         # Partial because legacy bookings carry null and a plain
+                                         # unique index refuses to build against more than one of
+                                         # them. It is the only thing enforcing that a booking
+                                         # handle is unique besides the generator's counter — and
+                                         # a database restored without that counter re-issues
+                                         # numbers customers are already holding, silently
+                                         # (idempotent, --dry-run)
 npm run migrate:inventory-indexes        # the agency stock-movement + storage-invoice indexes.
                                          # Two of them are correctness: one stops a retried payment
                                          # webhook selling a depot shelf twice, the other stops the
@@ -205,6 +213,28 @@ npm run test:agency-inventory                  # the agency stored-SKU roster AN
 npm run test:vehicle-profile                   # vehicle colour + photo merge (31, no DB needed)
 npm run test:payout-methods                    # the shared payout schema + switch (53, no DB needed)
 npm run test:booking-availability               # booking windows/timezones/seats (54, no DB needed)
+npm run test:booking-notification              # the booking number + the notifications that name
+                                               # it (40, no DB). Its first section is the reason it
+                                               # exists and generalises past bookings: for every
+                                               # `booking.*` event, every field either notification
+                                               # handler READS must be one the producer PUBLISHES,
+                                               # by source scan. `DomainEvent.payload` is `any`, so
+                                               # a handler destructuring `bookingNumber, serviceName,
+                                               # startTime` off an event carrying `productTitle,
+                                               # vendorName, startAt` type-checks perfectly and
+                                               # agrees with the producer on NOTHING — which is what
+                                               # shipped, and what sent every vendor "New booking #
+                                               # for scheduled on Invalid Date." in five languages
+                                               # while failing the WhatsApp send outright (Meta
+                                               # rejects an empty template parameter). No linter,
+                                               # type-checker or runtime error can see it: the empty
+                                               # string IS the designed rendering of a missing value
+                                               # (`message-renderer.ts`), so the defect looks like
+                                               # copy. It also distinguishes a REQUIRED unpublished
+                                               # read (a failure) from an OPTIONAL one (dead weight,
+                                               # reported) — the customer handler's `?`-declared
+                                               # fields with fallbacks are exactly why its half of
+                                               # the same event was never broken
 npm run test:customer-notifications             # customer catalog + balance settlement (53, no DB) — plus
                                                # GAP-012: the ticket situations, the pure status→situation
                                                # policy, and the assertion that every customer_* template has
@@ -350,7 +380,7 @@ npm run verify:messaging-login                 # the same feature against real i
                                                # password, that the old one stops working, and that
                                                # a Telegram contact-share completes the RESET rather
                                                # than signing the person in
-npm run test:bot-surface                       # the curated bot surface (153, no DB) — the door the
+npm run test:bot-surface                       # the curated bot surface (257, no DB) — the door the
                                                # automation layer acts through. Its FIRST group is the
                                                # contract copy: the route table asserted row-for-row
                                                # against `api-doc/n8n/tools/catalog.json`, which the
@@ -368,7 +398,7 @@ npm run test:bot-surface                       # the curated bot surface (153, n
                                                # no session is ever minted, no controller reads
                                                # req.auth, and no handler takes an identity out of a
                                                # body or a path
-npm run verify:bot-surface                     # the same surface against real infrastructure (74) —
+npm run verify:bot-surface                     # the same surface against real infrastructure (121) —
                                                # NEEDS Mongo + Redis. Boots the app in-process and
                                                # calls over real HTTP, which is the only way to prove
                                                # five things: that BOTH credentials are wired in the
@@ -384,11 +414,20 @@ npm run verify:bot-surface                     # the same surface against real i
                                                # a SECOND address can still be added
 npm run test:errors                            # Phase 16: the taxonomy, the exposure policy, the
                                                # envelope, the body-parser branch and the rate-limit
-                                               # policy (69, no DB). Includes a CENSUS of all 1362
+                                               # policy (74, no DB). Includes a CENSUS of all ~1517
                                                # createAppError sites — it fails if a NEW code is
                                                # raised at two statuses that disagree on category.
                                                # 25 pre-existing conflicts are baselined in the file
                                                # with the reasoning, and the baseline cannot go stale.
+                                               # § 8 is a SECOND ratchet: a code thrown with no
+                                               # message of its own AND no registry entry renders
+                                               # "An unexpected error occurred" on a 422 whose
+                                               # details carry the real numbers. 52 codes were doing
+                                               # that, incl. every COD one and SHIPMENT_NOT_FOUND;
+                                               # 20 remain, baselined. ⚠ Its regex matches BOTH the
+                                               # 3-arg `…, undefined` and the 2-arg form — matching
+                                               # only the first reported clean while AGENT_NOT_FOUND
+                                               # was generic at 38 sites
 npm run test:env                               # the environment contract (36, no DB) — a source CENSUS
                                                # that re-derives every variable src/ reads, INCLUDING the
                                                # ~120 that reach process.env through a config helper and
@@ -520,7 +559,7 @@ export class VendorProductController {
 **Never** use `throw new Error()` or `res.status().json({ error: ... })`. ESLint enforces this — and the `res.json` selector now matches `error` **anywhere** in the object literal, not only as its first property, which is exactly how eight hand-rolled error responses had accumulated.
 - Use `createAppError(code, statusCode, message?, details?)` from `src/core/errors.ts`
 - Pass errors to `next(error)` — the global handler normalises AppError, ZodError, body-parser rejections, Mongoose and Multer errors into one shape
-- Error codes are domain-prefixed literals in `src/core/error-codes.ts` (541 of them, 1362 call sites, zero ad-hoc strings)
+- Error codes are domain-prefixed literals in `src/core/error-codes.ts` (**623** of them, **~1517** call sites, zero ad-hoc strings). ⚠ Both numbers were **541 / 1362** here until 2026-09-06 and had been quoted onward into `geo-tracker`'s `apperror/codes.go` header and into a frontend doc that generated its client-side code registry from the stale figure — a count nobody re-measures is a claim that decays silently. **They then moved again the same day** (621 → 623, 1514 → 1517) from feature work in another module, which is why this line ends the way it does. Re-measure rather than trusting it: `grep -cE "^\s+[A-Z0-9_]+:\s*'" src/core/error-codes.ts`.
 
 **Every error carries a `category`** — one of nine (`src/core/error-category.ts`), **derived** from `(code, statusCode)` in the `AppError` constructor rather than in the factory, because four subclasses and six `ticket.service.ts` sites call `super()` directly. Never annotate one by hand: the same code is raised at different statuses at different sites, so an annotation would be wrong at one of them. **`400` is a schema failure and `422` is a business rule** — that split already exists at 136 and 139 call sites and the derivation depends on it.
 
@@ -1128,6 +1167,44 @@ Consume the domain through the barrel (`src/modules/agents/index.ts`) — **exce
 
 **Contract terms gate the SHIPMENT, and live elsewhere.** `evaluate(agentId, agencyId)` takes no shipment, so a rule that needs one cannot go there. `contract-coverage.service.ts` holds the two pure predicates — `contractCoversRegion` (against `order.delivery_address.components.region`) and `contractAllowsShipmentValue` — enforced in `AssignmentCandidateService.buildRanking` (the auto pool) and in `ShipmentAssignmentService.assertContractPolicy`, which runs on **all three** command paths: `offerToAgent`, `accept` and `reassign`. Gate the ranking but miss a command path and a manual assign silently bypasses the term, which is worse than not enforcing it — the rule would appear to work.
 
+⚠ **Those rules are no longer inline in `assertContractPolicy`.** They live in
+`shipment-assignment/domain/services/contract-policy.service.ts`, which evaluates all four
+contract gates — active contract · coverage · value ceiling · **COD exposure** — *without
+throwing*, and whose `assert` throws the first failure with the same codes, statuses and
+`details` as before. `assertContractPolicy` is a one-line delegation now.
+
+**The extraction was forced by a diagnostic, and the reason generalises.** Assignment is
+gated by TWO families and only one was inspectable: `AgentEligibilityService` had
+`/eligibility`, and the contract family had **no read surface at all**. So an agency refused
+with `COD_AGENT_EXPOSURE_EXCEEDED` could see its own `contract.cod.threshold` on three admin
+screens and could see **neither** the agent's actual exposure — which counts undelivered COD
+packages, not just held cash, and spans **every agency the agent serves** — **nor** the
+trust multiplier that had halved that threshold. Support had the wrong number in front of
+them with no way to know it. `GET /api/internal/admin/agents/:agentId/assignability?agencyId=&shipmentId=`
+(`AgentAssignabilityService`) composes both families and reports every gate with its
+numbers; wi-admin delegates it as its **fourth** verdict read.
+
+Two rules it establishes, and neither is optional:
+
+- **A chain of throws can only report the FIRST refusal, and only as an exception.** That is
+  the right shape for a gate and the wrong shape for an explanation — the same argument
+  `AgentEligibilityService` already makes about reporting every failed rule at once. Any new
+  gate belongs in the non-throwing evaluator, with `assert` as the thin throw over it.
+- ⚠ **A drifted diagnostic does not fail, it LIES.** Nothing may re-derive one of these rules
+  — not the diagnostic, not wi-admin, which could genuinely compute the cash half from
+  fields it reads directly and would be wrong three ways (the trust thresholds are
+  jovi-mall env config; exposure counts pending collections it has no read model for; the
+  effective score is `trust_override ?? trust_score`). An operator believes a diagnostic and
+  repeats it to an agency.
+
+⚠ **The route is a SECOND router mounted at the same `/agents` prefix**
+(`shipment-assignment/admin-assignability.routes.ts`), because its handler reaches into
+cod/ and orders/ and declaring it in `agents/routes/` would close an import cycle — agents
+is what shipment-assignment imports. Express tries routers at a shared prefix in order and
+`/:agentId` never matches two segments, so nothing is shadowed. wi-admin's `test:agents`
+cross-repo path scan reads **both** files; reading only the first is how that assertion
+would silently stop covering a route.
+
 **Everything unknown here FAILS OPEN.** Empty `coverage.regions` is the schema default on every contract ever written, so treating it as "covers nowhere" would make the whole roster undispatchable at once; a missing delivery region (orders predating the snapshot) and an uncomputable shipment value do the same. These are narrowing terms, not authorization — see the header of `contract-coverage.service.ts`.
 
 **Writing coverage is the strict half, and that asymmetry is the design.** `coverage.regions` used to be free text; it is now **picked**, from the agency's country's region catalogue in `locations.json` — the same list the agency's own `coverage_areas` use on its location tab. `normalizeContractRegions` (third pure function in `contract-coverage.service.ts`) canonicalises every write and refuses anything that does not resolve to a region of that country: `"Extrême-Nord"` → `far_north`, `"Douala"` → `400 CONTRACT_COVERAGE_REGION_INVALID`. It runs through **one choke point**, `AgentContractService.normalizeCoverageTerms`, called on all six terms-write paths (both request paths, `updateTerms`→`counterTerms`, `counterTerms`, `proposeTermsChange`, `counterTermsProposalAs`) — a term is only as good as its weakest write path. Reading still fails open for the legacy free-text rows. The catalogue is the **country's**, deliberately not the agency's declared areas (an agency contracts agents for a region before it declares it); the agent side is given `agencyCountry` + `agencyCoverageAreas` on `AgentMembershipWithAgencyDto` so its picker can scope itself and mark what the agency actually serves.
@@ -1159,6 +1236,17 @@ The enforcement is `toFileDetail`: a private key gets **`url: null`** and `acces
 ⚠ **A new storage provider can undo all of that without touching either file.** The rule lives in `toFileDetail` and the mount list, *not* in any provider, so an object-storage provider returning a public CDN URL silently republishes the private trees and no test fails. The reasoning is written at the provider switch in `storage.factory.ts`, where the next author will be standing.
 
 ⚠ **`storage/ticket-attachments/` has NO WRITER** and holds one legacy file. A ticket attachment today is an ordinary `by-type` upload landing in `documents/` or `images/` — **beside public product imagery** — and attached by id afterwards, so it cannot be made private by moving a tree. That half of D-2 is open and needs a dedicated ticket-attachment upload path.
+
+⚠ **Step 7b added a SECOND writer of those trees and deliberately did NOT close that gap.**
+`POST /api/internal/bot/files/inbound` takes a photo a customer sent in a chat and uploads it
+`folder: 'by-type'`, exactly as `POST /api/files/upload` does. It could not do otherwise: the
+whole point of the two-step design is that **intake does not know what the file is for** — a
+customer photographs a damaged item before there is a ticket to put it on at least as often
+as after, and the model decides afterwards by spending the handle. Naming the tree at intake
+would mean claiming a purpose nobody has stated, and would put a purpose folder's access rule
+on a file that may never become an attachment. So the number of chat-uploaded images sitting
+beside product imagery now grows with traffic, which makes D-2's open half **larger, not
+different** — and any fix has to move the file at ATTACH time rather than at upload time.
 
 ### Upload security (`src/core/uploads/`)
 
@@ -1354,6 +1442,109 @@ unpublish a product the moment it sold out. Pre-existing offenders are listed by
 Covered DB-free by `npm run test:stock-requests` (40) and the extended
 `npm run test:agency-inventory` (99). Contracts in `api-doc/{agency,vendor}/stock-requests.md`;
 the dashboard hand-off is `api-doc/FRONTEND-CHANGELOG-agency-storage.md`.
+
+### Plan quota (`src/modules/plan-quota/`)
+
+Plan limits used to bind **only at creation time**, on two endpoints — so a downgrade changed
+nothing. A vendor dropping from `business` (unlimited products, 100 GB) to `starter` (15, 1 GB)
+kept every product live and every byte served, forever, because nothing ever recounted. This
+module is the recount, and it runs on every plan transition.
+
+**Nothing is deleted.** Products past the allowance are **suspended**; files past it are
+**blocked**. Both are reversible, and an upgrade releases them **oldest-first** until the new
+allowance is full — the same computation against a bigger number, so restoration cannot disagree
+with suspension. Contract: [api-doc/FRONTEND-CHANGELOG-plan-quota.md](./api-doc/FRONTEND-CHANGELOG-plan-quota.md).
+
+**The rule is a PREFIX, on both axes.** Items are ordered `createdAt` ASC with an `_id`
+tie-break, the allowance is filled from the oldest end, and everything after the cut-off is held
+back. For storage the first file that does not fit **ends the run** — a later, smaller file is not
+squeezed in. Packing the allowance fuller would make the visible set depend on file *sizes* rather
+than on age, and would let an unrelated deletion silently reshuffle which images a customer sees.
+The `_id` tie-break is not decoration: a bulk upload lands several rows in one millisecond, and an
+unstable sort would move the cut-off between runs.
+
+Six things are load-bearing:
+
+- ⚠ **`countActiveByVendor` EXCLUDES quota-suspended products, and that exclusion is what makes
+  the sweep converge.** A `suspended` product is otherwise counted (it is still the vendor's
+  catalog), so if quota-suspended ones counted too, suspending one would never reduce the number
+  the sweep is trying to reduce — it would suspend the entire catalog and still report the vendor
+  over cap. Products suspended for the **other four** reasons keep their slot and are *pinned*:
+  they consume allowance and are never touched, which pushes a suspendable product out instead.
+- ⚠ **The quota is NOT an activation blocker, deliberately.** `collectActivationBlockers` is
+  called by `revalidateActiveStatus`, which **silently demotes** a live product to `draft`
+  rather than refusing — so a quota blocker there would quietly unpublish a product every time an
+  over-cap vendor edited anything. Exactly the trap `agency-storage-stock.rule.ts` documents. The
+  quota refuses at the write endpoints instead (`assertCanAddProduct`/`assertCanAddProducts`).
+- **`plan_quota_exceeded` is the FIFTH disjoint suspension reason**, and no vendor, agency or
+  administrator restore may clear it — none of them buys a bigger plan. It is also the only reason
+  that attaches to a **draft** (a draft occupies a slot), which is why it cannot reuse
+  `suspendProduct`: that primitive compare-and-sets on `status: 'active'`.
+- **Durability comes from committed state, not from the event bus.** `plan.activated` is
+  in-process, unpersisted and un-retried, and `publish` swallows handler errors — a dropped event
+  would leave a vendor on the free tier with a hundred live products and no symptom. An outbox is
+  not needed because the authority is already committed transactionally: `plan_quota_states`
+  records which plan, **and which limit VALUES**, the current suspensions were computed for, and
+  `PlanQuotaReconcileWorker` recomputes wherever that disagrees with the live plan. Stamping the
+  values is what catches an administrator **editing a plan in place** — that changes no `plan_id`
+  anywhere and `PricingPlanService.update` emits nothing at all.
+- ⚠ **The sweep also picks up owners who are merely HOLDING something back.** Drift alone is a
+  hole: the remedy offered to an over-cap owner is "archive something older and the next item
+  returns", and archiving changes neither plan nor limits, so a drift-only sweep would skip that
+  vendor forever. `quota.capacity_freed` (published by the archive and file-delete paths) makes it
+  immediate; the sweep is what makes it certain.
+- **Blocking is expressed at ONE place on the way out** — `toFileDetail`, which now returns
+  `access: 'quota_blocked'` with `url: null`, **checked before the privacy rule** so a blocked
+  private file is not reported as merely authorized. `isRenderableImage` drops blocked files from
+  every product gallery, which is what makes "the product stays listed and shows the images that
+  still fit" true with no DTO edit anywhere.
+
+⚠ **`toFileDetail` was NOT the choke point it was documented to be, and this change made it
+one.** Three sites built a URL outside it — `VectorisationService` (a ternary), 
+`ticket-attachment.service` (a bare return, and **no privacy check at all**) and
+`ticket-reference.service` (the field was named `firstFileUrl`) — and `test:uploads`' guard
+regex, anchored on `url: …getPublicUrl(`, missed all three. All three now route through the
+resolver, and the scan refuses **any** `getPublicUrl` call outside `core/storage` and the
+resolver itself. A guard anchored on one spelling only ever catches the shape somebody already
+thought of.
+
+**wi-admin needed the same change**, because it builds `FileDetail.url` itself (ADR-021 L-3):
+the third `access` value, and `quotaBlockedAt` added to both file read projections. An omitted
+column there reads as "not blocked", so leaving it out does not fail — it silently republishes URLs
+this service has stopped serving.
+
+**Reactivation is automatic, and the release rides the SAME event a payment does.** A gateway
+confirming a plan purchase reaches `PlanPurchaseService.completePurchase` →
+`SubscriberPlanService.assignPlan` → `plan.activated` → the consumer, with no quota-specific step
+anywhere on the payment path. `verify:plan-quota` § 5 drives exactly that chain rather than
+calling the enforcement service, because everything else in that suite proves the rule and nothing
+proves that anything ever *calls* it.
+
+⚠ **One case does NOT reactivate immediately, and it is pre-existing billing behaviour rather
+than a quota defect.** `assignPlan` replaces a free or lapsed plan at once, but a plan bought
+while a **paid term is still running** is queued as `pending_activation` — so the entitlements,
+and the release with them, wait for the current term to end. The queued plan releases normally when
+`PlanExpiryWorker` promotes it (`activatePending` emits `plan.activated` too). Pinned by
+`verify:plan-quota` § 6 so nobody reports it as a reactivation bug. The ordinary downgrade path is
+unaffected: a lapsed plan drops to the free tier, whose `expires_at` is null, so re-purchase
+applies instantly.
+
+**Administrative staff keep full visibility, and that is deliberate rather than incidental.**
+wi-admin's product read applies no default status filter and projects `suspension.reason`, so a
+quota-suspended listing is visible with its reason and counted in the status breakdown; the media
+library reports `access: 'quota_blocked'`. The **bytes** of a blocked file remain reachable through
+`GET /api/internal/admin/files/:id/content` (proxied by wi-admin's audited `files.content.read`),
+which is not gated on the quota — an administrator investigating "why did this vendor's image
+vanish" must be able to look at it. There is deliberately **no admin un-suspend** for this reason:
+nothing an administrator can do to a product buys the vendor a bigger plan, so the remedy is to
+assign one (`POST /api/internal/admin/billing/vendors/:vendorId/plan`), which releases through the
+same consumer.
+
+Covered by `npm run test:plan-quota` (36, no DB — the whole cut-off decision table plus the
+source scans) and `npm run verify:plan-quota` (24, NEEDS Mongo — that the count really converges,
+that a **draft** is really suspendable, that `previousStatus: '$status'` really captures the status
+rather than the literal, that an upgrade really returns the same files, and §§ 5-6 above). Indexes:
+`npm run migrate:plan-quota-indexes`.
 
 ### Bargainable pricing (`catalog/domain/services/bargain-price.rule.ts`)
 
@@ -1835,6 +2026,43 @@ measures the pre-existing backlog and deliberately fixes nothing.
 
 Services never enter the cart; they are booked. Availability → 15-min Redis hold → booking → payment.
 
+**A GROUP service is a different thing from a busy hour, and `GroupBookingService` is where
+that difference lives** (`services/group-booking.service.ts`). A capacity product — a class, a
+tour, a workshop — breaks three assumptions the single-occupancy path is built on, and every
+one of them had produced a defect:
+
+- **The checkout hold is owner-scoped** (`slot:lock:{slotId}:{userId}`), so several customers
+  can hold one class at once. Every `SlotLockService` call about a group slot must pass
+  `scopeToOwner`, or it addresses a key nothing wrote. ⚠ **This is KI-1**: `rescheduleBooking`
+  defaulted it to `false`, so moving a group booking failed with `BOOKING_SLOT_NOT_LOCKED`
+  **always** — storefront and bot alike — however free the target was.
+  `SlotLockService.extend` had the identical bug and its docstring still warns about it.
+- **Occupancy is a seat COUNT, not a free/busy verdict.** "Is this window free" refuses a move
+  into a class that has anybody else in it. The question is whether fewer than `maxBookings`
+  seats are taken, matched on the **exact** window (which is how the create path defines a
+  seat — counting by overlap would refuse a slot the booking path accepts), under the per-slot
+  capacity mutex so a concurrent commit cannot take the last seat between the count and the write.
+- **The calendar event is SHARED by every seat.** So a per-booking `updateEvent` drags the whole
+  class to one attendee's new time, and a per-booking `deleteEvent` removes the class because
+  one person dropped out — which is what all three cancellation paths did. A move re-renders
+  BOTH `[x/N]` events (left and joined); a cancel re-renders one and deletes only on the last seat.
+
+⚠ **`resolveCapacity` is the ONE place that decides whether a product is a group service**, and
+that is the structural half of the KI-1 fix rather than a tidy-up. The rule was being answered in
+two places — `ProductBookingService.isCapacityProduct` (which picks the lock-key namespace) and
+nowhere at all in `rescheduleBooking` — and a hold written under one key and read under another
+IS the defect. `isCapacityProduct` now delegates. `createCapacityBooking` is a delegate too, so
+the create path and the move path count seats through one implementation.
+
+Covered DB-free by `npm run test:group-booking` (24). Three of its assertions are **source scans**,
+because KI-1's shape is a MISSING ARGUMENT — `assertLocked(slot, owner)` and
+`assertLocked(slot, owner, true)` both compile, both run, and address different Redis keys, so
+nothing behavioural can tell them apart. `npm run seed:group-service` builds the fixture that
+made testing it possible: a 4-seat class with four slots seeded to the four states a move can
+land in (the mover's class, one seat free, full, empty). ⚠ Before it, this database held two
+`capacity` variants that were **orphans** — their `products` row was gone — and zero bookings of
+any kind.
+
 **The booking rows are the authority on a product's own occupancy, not Google Calendar.** This is the load-bearing rule. Availability previously derived busy time from the calendar alone, so a `manual` booking — which writes no calendar event until the vendor accepts it — never blocked its own slot and the same hour could be sold without limit. `ProductBookingService.getAvailability` now subtracts `fullWindows(bookedWindows, seats)` for **every** mode; the calendar only ever *adds* the vendor's other commitments on top. Consequences that follow, and must not be "simplified" back:
 
 - Calendar writes are **best-effort everywhere** (create, reschedule, capacity). A Google outage can no longer reject or lose a confirmed sale, and a vendor with no calendar connected still sells correctly. Safe *only* because of the rule above.
@@ -1856,6 +2084,13 @@ Services never enter the cart; they are booked. Availability → 15-min Redis ho
 - **A balance payment is a SECOND payment on the same booking**, discriminated by `PaymentTransaction.purpose = 'booking_balance'` (default `'primary'`, so no migration). Without it the webhook's already-paid early return swallows it. It splits through `splitBookingBalance`, which uses its own source id — `('booking', bookingId)` is already taken by the original — and matures immediately, since the completion that would otherwise start the hold clock has already happened.
 
 `creditDue` (settling *below* what was paid) is **recorded, not refunded**, by explicit product decision — usually a goodwill discount the vendor hands back themselves. It is surfaced so it is at least visible.
+
+**Every booking carries a NUMBER, and it is generated rather than written.** `BKG-2026-000123` — `booking/utils/booking-number.generator.ts`, stamped at creation on both creation paths (`createBooking` and the group/capacity one), never editable, no endpoint sets it. Deliberately the same shape as `Order.order_number` because a vendor reads both on one screen. Four things about it:
+
+- **The sequence is an atomic `$inc`** on `sequence_counters` (`core/database/sequence.model.ts`), **not** `OrderNumberGenerator`'s `countDocuments() + 1`, which is a read-then-write race: two bookings committed in the same instant both count N and both claim N+1, and the second loses to the unique index. Orders survive that because a failed insert is a lost sale; a booking is worse placed to absorb it — the slot is already held. Orders are deliberately **not** migrated onto the counter in the same change; the counter is written generically so they can be.
+- ⚠ **It is drawn OUTSIDE the creating transaction, and must stay there.** The counter is a single document, so incrementing it inside would make every concurrent booking conflict on that one row — an atomic increment turned into a retry storm. The cost is that a booking failing afterwards **burns its number**, so the sequence is unique and **not dense**: `BKG-2026-000042` does not mean "the 42nd booking of 2026". Do not report it as a count.
+- **`null` on legacy rows, and not backfilled** (D-5). The schema path is deliberately not `required` — a required path would make `.save()` throw on every legacy booking, including on the cancel and settle paths, which load and save existing documents. Every reader has a fallback.
+- **Uniqueness is a PARTIAL unique index** (`$type: 'string'`), so it tolerates those nulls; a plain unique index treats every missing value as the same null and would refuse to build. `npm run migrate:booking-number-index`.
 
 **Customers are notified now** — see the notifications section. `BookingReminderWorker` fires ~24h before `startAt`, which the platform owed them: it records `no-show` against people it had never once reminded. Each sweep covers `[now+lead, now+lead+interval)` so consecutive passes tile exactly, and the idempotency key makes a replay harmless.
 
@@ -2106,11 +2341,17 @@ reset token really changes a **vendor's** password and that the old one stops wo
 ### The curated bot surface (`src/modules/bot-surface/`) — GAP-001
 
 **The door the automation layer acts through**, and the only way anything can act *as a
-customer* without holding a customer session. Forty-five named operations at
-`/api/internal/bot/*`, each delegating to the same service the customer API calls, with a
-customer id the backend resolved from a **messaging identity**. Contract:
-`api-doc/n8n/bot-surface.md`; the plan it was built from is `api-doc/n8n/BACKEND-GAPS.md`
-§ GAP-001.
+customer* without holding a customer session. A closed set of named operations at
+`/api/internal/bot/*` — **81 rows in `BOT_ROUTES` today, 9 of them `DELETE`** — each
+delegating to the same service the customer API calls, with a customer id the backend
+resolved from a **messaging identity**. Contract: `api-doc/n8n/bot-surface.md`; the plan it
+was built from is `api-doc/n8n/BACKEND-GAPS.md` § GAP-001, and the tool-parity work on top of
+it is `api-doc/n8n/MCP-PARITY-PLAN.md`.
+
+⚠ **Do not trust the count in the sentence above over the table.** It read "Forty-five named
+operations" while the table held 81, and the same sentence had already been wrong about the
+`DELETE` rows twice. `test:bot-surface` § 1 asserts the table against `catalog.json` row for
+row; that assertion is the contract, and this paragraph is orientation.
 
 **Not a proxy and not a session mint**, and the second is the load-bearing half. A route
 forwarding arbitrary paths would make whatever the customer API grows next reachable from a
@@ -2284,7 +2525,7 @@ Four properties:
 - **It is ADDED, never a replacement for `message`.** Two audiences, two strings — an
   operator reading *"Something went wrong. Please try again."* in an incident has been told
   nothing.
-- **Always present, for all 541 codes.** Per-code copy exists only where being specific
+- **Always present, for all 623 codes.** Per-code copy exists only where being specific
   changes what the customer *does*; everything else falls back to a sentence keyed on the
   nine-value **category**, which is derived and always present. There is no path by which a
   raw code reaches a chat window.

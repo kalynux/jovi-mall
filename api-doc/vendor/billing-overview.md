@@ -28,9 +28,21 @@ All billing endpoints use the platform-standard envelope.
 
 **Error:**
 ```json
-{ "success": false, "error": { "code": "ERROR_CODE", "message": "Human-readable description", "details": { } } }
+{
+  "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
+  "error": {
+    "code": "BILLING_INSUFFICIENT_CREDITS",
+    "message": "Human-readable description",
+    "statusCode": 402,
+    "category": "business_rule",
+    "details": { }
+  }
+}
 ```
-`details` is present on some errors (e.g. insufficient credits, limit exceeded).
+`category` is one of the nine values listed in [`../errors/README.md`](../errors/README.md) and is
+**always present**. `details` is present on some errors (e.g. insufficient credits, limit
+exceeded) and is omitted entirely when absent.
 
 ---
 
@@ -87,7 +99,7 @@ A new (pending) plan's allowance is added **only when it activates**, not when i
 
 Notes:
 - Vendor-facing vectorisation is charged automatically; if the balance is too low the product still saves but its `vectorisationStatus` becomes `skipped_no_credits` (no error to the request). A failed external vectorisation is **refunded**.
-- Admin bulk re-vectorisation (`POST /admin/products/bulk-vectorise`) is **not** charged to vendors.
+- Admin bulk re-vectorisation is **not** charged to vendors. ⚠ The route is `POST /api/internal/admin/dev-tools/catalogue/vectorise` (wi-admin surfaces it at `/api/v1/dev-tools/catalogue/vectorise`); this line named the pre-cutover `POST /admin/products/bulk-vectorise` until 2026-09-06, and no `/api/admin/*` route has existed since Phase 5 Part E (DOC-PROGRAM P-7).
 - WhatsApp system messages (verification codes, delivery-agent dispatch) are **exempt** — only vendor→customer templates are billed.
 - Costs are configurable server-side and may change; don't hardcode them in the UI if you can read them from responses.
 
@@ -242,4 +254,6 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
 | `PAYMENT_GATEWAY_NOT_SUPPORTED` | 400 | Unsupported `gateway` value on a top-up or plan purchase |
 | `PAYMENT_INITIATION_FAILED` | 502 | Gateway rejected the top-up / plan-purchase initiation |
 
-Plus the platform-standard `UNAUTHORIZED` (401), `FORBIDDEN` (403), `VALIDATION_ERROR` (400), `NOT_FOUND` (404), `INTERNAL_ERROR` (500).
+Plus the platform-standard `VALIDATION_ERROR` (400), the `AUTH_*` family on 401/403 — `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` on 401, `AUTH_ROLE_NOT_FOUND` on 403 — and `INTERNAL_SERVER_ERROR` (500).
+
+> ⚠ **This line named four codes that do not exist** (`UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND` for a resource miss, `INTERNAL_ERROR`) until 2026-09-06. The registry has none of the first, second or fourth; the real ones are `AUTH_MISSING_TOKEN` / `AUTH_TOKEN_EXPIRED` / `AUTH_TOKEN_INVALID` on 401 and `AUTH_ROLE_NOT_FOUND` on 403 (`error-codes.ts:61-64`, raised at `auth.middleware.ts:126` and `:366`), and `INTERNAL_SERVER_ERROR` on 500 (`error-codes.ts:1530`). `NOT_FOUND` **is** in the registry but is marked *"unmatched routes only"* (`error-codes.ts:1531`) — a resource miss gets a domain-prefixed code such as `BILLING_TOPUP_NOT_FOUND` above. Corrected from source.

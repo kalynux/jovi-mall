@@ -21,6 +21,17 @@ scoped to the caller.
 > `avatar_url` is **reserved and always `null`** — draw the initials from `name`. Full shape
 > and the reasoning: [vendor/tickets.md](../vendor/tickets.md#populated--enriched-references).
 
+> [!IMPORTANT]
+> **A ticket and a ticket note are identified by `id`, not `_id`** — on every endpoint on this
+> page. `Ticket` is built on `BaseSchemaOptions` (`src/core/base.schema.ts`), whose `toJSON`
+> deletes `_id` and exposes the `id` virtual, so the write endpoints (status, priority, assign,
+> close, reopen, and the `PATCH` on the ticket itself) return the document with **`id` alone**.
+>
+> The three enriched reads — create, list and detail — additionally carry a duplicate **`_id`**,
+> because `TicketEnrichmentService` builds its payload with `toObject({ virtuals: true })`, which
+> applies no transform. **Key on `id`**: it is the only identifier present on all of them. A
+> client that keys on `_id` reads `undefined` the first time it patches a ticket.
+
 ## Endpoints
 
 | Method | Path | Purpose |
@@ -60,7 +71,7 @@ POST /api/agent/tickets
 ```
 
 ```json
-{ "success": true, "data": { "_id": "664tkt...", "ticket_number": "TKT-1042", "status": "open", "...": "..." } }
+{ "success": true, "data": { "id": "664tkt...", "subject": "Wrong drop-off address on shipment", "status": "open", "...": "..." } }
 ```
 
 ## Possible error codes

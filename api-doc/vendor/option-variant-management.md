@@ -1,5 +1,9 @@
 # Option / Value / Variant Management — Frontend Developer Guide
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–27). Corrections are marked inline with ⚠ and a source citation.
+
 This document is the definitive reference for frontend developers implementing the product options, option values,
 and variant management UI for **physical products** on Jovi Mall.
 
@@ -48,7 +52,7 @@ Product (physical)
 
 | Term | Definition |
 |------|-----------|
-| **Option** | An attribute dimension (e.g., "Color", "Size"). A product can have **max 3 options**. |
+| **Option** | An attribute dimension (e.g., "Color", "Size"). ⚠ **The documented 3-option cap is enforced by nothing reachable** — see the note under Step 2. |
 | **Option Value** | A specific choice within an option (e.g., "Black", "Medium"). Max **50 per bulk create**. |
 | **Variant** | A unique SKU combining one value from each option. Holds price, stock, dimensions. |
 | **optionValueIds** | The array of value ObjectIds on a variant — the IDs that tell you which option values it represents. |
@@ -72,26 +76,58 @@ These are hard limits enforced by the backend. Plan your UI around them.
 | Option value length | 1–100 chars | |
 | Option values are unique per option | Case-insensitive | "Black" and "black" are the same — the backend will return a `409` |
 | Variants apply to physical products only | — | Digital/service products cannot have `optionValueIds` |
-| `optionValueIds` cannot be updated | — | To change a variant's options, archive it and create a new one |
+| `optionValueIds` should not be updated | ⚠ **not enforced** | To change a variant's options, archive it and create a new one. The PATCH accepts the field and rewrites it without recomputing `optionSignature` — see § "Update a variant" |
 | `optionSignature` is read-only | — | Never send this in a request body |
 
 ---
 
 ## 3. Core Data Shapes
 
-### Option Object (returned by API)
+### Option Object (returned by API) — ⚠ there are THREE shapes, not one
+
+> ⚠ **This section showed a single "Option object" until 2026-09-06.** Three endpoints return an
+> option and **no two return the same keys.** A client that types the response once, from the
+> shape below, breaks on the other two.
+
+**`GET /options` — the entity PLUS a nested `values[]`** (`vendor-option.controller.ts:83-90`):
+
 ```json
 {
   "id": "507f1f77bcf86cd799439020",
   "productId": "507f1f77bcf86cd799439011",
   "name": "Color",
   "position": 1,
+  "createdAt": "2026-07-18T10:20:30.000Z",
+  "updatedAt": "2026-07-18T10:20:30.000Z",
+  "deletedAt": null,
+  "purgeAt": null,
   "values": [
     { "id": "507f1f77bcf86cd799439030", "optionId": "507f1f77bcf86cd799439020", "value": "Black" },
     { "id": "507f1f77bcf86cd799439031", "optionId": "507f1f77bcf86cd799439020", "value": "White" }
   ]
 }
 ```
+
+**`POST /options` (201) and `PATCH /options/:optionId` — the bare entity, NO `values` key at
+all** (`:56`, `:108`). Same eight fields as above minus `values`:
+
+```json
+{
+  "id": "507f1f77bcf86cd799439020",
+  "productId": "507f1f77bcf86cd799439011",
+  "name": "Color",
+  "position": 1,
+  "createdAt": "2026-07-18T10:20:30.000Z",
+  "updatedAt": "2026-07-18T10:20:30.000Z",
+  "deletedAt": null,
+  "purgeAt": null
+}
+```
+
+**The practical consequence:** after creating an option, **do not** read `.values` from the
+response — it is `undefined`, not `[]`. Seed it yourself or re-`GET`. The soft-delete pair
+`deletedAt` / `purgeAt` is on all three (`option.mapper.ts:4-13`) and is not something a
+dashboard should render; the mapper simply does not strip it.
 
 > **Note:** The `values` array in `GET /options` is joined by the backend at query time — it fetches all values for the product's options in a single batch query and nests them by `optionId`. The values are NOT stored on the option document itself in the DB.
 
@@ -157,6 +193,15 @@ All endpoints require `Authorization: Bearer <vendor_jwt>`.
 | `GET` | `/api/vendor/products/:productId/variants/:variantId` | Get single variant |
 | `PATCH` | `/api/vendor/products/:productId/variants/:variantId` | Update price, stock, dimensions, etc. |
 | `DELETE` | `/api/vendor/products/:productId/variants/:variantId` | Archive a variant (soft delete) |
+| `PATCH` | `/api/vendor/products/:productId/variants/:variantId/service/config` | Scheduling + peak-hours config — **service products only** (`vendor-products.routes.ts:345-349`) |
+| `PATCH` | `/api/vendor/products/:productId/variants/:variantId/status` | Toggle `active` ⇄ `archived` (`:358-362`). Activation enforces the same rules as promoting the product to active — price > 0, digital variants require an asset |
+
+> ⚠ **This table listed FIVE variant routes until 2026-09-06; there are SEVEN.** The two added
+> above are registered as multi-line `router.patch(...)` calls, which is why a single-line grep
+> over the router misses them — worth knowing before trusting any route count taken that way.
+> `DELETE …/:variantId` and `PATCH …/:variantId/status` are **not** the same operation: the
+> delete archives, the status route archives *or* re-activates, and only the latter can bring a
+> variant back.
 
 ---
 
@@ -181,7 +226,18 @@ POST /api/vendor/products
 
 ### Step 2: Create Options
 
-Create one option per attribute dimension. Max 3 options per product.
+Create one option per attribute dimension.
+
+> ⚠ **The "max 3 options" cap is NOT ENFORCED, and neither is the 1,000-variant one.**
+> Both live in `catalog/domain/services/variants/` — `MAX_OPTIONS_PER_PRODUCT` in `OptionService`
+> and `MAX_VARIANTS_PER_PRODUCT` in `VariantGeneratorService` / `VariantRegenerationService` —
+> and **all three of those services are imported by nothing outside their own directory**
+> (only `DEFAULT_VARIANT_SIGNATURE` is). `VendorOptionController.createOption` writes straight
+> through `OptionRepositoryMongo` with no count check
+> (`vendor-option.controller.ts:38-56`), so a fourth option is created normally and
+> `CATALOG_OPTION_LIMIT_EXCEEDED` is never raised. Treat both numbers as **guidance the
+> platform intends and does not currently apply**, not as behaviour you can rely on — and do
+> not write a client branch for either code.
 
 ```http
 POST /api/vendor/products/:productId/options
@@ -870,10 +926,22 @@ await createVariant({ sku: '...', optionValueIds: ['val_black', 'val_m'] });
 
 ### ❌ Never Try to Update `optionValueIds` via PATCH
 
-`optionValueIds` is immutable on a variant. If the option combination changes, archive the old variant and create a new one.
+`optionValueIds` **should be treated as immutable** on a variant: if the combination changes, archive the old variant and create a new one.
+
+> ⚠ **`optionValueIds` IS writable on `PATCH`, and this page said it was not.** The update
+> schema declares it (`variant.validator.ts:133`) and the controller spreads the whole parsed
+> body into the `$set` — only `serviceConfig` and `bargain` are destructured out
+> (`vendor-variant.controller.ts:415-416`). So a PATCH carrying `optionValueIds` rewrites the
+> combination. **`optionSignature` is NOT recomputed** — it is derived once at create
+> (`:178-182`) and never again — so after such a PATCH the variant's stored signature
+> describes a combination it no longer has, and two variants can end up claiming the same one.
+> **Do not send it on a PATCH.** Archive the variant and create a new one, which is what this
+> page has always advised and is still the right advice; what changed is that the platform no
+> longer stops you.
 
 ```javascript
-// ❌ WRONG — backend ignores this field on PATCH
+// ❌ WRONG — and NOT because the backend ignores it. It ACCEPTS this and rewrites
+//    optionValueIds while leaving optionSignature describing the old combination.
 await updateVariant(productId, variantId, { optionValueIds: ['val_red', 'val_m'] });
 
 // ✅ CORRECT
@@ -919,7 +987,22 @@ SKUs are unique **across all vendors and all products** in the entire system —
 
 ### ⚠️ Options Apply to Physical Products Only
 
-Calling the options endpoints for a `digital` or `service` product returns `400 CATALOG_PRODUCT_INVALID_TYPE`. Guard against this in your UI by only showing the options builder when `product.type === 'physical'`.
+Guard against this in your UI by only showing the options builder when `product.type === 'physical'`.
+
+> ⚠ **This said "calling the options endpoints … returns `400 CATALOG_PRODUCT_INVALID_TYPE`",
+> and only ONE of the ten does.** The guard lives in `createOption` alone
+> (`vendor-option.controller.ts:45-46`, *"Only physical products can have options"*). `GET`,
+> `PATCH`, `DELETE`, `PUT …/reorder` and all five option-**value** endpoints carry **no type
+> check at all** — they resolve the product for ownership and never look at `type`.
+>
+> **The UI guard is therefore the only guard**, not a convenience on top of a server one. In
+> practice a non-physical product has no options to act on, so the missing checks are unreachable
+> by an honest client; a client that *invents* an option id gets ordinary not-found/ownership
+> behaviour rather than the type error this page promised.
+>
+> **Variants are the opposite** — the type rules there are enforced thoroughly and per-case, in
+> `createVariant` (`vendor-variant.controller.ts:71-151`, nine distinct raises),
+> `updateVariant` (`:321-343`) and `updateServiceConfig` (`:584`).
 
 ---
 
@@ -928,14 +1011,16 @@ Calling the options endpoints for a `digital` or `service` product returns `400 
 | Code | HTTP | Trigger | Resolution |
 |------|------|---------|-----------|
 | `CATALOG_PRODUCT_NOT_FOUND` | 404 | productId is wrong or vendor doesn't own product | Verify product ID and auth |
-| `CATALOG_PRODUCT_INVALID_TYPE` | 400 | Options/variants called on digital/service product | Only show for physical products |
+| `CATALOG_PRODUCT_INVALID_TYPE` | 400 | Variants called on a digital/service product — thoroughly enforced. ⚠ On the **option** side only `POST /options` raises it (`vendor-option.controller.ts:45-46`); the other nine option/value endpoints have no type check | Only show for physical products |
+| `DATABASE_UNIQUE_CONSTRAINT_VIOLATION` | 409 | **A duplicate option name or option value.** Not a `CATALOG_*` code and raised by no controller — it is the global handler converting Mongo's 11000 (`error-handler.middleware.ts:155-166`). Two unique indexes produce it: `{productId, name}` on options (`product-option.model.ts:20`) and `{optionId, value}` on values, the latter **case-insensitive** (`strength: 2` collation, `product-option-value.model.ts:18-21`) — so `"Black"` and `"black"` collide | Show the collision inline; `error.details.keyValue` names the field and value. `details` survives here (the exposure rule drops it only for `internal` / `external_service`) |
 | `CATALOG_VARIANT_SKU_EXISTS` | 409 | SKU already in use globally | Ask vendor to choose a different SKU |
 | `CATALOG_VARIANT_NOT_FOUND` | 404 | variantId wrong or belongs to different product | Refresh variant list |
 | `CATALOG_OPTION_NOT_FOUND` | 404 | optionId/valueId wrong or belongs to different product | Refresh options list |
 | `CATALOG_INVALID_OPTION_ID` | 400 | Reorder array contains an unknown optionId | Validate IDs before sending reorder |
 | `CATALOG_VARIANT_NO_OPTIONS` | 422 | Generator called with no options defined | Add options first |
 | `CATALOG_VARIANT_OPTION_EMPTY` | 422 | An option has no values | Add values to all options |
-| `CATALOG_VARIANT_LIMIT_EXCEEDED` | 422 | Combination count > 1,000 | Reduce option values; preview count before generating |
+| ~~`CATALOG_VARIANT_LIMIT_EXCEEDED`~~ | ~~422~~ | ~~Combination count > 1,000~~ | **UNREACHABLE** — raised only by `VariantGeneratorService` / `VariantRegenerationService`, neither of which is imported by any live path. There is no variant cap over HTTP |
+| ~~`CATALOG_OPTION_LIMIT_EXCEEDED`~~ | ~~422~~ | ~~More than 3 options~~ | **UNREACHABLE** — raised only by `OptionService`, which nothing imports. `sibling variants.md` says "unlimited" and is the accurate half |
 | `CATALOG_OPTION_REQUIRES_NO_OPTIONS` | 422 | DefaultVariantService called when options exist | Only use for simple (option-less) products |
 | `CATALOG_PRODUCT_NO_VARIANTS` | 422 | Activation attempted with no variants | Create at least one variant |
 | `CATALOG_PRODUCT_VARIANT_ZERO_PRICE` | 422 | Active variant has price = 0 | Update variant price > 0 |

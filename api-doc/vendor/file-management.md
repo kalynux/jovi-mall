@@ -17,7 +17,7 @@
 7. [Storage Provider Abstraction](#storage-provider-abstraction)
 8. [Deletion Semantics](#deletion-semantics)
 9. [Security & Access Control](#security--access-control)
-10. [Error Handling](#error-handling)
+10. [Error Handling](#error-handling--edge-cases)
 11. [Frontend Integration Guide](#frontend-integration-guide)
 
 ---
@@ -268,6 +268,7 @@ and that a pipeline refusal can report **several files at once**, each keyed by 
   "error": {
     "code": "UPLOAD_POLICY_VIOLATION",
     "message": "Upload policy violations found",
+    "category": "validation",
     "statusCode": 400,
     "details": {
       "violations": [
@@ -655,9 +656,12 @@ Retrieve metadata for a single file by ID.
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "NOT_FOUND",
-    "message": "File not found"
+    "code": "CATALOG_FILE_NOT_FOUND",
+    "message": "File not found",
+    "statusCode": 404,
+    "category": "not_found"
   }
 }
 ```
@@ -666,9 +670,12 @@ Retrieve metadata for a single file by ID.
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "FORBIDDEN",
-    "message": "You do not have access to this file"
+    "code": "AUTH_FORBIDDEN",
+    "message": "You do not have access to this file",
+    "statusCode": 403,
+    "category": "authorization"
   }
 }
 ```
@@ -752,9 +759,12 @@ Soft delete a file (mark for garbage collection).
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "NOT_FOUND",
-    "message": "File not found"
+    "code": "CATALOG_FILE_NOT_FOUND",
+    "message": "File not found",
+    "statusCode": 404,
+    "category": "not_found"
   }
 }
 ```
@@ -763,9 +773,12 @@ Soft delete a file (mark for garbage collection).
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "FORBIDDEN",
-    "message": "You do not have access to this file"
+    "code": "AUTH_FORBIDDEN",
+    "message": "You do not have access to this file",
+    "statusCode": 403,
+    "category": "authorization"
   }
 }
 ```
@@ -2196,7 +2209,10 @@ async function detachFileFromProduct(productId: string, fileId: string) {
 <div className="file-preview">
   {uploadedFiles.map(file => (
     <div key={file.id}>
-      <img src={`/api/files/${file.id}/url`} alt={file.originalName} />
+      {/* ⚠ There is NO `/api/files/:id/url` route — that path 404s. `GET /api/files/:id`
+          matches one segment only. Render `file.url` from the FileDetail you already hold;
+          it is `null` for a file in a private tree, which is the case to branch on. */}
+      <img src={file.url ?? undefined} alt={file.originalName} />
       <span>{file.originalName}</span>
       <button onClick={() => removeFile(file.id)}>Remove</button>
     </div>

@@ -7,6 +7,7 @@ import {
     ResolvedBotCaller,
 } from '../services/bot-identity.service';
 import { digestForKey } from '../domain/bot-key-digest';
+import { unsealBotIdentity } from '../domain/bot-identity-token';
 import { botRouteFor } from '../domain/bot-route-table';
 import { CustomerModel } from '../../customers/customer.model';
 import { BotReplyIntent } from '../domain/channel-reply';
@@ -121,7 +122,29 @@ export function buildBotIdentityMiddleware(service: BotIdentityService = botIden
     ): Promise<void> {
         try {
             const body = (req.body ?? {}) as Record<string, unknown>;
-            const { identity } = BotEnvelopeSchema.parse(body);
+            const { identity: submitted } = BotEnvelopeSchema.parse(body);
+
+            /**
+             * ⚠ **The sealed form is UNSEALED HERE, and nowhere downstream.**
+             *
+             * Everything past this line — the route table, the resolver, the idempotency
+             * scope, all forty handlers — sees one shape and cannot tell which transport
+             * sent it. That is the point: the MCP door and the n8n door must not be two
+             * code paths with two chances to disagree about who is calling, which is the
+             * same argument `bot-identity.service.ts` makes for reusing the login ladder
+             * rather than reimplementing it.
+             *
+             * A token that does not verify throws a 401 before `req.bot` is stamped, so
+             * these two refusals are the only ones on this surface that carry no
+             * `error.customerMessage`. That is correct rather than an oversight: a bad
+             * token is a fault in the automation layer, not something a shopper did, and
+             * there is no sentence a customer could act on. `attachBotReply`'s outer mount
+             * still gives the response a `reply`-shaped body, so the transport has
+             * something to send.
+             */
+            const identity = 'token' in submitted
+                ? unsealBotIdentity(submitted.token)
+                : submitted;
 
             // `req.originalUrl` carries the query string; `req.baseUrl + req.path` does not,
             // and inside a `use`-mounted router `req.path` alone has had the prefix stripped.

@@ -66,6 +66,11 @@ import { ShipmentModel } from '../src/modules/shipments/shipment.model';
 import { PaymentTransactionModel } from '../src/modules/payments/models/payment-transaction.model';
 import { WhatsappService } from '../src/modules/whatsapp/whatsapp.service';
 import { CustomerNotificationModel } from '../src/modules/notifications/models/customer-notification.model';
+import { TicketModel } from '../src/modules/tickets/models/ticket.model';
+import { TicketAttachmentModel } from '../src/modules/tickets/models/ticket-attachment.model';
+import { TicketFollowerModel } from '../src/modules/tickets/models/ticket-follower.model';
+import { FileModel } from '../src/modules/catalog/models/file.model';
+import { FileReferenceModel } from '../src/modules/catalog/models/file-reference.model';
 import { geoCandidateStore } from '../src/modules/bot-surface/services/geo-candidate.store';
 import { botIdempotencyStore } from '../src/modules/bot-surface/services/bot-idempotency.store';
 import { BOT_ROUTES } from '../src/modules/bot-surface/domain/bot-route-table';
@@ -288,6 +293,15 @@ async function cleanup(): Promise<void> {
         // GAP-012's hand-off leaves a durable in-app row — the thing § 11 reads back to
         // prove the situation actually reached the notification stack.
         CustomerNotificationModel.deleteMany({ customerId: CUSTOMER_ID }),
+        // Step 7b's world. The ticket is created THROUGH the API rather than planted, so
+        // its id is not known here — sweep by the author, which is this run's customer.
+        // The attachment rows, the follower rows and the `file_references` are children of
+        // that ticket and are swept with it; the `files` rows are swept by their owner.
+        TicketModel.deleteMany({ created_by_user_id: USER_ID }),
+        TicketFollowerModel.deleteMany({ user_id: USER_ID }),
+        TicketAttachmentModel.deleteMany({ uploaded_by_user_id: USER_ID }),
+        FileReferenceModel.deleteMany({ entityType: 'ticket', ownerId: CUSTOMER_ID.toString() }),
+        FileModel.deleteMany({ ownerType: 'customer', ownerId: CUSTOMER_ID }),
     ]);
 
     // Idempotency records are NOT swept here. They are namespaced to this run (see RUN
@@ -460,14 +474,363 @@ async function main(): Promise<void> {
             return res.status === 200 && Array.isArray(res.body.data);
         });
 
-        await assert('tickets answer with `pagination`, not `meta` — the module\'s own shape', async () => {
+        /**
+         * ⚠ **This asserted `meta === undefined` until 2026-09-06, and the change that broke
+         * it was an ADDITION rather than the tidy-up it was written to catch.**
+         *
+         * What it exists to pin is the documented deviation: the three ticket tools answer
+         * `{ success, data, pagination }` because that is the ticket module's shape on every
+         * role's mount, and renaming that key would silently break a caller reading it.
+         * That still holds and is asserted below.
+         *
+         * What changed is that every list now carries the chat window (`shown` / `hasMore` /
+         * `moreUrl`), and it goes under `meta` on all of them — so a client never has to know
+         * which tool puts it where. Both keys are present here; `data` is untouched.
+         *
+         * So the assertion is now BOTH facts rather than an exclusion, which is strictly
+         * stronger: a future tidy-up that dropped `pagination` would still fail it.
+         */
+        await assert('tickets keep `pagination` AND carry the chat window in `meta`', async () => {
             const res = await call('POST', '/api/internal/bot/tickets/list');
-            return res.body.pagination !== undefined && res.body.meta === undefined;
+            const meta = res.body.meta as { hasMore?: unknown; shown?: unknown } | undefined;
+            return res.body.pagination !== undefined
+                && meta !== undefined
+                && typeof meta.hasMore === 'boolean'
+                && typeof meta.shown === 'number';
         });
 
         await assert('POST /bookings/list is the LIST, not a booking id', async () => {
             const res = await call('POST', '/api/internal/bot/bookings/list');
             return res.status === 200 && Array.isArray(res.body.data);
+        });
+
+        /**
+         * ⚠ **`/bookings/availability` is a LITERAL sitting among the `:bookingId` rows**,
+         * and it is the real shadowing case rather than the habitual one: both it and
+         * `/bookings/:bookingId` are two segments under the same prefix, so whichever is
+         * declared first wins. Reaching the wrong one does not error in a way anybody would
+         * notice from a table — `bookings_get` would refuse the literal `availability` as a
+         * malformed ObjectId with a `400`, which reads as "the model sent a bad argument".
+         * A `404 CATALOG_BOOKING_PRODUCT_NOT_FOUND` is proof the availability handler ran.
+         */
+        await assert('⚠ POST /bookings/availability is the LITERAL, not a booking id', async () => {
+            const res = await call('POST', '/api/internal/bot/bookings/availability', {
+                productId: '68f0000000000000000000aa',
+            });
+            return res.status === 404 && errorCode(res) === 'CATALOG_BOOKING_PRODUCT_NOT_FOUND';
+        });
+
+        await assert('availability defaults its window rather than demanding two ISO dates', async () => {
+            // The customer API 400s without fromDate and toDate. Reaching the product lookup
+            // at all — a 404 rather than a validation error — is what proves the default ran.
+            const res = await call('POST', '/api/internal/bot/bookings/availability', {
+                productId: '68f0000000000000000000aa',
+            });
+            return res.status === 404;
+        });
+
+        /**
+         * ⚠ **`POST /bookings` is the CREATE and `POST /bookings/list` is the list.** One
+         * segment against two, so they cannot collide — but a create reached by mistake
+         * writes an appointment, which is the one dispatch error on this surface with a
+         * consequence in somebody's calendar. Pinned by its own failure mode.
+         */
+        await assert('⚠ POST /bookings reaches CREATE, not the list', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/bookings',
+                { productId: '68f0000000000000000000aa', slotId: 'slot_1757494800000_1757498400000' },
+                { idempotencyKey: idem('booking-create-404') },
+            );
+            // The list would answer 200 with an array. Create takes the slot hold, fails to
+            // find the product, and releases it.
+            return res.status === 404 && errorCode(res) === 'CATALOG_BOOKING_PRODUCT_NOT_FOUND';
+        });
+
+        /**
+         * ⚠ **The hold must not survive a failed create.** The customer API releases only on
+         * its success path, so a failure there leaves a dead hold on the slot for the rest of
+         * its fifteen minutes. This surface releases in a `finally` — and the proof is that
+         * the SAME slot can be attempted again immediately: a surviving hold would answer
+         * `409 BOOKING_SLOT_LOCKED` on the second call instead of the same 404.
+         */
+        await assert('⚠ a failed create RELEASES the slot hold — the next attempt is not 409', async () => {
+            const body = {
+                productId: '68f0000000000000000000aa',
+                slotId: 'slot_1757581200000_1757584800000',
+            };
+            const first = await call('POST', '/api/internal/bot/bookings', body, {
+                idempotencyKey: idem('booking-release-1'),
+            });
+            const second = await call('POST', '/api/internal/bot/bookings', body, {
+                idempotencyKey: idem('booking-release-2'),
+            });
+            return first.status === 404
+                && second.status === 404
+                && errorCode(second) !== 'BOOKING_SLOT_LOCKED';
+        });
+
+        await assert('POST /bookings/<unknown>/balance reaches the balance route', async () => {
+            const res = await call('POST', '/api/internal/bot/bookings/68f0000000000000000000aa/balance');
+            return res.status === 404 && errorCode(res) === 'BOOKING_NOT_FOUND';
+        });
+
+        await assert('POST /bookings/<unknown>/payment-status reaches its own route', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/bookings/68f0000000000000000000aa/payment-status',
+            );
+            return res.status === 404 && errorCode(res) === 'BOOKING_NOT_FOUND';
+        });
+
+        /**
+         * Ownership is checked BEFORE a gateway is touched, so an unknown booking is a 404
+         * rather than a payment error — which is what keeps a stranger's id from reaching
+         * NotchPay at all.
+         */
+        await assert('⚠ POST /bookings/<unknown>/pay 404s before any gateway is called', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/bookings/68f0000000000000000000aa/pay',
+                { gateway: 'NOTCHPAY', phoneNumber: '+237600124417', phoneOperator: 'MTN' },
+                { idempotencyKey: idem('booking-pay-404') },
+            );
+            return res.status === 404 && errorCode(res) === 'BOOKING_NOT_FOUND';
+        });
+
+        await assert('POST /bookings/<unknown>/pay-balance is its own route, not /pay', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/bookings/68f0000000000000000000aa/pay-balance',
+                { gateway: 'NOTCHPAY', phoneNumber: '+237600124417', phoneOperator: 'MTN' },
+                { idempotencyKey: idem('booking-pay-balance-404') },
+            );
+            return res.status === 404 && errorCode(res) === 'BOOKING_NOT_FOUND';
+        });
+
+        /**
+         * ⚠ **Ownership before the hold.** Rescheduling a stranger's booking is a 404 either
+         * way — but taking a slot hold before finding that out would let any unrelated id
+         * lock somebody else's appointment time for fifteen minutes. A 404 with no
+         * `BOOKING_SLOT_*` code anywhere is what says the ownership read ran first.
+         */
+        await assert('⚠ PATCH /bookings/<unknown>/reschedule 404s BEFORE taking a hold', async () => {
+            const res = await call(
+                'PATCH',
+                '/api/internal/bot/bookings/68f0000000000000000000aa/reschedule',
+                { slotId: 'slot_1757667600000_1757671200000' },
+                { idempotencyKey: idem('booking-reschedule-404') },
+            );
+            return res.status === 404 && errorCode(res) === 'BOOKING_NOT_FOUND';
+        });
+
+        await assert('a booking payment refuses mobile money with no number, at the door', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/bookings/68f0000000000000000000aa/pay',
+                { gateway: 'NOTCHPAY' },
+                { idempotencyKey: idem('booking-pay-nonumber') },
+            );
+            // 400 rather than the 404 above: the body is refused before the booking is read.
+            return res.status === 400;
+        });
+
+        await assert('POST /bookings/list still carries the chat window after the projection', async () => {
+            const res = await call('POST', '/api/internal/bot/bookings/list');
+            const meta = res.body.meta as { shown?: unknown; hasMore?: unknown } | undefined;
+            return res.status === 200
+                && Array.isArray(res.body.data)
+                && typeof meta?.shown === 'number'
+                && typeof meta?.hasMore === 'boolean';
+        });
+
+        /**
+         * ⚠ **The two route families added by the MCP parity plan, and both are the shape
+         * this suite exists for.** A DB-free assertion sees the table; only Express can say
+         * which handler a path actually reaches, and this service has been bitten by route
+         * order twice — `/articles/index` behind `/articles/:slug`, `/orders/groups/:cartId`
+         * behind `/orders/:id`.
+         *
+         *   `/addresses/:addressId`          beside `/addresses/:addressId/default`
+         *   `/notifications/read-all`        beside `/notifications/:notificationId/read`
+         *                                    and `/notifications/preferences`
+         *
+         * Each is asserted by its OWN failure mode: a route that reached the wrong handler
+         * would answer a different code, not an error at all.
+         */
+        await assert('PATCH /addresses/<unknown id> reaches the EDIT route, not /default', async () => {
+            const res = await call(
+                'PATCH',
+                '/api/internal/bot/addresses/68f0000000000000000000aa',
+                { label: 'Nowhere' },
+                { idempotencyKey: idem('addr-edit-404') },
+            );
+            // The edit route parses a body and then 404s on the id. `/default` takes no body
+            // and would have refused `label` as an unknown key with a 400 instead.
+            return res.status === 404 && errorCode(res) === 'CUSTOMER_ADDRESS_NOT_FOUND';
+        });
+
+        await assert('DELETE /addresses/<unknown id> reaches the REMOVE route and 404s', async () => {
+            const res = await call(
+                'DELETE',
+                '/api/internal/bot/addresses/68f0000000000000000000aa',
+                {},
+                { idempotencyKey: idem('addr-del-404') },
+            );
+            return res.status === 404 && errorCode(res) === 'CUSTOMER_ADDRESS_NOT_FOUND';
+        });
+
+        await assert('⚠ PATCH /notifications/read-all is the LITERAL, not an id', async () => {
+            const res = await call(
+                'PATCH',
+                '/api/internal/bot/notifications/read-all',
+                {},
+                { idempotencyKey: idem('notif-read-all') },
+            );
+            // Reaching `/:notificationId/read` instead would 404 on the id `read-all`; a
+            // 200 carrying `updated` is proof the literal won.
+            return res.status === 200 && typeof (res.body.data as { updated?: unknown })?.updated === 'number';
+        });
+
+        await assert('PATCH /notifications/<unknown id>/read reaches the mark-read route', async () => {
+            const res = await call(
+                'PATCH',
+                '/api/internal/bot/notifications/68f0000000000000000000aa/read',
+                {},
+                { idempotencyKey: idem('notif-read-404') },
+            );
+            return res.status === 404 && errorCode(res) === 'CUSTOMER_NOTIFICATION_NOT_FOUND';
+        });
+
+        await assert('POST /notifications/list carries the chat window', async () => {
+            const res = await call('POST', '/api/internal/bot/notifications/list');
+            const meta = res.body.meta as { shown?: unknown; hasMore?: unknown } | undefined;
+            return res.status === 200
+                && Array.isArray(res.body.data)
+                && typeof meta?.shown === 'number'
+                && typeof meta?.hasMore === 'boolean';
+        });
+
+        /**
+         * ⚠ **The leak this step's projection exists to prevent, asserted against a REAL
+         * row.** `deliveryErrors[]` carries raw SMTP and Meta rejection strings and
+         * `idempotencyKey` is an internal dedup handle; both are on the stored document and
+         * a spread would have shipped them into a model's context window.
+         */
+        await assert('⚠ a real notification row leaks no operational field', async () => {
+            const res = await call('POST', '/api/internal/bot/notifications/list');
+            const raw = JSON.stringify(res.body);
+            return res.status === 200
+                && !raw.includes('idempotencyKey')
+                && !raw.includes('deliveryErrors')
+                && !raw.includes('deliveredVia')
+                && !raw.includes('customerId');
+        });
+
+        /**
+         * ⚠ **`/reviews/list` is a LITERAL beside the bare `POST /reviews`, which is the
+         * write.** A DB-free assertion cannot tell them apart — both are `POST` under the
+         * same prefix — and reaching the wrong one here does not 404: `reviews_create`
+         * would parse `{}` against `BotReviewCreateSchema` and refuse it as a `400` for a
+         * missing `subjectType`. So a `200` carrying an array is the proof, and it is
+         * proof of the dispatch specifically.
+         */
+        await assert('POST /reviews/list is the LIST, not the bare create route', async () => {
+            const res = await call('POST', '/api/internal/bot/reviews/list');
+            const meta = res.body.meta as { shown?: unknown; hasMore?: unknown } | undefined;
+            return res.status === 200
+                && Array.isArray(res.body.data)
+                && typeof meta?.shown === 'number'
+                && typeof meta?.hasMore === 'boolean';
+        });
+
+        await assert('the review list is a READ — no Idempotency-Key is demanded', async () => {
+            const res = await call('POST', '/api/internal/bot/reviews/list', { status: 'published' });
+            return res.status === 200;
+        });
+
+        await assert('a review status outside the three is a 400, not an empty list', async () => {
+            const res = await call('POST', '/api/internal/bot/reviews/list', { status: 'held' });
+            return res.status === 400;
+        });
+
+        /**
+         * ⚠ **`POST /payment-methods` is the SAVE and `POST /payment-methods/list` is the
+         * list**, one segment against two. They cannot collide, but a save reached by mistake
+         * writes a payment instrument onto somebody's account, so it is pinned by its own
+         * failure mode: the list answers 200 with an array, the save 400s on a missing body.
+         */
+        await assert('POST /payment-methods/list is the LIST, not the save', async () => {
+            const res = await call('POST', '/api/internal/bot/payment-methods/list');
+            const meta = res.body.meta as { shown?: unknown; hasMore?: unknown } | undefined;
+            return res.status === 200
+                && Array.isArray(res.body.data)
+                && typeof meta?.shown === 'number'
+                && typeof meta?.hasMore === 'boolean';
+        });
+
+        await assert('⚠ POST /payment-methods reaches SAVE and refuses an empty body', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/payment-methods',
+                {},
+                { idempotencyKey: idem('pm-add-empty') },
+            );
+            return res.status === 400;
+        });
+
+        /**
+         * ⚠ The stored number is what a gateway will later be asked to debit, so a locally
+         * formatted one saved today is a payment that fails at checkout weeks later with
+         * nothing to point at. Refused at the door, by the platform's own phone schema.
+         */
+        await assert('⚠ a wallet number that is not E.164 is refused before it is stored', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/payment-methods',
+                { provider: 'mtn_momo', phoneNumber: '600124417' },
+                { idempotencyKey: idem('pm-add-local') },
+            );
+            return res.status === 400;
+        });
+
+        await assert('⚠ a card cannot be saved from a chat — the fields do not exist', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/payment-methods',
+                {
+                    provider: 'stripe',
+                    phoneNumber: '+237600124417',
+                    gateway_instrument_id: 'pm_card_visa',
+                },
+                { idempotencyKey: idem('pm-add-card') },
+            );
+            return res.status === 400;
+        });
+
+        await assert('PATCH /payment-methods/<unknown>/default 404s on its own route', async () => {
+            const res = await call(
+                'PATCH',
+                '/api/internal/bot/payment-methods/68f0000000000000000000aa/default',
+                {},
+                { idempotencyKey: idem('pm-default-404') },
+            );
+            return res.status === 404 && errorCode(res) === 'PAYMENT_METHOD_NOT_FOUND';
+        });
+
+        /**
+         * ⚠ **The SIXTH `DELETE` with a body on this surface.** Express parses one without
+         * complaint and some HTTP stacks drop it, so reaching the handler at all — a 404 on
+         * the id rather than an identity refusal — is what proves the envelope survived.
+         */
+        await assert('⚠ DELETE /payment-methods/<unknown> carries its identity body', async () => {
+            const res = await call(
+                'DELETE',
+                '/api/internal/bot/payment-methods/68f0000000000000000000aa',
+                {},
+                { idempotencyKey: idem('pm-remove-404') },
+            );
+            return res.status === 404 && errorCode(res) === 'PAYMENT_METHOD_NOT_FOUND';
         });
 
         await assert('POST /cart/get answers a cart for a customer who has none', async () => {
@@ -488,6 +851,204 @@ async function main(): Promise<void> {
         await assert('POST /addresses/list answers an empty list rather than 404', async () => {
             const res = await call('POST', '/api/internal/bot/addresses/list');
             return res.status === 200 && Array.isArray(res.body.data) && (res.body.data as unknown[]).length === 0;
+        });
+
+        /**
+         * ⚠ **The contact family (MCP parity step 6), and it is the shape this suite exists
+         * for.** `/contact/email` and `/contact/email/pending` are two and three segments
+         * under one prefix, and neither is a `:param` — so a DB-free assertion sees a table
+         * that cannot shadow, while only Express can say which handler a path actually
+         * reaches. Each is pinned by its OWN failure code.
+         *
+         * ⚠ **None of these writes anything, deliberately.** `PATCH /contact/email` with a
+         * real address would SEND MAIL (the service awaits the send), so the door is what is
+         * asserted; the phone half is exercised end to end below, where it is reversible.
+         */
+        await assert('POST /contact answers the state read, MASKED', async () => {
+            const res = await call('POST', '/api/internal/bot/contact');
+            const data = res.body.data as Json | undefined;
+            const json = JSON.stringify(res.body);
+            return res.status === 200
+                && !json.includes(STORED_PHONE)
+                && String(data?.phoneMasked ?? '').includes('••••')
+                && data?.pendingEmail === null
+                && data?.pendingPhone === null
+                && data?.phoneChangeProved === null;
+        });
+
+        await assert('PATCH /contact/email reaches the EMAIL route and refuses a non-address', async () => {
+            const res = await call(
+                'PATCH',
+                '/api/internal/bot/contact/email',
+                { email: 'not an address' },
+                { idempotencyKey: idem('contact-email-bad') },
+            );
+            // A 400 from the schema is proof the email handler ran: the cancel below is a
+            // DELETE, and `/contact` itself takes no arguments and would 400 on `email` too —
+            // but only after `BotNoArgsSchema`, which is why the phone case is asserted apart.
+            return res.status === 400;
+        });
+
+        await assert('DELETE /contact/email/pending is its own route — 409 with nothing pending', async () => {
+            const res = await call(
+                'DELETE',
+                '/api/internal/bot/contact/email/pending',
+                {},
+                { idempotencyKey: idem('contact-email-cancel') },
+            );
+            return res.status === 409 && errorCode(res) === 'CONTACT_CHANGE_NOT_PENDING';
+        });
+
+        await assert('POST /contact/phone/confirm is its own route — 409 with nothing pending', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/contact/phone/confirm',
+                {},
+                { idempotencyKey: idem('contact-phone-confirm-empty') },
+            );
+            return res.status === 409 && errorCode(res) === 'CONTACT_CHANGE_NOT_PENDING';
+        });
+
+        await assert('⚠ PATCH /contact/phone refuses the number already on the account', async () => {
+            const res = await call(
+                'PATCH',
+                '/api/internal/bot/contact/phone',
+                { phone: STORED_PHONE },
+                { idempotencyKey: idem('contact-phone-same') },
+            );
+            return res.status === 422 && errorCode(res) === 'CONTACT_CHANGE_SAME_IDENTIFIER';
+        });
+
+        /**
+         * ⭐ **`phoneChangeProved` against REAL data, which is the one thing the DB-free
+         * suite cannot do.** The proof is a WhatsApp connection whose identity IS the pending
+         * number — and `external_id` arrives as bare digits (`237600000287`) while a login
+         * phone is strict E.164 (`+237600000287`). A comparison that skipped that repair
+         * would read `false` for **every customer, always**, while looking perfectly
+         * implemented; only a live run with a real connection row can tell the difference.
+         *
+         * So both verdicts are exercised: a number that is NOT the connected one reports
+         * `false`, and the connected one — which is the account's current number, so it can
+         * never actually be pending — is asserted through the service's own predicate in the
+         * DB-free suite instead. Reversible: the pending block is cancelled at the end.
+         */
+        await assert('⭐ a pending phone change reports `phoneChangeProved: false` truthfully', async () => {
+            const opened = await call(
+                'PATCH',
+                '/api/internal/bot/contact/phone',
+                { phone: '+237600000999' },
+                { idempotencyKey: idem('contact-phone-open') },
+            );
+            const state = await call('POST', '/api/internal/bot/contact');
+            const data = state.body.data as Json | undefined;
+            const pending = data?.pendingPhone as Json | undefined;
+
+            const cancelled = await call(
+                'DELETE',
+                '/api/internal/bot/contact/phone/pending',
+                {},
+                { idempotencyKey: idem('contact-phone-cancel') },
+            );
+            const after = await call('POST', '/api/internal/bot/contact');
+
+            return opened.status === 200
+                // The target comes back VERBATIM — masking it would defeat the read.
+                && pending?.target === '+237600000999'
+                && data?.phoneChangeProved === false
+                && cancelled.status === 200
+                && (after.body.data as Json | undefined)?.pendingPhone === null;
+        });
+
+        /**
+         * ⚠ **Connections and closure (MCP parity step 7).** `connections_disconnect` is the
+         * only route on this surface that refuses on a property of the CALLER rather than of
+         * its argument, and both sides of that rule are asserted: the current channel is
+         * refused, the other one is not.
+         */
+        await assert('POST /connections/list reports both channels and marks the current one', async () => {
+            const res = await call('POST', '/api/internal/bot/connections/list');
+            const rows = res.body.data as Array<Json> | undefined;
+            const wa = rows?.find((r) => r.channel === 'whatsapp');
+            const tg = rows?.find((r) => r.channel === 'telegram');
+            const json = JSON.stringify(res.body);
+            return res.status === 200
+                && rows?.length === 2
+                && wa?.isCurrentChannel === true
+                && tg?.isCurrentChannel === false
+                // The resolver BINDS on success, so this run's own WhatsApp row is here.
+                && wa?.connected === true
+                // ⚠ The leak assertion, against a REAL row: the raw identity never leaves.
+                && !json.includes(WA_PHONE_ID)
+                && !json.includes('howToConnect');
+        });
+
+        await assert('⛔ DELETE /connections/whatsapp is REFUSED — it is the current channel', async () => {
+            const res = await call(
+                'DELETE',
+                '/api/internal/bot/connections/whatsapp',
+                {},
+                { idempotencyKey: idem('conn-disconnect-self') },
+            );
+            const still = await call('POST', '/api/internal/bot/connections/list');
+            const wa = (still.body.data as Array<Json> | undefined)?.find((r) => r.channel === 'whatsapp');
+            return res.status === 409
+                && errorCode(res) === 'BOT_CONNECTION_ACTIVE_CHANNEL'
+                // The refusal changed nothing — it runs BEFORE the unbind, and there is no
+                // re-bind verb, so an unbind followed by a refusal would be unrecoverable.
+                && wa?.connected === true;
+        });
+
+        await assert('the OTHER channel is not refused — it is simply not connected', async () => {
+            const res = await call(
+                'DELETE',
+                '/api/internal/bot/connections/telegram',
+                {},
+                { idempotencyKey: idem('conn-disconnect-other') },
+            );
+            return res.status === 404 && errorCode(res) === 'MESSAGING_CONNECTION_NOT_FOUND';
+        });
+
+        await assert('a channel outside the two is refused at the door', async () => {
+            const res = await call(
+                'DELETE',
+                '/api/internal/bot/connections/signal',
+                {},
+                { idempotencyKey: idem('conn-disconnect-unknown') },
+            );
+            return res.status === 400;
+        });
+
+        /**
+         * ⚠ **The preview is exercised; the CLOSE deliberately is not.** This fixture is a
+         * customer-only account with no orders in flight, so a valid `confirm` would close it
+         * — and every assertion after this one reads it. What is proven instead is the
+         * dispatch, by its own failure mode: `/account/close/preview` answers 200 to an empty
+         * body and `/account/close` answers 400, so neither can be reaching the other.
+         */
+        await assert('POST /account/close/preview is a READ and carries the localised consequence', async () => {
+            const res = await call('POST', '/api/internal/bot/account/close/preview');
+            const data = res.body.data as Json | undefined;
+            return res.status === 200
+                && data?.canClose === true
+                && Array.isArray(data?.blockingRoles)
+                && (data?.blockingRoles as unknown[]).length === 0
+                && data?.activeOrderCount === 0
+                && data?.confirmWith === 'CLOSE MY ACCOUNT'
+                && String(data?.consequence ?? '').includes('business records');
+        });
+
+        await assert('⛔ POST /account/close refuses a confirmation that is not the token', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/account/close',
+                { confirm: 'close my account' },
+                { idempotencyKey: idem('account-close-wrong-token') },
+            );
+            const still = await call('POST', '/api/internal/bot/contact');
+            // A 400 here is proof the CLOSE handler ran — the preview takes no arguments and
+            // would have refused `confirm` too, but with the account untouched either way,
+            // so the account is re-read to prove nothing was anonymised.
+            return res.status === 400 && still.status === 200;
         });
 
         await assert('every route in the table is MOUNTED — none answers 404 NOT_FOUND', async () => {
@@ -1191,6 +1752,203 @@ async function main(): Promise<void> {
                 message: 'Buy two, get one free',
             }, { idempotencyKey: idem('notify-text') });
             return res.status === 400;
+        });
+
+        // ═════════════════════════════════════════════════════════════════════
+        section('12 · Files the customer sends, end to end (parity step 7b)');
+
+        /**
+         * ⚠ **A REAL PNG, eight bytes of header and all.** The upload pipeline SNIFFS the
+         * magic bytes and refuses a file whose real type differs from the claimed one, so a
+         * fixture of `Buffer.from('hello')` labelled `image/png` is refused — and refused for
+         * the right reason, which would make this whole section pass while proving nothing.
+         * This is a 1x1 transparent PNG.
+         */
+        const PNG_BASE64 =
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk'
+            + 'YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+        let fileRef = '';
+        let ticketId = '';
+
+        await assert('⭐ POST /files/inbound stores a real PNG and answers a handle', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/files/inbound',
+                { fileName: 'damage.png', mimeType: 'image/png', contentBase64: PNG_BASE64 },
+                { idempotencyKey: idem('file-1') },
+            );
+            const data = res.body.data as Json | undefined;
+            fileRef = String(data?.ref ?? '');
+            if (res.status !== 201) console.error('     ↳', JSON.stringify(res.body).slice(0, 300));
+            return res.status === 201
+                && fileRef.startsWith('att_')
+                && data?.kind === 'image'
+                && data?.fileName === 'damage.png'
+                && typeof data?.size === 'number' && (data.size as number) > 0;
+        });
+
+        /**
+         * ⚠ **A LEAK assertion against the REAL pipeline output**, not a hand-built DTO. The
+         * pipeline returns a `File` carrying `id`, `key`, `provider` and an owner; publishing
+         * any of it beside the handle would make the handle's three properties decorative,
+         * because a caller would simply keep the id.
+         */
+        await assert('⛔ the stored file\'s id, key and provider never leave the backend', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/files/inbound',
+                { fileName: 'leak.png', mimeType: 'image/png', contentBase64: PNG_BASE64 },
+                { idempotencyKey: idem('file-leak') },
+            );
+            const serialised = JSON.stringify(res.body.data ?? {});
+            return res.status === 201
+                && !/fileId|"key"|"url"|"provider"|"ownerId"|storage/i.test(serialised);
+        });
+
+        /**
+         * ⚠ Refused at the door rather than by the pipeline, and the DIFFERENCE matters: this
+         * is the refusal that saves the automation layer a channel download it cannot get back.
+         * A voice note is `audio/ogg` on both channels, and the pipeline would refuse it too —
+         * after the bytes had already crossed the wire.
+         */
+        await assert('⛔ a voice note is refused — images and PDF only', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/files/inbound',
+                { fileName: 'note.ogg', mimeType: 'audio/ogg', contentBase64: PNG_BASE64 },
+                { idempotencyKey: idem('file-ogg') },
+            );
+            return res.status === 400 && errorCode(res) === 'UPLOAD_POLICY_VIOLATION';
+        });
+
+        /**
+         * ⚠ **The 413 the CUSTOMER reads, not the body parser's.** `BOT_FILE_BODY_LIMIT`
+         * (12mb) would also refuse this, with a bare status and no code to relay. This proves
+         * the controller's own ceiling fires first — which is only true while it stays the
+         * lower of the two.
+         */
+        await assert('⚠ over 8 MB decoded is refused with a CODE, not a bare 413', async () => {
+            // 8.5 MB of zero bytes: above the 8 MB DECODED ceiling and, at ~11.3 MB of
+            // base64, still under `BOT_FILE_BODY_LIMIT`. Both halves matter — a bigger
+            // fixture is refused by the parser instead and proves nothing about this rule.
+            const big = Buffer.alloc(Math.floor(8.5 * 1024 * 1024)).toString('base64');
+            const res = await call(
+                'POST',
+                '/api/internal/bot/files/inbound',
+                { fileName: 'big.png', mimeType: 'image/png', contentBase64: big },
+                { idempotencyKey: idem('file-big') },
+            );
+            return res.status === 413 && errorCode(res) === 'UPLOAD_POLICY_VIOLATION';
+        });
+
+        await assert('a ticket to attach it to', async () => {
+            const res = await call(
+                'POST',
+                '/api/internal/bot/tickets',
+                {
+                    subject: 'Verify bot attachment',
+                    description: 'One item arrived cracked.',
+                    type: 'order_issue',
+                },
+                { idempotencyKey: idem('ticket-1') },
+            );
+            const data = res.body.data as Json | undefined;
+            ticketId = String(data?.id ?? '');
+            if (res.status !== 201) console.error('     ↳', JSON.stringify(res.body).slice(0, 300));
+            return res.status === 201 && ticketId.length === 24;
+        });
+
+        await assert('⭐ the handle attaches, and the answer reports the ceiling', async () => {
+            const res = await call(
+                'POST',
+                `/api/internal/bot/tickets/${ticketId}/attachments`,
+                { ref: fileRef },
+                { idempotencyKey: idem('attach-1') },
+            );
+            const data = res.body.data as Json | undefined;
+            if (res.status !== 201) console.error('     ↳', JSON.stringify(res.body).slice(0, 300));
+            return res.status === 201
+                && data?.fileName === 'damage.png'
+                && data?.kind === 'image'
+                && data?.attachmentCount === 1
+                && data?.attachmentLimit === 5;
+        });
+
+        /**
+         * ⚠ **Single-use, and this is the only place it is PROVEN.** The store's `consume` is
+         * an atomic Lua read-and-delete precisely so two concurrent attaches cannot both write
+         * an attachment row for one file; a `get` then a `del` would pass every DB-free
+         * assertion and fail here.
+         */
+        await assert('⛔ the same handle cannot be spent twice', async () => {
+            const res = await call(
+                'POST',
+                `/api/internal/bot/tickets/${ticketId}/attachments`,
+                { ref: fileRef },
+                { idempotencyKey: idem('attach-replay') },
+            );
+            return res.status === 404 && errorCode(res) === 'BOT_INBOUND_FILE_EXPIRED';
+        });
+
+        /**
+         * ⭐ **THE ASSERTION THIS SECTION EXISTS FOR, and nothing DB-free can make it.**
+         *
+         * A failed attach must leave the handle live. The attach fails for reasons that are
+         * the customer's to fix and not the file's, and burning the handle on those turns a
+         * fixable refusal into "…and now send the photo again", for a file sitting in storage,
+         * correct and unused. Proven the only honest way: fail an attach, then succeed with
+         * the SAME handle.
+         */
+        await assert('⭐ a FAILED attach leaves the handle spendable', async () => {
+            const second = await call(
+                'POST',
+                '/api/internal/bot/files/inbound',
+                { fileName: 'second.png', mimeType: 'image/png', contentBase64: PNG_BASE64 },
+                { idempotencyKey: idem('file-2') },
+            );
+            const ref2 = String((second.body.data as Json | undefined)?.ref ?? '');
+            if (!ref2) return false;
+
+            // A ticket that does not exist. The follower check never runs; the point is that
+            // the request fails AFTER the handle has been named and BEFORE it is lost.
+            const missed = await call(
+                'POST',
+                '/api/internal/bot/tickets/60700000000000000000f999/attachments',
+                { ref: ref2 },
+                { idempotencyKey: idem('attach-miss') },
+            );
+            if (missed.status !== 404 || errorCode(missed) !== 'TICKET_NOT_FOUND') {
+                console.error('     ↳ expected TICKET_NOT_FOUND, got', missed.status, errorCode(missed));
+                return false;
+            }
+
+            const retried = await call(
+                'POST',
+                `/api/internal/bot/tickets/${ticketId}/attachments`,
+                { ref: ref2 },
+                { idempotencyKey: idem('attach-2') },
+            );
+            if (retried.status !== 201) console.error('     ↳', JSON.stringify(retried.body).slice(0, 300));
+            return retried.status === 201
+                && (retried.body.data as Json | undefined)?.attachmentCount === 2;
+        });
+
+        /**
+         * ⚠ **The ownership stamp, proven rather than source-scanned.** The upload writes
+         * `ownerType: 'customer'` / `ownerId: caller.customerId`, and
+         * `enforceFileAttachmentAuthorization` compares exactly those two fields against the
+         * actor. A wrong stamp uploads perfectly and then 403s here, one route later — so a
+         * successful attach above is the only thing that proves the two agree.
+         */
+        await assert('⛔ a handle minted for ANOTHER account is refused, not resolved', async () => {
+            const res = await call(
+                'POST',
+                `/api/internal/bot/tickets/${ticketId}/attachments`,
+                { ref: 'att_' + 'A'.repeat(43) },
+                { idempotencyKey: idem('attach-forged') },
+            );
+            return res.status === 404 && errorCode(res) === 'BOT_INBOUND_FILE_EXPIRED';
         });
 
         if (stripePublishableBefore === undefined) delete process.env.STRIPE_PUBLISHABLE_KEY;

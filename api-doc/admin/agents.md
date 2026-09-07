@@ -48,9 +48,32 @@ control the tracking-allow flag, transfer an agent between agencies, and inspect
 | `PUT` | `/internal/admin/agents/:agentId/cod-threshold` | Set the agent's whole COD pool |
 | `GET` | `/internal/admin/agents/:agentId/cod-allocation` | The pool, every contract's slice, and the headroom |
 | `GET` | `/internal/admin/agents/:agentId/history` | Membership/lifecycle history |
-| `GET` | `/internal/admin/agents/:agentId/eligibility?agencyId=` | Assignment-eligibility check for an agency |
+| `GET` | `/internal/admin/agents/:agentId/eligibility?agencyId=` | Assignment-eligibility check for an agency — the **platform** rules only |
+| `GET` | `/internal/admin/agents/:agentId/assignability?agencyId=&shipmentId=` | **Every** gate, platform **and contract**, with the numbers behind each |
+| `POST` | `/internal/admin/agents/contracts/:contractId/suspend` | Freeze **one agent↔agency contract** |
+| `POST` | `/internal/admin/agents/contracts/:contractId/reinstate` | Lift a suspension |
+| `POST` | `/internal/admin/agents/contracts/:contractId/deactivate` | End the relationship — **no administrative override**; the counterparty and the cash conditions still apply, and it answers `{ request, contract, blockers }` with `contract: null` when they are not met |
 
-> Route order matters: `/transfer` is declared **before** `/:agentId` so it is not read as an agent id.
+> Route order matters: `/transfer` is declared **before** `/:agentId` so it is not read as an
+> agent id — and the same applies to `/contracts/:contractId/*`, whose literal first segment
+> would otherwise be matched as one.
+
+> **The three `contracts/*` routes act on a CONTRACT, not on the agent.** Every other row here
+> is keyed by `:agentId`; these resolve the contract's own `agency_id` and then run the ordinary
+> agency-scoped transition, so the authority matrix, the legal `from` states, the status-request
+> row and the membership-event history are the same code an agency desk runs. Their full
+> specification is in
+> [internal-service-api.md](./internal-service-api.md#added-in-the-dashboard-request-round); the
+> dashboard-facing contract is `admin/docs/api/contracts.md` in the wi-admin repository.
+
+> ⚠ **Added 2026-09-06** (DOC-PROGRAM F-17 class 6). This table listed 12 rows over a 15-route
+> surface. The three above were served, specified on a sibling page, and absent from the page a
+> reader looks an agent-administration route up on.
+
+> `assignability` is served by a **second router** mounted at the same `/agents` prefix, because its
+> handler lives in `shipment-assignment` and that module already imports `agents` — declaring the
+> route in `admin-agent.routes.ts` would close an import cycle. Express tries routers at a shared
+> prefix in order, and `/:agentId` never matches two segments, so nothing is shadowed.
 
 ---
 
@@ -79,8 +102,23 @@ able to pull an agent off a rival's roster.
 ### Example success `200`
 
 ```json
-{ "success": true, "data": { "agentId": "664agt...", "fromAgencyId": "664agyA...", "toAgencyId": "664agyB..." }, "message": "Agent transferred" }
+{
+  "success": true,
+  "data": {
+    "from": { "id": "664memA...", "agencyId": "664agyA...", "status": "deactivated", "...": "an AgentMembershipDto" },
+    "to":   { "id": "664memB...", "agencyId": "664agyB...", "status": "active",      "...": "an AgentMembershipDto" }
+  },
+  "message": "Agent transferred."
+}
 ```
+
+> [!NOTE]
+> **`data` is the two contract rows, not an echo of the request.** This example echoed
+> `{ agentId, fromAgencyId, toAgencyId }` until 2026-09-06; the controller returns
+> `{ from: AgentMembershipMapper.toDto(result.from), to: … }`, so the deactivated source contract
+> and the new destination contract both come back in full. Both are the same
+> [`AgentMembershipDto`](../agency/agent-roster.md#agentmembershipdto) as the detail read's
+> `memberships[]`.
 
 > The transfer moves both membership sides as one unit; the source is deactivated before the destination
 > threshold is checked against pooled COD headroom, and COD/wage settlement gates still apply.
@@ -100,15 +138,15 @@ able to pull an agent off a rival's roster.
   "success": true,
   "data": {
     "agent": {
-      "_id": "664agt...",
+      "id": "664agt...",
       "name": "Sam Rider",
       "status": "active",
+      "statusReason": null,
       "availability": "online",
-      "working_state": "available",
-      "tracking": { "allowed": true },
-      "capacity": { "active_shipment_count": 1, "max_active_shipments": 20 },
-      "cod": { "max_threshold": 500000, "trust_score": 82 },
-      "vehicle_info": { "vehicle_type": "bike", "color": "red", "plate_number": "LT-4412", "photo": null }
+      "workingState": "available",
+      "tracking": { "allowed": true, "reason": null, "changedAt": "2026-08-30T09:12:00.000Z", "changedByRole": "admin" },
+      "capacity": { "maxActiveShipments": 20, "activeShipmentCount": 1, "remaining": 19 },
+      "vehicleInfo": { "vehicle_type": "bike", "plate_number": "LT-4412", "color": "red", "photo": null }
     },
     "memberships": [
       {
@@ -132,6 +170,17 @@ able to pull an agent off a rival's roster.
   }
 }
 ```
+
+> [!IMPORTANT]
+> **`agent` is an `AgentProfileMapper.toResponseDto`, not the stored document** — so it is
+> **camelCase** and its identifier is **`id`**. This block showed the raw Mongoose shape
+> (`_id`, `working_state`, `vehicle_info`) until 2026-09-06; none of those keys is on the wire.
+> `vehicleInfo`'s own three keys stay snake_case because `toVehicleSummaryDto` emits them that
+> way — that is the DTO, not an oversight.
+>
+> ⚠ **There is no `cod` block on this response.** The example used to show one. An agent's COD
+> pool and trust score are read from `GET /internal/admin/agents/:agentId/cod-allocation`, and
+> the per-contract sub-allocation is `codThreshold` on each membership below.
 
 Every contract is an `AgentMembershipDto` — full field reference in
 [agency/agent-roster.md](../agency/agent-roster.md#agentmembershipdto). **Unpaginated by design**: an
@@ -176,8 +225,18 @@ restores them.
 ### Example success `200`
 
 ```json
-{ "success": true, "data": { "_id": "664agt...", "status": "suspended" }, "message": "Status updated" }
+{ "success": true, "data": { "id": "664agt...", "status": "suspended", "statusReason": "KYC re-check pending", "...": "the full agent profile" }, "message": "Agent status set to suspended." }
 ```
+
+> [!NOTE]
+> **`data` is the whole `AgentProfileMapper.toResponseDto`**, the same object the detail read
+> returns above — not the two-field acknowledgement this example used to show.
+> `AgentProfileService.setStatus` returns `present(updated)`, so a client can re-render from the
+> response without a follow-up GET. The `message` is built as `` `Agent status set to ${status}.` ``.
+>
+> ⚠ **The other two writes on this router return something narrower, so do not generalise this.**
+> `PUT /tracking-allow` returns `toResponseDto(agent).tracking` — the tracking sub-object *alone* —
+> and `POST /transfer` returns `{ from, to }`, two `AgentMembershipDto`s.
 
 ---
 
@@ -200,6 +259,27 @@ enforces it — flipping it here revokes/permits live tracking downstream.
 ```json
 { "allowed": false, "reason": "Privacy complaint under review" }
 ```
+
+### Example success `200`
+
+```json
+{
+  "success": true,
+  "data": {
+    "allowed": false,
+    "reason": "Privacy complaint under review",
+    "changedAt": "2026-09-06T11:04:00.000Z",
+    "changedByRole": "admin"
+  },
+  "message": "Tracking disabled for this agent."
+}
+```
+
+> [!NOTE]
+> **`data` is the `tracking` sub-object alone, not the agent.** The controller sends
+> `AgentProfileMapper.toResponseDto(agent).tracking`. This response was undocumented until
+> 2026-09-06. `message` is `Tracking enabled for this agent.` or `Tracking disabled for this
+> agent.` — there is no other variant.
 
 ---
 
@@ -384,15 +464,180 @@ under capacity).
 
 ### Example success `200` (representative shape)
 
+> ⚠ **Corrected.** This block previously showed `{ eligible, failedRules }`. There is no
+> `failedRules` field and never has been — `AgentEligibilityService.evaluate` returns `reasons`
+> (the codes) and `rules` (every rule, passed ones included, each with `observed`). A client
+> written against the old example would have read `undefined`.
+
 ```json
 {
   "success": true,
   "data": {
+    "agentId": "b0000000000000000000000a",
+    "agencyId": "a9e7000000000000000000b2",
     "eligible": false,
-    "failedRules": ["tracking_not_allowed", "over_capacity"]
+    "reasons": ["tracking_not_allowed", "at_capacity"],
+    "rules": [
+      { "rule": "platform_ban", "passed": true,  "reason": null, "observed": { "banned": false, "reason": null } },
+      { "rule": "tracking_allowed", "passed": false, "reason": "tracking_not_allowed",
+        "observed": { "allowed": false, "reason": "admin_disabled" } }
+    ],
+    "activeShipmentCount": 20,
+    "maxConcurrentShipments": 20
   }
 }
 ```
+
+---
+
+## GET `/internal/admin/agents/:agentId/assignability`
+
+**Purpose**: The complete "**why can this agent not take this work?**" answer — every gate the
+assignment path applies, each with what the rule saw, one English line, and (where one exists) what
+would fix it.
+
+> **Why this exists beside `/eligibility`.** Assignment is gated by **two independent families** of
+> rule and `/eligibility` reports only the first:
+>
+> | Family | Gates | Diagnosable before this endpoint |
+> |---|---|---|
+> | **platform** | banned · KYC · active · available · tracking allowed · device location · capacity | ✅ `/eligibility` |
+> | **contract** | active contract · coverage region · per-shipment value ceiling · **COD exposure** | ❌ nowhere |
+>
+> The gap was not academic. An agency refused with `COD_AGENT_EXPOSURE_EXCEEDED` could read its own
+> COD threshold off three screens and could see **neither** the agent's actual exposure (which counts
+> undelivered COD packages, not just held cash, and spans **every** agency the agent serves) **nor**
+> the trust multiplier that had halved that threshold. Support had the wrong number in front of them
+> with no way to know it.
+
+**Auth**: Required · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
+
+### Query parameters
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `agencyId` | string (ObjectId) | ✅ | The dispatching agency. The answer is pairwise — there is no agency-free verdict |
+| `shipmentId` | string (ObjectId) | — | Optional **by design**. See below |
+
+**With `shipmentId`**: every gate runs, including the two shipment-scoped ones (coverage region,
+per-shipment value ceiling), and the cash gate is evaluated with that shipment's value added. The
+shipment must belong to `agencyId` or the endpoint answers `404`.
+
+**Without it**: those two report `"skipped"`, and the cash gate answers *"is this agent already at
+their limit for this agency?"* with `additionalAmount: 0`. That is the question support asks first —
+it usually arrives holding an agency and an agent and no shipment id at all.
+
+### Gate statuses
+
+| Status | Meaning |
+|---|---|
+| `passed` | The rule ran and allowed it |
+| `failed` | The rule ran and refused. `reason` carries the `ERROR_CODES` value the assignment path throws |
+| `skipped` | The rule **could not run** — no `shipmentId`, or no active contract to read terms from |
+| `not_applicable` | The rule does not apply — e.g. the cash gate on a prepaid shipment |
+
+`assignable` is true only when **no** gate is `failed`; `skipped` does not make it false.
+
+### Example success `200` — the refusal this endpoint was built for
+
+```json
+{
+  "success": true,
+  "data": {
+    "agentId": "b00000000000000000000006",
+    "agencyId": "b00000000000000000000005",
+    "shipmentId": "6a90228701508373b234f6e8",
+    "assignable": false,
+    "blockers": ["cod_exposure"],
+    "gates": [
+      { "family": "platform", "gate": "capacity", "status": "passed", "reason": null,
+        "observed": { "activeShipmentCount": 6, "max": 20 },
+        "summary": "Carrying 6 of a maximum 20 concurrent shipments.", "remedies": [] },
+      { "family": "contract", "gate": "coverage_region", "status": "passed", "reason": null,
+        "observed": { "deliveryRegion": "littoral", "countryCode": "CM", "coveredRegions": ["littoral"] },
+        "summary": "The delivery region (littoral) is covered by this contract.", "remedies": [] },
+      { "family": "contract", "gate": "cod_exposure", "status": "failed",
+        "reason": "COD_AGENT_EXPOSURE_EXCEEDED",
+        "observed": {
+          "blocker": "exposure_exceeded",
+          "additionalAmount": 100,
+          "exposure": {
+            "currency": "XAF",
+            "cashHeld": 37400,
+            "pendingCollections": {
+              "total": 83000, "count": 5,
+              "items": [
+                { "collectionId": "…", "shipmentId": "…", "agencyId": "b00000000000000000000005", "expectedAmount": 26000 }
+              ]
+            },
+            "total": 120400
+          },
+          "limit": {
+            "contractThreshold": 200000, "base": 200000,
+            "trustScore": 75, "trustSource": "computed", "computedTrustScore": 75, "overrideReason": null,
+            "tier": "reduced", "multiplier": 0.5,
+            "fullThreshold": 80, "reducedThreshold": 50,
+            "effectiveLimit": 100000
+          },
+          "headroom": 0, "depositNeeded": 20500, "openCashShortfall": false
+        },
+        "summary": "Refused on cash: the agent is already exposed to 120400 (37400 held plus 83000 expected from 5 undelivered package(s), across every agency they serve) and this shipment adds 100, against a limit of 100000 — reduced trust (75, under 80), so the contract threshold of 200000 is halved to 100000.",
+        "remedies": [
+          { "action": "deposit_cash", "params": { "amount": 20500 } },
+          { "action": "raise_trust_score", "params": { "to": 80, "from": 75, "wouldRaiseLimitTo": 200000, "sufficientOnItsOwn": true } },
+          { "action": "raise_contract_threshold", "params": { "current": 200000, "requiredForCurrentExposure": 241000 } },
+          { "action": "wait_for_deliveries" }
+        ] }
+    ],
+    "context": {
+      "shipment": { "shipmentId": "…", "status": "assigned", "agencyId": "…", "currentAgentId": null,
+                    "orderId": "…", "paymentMethod": "cash_on_delivery", "currency": "XAF",
+                    "value": 100, "deliveryRegion": "littoral" },
+      "contract": { "contractId": "…", "status": "active", "codThreshold": 200000,
+                    "outstandingBalance": 4200, "shipmentValueCeiling": null, "coverageRegions": ["littoral"] }
+    },
+    "eligibility": { "…": "the /eligibility payload, unmodified" },
+    "contractPolicy": { "…": "the raw contract-gate result, including codVerdict" }
+  }
+}
+```
+
+### Three things to read carefully
+
+1. **Exposure is agent-wide; the limit is per-contract.** `exposure.total` spans **every** agency the
+   agent serves — the cash is one physical pot — while `limit.contractThreshold` belongs to the one
+   agency in `agencyId`. Every `pendingCollections.items` row carries its own `agencyId` so the split
+   is visible. This asymmetry is the single most misread thing about the refusal.
+2. **`limit.contractThreshold` is not the limit.** `effectiveLimit` is, and it is the threshold scaled
+   by the trust tier. A screen showing only the threshold tells an operator the opposite of what the
+   gate decided.
+3. **`trustScore` is the EFFECTIVE score** — an administrator's pinned override when one exists
+   (`trustSource: "override"`), the computed score otherwise. `computedTrustScore` rides along so a
+   screen can show both.
+
+### Remedy actions
+
+| `action` | `params` |
+|---|---|
+| `deposit_cash` | `amount` — the smallest deposit that makes the shipment fit |
+| `raise_trust_score` | `to`, `from`, `wouldRaiseLimitTo`, `sufficientOnItsOwn` — offered only when the tier is not already `full` |
+| `raise_contract_threshold` | `current`, `requiredForCurrentExposure`. ⚠ Bounded by the agent's COD pool — check `/cod-allocation` for headroom first |
+| `resolve_cash_shortfall` | — |
+| `add_coverage_region` | `region` |
+| `raise_shipment_value_ceiling` | `required` |
+| `activate_contract` | `contracts` — the non-active contracts that exist with this agency |
+| `wait_for_deliveries` | — |
+
+### Errors
+
+| `error.code` | Status | When |
+|---|---|---|
+| `AGENT_NOT_FOUND` | 404 | No such agent |
+| `SHIPMENT_NOT_FOUND` | 404 | No such shipment, **or** it belongs to a different agency than `agencyId` |
+| `ORDER_NOT_FOUND` | 404 | The shipment's order is missing |
+| `VALIDATION_ERROR` | 400 | `agencyId` absent or not a 24-hex id |
+
+---
 
 ## Possible error codes
 

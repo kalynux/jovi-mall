@@ -52,8 +52,9 @@ Authorization: Bearer <jwt_token>
     "phoneVerified": false,
     "avatar": {
       "id": "507f1f77bcf86cd799439030",
-      "key": "agencies/2026/07/jp-avatar.png",
+      "key": "images/2026/07/jp-avatar.png",
       "url": "https://cdn.example.com/jp-avatar.png",
+      "access": "public",
       "mimeType": "image/png",
       "size": 24576,
       "originalName": "me.png"
@@ -155,9 +156,12 @@ See [profile-schema.md](./profile-schema.md) for the meaning and validation rule
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "DELIVERY_AGENCY_NOT_FOUND",
-    "message": "..."
+    "message": "...",
+    "statusCode": 404,
+    "category": "not_found"
   }
 }
 ```
@@ -257,8 +261,9 @@ All fields are **optional** — send only what changed. This maps 1:1 to `Update
     "phoneVerified": false,
     "avatar": {
       "id": "507f1f77bcf86cd799439030",
-      "key": "agencies/2026/07/jp-avatar-v2.png",
+      "key": "images/2026/07/jp-avatar-v2.png",
       "url": "https://cdn.example.com/jp-avatar-v2.png",
+      "access": "public",
       "mimeType": "image/png",
       "size": 24576,
       "originalName": "me-v2.png"
@@ -298,15 +303,21 @@ All fields are **optional** — send only what changed. This maps 1:1 to `Update
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Request validation failed",
-    "details": [
-      {
-        "field": "policies.pricing.storage_based.enabled",
-        "message": "At least one of storage_based or pickup_based must be enabled."
-      }
-    ]
+    "statusCode": 400,
+    "category": "validation",
+    "details": {
+      "fields": [
+        {
+          "path": "policies.pricing.storage_based.enabled",
+          "message": "At least one of storage_based or pickup_based must be enabled.",
+          "code": "custom"
+        }
+      ]
+    }
   }
 }
 ```
@@ -316,9 +327,12 @@ All fields are **optional** — send only what changed. This maps 1:1 to `Update
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "DELIVERY_AGENCY_NOT_FOUND",
-    "message": "..."
+    "message": "...",
+    "statusCode": 404,
+    "category": "not_found"
   }
 }
 ```
@@ -378,9 +392,12 @@ Authorization: Bearer <jwt_token>
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "DELIVERY_AGENCY_NOT_FOUND",
-    "message": "..."
+    "message": "...",
+    "statusCode": 404,
+    "category": "not_found"
   }
 }
 ```
@@ -392,10 +409,10 @@ Authorization: Bearer <jwt_token>
 | Code | HTTP Status | Description |
 |------|-------------|-------------|
 | `VALIDATION_ERROR` | 400 | Request body failed validation |
-| `UNAUTHORIZED` | 401 | Missing or invalid JWT token |
-| `FORBIDDEN` | 403 | Insufficient permissions (wrong role) |
+| `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` | 401 | Missing or invalid JWT token |
+| `AUTH_ROLE_NOT_FOUND` | 403 | Insufficient permissions (wrong role) |
 | `DELIVERY_AGENCY_NOT_FOUND` | 404 | No agency profile exists for the authenticated user |
-| `INTERNAL_ERROR` | 500 | Unexpected server error |
+| `INTERNAL_SERVER_ERROR` | 500 | Unexpected server error |
 
 ---
 

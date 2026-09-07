@@ -1,5 +1,10 @@
 # Geospatial Addresses & Address Search
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–28). This page had gone stale against the 2026-08-23 provider-chain work;
+corrections are marked inline with ⚠ and a source citation.
+
 > Provider-agnostic address search + the shared **GeoAddress** value object that every address in
 > jovi-mall now carries. Users keep typing free-form text; the backend turns it into map-grade
 > candidates via the active geocoding provider, and the selected candidate is stored with full
@@ -17,9 +22,17 @@ Now:
 
 - **Vendor** business addresses, **agency** headquarters, **customer** saved addresses, order
   **pickup** snapshots, and the order **drop-off** all embed a `GeoAddress`.
-- A single geocoding provider (default **Nominatim / OpenStreetMap**, keyless) resolves free-form text
-  to candidates. Swapping to Google/Mapbox/HERE/Geoapify is a config change only (`GEO_PROVIDER`) —
-  the API shape and every consumer stay identical. **No business logic ever depends on the provider.**
+- A geocoding provider resolves free-form text to candidates. **Three adapters are built** —
+  `nominatim` (the keyless default), `geoapify` and `locationiq` — and `GEO_PROVIDER=chain` runs
+  them in a failover order, which is **the intended production setting**. Switching is a config
+  change only; the API shape and every consumer stay identical. **No business logic ever depends
+  on the provider.**
+
+> ⚠ **This said "a single geocoding provider … only `nominatim` has an adapter in this build"
+> until 2026-09-06, and it had been false since 2026-08-23.** `src/core/geocoding/providers/`
+> holds `nominatim.provider.ts`, `geoapify.provider.ts` and `locationiq.provider.ts`, and
+> `geocoding.chain.ts` is a fourth composite. A reader planning a deployment from this page would
+> have concluded the platform was pinned to public OSM.
 
 ---
 
@@ -103,14 +116,48 @@ Turn a coordinate into its best-matching address (e.g. "use my current location"
 { "success": true, "data": { "provider": "nominatim", "result": { /* one candidate, or null */ } } }
 ```
 
+> ⚠ **There are TWO `provider` fields and they answer different questions.** Both responses carry
+> one at the top of `data` and one inside every candidate, and under `GEO_PROVIDER=chain` they
+> **disagree** — which is the configuration this platform is meant to run.
+>
+> | Field | What it is | Can it say `"chain"`? |
+> |---|---|---|
+> | `data.provider` | the **configured type**, straight from `GEO_PROVIDER` (`getGeocodingProviderType()` → `geocodingConfig.provider`, `geocoding.instance.ts:177-179`) | **Yes** — literally `"chain"` |
+> | `data.results[].provider` · `data.result.provider` | the **service that actually resolved that candidate** | **Never** |
+>
+> The per-candidate one is the one that matters and the only one you may store: it is what
+> `GeoAddress.provider` persists, and `'chain'` is **deliberately absent** from `GEO_PROVIDERS`
+> (`geo-address.types.ts:44`) because a stored row saying "chain" records which *mechanism*
+> answered instead of which *service*, making `provider_place_id` unresolvable forever
+> (`geocoding.chain.ts:75-81`). The chain passes candidates through untouched.
+>
+> **So `data.provider` is diagnostic only.** Do not persist it, and do not assume the candidates
+> below it came from it.
+
 ### Error codes
 
 | `error.code` | Status | Meaning |
 |---|---|---|
-| `GEO_PROVIDER_UNAVAILABLE` | 503 | Provider unreachable (network/timeout). Geo is off the critical path — retry; checkout/profile still work. |
-| `GEO_SEARCH_FAILED` | 502 | Provider returned an error / unparseable response. |
-| `GEO_PROVIDER_NOT_CONFIGURED` | 500 | Configured provider has no adapter/credentials in this build. |
+| `GEO_PROVIDER_RATE_LIMITED` | 429 | Out of quota / over the provider's rate limit (`geoapify.provider.ts:132`, `locationiq.provider.ts:143`). ⚠ **Under `chain` you will rarely see this** — it is a *failover* trigger, so the next provider answers instead and you get a `200`. It surfaces only when **every** member is rate-limited. |
+| `GEO_PROVIDER_UNAVAILABLE` | 503 | Provider unreachable (network/timeout). Geo is off the critical path — retry; checkout/profile still work. Also a failover trigger under `chain`. |
+| `GEO_SEARCH_FAILED` | 502 | Provider returned an error / unparseable response. ⚠ **NOT a failover trigger** — a malformed query is malformed everywhere, so the chain does not retry it. |
+| `GEO_PROVIDER_NOT_CONFIGURED` | 500 | Configured provider has no adapter or no credentials in this build (`google`/`mapbox`/`here`, or a keyed provider with no key). |
+| `CONFIG_INVALID_GEO_PROVIDER` | 500 | `GEO_PROVIDER` is a string that is not a provider name at all (`geocoding.factory.ts:123`). A misspelling fails loudly rather than silently running on the fallback. |
 | `VALIDATION_ERROR` | 400 | Bad query params (missing `q`, out-of-range `lat`/`lng`). |
+
+> ⚠ **`GEO_PROVIDER_RATE_LIMITED` and `CONFIG_INVALID_GEO_PROVIDER` were missing from this table
+> until 2026-09-06**, and the failover column above did not exist. Which errors the chain absorbs
+> and which it re-throws is the difference between a retry that helps and one that never will.
+>
+> ⚠ **A total outage surfaces as an ERROR, never as an empty result.** When every member fails
+> the chain re-throws the last error (`geocoding.chain.ts:83-86`), because *"nobody could be
+> asked"* and *"everybody said no"* are different answers and a client must be able to tell them
+> apart. An empty `results: []` therefore genuinely means no match.
+>
+> ⚠ **One source comment is stale and is documented rather than edited**:
+> `geocoding.instance.ts:17` still says the chain default is `'geoapify,locationiq'`. The order
+> was **reversed by measurement on 2026-08-23** and the running default is `locationiq,geoapify`
+> (`geocoding.factory.ts:153-155`, whose own comment explains why). Trust the factory.
 
 ---
 
@@ -191,7 +238,12 @@ Selected once at boot from env (see `.env.example`). Mirrors the storage-provide
 
 | Env | Default | Notes |
 |---|---|---|
-| `GEO_PROVIDER` | `nominatim` | `nominatim` \| `google` \| `mapbox` \| `here` \| `geoapify`. Only `nominatim` has an adapter in this build. |
+| `GEO_PROVIDER` | `nominatim` | **`chain`** \| `nominatim` \| `geoapify` \| `locationiq` — these four work. `google` \| `mapbox` \| `here` are named seams with **no adapter**: the factory throws `GEO_PROVIDER_NOT_CONFIGURED` and the boot validator refuses the start (`config/env.ts:444`). |
+| `GEO_PROVIDER_CHAIN` | `locationiq,geoapify` | **Only read when `GEO_PROVIDER=chain`.** The failover order (`geocoding.factory.ts:153-155`). **Keyless `nominatim` is always appended last** unless already named, so the chain can never come out empty. |
+| `GEO_GEOAPIFY_API_KEY` | — | Required when `GEO_PROVIDER=geoapify` (boot error). In a **chain** a missing key **skips that provider with a warning** rather than failing the boot — that is what lets one setting serve a keyless laptop and a two-key production host. |
+| `GEO_LOCATIONIQ_API_KEY` | — | Same rule as above. |
+| `GEO_GEOAPIFY_BASE_URL` | Geoapify public | Or a self-hosted mirror. |
+| `GEO_LOCATIONIQ_BASE_URL` | LocationIQ public | Or a self-hosted mirror. |
 | `GEO_REQUEST_TIMEOUT_MS` | `5000` | Per-request timeout. |
 | `GEO_DEFAULT_LIMIT` | `5` | Default candidate count. |
 | `GEO_DEFAULT_COUNTRY_CODES` | `cm` | Comma-separated ISO-2 bias. Blank = worldwide. |

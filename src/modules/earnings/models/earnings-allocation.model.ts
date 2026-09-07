@@ -80,7 +80,7 @@ const EarningsAllocationSchema = new Schema<IEarningsAllocation>(
     },
     source_id: { type: Schema.Types.ObjectId, required: true },
 
-    beneficiary_type: { type: String, enum: ['vendor', 'agency', 'platform', 'agent'], required: true },
+    beneficiary_type: { type: String, enum: ['vendor', 'agency', 'platform', 'agent', 'platform_ai'], required: true },
     beneficiary_id: { type: Schema.Types.ObjectId, default: null },
 
     gross_snapshot: { type: Number, required: true, min: 0 },

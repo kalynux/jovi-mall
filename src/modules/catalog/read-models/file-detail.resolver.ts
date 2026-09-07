@@ -13,6 +13,13 @@ interface FileLike {
   mimeType: string;
   size: number;
   originalName?: string;
+  /**
+   * Set when the owner is over their plan storage cap and this file falls outside it.
+   * Optional so a caller projecting a narrower shape still compiles — an omitted value
+   * reads as "not blocked", which is the correct default for every file that has never
+   * been through the quota sweep.
+   */
+  quotaBlockedAt?: Date | null;
 }
 export interface FileLookup {
   findManyByIds(ids: string[]): Promise<FileLike[]>;
@@ -40,8 +47,35 @@ export interface FileLookup {
  * `id` is the handle, and the entity's own authorized read is where the authorization lives
  * (that is the point of ADR-A01 D-2: the scope belongs to the shipment or the ticket, not to
  * a second copy of its rules bolted onto a file route).
+ *
+ * ── A QUOTA-BLOCKED file gets `url: null` too, and is reported FIRST ──────────
+ * When a plan downgrade puts an owner over their storage cap, the files outside the cap are
+ * blocked newest-first rather than deleted (`modules/plan-quota/`). Blocking is expressed
+ * here, at the same choke point and for the same reason: one rule, forty call sites.
+ *
+ * ⚠ **The blocked check runs BEFORE the privacy check, and the order is load-bearing.** A
+ * blocked file inside a private tree is blocked, not merely authorized. Reporting
+ * `authorized` would send a client to the owning entity's byte route to discover the
+ * problem, and the answer it got back would describe a permissions failure rather than a
+ * billing one — a support conversation about the wrong subject.
+ *
+ * ⚠ Blocking is **reversible and lossless**. Never treat it as deletion: the row, the bytes
+ * and the file's contribution to the owner's used-bytes total all survive, and an upgrade
+ * restores exactly the same files. That is the entire difference between this and the
+ * cleanup sweep.
  */
 export function toFileDetail(file: FileLike, storage: IStorageProvider): FileDetail {
+  if (file.quotaBlockedAt) {
+    return {
+      id: file.id,
+      key: file.key,
+      url: null,
+      access: 'quota_blocked',
+      mimeType: file.mimeType,
+      size: file.size,
+      originalName: file.originalName,
+    };
+  }
   const isPrivate = isPrivateStorageKey(file.key);
   return {
     id: file.id,

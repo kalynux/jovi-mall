@@ -131,6 +131,45 @@ export type PublicStoreListQuery = z.infer<typeof PublicStoreListQuerySchema>;
 
 export const PublicProductIdParamSchema = z.object({ productId: ObjectIdSchema });
 
+/**
+ * Upper bound on one `/products/by-ids` request.
+ *
+ * Explicit, like every other bound on this world-readable router. The realistic caller is
+ * a search result set — five to twenty ids — and `listByIds` decorates a batch with two
+ * aggregate reads plus image resolution, so this is a work ceiling rather than a URL-length
+ * one. Fifty is far above any caller and far below anything worth doing on an unauthenticated
+ * endpoint.
+ */
+export const PRODUCTS_BY_IDS_MAX = 50;
+
+/**
+ * `GET /api/public/products/by-ids?ids=a,b,c`
+ *
+ * `ids` accepts a repeated param or a comma-separated list, the same two shapes `type`
+ * accepts and for the same reason — Express hands back `string` or `string[]` depending on
+ * how the client wrote it, so both have to be handled anyway.
+ *
+ * ⚠ **Duplicates are collapsed here, not downstream.** A caller pasting a list is allowed to
+ * repeat an id; `listByIds` keys its answer by id, so a duplicate would otherwise inflate
+ * the count against `PRODUCTS_BY_IDS_MAX` while adding nothing.
+ */
+export const PublicProductsByIdsQuerySchema = z.object({
+    ids: z
+        .union([z.string(), z.array(z.string())])
+        .transform((value) => {
+            const raw = Array.isArray(value) ? value : [value];
+            return [...new Set(raw.flatMap((v) => v.split(',')).map((v) => v.trim()).filter(Boolean))];
+        })
+        .pipe(
+            z
+                .array(ObjectIdSchema)
+                .min(1, 'ids must name at least one product')
+                .max(PRODUCTS_BY_IDS_MAX, `ids may name at most ${PRODUCTS_BY_IDS_MAX} products per request`),
+        ),
+});
+
+export type PublicProductsByIdsQuery = z.infer<typeof PublicProductsByIdsQuerySchema>;
+
 export const PublicStoreSlugParamSchema = z.object({ storeSlug: StoreSlugSchema });
 
 export const PublicProductSlugsParamSchema = z.object({

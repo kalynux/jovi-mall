@@ -5,7 +5,7 @@ import { OAuthStateService } from '../../../auth/services/oauth-state.service';
 import { ConnectedCalendarAccount } from './connected-account.model';
 import { VendorModel } from '../../../vendors/vendor.model';
 import { asyncHandler } from '../../../../api/middlewares/async-handler';
-import { createAppError } from '../../../../core/errors';
+import { AppError, createAppError } from '../../../../core/errors';
 import { ERROR_CODES } from '../../../../core/error-codes';
 import { sendSuccess, sendMessage } from '../../../../core/responses';
 
@@ -305,8 +305,25 @@ router.get(
     try {
       const result = await provider.testConnection(userId);
       sendSuccess(res, { ok: result });
-    } catch (error: any) {
-      next(createAppError(ERROR_CODES.INTEGRATION_UNSUPPORTED_CALENDAR_PROVIDER, 500, error.message));
+    } catch (error: unknown) {
+      /**
+       * ⚠ Forward an AppError UNCHANGED. Fixed 2026-09-07 (DOC-PROGRAM § 30).
+       *
+       * This catch used to re-wrap **everything** as
+       * `INTEGRATION_UNSUPPORTED_CALENDAR_PROVIDER` at 500, which swallowed the one answer
+       * a caller actually needs: `getAuthenticatedClient` raises
+       * `400 GOOGLE_CALENDAR_NOT_CONNECTED` for a vendor who never connected, and that
+       * became a 500. Worse, the re-wrap passed `error.message` through — and 500 derives
+       * category `internal`, so the boundary then replaced the message with the registry
+       * default and dropped `details`. The real reason reached nobody, and `/test` could not
+       * distinguish "not connected" from "connected but broken".
+       *
+       * Anything that is not an AppError is a genuine provider fault and keeps the old
+       * shape.
+       */
+      if (error instanceof AppError) return next(error);
+      const message = error instanceof Error ? error.message : String(error);
+      next(createAppError(ERROR_CODES.INTEGRATION_UNSUPPORTED_CALENDAR_PROVIDER, 500, message));
     }
   })
 );

@@ -1,5 +1,9 @@
 # Vendor Stock Requests
 
+**Verified against source on 2026-09-07** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
+
 Changing the recorded stock of a product a delivery agency warehouses for you. Every
 change needs both signatures — yours and the agency's.
 

@@ -26,7 +26,7 @@ message to the moment you answer the question they originally asked. Contract re
 > body  {{ $json.reply.body }}
 > ```
 >
-> Contract: [bot-surface.md § 14](./bot-surface.md#14--reply--the-request-body-you-post-to-the-channel-unmodified).
+> Contract: [bot-surface.md § 14](./bot-surface.md#14---reply--the-request-body-you-post-to-the-channel-unmodified).
 >
 > **Every `### → Telegram sendMessage` block below is now a CAPTURE of `reply.body`, not a
 > set of assembly instructions.** Three specific instructions in this document are
@@ -44,7 +44,7 @@ message to the moment you answer the question they originally asked. Contract re
 >    carrying `skip:<step>`, the same token in every language, and the prompt went back to
 >    being a plain question. The general rule — **a closed answer set is always a button,
 >    never typed text** — is
->    [bot-surface.md § 14.6](./bot-surface.md#146--a-determined-answer-is-a-button-never-a-typed-word),
+>    [bot-surface.md § 14.6](./bot-surface.md#146---a-determined-answer-is-a-button-never-a-typed-word),
 >    and it governs every future turn with yes/no-shaped answers.
 >
 > Everything else on this page — the requests, the `data` bodies, the error table — is
@@ -422,7 +422,7 @@ The inbound event is now a **tap**, not the text `"passer"`:
 ```
 
 Split `data` on `:` → `{ step: "email", action: "skip" }`. One rule per verb, and the whole
-table is [bot-surface.md § 14.6](./bot-surface.md#146--a-determined-answer-is-a-button-never-a-typed-word).
+table is [bot-surface.md § 14.6](./bot-surface.md#146---a-determined-answer-is-a-button-never-a-typed-word).
 No language is involved anywhere on that path. (The customer may still *type* their email on
 that turn — the button is the other answer, not the only one.)
 

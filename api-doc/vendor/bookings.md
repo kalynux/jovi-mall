@@ -1,5 +1,9 @@
 # Vendor Booking Management API
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–26). Corrections are marked inline with ⚠ and a source citation.
+
 Complete API reference for managing bookings in the multi-vendor ecommerce platform.
 
 > **Booking system docs:** [Implementation guide](../booking-implementation-guide.md) · [Service product setup](./products.md#service-products) · [Availability rules](./availability-rules.md) · [Google Calendar](./calendar.md) · [Customer booking flow](../customer/bookings.md) · **Vendor booking management** (this doc)
@@ -58,8 +62,9 @@ List all bookings for the authenticated vendor with filtering and pagination.
   "success": true,
   "data": [
     {
-      "_id": "507f1f77bcf86cd799439011",
-      "productId": { "_id": "507f1f77bcf86cd799439012", "title": "1-Hour Consultation", "type": "service" },
+      "id": "507f1f77bcf86cd799439011",
+      "bookingNumber": "BKG-2026-000123",
+      "productId": { "id": "507f1f77bcf86cd799439012", "title": "1-Hour Consultation", "type": "service" },
       "userId": { "_id": "507f1f77bcf86cd799439013", "login_email": "customer@example.com" },
       "vendorId": "507f1f77bcf86cd799439014",
       "startAt": "2026-02-05T10:00:00.000Z",
@@ -77,6 +82,29 @@ List all bookings for the authenticated vendor with filtering and pagination.
   "meta": { "total": 45, "page": 1, "limit": 20, "totalPages": 3 }
 }
 ```
+
+> [!WARNING]
+> **The three identifiers in that block genuinely differ, and this is not a typo to tidy up.**
+> The booking and the populated product answer to **`id`**; the populated user answers to
+> **`_id`**. jovi-mall has no global mongoose `toJSON` plugin, so the key is decided per model by
+> whether it is built on `BaseSchemaOptions` (`src/core/base.schema.ts`), which deletes `_id` and
+> exposes the `id` virtual. `Booking` and `Product` are; `User` is not. Populating does not change
+> this — each child is serialised by its own schema.
+
+> [!NOTE]
+> **`bookingNumber`** is the booking's human-readable handle — `BKG-2026-000123`, deliberately
+> the same shape as an order's `ORD-2026-000123`, since a vendor reads both on one screen. It is
+> generated at creation, is never editable, and there is no endpoint that sets it. It is what the
+> vendor's "new booking" notification names, what the calendar event's description carries, and
+> what a customer will quote on the phone — so show it wherever a booking is identified.
+>
+> **It is `null` on bookings created before the field existed**, and those are deliberately not
+> backfilled (there is no production data; see `PRODUCTION-READINESS/PHASE-6-UNBUILT-SCOPE-PLAN.md`
+> D-5). Render a fallback rather than an empty `#`.
+>
+> ⚠ **It is not a count.** The sequence is drawn before the booking row is written, so a booking
+> that then fails burns its number — `BKG-2026-000042` does **not** mean "the 42nd booking of
+> 2026". Do not derive a total from it. Use `id`, never `bookingNumber`, in a request path.
 
 > [!NOTE]
 > **`priceSnapshot`** is captured when the booking is created, computed by the backend from the service product's single default variant: `variant.price` is the base price per `serviceConfig.durationMinutes`, prorated by the booked slot duration, plus any peak-hours surcharge. On completion it can be recomputed from the actual elapsed duration — see [Complete Booking](#complete-booking-settle-final-price).
@@ -113,7 +141,19 @@ Returns bookings grouped by date for calendar display. Single query, no N+1.
 | `endDate` | ISO datetime | **Yes** | End of range (inclusive, max 90 days from startDate). Filters on the booking's `startAt`. |
 
 > [!NOTE]
-> A booking is included when its **`startAt`** falls within `[startDate, endDate]`, regardless of when it ends. Results are grouped under the `YYYY-MM-DD` (UTC) of each booking's `startAt`.
+> A booking is included when its **`startAt`** falls within `[startDate, endDate]`, regardless of when it ends. Results are grouped under the `YYYY-MM-DD` of each booking's `startAt`.
+>
+> ⚠ **That date key is the SERVER'S LOCAL DAY, not UTC — this line said UTC until 2026-09-06.**
+> The grouping is `format(booking.startAt, 'yyyy-MM-dd')` with date-fns' `format`
+> (`booking.service.ts:23, 1002`), which renders in the process timezone. A booking at
+> `23:30Z` therefore lands under the **next** day on a server running UTC+1, and a client that
+> re-derives the day from `startAt` in UTC will disagree with the key it was given.
+>
+> ⚠ **The source's own comment one line above the code also says "in UTC" and is wrong**
+> (`booking.service.ts:998`). Neither the doc nor the comment was checked against the call;
+> only `format`'s behaviour is authoritative. **Group by the returned `date` key rather than
+> recomputing it**, and treat the boundary as server-local until the server's timezone is
+> pinned.
 
 **Response:**
 
@@ -218,11 +258,27 @@ Omitting all three settles at the originally booked duration.
 
 - `priceSnapshot` — the originally booked estimate.
 - `finalPrice` — the recomputed (or flat) price; also recorded under `booking.metadata.completion`.
-- `additionalAmountDue` — `max(0, finalPrice − priceSnapshot)`.
-- `amountPaid` — what the customer has actually paid so far (`0` unless the booking is `paid`).
-- `additionalAmountDue` — `max(0, finalPrice − amountPaid)`. **Compared against what was PAID, not what was quoted** — an unpaid booking owes the whole final price, not just the overrun.
-- `creditDue` — `max(0, amountPaid − finalPrice)`. Recorded, **not** auto-refunded.
+- `additionalAmountDue` — `max(0, finalPrice − amountPaid)`, where `amountPaid` is
+  `priceSnapshot` when the booking is `paid` and **`0` otherwise**
+  (`CompletionPricingService.ts:111-112`). **Compared against what was PAID, not what was
+  quoted** — an unpaid booking owes the whole final price, not just the overrun.
 - `additionalAmountCharged` — always `false`: the balance is requested, never charged automatically.
+- `additionalAmountNote` — the sentence to show when a balance is outstanding, `null` otherwise.
+- `breakdown` — present only when the price was recalculated.
+
+> ⚠ **This list carried `additionalAmountDue` TWICE, with two different formulas, two lines
+> apart** — `max(0, finalPrice − priceSnapshot)` and `max(0, finalPrice − amountPaid)` — until
+> 2026-09-06. The second is right; the first is the pre-correction version that was left behind
+> when the entry beneath it was fixed. Comparing against `priceSnapshot` **bills an unpaid
+> customer only the overrun**, which is the bug `CompletionPricingService.ts:106-108` exists to
+> explain: *"Comparing against `priceSnapshot` (as this used to) bills an unpaid customer…"*.
+>
+> ⚠ **`amountPaid` and `creditDue` were also listed here and are NOT on this response.** The
+> controller returns exactly `booking`, `priceSnapshot`, `finalPrice`, `additionalAmountDue`,
+> `additionalAmountCharged`, `additionalAmountNote` and `breakdown`
+> (`vendor-booking.controller.ts:246-262`). Both values are computed internally and **persisted
+> on `booking.settlement`** — read them from there (see the paragraph below), not from this
+> payload.
 
 The settled figures are persisted on `booking.settlement` (`finalPrice`, `balanceDue`, `balancePaid`, `creditDue`, `pricingMode`, `settledAt`), so an outstanding balance is queryable rather than buried in `metadata`.
 
@@ -345,8 +401,19 @@ Reschedule a booking to a new time slot. Updates the Google Calendar event.
 **Request Body:**
 
 ```json
-{ "newSlotId": "slot-2026-02-10T14:00:00Z-60" }
+{ "newSlotId": "slot_1739365200000_1739372400000_a1b2c3d4" }
 ```
+
+> ⚠ **The example here read `slot-2026-02-10T14:00:00Z-60` until 2026-09-06 — that shape does
+> not exist.** A slot id is `slot_{startMs}_{endMs}_{hash}`, built at
+> `slot-generator.service.ts:48` as `` `slot_${start.getTime()}_${end.getTime()}_${hash}` ``.
+> It is **opaque**: pass back exactly what `GET /availability` returned and never construct or
+> mutate one. [customer/bookings.md](../customer/bookings.md#get-available-slots) had this right the
+> whole time, so where the two pages disagreed, that one was correct.
+>
+> ⚠ Note the *source's own docstring* one line above the code says `slot_{startISO}_{endISO}`,
+> which is also wrong — `getTime()` yields epoch milliseconds, not ISO. Do not take the
+> comment as the contract; the template literal is.
 
 **Error Responses:**
 
@@ -356,7 +423,7 @@ Reschedule a booking to a new time slot. Updates the Google Calendar event.
 - `409 BOOKING_SLOT_NOT_LOCKED`: New slot is not locked, or the lock has expired
 - `403 BOOKING_UNAUTHORIZED`: New slot is locked by a different owner
 - `409 BOOKING_ALREADY_CANCELLED`: Booking is already cancelled
-- `500 BOOKING_CALENDAR_SYNC_FAILED`: Calendar event update failed
+- ~~`500 BOOKING_CALENDAR_SYNC_FAILED`: Calendar event update failed~~ — **never sent.** Calendar mirroring is best-effort on every path; the throw was removed when it became so (`booking.service.ts:515`), and no site anywhere raises this code. A reschedule whose Google event fails to update returns `200` and logs.
 
 ---
 
@@ -388,7 +455,7 @@ Cancel a booking with an optional reason. Deletes the calendar event and emits a
 {
   "success": true,
   "data": {
-    "_id": "507f1f77bcf86cd799439011",
+    "id": "507f1f77bcf86cd799439011",
     "status": "cancelled",
     "cancelledAt": "2026-02-05T09:00:00.000Z",
     "cancelledReason": "Vendor unavailable due to illness"
@@ -448,17 +515,20 @@ stateDiagram-v2
 | `BOOKING_TERMINAL_STATE` | 409 | Booking is `completed`/`no-show` and cannot be cancelled |
 | `BOOKING_SLOT_NOT_LOCKED` | 409 | New slot is not locked, or the lock expired (reschedule) |
 | `BOOKING_UNAUTHORIZED` | 403 | New slot is locked by a different owner (reschedule) |
-| `BOOKING_CALENDAR_SYNC_FAILED` | 500 | Calendar event update failed (reschedule) |
-| `INTERNAL_ERROR` | 500 | Unexpected server error |
+| ~~`BOOKING_CALENDAR_SYNC_FAILED`~~ | ~~500~~ | **UNREACHABLE** — registered, given a default message, and raised by nothing. Calendar sync never fails a request |
+| `INTERNAL_SERVER_ERROR` | 500 | Unexpected server error |
 
 **Error Response Format:**
 
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Invalid input",
+    "statusCode": 500,
+    "category": "internal",
     "details": [...]
   }
 }
@@ -493,3 +563,18 @@ Stripe. Just add `disputed` to your payment-status badges/filters and treat a
 6. **Calendar View**: Returns bookings grouped by `YYYY-MM-DD` (UTC), max 90-day range
 7. **Reschedule**: Requires the vendor to hold a slot lock via the existing slot-locking mechanism
 8. **Capacity bookings**: For service products with `serviceConfig.bookingMode: "capacity"`, multiple customers book the same slot (up to `maxBookings`). All seats for a slot share **one** Google Calendar event titled `[x/N] <Product>`, updated as seats fill. Each seat is a separate booking row, visible here and in the calendar view; cancelling one frees a seat. Per-seat payment/status is tracked per booking as usual.
+
+   **The shared event is maintained rather than moved or deleted, and both halves of that were wrong until 2026-09-06.**
+
+   - **Rescheduling one seat** re-renders TWO events — the class it left, one seat lighter, and
+     the class it joined. It does not move the shared event, which would have dragged every
+     other attendee to the mover's new time. (Before this date a capacity booking could not be
+     rescheduled at all: it always failed with `409 BOOKING_SLOT_NOT_LOCKED` — KI-1.)
+   - **Cancelling one seat** re-renders the event at the new count and deletes it only when the
+     LAST seat goes. It previously called `deleteEvent` outright, so one attendee dropping out
+     removed the whole class from your calendar. All three cancellation paths (customer cancel,
+     your cancel, and a `confirmed → cancelled` status change) are fixed.
+   - A move into a **full** class is refused with `409 BOOKING_SLOT_FULL`; a class with seats
+     free accepts it, even with other attendees already in it.
+
+   Calendar sync stays best-effort throughout — a Google outage never rejects or loses a move.

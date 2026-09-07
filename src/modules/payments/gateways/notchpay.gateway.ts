@@ -99,10 +99,30 @@ export class NotchPayGateway implements PaymentGateway {
 
       // Step 2 — charge. Without this the transaction sits `pending` forever
       // and the customer is never prompted for anything.
-      const charged = await this.call(`/payments/${encodeURIComponent(gatewayRef)}`, 'POST', {
-        channel: notchPayChannelFor(operator),
-        data: { phone: payload.channel.phoneNumber },
-      });
+      //
+      // ── THE REFERENCE MUST SURVIVE A FAILURE HERE ─────────────────────────
+      // Step 1 has already opened a real transaction under `gatewayRef`. If this call fails
+      // and the error goes up as it stands, that reference is lost, and the caller records a
+      // row saying no charge was ever opened. It uses exactly that to decide whether a retry
+      // is safe (`PaymentOrchestratorService.releaseDeadAttempt`), so losing it here is how a
+      // timed-out charge gets placed a second time. Carried out on `details` rather than
+      // returned, because the failure kinds this call raises — a refusal, an unreachable
+      // provider — are decisions the caller must still see as themselves.
+      let charged: any;
+      try {
+        charged = await this.call(`/payments/${encodeURIComponent(gatewayRef)}`, 'POST', {
+          channel: notchPayChannelFor(operator),
+          data: { phone: payload.channel.phoneNumber },
+        });
+      } catch (error: any) {
+        if (error instanceof AppError) {
+          throw createAppError(error.code, error.statusCode, error.message, {
+            ...(error.details ?? {}),
+            gatewayRef,
+          });
+        }
+        throw error;
+      }
 
       const status = this.normalizeStatus(charged?.transaction?.status ?? charged?.status);
 

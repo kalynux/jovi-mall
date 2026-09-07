@@ -116,9 +116,12 @@ nothing is stored:
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "UPLOAD_POLICY_VIOLATION",
     "message": "Upload policy violations found",
+    "statusCode": 400,
+    "category": "validation",
     "details": { "violations": [
       { "code": "QUOTA_EXCEEDED",
         "message": "Storage quota exceeded. Maximum: 5.00 GB, Current: 4.90 GB, Requested: 0.30 GB",

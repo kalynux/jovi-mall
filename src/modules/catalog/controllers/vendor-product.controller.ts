@@ -31,6 +31,7 @@ import {
 } from '../validators/product.validator';
 import { vectorisationService } from '../domain/services/VectorisationService';
 import { entitlementService } from '../../billing/services/entitlement.service';
+import { eventBus } from '../../../core/events/event-bus';
 import { ProductDeliveryAgencySuspensionService } from '../domain/services/ProductDeliveryAgencySuspensionService';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
@@ -107,6 +108,31 @@ async function handleProductAgencyOverrideChange(
         targetAgencyId,
     );
     return { restored, reassignedCount };
+}
+
+/**
+ * Tell the plan-quota module a catalog slot just came free.
+ *
+ * An over-cap vendor is told their remedy is to archive something older, at which point
+ * the next-oldest suspended product returns. Archiving changes neither their plan nor its
+ * limits, so `plan.activated` does not fire and nothing would otherwise recompute — the
+ * nightly sweep would eventually pick them up, but the vendor is looking at the screen
+ * now.
+ *
+ * ⚠ **An EVENT rather than a call into `plan-quota`, deliberately.** That module reaches
+ * into catalog for products and files; importing it from here would close the cycle. Same
+ * shape as billing → agents via `plan.activated`.
+ *
+ * Fire-and-forget after the response: a failed recompute must not fail the archive the
+ * vendor actually asked for, and `PlanQuotaReconcileWorker` is the durable backstop.
+ */
+function publishCapacityFreed(vendorId: string): void {
+    void eventBus.publish('quota.capacity_freed', {
+        eventType: 'quota.capacity_freed',
+        aggregateId: vendorId,
+        occurredAt: new Date(),
+        payload: { ownerType: 'vendor', ownerId: vendorId },
+    }).catch((err) => console.error('[VendorProductController] capacity_freed publish failed:', err));
 }
 
 /**
@@ -277,6 +303,26 @@ export class VendorProductController {
         // leave; activation only from 'draft'), then target-status requirements.
         productStatusValidationService.assertVendorTransition(product, input.status);
         await productStatusValidationService.validate(product, input.status);
+
+        // ⚠ The plan cap, on the one transition that TAKES a slot back.
+        //
+        // `archived → draft` is the un-archive edge, and archiving is precisely how a
+        // vendor frees a slot when they hit their cap — so without this, the remedy for
+        // the limit is also the way around it: archive one, create one, un-archive the
+        // first, repeat. Every other vendor transition here moves between two statuses
+        // that both occupy a slot (`countActiveByVendor` counts drafts), so the count
+        // does not move and no check is owed.
+        //
+        // Deliberately NOT expressed as an activation blocker in
+        // `collectActivationBlockers`: that runs from `revalidateActiveStatus`, which
+        // SILENTLY DEMOTES a live product to draft rather than refusing — so an
+        // over-quota vendor editing any product would quietly unpublish it. Same trap
+        // `agency-storage-stock.rule.ts` documents. The quota refuses at the door.
+        if (product.status === 'archived') {
+            const slots = await productRepository.countActiveByVendor(vendorId);
+            await entitlementService.assertCanAddProduct(vendorId, slots);
+        }
+
         const updatedProduct = await productRepository.update(id, vendorId, { status: input.status });
 
         // Return response immediately
@@ -316,6 +362,14 @@ export class VendorProductController {
     static duplicateProduct = asyncHandler(async (req: Request, res: Response) => {
         const vendorId = req.auth!.role_entity._id.toString();
         const { id } = req.params;
+
+        // The plan cap. A duplicate lands at `status: 'draft'`, and a draft occupies a
+        // catalog slot (`countActiveByVendor`), so this creates one exactly as
+        // `POST /products` does — it was simply the only create path that never asked.
+        // A vendor at 15/15 could duplicate to 16, 17, 18 indefinitely.
+        const slots = await productRepository.countActiveByVendor(vendorId);
+        await entitlementService.assertCanAddProduct(vendorId, slots);
+
         const duplicatedProduct = await productDuplicateService.execute(id, vendorId);
         res.status(201).json({ success: true, data: duplicatedProduct, message: 'Product duplicated successfully' });
     });
@@ -329,6 +383,9 @@ export class VendorProductController {
         const { id } = req.params;
         await productArchiveService.execute(id, vendorId);
         res.json({ success: true, message: 'Product archived successfully' });
+
+        // A slot just came free — release the next-oldest quota-suspended product.
+        publishCapacityFreed(vendorId);
     });
 
     /**
@@ -340,6 +397,8 @@ export class VendorProductController {
         const input = BulkArchiveSchema.parse(req.body);
         const result = await productBulkOperationsService.bulkArchive(input.productIds, vendorId);
         res.json({ success: true, data: result, message: `Archived ${result.success} of ${result.total} products` });
+
+        if (result.success > 0) publishCapacityFreed(vendorId);
     });
 
     /**
@@ -484,15 +543,24 @@ export class VendorProductController {
     });
 
     /**
-     * POST /api/admin/products/bulk-vectorise
+     * POST /api/internal/admin/dev-tools/catalogue/vectorise
      * Admin: Trigger bulk vectorisation for a list of product IDs.
+     *
+     * ⚠ Routed at `dev-tools/admin-dev-tools.routes.ts:278`. This header named
+     * `POST /api/admin/products/bulk-vectorise` until 2026-09-07 — a mount deleted at the
+     * Phase 5 cutover, when every public `/api/admin/*` router went.
      *
      * Body: { productIds?: string[] }
      *   - Omit productIds (or pass an empty array) to vectorise ALL eligible products
      *     across all vendors (use with caution on large catalogues).
      *
-     * This endpoint AWAITS the result and returns a summary — it is intentionally
-     * synchronous so the caller knows what happened.
+     * This endpoint AWAITS the SUBMISSION and returns a summary of it.
+     *
+     * ⚠ It does NOT wait for the products to be indexed, and cannot: the
+     * vectoriser answers 202 and reports each product's outcome minutes later on
+     * `POST /api/internal/vectoriser/callback`. `accepted` therefore means "taken
+     * on, now pending", not "in the index" — which is why the field is no longer
+     * called `succeeded`. `failed` is still final: those never started.
      */
     static bulkVectorise = asyncHandler(async (req: Request, res: Response) => {
         const input = BulkVectoriseSchema.parse(req.body);
@@ -518,7 +586,10 @@ export class VendorProductController {
         res.json({
             success: true,
             data: result,
-            message: `Vectorisation complete: ${result.succeeded} succeeded, ${result.failed} failed out of ${result.total} total`,
+            message:
+                `Vectorisation submitted: ${result.accepted} accepted, ${result.failed} rejected `
+                + `out of ${result.total} total. Accepted products are pending — their outcome `
+                + `arrives on the vectoriser callback.`,
         });
     });
 }

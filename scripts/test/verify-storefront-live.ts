@@ -169,6 +169,13 @@ async function main(): Promise<void> {
             status: 'active',
             optionSignature: 'default',
             price: 12000,
+            // ⚠ A window on a product that is NOT in the AI index — so it is INERT, and the
+            // row must still quote 12 000. `isBargainEffective` keeps such a window and
+            // reports it inert rather than deleting it, so this is a real state a vendor can
+            // be in. It is planted on the fixture the browse assertions already read, which
+            // turns `row.price === 12000` below from an untouched baseline into a proof that
+            // the flip is gated on the flag.
+            bargain: { minPrice: 12000, maxPrice: 19000 },
             stock: 4,
             isInfiniteStock: false,
             allow_oversell: false,
@@ -208,6 +215,85 @@ async function main(): Promise<void> {
             createdAt: new Date(),
             updatedAt: new Date(),
         } as never);
+
+        /**
+         * A SECOND product, in the AI index, whose default variant IS bargainable.
+         *
+         * Separate from the kettle on purpose: the kettle's assertions pin the unflipped
+         * behaviour and must keep passing untouched, and a card quotes its DEFAULT variant —
+         * so the flip can only be proven on a product whose default carries the window.
+         *
+         * The numbers are chosen so every one of the five derivations has something to get
+         * wrong. Floor 30 001 (a value appearing nowhere else, so it can be searched for),
+         * ask 48 000, and a `compareAtPrice` of 35 000 that sits BETWEEN them — legitimate
+         * against the floor, nonsense against the ask, which is the case that must be
+         * suppressed. The second variant at 20 000 gives the band two different ends.
+         */
+        const haggleProductId = new Types.ObjectId();
+        const haggleVariantId = new Types.ObjectId();
+        const HAGGLE_FLOOR = 30001;
+        const HAGGLE_ASK = 48000;
+
+        await db.collection(COLLECTIONS.PRODUCT).insertOne({
+            _id: haggleProductId,
+            vendorId,
+            type: 'physical',
+            status: 'active',
+            mode: 'advanced',
+            title: 'Verify Storefront Haggle Lamp',
+            description: 'A lamp for verification',
+            slug: `${MARKER}-lamp`,
+            category: 'Home',
+            tags: ['lamp'],
+            hasVariants: true,
+            defaultVariantId: haggleVariantId,
+            fileIds: [],
+            suspension: null,
+            // The other half of the bargainable predicate. Without it the window below is
+            // inert, exactly as the kettle's is.
+            vectorisationEnabled: true,
+            deletedAt: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        } as never);
+
+        await db.collection(COLLECTIONS.PRODUCT_VARIANT).insertMany([
+            {
+                _id: haggleVariantId,
+                productId: haggleProductId,
+                sku: `${MARKER}-LAMP-1`,
+                status: 'active',
+                optionSignature: 'default',
+                price: HAGGLE_FLOOR,
+                compareAtPrice: 35000,
+                bargain: { minPrice: HAGGLE_FLOOR, maxPrice: HAGGLE_ASK },
+                stock: 3,
+                isInfiniteStock: false,
+                allow_oversell: false,
+                optionValueIds: [],
+                fileIds: [],
+                deletedAt: null,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+            },
+            {
+                _id: new Types.ObjectId(),
+                productId: haggleProductId,
+                sku: `${MARKER}-LAMP-2`,
+                name: 'Small',
+                status: 'active',
+                optionSignature: 'size:small',
+                price: 20000,
+                stock: 2,
+                isInfiniteStock: false,
+                allow_oversell: false,
+                optionValueIds: [],
+                fileIds: [],
+                deletedAt: null,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+            },
+        ] as never);
 
         log('  ✅ fixtures inserted');
 
@@ -328,6 +414,89 @@ async function main(): Promise<void> {
             return rows.length === 0;
         });
 
+        // ─── 3c. The bargainable display flip (D-1) ───────────────────────────
+        //
+        // `test:public-catalog` asserts the pure rule and asserts that the pipeline's own
+        // expression AGREES with it — but it evaluates that expression itself, so it cannot
+        // prove Mongo accepts the pipeline or that the decorated field survives to the stages
+        // that read it. `$mergeObjects` inside a `$map`, an extra `$addFields`, a `$match` on
+        // a computed path and a `$sort` on a projected one are all validated at EXECUTION
+        // time. This is the only place any of that is exercised.
+        log('\n── Bargainable display price ──');
+
+        const browseAll = () => publicCatalogRepository.search({ sort: 'newest', page: 1, limit: 50 });
+        const lampRow = async () => (await browseAll()).rows.find((r) => r.slug === `${MARKER}-lamp`);
+
+        await assert('⚠ the browse row quotes the ASK, not the vendor\'s floor', async () =>
+            (await lampRow())?.price === HAGGLE_ASK);
+
+        await assert('⚠ an INERT window changes nothing — the kettle still quotes 12 000', async () => {
+            // Its product carries no `vectorisationEnabled`, so the missing-field half of the
+            // predicate is exercised against real BSON rather than against the evaluator's
+            // model of it. This is the assertion that would catch `$ifNull` being wrong.
+            const { rows } = await browseAll();
+            return rows.find((r) => r.slug === `${MARKER}-kettle`)?.price === 12000;
+        });
+
+        await assert('the price band spans DISPLAYED prices across the variants', async () => {
+            const row = await lampRow();
+            return row?.priceMin === 20000 && row?.priceMax === HAGGLE_ASK;
+        });
+
+        await assert('a compareAtPrice between the floor and the ask is SUPPRESSED', async () =>
+            // 35 000 is above the floor and below the ask. Publishing it beside a live 48 000
+            // renders a strikethrough underneath the price.
+            (await lampRow())?.compareAtPrice === null);
+
+        await assert('⚠ maxPrice=40000 EXCLUDES it — the exact defect the trap names', async () => {
+            // The whole reason all five derivations had to move together: filtering on the
+            // floor (30 001) while quoting the ask (48 000) puts a product displaying 48 000
+            // on a page the shopper asked to cap at 40 000.
+            const { rows } = await publicCatalogRepository.search({ maxPrice: 40000, sort: 'newest', page: 1, limit: 50 });
+            return !rows.some((r) => r.slug === `${MARKER}-lamp`)
+                // …and the filter really ran, rather than returning nothing at all.
+                && rows.some((r) => r.slug === `${MARKER}-kettle`);
+        });
+
+        await assert('minPrice=45000 INCLUDES it — the band is judged on the ask', async () => {
+            const { rows } = await publicCatalogRepository.search({ minPrice: 45000, sort: 'newest', page: 1, limit: 50 });
+            return rows.some((r) => r.slug === `${MARKER}-lamp`)
+                && !rows.some((r) => r.slug === `${MARKER}-kettle`);
+        });
+
+        await assert('price_desc orders on the ask — the sort inherits the flip', async () => {
+            const { rows } = await publicCatalogRepository.search({ sort: 'price_desc', page: 1, limit: 50 });
+            const lamp = rows.findIndex((r) => r.slug === `${MARKER}-lamp`);
+            const kettle = rows.findIndex((r) => r.slug === `${MARKER}-kettle`);
+            // Ordering by the floors would still put the lamp first (30 001 > 12 000), so the
+            // position alone proves nothing — the quoted price is what carries the assertion.
+            return lamp !== -1 && kettle !== -1 && lamp < kettle && rows[lamp].price === HAGGLE_ASK;
+        });
+
+        await assert('price_asc is the same ordering reversed', async () => {
+            const { rows } = await publicCatalogRepository.search({ sort: 'price_asc', page: 1, limit: 50 });
+            const lamp = rows.findIndex((r) => r.slug === `${MARKER}-lamp`);
+            const kettle = rows.findIndex((r) => r.slug === `${MARKER}-kettle`);
+            return lamp !== -1 && kettle !== -1 && kettle < lamp;
+        });
+
+        await assert('the SKU resolution quotes the ask too', async () => {
+            const [row] = await resolveSku(`${MARKER}-LAMP-1`);
+            return row?.price === HAGGLE_ASK;
+        });
+
+        await assert('⚠ the floor reaches NO public read — browse, band or SKU', async () => {
+            // A single scan of everything this surface hands out for that product. The floor
+            // is a value used nowhere else in this file, so a hit can only be a leak.
+            const { rows } = await browseAll();
+            const sku = await resolveSku(`${MARKER}-LAMP-1`);
+            const json = JSON.stringify({ rows, sku });
+            return !json.includes(String(HAGGLE_FLOOR))
+                && !json.includes('bargain')
+                && !json.includes('minPrice')
+                && !json.includes('maxPrice');
+        });
+
         // ─── 4. Visibility, against real data ─────────────────────────────────
         log('\n── Visibility ──');
 
@@ -381,6 +550,7 @@ async function main(): Promise<void> {
         const EXPECTED_PUBLIC_ROUTES = [
             '/products',
             '/products/:productId/related',
+            '/products/by-ids',
             '/products/:productId',
             '/variants/by-sku/:sku',
             '/categories',
@@ -408,6 +578,14 @@ async function main(): Promise<void> {
         // anybody makes the bare product route a prefix or wildcard match.
         await assert('/products/:productId/related precedes the bare /products/:productId', () =>
             paths.indexOf('/products/:productId/related') < paths.indexOf('/products/:productId'));
+
+        // ⚠ THIS one is not ordering-safe by segment count, unlike every other pair here:
+        // '/products/by-ids' and '/products/:productId' are both two segments, so Express
+        // resolves them purely by declaration order. Declared the wrong way round, 'by-ids'
+        // is read as a product id, fails the 24-hex schema, and every search-result
+        // hydration answers 400 — a live failure that no type checker can see.
+        await assert('/products/by-ids precedes the bare /products/:productId (SAME segment count)', () =>
+            paths.indexOf('/products/by-ids') < paths.indexOf('/products/:productId'));
 
         await assert('/stores/:slug/products precedes the 4-segment product route', () =>
             paths.indexOf('/stores/:slug/products') < paths.indexOf('/stores/:storeSlug/products/:productSlug'));

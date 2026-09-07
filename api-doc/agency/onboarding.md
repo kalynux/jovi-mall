@@ -669,24 +669,32 @@ All `PUT` step submissions return the full updated profile and a `completionStat
 
 ### Validation Errors (`400 VALIDATION_ERROR`)
 
-Returned when the request body fails Zod schema validation. The `details` array pinpoints each invalid field.
+Returned when the request body fails Zod schema validation. `details.fields[]` pinpoints each
+invalid field: `path` is the dot-joined location, `code` is the Zod issue kind.
 
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Request validation failed",
-    "details": [
-      {
-        "field": "policies.damage.inspector",
-        "message": "Invalid enum value. Expected 'agency' | 'vendor' | 'admin'"
-      },
-      {
-        "field": "policies.pricing.additional_fees.cod_handling_fee.type",
-        "message": "Invalid enum value. Expected 'percentage' | 'fixed'"
-      }
-    ]
+    "statusCode": 400,
+    "category": "validation",
+    "details": {
+      "fields": [
+        {
+          "path": "policies.damage.inspector",
+          "message": "Invalid enum value. Expected 'agency' | 'vendor' | 'admin'",
+          "code": "invalid_enum_value"
+        },
+        {
+          "path": "policies.pricing.additional_fees.cod_handling_fee.type",
+          "message": "Invalid enum value. Expected 'percentage' | 'fixed'",
+          "code": "invalid_enum_value"
+        }
+      ]
+    }
   }
 }
 ```

@@ -10,6 +10,7 @@ import {
 } from '../../agents';
 import { DeliveryAgencyModel } from '../../delivery/delivery-agency.model';
 import { AgencyMagazinModel } from '../../magazin/models/magazin.model';
+import { resolveEffectiveTrustScore } from '../../agents/domain/services/agent-trust-override';
 
 /**
  * CodSummaryService - read-only aggregate views of the COD cash chain:
@@ -120,6 +121,8 @@ export class CodSummaryService {
     ]);
 
     const agentIds = accounts.map((a) => a.owner_id.toString());
+    // `cod` whole, not `cod.trust_score` — `cod.trust_override` is read below and a
+    // narrower projection is exactly how this view came to report the wrong number.
     const agents = await DeliveryAgentModel.find({ _id: { $in: agentIds } })
       .select('name email phone cod status')
       .lean()
@@ -152,11 +155,42 @@ export class CodSummaryService {
           status: agent?.status ?? null,
           cashHeld: account.balance,
           currency: account.currency,
-          trustScore: agent?.cod?.trust_score ?? 100,
+          // ⚠ The EFFECTIVE score — the administrator's pinned override when one
+          // exists, the computed score otherwise (O-7). This used to read
+          // `cod.trust_score` directly, so an agent whose override was the thing
+          // actually gating their dispatch was listed here under the score that
+          // override replaces. That is not a cosmetic difference on this screen:
+          // the reason anyone opens it is to understand a COD refusal, and the
+          // gate reads the override.
+          //
+          // `computedTrustScore` and `trustSource` ride along because a screen
+          // showing only the effective score cannot tell an operator that a human
+          // pinned it, nor what releasing it would do.
+          ...this.trustFields(agent),
           codMaxThreshold: agent?.cod?.max_threshold ?? 0,
         };
       }),
       meta: { total, page, limit, pages: Math.ceil(total / limit) },
+    };
+  }
+
+  /**
+   * The three trust fields every admin-facing agent row carries.
+   *
+   * `trustScore` is the EFFECTIVE score, which is the one every gate reads; the
+   * other two exist so a screen can say where it came from. Takes a lean row
+   * rather than a hydrated document because that is what the list queries
+   * return — `resolveEffectiveTrustScore` only reads `cod.trust_score` and
+   * `cod.trust_override`, both of which a lean row carries.
+   */
+  private trustFields(agent: { cod?: { trust_score?: number; trust_override?: unknown } } | undefined) {
+    if (!agent) return { trustScore: 100, computedTrustScore: 100, trustSource: 'computed' as const };
+
+    const trust = resolveEffectiveTrustScore(agent as unknown as IDeliveryAgent);
+    return {
+      trustScore: trust.score,
+      computedTrustScore: trust.computed,
+      trustSource: trust.source,
     };
   }
 

@@ -43,7 +43,7 @@ Notes specific to the agency:
   They do appear in the agency's storage usage and, when referenced, block a raw
   delete the same way any referenced file does.
 - Every referenced file is returned as a `FileDetail`
-  (`{ id, key, url, mimeType, size, originalName }`), never a bare URL string.
+  (`{ id, key, url, access, mimeType, size, originalName }`), never a bare URL string.
 
 ## Response envelope
 Standard `{ success, data, meta? }` on success; `{ success:false, error:{ code, message, details? } }`

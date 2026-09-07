@@ -34,9 +34,33 @@ Every jovi-mall endpoint returns one of exactly two shapes.
 }
 ```
 
-- `data` is **always present** on success (object, array, or `null`).
+- `data` is present on success (object, array, or `null`) — **with four documented exceptions, all
+  on `/api/payments/*`.** See the ⚠ below.
 - `meta` appears **only** on paginated/list responses (and may carry extra summary fields).
 - `message` is optional.
+
+> ⚠ **Four payment routes predate this envelope and return FLAT bodies with no `data` key.**
+> This line read *"`data` is **always present** on success"* until 2026-09-06 (DOC-PROGRAM F-34),
+> and a client helper written from it — `return body.data` — reads `undefined` for every one of
+> them, **on the checkout path**.
+>
+> | Route | Shape | Source |
+> |---|---|---|
+> | `POST /api/payments/initiate` | `{ success, ...result }` — `transactionId`, `status`, `instructions` are **top-level** | `payment.routes.ts:59` |
+> | `POST /api/payments/verify` | `{ success, ...result }` | `payment.routes.ts:87` |
+> | `POST /api/payments/authorize` | `{ success, ...result }` | `payment.routes.ts:123` |
+> | `GET /api/payments/:transactionId` | `{ success, transaction }` — payload under **`transaction`**, not `data` | `payment.routes.ts:206` |
+>
+> Note `success` on the first two is **derived from the payment status**, not from "the request
+> worked": `initiate` sends `success: result.status !== 'FAILED'` and `verify` sends
+> `success: result.status === 'SUCCEEDED'`. A 200 with `success: false` is a normal, expected
+> answer there and is **not** an error envelope — it carries no `error` object.
+>
+> The two newest routes on that prefix — `GET /api/payments/session/:token` and
+> `POST /api/payments/:transactionId/pay-link` (`:155`, `:178`) — **do** use `data` normally.
+> The exception is historical, not a property of the prefix.
+>
+> **Unwrap defensively:** `success === true && 'data' in body ? body.data : body`.
 
 > **Three list endpoints call the pagination block `pagination`, not `meta`** — `GET
 > /api/{role}/tickets` and the two `…/tickets/reference/{orders,products}` lookups. The block's
@@ -280,7 +304,7 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 
 ### Vendor
 - [Store](./vendor/store.md) · [Profile](./vendor/profile.md) · [Onboarding](./vendor/onboarding.md)
-- [Products](./vendor/products.md) · [Product update](./vendor/product-update.md) · [Upload flow](./vendor/product-upload-flow.md) · [Variants](./vendor/variants.md) · [Options & variants](./vendor/option-variant-management.md) · [Digital products](./vendor/digital-products.md) · [Rich descriptions](./vendor/product-description-rich.md)
+- [Products](./vendor/products.md) · [Simple products](./vendor/simple-products.md) · [Product update](./vendor/product-update.md) · [Upload flow](./vendor/product-upload-flow.md) · [Variants](./vendor/variants.md) · [Options & variants](./vendor/option-variant-management.md) · [Digital products](./vendor/digital-products.md) · [Rich descriptions](./vendor/product-description-rich.md) · [Share to a chat app](./vendor/product-share.md)
 - [Inventory](./vendor/inventory.md) · [Orders](./vendor/orders.md) · [Shipping](./vendor/shipping.md) · [Delivery agencies](./vendor/delivery-agencies.md) · [Agency connections](./vendor/agency-connections.md)
 - [Bookings](./vendor/bookings.md) · [Booking guide](./booking-implementation-guide.md) · [Calendar](./vendor/calendar.md) · [Availability rules](./vendor/availability-rules.md)
 - [Billing](./vendor/billing.md) · [Billing overview](./vendor/billing-overview.md) · [Earnings](./vendor/earnings.md) · [Transactions](./vendor/transactions.md) · [Stripe payments](./vendor/stripe-payments.md) · [Payment methods](./vendor/payment-methods.md) (pay *with*) · [**Payout methods**](./vendor/payout-methods.md) (get paid *to* — mobile money only right now; 🚧 bank + card switched off)
@@ -422,6 +446,7 @@ offending field in `error.details.fields[]`:
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Validation failed",
+    "category": "validation",
     "statusCode": 400,
     "details": {
       "fields": [

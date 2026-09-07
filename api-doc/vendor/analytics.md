@@ -1,5 +1,9 @@
 # Vendor Analytics API
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
+
 **Base Path:** `/api/vendor/analytics`
 
 **Authentication Required:** Yes — **vendor role only.** Requests from any other role are rejected with `403 AUTH_ROLE_NOT_FOUND`.
@@ -11,7 +15,9 @@
 ## Core Concepts
 
 ### Date Range Parameters
-- **Timezone-Aware:** Date boundaries calculated in vendor's timezone
+- **Timezone-Aware — but at AGGREGATION time, not at read time.** Each `vendor_daily_metrics` row was bucketed by the nightly worker using the vendor's stored `timezone`, and that boundary is baked into the row.
+
+  ⚠ **The `timezone` query parameter has NO EFFECT on any of these four reads.** The controller resolves it (`query.timezone || vendor.timezone || 'Africa/Douala'`) and then passes only `{ from, to }` to the service — the resolved value is echoed straight back into `meta.timezone` and is never used to compute anything (`vendor-analytics.controller.ts:36-48`, and identically at `:68`, `:102`, `:134`). So `meta.timezone` reports **what you asked for**, not what the numbers were computed in. Sending a different zone changes the label and not one figure. To change the buckets, change the vendor's own `timezone` and wait for the next aggregation run.
 - **Max Range:** 365 days
 - **Format:** ISO 8601 date strings (YYYY-MM-DD)
 
@@ -38,10 +44,17 @@ Get overview metrics for dashboard display.
 |-----------|------|----------|-------------|
 | `from` | string (ISO date) | Yes | Start date (YYYY-MM-DD) |
 | `to` | string (ISO date) | Yes | End date (YYYY-MM-DD) |
-| `timezone` | string (IANA) | No | Vendor timezone (default: vendor's timezone) |
+| `timezone` | string (IANA) | No | ⚠ **Echoed into `meta.timezone` and otherwise ignored** — see "Date Range Parameters" above. Defaults to the vendor's stored timezone, then `Africa/Douala` |
 | `fiscalCalendar` | enum | No | Must be `'gregorian'` (default: gregorian) |
 
 **Response (200 OK):**
+
+> ⚠ **These four responses have NO `success` key.** The controller answers with
+> `res.json({ ...result, meta })` (`vendor-analytics.controller.ts:45-50`) rather than through
+> `sendSuccess`, so the body is `{ data, meta }` — no `success: true`. **Errors on the same
+> endpoints DO carry `success: false`**, because those go through the shared error handler. A
+> client testing `body.success` to decide whether a call worked reads `undefined` on every
+> successful analytics response.
 
 ```json
 {
@@ -81,7 +94,7 @@ Get overview metrics for dashboard display.
 
 **Error Responses:**
 
-All errors follow the platform-wide envelope: a top-level `success`/`requestId` with a **nested** `error` object (`code`, `message`, `statusCode`, optional `details`). Read `error.code` for programmatic handling — never the HTTP status.
+All errors follow the platform-wide envelope: a top-level `success`/`requestId` with a **nested** `error` object (`code`, `message`, `statusCode`, `category`, optional `details`). `category` is one of the nine values listed in [`errors/README.md`](../errors/README.md) and is **always present**. Read `error.code` for programmatic handling — never the HTTP status.
 
 ```json
 // 400 - Invalid date range
@@ -91,7 +104,8 @@ All errors follow the platform-wide envelope: a top-level `success`/`requestId` 
   "error": {
     "code": "ANALYTICS_INVALID_DATE_RANGE",
     "message": "Start date must be before or equal to end date",
-    "statusCode": 400
+    "statusCode": 400,
+    "category": "validation"
   }
 }
 
@@ -106,18 +120,29 @@ All errors follow the platform-wide envelope: a top-level `success`/`requestId` 
   }
 }
 
-// 503 - Data not available
+// 503 - Data not available — WHAT THE CLIENT ACTUALLY RECEIVES
 {
   "success": false,
   "requestId": "req_abc123",
   "error": {
     "code": "ANALYTICS_AGGREGATION_NOT_READY",
-    "message": "No analytics data available for the requested period. Aggregation may not have run yet or the vendor has no data for this period.",
+    "message": "Analytics data not yet available for requested period",
     "statusCode": 503,
-    "details": { "vendorId": "…", "from": "2026-02-01", "to": "2026-02-28" }
+    "category": "external_service"
   }
 }
 ```
+
+> ⚠ **This example showed a detailed message and `details: { vendorId, from, to }` until
+> 2026-09-06, and a client never receives either.** `503` derives category
+> **`external_service`** (`error-category.ts:233`), and the boundary's exposure rule replaces the
+> message with the **code's registry default** and **drops `details` entirely** — for
+> `external_service` and `internal`, **in every environment**, not just production. The service
+> does pass a longer message and those details; they are journaled, never sent.
+>
+> So: **branch on `code`, and do not parse the message or read `details` on this error.** The
+> only fields you can rely on are the four above. `category` was also missing from the example
+> and is always present.
 
 ---
 
@@ -132,7 +157,7 @@ Get detailed sales metrics with optional daily breakdown.
 | `from` | string (ISO date) | Yes | Start date (YYYY-MM-DD) |
 | `to` | string (ISO date) | Yes | End date (YYYY-MM-DD) |
 | `breakdown` | enum | No | `'daily'` or `'none'` (default: none) |
-| `timezone` | string (IANA) | No | Vendor timezone |
+| `timezone` | string (IANA) | No | ⚠ **Echoed into `meta.timezone` and otherwise ignored** — see "Date Range Parameters" above |
 | `fiscalCalendar` | enum | No | Must be `'gregorian'` |
 
 **Response (200 OK) - Without Breakdown:**
@@ -211,10 +236,12 @@ Get top-performing products by revenue and quantity.
 | `from` | string (ISO date) | Yes | Start date (YYYY-MM-DD) |
 | `to` | string (ISO date) | Yes | End date (YYYY-MM-DD) |
 | `limit` | number | No | Top N products (1-50, default: 5) |
-| `timezone` | string (IANA) | No | Vendor timezone |
+| `timezone` | string (IANA) | No | ⚠ **Echoed into `meta.timezone` and otherwise ignored** — see "Date Range Parameters" above |
 | `fiscalCalendar` | enum | No | Must be `'gregorian'` |
 
 **Response (200 OK):**
+
+> ⚠ **No `success` key on this response** — see the note on the first endpoint above.
 
 ```json
 {
@@ -295,10 +322,12 @@ Get customer acquisition and retention metrics.
 |-----------|------|----------|-------------|
 | `from` | string (ISO date) | Yes | Start date (YYYY-MM-DD) |
 | `to` | string (ISO date) | Yes | End date (YYYY-MM-DD) |
-| `timezone` | string (IANA) | No | Vendor timezone |
+| `timezone` | string (IANA) | No | ⚠ **Echoed into `meta.timezone` and otherwise ignored** — see "Date Range Parameters" above |
 | `fiscalCalendar` | enum | No | Must be `'gregorian'` |
 
 **Response (200 OK):**
+
+> ⚠ **No `success` key on this response** — see the note on the first endpoint above.
 
 ```json
 {
@@ -350,9 +379,23 @@ All codes below are the exact string values of `error.code` in the response enve
 ## Data Aggregation Details
 
 ### Scheduled Aggregation
-- **Frequency:** Daily at 2:00 AM server time
+- **Frequency:** `0 2 * * *` — daily at 02:00 server time — but that is only the **default**.
+  It is `ANALYTICS_AGGREGATION_CRON` and an operator may change it without a deploy
+  (`aggregation-scheduler.ts:32,43`), so do not present "2 AM" to a vendor as a fact.
 - **Scope:** All active vendors
 - **Timezone-Aware:** Each vendor's data aggregated in their timezone
+
+> ⚠ **A run is SKIPPED during a maintenance window, not deferred** — the tick returns early on
+> `maintenanceBlocksWorkers()` (`aggregation-scheduler.ts:73`) and nothing catches it up. A
+> window spanning 02:00 therefore leaves that day's `vendor_daily_metrics` rows unwritten until
+> the next scheduled run, and the reads answer `503 ANALYTICS_AGGREGATION_NOT_READY` for the
+> gap in the meantime. That is the honest reading of the 503 — *"aggregation may not have run
+> yet"* is not hypothetical.
+>
+> ⚠ **This bullet said "Daily at 2:00 AM server time" flat until 2026-09-06**, with neither the
+> variable nor the maintenance skip. The scheduler's own header records that it used to be a
+> hardcoded literal with **no** maintenance guard, which is the defect Phase 15 fixed
+> (`aggregation-scheduler.ts:13-27`); the documentation kept describing the version from before.
 
 ### Booking Metrics
 Booking figures on the dashboard (`data.bookings`) are aggregated per day with the following rules:

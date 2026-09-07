@@ -1,5 +1,9 @@
 # Vendor Earnings
 
+**Verified against source on 2026-09-07** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
+
 ## Base Path
 
 ```
@@ -111,8 +115,8 @@ an admin marks it paid, or returns to `available` if the admin rejects it.
 | `currency` | `string` | Currency code for all balances. |
 
 **Error Responses**:
-- `401` – `UNAUTHORIZED` – Missing or invalid auth token.
-- `403` – `FORBIDDEN` – Valid token but not a vendor.
+- `401` – `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` – Missing or invalid auth token.
+- `403` – `AUTH_ROLE_NOT_FOUND` – Valid token but not a vendor.
 
 ---
 
@@ -132,12 +136,23 @@ your configured secondary channel — see [Notifications](./notifications.md), e
   (`EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT`); below it you'll get `409 EARNINGS_PAYOUT_BELOW_MINIMUM`.
 - **One request at a time** — you can't open a second request while one is still `pending`
   (`409 EARNINGS_PAYOUT_ALREADY_PENDING`).
-- **A payout method must be configured first** — mobile money, bank or card; add one via
+- **A payout method must be configured first** — ⚠ **mobile money only, today**; add one via
   `PATCH /api/vendor/profile` (`payout_details`, see [Profile](./profile.md) and the canonical
   [Payout methods](./payout-methods.md)) or you'll get
   `409 EARNINGS_PAYOUT_METHOD_MISSING`. The **first** payout method on file is the one used, and a
   snapshot of it is frozen onto the request at creation time — editing your payout details later
   never changes where an already-pending request is headed.
+
+  > ⚠ **This said "mobile money, bank or card" until 2026-09-07, and only the first can be
+  > configured.** `ENABLED_PAYOUT_METHODS` is `['mobile_money']` (`core/types/payout.types.ts:180`)
+  > — a switch separate from which kinds *exist*, so a vendor posting a bank or card form is
+  > refused with *"not available right now"* rather than a field-level error. Its own
+  > [payout-methods.md](./payout-methods.md) has this right, so the two pages disagreed.
+  >
+  > **Reads are deliberately NOT switched**: a `bank` or `card` entry stored before the switch
+  > still reads back, is still snapshotted, and is still paid. Turning a kind off closes the door
+  > on *new configuration* only — it never hides an owner's stored destination or strands money
+  > already addressed to one.
 - **Rejections restore the balance** — a rejected request moves the full amount back to `available`
   immediately; the ticket records the reason.
 
@@ -182,7 +197,7 @@ Check `origin` on the request (see below) to tell manual (`"manual"`) from autom
 ```
 
 **Error Responses**:
-- `401` – `UNAUTHORIZED` / `403` – `FORBIDDEN`
+- `401` – `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` / `403` – `AUTH_ROLE_NOT_FOUND`
 - `409` – `EARNINGS_PAYOUT_ALREADY_PENDING` – A request is already pending.
 - `409` – `EARNINGS_PAYOUT_METHOD_MISSING` – No payout method configured on the profile yet.
 - `409` – `EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE` – `available` is `0` — nothing to request.

@@ -55,7 +55,7 @@ export const GENERIC_ERROR_MESSAGE = 'An unexpected error occurred';
  *
  * ── Why this is at module scope ───────────────────────────────────────────────
  * It used to be declared INSIDE `createAppError`, which meant this ~330-line object literal
- * was rebuilt on every one of the 1362 throw sites in the service. Hoisting it changes no
+ * was rebuilt on every one of the 1517 throw sites in the service. Hoisting it changes no
  * behaviour and is the same lines; it is here rather than left alone because Phase 16 needs
  * to READ it from outside the factory — `error-detail-policy.ts` substitutes the registry
  * default for an `internal` or `external_service` error's thrown message, and it cannot
@@ -109,6 +109,166 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.EARNINGS_PAYOUT_BELOW_MINIMUM]: 'Available balance is below the minimum payout amount',
     [ERROR_CODES.EARNINGS_PAYOUT_REQUEST_NOT_FOUND]: 'Payout request not found',
     [ERROR_CODES.EARNINGS_PAYOUT_REQUEST_NOT_PENDING]: 'This payout request has already been resolved',
+
+    /**
+     * ── COD ──────────────────────────────────────────────────────────────────
+     *
+     * Every one of these threw with `message: undefined` and NO registry entry, so all
+     * of them rendered as the generic `An unexpected error occurred` — on a 422 whose
+     * category is `business_rule` and whose `details` carry the real numbers. A dashboard
+     * had the figures and no sentence to put beside them, and an operator reading the
+     * response saw a message that says "this is a bug on our side" about a rule working
+     * exactly as designed.
+     *
+     * Written for the person who has to ACT on them. The exposure and trust messages say
+     * whose limit it is, because the single most common misreading of that refusal is
+     * that the agency's own threshold is the number that applied — it is that threshold
+     * scaled by the agent's trust tier, and `details.effectiveLimit` is the result.
+     */
+    [ERROR_CODES.COD_NOT_AVAILABLE_FOR_DIGITAL]: 'Cash on delivery is not available for digital orders',
+    [ERROR_CODES.COD_AGENCY_NOT_SUPPORTED]: 'This agency does not accept cash on delivery',
+    [ERROR_CODES.COD_ORDER_AMOUNT_EXCEEDS_LIMIT]: 'This order is worth more than the cash-on-delivery limit allows',
+    [ERROR_CODES.COD_COLLECTION_NOT_FOUND]: 'Cash collection not found',
+    [ERROR_CODES.COD_COLLECTION_ALREADY_COLLECTED]: 'This cash has already been collected',
+    [ERROR_CODES.COD_COLLECTION_NOT_COLLECTIBLE]: 'This collection cannot be collected in its current state',
+    [ERROR_CODES.COD_INVALID_CODE]: 'That delivery code is not correct',
+    [ERROR_CODES.COD_CODE_ATTEMPTS_EXCEEDED]: 'Too many incorrect delivery codes — a new code must be sent',
+    [ERROR_CODES.COD_CODE_RESEND_TOO_SOON]: 'A delivery code was just sent; please wait before requesting another',
+    [ERROR_CODES.COD_AGENT_NOT_ASSIGNED]: 'This agent is not assigned to that shipment',
+    [ERROR_CODES.COD_AGENT_EXPOSURE_EXCEEDED]:
+        'This agent is already holding more cash than this contract allows them to carry',
+    [ERROR_CODES.COD_AGENT_TRUST_TOO_LOW]:
+        "This agent's trust score is too low for cash-on-delivery work with this contract",
+    [ERROR_CODES.COD_AGENT_HAS_OUTSTANDING_CASH]: 'This agent still holds cash that has not been deposited',
+    [ERROR_CODES.COD_DEPOSIT_INVALID_AMOUNT]: 'That deposit amount is not valid',
+    [ERROR_CODES.COD_DEPOSIT_EXCEEDS_BALANCE]: 'That deposit is more than the agent is holding',
+    [ERROR_CODES.COD_DEPOSIT_NOT_FOUND]: 'Deposit not found',
+    [ERROR_CODES.COD_DEPOSIT_ALREADY_RESOLVED]: 'This deposit has already been confirmed or rejected',
+    [ERROR_CODES.COD_DEPOSIT_REFERENCE_REQUIRED]: 'A payment reference is required for this deposit',
+    [ERROR_CODES.COD_DEPOSIT_AGENCY_ALREADY_SETTLED]: 'The agency has already remitted this cash to the platform',
+    [ERROR_CODES.COD_DEPOSIT_WRONG_RECIPIENT]: 'This deposit was declared to a different recipient',
+    [ERROR_CODES.COD_REMITTANCE_INVALID_AMOUNT]: 'That remittance amount is not valid',
+    [ERROR_CODES.COD_REMITTANCE_EXCEEDS_LIABILITY]: 'That remittance is more than this agency owes',
+    [ERROR_CODES.COD_REMITTANCE_NOT_FOUND]: 'Remittance not found',
+    [ERROR_CODES.COD_REMITTANCE_ALREADY_RESOLVED]: 'This remittance has already been confirmed or rejected',
+    [ERROR_CODES.COD_DISCREPANCY_NOT_FOUND]: 'Cash discrepancy not found',
+    [ERROR_CODES.COD_DISCREPANCY_ALREADY_RESOLVED]: 'This discrepancy has already been resolved',
+
+    /**
+     * The four assignment gates, which had the same defect for the same reason — all
+     * four throw with `message: undefined`. They are listed beside COD rather than with
+     * the agent codes because they are the OTHER half of one refusal: a dispatch is
+     * gated by the platform rules and by the contract terms, and an operator reading
+     * either needs a sentence, not `An unexpected error occurred`.
+     */
+    [ERROR_CODES.AGENT_NOT_ELIGIBLE_FOR_ASSIGNMENT]:
+        'This agent cannot take shipments right now — see details for every rule that failed',
+    [ERROR_CODES.AGENT_MEMBERSHIP_NOT_APPROVED]: 'This agent has no active contract with this agency',
+    [ERROR_CODES.CONTRACT_COVERAGE_REGION_NOT_COVERED]:
+        'This delivery is outside the regions this contract covers',
+    [ERROR_CODES.CONTRACT_SHIPMENT_VALUE_EXCEEDED]:
+        'This shipment is worth more than this contract allows for a single delivery',
+
+    /**
+     * ── The rest of the dispatch vocabulary ──────────────────────────────────
+     *
+     * A scan for `createAppError(ERROR_CODES.X, <status>, undefined` against codes with no
+     * registry entry found **52 codes across ~85 call sites** rendering
+     * `An unexpected error occurred` — `SHIPMENT_NOT_FOUND` among them, at four sites.
+     *
+     * The agent · contract · shipment-assignment families are given messages here because
+     * they ARE the vocabulary of "why can't I assign my agent", which is the question
+     * `/assignability` exists to answer — a diagnostic that names a blocker the error
+     * response cannot describe only moves the confusion.
+     *
+     * The remainder (payments · refunds · booking · tickets · product-share) are LEFT, and
+     * are baselined in `scripts/test/test-errors.ts` § 8 so the list cannot grow. Writing
+     * plausible-sounding copy for a domain without reading its rules is how a wrong message
+     * gets believed, and a wrong message is worse than a generic one.
+     */
+
+    /**
+     * ⚠ The scan above matches `createAppError(CODE, 404, undefined`. It does NOT match the
+     * TWO-ARGUMENT form `createAppError(CODE, 404)`, which is the same declaration — "the
+     * registry speaks for me" — written more briefly, and which is how the single worst
+     * offender is written: `AGENT_NOT_FOUND` at **38 call sites**, rendering
+     * `An unexpected error occurred` at every one. Found by calling the new diagnostic with
+     * an id that does not exist, after the first pass had reported itself complete.
+     * `test:errors` § 8 matches both forms now.
+     */
+    [ERROR_CODES.AGENT_NOT_FOUND]: 'Agent not found',
+    [ERROR_CODES.AGENT_MEMBERSHIP_NOT_FOUND]: 'No contract between this agent and this agency',
+    [ERROR_CODES.CONTRACT_NOT_FOUND]: 'Contract not found',
+    [ERROR_CODES.CONTRACT_STATUS_REQUEST_NOT_FOUND]: 'Contract request not found',
+    [ERROR_CODES.CONTRACT_TERMS_PROPOSAL_NOT_FOUND]: 'Terms proposal not found',
+    [ERROR_CODES.SHIPMENT_OFFER_NOT_FOUND]: 'Assignment offer not found',
+
+    /**
+     * The two service-token refusals. A caller holding the wrong secret should be told the
+     * credential was rejected, not that something went wrong on our side — the second reads
+     * as an outage and sends an operator to look at the wrong service.
+     */
+    [ERROR_CODES.AUTH_ADMIN_CALLER_TOKEN_INVALID]: 'Invalid administrative service token',
+    [ERROR_CODES.AGENT_SERVICE_TOKEN_INVALID]: 'Invalid service token',
+    [ERROR_CODES.AUTH_ACCOUNT_SUSPENDED]: 'This account has been suspended',
+
+    // Agent — platform gates and limits
+    [ERROR_CODES.AGENT_NOT_ACTIVE]: 'This agent account is not active',
+    [ERROR_CODES.AGENT_PLATFORM_BANNED]: 'This agent is banned from the platform',
+    [ERROR_CODES.AGENT_KYC_NOT_VERIFIED]: "This agent's identity documents have not been verified",
+    [ERROR_CODES.AGENT_TRACKING_NOT_ALLOWED]:
+        'Tracking is disabled for this agent, and the platform will not dispatch without it',
+    [ERROR_CODES.AGENT_AT_CAPACITY]: 'This agent is already carrying their maximum number of shipments',
+    [ERROR_CODES.AGENT_CAPACITY_OUT_OF_BOUNDS]: 'That shipment capacity is outside the allowed range',
+    [ERROR_CODES.AGENT_CAPACITY_BELOW_IN_USE]:
+        'That capacity is below the number of shipments this agent is already carrying',
+    [ERROR_CODES.AGENT_COD_THRESHOLD_OUT_OF_BOUNDS]: 'That COD threshold is outside the allowed range',
+    [ERROR_CODES.AGENT_COD_THRESHOLD_BELOW_ALLOCATED]:
+        'That COD pool is smaller than what this agent has already allocated to their agencies',
+    [ERROR_CODES.AGENT_TRUST_OVERRIDE_OUT_OF_BOUNDS]: 'A pinned trust score must be between 0 and 100',
+    [ERROR_CODES.AGENT_MEMBERSHIP_ALREADY_EXISTS]: 'This agent already has a contract with this agency',
+    [ERROR_CODES.AGENT_MEMBERSHIP_LIMIT_REACHED]:
+        'This agent has reached the maximum number of agency contracts',
+
+    // Contract — lifecycle, terms and the negotiation workflow
+    [ERROR_CODES.CONTRACT_INVALID_TRANSITION]: 'This contract cannot move to that status from its current one',
+    [ERROR_CODES.CONTRACT_TRANSITION_NOT_PERMITTED]: 'You are not allowed to make that change to this contract',
+    [ERROR_CODES.CONTRACT_HAS_OUTSTANDING_COD]:
+        'This contract still has cash outstanding — it must be settled first',
+    [ERROR_CODES.CONTRACT_HAS_UNPAID_EARNINGS]:
+        'This contract still has unpaid earnings — they must be settled first',
+    [ERROR_CODES.CONTRACT_SETTLEMENT_EXCEEDS_OUTSTANDING]:
+        'That settlement is more than this contract has outstanding',
+    [ERROR_CODES.CONTRACT_FEE_SPLIT_INVALID]: 'That fee split is not valid',
+    [ERROR_CODES.CONTRACT_COD_THRESHOLD_OUT_OF_BOUNDS]: 'That COD threshold is outside the allowed range',
+    [ERROR_CODES.CONTRACT_COD_THRESHOLD_EXCEEDS_HEADROOM]:
+        "That COD threshold is more than the agent has left unallocated in their pool",
+    [ERROR_CODES.CONTRACT_COD_THRESHOLD_BELOW_OUTSTANDING]:
+        'That COD threshold is below what the agent already owes under this contract',
+    [ERROR_CODES.CONTRACT_STATUS_REQUEST_NOT_PENDING]: 'This request has already been answered',
+    [ERROR_CODES.CONTRACT_STATUS_REQUEST_ALREADY_PENDING]: 'A request on this contract is already pending',
+    [ERROR_CODES.CONTRACT_STATUS_REQUEST_NOT_YOURS]: 'This request is not yours to answer',
+    [ERROR_CODES.CONTRACT_TERMS_REQUIRED]: 'Contract terms must be stated before this contract can be approved',
+    [ERROR_CODES.CONTRACT_TERMS_NOT_PROPOSED]: 'Nobody has proposed terms for this contract yet',
+    [ERROR_CODES.CONTRACT_TERMS_NOT_NEGOTIABLE]: 'That term is not one you may propose',
+    [ERROR_CODES.CONTRACT_TERMS_LIVE_EDIT_NOT_ALLOWED]:
+        'A live contract cannot be edited directly — propose the change instead',
+    [ERROR_CODES.CONTRACT_TERMS_PROPOSAL_NOT_PENDING]: 'This proposal has already been answered',
+    [ERROR_CODES.CONTRACT_TERMS_PROPOSAL_ALREADY_PENDING]: 'A proposal on this contract is already pending',
+    [ERROR_CODES.CONTRACT_TERMS_PROPOSAL_NOT_YOURS]: 'This proposal is not yours to answer',
+
+    // Shipment assignment
+    [ERROR_CODES.SHIPMENT_NOT_FOUND]: 'Shipment not found',
+    [ERROR_CODES.SHIPMENT_NOT_OFFERABLE]: 'This shipment cannot be offered to an agent in its current status',
+    [ERROR_CODES.SHIPMENT_ALREADY_HAS_AGENT]: 'This shipment already has an agent',
+    [ERROR_CODES.SHIPMENT_ALREADY_HAS_PENDING_OFFER]: 'This agent already has a pending offer for this shipment',
+    [ERROR_CODES.SHIPMENT_OFFER_NOT_PENDING]: 'This offer has already been answered or has expired',
+    [ERROR_CODES.SHIPMENT_CANCEL_NOT_ALLOWED]: 'This shipment cannot be cancelled in its current status',
+    [ERROR_CODES.SHIPMENT_CANCEL_CONFLICT]: 'This shipment changed while you were cancelling it — reload and retry',
+    [ERROR_CODES.SHIPMENT_REASSIGNMENT_NOT_ALLOWED]:
+        'This shipment cannot be reassigned in its current status',
+    [ERROR_CODES.SHIPMENT_REASSIGNMENT_CONFLICT]:
+        'This shipment changed while you were reassigning it — reload and retry',
 
     [ERROR_CODES.PAYMENT_ORDER_NOT_FOUND]: 'Order not found',
     [ERROR_CODES.PAYMENT_ORDER_ALREADY_PAID]: 'Order is already paid',
@@ -233,6 +393,10 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
         'This chat is anonymous — a verified contact must be shared before any customer-scoped operation',
     [ERROR_CODES.BOT_IDENTITY_NOT_CUSTOMER]:
         'This messaging identity does not resolve to a customer account',
+    [ERROR_CODES.BOT_IDENTITY_TOKEN_INVALID]:
+        'The sealed identity token is not valid',
+    [ERROR_CODES.BOT_IDENTITY_TOKEN_EXPIRED]:
+        'The sealed identity token has expired',
     [ERROR_CODES.BOT_IDEMPOTENCY_KEY_REQUIRED]:
         'Idempotency-Key is required on every mutating bot route',
     [ERROR_CODES.BOT_IDEMPOTENCY_IN_PROGRESS]:
@@ -246,6 +410,8 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
         'This Idempotency-Key was already spent by a different request',
     [ERROR_CODES.BOT_GEO_CANDIDATE_EXPIRED]:
         'That address candidate is unknown or has expired — run the search again',
+    [ERROR_CODES.BOT_INBOUND_FILE_EXPIRED]:
+        'That file reference is unknown or has expired — the customer must send the file again',
     [ERROR_CODES.BOT_REGISTRATION_IDENTITY_TAKEN]:
         'This messaging identity is already bound to a different platform account',
     [ERROR_CODES.BOT_ONBOARDING_NOT_REGISTERED]:
@@ -258,6 +424,8 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
         'Nothing recent to route support from — no hint, no orders, nothing viewed',
     [ERROR_CODES.BOT_SUPPORT_SCOPE_UNAVAILABLE]:
         'The requested support scope has no party in this context',
+    [ERROR_CODES.BOT_CONNECTION_ACTIVE_CHANNEL]:
+        'A chat cannot disconnect the channel it arrived on — that is the binding this request was resolved by',
 
     [ERROR_CODES.GOOGLE_MISSING_CLIENT_ID]: 'GOOGLE_CLIENT_ID is not configured',
     [ERROR_CODES.GOOGLE_MISSING_CLIENT_SECRET]: 'GOOGLE_CLIENT_SECRET is not configured',
@@ -362,6 +530,21 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.CATALOG_VARIANT_BARGAIN_NOT_SUPPORTED]: 'Bargainable pricing is not available on service products',
     [ERROR_CODES.CATALOG_VARIANT_BARGAIN_RANGE_INVALID]: 'The maximum bargain price must be at least the variant price',
     [ERROR_CODES.CATALOG_VARIANT_BARGAIN_PRICE_MISMATCH]: 'bargain.minPrice must equal the variant price',
+    [ERROR_CODES.NEGOTIATION_PLAYBOOK_NOT_PUBLISHED]: 'No negotiation playbook is published — bargaining is unavailable',
+    [ERROR_CODES.NEGOTIATION_LOCK_INVALID]: 'That agreed price could not be found',
+    [ERROR_CODES.NEGOTIATION_LOCK_EXPIRED]: 'That agreed price has expired',
+    [ERROR_CODES.NEGOTIATION_LOCK_CONSUMED]: 'That agreed price has already been used on an order',
+    [ERROR_CODES.NEGOTIATION_LOCK_VARIANT_MISMATCH]: 'That agreed price was for a different item or quantity',
+    [ERROR_CODES.NEGOTIATION_LOCK_WINDOW_MOVED]: 'The seller has changed this price since it was agreed',
+    [ERROR_CODES.NEGOTIATION_SESSION_NOT_FOUND]: 'No negotiation session was found for this line',
+    [ERROR_CODES.NEGOTIATION_SESSION_EXPIRED]: 'This negotiation has expired',
+    [ERROR_CODES.NEGOTIATION_SESSION_CLOSED]: 'This negotiation is already closed',
+    [ERROR_CODES.NEGOTIATION_PRICE_BELOW_FLOOR]: 'The proposed price is below the seller’s minimum',
+    [ERROR_CODES.NEGOTIATION_PRICE_ABOVE_ASK]: 'The proposed price is above the asking price',
+    [ERROR_CODES.NEGOTIATION_PRICE_INCREASED]: 'A quoted price may not go back up',
+    [ERROR_CODES.NEGOTIATION_NOT_BARGAINABLE]: 'This item is not negotiable',
+    [ERROR_CODES.NEGOTIATION_TOOL_SUBJECT_REQUIRED]: 'Name the product first — pass a productId, variantId, sku or slug',
+    [ERROR_CODES.NEGOTIATION_PROMOTIONS_UNAVAILABLE]: 'This platform runs no promotions or discount codes at all, so no code can be checked and none exists',
     [ERROR_CODES.CATALOG_VARIANT_LIMIT_EXCEEDED]: 'catalog variant limit exceeded',
     [ERROR_CODES.CATALOG_VARIANT_NO_OPTIONS]: 'catalog variant no options',
     [ERROR_CODES.CATALOG_VARIANT_OPTION_EMPTY]: 'catalog variant option empty',
@@ -472,6 +655,7 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.BOOKING_INVALID_PAYMENT_METHOD]: 'booking invalid payment method',
     [ERROR_CODES.BOOKING_TERMINAL_STATE]: 'booking terminal state',
     [ERROR_CODES.BOOKING_SLOT_NOT_LOCKED]: 'booking slot not locked',
+    [ERROR_CODES.BOOKING_SLOT_LOCKED]: 'booking slot is held by another customer',
     [ERROR_CODES.BOOKING_FORBIDDEN]: 'booking forbidden',
     [ERROR_CODES.BOOKING_INVALID_SLOT_ID]: 'booking invalid slot id',
     [ERROR_CODES.ADMIN_NOT_FOUND]: 'admin not found',

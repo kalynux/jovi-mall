@@ -57,7 +57,7 @@ Body:
 {
   "success": true,
   "data": {
-    "_id": "string",
+    "id": "string",
     "productId": "string",
     "weight": 5.5,
     "length": 30,
@@ -105,7 +105,7 @@ Body:
 {
   "success": true,
   "data": {
-    "_id": "string",
+    "id": "string",
     "productId": "string",
     "weight": 5.5,
     "length": 30,
@@ -161,14 +161,19 @@ Body:
 
 ## Error Responses
 
-All error responses follow this format:
+All error responses follow this format. `category` is one of the nine values listed in
+[`errors/README.md`](../errors/README.md) and is **always present**; `details` is omitted
+entirely when absent.
 
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "ERROR_CODE",
-    "message": "Human-readable error description"
+    "code": "CATALOG_PRODUCT_NOT_FOUND",
+    "message": "Product not found",
+    "statusCode": 404,
+    "category": "not_found"
   }
 }
 ```
@@ -178,15 +183,21 @@ For validation errors:
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Request validation failed",
-    "details": [
-      {
-        "field": "weight",
-        "message": "Weight must be positive"
-      }
-    ]
+    "statusCode": 400,
+    "category": "validation",
+    "details": {
+      "fields": [
+        {
+          "path": "weight",
+          "message": "Weight must be positive",
+          "code": "too_small"
+        }
+      ]
+    }
   }
 }
 ```
@@ -200,9 +211,12 @@ Only **physical products** can have shipping configuration. Attempting to config
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "CATALOG_PRODUCT_INVALID_TYPE",
-    "message": "Only physical products can have shipping configuration"
+    "message": "Only physical products can have shipping configuration",
+    "statusCode": 400,
+    "category": "validation"
   }
 }
 ```

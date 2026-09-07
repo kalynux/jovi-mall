@@ -127,7 +127,7 @@ parameter — a customer can only read/write **their own** record.
 
 > **Profile avatar is a file reference.** Upload the image via `POST /api/files/upload`, then send the
 > returned file `id` as `avatarFileId`. Reads return `avatar` as a **resolved file object** — the same
-> `{ id, key, url, mimeType, size, originalName }` shape product images use — or `null` when unset;
+> `{ id, key, url, access, mimeType, size, originalName }` shape product images use — or `null` when unset;
 > never a bare URL string. While set, that file counts as *in use* — it appears under `usage.references`
 > on `GET /api/files/:id` with `entityType: "customer", field: "avatar"`, and cannot be deleted until you
 > detach it (`avatarFileId: null`). See [File Management — the `usage` object](../vendor/file-management.md#get-apifilesid).
@@ -147,7 +147,7 @@ parameter — a customer can only read/write **their own** record.
 ### Example error `400` (validation)
 
 ```json
-{ "success": false, "requestId": "req_abc", "error": { "code": "VALIDATION_ERROR", "message": "Validation failed", "statusCode": 400, "details": { "fields": [{ "path": "avatarFileId", "message": "avatarFileId must be a valid file id", "code": "invalid_string" }] } } }
+{ "success": false, "requestId": "req_abc", "error": { "code": "VALIDATION_ERROR", "message": "Validation failed", "statusCode": 400, "category": "validation", "details": { "fields": [{ "path": "avatarFileId", "message": "avatarFileId must be a valid file id", "code": "invalid_string" }] } } }
 ```
 
 ---

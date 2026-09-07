@@ -183,6 +183,18 @@ notifies the requester.
 
 ## Error envelope
 
+`category` is one of the nine values listed in [`../errors/README.md`](../errors/README.md) and is
+**always present**; `details` is omitted entirely when absent.
+
 ```json
-{ "success": false, "error": { "code": "ERROR_CODE", "message": "Human-readable description", "details": {} } }
+{
+  "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
+  "error": {
+    "code": "EARNINGS_PAYOUT_REQUEST_NOT_PENDING",
+    "message": "Human-readable description",
+    "statusCode": 409,
+    "category": "conflict"
+  }
+}
 ```

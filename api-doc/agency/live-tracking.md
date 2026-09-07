@@ -54,8 +54,9 @@ Two consequences worth knowing:
         "name": "Awa Ngassa",
         "avatar": {
           "id": "665f1f77bcf86cd799439fff",
-          "key": "avatars/awa.png",
-          "url": "https://…/avatars/awa.png",
+          "key": "images/2026/07/awa.png",
+          "url": "https://…/images/2026/07/awa.png",
+          "access": "public",
           "mimeType": "image/png",
           "size": 20481,
           "originalName": "awa.png"
@@ -113,7 +114,7 @@ right now" is an answer, not a missing resource.
 | Field | Notes |
 |---|---|
 | `agents[].agentId` | Use this verbatim as the `agentId` in geo-tracker's `subscribe` frame. |
-| `agents[].avatar` | The standard file object `{ id, key, url, mimeType, size, originalName }`, or `null`. Never a bare URL string. |
+| `agents[].avatar` | The standard file object `{ id, key, url, access, mimeType, size, originalName }`, or `null`. Never a bare URL string. |
 | `agents[].shipments` | Newest first. An agent running several deliveries has several entries — geo-tracker opens one tracking session per shipment, all fed by the agent's single GPS stream. |
 | `origin` | **The start pin.** Where the parcel is collected: the vendor's business address, this agency's HQ, or — after a reassignment — the handover point. `mode` is `pickup_based` \| `storage_based` \| `mixed` \| `null`; `count > 1` means there are further collection points, which [`GET /api/agency/shipments/:id`](./shipments.md#detail) lists in full. |
 | `destination` | **The end pin.** The customer address geocoded at checkout, snapshotted onto the order. Deliberately *not* the customer's current saved address — reading that live would silently re-route a delivery already on the road. |
@@ -153,12 +154,43 @@ the road, and the replacement agent is tracked from the moment they accept.
    ```
    The destination is per-subscription and not persisted; send it again after a
    reconnect.
+
+   > **You usually no longer need to send it** (Phase 3 · 3.C, recorded here 2026-09-06 —
+   > DOC-PROGRAM F-45). geo-tracker now **pulls the drop-off from jovi-mall itself** at session
+   > activation and resolves it per watcher, so the target chain is:
+   > **① your `destination` (still an override) → ② the session for a `shipmentId` you send →
+   > ③ the agent's SOLE open session → ④ no ETA.**
+   > Sending `{"agentId": …, "shipmentId": …}` is the precise form for a multi-drop agent.
+   > ⚠ **② deliberately does not fall back to ③** — an ETA to the wrong drop-off is worse than
+   > none — and ③ deliberately refuses to guess when an agent has several open sessions.
+   > A watcher who subscribed before the pull landed gets the ETA on their next subscribe, not
+   > immediately.
 6. **Road line between the two pins** (optional) — geo-tracker's
    `POST /routing/route` with `{ origin, destination }`. Without it, a straight
    line between the two pins is a reasonable fallback.
-7. A `permission_revoked` frame means that agent is no longer watchable — the
-   shipment finished, or they were released by a reassignment. Drop the marker
-   and refetch the board.
+7. A `permission_revoked` frame means **your subscription ended — NOT that the delivery did.**
+   Drop the marker and refetch the board, then read `payload.reason` before telling the user
+   anything. It is a **closed set of three**:
+
+   | `reason` | What happened | What to show |
+   |---|---|---|
+   | `shipment_completed` | jovi-mall was asked and said the agent is no longer watchable. | **The only value from which you may report a delivery outcome.** |
+   | `authorization_expired` | jovi-mall **rejected the access token** the socket was opened with. Nothing is known about the shipment. | Get a fresh token, reconnect, re-subscribe. Say nothing about the delivery. |
+   | `authorization_unavailable` | jovi-mall **could not be asked** — unreachable, 5xx, timeout. | Retry with backoff. Report no outcome. |
+
+   **Treat an unrecognised value as `authorization_expired`.**
+
+   > ⚠ **This step read *"the shipment finished, or they were released by a reassignment"* until
+   > 2026-09-06** (DOC-PROGRAM F-45) — the single-meaning reading that the three-value set was
+   > introduced to end, on the page an agency-dashboard author reads first. Acting on it reproduces
+   > the original defect *after the fix shipped*: telling an agency a delivery completed because a
+   > 15-minute access token aged out, which on a long-lived socket is the **commonest** of the
+   > three. See [tracking/live-tracking.md](../tracking/live-tracking.md#permission_revoked-does-not-always-mean-the-delivery-ended)
+   > and geo-tracker's `api-doc/tracking-websocket.md`, both of which were already correct.
+   >
+   > This is also why you should **reconnect on a cadence shorter than the 15-minute access TTL**:
+   > geo-tracker validates the token at the handshake and never on a timer, but re-forwards *that
+   > same token* when a revocation check fires.
 
 ### Refreshing
 

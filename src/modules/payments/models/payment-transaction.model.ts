@@ -74,7 +74,7 @@ export interface IPaymentTransaction extends Document {
   // Gateway info
   gateway: PaymentGatewayType;      // Which gateway processed this
   method: PaymentMethod;            // Payment method type
-  gatewayRef: string;               // Gateway's payment reference (transaction ID)
+  gatewayRef: string;               // Gateway's payment reference — '' until the charge is opened
 
   // Status tracking
   status: PaymentStatus;            // Current payment status
@@ -211,9 +211,19 @@ const PaymentTransactionSchema = new Schema<IPaymentTransaction>({
     enum: ['MOBILE', 'CARD', 'CASH'],
     required: true
   },
+  // Written EMPTY at creation and filled in from the gateway's response — all four
+  // initiate paths in `payment-orchestrator.service.ts` commit the row BEFORE the charge
+  // is opened, so a callback that beats the response still finds a home. `merchantRef` is
+  // what routes it in that window; this reference is the gateway's and arrives later.
+  //
+  // Deliberately NOT `required`: mongoose rejects '' for a required String, so every
+  // `initiate` died on validation before the gateway was ever called. An initiation that
+  // FAILED without ever obtaining a reference also keeps it empty forever — a legitimate
+  // row. Webhook lookups stay safe: `findTransactionForEvent` refuses to query an empty
+  // ref, so an empty row can never be matched by one.
   gatewayRef: {
     type: String,
-    required: true,
+    default: '',
     index: true  // Gateway webhook lookups
   },
 

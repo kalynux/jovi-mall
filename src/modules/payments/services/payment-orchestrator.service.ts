@@ -27,11 +27,38 @@ import { BookingCalendarSyncService } from '../../booking/services/booking-calen
  * money invariants — refundable balance, gateway support, escrow reversal —
  * cannot be implemented twice and diverge.
  */
+/**
+ * What a new payment attempt must carry.
+ *
+ * The union is the model's own rule, lifted to compile time: `PaymentTransactionSchema`
+ * refuses a row that does not have EXACTLY ONE of `orderId`, `bookingId` and `cartId`, and
+ * refuses a cart row with no `orderIds`. That check runs in `pre('validate')`, so until this
+ * type existed the only way to find out you had dropped the source field was to watch an
+ * initiate fail at runtime — which is exactly how it was found.
+ */
+type NewPaymentAttempt = {
+  userId: Types.ObjectId;
+  gateway: PaymentGatewayType;
+  method: 'MOBILE' | 'CARD' | 'CASH';
+  status: PaymentStatus;
+  gatewayRef: string;
+  amountSnapshot: number;
+  currencySnapshot: string;
+  idempotencyKey: string;
+  merchantRef: string;
+  rawGatewayPayloads: unknown[];
+  purpose?: 'primary' | 'booking_balance';
+} & (
+  | { orderId: Types.ObjectId }
+  | { cartId: Types.ObjectId; orderIds: Types.ObjectId[] }
+  | { bookingId: Types.ObjectId }
+);
+
 export type RefundSource =
   | { kind: 'order'; orderId: string }
   | { kind: 'booking'; bookingId: string };
 import { RefundTransactionModel } from '../models/refund-transaction.model';
-import { createAppError } from '../../../core/errors';
+import { createAppError, AppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { eventBus } from '../../../core/events/event-bus';
 import { transactionManager } from '../../../core/database/transaction.manager';
@@ -133,6 +160,19 @@ export class PaymentOrchestratorService {
     const idempotencyKey = this.generateIdempotencyKey(orderId, userId, order.total_amount);
 
     // 3. CHECK FOR EXISTING TRANSACTION
+    // One shape for every "you already have this payment" answer in this method. The
+    // dead-attempt check, the live-attempt guard and the lost create race all mean the
+    // same thing to a caller, and all three are reachable from one impatient customer
+    // pressing Pay repeatedly.
+    const respondWithExisting = (tx: IPaymentTransaction) => ({
+      transactionId: tx._id.toString(),
+      status: tx.status,
+      instructions: this.lastInstructions(tx),
+      message: tx.status === 'SUCCEEDED'
+        ? 'Payment already completed'
+        : 'Payment already initiated. Complete the pending payment.'
+    });
+
     const existingTx = await PaymentTransactionModel.findOne({ idempotencyKey });
 
     if (existingTx) {
@@ -147,18 +187,14 @@ export class PaymentOrchestratorService {
 
       // Already initiated/pending - return existing session
       if (existingTx.status === 'INITIATED' || existingTx.status === 'PENDING') {
-        const lastPayload = existingTx.rawGatewayPayloads[existingTx.rawGatewayPayloads.length - 1];
-
-        return {
-          transactionId: existingTx._id.toString(),
-          status: existingTx.status,
-          instructions: lastPayload?.instructions,
-          message: 'Payment already initiated. Complete the pending payment.'
-        };
+        return respondWithExisting(existingTx);
       }
 
-      // Failed/cancelled - allow retry with new transaction
-      // Fall through to create new transaction
+      // Failed/cancelled → this is a NEW attempt, and it needs the key the dead one holds.
+      // Only once we KNOW it is dead, though: `FAILED` is written for a refusal AND for a
+      // call that merely errored, and a live charge can be sitting behind the second kind.
+      const settledAttempt = await this.releaseDeadAttempt(existingTx);
+      if (settledAttempt) return respondWithExisting(settledAttempt);
     }
 
     // 4. CREATE NEW PAYMENT TRANSACTION
@@ -168,7 +204,22 @@ export class PaymentOrchestratorService {
     const method = gateway === 'STRIPE' ? 'CARD' : 'MOBILE';
 
     // Create transaction in INITIATED state
-    const transaction = await PaymentTransactionModel.create({
+    // A second LIVE charge over money that already has one — the hole the idempotency key
+    // cannot see, because that key is (source, user, AMOUNT) while this asks about the money
+    // itself. Two routes reach the same order (the cart path and the single-order path), and
+    // a group total moves when one order in it settles or is cancelled, so one customer can
+    // compute two different keys over overlapping orders and open two charges that nothing
+    // links. Answered with the live attempt rather than an error: from the customer's side
+    // this IS their payment, and the prompt is already on their phone.
+    const liveElsewhere = await this.findLiveAttempt({
+      $or: [
+        { orderId: new Types.ObjectId(orderId) },
+        { orderIds: new Types.ObjectId(orderId) }
+      ]
+    });
+    if (liveElsewhere) return respondWithExisting(liveElsewhere);
+
+    const attempt = await this.openAttempt({
       orderId: new Types.ObjectId(orderId),
       userId: new Types.ObjectId(userId),
       gateway,
@@ -180,7 +231,9 @@ export class PaymentOrchestratorService {
       idempotencyKey,
       merchantRef: mintMerchantRef('pt'),
       rawGatewayPayloads: []
-    });
+    }, idempotencyKey);
+    if ('raced' in attempt) return respondWithExisting(attempt.raced);
+    const transaction = attempt.opened;
 
     // 5. CALL GATEWAY
     try {
@@ -200,7 +253,8 @@ export class PaymentOrchestratorService {
       transaction.rawGatewayPayloads.push({
         timestamp: new Date(),
         type: 'initiate',
-        ...gatewayResult.rawResponse
+        ...gatewayResult.rawResponse,
+        instructions: gatewayResult.instructions ?? null
       });
 
       // Compute payload hash for webhook deduplication
@@ -241,13 +295,7 @@ export class PaymentOrchestratorService {
 
     } catch (error: any) {
       // Update transaction to failed
-      transaction.status = 'FAILED';
-      transaction.rawGatewayPayloads.push({
-        timestamp: new Date(),
-        type: 'error',
-        error: error.message
-      });
-      await transaction.save();
+      await this.recordFailedAttempt(transaction, error);
 
       throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, { cause: error.message });
     }
@@ -317,6 +365,19 @@ export class PaymentOrchestratorService {
     const idempotencyKey = this.generateIdempotencyKey(cartId, userId, groupTotal);
 
     // 3. CHECK FOR EXISTING TRANSACTION
+    // One shape for every "you already have this payment" answer in this method. The
+    // dead-attempt check, the live-attempt guard and the lost create race all mean the
+    // same thing to a caller, and all three are reachable from one impatient customer
+    // pressing Pay repeatedly.
+    const respondWithExisting = (tx: IPaymentTransaction) => ({
+      transactionId: tx._id.toString(),
+      status: tx.status,
+      instructions: this.lastInstructions(tx),
+      message: tx.status === 'SUCCEEDED'
+        ? 'Payment already completed'
+        : 'Payment already initiated. Complete the pending payment.'
+    });
+
     const existingTx = await PaymentTransactionModel.findOne({ idempotencyKey });
     if (existingTx) {
       if (existingTx.status === 'SUCCEEDED') {
@@ -327,15 +388,13 @@ export class PaymentOrchestratorService {
         };
       }
       if (existingTx.status === 'INITIATED' || existingTx.status === 'PENDING') {
-        const lastPayload = existingTx.rawGatewayPayloads[existingTx.rawGatewayPayloads.length - 1];
-        return {
-          transactionId: existingTx._id.toString(),
-          status: existingTx.status,
-          instructions: lastPayload?.instructions,
-          message: 'Payment already initiated. Complete the pending payment.'
-        };
+        return respondWithExisting(existingTx);
       }
-      // Failed/cancelled → fall through to a fresh transaction
+      // Failed/cancelled → this is a NEW attempt, and it needs the key the dead one holds.
+      // Only once we KNOW it is dead, though: `FAILED` is written for a refusal AND for a
+      // call that merely errored, and a live charge can be sitting behind the second kind.
+      const settledAttempt = await this.releaseDeadAttempt(existingTx);
+      if (settledAttempt) return respondWithExisting(settledAttempt);
     }
 
     // 4. CREATE NEW PAYMENT TRANSACTION (group)
@@ -343,7 +402,23 @@ export class PaymentOrchestratorService {
 
     const method = gateway === 'STRIPE' ? 'CARD' : 'MOBILE';
 
-    const transaction = await PaymentTransactionModel.create({
+    // A second LIVE charge over money that already has one — the hole the idempotency key
+    // cannot see, because that key is (source, user, AMOUNT) while this asks about the money
+    // itself. Two routes reach the same order (the cart path and the single-order path), and
+    // a group total moves when one order in it settles or is cancelled, so one customer can
+    // compute two different keys over overlapping orders and open two charges that nothing
+    // links. Answered with the live attempt rather than an error: from the customer's side
+    // this IS their payment, and the prompt is already on their phone.
+    const liveElsewhere = await this.findLiveAttempt({
+      $or: [
+        { cartId: new Types.ObjectId(cartId) },
+        { orderId: { $in: orderIds } },
+        { orderIds: { $in: orderIds } }
+      ]
+    });
+    if (liveElsewhere) return respondWithExisting(liveElsewhere);
+
+    const attempt = await this.openAttempt({
       cartId: new Types.ObjectId(cartId),
       orderIds,
       userId: new Types.ObjectId(userId),
@@ -356,7 +431,9 @@ export class PaymentOrchestratorService {
       idempotencyKey,
       merchantRef: mintMerchantRef('pt'),
       rawGatewayPayloads: []
-    });
+    }, idempotencyKey);
+    if ('raced' in attempt) return respondWithExisting(attempt.raced);
+    const transaction = attempt.opened;
 
     // 5. CALL GATEWAY ONCE for the group total (cartId is the external reference)
     try {
@@ -375,7 +452,8 @@ export class PaymentOrchestratorService {
       transaction.rawGatewayPayloads.push({
         timestamp: new Date(),
         type: 'initiate',
-        ...gatewayResult.rawResponse
+        ...gatewayResult.rawResponse,
+        instructions: gatewayResult.instructions ?? null
       });
       transaction.gatewayPayloadHash = this.hashPayload(gatewayResult.rawResponse);
       await transaction.save();
@@ -389,13 +467,7 @@ export class PaymentOrchestratorService {
           : gatewayResult.error || 'Payment initiation failed'
       };
     } catch (error: any) {
-      transaction.status = 'FAILED';
-      transaction.rawGatewayPayloads.push({
-        timestamp: new Date(),
-        type: 'error',
-        error: error.message
-      });
-      await transaction.save();
+      await this.recordFailedAttempt(transaction, error);
 
       throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, { cause: error.message });
     }
@@ -769,6 +841,19 @@ export class PaymentOrchestratorService {
     );
 
     // 4. CHECK FOR EXISTING TRANSACTION
+    // One shape for every "you already have this payment" answer in this method. The
+    // dead-attempt check, the live-attempt guard and the lost create race all mean the
+    // same thing to a caller, and all three are reachable from one impatient customer
+    // pressing Pay repeatedly.
+    const respondWithExisting = (tx: IPaymentTransaction) => ({
+      transactionId: tx._id.toString(),
+      status: tx.status,
+      instructions: this.lastInstructions(tx),
+      message: tx.status === 'SUCCEEDED'
+        ? 'Payment already completed'
+        : 'Payment already initiated. Complete the pending payment.'
+    });
+
     const existingTx = await PaymentTransactionModel.findOne({ idempotencyKey });
 
     if (existingTx) {
@@ -783,18 +868,14 @@ export class PaymentOrchestratorService {
 
       // Already initiated/pending - return existing session
       if (existingTx.status === 'INITIATED' || existingTx.status === 'PENDING') {
-        const lastPayload = existingTx.rawGatewayPayloads[existingTx.rawGatewayPayloads.length - 1];
-
-        return {
-          transactionId: existingTx._id.toString(),
-          status: existingTx.status,
-          instructions: lastPayload?.instructions,
-          message: 'Payment already initiated. Complete the pending payment.'
-        };
+        return respondWithExisting(existingTx);
       }
 
-      // Failed/cancelled - allow retry with new transaction
-      // Fall through to create new transaction
+      // Failed/cancelled → this is a NEW attempt, and it needs the key the dead one holds.
+      // Only once we KNOW it is dead, though: `FAILED` is written for a refusal AND for a
+      // call that merely errored, and a live charge can be sitting behind the second kind.
+      const settledAttempt = await this.releaseDeadAttempt(existingTx);
+      if (settledAttempt) return respondWithExisting(settledAttempt);
     }
 
     // 5. CREATE NEW PAYMENT TRANSACTION
@@ -804,7 +885,20 @@ export class PaymentOrchestratorService {
     const method = gateway === 'STRIPE' ? 'CARD' : 'MOBILE';
 
     // Create transaction in INITIATED state
-    const transaction = await PaymentTransactionModel.create({
+    // A second LIVE charge over money that already has one — the hole the idempotency key
+    // cannot see, because that key is (source, user, AMOUNT) while this asks about the money
+    // itself. Two routes reach the same order (the cart path and the single-order path), and
+    // a group total moves when one order in it settles or is cancelled, so one customer can
+    // compute two different keys over overlapping orders and open two charges that nothing
+    // links. Answered with the live attempt rather than an error: from the customer's side
+    // this IS their payment, and the prompt is already on their phone.
+    const liveElsewhere = await this.findLiveAttempt({
+      bookingId: new Types.ObjectId(bookingId),
+      purpose: 'primary'
+    });
+    if (liveElsewhere) return respondWithExisting(liveElsewhere);
+
+    const attempt = await this.openAttempt({
       bookingId: new Types.ObjectId(bookingId),
       userId: new Types.ObjectId(userId),
       gateway,
@@ -816,7 +910,9 @@ export class PaymentOrchestratorService {
       idempotencyKey,
       merchantRef: mintMerchantRef('pt'),
       rawGatewayPayloads: []
-    });
+    }, idempotencyKey);
+    if ('raced' in attempt) return respondWithExisting(attempt.raced);
+    const transaction = attempt.opened;
 
     // 6. CALL GATEWAY
     try {
@@ -836,7 +932,8 @@ export class PaymentOrchestratorService {
       transaction.rawGatewayPayloads.push({
         timestamp: new Date(),
         type: 'initiate',
-        ...gatewayResult.rawResponse
+        ...gatewayResult.rawResponse,
+        instructions: gatewayResult.instructions ?? null
       });
 
       // Compute payload hash for webhook deduplication
@@ -865,13 +962,7 @@ export class PaymentOrchestratorService {
 
     } catch (error: any) {
       // Update transaction to failed
-      transaction.status = 'FAILED';
-      transaction.rawGatewayPayloads.push({
-        timestamp: new Date(),
-        type: 'error',
-        error: error.message
-      });
-      await transaction.save();
+      await this.recordFailedAttempt(transaction, error);
 
       // Update booking payment status
       booking.paymentStatus = 'failed';
@@ -941,6 +1032,21 @@ export class PaymentOrchestratorService {
       outstanding
     );
 
+    // One shape for every "you already have this payment" answer in this method. The
+    // dead-attempt check, the live-attempt guard and the lost create race all mean the
+    // same thing to a caller, and all three are reachable from one impatient customer
+    // pressing Pay repeatedly.
+    const respondWithExisting = (tx: IPaymentTransaction) => ({
+      transactionId: tx._id.toString(),
+      status: tx.status,
+      amount: outstanding,
+      currency: booking.currency,
+      instructions: this.lastInstructions(tx),
+      message: tx.status === 'SUCCEEDED'
+        ? 'Balance already paid'
+        : 'Balance payment already initiated. Complete the pending payment.'
+    });
+
     const existingTx = await PaymentTransactionModel.findOne({ idempotencyKey });
     if (existingTx) {
       if (existingTx.status === 'SUCCEEDED') {
@@ -953,22 +1059,31 @@ export class PaymentOrchestratorService {
         };
       }
       if (existingTx.status === 'INITIATED' || existingTx.status === 'PENDING') {
-        const lastPayload = existingTx.rawGatewayPayloads[existingTx.rawGatewayPayloads.length - 1];
-        return {
-          transactionId: existingTx._id.toString(),
-          status: existingTx.status,
-          amount: outstanding,
-          currency: booking.currency,
-          instructions: lastPayload?.instructions,
-          message: 'Balance payment already initiated. Complete the pending payment.'
-        };
+        return respondWithExisting(existingTx);
       }
-      // Failed/cancelled — fall through and retry with a new transaction.
+      // Failed/cancelled → this is a NEW attempt, and it needs the key the dead one holds.
+      // Only once we KNOW it is dead, though: `FAILED` is written for a refusal AND for a
+      // call that merely errored, and a live charge can be sitting behind the second kind.
+      const settledAttempt = await this.releaseDeadAttempt(existingTx);
+      if (settledAttempt) return respondWithExisting(settledAttempt);
     }
 
     const gatewayInstance = getPaymentGateway(gateway);
 
-    const transaction = await PaymentTransactionModel.create({
+    // A second LIVE charge over money that already has one — the hole the idempotency key
+    // cannot see, because that key is (source, user, AMOUNT) while this asks about the money
+    // itself. Two routes reach the same order (the cart path and the single-order path), and
+    // a group total moves when one order in it settles or is cancelled, so one customer can
+    // compute two different keys over overlapping orders and open two charges that nothing
+    // links. Answered with the live attempt rather than an error: from the customer's side
+    // this IS their payment, and the prompt is already on their phone.
+    const liveElsewhere = await this.findLiveAttempt({
+      bookingId: new Types.ObjectId(bookingId),
+      purpose: 'booking_balance'
+    });
+    if (liveElsewhere) return respondWithExisting(liveElsewhere);
+
+    const attempt = await this.openAttempt({
       bookingId: new Types.ObjectId(bookingId),
       purpose: 'booking_balance',
       userId: new Types.ObjectId(userId),
@@ -981,7 +1096,9 @@ export class PaymentOrchestratorService {
       idempotencyKey,
       merchantRef: mintMerchantRef('pt'),
       rawGatewayPayloads: []
-    });
+    }, idempotencyKey);
+    if ('raced' in attempt) return respondWithExisting(attempt.raced);
+    const transaction = attempt.opened;
 
     try {
       const gatewayResult = await gatewayInstance.initiatePayment({
@@ -999,7 +1116,8 @@ export class PaymentOrchestratorService {
       transaction.rawGatewayPayloads.push({
         timestamp: new Date(),
         type: 'initiate',
-        ...gatewayResult.rawResponse
+        ...gatewayResult.rawResponse,
+        instructions: gatewayResult.instructions ?? null
       });
       transaction.gatewayPayloadHash = this.hashPayload(gatewayResult.rawResponse);
       await transaction.save();
@@ -1020,13 +1138,7 @@ export class PaymentOrchestratorService {
           : gatewayResult.error || 'Balance payment initiation failed'
       };
     } catch (error: any) {
-      transaction.status = 'FAILED';
-      transaction.rawGatewayPayloads.push({
-        timestamp: new Date(),
-        type: 'error',
-        error: error.message
-      });
-      await transaction.save();
+      await this.recordFailedAttempt(transaction, error);
 
       throw createAppError(ERROR_CODES.PAYMENT_INITIATION_FAILED, 502, undefined, {
         cause: error.message
@@ -1461,6 +1573,250 @@ export class PaymentOrchestratorService {
     console.log(
       `[PaymentOrchestrator] Booking ${booking._id} balance of ${transaction.amountSnapshot} credited`
     );
+  }
+
+  /**
+   * Hand the idempotency key back, so a retry can take it.
+   *
+   * `idempotencyKey` is `unique`, and all four initiate paths derive it from the same three
+   * facts — source id, user, amount — so a retry of the same intent computes the SAME key.
+   * The four "failed/cancelled → fall through to a fresh transaction" branches therefore
+   * could not do what they said: `create()` collided on the index and answered
+   * `DATABASE_UNIQUE_CONSTRAINT_VIOLATION` 409, so a customer whose first attempt failed
+   * could never try again — for that cart, at that price, ever. The branch existed from the
+   * first commit and had never once run to completion, because nothing reached it until the
+   * `gatewayRef` validation defect was fixed and initiate began writing rows at all.
+   *
+   * The dead attempt is KEPT, never reused and never deleted. It holds the failure in
+   * `rawGatewayPayloads`, and — the part that matters for money — it keeps its `merchantRef`,
+   * which is what routes a late webhook home if the gateway settles a charge we had given up
+   * on. Only its claim on the key is retired, because that key means "the LIVE attempt at
+   * this intent" and a dead attempt is not it. Reusing the row instead would have to mint a
+   * fresh `merchantRef` over the old one (the gateway refuses a repeated reference), which
+   * is precisely how that late webhook would be orphaned.
+   *
+   * Suffixed with the row's own `_id`, so the retired value stays unique however many
+   * attempts a customer makes.
+   *
+   * ⚠ What this does NOT decide is whether retrying is safe. `FAILED` is written both when
+   * the gateway refused outright and when the call merely errored — a timeout can leave a
+   * charge live at the provider — so a retry after the second kind can double-charge. That
+   * is a pre-existing property of the fall-through branch, not of retiring the key; closing
+   * it means verifying the dead attempt against the gateway before allowing the retry.
+   */
+  /**
+   * Is there already a LIVE attempt over this money?
+   *
+   * `INITIATED` is the window between the row being written and the gateway answering;
+   * `PENDING` is a prompt sitting on the customer's handset. Both mean a charge may complete
+   * without anything else happening, so a second one must not be opened beside it.
+   *
+   * Scoped by the MONEY, not by the request: an order reached through the cart path and the
+   * same order reached through the single-order path compute different idempotency keys, and
+   * so does the same cart after one of its orders settles or is cancelled (the group total is
+   * part of the key). The unique index cannot see any of that; this can.
+   */
+  private async findLiveAttempt(
+    scope: Record<string, unknown>
+  ): Promise<IPaymentTransaction | null> {
+    return PaymentTransactionModel.findOne({
+      ...scope,
+      status: { $in: ['INITIATED', 'PENDING'] }
+    });
+  }
+
+  /**
+   * Open the attempt, or report that a concurrent request already did.
+   *
+   * The idempotency check and `findLiveAttempt` are both read-then-write, so two clicks
+   * landing inside the same millisecond pass them both and race to `create`. The unique index
+   * on `idempotencyKey` is what actually decides it — and it decides correctly, which is why
+   * only ONE of the two ever reaches a gateway. What it produced was a raw
+   * `DATABASE_UNIQUE_CONSTRAINT_VIOLATION` 409 at the loser, which is a true statement about
+   * the database and a useless one to a customer who pressed a button twice. The loser now
+   * gets the winner's transaction, which is what idempotency promised in the first place.
+   *
+   * Only a duplicate on THIS key is treated this way. Any other write failure is still thrown.
+   */
+  private async openAttempt(
+    doc: NewPaymentAttempt,
+    idempotencyKey: string
+  ): Promise<{ opened: IPaymentTransaction } | { raced: IPaymentTransaction }> {
+    try {
+      return { opened: await PaymentTransactionModel.create(doc) };
+    } catch (error: any) {
+      const duplicate =
+        error?.code === 11000 && Object.keys(error?.keyPattern ?? {}).includes('idempotencyKey');
+      if (!duplicate) throw error;
+
+      const winner = await PaymentTransactionModel.findOne({ idempotencyKey });
+      if (!winner) throw error;
+      console.log(
+        `[PaymentOrchestrator] Concurrent initiate for ${idempotencyKey} — answering with ${winner._id}`
+      );
+      return { raced: winner };
+    }
+  }
+
+  /** The instructions the customer was last given — the USSD prompt, the hosted-page secret. */
+  private lastInstructions(transaction: IPaymentTransaction): any {
+    for (let i = transaction.rawGatewayPayloads.length - 1; i >= 0; i--) {
+      const instructions = transaction.rawGatewayPayloads[i]?.instructions;
+      if (instructions) return instructions;
+    }
+    return undefined;
+  }
+
+  /**
+   * May this dead-looking attempt be retried? Clears the way if it may.
+   *
+   * Returns the transaction when the retry must NOT happen — it is alive, or it settled after
+   * all — and `null` when the caller may go ahead, in which case the key has been retired.
+   *
+   * ── WHY A LOCAL `FAILED` IS NOT ENOUGH ──────────────────────────────────────
+   * `FAILED` is written from the catch of the gateway call, and that catch cannot tell a
+   * refusal from a timeout. A refusal means no charge exists. A timeout means the request may
+   * have arrived, the operator may have prompted the customer, and the money may be moving —
+   * we simply stopped listening after 15 seconds. Retrying on the second is how one basket
+   * gets paid for twice, and no amount of order-level idempotency downstream gives that money
+   * back: `OrderService.handlePaymentSuccess` no-ops on an already-paid order, so the second
+   * charge settles silently against nothing.
+   *
+   * So the gateway is asked, and its answer outranks ours. SUCCEEDED is adopted and fulfilled
+   * — that is money we would otherwise have abandoned. FAILED or CANCELLED confirms the local
+   * verdict and the retry proceeds.
+   *
+   * PENDING is the interesting one, because it has two causes that look identical: a charge
+   * genuinely awaiting the customer, and a payment record that was opened but never charged
+   * (NotchPay initialises in one call and charges in a second — a refusal at the second leaves
+   * exactly this). They are told apart by HOW the attempt died: a 4xx is the provider deciding,
+   * and a provider that refused the charge never placed it. Anything else — a timeout, a 5xx,
+   * an unreachable host — is ignorance, and ignorance about money fails closed.
+   */
+  private async releaseDeadAttempt(
+    transaction: IPaymentTransaction
+  ): Promise<IPaymentTransaction | null> {
+    // Nothing was ever opened at the gateway, so there is no charge to double.
+    if (!transaction.gatewayRef) {
+      await this.retireDeadAttempt(transaction);
+      return null;
+    }
+
+    const gatewayInstance = getPaymentGateway(transaction.gateway);
+    let verified: PaymentStatus;
+    try {
+      const result = await gatewayInstance.verifyPayment({ gatewayRef: transaction.gatewayRef });
+      verified = result.status as PaymentStatus;
+    } catch (error: any) {
+      // We asked and could not find out. That is not permission to charge again.
+      console.warn(
+        `[PaymentOrchestrator] Cannot verify ${transaction._id} before retry: ${error?.message}`
+      );
+      return transaction;
+    }
+
+    if (verified === 'SUCCEEDED') {
+      const previousStatus = transaction.status;
+      transaction.status = 'SUCCEEDED';
+      transaction.rawGatewayPayloads.push({
+        timestamp: new Date(),
+        type: 'verify',
+        detail: 'settled after a failed-looking attempt; retry refused'
+      });
+      await transaction.save();
+      console.warn(
+        `[PaymentOrchestrator] ${transaction._id} was recorded ${previousStatus} but the gateway ` +
+          'settled it — adopting, and refusing the retry'
+      );
+      await this.handlePaymentSuccess(transaction);
+      return transaction;
+    }
+
+    if (verified === 'FAILED' || verified === 'CANCELLED') {
+      await this.retireDeadAttempt(transaction);
+      return null;
+    }
+
+    // PENDING. Safe to retry only if the provider REFUSED, which means it never charged.
+    if (this.lastFailureWasRefused(transaction)) {
+      await this.retireDeadAttempt(transaction);
+      return null;
+    }
+
+    transaction.status = 'PENDING';
+    await transaction.save();
+    return transaction;
+  }
+
+  /**
+   * Did the provider REFUSE this attempt, as opposed to leaving us not knowing?
+   *
+   * Reads the status the gateway adapter recorded on the row — `errorPayload` keeps it in
+   * `details.status` — and treats 4xx as a decision. A 5xx, a timeout, or an unreachable host
+   * records no status at all, which is exactly the case that must NOT count as refused.
+   */
+  private lastFailureWasRefused(transaction: IPaymentTransaction): boolean {
+    for (let i = transaction.rawGatewayPayloads.length - 1; i >= 0; i--) {
+      const payload = transaction.rawGatewayPayloads[i];
+      if (payload?.type !== 'error') continue;
+      const status = payload?.details?.status;
+      return typeof status === 'number' && status >= 400 && status < 500;
+    }
+    return false;
+  }
+
+  /**
+   * Write a failed attempt down — including the reference the gateway had already issued.
+   *
+   * NotchPay opens a transaction in one call and charges it in a second, so a failure at the
+   * second still leaves a real reference behind. It used to be dropped on the floor with the
+   * error, which left the row claiming no charge had ever been opened — the precise input
+   * `releaseDeadAttempt` needs to decide whether retrying is safe. The adapter now carries it
+   * out on the error, and this is where it lands.
+   */
+  private async recordFailedAttempt(
+    transaction: IPaymentTransaction,
+    error: unknown
+  ): Promise<void> {
+    transaction.status = 'FAILED';
+    transaction.rawGatewayPayloads.push(this.errorPayload(error));
+
+    if (!transaction.gatewayRef && error instanceof AppError) {
+      const issued = error.details?.gatewayRef;
+      if (typeof issued === 'string' && issued) transaction.gatewayRef = issued;
+    }
+
+    await transaction.save();
+  }
+
+  private async retireDeadAttempt(transaction: IPaymentTransaction): Promise<void> {
+    await PaymentTransactionModel.updateOne(
+      { _id: transaction._id },
+      { $set: { idempotencyKey: `${transaction.idempotencyKey}:retired:${transaction._id}` } }
+    );
+  }
+
+  /**
+   * What to record on the row when the gateway call threw.
+   *
+   * `error.message` alone is what this used to keep, and from the gateway adapters that is a
+   * one-line summary — "NotchPay POST /payments/{ref} answered 422" — with the provider's own
+   * explanation sitting in `details.body`. The boundary drops `details` from the CLIENT
+   * response for every `external_service` error, correctly and in every environment, so
+   * unless it is written HERE the reason a payment was refused exists nowhere at all: not in
+   * the response, not in the log, not on the row. `rawGatewayPayloads` is the audit trail
+   * and is never served to a customer, which is what makes it the right place for it.
+   */
+  private errorPayload(error: unknown): Record<string, unknown> {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      timestamp: new Date(),
+      type: 'error',
+      error: message,
+      ...(error instanceof AppError
+        ? { code: error.code, statusCode: error.statusCode, details: error.details ?? null }
+        : {}),
+    };
   }
 
   /**

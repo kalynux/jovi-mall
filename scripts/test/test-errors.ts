@@ -186,7 +186,7 @@ interface CensusRow {
 
 function census(): Map<string, CensusRow> {
     // Matches `createAppError(ERROR_CODES.FOO, 404` across a line break, which is how most
-    // of the 1362 sites are formatted. A dynamic status (a variable, a ternary) simply does
+    // of the ~1517 sites are formatted. A dynamic status (a variable, a ternary) simply does
     // not match and is therefore not asserted on — reporting it as agreeing would be worse
     // than not reporting it.
     const pattern = /createAppError\(\s*ERROR_CODES\.([A-Z0-9_]+)\s*,\s*(\d{3})/g;
@@ -664,6 +664,113 @@ function census(): Map<string, CensusRow> {
 
     assert('every exemption carries a written reason', () =>
         EXEMPT_PATHS.every((e) => e.reason.length > 40));
+
+    // ── 8. The generic-message leak ──────────────────────────────────────────
+    section('8. Default messages — no refusal may render as "unexpected error"');
+
+    /**
+     * ── The defect this section exists to stop ────────────────────────────────
+     *
+     * `createAppError(CODE, 422, undefined, {...})` falls back to
+     * `DEFAULT_ERROR_MESSAGES[CODE]`, and to `GENERIC_ERROR_MESSAGE` when there is no entry.
+     * So a code with no registry entry, thrown with no message, hands a client:
+     *
+     *   { code: "COD_AGENT_EXPOSURE_EXCEEDED", statusCode: 422,
+     *     category: "business_rule", message: "An unexpected error occurred",
+     *     details: { currentExposure: 120400, effectiveLimit: 100000 } }
+     *
+     * — a business rule working exactly as designed, described to the operator as a bug on
+     * our side, with the real numbers sitting right beside the wrong sentence. That is the
+     * shape a real support ticket arrived in, and it is what prompted this assertion.
+     *
+     * wi-admin has had `every code renders a message — none falls back to the generic
+     * default` since Phase 16 and asserts it over its WHOLE registry. This service could
+     * not: 170 of its 623 codes have no entry. Most never matter, because their call sites
+     * pass an explicit message. What matters is the intersection — a code thrown with an
+     * explicit `undefined` AND holding no entry — and that is what this scans for.
+     *
+     * ── A RATCHET, not an amnesty ─────────────────────────────────────────────
+     *
+     * Fourteen remain, baselined below. They are real findings, left because writing
+     * plausible copy for a domain without reading its rules produces a message that is
+     * confidently wrong, which is worse than one that is obviously unhelpful. The list may
+     * SHRINK freely; it may not grow. A new code raised with `undefined` and no entry fails
+     * on the commit that introduces it, which is the only moment fixing it is free.
+     */
+    const KNOWN_GENERIC_FALLBACKS = new Set([
+        'BOOKING_BALANCE_ALREADY_SETTLED',
+        'BOOKING_NO_BALANCE_DUE',
+        'BOOKING_NOT_COMPLETED',
+        'ORDER_ALREADY_CANCELLED',
+        'ORDER_CANCEL_REQUIRES_REFUND',
+        'ORDER_DISPUTE_HOLD',
+        'ORDER_ITEM_NOT_FOUND',
+        'ORDER_NOT_CANCELLABLE',
+        'PAYMENT_CART_MIXED_CURRENCY',
+        'PAYMENT_CART_NOT_FOUND',
+        'PAYMENT_CART_NO_PAYABLE_ORDERS',
+        'PRODUCT_SHARE_SEND_FAILED',
+        'REFUND_ALREADY_FULLY_REFUNDED',
+        'REFUND_AMOUNT_EXCEEDS_MAX',
+        'REFUND_GATEWAY_FAILED',
+        'REFUND_GATEWAY_NOT_SUPPORTED',
+        'REFUND_ORDER_IS_COD',
+        'REFUND_ORDER_NOT_FOUND',
+        'REFUND_PAYMENT_NOT_FOUND',
+        'VENDOR_ONBOARDING_ALREADY_COMPLETED',
+    ]);
+
+    /**
+     * Codes thrown with no message of their own — the site that has declared "the registry
+     * speaks for me", so the registry must have something to say.
+     *
+     * ⚠ BOTH forms, and the second is the one that matters. This scan originally matched
+     * only `createAppError(CODE, 404, undefined` and reported itself clean, while the
+     * TWO-ARGUMENT `createAppError(CODE, 404)` — the same declaration written more briefly —
+     * went unseen. Hiding in it was `AGENT_NOT_FOUND` at **38 call sites**, every one
+     * answering `An unexpected error occurred`. It was found by calling an endpoint with an
+     * id that does not exist, not by this assertion, which is the failure mode a scan-based
+     * guard has: a regex that matches less than it claims reports success.
+     */
+    const genericFallbacks = (() => {
+        const pattern = /createAppError\(\s*ERROR_CODES\.([A-Z0-9_]+)\s*,\s*\d{3}\s*(?:\)|,\s*undefined)/g;
+        const found = new Set<string>();
+        for (const file of sourceFiles(join(__dirname, '..', '..', 'src'))) {
+            for (const match of readFileSync(file, 'utf8').matchAll(pattern)) {
+                if (!(match[1] in DEFAULT_ERROR_MESSAGES)) found.add(match[1]);
+            }
+        }
+        return found;
+    })();
+
+    assert('the scan found sites (it is regex-based — a silent zero would be a false green)', () => {
+        // Every code in the baseline must still be FOUND by the scan. If the regex stops
+        // matching — a reformat, a rename — this collapses to zero and the assertion below
+        // passes vacuously. Three CI baselines in this repo have already asserted a red
+        // state that had quietly gone green; see `assertions-that-never-run`.
+        const stillFound = [...KNOWN_GENERIC_FALLBACKS].filter((c) => genericFallbacks.has(c));
+        return stillFound.length >= KNOWN_GENERIC_FALLBACKS.size - 2;
+    });
+
+    assert('no NEW code renders the generic message — the baseline may shrink, never grow', () => {
+        const added = [...genericFallbacks].filter((c) => !KNOWN_GENERIC_FALLBACKS.has(c));
+        if (added.length > 0) {
+            originalConsole.log(
+                `      ↳ add a DEFAULT_ERROR_MESSAGES entry for: ${added.sort().join(', ')}`,
+            );
+        }
+        return added.length === 0;
+    });
+
+    // Every code the assignability diagnostic's own error table names, plus the four gates
+    // it reports. A diagnostic that names a blocker whose error response cannot describe it
+    // only moves the confusion one endpoint along.
+    assert('the COD and dispatch vocabulary is out of the baseline for good', () =>
+        ['COD_AGENT_EXPOSURE_EXCEEDED', 'COD_AGENT_TRUST_TOO_LOW', 'SHIPMENT_NOT_FOUND',
+            'CONTRACT_COVERAGE_REGION_NOT_COVERED', 'CONTRACT_SHIPMENT_VALUE_EXCEEDED',
+            'AGENT_MEMBERSHIP_NOT_APPROVED', 'AGENT_NOT_ELIGIBLE_FOR_ASSIGNMENT',
+            'AGENT_NOT_FOUND', 'ORDER_NOT_FOUND', 'CONTRACT_NOT_FOUND',
+        ].every((code) => code in DEFAULT_ERROR_MESSAGES));
 
     originalConsole.log(`\n${'═'.repeat(76)}`);
     originalConsole.log(`  ${passed} passed, ${failed} failed`);

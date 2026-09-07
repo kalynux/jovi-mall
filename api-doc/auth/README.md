@@ -1,5 +1,9 @@
 # Auth API
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–27). Corrections are marked inline with ⚠ and a source citation.
+
 ## Base URL
 
 ```
@@ -150,11 +154,30 @@ A user can hold **multiple roles** and log in under any of them independently.
 | `POST` | `/auth/mobile/add-role` | Required | Add a role + a pair scoped to it |
 | `POST` | `/auth/magic/link` | Public | Redeem a magic link — **passwordless customer sign-in** |
 | `POST` | `/auth/magic/code` | Public | Redeem an 8-character sign-in code with a phone or email |
+| `POST` | `/auth/mobile/magic/link` | Public | The **bearer twin** of `/auth/magic/link` — tokens in the body, no cookie. See [magic-login.md](./magic-login.md#bearer-clients--apiauthmobilemagic) |
+| `POST` | `/auth/mobile/magic/code` | Public | The bearer twin of `/auth/magic/code` |
+| `POST` | `/auth/email-change/confirm` | Public | Redeem an email-change token. **Public on purpose** — the link is tapped from a mail client. Requested by `PATCH /api/me/email`; see [../me/contact-change.md](../me/contact-change.md#post-apiauthemail-changeconfirm) |
 
 There is **no** `POST /auth/refresh` or `/auth/verify-code` on this service, and no
-`/auth/mobile/logout`; the table above is the complete auth surface
-(`src/modules/auth/auth.routes.ts` + `routes/browser-auth.routes.ts` +
-`routes/mobile-auth.routes.ts` + `modules/messaging-login/messaging-login.routes.ts`).
+`/auth/mobile/logout`; the table above is the complete auth surface — **24 routes**, from
+`src/modules/auth/auth.routes.ts` + `routes/browser-auth.routes.ts` +
+`routes/mobile-auth.routes.ts` + `modules/messaging-login/messaging-login.routes.ts`
++ `modules/messaging-login/mobile-messaging-login.routes.ts`.
+
+```bash
+# the table above, re-measured — run from jovi-mall/
+npm run dev  # then read the printed route table, or:
+grep -cE '^(GET|POST|PUT|PATCH|DELETE) /api/auth/' ../DOC-PROGRAM/evidence/jovi-routes.txt   # → 24
+```
+
+> ⚠ **Corrected 2026-09-06** (DOC-PROGRAM F-17 class 6). This table listed **21** rows and
+> claimed to be complete, from a list of **four** source files. The fifth,
+> `mobile-messaging-login.routes.ts`, is mounted at `/auth/mobile/magic` in
+> `src/api/index.ts` and holds the two bearer magic routes — so the provenance list being
+> short by one file is exactly why the table was short by two rows. `email-change/confirm`
+> was the third omission, and it lives in `auth.routes.ts`, which the list *did* name.
+> **A completeness claim is only as good as the file list under it, and a reader cannot
+> check a list they are not given.**
 
 > ### ⚠ Customers register in the bot and sign in without a password
 >
@@ -280,13 +303,24 @@ Both endpoints inherit the credential bucket below (20/min/IP).
 
 ### Rate limiting
 
-The `/auth` prefix — all three routers — sits behind **two** IP-scoped buckets, chosen per path
+The `/auth` prefix — **all five routers** — sits behind **two** IP-scoped buckets, chosen per path
 and applied before authentication:
 
 | Bucket | Limit | Paths |
 |---|---|---|
-| **credential** | **20/min/IP** | everything that presents a credential: `login`, `register`, `forgot-password`, `reset-password`, `add-role`, the verification routes, and the `browser`/`mobile` login + register twins. **The default** — a route added here later inherits it |
-| **session** | **300/min/IP** | everything that merely extends a session you already hold: `/auth/me`, `/auth/auth-me/:role`, `/auth/mobile/auth-me/:role`, `/auth/browser/refresh`, `/auth/mobile/refresh` |
+| **credential** | **20/min/IP** | everything that presents a credential: `login`, `register`, `forgot-password`, `reset-password`, `add-role`, the verification routes, the `browser`/`mobile` login + register twins, **`/auth/email-change/confirm`, and all four magic routes** — `/auth/magic/link`, `/auth/magic/code`, `/auth/mobile/magic/link`, `/auth/mobile/magic/code`. **The default** — anything not in the session row is here, and a route added later inherits it |
+| **session** | **300/min/IP** | everything that merely extends a session you already hold. A closed, five-entry **allowlist** (`auth-paths.ts:38-77`): `/auth/me`, `/auth/auth-me` (prefix, covers `/:role`), `/auth/mobile/auth-me`, `/auth/browser/refresh`, `/auth/mobile/refresh` |
+
+> ⚠ **Two corrections here, 2026-09-06.** This said "all **three** routers" — there are **five**
+> mounted under `/auth` (`api/index.ts:94, 95, 96, 104, 119`), the two extra being the magic-login
+> pair. ⚠ **The source comment at `api/index.ts:73` still says "ALL THREE" and is the stale
+> half** — it predates the magic mounts and is documented here rather than edited.
+>
+> And the credential list omitted `email-change/confirm` and all four magic routes. The
+> **direction** of the split is what makes that safe rather than dangerous: the session list is
+> an allowlist, so anything unnamed stays **strict**. But it left the magic routes — which *are*
+> passwordless sign-in, exactly the surface the 20 exists to bound — looking undocumented rather
+> than deliberately strict. **A magic-link client gets 20/min/IP**; budget for it.
 
 Exactly one of the two applies per request. The credential number is the strictest in the
 service and is a security control, not a backstop; the session number is a backstop, and
@@ -557,7 +591,19 @@ valid session.
 | `AUTH_PASSWORD_CHANGED` | `401` | The password changed after this token was minted. **Terminal — do not retry** |
 | `AUTH_SESSION_CAP_REACHED` | `401` | The sign-in is older than 90 days. **Terminal — do not retry** |
 | `AUTH_ACCOUNT_SUSPENDED` | `403` | `User.status` is no longer `active` |
+| `AUTH_ACCOUNT_CLOSED` | `403` | The account was **closed by its owner**. Checked *before* suspension and with its own code, because the 30-day refresh cookie otherwise outlives a closure by a month (`auth.service.ts:134-136`). **Terminal — sign out; there is no path back** |
+| `AUTH_ROLE_NOT_FOUND` | `403` | The refresh token names a role that cannot be signed in as (`isAuthenticatableRole`, `auth.service.ts:204-206`). **Terminal — it is deliberately NOT `AUTH_SESSION_EXPIRED`**, because a client that cannot tell the two apart retries forever |
 | `AUTH_USER_NOT_FOUND` | `401` | The account no longer exists |
+
+> ⚠ **This table omitted BOTH 403s until 2026-09-06, and `AUTH_ACCOUNT_CLOSED` appeared nowhere
+> in this entire `auth/` directory** despite being raised at four sites — the rotation above
+> (`auth.service.ts:134-136`), `login` (`:337`), `requireAuth` (`auth.middleware.ts:205`) and
+> the password reset (`password-reset.service.ts:245`). A client branching this table's seven
+> codes fell through to a generic handler on the two that are **terminal**, and retried a
+> session that can never come back.
+>
+> ⚠ **Both 403s are terminal; four of the five 401s are not.** Status alone does not separate
+> them here — branch on the code.
 
 ---
 
@@ -685,8 +731,17 @@ the old one, so there is no rotation window to get wrong. Every refresh therefor
 | `AUTH_REFRESH_TOKEN_INVALID` | 401 | Malformed, wrong signature, **or an *access* token posted here** (the `type: "refresh"` claim is checked) | Sign out. If you see this in development, check you are not sending the wrong half of the pair |
 | `AUTH_SESSION_EXPIRED` | 401 | The refresh token's own 30 days elapsed | Sign out, prompt login |
 | `AUTH_PASSWORD_CHANGED` | 401 | The account's password changed after this token was minted | Sign out **immediately, and do not retry** — every token you hold is refused by the same rule. Worth surfacing verbatim: for someone who did not change their password, it is the first sign that somebody else did |
+| `AUTH_SESSION_CAP_REACHED` | 401 | The sign-in itself is older than 90 days | Sign out, prompt login. **Terminal — do not retry** |
 | `AUTH_ACCOUNT_SUSPENDED` | 403 | The account was suspended | Sign out, show the reason |
+| `AUTH_ACCOUNT_CLOSED` | 403 | The account was **closed by its owner**. Checked before suspension and with its own code, because a 30-day refresh token otherwise outlives a closure by a month (`auth.service.ts:134-136`) | Sign out. **Terminal — there is no path back**, so do not offer a retry |
+| `AUTH_ROLE_NOT_FOUND` | 403 | The refresh token names a role that cannot be signed in as (`auth.service.ts:204-206`) | Sign out. **Terminal**, and deliberately not `AUTH_SESSION_EXPIRED` — a client that cannot tell the two apart retries forever |
 | `AUTH_USER_NOT_FOUND` | 401 | The account no longer exists | Sign out |
+
+> ⚠ **This table was missing three codes until 2026-09-06** — both 403s above and
+> `AUTH_SESSION_CAP_REACHED`. All three come out of the same `rotateRefreshToken` the section
+> above says the two routes share, so the cookie table and this one were short by the same rows.
+> **Status does not separate terminal from retryable here**: both 403s are terminal, and so are
+> two of the six 401s. Branch on the code.
 
 #### Maintenance windows
 
@@ -1060,7 +1115,7 @@ Below are the key fields returned in `role_entity` for each role. Some fields ar
 > document — **not** the shape `GET /api/{role}/profile` returns. Two differences bite:
 >
 > - **Avatars come back as `avatar_file_id` (an id or `null`)**, not as the
->   `{ id, key, url, mimeType, size, originalName }` object the profile endpoints resolve.
+>   `{ id, key, url, access, mimeType, size, originalName }` object the profile endpoints resolve.
 >   To render an avatar, read the profile endpoint; do not try to build a URL from this id.
 > - **The business name is absent**, for vendor and agency alike — see below.
 >
@@ -1434,6 +1489,7 @@ Once `now − auth_time` exceeds **90 days**, every credential path refuses:
 
 ```
 401  { "success": false,
+"requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
        "error": { "code": "AUTH_SESSION_CAP_REACHED",
                   "statusCode": 401,
                   "category": "authentication",

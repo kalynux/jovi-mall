@@ -13,8 +13,18 @@
  * survives into the serialised response. A projection that silently starts spreading its
  * input fails there rather than in production.
  *
+ * Section **2b** is the second reason it exists, and it is newer: after D-1 of the bargaining
+ * plan a bargainable variant is shelved at its ask rather than at `variant.price`, and FIVE
+ * derivations move together or the storefront contradicts itself. Two of them are pure
+ * functions and are asserted directly; the other three live in an aggregation pipeline, so
+ * § 2b asserts the pipeline's own expression against the pure one on a shared fixture table,
+ * and § 8 source-scans that the pipeline actually reads what it computed. `verify:storefront`
+ * runs the real pipeline against real Mongo — a DB-free suite cannot.
+ *
  * Run: npm run test:public-catalog
  */
+import fs from 'fs';
+import path from 'path';
 import {
     publishableProductFilter,
     isPublishableProduct,
@@ -35,6 +45,13 @@ import {
     toPublicCancellationPolicyDto,
     PublicProductDetailStoreDto,
 } from '../../src/modules/catalog/dto/public-product.dto';
+import {
+    bargainEffectiveExpr,
+    displayCompareAtPriceExpr,
+    displayPriceExpr,
+    publicCompareAtPrice,
+    publicDisplayPrice,
+} from '../../src/modules/catalog/read-models/public-display-price';
 import { toPublicStoreDto } from '../../src/modules/store/dto/public-store.dto';
 import {
     PublicProductListQuerySchema,
@@ -104,6 +121,36 @@ const variant = (over: Partial<Variant> = {}): Variant => ({
     deletedAt: null,
     ...over,
 });
+
+/**
+ * The pricing parent every public price mapper now takes.
+ *
+ * `vectorisationEnabled: true` matches the `product()` fixture below, so the existing
+ * assertions — none of whose variants carry a window — are unaffected: with no `bargain`,
+ * the flag decides nothing and the displayed price is `variant.price` either way.
+ */
+const pricingParent = { vectorisationEnabled: true };
+
+/** The same, with the AI index opted out — which makes a stored window inert. */
+const pricingParentOptedOut = { vectorisationEnabled: false };
+
+/**
+ * A bargainable variant whose FLOOR is a number that appears nowhere else in this file.
+ *
+ * That is what makes the leak assertions in § 4 mean something: `24001` is searched for in
+ * the serialised output, and it can only get there by a mapper publishing `variant.price` or
+ * `bargain.minPrice` on a bargainable variant — the two things D-1 says the storefront must
+ * never show.
+ */
+const BARGAIN_FLOOR = 24001;
+const BARGAIN_ASK = 45000;
+const bargainableVariant = (over: Partial<Variant> = {}): Variant =>
+    variant({
+        price: BARGAIN_FLOOR,
+        compareAtPrice: undefined,
+        bargain: { minPrice: BARGAIN_FLOOR, maxPrice: BARGAIN_ASK },
+        ...over,
+    });
 
 /**
  * A product carrying everything a REAL one carries — including the fields that must never
@@ -265,18 +312,18 @@ assert('allowOversell is always in stock — the vendor will source it', () =>
     variantInStock(variant({ stock: 0, allowOversell: true })));
 
 assert('a single price yields NO priceRange (the key is omitted, not degenerate)', () =>
-    priceRangeOf([variant({ price: 100 })]) === undefined);
+    priceRangeOf([variant({ price: 100 })], pricingParent) === undefined);
 assert('identical prices across variants yield NO priceRange', () =>
-    priceRangeOf([variant({ id: 'a', price: 100 }), variant({ id: 'b', price: 100 })]) === undefined);
+    priceRangeOf([variant({ id: 'a', price: 100 }), variant({ id: 'b', price: 100 })], pricingParent) === undefined);
 assert('differing prices yield min/max', () => {
-    const r = priceRangeOf([variant({ id: 'a', price: 100 }), variant({ id: 'b', price: 250 })]);
+    const r = priceRangeOf([variant({ id: 'a', price: 100 }), variant({ id: 'b', price: 250 })], pricingParent);
     return r?.min === 100 && r?.max === 250;
 });
 assert('an archived variant does NOT widen the price range', () => {
     const r = priceRangeOf([
         variant({ id: 'a', price: 100 }),
         variant({ id: 'b', price: 999, status: 'archived' }),
-    ]);
+    ], pricingParent);
     return r === undefined;
 });
 
@@ -284,34 +331,209 @@ assert('a sub-hour duration reads "per 45 min"', () => servicePriceUnit(45) === 
 assert('an exact hour reads "per 1 h"', () => servicePriceUnit(60) === 'per 1 h');
 assert('90 minutes reads "per 1 h 30 min"', () => servicePriceUnit(90) === 'per 1 h 30 min');
 assert('priceFrom is the rate itself — peak hours only ever ADD', () =>
-    servicePriceFrom(variant({ price: 24000 })) === 24000);
+    servicePriceFrom(variant({ price: 24000 }), pricingParent) === 24000);
+
+// ─── 2b. The bargainable display price (D-1) ─────────────────────────────────
+
+console.log('\n── Bargainable display price ──');
+
+assert('a variant with NO window displays its own price', () =>
+    publicDisplayPrice(true, { price: 24000 }) === 24000);
+
+assert('⚠ a BARGAINABLE variant displays the ASK, never the floor', () =>
+    publicDisplayPrice(true, { price: BARGAIN_FLOOR, bargain: { minPrice: BARGAIN_FLOOR, maxPrice: BARGAIN_ASK } })
+    === BARGAIN_ASK);
+
+assert('a window on an OPTED-OUT product is inert — the floor is displayed', () =>
+    // `isBargainEffective` keeps a configured window and reports it inert rather than
+    // deleting it, so this is a real state a vendor can be in, not a should-never-happen.
+    publicDisplayPrice(false, { price: BARGAIN_FLOOR, bargain: { minPrice: BARGAIN_FLOOR, maxPrice: BARGAIN_ASK } })
+    === BARGAIN_FLOOR);
+
+assert('a DEGENERATE window (ask == floor) is a no-op — the vendor configured no headroom', () =>
+    publicDisplayPrice(true, { price: 24000, bargain: { minPrice: 24000, maxPrice: 24000 } }) === 24000);
+
+assert('a non-bargainable variant\'s compareAtPrice passes through UNCHANGED', () =>
+    publicCompareAtPrice(true, { price: 24000, compareAtPrice: 30000 }) === 30000
+    // Including an already-inverted one. The narrowing below is scoped to the flip; it does
+    // not silently change what the storefront publishes for products this feature never touches.
+    && publicCompareAtPrice(true, { price: 24000, compareAtPrice: 20000 }) === 20000
+    && publicCompareAtPrice(true, { price: 24000 }) === null);
+
+assert('a bargainable variant KEEPS a compareAtPrice strictly above its ask', () =>
+    publicCompareAtPrice(true, {
+        price: BARGAIN_FLOOR, compareAtPrice: 50000, bargain: { minPrice: BARGAIN_FLOOR, maxPrice: BARGAIN_ASK },
+    }) === 50000);
+
+assert('⚠ a bargainable variant DROPS a compareAtPrice at or below its ask', () =>
+    // Otherwise the flip renders "was 30 000, now 45 000" — a strikethrough beneath the live
+    // price. `compareAtPrice` is a "was" price and is unrelated to the window, so the pair is
+    // a perfectly legitimate vendor configuration; it just cannot both be published.
+    publicCompareAtPrice(true, {
+        price: BARGAIN_FLOOR, compareAtPrice: 30000, bargain: { minPrice: BARGAIN_FLOOR, maxPrice: BARGAIN_ASK },
+    }) === null
+    && publicCompareAtPrice(true, {
+        price: BARGAIN_FLOOR, compareAtPrice: BARGAIN_ASK, bargain: { minPrice: BARGAIN_FLOOR, maxPrice: BARGAIN_ASK },
+    }) === null);
+
+assert('priceRangeOf spans DISPLAYED prices, so the band contains the grid\'s own price', () => {
+    // Floors 100 and 24 001; displayed 100 and 45 000. A band computed from floors would read
+    // {100, 24001} beneath a card quoting 45 000 — the range would not contain its own price.
+    const r = priceRangeOf([variant({ id: 'a', price: 100 }), bargainableVariant({ id: 'b' })], pricingParent);
+    return r?.min === 100 && r?.max === BARGAIN_ASK;
+});
+
+assert('priceRangeOf on an opted-out product falls back to the floors', () => {
+    const r = priceRangeOf([variant({ id: 'a', price: 100 }), bargainableVariant({ id: 'b' })], pricingParentOptedOut);
+    return r?.min === 100 && r?.max === BARGAIN_FLOOR;
+});
+
+// ── The two dialects, on one fixture table ───────────────────────────────────
+// The pure functions serve the product detail; the `$` expressions serve the browse grid,
+// its price band and the SKU resolution. They are the SAME rule and they are written in the
+// same file for that reason — this is what asserts they have not drifted.
+//
+// ⚠ The evaluator below is deliberately tiny and covers ONLY the operators
+// `public-display-price.ts` emits. It is not a Mongo emulator, and it is not the proof that
+// the pipeline works — `verify:storefront` runs the real pipeline against real Mongo. What it
+// proves is agreement, which no live suite can check without a bargainable fixture on both
+// sides of the boundary.
+
+const DISPLAY_PATHS = {
+    vectorisationEnabled: '$vectorisationEnabled',
+    bargainMaxPrice: '$$v.bargain.maxPrice',
+    price: '$$v.price',
+    compareAtPrice: '$$v.compareAtPrice',
+};
+
+/** BSON comparison order for the three types these expressions ever compare. */
+const bsonRank = (v: unknown): number =>
+    v === null || v === undefined ? 1 : typeof v === 'number' ? 2 : typeof v === 'boolean' ? 8 : 5;
+
+function bsonCompare(a: unknown, b: unknown): number {
+    const [ra, rb] = [bsonRank(a), bsonRank(b)];
+    if (ra !== rb) return ra < rb ? -1 : 1;
+    if (typeof a === 'number' && typeof b === 'number') return a === b ? 0 : a < b ? -1 : 1;
+    if (typeof a === 'boolean' && typeof b === 'boolean') return a === b ? 0 : a ? 1 : -1;
+    return 0;
+}
+
+function resolvePath(expr: string, root: unknown, vars: Record<string, unknown>): unknown {
+    const isVar = expr.startsWith('$$');
+    const parts = expr.slice(isVar ? 2 : 1).split('.');
+    let cur: unknown = isVar ? vars[parts[0]] : root;
+    for (const key of parts.slice(isVar ? 1 : 0)) {
+        if (cur === null || cur === undefined || typeof cur !== 'object') return undefined;
+        cur = (cur as Record<string, unknown>)[key];
+    }
+    return cur;
+}
+
+function evalExpr(expr: unknown, root: unknown, vars: Record<string, unknown>): unknown {
+    if (typeof expr === 'string') return expr.startsWith('$') ? resolvePath(expr, root, vars) : expr;
+    if (expr === null || typeof expr !== 'object') return expr;
+    const obj = expr as Record<string, unknown>;
+    const op = Object.keys(obj)[0];
+    const args = obj[op] as unknown[];
+    const ev = (x: unknown): unknown => evalExpr(x, root, vars);
+    switch (op) {
+        case '$cond': return ev(args[0]) === true ? ev(args[1]) : ev(args[2]);
+        case '$and': return args.every((a) => ev(a) === true);
+        case '$eq': return bsonCompare(ev(args[0]), ev(args[1])) === 0;
+        case '$ne': return bsonCompare(ev(args[0]), ev(args[1])) !== 0;
+        case '$gt': return bsonCompare(ev(args[0]), ev(args[1])) > 0;
+        case '$ifNull': {
+            const v = ev(args[0]);
+            return v === undefined || v === null ? ev(args[1]) : v;
+        }
+        default: throw new Error(`the evaluator does not implement ${op} — add it deliberately`);
+    }
+}
+
+interface DisplayCase {
+    label: string;
+    vectorisationEnabled: boolean;
+    variant: { price: number; compareAtPrice?: number; bargain?: { minPrice: number; maxPrice: number } };
+}
+
+const DISPLAY_CASES: DisplayCase[] = [
+    { label: 'no window', vectorisationEnabled: true, variant: { price: 24000, compareAtPrice: 30000 } },
+    { label: 'no window, no compareAt', vectorisationEnabled: true, variant: { price: 24000 } },
+    {
+        label: 'bargainable, compareAt above the ask', vectorisationEnabled: true,
+        variant: { price: BARGAIN_FLOOR, compareAtPrice: 50000, bargain: { minPrice: BARGAIN_FLOOR, maxPrice: BARGAIN_ASK } },
+    },
+    {
+        label: 'bargainable, compareAt below the ask', vectorisationEnabled: true,
+        variant: { price: BARGAIN_FLOOR, compareAtPrice: 30000, bargain: { minPrice: BARGAIN_FLOOR, maxPrice: BARGAIN_ASK } },
+    },
+    {
+        label: 'bargainable, compareAt EQUAL to the ask', vectorisationEnabled: true,
+        variant: { price: BARGAIN_FLOOR, compareAtPrice: BARGAIN_ASK, bargain: { minPrice: BARGAIN_FLOOR, maxPrice: BARGAIN_ASK } },
+    },
+    {
+        label: 'bargainable, no compareAt', vectorisationEnabled: true,
+        variant: { price: BARGAIN_FLOOR, bargain: { minPrice: BARGAIN_FLOOR, maxPrice: BARGAIN_ASK } },
+    },
+    {
+        label: 'window present but product OPTED OUT', vectorisationEnabled: false,
+        variant: { price: BARGAIN_FLOOR, compareAtPrice: 30000, bargain: { minPrice: BARGAIN_FLOOR, maxPrice: BARGAIN_ASK } },
+    },
+    {
+        label: 'degenerate window', vectorisationEnabled: true,
+        variant: { price: 24000, compareAtPrice: 30000, bargain: { minPrice: 24000, maxPrice: 24000 } },
+    },
+];
+
+for (const c of DISPLAY_CASES) {
+    const root = { vectorisationEnabled: c.vectorisationEnabled };
+    const vars = { v: c.variant };
+
+    assert(`both dialects agree on the PRICE — ${c.label}`, () =>
+        evalExpr(displayPriceExpr(DISPLAY_PATHS), root, vars)
+        === publicDisplayPrice(c.vectorisationEnabled, c.variant));
+
+    assert(`both dialects agree on compareAtPrice — ${c.label}`, () =>
+        evalExpr(displayCompareAtPriceExpr(DISPLAY_PATHS), root, vars)
+        === publicCompareAtPrice(c.vectorisationEnabled, c.variant));
+}
+
+assert('the pipeline predicate treats a MISSING window exactly as `bargain != null` does', () =>
+    // A missing field path and an explicit null compare equal to null in the aggregation
+    // language, which is what lets one `$ne` cover "never configured" and "cleared".
+    evalExpr(bargainEffectiveExpr(DISPLAY_PATHS), { vectorisationEnabled: true }, { v: { price: 1 } }) === false
+    && evalExpr(bargainEffectiveExpr(DISPLAY_PATHS), { vectorisationEnabled: true }, { v: { price: 1, bargain: null } }) === false
+    && evalExpr(bargainEffectiveExpr(DISPLAY_PATHS), { vectorisationEnabled: true }, { v: { price: 1, bargain: { maxPrice: 9 } } }) === true);
+
+assert('a MISSING vectorisationEnabled is not `true` — products predating the column stay inert', () =>
+    evalExpr(bargainEffectiveExpr(DISPLAY_PATHS), {}, { v: { price: 1, bargain: { maxPrice: 9 } } }) === false);
 
 // ─── 3. The projections ──────────────────────────────────────────────────────
 
 console.log('\n── Projections ──');
 
 assert('compareAtPrice is explicit null when absent, not omitted', () => {
-    const dto = toPublicVariantDto(variant({ compareAtPrice: undefined }), 'XAF', new Map(), new Map(), []);
+    const dto = toPublicVariantDto(variant({ compareAtPrice: undefined }), 'XAF', new Map(), new Map(), [], pricingParent);
     return 'compareAtPrice' in dto && dto.compareAtPrice === null;
 });
 
 assert('sku IS published — already unique and already shown on cart/order lines', () => {
-    const dto = toPublicVariantDto(variant(), 'XAF', new Map(), new Map(), []);
+    const dto = toPublicVariantDto(variant(), 'XAF', new Map(), new Map(), [], pricingParent);
     return dto.sku === 'TSHIRT-RED-L';
 });
 
 assert('optionValueIds is published as the selection key', () => {
-    const dto = toPublicVariantDto(variant(), 'XAF', new Map(), new Map(), []);
+    const dto = toPublicVariantDto(variant(), 'XAF', new Map(), new Map(), [], pricingParent);
     return Array.isArray(dto.optionValueIds) && dto.optionValueIds.length === 1;
 });
 
 assert('optionSignature is NEVER published — it goes stale on a value rename', () => {
-    const dto = toPublicVariantDto(variant(), 'XAF', new Map(), new Map(), []);
+    const dto = toPublicVariantDto(variant(), 'XAF', new Map(), new Map(), [], pricingParent);
     return !('optionSignature' in dto) && !JSON.stringify(dto).includes('size:large');
 });
 
 assert('variant images are OMITTED when the variant has none', () => {
-    const dto = toPublicVariantDto(variant(), 'XAF', new Map(), new Map(), []);
+    const dto = toPublicVariantDto(variant(), 'XAF', new Map(), new Map(), [], pricingParent);
     return !('images' in dto);
 });
 
@@ -325,7 +547,7 @@ assert('a service variant carries priceUnit AND priceFrom beside the raw rate', 
                 bookingMode: 'calendar',
             },
         }),
-        'XAF', new Map(), new Map(), [],
+        'XAF', new Map(), new Map(), [], pricingParent,
     );
     // "per 1 h" rather than BACKEND-SHOP-REQUIREMENTS §2.7d's "per 60 min" example: the
     // former is the better human string, and `durationMinutes` ships beside it so a
@@ -336,13 +558,40 @@ assert('a service variant carries priceUnit AND priceFrom beside the raw rate', 
 assert('a digital variant publishes terms of sale but never the asset', () => {
     const dto = toPublicVariantDto(
         variant({ digitalConfig: { assetId: 'SECRET_ASSET_ID', maxDownloads: 3, expiresAfterDays: 30 } }),
-        'XAF', new Map(), new Map(), [],
+        'XAF', new Map(), new Map(), [], pricingParent,
     );
     return (
         dto.digital?.maxDownloads === 3 &&
         dto.digital?.expiresAfterDays === 30 &&
         !JSON.stringify(dto).includes('SECRET_ASSET_ID')
     );
+});
+
+assert('⚠ the variant DTO quotes the ASK on a bargainable variant, and never the floor', () => {
+    const dto = toPublicVariantDto(bargainableVariant(), 'XAF', new Map(), new Map(), [], pricingParent);
+    return dto.price === BARGAIN_ASK && !JSON.stringify(dto).includes(String(BARGAIN_FLOOR));
+});
+
+assert('the variant DTO quotes the floor when the product is opted OUT of the AI index', () => {
+    const dto = toPublicVariantDto(bargainableVariant(), 'XAF', new Map(), new Map(), [], pricingParentOptedOut);
+    return dto.price === BARGAIN_FLOOR;
+});
+
+assert('a bargainable variant\'s compareAtPrice is dropped when the flip would invert it', () => {
+    const dto = toPublicVariantDto(
+        bargainableVariant({ compareAtPrice: 30000 }), 'XAF', new Map(), new Map(), [], pricingParent,
+    );
+    return dto.price === BARGAIN_ASK && dto.compareAtPrice === null;
+});
+
+assert('⚠ the product detail prices EACH variant on its own merits', () => {
+    // One product, one flag, two variants — a per-product flip would move both. The rule is
+    // per-variant because the window is: `bargainable` is `product.vectorisationEnabled &&
+    // variant.bargain != null`, and a vendor may configure one variant and not its sibling.
+    const dto = detail(product(), [variant({ id: 'plain', price: 100 }), bargainableVariant({ id: 'haggle' })]);
+    const plain = dto.variants.find((v) => v.id === 'plain');
+    const haggle = dto.variants.find((v) => v.id === 'haggle');
+    return plain?.price === 100 && haggle?.price === BARGAIN_ASK;
 });
 
 assert('a simple-mode product returns options: [] and one variant', () => {
@@ -442,6 +691,50 @@ assert('the product detail exposes no vectorisation state', () =>
     !detailJson.includes('vectorisation'));
 assert('the product detail exposes no soft-delete bookkeeping', () =>
     !detailJson.includes('deletedAt') && !detailJson.includes('purgeAt'));
+
+// ── The vendor's floor (D-1) ─────────────────────────────────────────────────
+// `bargain.minPrice` IS `variant.price` and IS the number the vendor will not go below. On
+// the storefront it is the other side's negotiating position, so it is not merely internal
+// bookkeeping like the ids above — publishing it hands the shopper the vendor's reserve.
+
+const bargainDetailJson = JSON.stringify(
+    detail(product(), [bargainableVariant({ compareAtPrice: 30000 })]),
+);
+
+assert('⚠ the product detail does NOT leak bargain.minPrice — it is the vendor\'s floor', () =>
+    !bargainDetailJson.includes('minPrice'));
+
+assert('⚠ the product detail does NOT leak the floor VALUE under any other key', () =>
+    // The key name alone is not enough: the floor also travels as `variant.price`, and a
+    // mapper that forgot to flip would publish the same number under an innocent name.
+    !bargainDetailJson.includes(String(BARGAIN_FLOOR)));
+
+assert('the product detail exposes no `bargain` key at all', () =>
+    !bargainDetailJson.includes('bargain') && !bargainDetailJson.includes('maxPrice'));
+
+assert('the ask IS published — it is the price the shopper is being quoted', () =>
+    bargainDetailJson.includes(String(BARGAIN_ASK)));
+
+assert('an INERT window leaks no floor either — the number is published, the reserve is not', () => {
+    // The opted-out case publishes the floor legitimately, AS the price. What must still not
+    // appear is the window: a shopper who can read `maxPrice` learns there is headroom, and a
+    // shopper who can read `minPrice` learns the reserve whatever the flag says.
+    const json = JSON.stringify(
+        toPublicProductDetailDto({
+            product: product({ vectorisationEnabled: false }),
+            variants: [bargainableVariant()],
+            options: [],
+            optionValues: [],
+            productImages: [],
+            variantImages: new Map(),
+            currency: 'XAF',
+            contentLanguage: 'fr',
+            rating: null,
+            store: storeBlock,
+        }),
+    );
+    return !json.includes('minPrice') && !json.includes('maxPrice') && !json.includes(String(BARGAIN_ASK));
+});
 
 assert('a suspension NOTE cannot reach the wire even if a suspended product were projected', () => {
     const json = JSON.stringify(
@@ -675,9 +968,97 @@ assert('⚠ the product detail and the SKU resolution name a variant IDENTICALLY
         optionsById,
         valuesById,
         [],
+        pricingParent,
     );
     return dto.name === buildVariantDisplayName(null, [{ optionName: 'Size', value: 'M' }], 'DRESS-WAX-M');
 });
+
+// ─── 8. Source scans: all five derivations move together ─────────────────────
+//
+// Three of the five live in an aggregation pipeline — the browse row's `price`, the
+// `priceMin`/`priceMax` band, and the `minPrice`/`maxPrice` filter — and a fourth, the
+// `price_asc`/`price_desc` sort, is correct only because of where its stage sits relative to
+// the projection. None of that is reachable from a DB-free suite, and the failure it guards
+// is not a crash: a filter left on `_defaultVariant.price` returns products whose own card
+// contradicts the band the shopper asked for, and every other test still passes.
+
+console.log('\n── The flip moves together (source) ──');
+
+const SRC = path.join(__dirname, '..', '..', 'src');
+const readSrc = (rel: string): string => fs.readFileSync(path.join(SRC, rel), 'utf8');
+
+/**
+ * Comments are stripped first, and that is deliberate rather than convenient: the tombstones
+ * explaining WHY a path was flipped are the most useful thing in this diff, and a scan that
+ * forced their removal would have made the codebase worse to keep itself green.
+ */
+const stripComments = (src: string): string =>
+    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+const REPO = 'modules/catalog/repositories/mongo/public-catalog.repository.mongo.ts';
+const DTO = 'modules/catalog/dto/public-product.dto.ts';
+const repoSrc = stripComments(readSrc(REPO));
+const dtoSrc = stripComments(readSrc(DTO));
+
+assert('the pipeline builds its price from the SHARED rule, not a hand-rolled $cond', () =>
+    repoSrc.includes("from '../../read-models/public-display-price'")
+    && repoSrc.includes('displayPriceExpr(')
+    && repoSrc.includes('displayCompareAtPriceExpr('));
+
+assert('⚠ the browse row projects displayPrice — `_defaultVariant.price` survives NOWHERE', () =>
+    repoSrc.includes("price: '$_defaultVariant.displayPrice'")
+    && !repoSrc.includes('_defaultVariant.price'));
+
+assert('⚠ the FILTER BAND matches displayPrice — this is the "under 40 000" defect', () =>
+    repoSrc.includes("{ $match: { '_defaultVariant.displayPrice': priceMatch } }")
+    && !repoSrc.includes("'_defaultVariant.price': priceMatch"));
+
+assert('⚠ priceMin/priceMax are taken over displayPrice, never over the floors', () =>
+    repoSrc.includes("$min: '$sellableVariants.displayPrice'")
+    && repoSrc.includes("$max: '$sellableVariants.displayPrice'")
+    && !repoSrc.includes('sellableVariants.price'));
+
+assert('⚠ the SORT stage is pushed AFTER the projection — which is what flips it too', () => {
+    // `price_asc`/`price_desc` sort on the field name `price`, and after
+    // `listProjectionStage` that field IS the displayed price. Move the `$sort` above the
+    // `$project` and it silently starts ordering the grid by the vendors' floors while
+    // showing their asks — a wrong order, never an error.
+    const project = repoSrc.indexOf('stages.push(this.listProjectionStage());');
+    const sort = repoSrc.indexOf('stages.push({ $sort: this.sortStage(query) });');
+    return project !== -1 && sort !== -1 && project < sort;
+});
+
+assert('the sort keys on the projected `price`, so it inherits the flip', () =>
+    repoSrc.includes('return { price: 1, _id: 1 };') && repoSrc.includes('return { price: -1, _id: 1 };'));
+
+assert('the SKU resolution projects vectorisationEnabled and prices through the same rule', () =>
+    repoSrc.includes('vectorisationEnabled: 1')
+    && repoSrc.includes("vectorisationEnabled: '$product.vectorisationEnabled'"));
+
+assert('⚠ the variant lookup projects the ASK ALONE — the floor never enters the pipeline', () =>
+    // Structural, not incidental: with only `maxPrice` in `sellableVariants` there is no
+    // floor for a later `$project` to pick up by accident, however the projection changes.
+    repoSrc.includes("'bargain.maxPrice': 1")
+    && !/\bbargain:\s*1\b/.test(repoSrc));
+
+assert('⚠ neither file names the path `bargain.minPrice` at all', () =>
+    !repoSrc.includes('bargain.minPrice') && !dtoSrc.includes('bargain.minPrice'));
+
+assert('⚠ the public DTO carries no `minPrice` of any kind', () =>
+    // ⚠ The repository legitimately does, and that is a NAME COLLISION rather than a leak:
+    // `PublicProductQuery.minPrice` is the SHOPPER's filter floor, which travels in the
+    // query string. The DTO has no such parameter, so there the word can only mean the
+    // vendor's reserve — which is why the two halves of this rule are asserted separately
+    // instead of as one grep that would have to be weakened to pass.
+    !dtoSrc.includes('minPrice'));
+
+assert('the repository\'s only `minPrice` is the shopper\'s filter bound', () =>
+    repoSrc.split('minPrice').length - 1 === repoSrc.split(/(?:query\.minPrice|minPrice\?:)/).length - 1);
+
+assert('⚠ the public DTO reads no raw `variant.price` — every quote goes through the rule', () =>
+    !dtoSrc.includes('variant.price')
+    && dtoSrc.includes('publicDisplayPrice(')
+    && dtoSrc.includes('publicCompareAtPrice('));
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
 

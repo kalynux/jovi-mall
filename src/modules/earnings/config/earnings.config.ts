@@ -85,6 +85,32 @@ export const EARNINGS_CONFIG = {
    * COD or online-paid.
    */
   AUTO_PAYOUT_THRESHOLD: intEnv('EARNINGS_AUTO_PAYOUT_THRESHOLD', 2_000_000),
+
+  /**
+   * The platform's share of the UPLIFT on a negotiated line, as a percentage
+   * (BARGAINING-AGENT-PLAN D-5). It funds the model spend that produced the
+   * uplift.
+   *
+   * ⚠ It is a share of `(P − floor) × qty`, **never of the gross**. That is what
+   * makes invariant 1 hold — `vendorGross ≥ floor × qty` for any percentage in
+   * `[0, 100]` — so a vendor can never be paid below the number they set
+   * themselves, and D-5 cannot newly trip `EARNINGS_INVALID_SPLIT`. A share of
+   * the gross would break both in the first franc.
+   *
+   * ⚠ It applies **only to lines carrying a negotiation lock**. A storefront sale
+   * at the ask used no AI and the whole uplift is the vendor's — there is no
+   * uplift to speak of there anyway, since P is the ask and the floor is what
+   * `variant.price` says.
+   *
+   * Lives here rather than in `negotiation.config.ts` because it is a term of the
+   * money split: `EarningsSplitService` is its only reader, and the negotiation
+   * module neither knows nor needs to know what the platform keeps.
+   *
+   * Clamped to `[0, 100]` at read time — an out-of-range percentage would let a
+   * misconfiguration invert the invariant above, and `intEnv` alone would happily
+   * return 400.
+   */
+  AI_MARGIN_PERCENT: Math.min(100, intEnv('NEGOTIATION_AI_MARGIN_PERCENT', 30)),
 } as const;
 
 /** A `Date` `days` in the future relative to `now`. */

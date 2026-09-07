@@ -459,9 +459,34 @@ earnings against its own vendor's commission, and proceeds with fulfilment.
 
 **Group-payment errors:** `404 PAYMENT_CART_NOT_FOUND` (no orders for the cartId), `409
 PAYMENT_ORDER_ALREADY_PAID` (all orders already paid), `409 PAYMENT_CART_NO_PAYABLE_ORDERS` (nothing
-left to pay), `400 PAYMENT_CART_MIXED_CURRENCY`, `400 PAYMENT_REFERENCE_REQUIRED` (neither cartId nor
-orderId supplied), `422 PAYMENT_ORDER_IS_COD` (the checkout is cash-on-delivery — no online payment
-exists for it).
+left to pay), `400 PAYMENT_CART_MIXED_CURRENCY`, `422 PAYMENT_ORDER_IS_COD` (the checkout is
+cash-on-delivery — no online payment exists for it).
+
+**Sending neither `cartId` nor `orderId` is `400 VALIDATION_ERROR`**, not a payment code — it is a
+schema failure, caught by a Zod `.refine` before the handler runs, so it arrives in the ordinary
+field shape:
+
+```json
+{
+  "success": false,
+  "requestId": "req_9f3c1a",
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Validation failed",
+    "statusCode": 400,
+    "category": "validation",
+    "details": { "fields": [ { "path": "cartId", "message": "Either cartId or orderId is required" } ] }
+  }
+}
+```
+
+> 🔴 **Corrected 2026-09-06** (DOC-PROGRAM F-17 class 7). This list said
+> ~~`400 PAYMENT_REFERENCE_REQUIRED`~~. That code is in the registry and is raised **nowhere in
+> `src/`** — the condition is caught by `InitiatePaymentSchema`'s refine
+> (`payments/validators/payment.validators.ts:58`), which reports `path: ['cartId']`. A client
+> branching on the payment code never matched, and — the part that actually cost something —
+> would not have known to surface the message against the **`cartId` field** the way it does for
+> every other validation failure.
 
 ### Watching the payment land
 

@@ -97,7 +97,10 @@ export class TemplateRegistry {
             // ── Vendor ───────────────────────────────────────────────────────
             ['vendor_order_created', 3, true, 'Vendor: new order received'],
             ['vendor_order_cancelled', 1, true, 'Vendor: order cancelled'],
-            ['vendor_booking_created', 3, true, 'Vendor: new booking received'],
+            // 3 -> 5: gained the customer's name and the confirm-or-decline line.
+            // Re-approve in Business Manager before deploying, in all 5 languages —
+            // until then out-of-window sends for this situation fail.
+            ['vendor_booking_created', 5, true, 'Vendor: new booking received'],
             ['vendor_booking_cancelled', 1, true, 'Vendor: booking cancelled'],
             ['vendor_payment_partial', 2, true, 'Vendor: partial payment received'],
             ['vendor_payment_full', 2, true, 'Vendor: full payment received'],

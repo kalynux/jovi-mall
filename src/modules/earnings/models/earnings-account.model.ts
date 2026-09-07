@@ -23,7 +23,32 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
  * `version` provides optimistic locking; balance mutations use atomic `$inc`.
  */
 
-export type EarningsOwnerType = 'vendor' | 'agency' | 'platform' | 'agent';
+/**
+ * `platform_ai` is the SECOND platform-owned singleton, and it is deliberately
+ * not folded into `platform`.
+ *
+ * It holds the 30% of a negotiated line's uplift that funds the bargaining
+ * agent's model spend (BARGAINING-AGENT-PLAN D-5). Keeping it apart from the
+ * marketplace commission is the whole point: the two answer different questions
+ * — "what does the marketplace earn" and "what did the AI cost us" — and summing
+ * them into one balance makes the second unanswerable, which is the number the
+ * feature has to be judged on. Like `platform` it is keyed by a `null` owner_id
+ * and is never paid out (see PAYOUT_OWNER_TYPES).
+ */
+export type EarningsOwnerType = 'vendor' | 'agency' | 'platform' | 'agent' | 'platform_ai';
+
+/**
+ * The owner types the platform itself holds — a `null` `owner_id`, one row each.
+ * Exported so the singleton rule is spread from ONE list rather than re-typed at
+ * every `=== 'platform'` comparison; `EarningsAccountRepository.toOwnerId` is
+ * what it exists for.
+ */
+export const PLATFORM_OWNER_TYPES: readonly EarningsOwnerType[] = ['platform', 'platform_ai'];
+
+/** True for an owner type whose account is a singleton with no `owner_id`. */
+export function isPlatformOwnerType(ownerType: EarningsOwnerType): boolean {
+  return PLATFORM_OWNER_TYPES.includes(ownerType);
+}
 
 export interface IEarningsAccount extends Document {
   owner_type: EarningsOwnerType;
@@ -55,7 +80,7 @@ export interface IEarningsAccount extends Document {
 
 const EarningsAccountSchema = new Schema<IEarningsAccount>(
   {
-    owner_type: { type: String, enum: ['vendor', 'agency', 'platform', 'agent'], required: true },
+    owner_type: { type: String, enum: ['vendor', 'agency', 'platform', 'agent', 'platform_ai'], required: true },
     owner_id: { type: Schema.Types.ObjectId, default: null },
     currency: { type: String, required: true, uppercase: true, trim: true, default: 'XAF' },
     pending_balance: { type: Number, required: true, default: 0, min: 0 },

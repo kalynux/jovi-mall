@@ -145,7 +145,7 @@ contract state, so the UI can render Apply / Pending / Connected.
     {
       "id": "507f1f77bcf86cd799439099",
       "agencyName": "Douala Express Logistics",
-      "logo": { "id": "665f...", "key": "images/2026/07/logo.png", "url": "https://cdn.example.com/logo.png", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
+      "logo": { "id": "665f...", "key": "images/2026/07/logo.png", "url": "https://cdn.example.com/logo.png", "access": "public", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
       "kycVerified": true,
       "headquartersAddress": { "region": "Littoral", "city": "Douala", "address_description": "Akwa, Rue Joss" },
       "country": "CM",

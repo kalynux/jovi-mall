@@ -12,8 +12,9 @@ import { customerOrderViewService } from '../../orders/services/customer-order-v
 import { ShipmentService } from '../../shipments/shipment.service';
 import { cashCollectionService } from '../../cod/services/cash-collection.service';
 import { VendorRepository } from '../../vendors/vendor.repository';
-import { botCallerOf } from '../middlewares/bot-identity.middleware';
+import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { stripDeliveryCodes } from '../dto/bot-projections';
+import { windowForChat } from '../domain/bot-list-window';
 import {
     BotCartIdParamSchema,
     BotCodCodeSchema,
@@ -60,15 +61,23 @@ export class BotOrderController {
             },
         );
 
-        sendSuccess(res, data.map((group) => ({
-            cartId: group.cartId,
-            createdAt: group.createdAt,
-            currency: group.currency,
-            totalAmount: group.totalAmount,
-            orderCount: group.orderCount,
-            paymentStatus: aggregatePaymentStatus(group.paymentStatuses),
-            orders: group.orders,
-        })), { meta });
+        const chat = windowForChat({
+            items: data.map((group) => ({
+                cartId: group.cartId,
+                createdAt: group.createdAt,
+                currency: group.currency,
+                totalAmount: group.totalAmount,
+                orderCount: group.orderCount,
+                paymentStatus: aggregatePaymentStatus(group.paymentStatuses),
+                orders: group.orders,
+            })),
+            total: meta.total,
+            offset: (query.page - 1) * query.limit,
+            surface: 'orders',
+            language: botResponseLanguageOf(req),
+        });
+
+        sendSuccess(res, chat.items, { meta: { ...meta, ...chat.window } });
     });
 
     /** `POST /orders/groups/:cartId` — one checkout group in detail. */

@@ -5,7 +5,7 @@ import {
   EarningsLedgerEntryType,
   EarningsLedgerReasonCode,
 } from '../models/earnings-ledger.model';
-import { EarningsOwnerType } from '../models/earnings-account.model';
+import { EarningsOwnerType, isPlatformOwnerType } from '../models/earnings-account.model';
 import { EarningsSourceType } from '../models/earnings-allocation.model';
 
 export interface CreateLedgerInput {
@@ -54,7 +54,7 @@ export class EarningsLedgerRepository {
   ): Promise<{ items: IEarningsLedger[]; total: number; page: number; limit: number }> {
     const filter = {
       owner_type: ownerType,
-      owner_id: ownerType === 'platform' ? null : new Types.ObjectId(ownerId!),
+      owner_id: isPlatformOwnerType(ownerType) ? null : new Types.ObjectId(ownerId!),
     };
     const [items, total] = await Promise.all([
       EarningsLedgerModel.find(filter)

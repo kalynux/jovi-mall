@@ -6,6 +6,7 @@ import { ITicketAttachment } from '../models/ticket-attachment.model';
 import { eventBus } from '../../../core/events/event-bus';
 import { getStorageProvider, IStorageProvider } from "../../../core/storage";
 import { FileModel, IFile } from '../../catalog/models/file.model';
+import { toFileDetail } from '../../catalog/read-models/file-detail.resolver';
 import { FileReferenceRepositoryMongo } from '../../catalog/repositories/mongo/file-reference.repository.mongo';
 import { IFileReferenceRepository } from '../../catalog/repositories/interfaces/file-reference.repository.interface';
 import mongoose from 'mongoose';
@@ -26,6 +27,16 @@ import mongoose from 'mongoose';
  * - A `file_references` row (entityType 'ticket') keeps the file from being
  *   reclaimed by orphan garbage collection while it is attached.
  */
+
+/**
+ * The per-ticket ceiling, exported because a SECOND caller now reports it.
+ *
+ * ⚠ It was a bare `5` in `attachFile` and nowhere else. The bot surface tells a customer
+ * how many attachments a ticket now holds out of how many it may hold, and a chat that
+ * says "4 of 5" while the service refuses at 3 is worse than saying nothing. One
+ * constant, so the sentence and the refusal cannot disagree.
+ */
+export const TICKET_ATTACHMENT_LIMIT = 5;
 
 const TICKET_FILE_REFERENCE_FIELD = 'attachment';
 
@@ -62,7 +73,7 @@ export class TicketAttachmentService {
     ): Promise<ITicketAttachment> {
         // Check attachment count
         const currentCount = await this.attachmentRepo.countByTicket(ticketId);
-        if (currentCount >= 5) {
+        if (currentCount >= TICKET_ATTACHMENT_LIMIT) {
             throw createAppError(ERROR_CODES.TICKET_ATTACHMENT_LIMIT_EXCEEDED, 422);
         }
 
@@ -243,17 +254,43 @@ export class TicketAttachmentService {
     }
 
     /**
-     * Get the URL for an attachment file
-     * Generates the URL at runtime from the stored key
-     * 
+     * The URL for an attachment file, or `null` when there is no servable one.
+     *
+     * ⚠ **This used to return `getPublicUrl(key)` unconditionally, bypassing the
+     * `toFileDetail` choke point entirely** — and `test:uploads`' guard scan could not
+     * see it, because that regex anchors on a bare `url: storage.getPublicUrl(`. Two
+     * rules were therefore missing here:
+     *
+     *  - **privacy** (ADR-A01 D-2): a key in a private tree is off `express.static`, so
+     *    the URL is a link that 404s. Benign today only because ticket attachments land
+     *    in `documents/`/`images/` rather than `ticket-attachments/` — an accident of
+     *    the upload path, not a guarantee, and the one legacy file in that tree is
+     *    exactly the case this got wrong.
+     *  - **plan quota**: a file outside the owner's storage allowance must not be served
+     *    from here when it is served from nowhere else.
+     *
+     * The return type widened from `string` to `string | null` deliberately, for the
+     * reason `FileDetail.url` is nullable: a caller must be made to handle "there is no
+     * URL" by the compiler rather than render an empty `<img>`.
+     *
      * @param attachment - Ticket attachment
-     * @returns Public URL for the file
+     * @returns Public URL, or null when private or quota-blocked
      */
-    async getAttachmentUrl(attachment: ITicketAttachment): Promise<string> {
+    async getAttachmentUrl(attachment: ITicketAttachment): Promise<string | null> {
         const fileRecord = await FileModel.findById(attachment.file_id);
         if (!fileRecord) {
             throw createAppError(ERROR_CODES.TICKET_ATTACHMENT_MISSING, 404, 'File record not found');
         }
-        return this.storageService.getPublicUrl(fileRecord.key);
+        return toFileDetail(
+            {
+                id: fileRecord._id.toString(),
+                key: fileRecord.key,
+                mimeType: fileRecord.mimeType,
+                size: fileRecord.size,
+                originalName: fileRecord.originalName,
+                quotaBlockedAt: fileRecord.quotaBlockedAt,
+            },
+            this.storageService,
+        ).url;
     }
 }

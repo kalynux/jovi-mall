@@ -206,9 +206,11 @@ Rejected — the PAN is present:
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "statusCode": 400,
+    "category": "validation",
     "details": {
       "fields": [
         { "path": "payout_details.0.card.number", "message": "Card numbers and security codes are never accepted or stored. Send only brand, last4, holder, expiry and country (plus a gateway token if you have one)." },
@@ -371,6 +373,6 @@ addressed.
 | `400` | `VALIDATION_ERROR` on `payout_details[n].method` | The kind is **switched off** — today, anything but `mobile_money`. Message: *"Bank transfer payouts are not available right now. Currently accepted: mobile money."* |
 | `400` | `VALIDATION_ERROR` | Any field above fails — including a PAN/CVV in the card object, an expired card, an off-vocabulary brand, a `last4` that isn't 4 digits, or a list outside 1–3 entries. Map `details.fields[].path` to your form. |
 | `409` | `EARNINGS_PAYOUT_METHOD_MISSING` | A payout was requested with an empty list. |
-| `409` | `CONFLICT` | The `version` you sent to `PATCH /profile` is stale (optimistic locking) — re-read and retry. |
+| `409` | `VENDOR_ONBOARDING_CONCURRENT_MODIFICATION` | The `version` you sent to `PATCH /profile` is stale (optimistic locking) — re-read and retry. ⚠ **Not `CONFLICT`**, which is in no registry (`vendor-profile.service.ts:400`). |
 
 Full catalog: [errors/README.md](../errors/README.md).

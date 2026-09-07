@@ -5,7 +5,8 @@ import { wishlistService } from '../../customers/services/wishlist.service';
 import { recentlyViewedService } from '../../customers/services/recently-viewed.service';
 import { DigitalEntitlementService } from '../../digital-delivery/services/digital-entitlement.service';
 import { DownloadLinkService } from '../../digital-delivery/services/download-link.service';
-import { botCallerOf } from '../middlewares/bot-identity.middleware';
+import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
+import { windowForChat } from '../domain/bot-list-window';
 import {
     BotEntitlementSchema,
     BotNoArgsSchema,
@@ -31,7 +32,16 @@ export class BotCatalogController {
     static listWishlist = asyncHandler(async (req: Request, res: Response) => {
         const { page, limit } = BotPageSchema.parse(req.body ?? {});
         const { data, meta } = await wishlistService.list(botCallerOf(req).customerId, page, limit);
-        sendSuccess(res, data, { meta });
+
+        const chat = windowForChat({
+            items: data,
+            total: meta.total,
+            offset: (page - 1) * limit,
+            surface: 'wishlist',
+            language: botResponseLanguageOf(req),
+        });
+
+        sendSuccess(res, chat.items, { meta: { ...meta, ...chat.window } });
     });
 
     /**
@@ -77,13 +87,77 @@ export class BotCatalogController {
         sendSuccess(res, entry);
     });
 
+    /**
+     * `POST /recently-viewed/list` — what the customer has been looking at.
+     *
+     * ⚠ **This list gets NO `moreUrl`, and that is the honest answer rather than an
+     * omission.** The storefront records views from the product page and shows them on no
+     * page at all — verified in `frontend/landing`, where the only reference is the write.
+     * Sending a customer to "see the rest on the website" would be an invitation to a page
+     * that does not list them. `windowForChat` takes `surface: null` for exactly this.
+     *
+     * The rows survive their products going away — the service degrades those to
+     * `product: null` rather than dropping them — so a caller must expect an entry it
+     * cannot render and say "no longer available" instead of skipping it silently.
+     */
+    static listRecentlyViewed = asyncHandler(async (req: Request, res: Response) => {
+        const { page, limit } = BotPageSchema.parse(req.body ?? {});
+        const { data, meta } = await recentlyViewedService.list(
+            botCallerOf(req).customerId,
+            page,
+            limit,
+        );
+
+        const chat = windowForChat({
+            items: data,
+            total: meta.total,
+            offset: (page - 1) * limit,
+            surface: null,
+            language: botResponseLanguageOf(req),
+        });
+
+        sendSuccess(res, chat.items, { meta: { ...meta, ...chat.window } });
+    });
+
+    /**
+     * `DELETE /recently-viewed` — forget the browsing history.
+     *
+     * ⚠ **Genuinely destructive: the rows are deleted, not flagged**, and nothing
+     * reconstructs them. It is `requires_confirmation` in the catalogue for that reason —
+     * "clear my history" is a sentence a model could plausibly infer from "I'm not
+     * interested in those", and it must not.
+     *
+     * The service also clears the legacy `recentProductCode` mirror, which is what the
+     * support-routing ladder falls back to when it has nothing else — so a customer who
+     * clears their history and then asks "who do I contact about that thing" may get the
+     * platform rung rather than a vendor. Correct, and worth knowing.
+     */
+    static clearRecentlyViewed = asyncHandler(async (req: Request, res: Response) => {
+        BotNoArgsSchema.parse(req.body ?? {});
+        const { removed } = await recentlyViewedService.clear(botCallerOf(req).customerId);
+        sendSuccess(res, { cleared: true, removed }, { message: 'Browsing history cleared.' });
+    });
+
     /** `POST /digital/my-products` — the purchased library, with each entitlement's state. */
     static listEntitlements = asyncHandler(async (req: Request, res: Response) => {
         BotNoArgsSchema.parse(req.body ?? {});
         const entitlements = await entitlementService.getCustomerEntitlements(
             botCallerOf(req).customerId,
         );
-        sendSuccess(res, entitlements);
+
+        /**
+         * ⚠ **Unpaginated, so the slice inside `windowForChat` IS the cap here.** The
+         * service returns the whole library and there is no `limit` to clamp — a customer
+         * with forty downloads would otherwise have had all forty narrated at them.
+         */
+        const chat = windowForChat({
+            items: entitlements,
+            total: entitlements.length,
+            surface: 'digital',
+            language: botResponseLanguageOf(req),
+        });
+
+        sendSuccess(res, chat.items, { meta: { ...chat.window } });
     });
 
     /**

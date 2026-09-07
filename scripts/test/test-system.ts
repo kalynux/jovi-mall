@@ -1365,7 +1365,10 @@ section('Worker inventory — the thirteenth worker was invisible to every surfa
 // The count is hardcoded on purpose: a worker added without an inventory entry is invisible
 // to every operations surface AND is never stopped by the drain, which is the defect this
 // section was written about. Do not weaken it to `>=`.
-assert('the inventory now holds 18 workers', () => WORKER_INVENTORY.length === 18);
+// 18 -> 19: PlanQuotaReconcileWorker, the drift sweep that repairs plan-quota enforcement
+// when the `plan.activated` event that should have done it was lost — and that releases an
+// owner's held-back products once they free room, which no plan change announces.
+assert('the inventory now holds 19 workers', () => WORKER_INVENTORY.length === 19);
 
 /**
  * The new one, asserted by name and by the two properties that make it a backstop rather
@@ -1421,8 +1424,8 @@ const WORKER_SOURCES = [
         readFileSync(join(SRC, 'core', 'jobs', 'aggregation-scheduler.ts'), 'utf8')) },
 ];
 
-assert('the scan sees every worker file — 17 module workers plus the scheduler', () =>
-    WORKER_SOURCES.length === 18);
+assert('the scan sees every worker file — 18 module workers plus the scheduler', () =>
+    WORKER_SOURCES.length === 19);
 
 assert('EVERY worker routes its pass through withWorkerLock', () => {
     const missing = WORKER_SOURCES.filter(({ code }) => !code.includes('withWorkerLock('));
@@ -1574,7 +1577,26 @@ assert('lifecycle.ts is the ONLY signal handler in src/', () => {
 const BUILD_ASSETS_SRC = readFileSync(join(__dirname, '..', 'copy-build-assets.ts'), 'utf8');
 
 /** Extensions that are documentation or fixtures, never read by the running service. */
-const NON_RUNTIME_EXTENSIONS = new Set(['.md', '.pdf']);
+const NON_RUNTIME_EXTENSIONS = new Set(['.pdf']);
+
+/**
+ * The `.md` files under `src/` that really are documentation.
+ *
+ * `.md` used to sit in NON_RUNTIME_EXTENSIONS, on the assumption that markdown under
+ * `src/` is always a README. That assumption held until the negotiation playbook, which
+ * IS read off disk at runtime - so it would have been absent from `dist/` under
+ * `npm start`, and the one guard written to catch exactly that would have skipped it.
+ *
+ * An allowlist rather than an extension skip: a NEW runtime `.md` fails this suite until
+ * somebody classifies it, which is the same argument the manifest itself makes against a
+ * glob. Adding a README here is a claim that nothing reads it.
+ */
+const DOCUMENTATION_MARKDOWN = new Set([
+    'core/storage/README.md',
+    'core/uploads/README.md',
+    'modules/whatsapp/EXAMPLES.md',
+    'modules/whatsapp/README.md',
+]);
 
 /** `tsc` emits these itself, so they need no manifest entry. */
 const EMITTED_BY_TSC = new Set(['.ts', '.json']);
@@ -1591,6 +1613,7 @@ function collectAssetFiles(dir: string, out: string[] = []): string[] {
         const dot = entry.name.lastIndexOf('.');
         const ext = dot === -1 ? '' : entry.name.slice(dot);
         if (EMITTED_BY_TSC.has(ext) || NON_RUNTIME_EXTENSIONS.has(ext)) continue;
+        if (ext === '.md' && DOCUMENTATION_MARKDOWN.has(relative(SRC, full).split(sep).join('/'))) continue;
         out.push(full);
     }
     return out;
@@ -1736,8 +1759,18 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
 // of it — `stock_movement_idempotency` is what stops a retried payment webhook selling the same
 // depot shelf twice, and `storage_invoice_identity` is what stops the monthly run issuing two
 // statements for one month.
-assert('all twenty are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 20);
+// 21 -> 22: `migrate:booking-number-index`, the partial unique index on
+// `bookings.bookingNumber`. Same argument a fourth time — the booking handle's
+// uniqueness is enforced by that index and by `BookingNumberGenerator`'s counter,
+// and a restored database that lost the counter re-issues numbers customers are
+// already holding, silently.
+// 22 -> 23: `migrate:plan-quota-indexes`. Two ordering indexes the plan-quota sweep walks
+// (on `products` and `files`), plus the UNIQUE stamp on `plan_quota_states` — the fifth
+// migration here to claim uniqueness, and for the same class of reason: without it two
+// sweeps can each believe they enforced the current plan while disagreeing about which one
+// it is.
+assert('all twenty-two are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 22);
 
 // ONE ordering rule now, from the runner's own header, and it is correctness rather than
 // taste: a unique index build fails outright against data a later migration has not yet

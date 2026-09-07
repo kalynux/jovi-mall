@@ -34,9 +34,32 @@ Everything after the purchase lives under `/api/customer/bookings` (beside `/api
 | `GET` | `/api/customer/bookings` | List your bookings. Query: `status`, `paymentStatus`, `startDate`, `endDate`, `page`, `limit`. Returns `{ data, meta: { total, page, limit, totalPages } }`. |
 | `GET` | `/api/customer/bookings/:id` | One booking, with product and vendor populated. |
 | `POST` | `/api/customer/bookings/:id/cancel` | Cancel. Body: `{ reason? }`. Subject to the vendor's cancellation policy. |
-| `PATCH` | `/api/customer/bookings/:id/reschedule` | Move to another slot. Body: `{ newSlotId }`. **Lock the new slot first** (step 2 above). `pending`/`confirmed` only. |
+| `PATCH` | `/api/customer/bookings/:id/reschedule` | Move to another slot. Body: `{ newSlotId }`. **Lock the new slot first** (step 2 above). `pending`/`confirmed` only. Works for capacity services — see below. |
 | `GET` | `/api/customer/bookings/:id/balance` | What is still owed after completion (and what was overpaid). |
 | `POST` | `/api/customer/bookings/:id/pay-balance` | Pay that balance. Body: `{ gateway, channel }` — same shape as step 4. |
+
+---
+
+## Rescheduling a capacity service
+
+Moving a seat in a group class works exactly like moving an ordinary booking — lock the target
+slot, then `PATCH .../reschedule` — but two of the answers differ, because a class is not a
+free/busy question:
+
+- **A class with other people in it is still movable into.** The check is "are there fewer than
+  `maxBookings` seats taken", not "is this interval free". Moving into a 3-of-8 class succeeds
+  and makes it 4 of 8.
+- **A full class answers `409 BOOKING_SLOT_FULL`**, not `BOOKING_SLOT_UNAVAILABLE`. Show the
+  seat count and offer another slot rather than reporting a clash.
+
+Everything else is the same, including that the hold must be taken through
+`POST /api/products/:productId/slots/:slotId/lock` — for a capacity service that hold is
+namespaced to you, which is what lets several customers hold the same class at once.
+
+> ⚠ **Before 2026-09-06 this always failed with `409 BOOKING_SLOT_NOT_LOCKED`**, however
+> correct the request was, because the reschedule looked for the hold under a different key
+> from the one the lock endpoint writes. A client that special-cased capacity services out of
+> its reschedule UI can stop doing so.
 
 ---
 
@@ -292,7 +315,8 @@ In all cases `paymentStatus` starts as `unpaid`.
   "success": true,
   "data": {
     "booking": {
-      "_id": "507f1f77bcf86cd799439011",
+      "id": "507f1f77bcf86cd799439011",
+      "bookingNumber": "BKG-2026-000123",
       "productId": "507f1f77bcf86cd799439012",
       "userId": "507f1f77bcf86cd799439013",
       "vendorId": "507f1f77bcf86cd799439014",
@@ -316,6 +340,16 @@ In all cases `paymentStatus` starts as `unpaid`.
 ```
 
 `priceSnapshot` and `price.amount` are in the smallest currency unit (e.g. `5000` = 50.00 XAF). The booking is now awaiting payment — proceed to **Pay for a Booking**.
+
+> [!NOTE]
+> **`bookingNumber`** is the booking's human-readable handle — `BKG-2026-000123`, the same shape
+> as an order's `ORD-2026-000123`. It is generated at creation, never editable, and it is the
+> string to show the customer and to quote to the vendor or to support. It appears on every
+> booking read here and on the vendor's side of the same booking.
+>
+> **It is `null` on bookings created before the field existed** — show a fallback rather than a
+> bare `#`. And it is **not a count**: a booking that fails after the number is drawn burns it, so
+> `BKG-2026-000042` does not mean "the 42nd booking of 2026". Requests still take `id`.
 
 > **How the price is computed.** The service product's single variant holds a base `price` per `serviceConfig.durationMinutes`. The backend prorates it by the booked slot duration and adds a peak-hours surcharge for any minutes overlapping the vendor's peak window — `price.breakdown` shows `basePrice` and (when applicable) `peakHoursSurcharge`. The final amount may be recomputed by the vendor at completion if the appointment runs longer.
 
@@ -474,9 +508,12 @@ Point 1 is decided from the platform's own booking records, so availability stay
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "BOOKING_SLOT_NOT_LOCKED",
-    "message": "Human-readable description"
+    "message": "Human-readable description",
+    "statusCode": 409,
+    "category": "conflict"
   }
 }
 ```
@@ -488,8 +525,8 @@ Point 1 is decided from the platform's own booking records, so availability stay
 | `BOOKING_INVALID_SLOT_ID` | 400 | Malformed `slotId` |
 | `BOOKING_SLOT_LOCKED` | 409 | Lock — slot held by another user |
 | `BOOKING_SLOT_NOT_LOCKED` | 409 | Book — slot not locked / lock expired |
-| `BOOKING_SLOT_FULL` | 409 | Book — capacity slot is full (`maxBookings` reached) |
-| `BOOKING_SLOT_UNAVAILABLE` | 409 | Book/reschedule — someone took that interval first |
+| `BOOKING_SLOT_FULL` | 409 | Book **or reschedule** — capacity slot is full (`maxBookings` reached) |
+| `BOOKING_SLOT_UNAVAILABLE` | 409 | Book/reschedule — someone took that interval first. **Single-occupancy services only** — a capacity service answers `BOOKING_SLOT_FULL` instead, because a class with other people already in it is not "taken" |
 | `BOOKING_NOT_RESCHEDULABLE` | 409 | Reschedule — booking is not `pending`/`confirmed` |
 | `BOOKING_NOT_CANCELLABLE` | 409 | Cancel — booking is `completed` or `no-show` |
 | `BOOKING_ALREADY_CANCELLED` | 409 | Cancel — already cancelled |

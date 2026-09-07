@@ -341,12 +341,24 @@ export class ConnectionService {
     });
     if (!updated) throw createAppError(ERROR_CODES.CONNECTION_NOT_FOUND, 404);
 
+    /**
+     * ⚠ Notify UNCONDITIONALLY. Fixed 2026-09-07 (DOC-PROGRAM § 30).
+     *
+     * Both branches were `if (name) await notify(...)`, so a counterparty whose Store or
+     * Magazin name did not resolve — no store yet, or an unnamed one — was **never told their
+     * connection request had been rejected**. The request simply sat in their dashboard.
+     *
+     * The approval path a few lines above has always used `?? ''` and fired regardless, and
+     * that is the correct behaviour: the name is a rendering detail, not a precondition for
+     * telling somebody a decision was made about them. The two paths now agree.
+     *
+     * `?? ''` renders as the catalog's empty-value case, which `renderTemplate` already trims
+     * — the same handling the approval notification has always relied on.
+     */
     if (actorRole === 'agency') {
-      const agencyName = await this.magazinRepo.findNameByAgencyId(actorEntityId);
-      if (agencyName) await this.notifyVendor('connection.rejected', updated._id.toString(), connection.vendor_id.toString(), agencyName);
+      await this.notifyVendor('connection.rejected', updated._id.toString(), connection.vendor_id.toString(), (await this.magazinRepo.findNameByAgencyId(actorEntityId)) ?? '');
     } else {
-      const vendorName = await this.storeRepo.findNameByVendorId(actorEntityId);
-      if (vendorName) await this.notifyAgency('connection.rejected', updated._id.toString(), connection.agency_id.toString(), vendorName);
+      await this.notifyAgency('connection.rejected', updated._id.toString(), connection.agency_id.toString(), (await this.storeRepo.findNameByVendorId(actorEntityId)) ?? '');
     }
 
     return updated;

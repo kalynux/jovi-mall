@@ -44,6 +44,27 @@ export const TRUST_PROXY: boolean | number | string = (() => {
 export const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT ?? '1mb';
 
 /**
+ * Ceiling on ONE path: `POST /api/internal/bot/files/inbound` (Step 7b).
+ *
+ * ── WHY THE GLOBAL LIMIT COULD NOT SIMPLY BE RAISED ─────────────────────────
+ * A photo a customer sends in a chat reaches us as base64 inside a JSON body, because the
+ * automation layer is the only party that can fetch it from Meta or Telegram and n8n's
+ * HTTP node speaks JSON. Base64 inflates by a third, so a 5 MB image — the largest
+ * WhatsApp will deliver — is 6.7 MB on the wire and the 1 MB global ceiling refuses it.
+ *
+ * Raising `JSON_BODY_LIMIT` instead would hand every one of the several hundred other
+ * routes a twelve-megabyte body budget to defend, for one route's benefit. The path-scoped
+ * parser is the same shape `app.ts` already uses for the gateway webhooks, which need raw
+ * bytes on three literal paths and nowhere else.
+ *
+ * ⚠ **This is the backstop, not the refusal a customer reads.** Exceeding it is a bare 413
+ * from body-parser with no error code for a chat to relay. `BOT_INBOUND_FILE_MAX_BYTES`
+ * (8 MB, applied to the DECODED buffer) is the limit that produces a sentence, and it is
+ * deliberately lower so it always fires first.
+ */
+export const BOT_FILE_BODY_LIMIT = process.env.BOT_FILE_BODY_LIMIT ?? '12mb';
+
+/**
  * Ceiling on a raw gateway webhook body, deliberately larger than the JSON one.
  *
  * A Stripe event carrying a fully expanded object is legitimate traffic we cannot ask the

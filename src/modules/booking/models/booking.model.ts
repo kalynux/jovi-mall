@@ -21,6 +21,23 @@ export type BookingPaymentStatus =
 export type BookingPaymentMethod = 'cash' | 'online';
 
 export interface IBooking extends IBaseDocument {
+  /**
+   * The booking's human-readable handle — `BKG-2026-000123`, generated at
+   * creation by `BookingNumberGenerator` and never editable. Deliberately the
+   * same shape as `Order.order_number`, because a vendor reads both on one
+   * screen.
+   *
+   * Nullable ONLY for bookings written before generation existed. Everything the
+   * platform creates has one, and the partial unique index below tolerates the
+   * nulls so it can build against a database that still holds them. Per D-5
+   * (`PRODUCTION-READINESS/PHASE-6-UNBUILT-SCOPE-PLAN.md`) those legacy rows are
+   * NOT backfilled — there is no production data, and dev bookings are remade.
+   *
+   * So every reader must handle null. The vendor notification does, by falling
+   * back to a localized "your new booking" rather than emitting `#` and nothing:
+   * that empty rendering is exactly the defect this field exists to close.
+   */
+  bookingNumber?: string | null;
   productId: Types.ObjectId;
   userId: Types.ObjectId;
   vendorId: Types.ObjectId;
@@ -81,6 +98,10 @@ export interface IBooking extends IBaseDocument {
 
 const BookingSchema = new Schema<IBooking>(
   {
+    // Not `required`, and that is deliberate: a legacy booking has none, and a
+    // required path would make `.save()` throw on every one of them — including
+    // the cancel and settle paths, which load and save existing documents.
+    bookingNumber: { type: String, default: null, trim: true },
     productId: {
       type: Schema.Types.ObjectId,
       ref: MODELS.PRODUCT,
@@ -205,6 +226,16 @@ BookingSchema.index(
 );
 // The reminder sweep: upcoming confirmed bookings in a time window.
 BookingSchema.index({ status: 1, startAt: 1 });
+
+// The booking number is a handle, so it has to be unique and it has to be
+// findable. PARTIAL on `$type: 'string'` so it tolerates the legacy nulls — a
+// plain unique index treats every missing value as the same null and would
+// refuse to build on any database holding more than one of them. The generator's
+// counter already makes collisions impossible; this is what guarantees it.
+BookingSchema.index(
+  { bookingNumber: 1 },
+  { unique: true, partialFilterExpression: { bookingNumber: { $type: 'string' } } }
+);
 
 // Pre-save hook: Auto-mark free bookings as paid
 BookingSchema.pre('save', function (next) {

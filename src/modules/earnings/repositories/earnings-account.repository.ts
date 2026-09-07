@@ -3,6 +3,7 @@ import {
   EarningsAccountModel,
   IEarningsAccount,
   EarningsOwnerType,
+  isPlatformOwnerType,
 } from '../models/earnings-account.model';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -18,7 +19,13 @@ import { EARNINGS_CONFIG } from '../config/earnings.config';
  */
 export class EarningsAccountRepository {
   private toOwnerId(ownerType: EarningsOwnerType, ownerId: string | null): Types.ObjectId | null {
-    if (ownerType === 'platform') return null;
+    // Both platform-owned types are singletons — `platform` (commission) and
+    // `platform_ai` (the bargaining agent's share of a negotiated uplift). Read
+    // from ONE list rather than compared to a literal: a second `=== 'platform'`
+    // written here would have thrown INTERNAL_SERVER_ERROR on every AI-margin
+    // allocation, on the money path, for want of an `owner_id` that by design
+    // does not exist.
+    if (isPlatformOwnerType(ownerType)) return null;
     if (!ownerId) {
       throw createAppError(
         ERROR_CODES.INTERNAL_SERVER_ERROR,

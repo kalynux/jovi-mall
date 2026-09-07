@@ -19,6 +19,7 @@ import { createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
 import { ProductRepositoryMongo } from '../catalog/repositories/mongo/product.repository.mongo';
 import { VariantRepositoryMongo } from '../catalog/repositories/mongo/variant.repository.mongo';
+import { PriceResolverService } from '../catalog/domain/services/pricing-inventory/PriceResolverService';
 import { ProductModel } from '../catalog/models/product.model';
 import { ProductVariantModel } from '../catalog/models/product-variant.model';
 import { VendorCustomerSyncService } from '../vendors/services/vendor-customer-sync.service';
@@ -108,6 +109,13 @@ export class OrderService {
   private storageProvider: IStorageProvider;
   /** Read-only, and only ever through `findPublicIdentitiesByIds` — see ADR-A06. */
   private agentRepo: AgentRepository;
+  /**
+   * Used for ONE thing: re-resolving the lines that carry a negotiation lock, so
+   * their price can be re-validated and the lock consumed inside the order's own
+   * transaction (BARGAINING-AGENT-PLAN D-12). Ordinary lines keep taking their
+   * price from the cart snapshot — see `resolveNegotiatedLines`.
+   */
+  private priceResolver: PriceResolverService;
 
   constructor() {
     this.orderRepo = new OrderRepository();
@@ -123,6 +131,7 @@ export class OrderService {
     this.fileRepository = new FileRepositoryMongo();
     this.storageProvider = getStorageProvider();
     this.agentRepo = new AgentRepository();
+    this.priceResolver = new PriceResolverService(this.productRepo, this.variantRepo);
   }
 
   /**
@@ -758,6 +767,87 @@ export class OrderService {
   }
 
   /**
+   * Spend the negotiation locks on this vendor's lines, and return what each one
+   * is actually worth — keyed by `variantId`, which is how a cart line is
+   * addressed everywhere else here (cart items carry no `_id`).
+   *
+   * ── This is the ONLY re-resolution on the checkout path, and it is new ──────
+   *
+   * ⚠ `cart.service.ts` used to claim that "the price a cart quotes is
+   * re-resolved at checkout, which is the moment that actually binds." **It was
+   * not.** This method read `cartItem.price` — the snapshot taken when the line
+   * entered the basket — and never called `PriceResolverService` at all; the only
+   * other call site was `mergeCart`. That comment is corrected, and this is the
+   * re-resolution D-12 requires.
+   *
+   * **Scoped to locked lines on purpose.** Re-resolving every line would change
+   * ordinary checkout behaviour — a vendor's price edit would silently re-price a
+   * basket somebody is in the middle of paying for — and that is a decision
+   * nobody has taken. A locked line is different: its price MUST be re-checked,
+   * because honouring an agreed price the vendor's current window no longer
+   * contains would pay them below their own floor (D-10).
+   *
+   * Three properties are load-bearing:
+   *
+   *  - **It runs inside the order's transaction.** `consume` is a write, and a
+   *    checkout that fails afterwards must leave the lock spendable — otherwise
+   *    a customer whose payment page timed out has lost what they haggled for
+   *    with nothing to show for it.
+   *  - **It runs BEFORE the totals.** The consume verdict can legitimately carry
+   *    a different price from the cart's snapshot, and `price_breakdown` must
+   *    describe what is charged.
+   *  - **A refusal throws, and takes the whole checkout with it.** All five
+   *    `NEGOTIATION_LOCK_*` codes are client-safe, so the chat can say what
+   *    happened and reopen the negotiation. Skipping the line and charging the
+   *    list price instead would charge more than the customer agreed to.
+   */
+  private async resolveNegotiatedLines(
+    customerId: string,
+    items: CartResponse['items'],
+    session: ClientSession,
+  ): Promise<Map<string, { unitPrice: number; floorPrice: number }>> {
+    const resolved = new Map<string, { unitPrice: number; floorPrice: number }>();
+
+    for (const item of items) {
+      if (!item.negotiationLockRef) continue;
+
+      const price = await this.priceResolver.execute({
+        productId: item.productId,
+        variantId: item.variantId,
+        vendorId: item.vendorId,
+        quantity: item.quantity,
+        negotiation: {
+          lockRef: item.negotiationLockRef,
+          customerId,
+          mode: 'consume',
+          session,
+        },
+      });
+
+      // Defensive: `execute` returns `negotiated` whenever it was given a lock
+      // and did not throw. If that ever stops being true, refuse rather than
+      // silently record the line as un-negotiated — an un-negotiated line pays
+      // the platform no AI margin and reports no floor, so the failure would be
+      // a quiet accounting hole rather than an error.
+      if (!price.negotiated) {
+        throw createAppError(
+          ERROR_CODES.NEGOTIATION_LOCK_INVALID,
+          404,
+          undefined,
+          { variantId: item.variantId, lockRef: item.negotiationLockRef },
+        );
+      }
+
+      resolved.set(item.variantId, {
+        unitPrice: price.unitPrice,
+        floorPrice: price.negotiated.floorPrice,
+      });
+    }
+
+    return resolved;
+  }
+
+  /**
    * Build and persist ONE single-vendor order (plus its shipments, for physical
    * orders) within the given transaction session. Extracted from the cart split
    * so each vendor group produces an independent order that then runs the normal
@@ -781,6 +871,10 @@ export class OrderService {
     // Order number (unique per order)
     const orderNumber = await OrderNumberGenerator.generateOrderNumber();
 
+    // Spend the negotiation locks and re-validate their prices, inside this
+    // transaction, BEFORE anything is totalled — see `resolveNegotiatedLines`.
+    const negotiatedLines = await this.resolveNegotiatedLines(customerId, items, session);
+
     /**
      * Price breakdown from THIS vendor's items only.
      *
@@ -799,7 +893,10 @@ export class OrderService {
      * Keeping the fields present and zero means the receipt shape does not change the day
      * either arrives.
      */
-    const base = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const unitPriceOf = (item: CartResponse['items'][number]): number =>
+      negotiatedLines.get(item.variantId)?.unitPrice ?? item.price;
+
+    const base = items.reduce((sum, item) => sum + (unitPriceOf(item) * item.quantity), 0);
     const tax = 0;       // No tax engine — see the note above.
     const discount = 0;  // No coupon model — see the note above.
     const total = base + tax - discount;
@@ -819,10 +916,14 @@ export class OrderService {
       vendor_id: new mongoose.Types.ObjectId(cartItem.vendorId),
       product_type: cartItem.productType,
 
-      // Pricing - from cart snapshot
+      // Pricing - from cart snapshot, EXCEPT on a line whose lock was just
+      // consumed: there the verdict wins, because the vendor may have moved
+      // their window since the cart was filled (D-10).
       quantity: cartItem.quantity,
-      price: cartItem.price,
+      price: unitPriceOf(cartItem),
       currency: cartItem.currency,
+      negotiated_unit_price: negotiatedLines.get(cartItem.variantId)?.unitPrice ?? null,
+      floor_price_snapshot: negotiatedLines.get(cartItem.variantId)?.floorPrice ?? null,
 
       // Delivery: added for physical orders below
     }));
@@ -1072,7 +1173,7 @@ export class OrderService {
 
       const { handleDigitalProductFulfillment } = await import('./digital-fulfillment.integration');
 
-      await handleDigitalProductFulfillment(
+      const fulfilment = await handleDigitalProductFulfillment(
         order._id.toString(),
         order.items.map(item => ({
           _id: item._id.toString(),
@@ -1083,7 +1184,32 @@ export class OrderService {
         order.customer_id.toString(),
       );
 
-      order.fulfillment_status = 'fulfilled';
+      /**
+       * 'fulfilled' means the customer can download what they paid for — nothing less.
+       *
+       * This used to be an unconditional assignment sitting after a call whose return was
+       * discarded, so an order that granted ZERO entitlements was still stamped fulfilled.
+       * That is what happened to ORD-2026-000052: paid, fulfilled, nothing to download, and
+       * no signal anywhere. See the ⚠ on `handleDigitalProductFulfillment`.
+       *
+       * Leaving it at 'processing' on failure is the deliberate choice, and it is load-bearing
+       * in two places rather than cosmetic: `OrderCompletionService.isSettled` treats a digital
+       * order as settled iff it is 'fulfilled', and the earnings release worker only matures
+       * escrow for 'fulfilled' / 'delivered' / 'partially_delivered'. So a failed grant now
+       * holds the vendor's payout instead of paying out for an undelivered file, and the order
+       * stays visibly stuck rather than silently done. Re-running fulfilment is safe — the
+       * grant is idempotent on (orderId, orderItemId).
+       */
+      if (fulfilment.failed.length > 0) {
+        console.error(
+          `[OrderService] Digital order ${orderId} is NOT fulfilled — ${fulfilment.failed.length} of ` +
+          `${fulfilment.failed.length + fulfilment.granted.length} item(s) granted no entitlement. ` +
+          `Left at 'processing'. Reasons:`,
+          fulfilment.failed,
+        );
+      } else {
+        order.fulfillment_status = 'fulfilled';
+      }
     }
 
     await order.save();

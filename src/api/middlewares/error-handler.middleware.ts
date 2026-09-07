@@ -31,7 +31,7 @@ import { botResponseLanguageOf } from '../../modules/bot-surface/middlewares/bot
  *
  * `category` is additive: a JSON reader ignores keys it does not know, and `details` is
  * already conditionally present, so every existing consumer already tolerates a varying key
- * set. It is the one thing a frontend can branch on generically without a 541-entry switch
+ * set. It is the one thing a frontend can branch on generically without a 623-entry switch
  * — "offer a retry on external_service, highlight the field on validation".
  *
  * ── `customerMessage` — the sentence a chat window can relay verbatim ─────────
@@ -53,7 +53,7 @@ import { botResponseLanguageOf } from '../../modules/bot-surface/middlewares/bot
  * localised copy and branch on `code`; sending them a second, server-chosen sentence would
  * be a second source of truth for wording they already own.
  *
- * ── What Phase 16 changed, and why it is here rather than at 1362 throw sites ─
+ * ── What Phase 16 changed, and why it is here rather than at ~1517 throw sites ─
  * Filtering happens HERE, keyed on category. `payment-orchestrator.service.ts` raises five
  * errors carrying `{ cause: error.message }` — raw axios/gateway prose — and
  * `google-calendar.client.ts` carries Google's own error body. None of those files is

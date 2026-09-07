@@ -56,15 +56,77 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
   }
 
   /**
-   * Count a vendor's active products for plan-limit enforcement. "Active" here
-   * means any non-archived, non-deleted product (it occupies a catalog slot).
+   * Count the catalog slots a vendor currently occupies, for plan-limit enforcement.
+   * A slot is any non-archived, non-deleted product — `draft` included, because a
+   * draft is a listing the vendor is building and the plan is what says how many they
+   * may hold.
+   *
+   * ⚠ **Products suspended by the plan-quota sweep are EXCLUDED, and that exclusion is
+   * what makes the whole feature converge.** A `suspended` product is otherwise counted
+   * (it is still the vendor's catalog, temporarily off sale), so if quota-suspended ones
+   * counted too, suspending a product would never reduce the number the sweep is trying
+   * to reduce — it would suspend the entire catalog and still report the vendor over
+   * cap, forever. Quota suspension is precisely the act of *giving up* a slot.
+   *
+   * The four other suspension reasons keep their slot deliberately: a listing off sale
+   * because its delivery agency vanished, or because an administrator took it down, is
+   * still occupying room in the plan the vendor is paying for, and freeing that room
+   * would let a downgrade quietly go unnoticed.
+   *
+   * @see modules/plan-quota/domain/services/plan-quota-enforcement.service.ts
    */
-  async countActiveByVendor(vendorId: string): Promise<number> {
-    return this.model.countDocuments({
+  async countActiveByVendor(vendorId: string, options?: RepositoryOptions): Promise<number> {
+    return this.model.countDocuments(this.quotaSlotFilter(vendorId)).session(options?.session ?? null);
+  }
+
+  /**
+   * The one definition of "occupies a catalog slot", shared by the count above and the
+   * ordered listing below so the sweep can never disagree with the gate about which
+   * products it is choosing between.
+   */
+  private quotaSlotFilter(vendorId: string): FilterQuery<IProduct> {
+    return {
       vendorId,
       deletedAt: null,
       status: { $ne: 'archived' },
-    });
+      'suspension.reason': { $ne: 'plan_quota_exceeded' },
+    } as FilterQuery<IProduct>;
+  }
+
+  /**
+   * Every product that occupies (or would occupy) a catalog slot, **oldest first** —
+   * the ordering the plan-quota sweep suspends and restores along.
+   *
+   * Includes the quota-suspended ones, unlike `countActiveByVendor`: the sweep needs to
+   * see the whole candidate set to decide which of them now fit. It is the *count* that
+   * must exclude them, not the listing.
+   *
+   * ⚠ **`createdAt` ASC then `_id` ASC, and the tie-break is not decoration.** A bulk
+   * upload writes several products inside the same millisecond, and Mongo's sort is not
+   * stable across calls — without `_id` the cutoff would fall in a different place on
+   * consecutive runs and the sweep would suspend and restore the same product forever.
+   */
+  async listQuotaSlotsOldestFirst(vendorId: string, options?: RepositoryOptions): Promise<
+    Array<{ id: string; status: ProductStatus; createdAt: Date; suspensionReason: ProductSuspensionReason | null }>
+  > {
+    const docs = await this.model
+      .find({
+        vendorId,
+        deletedAt: null,
+        status: { $ne: 'archived' },
+      })
+      .select('status createdAt suspension.reason')
+      .sort({ createdAt: 1, _id: 1 })
+      .session(options?.session ?? null)
+      .lean()
+      .exec();
+
+    return (docs as any[]).map((d) => ({
+      id: d._id.toString(),
+      status: d.status as ProductStatus,
+      createdAt: d.createdAt as Date,
+      suspensionReason: (d.suspension?.reason ?? null) as ProductSuspensionReason | null,
+    }));
   }
 
   async update(id: string, vendorId: string, updates: Partial<Product>, options?: RepositoryOptions): Promise<Product | null> {
@@ -477,6 +539,109 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
           },
         },
       ] as any,
+      sessionOpt,
+    ).exec();
+
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * Suspend the named products for `plan_quota_exceeded`, capturing each one's current
+   * status so the upgrade can put it back exactly where it was.
+   *
+   * ── Why this cannot reuse `suspendProduct` ────────────────────────────────────
+   * Every other suspend primitive here compare-and-sets on `status: 'active'`, on the
+   * sound argument that a draft cannot be on sale so suspending it achieves nothing.
+   * The plan quota is the one rule where that argument is false: a **draft occupies a
+   * catalog slot** (`countActiveByVendor`), so a vendor whose overflow is all drafts
+   * would be permanently over cap with nothing suspendable and no way back except
+   * archiving. This one therefore takes any non-archived status.
+   *
+   * ⚠ It deliberately does **not** carry the `vectorisationStatus: { $ne: 'pending' }`
+   * exclusion the other three have. That exclusion exists because a completing
+   * vectorisation job was believed to write `status: 'active'` and would silently undo
+   * the suspension; `VectorisationService` in fact writes no status at all. Either way
+   * the quota is a billing fact rather than a race — an in-flight job must not buy a
+   * vendor a free slot — and `require-product-editable.middleware.ts` already keeps the
+   * *vendor* out while a job runs.
+   *
+   * Returns the ids actually moved, which is what the caller stamps on the state row.
+   */
+  async suspendProductsForQuota(
+    vendorId: string,
+    productIds: string[],
+    options?: RepositoryOptions,
+  ): Promise<string[]> {
+    const ids = productIds.filter(id => Types.ObjectId.isValid(id)).map(id => new Types.ObjectId(id));
+    if (ids.length === 0) return [];
+    const sessionOpt = options?.session ? { session: options.session } : {};
+
+    await this.model.updateMany(
+      {
+        _id: { $in: ids },
+        vendorId: vendorId as any,
+        deletedAt: null,
+        status: { $nin: ['archived', 'suspended'] },
+      },
+      [
+        {
+          $set: {
+            suspension: {
+              reason: 'plan_quota_exceeded',
+              previousStatus: '$status',
+              suspendedAt: '$$NOW',
+            },
+            status: 'suspended',
+            updatedAt: '$$NOW',
+          },
+        },
+      ] as any,
+      sessionOpt,
+    ).exec();
+
+    // Re-read rather than trusting modifiedCount: the caller needs the ids, and a
+    // concurrent archive between the plan and the write must not be reported as suspended.
+    const moved = await this.model
+      .find(
+        { _id: { $in: ids }, status: 'suspended', 'suspension.reason': 'plan_quota_exceeded' },
+        { _id: 1 },
+        sessionOpt,
+      )
+      .lean();
+    return (moved as any[]).map(d => d._id.toString());
+  }
+
+  /**
+   * Lift a `plan_quota_exceeded` suspension, putting the product back at `targetStatus`
+   * — which the caller resolves from the stored `suspension.previousStatus`, after
+   * re-running the activation gate.
+   *
+   * ⚠ **The filter pins `suspension.reason`, and that is the disjointness rule in
+   * force.** Room reappearing in a plan says nothing about a listing an administrator
+   * took down or an agency froze for unpaid storage; without this predicate an upgrade
+   * would quietly republish both. Same shape as `DELIVERY_AGENCY_REASONS` scoping.
+   *
+   * `suspension: null` is passed explicitly even though `update()` would infer it, so
+   * this write does not depend on that inference staying true.
+   */
+  async restoreProductFromQuota(
+    productId: string,
+    vendorId: string,
+    targetStatus: Exclude<ProductStatus, 'suspended'>,
+    options?: RepositoryOptions,
+  ): Promise<boolean> {
+    if (!Types.ObjectId.isValid(productId)) return false;
+    const sessionOpt = options?.session ? { session: options.session } : {};
+
+    const result = await this.model.updateOne(
+      {
+        _id: productId,
+        vendorId: vendorId as any,
+        status: 'suspended',
+        'suspension.reason': 'plan_quota_exceeded',
+        deletedAt: null,
+      },
+      { $set: { status: targetStatus, suspension: null, updatedAt: new Date() } },
       sessionOpt,
     ).exec();
 

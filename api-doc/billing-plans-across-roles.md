@@ -27,9 +27,17 @@ server job). Activating a plan grants its `credit_allowance` once into the role'
 
 ## Per-dashboard summary
 
+> ⚠ **The Admin column is NOT a browser surface.** jovi-mall's public `/api/admin/*` mount was
+> deleted at the Phase 5 cutover (`src/api/index.ts:186-189`) and the live route census has **zero**
+> `/api/admin/*` routes. The admin billing surface is eight routes under
+> `/api/internal/admin/billing/*`, reachable only by **wi-admin** with a service token — no browser
+> session of any role can reach it, and the admin dashboard talks to wi-admin's `/api/v1/*`, never
+> to this. Corrected 2026-09-06 (DOC-PROGRAM F-30); the prose below had been fixed earlier and this
+> table had not, which is the half-corrected-page failure mode described in F-29.
+
 | | Vendor | Agency | Agent | Admin |
 |---|---|---|---|---|
-| **Base path** | `/api/vendor` | `/api/agency` | `/api/agent` | `/api/admin` |
+| **Base path** | `/api/vendor` | `/api/agency` | `/api/agent` | `/api/internal/admin/billing` ⚠ |
 | **Doc** | [vendor/billing.md](./vendor/billing.md) | [agency/billing.md](./agency/billing.md) | [agent/billing.md](./agent/billing.md) | [admin/billing.md](./admin/billing.md) |
 | **Free tier** | `starter` | `agency_free` | `agent_free` | — |
 | **Plan limit** | products / storage / commission | `max_unterminated_shipments` (**soft**) | `max_unterminated_shipments` (**hard**) | defines all |

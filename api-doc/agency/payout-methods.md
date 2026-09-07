@@ -208,9 +208,11 @@ Rejected — the PAN is present:
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "statusCode": 400,
+    "category": "validation",
     "details": {
       "fields": [
         { "path": "payout_details.0.card.number", "message": "Card numbers and security codes are never accepted or stored. Send only brand, last4, holder, expiry and country (plus a gateway token if you have one)." },

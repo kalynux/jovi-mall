@@ -26,7 +26,7 @@ Bearer token / cookie session with the **agent** role.
 
 Files are referenced elsewhere by their returned `id` (e.g. the agent avatar).
 Every referenced file is returned as a `FileDetail`
-(`{ id, key, url, mimeType, size, originalName }`).
+(`{ id, key, url, access, mimeType, size, originalName }`).
 
 `POST /api/files/upload` accepts every allowed type (images, documents, archives,
 audio; videos on the dedicated route) and stores each file under the folder for

@@ -21,6 +21,7 @@ import {
     currentRecords,
 } from '../services/bot-registration.service';
 import { BotOnboardingRecord, seedOnboarding } from '../domain/bot-onboarding';
+import { sealBotIdentity } from '../domain/bot-identity-token';
 import { BotSyncDto, toBotIdentityDto, toBotSyncDto } from '../dto/bot-projections';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
@@ -74,12 +75,28 @@ export class BotIdentityController {
             }),
         ]);
 
+        const envelope = botEnvelopeOf(req);
+
         sendSuccess(res, toBotIdentityDto({
             displayName: customer?.name ?? null,
             language: customer?.preferences?.language ?? null,
             connectedChannels: states.filter((s) => s.connection !== null).map((s) => s.channel),
             hasOpenOrders: openOrder !== null,
             identityHint: caller.identityHint,
+            /**
+             * Sealed from the ENVELOPE this request carried, not from `caller`.
+             *
+             * ⚠ **The two are not interchangeable and only one of them round-trips.** A
+             * `ResolvedBotCaller` names the account; the resolver's job is to turn a
+             * messaging identity INTO one, and it cannot run backwards — an account
+             * reachable from two channels has no single `externalId`. Sealing the envelope
+             * is what makes the token unseal to the same sender the next call resolves.
+             */
+            botToken: sealBotIdentity({
+                channel: envelope.channel,
+                externalId: envelope.externalId,
+                language: customer?.preferences?.language ?? envelope.language ?? null,
+            }),
         }));
     });
 
@@ -290,6 +307,7 @@ async function describe(req: Request, outcome: BotRegistrationOutcome) {
     const customer: ICustomer = outcome.customer;
     const language = customer.preferences?.language ?? null;
     setBotResponseLanguage(req, language);
+    const envelope = botEnvelopeOf(req);
 
     const [states, openOrder] = await Promise.all([
         connectionService.getStates(outcome.account.userId),
@@ -309,6 +327,15 @@ async function describe(req: Request, outcome: BotRegistrationOutcome) {
             connectedChannels: states.filter((s) => s.connection !== null).map((s) => s.channel),
             hasOpenOrders: openOrder !== null,
             identityHint: outcome.account.identityHint,
+            // Sealed from the envelope, for the reason given in `resolve` above. This is
+            // the mint that matters in practice: `/identity/sync` runs on EVERY inbound
+            // message, so a conversation is handed a fresh token each turn and the TTL
+            // never has to stretch to cover one.
+            botToken: sealBotIdentity({
+                channel: envelope.channel,
+                externalId: envelope.externalId,
+                language: language ?? envelope.language ?? null,
+            }),
         }),
         records: currentRecords(customer),
         channel: outcome.account.channel,
@@ -358,6 +385,26 @@ function setOnboardingReply(req: Request, dto: BotSyncDto, language: string | nu
             kind: 'contact_request',
             text: next.prompt,
             buttonLabel: botChrome('contactButton', language),
+        });
+        return;
+    }
+
+    if (next.requestLocation) {
+        /**
+         * The address step. A pin is the shortcut and typing still works, so this control
+         * replaces the plain `text` + Skip action rather than sitting beside it.
+         *
+         * ⚠ **The Skip travels as `skipLabel`, not as an `action`.** On Telegram a location
+         * request is a reply keyboard and `reply_markup` is a union, so an inline Skip
+         * carrying `skip:address` cannot be on the same message. The renderer puts a second
+         * keyboard button there instead, and the caller is handed the exact string it will
+         * send back (`next.skipLabel`) so it never has to know the word.
+         */
+        setBotReply(req, {
+            kind: 'location_request',
+            text: next.prompt,
+            buttonLabel: botChrome('locationButton', language),
+            ...(next.skipLabel ? { skipLabel: next.skipLabel } : {}),
         });
         return;
     }

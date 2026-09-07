@@ -1,5 +1,9 @@
 # Vendor Onboarding API Documentation
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–27). Corrections are marked inline with ⚠ and a source citation.
+
 This documentation provides frontend developers with the complete specifications needed to build the vendor onboarding flow.
 
 The flow uses dedicated `PUT` endpoints for each step — the same pattern used by the [Delivery Agency Onboarding](../agency/onboarding.md). Each step can be re-submitted to update its data without resetting progress.
@@ -65,6 +69,18 @@ Two endpoints are available — use the richer one (`/onboarding/status`) for bu
 }
 ```
 
+> ⚠ **`progressPercent` is derived from the STEP NUMBER alone, never from `completedFields`.**
+> `round(((step === 0 ? 4 : step − 1) / 4) × 100)` — `vendor-profile.dto.ts:231-232`. So it is
+> `0 · 25 · 50 · 75 · 100` and nothing else, it moves only when a step is submitted, and filling
+> in `country` and `payout_details` without submitting Step 1 leaves it at `0`. Do not render it
+> as a field-completion meter; the honest field-level signal is `completedFields` /
+> `missingFields` beside it.
+
+> ⚠ **`completedFields` and `missingFields` cover FOUR profile fields, not the whole flow.**
+> Only `country`, `timezone`, `payout_details` and `default_delivery_agency_id` are ever tested
+> (`vendor-profile.dto.ts:234-241`), and only the first and third can appear in `missingFields` —
+> so nothing Steps 3 and 4 collect (branding, addresses, policies) is represented in either list.
+
 **`steps[].status` meanings:**
 
 | Value | Meaning |
@@ -117,7 +133,7 @@ Any `PUT` step endpoint accepts an optional `version` integer field. If supplied
 Once a step is marked complete you may re-submit its endpoint to update the data. The backend saves the new values but does **not** reset `onboarding_step`. This means:
 
 - Submitting Step 1 again when you're on Step 2, 3, or 4 → data saved, `onboarding_step` stays unchanged.
-- Submitting Step 2 again when you're on Step 3 or 4 → agency ID updated (or no-op if `skip: true`), `onboarding_step` stays unchanged.
+- Submitting Step 2 again when you're on Step 3 or 4 → **complete no-op.** Step 2 writes nothing at all (it is a pure step-advance, `vendor-profile.service.ts:466-473`), so the re-edit path returns the current profile unchanged, whatever the body contains — `skip: true` included. No agency id is updated; that happens through the agency-connections flow.
 - Submitting Step 3 again when you're on Step 4 → branding/addresses saved, `onboarding_step` stays `4`.
 - Submitting Step 4 completes onboarding → `onboarding_step` advances to `0`.
 
@@ -271,9 +287,17 @@ Captures the vendor's country, timezone, and payout method.
 | Field | Type | Required? | Validation | Notes |
 |-------|------|-----------|------------|-------|
 | `skip` | `boolean` | No | Defaults to `false` | **Deprecated** — accepted but ignored. Kept only so existing clients don't break. |
-| `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard. |
+| `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard — ⚠ **on the first-time path only**, see below. |
 
-Any other field (e.g. a legacy client still sending `default_delivery_agency_id`) is silently ignored — it is not part of this endpoint's schema anymore and does not cause a validation error.
+Any other field (e.g. a legacy client still sending `default_delivery_agency_id`) is silently ignored — it is not part of this endpoint's schema anymore and does not cause a validation error. The schema is literally `{ skip }` (`vendor-onboarding.validator.ts:90-93`), and it is a bare `z.object`, so Zod strips unknown keys rather than rejecting them.
+
+> ⚠ **`version` is enforced on this step ASYMMETRICALLY, and Step 3's note does not carry over.**
+> First-time completion (you are *on* Step 2) passes it to
+> `atomicOnboardingUpdate(vendorId, { onboarding_step }, expectedVersion)` and a stale value is
+> `409 VENDOR_ONBOARDING_CONCURRENT_MODIFICATION` (`vendor-profile.service.ts:476-478`). The
+> **re-edit no-op** (you are already on Step 3 or 4) returns at `:466-473` **before that call**,
+> so a stale `version` is silently accepted and you get a `200`. Do not use a Step 2 re-edit as a
+> concurrency probe — it will tell you your `version` is current when it is not.
 
 #### Success Response (`200 OK`)
 
@@ -301,7 +325,14 @@ Any other field (e.g. a legacy client still sending `default_delivery_agency_id`
 - **Auth**: Yes (Vendor role)
 - **Prerequisite**: Step 2 completed or skipped
 
-Captures the vendor's branding (logo, cover image) and business addresses. This step is optional — the user can skip it and onboarding will be marked as complete.
+Captures the vendor's branding (logo, cover image) and business addresses. This step is optional — the vendor can skip it.
+
+> ⚠ **Skipping (or completing) this step does NOT finish onboarding — it advances to Step 4.**
+> `completeStep3` sets `onboarding_step = VendorOnboardingStep.POLICY_SETUP` (4) on both paths
+> (`vendor-profile.service.ts:548`). Only **Step 4** writes `COMPLETED` (0) — via
+> `recalculateOnboardingStep` returning it at `:682`. This page said
+> otherwise, and a client that routes to the dashboard on the Step 3 response strands the
+> vendor one step short of finishing.
 
 > [!NOTE]
 > The `branding` (logo/cover) you submit here is the **business** branding and is stored on the vendor's [Store](./store.md) — its `logo` and `banner`. `business_addresses` stay on the profile. Edit branding later via `PATCH /api/vendor/store`.
@@ -329,11 +360,42 @@ Captures the vendor's branding (logo, cover image) and business addresses. This 
       "address_line2": "Suite 4B",
       "city": "Douala",
       "state": "Littoral",
-      "location": null
+      "geo": {
+        "formatted_address": "123 Commerce Ave, Akwa, Douala, Cameroun",
+        "coordinates": { "type": "Point", "coordinates": [9.7043, 4.0483] },
+        "provider": "geoapify",
+        "provider_place_id": "way:98765432",
+        "components": {
+          "street": "Commerce Ave",
+          "neighbourhood": "Akwa",
+          "city": "Douala",
+          "region": "Littoral",
+          "country": "Cameroon",
+          "country_code": "CM",
+          "postal_code": null
+        },
+        "raw_input": "123 Commerce Ave Akwa"
+      }
     }
   ]
 }
 ```
+
+> [!IMPORTANT]
+> ⚠ **This example sent `"location": null` and no `geo` until 2026-09-06, and a client copying
+> it was rejected.** `completeStep3` runs the same geo guard as the profile update
+> (`vendor-profile.service.ts:523` → `address-country.helper.ts:57-64`), so a new address
+> without `geo` is `400 ADDRESS_GEO_REQUIRED` — exactly what the field reference below says,
+> and what the example contradicted.
+>
+> **Do not send `location` at all.** It is accepted by the validator
+> (`vendor-onboarding.validator.ts:35`) but a nullish value is **stripped before write**, and
+> deliberately: the array is 2dsphere-indexed, and one entry holding an explicit `null` beside
+> one holding a real point fails index-key extraction and makes **every subsequent write to
+> that vendor** fail, whatever it touches (`geo-address.types.ts:169-184`). `geo.coordinates`
+> is where the point belongs.
+>
+> `resolved_at` is server-assigned — send the search result plus `raw_input`, nothing more.
 
 #### Request Body — Skipping
 
@@ -347,9 +409,9 @@ Captures the vendor's branding (logo, cover image) and business addresses. This 
 
 | Field | Type | Required? | Validation | Notes |
 |-------|------|-----------|------------|-------|
-| `skip` | `boolean` | No | Defaults to `false` | Set `true` to skip and finalize onboarding. |
-| `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard. Ignored if `skip: true`. |
-| `branding` | `object` | No | See sub-fields | **Full replacement of the whole sub-object** — send both fields, including the one you're not changing, or it will be cleared. Ignored if `skip: true`. |
+| `skip` | `boolean` | No | Defaults to `false` | Set `true` to advance past this step without providing branding or addresses. ⚠ **It does not finalize onboarding** — it advances to Step 4. Only Step 4 completes. |
+| `version` | `number (integer)` | No | Must match profile `version` if provided | Optimistic concurrency guard. ⚠ **NOT ignored when `skip: true`** — the skip path still calls `atomicOnboardingUpdate(vendorId, updates, expectedVersion)`, so a stale `version` is a `409 VENDOR_ONBOARDING_CONCURRENT_MODIFICATION` whether you are skipping or not. Omit it if you do not want the guard. |
+| `branding` | `object` | No | See sub-fields | ⚠ **Each slot is independent — this is NOT a full replacement.** `applyBrandingToStore` tests `logo_file_id !== undefined` and `cover_image_file_id !== undefined` separately (`vendor-profile.service.ts:96,108`), so **omitting one leaves it alone**. Send `null` to clear a slot. Ignored entirely if `skip: true`. |
 | `branding.logo_file_id` | `string \| null` | No | Valid MongoDB ObjectId of a file you uploaded via `POST /api/files/upload` | Vendor logo image. |
 | `branding.cover_image_file_id` | `string \| null` | No | Valid MongoDB ObjectId of a file you uploaded via `POST /api/files/upload` | Cover/banner image. |
 | `business_addresses` | `object[]` | No | See sub-fields | Vendor's physical locations. **Full replacement** — send the complete desired array, including unchanged entries. Ignored if `skip: true`. |
@@ -359,7 +421,7 @@ Captures the vendor's branding (logo, cover image) and business addresses. This 
 | `business_addresses[].address_line2` | `string \| null` | No | Max 200 chars | Secondary address (suite, floor, etc.). |
 | `business_addresses[].city` | `string` | Yes | Min 1, Max 100 chars | City name. |
 | `business_addresses[].state` | `string \| null` | No | Max 100 chars | State or region. |
-| `business_addresses[].location` | `GeoPoint \| null` | No | `{ type: "Point", coordinates: [lng, lat] }` | **Deprecated** — prefer `geo` (which carries coordinates plus the resolved address). |
+| `business_addresses[].location` | `GeoPoint \| null` | No | `{ type: "Point", coordinates: [lng, lat] }` | **Deprecated — do not send it.** `geo` carries the coordinates. A nullish value is accepted by the validator (`vendor-onboarding.validator.ts:35`) and then **stripped**, never stored, because a persisted `null` in this 2dsphere-indexed array bricks every later write to the vendor (`geo-address.types.ts:169-184`). Reads omit the key entirely. |
 | `business_addresses[].geo` | `GeoAddress \| null` | **Yes on new/edited entries** | A selected `/api/geo/search` result (see [Geospatial addresses](../geo/README.md)) | **Required on every new or edited entry**, and must resolve **inside the vendor's registered `country`** (Step 1) — else `400 ADDRESS_GEO_REQUIRED` / `400 ADDRESS_COUNTRY_MISMATCH`. Entries echoed back byte-identical to what is stored are grandfathered (legacy plain-text addresses keep working until next touched). |
 
 > **Clearable fields**: the nullable strings above (`branding.*_file_id`, `address_line2`, `state`)
@@ -535,9 +597,16 @@ This is a **standalone upload route, unrelated to the product/ticket media pipel
 | Status | Code | Cause |
 |--------|------|-------|
 | `400` | `VENDOR_POLICY_DOCUMENT_MISSING` | No file sent under the `documents` field. |
-| `400` | `VENDOR_POLICY_DOCUMENT_TYPE_INVALID` | A file's MIME type is not `application/pdf`. |
+| `400` | `VENDOR_POLICY_DOCUMENT_TYPE_INVALID` | The **claimed** MIME type is not `application/pdf`. A cheap pre-filter, checked before any bytes are read. |
+| `400` | `UPLOAD_POLICY_VIOLATION` | The upload pipeline refused it. `details.violations[]` says why — the **sniffed** type is not a PDF (a file merely *named* `.pdf` and *declared* `application/pdf` reaches this one, not the row above), the 5 MB per-file or 10 MB per-request ceiling, or the owner's plan-driven media quota. |
 | `400` | `VALIDATION_ERROR` | More than 2 files sent, or an unexpected field name. |
-| `413` | `CATALOG_FILE_TOO_LARGE` | A file exceeds 5MB. |
+| `413` | `CATALOG_FILE_TOO_LARGE` | A file exceeds 5MB (multer's own ceiling, which fires before the pipeline). |
+
+> ⚠ **This route has TWO type gates and this table used to document only the first.** The
+> claimed-type loop in the controller (`vendor-profile.controller.ts:180-187`) answers with
+> this endpoint's own code; `FileSniffingProcessor` then re-checks the **actual bytes** inside
+> `UploadIntakeService`, and a failure there is `UPLOAD_POLICY_VIOLATION` with a `violations[]`
+> array — a different code, a different shape, and the one that actually decides.
 
 #### Success Response (`200 OK`)
 
@@ -595,15 +664,21 @@ Returned when the request body fails Zod schema validation.
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Request validation failed",
-    "details": [
-      {
-        "field": "default_delivery_agency_id",
-        "message": "Either skip must be true or a default_delivery_agency_id must be provided"
-      }
-    ]
+    "statusCode": 400,
+    "category": "validation",
+    "details": {
+      "fields": [
+        {
+          "path": "refund_percentage",
+          "message": "refund_percentage is required when refund_type is \"partial\"",
+          "code": "custom"
+        }
+      ]
+    }
   }
 }
 ```
@@ -616,7 +691,7 @@ Returned when the request body fails Zod schema validation.
 | `404` | `AUTH_USER_NOT_FOUND` | No vendor profile exists for the authenticated user. | Redirect to the add-role or registration flow. |
 | `409` | `VENDOR_ONBOARDING_ALREADY_COMPLETED` | The vendor is fully onboarded; onboarding endpoints are locked. Use the general profile update endpoint instead. | Redirect to dashboard. |
 | `409` | `VENDOR_ONBOARDING_CONCURRENT_MODIFICATION` | The `version` you sent does not match the server's current value — another session saved changes in the meantime. | Show a prompt: *"Your profile was modified elsewhere. Please refresh and try again."* Then re-fetch the profile, store the new `version`, and let the user re-submit. |
-| `500` | `INTERNAL_ERROR` | Unexpected server error. | Show generic error message. |
+| `500` | `INTERNAL_SERVER_ERROR` | Unexpected server error. | Show generic error message. |
 
 ---
 

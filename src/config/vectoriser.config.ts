@@ -5,10 +5,10 @@
  * Values here document the shape and defaults — never hard-code secrets.
  *
  * Required env vars (production):
- *   VECTORISER_API_KEY  — secret sent as T8N-API-KEY header
+ *   VECTORISER_API_KEY  — secret sent as VECTORISER_API_KEY header
  *
  * Optional env vars (with defaults):
- *   VECTORISER_BASE_URL            — base URL (default: https://the8n.fante.cloud/vectoriser)
+ *   VECTORISER_BASE_URL            — base URL (default: https://the8n.fante.cloud/webhook/vectorise)
  *   VECTORISER_TIMEOUT_SINGLE_MS   — single product HTTP timeout in ms (default: 30000)
  *   VECTORISER_TIMEOUT_BULK_MS     — bulk HTTP timeout in ms (default: 120000)
  *   VECTORISER_MAX_RETRIES         — max retry attempts on transient failures (default: 3)
@@ -16,15 +16,22 @@
  */
 export const vectoriserConfig = {
   /**
-   * Base URL for the vectoriser service.
-   * Single-product endpoint: POST <baseUrl>
-   * Status-update endpoint:  POST <baseUrl>/status
-   * Bulk endpoint:           POST <baseUrl> (array payload)
+   * Base URL for the vectoriser service — the n8n `wi-mall-vectoriser` workflow's
+   * production webhook.
+   *
+   *   POST <baseUrl>          — one payload, an array, or { products: [...] } → **202**
+   *   POST <baseUrl>/status   — status-only move, no re-embedding
+   *   POST <baseUrl>/delete   — drop the row
+   *   POST <baseUrl>/file     — CSV/XLSX upload. jovi-mall never calls this one.
+   *
+   * ⚠ The default was `https://the8n.fante.cloud/vectoriser` until 2026-09-06, and
+   * that path never existed on any deployment — an n8n production webhook lives under
+   * `/webhook/<path>`. A deploy that relied on the default was posting into a 404.
    */
-  baseUrl: process.env.VECTORISER_BASE_URL ?? 'https://the8n.fante.cloud/vectoriser',
+  baseUrl: process.env.VECTORISER_BASE_URL ?? 'https://the8n.fante.cloud/webhook/vectorise',
 
   /**
-   * API key sent as the custom header: T8N-API-KEY: <apiKey>
+   * API key sent as the custom header: VECTORISER_API_KEY: <apiKey>
    * Must be set in production. Absent in dev → requests go unauthenticated (OK for local mocks).
    */
   apiKey: process.env.VECTORISER_API_KEY ?? '',

@@ -11,12 +11,16 @@ import { BotOrderController } from './controllers/bot-order.controller';
 import { BotProfileController } from './controllers/bot-profile.controller';
 import { BotGeoController } from './controllers/bot-geo.controller';
 import { BotTicketController } from './controllers/bot-ticket.controller';
+import { BotFileController } from './controllers/bot-file.controller';
 import { BotCatalogController } from './controllers/bot-catalog.controller';
 import { BotBookingController } from './controllers/bot-booking.controller';
+import { BotPaymentMethodController } from './controllers/bot-payment-method.controller';
 import { BotReviewController } from './controllers/bot-review.controller';
 import { BotNotificationController } from './controllers/bot-notification.controller';
 import { BotSupportController } from './controllers/bot-support.controller';
 import { BotMessagingController } from './controllers/bot-messaging.controller';
+import { BotContactController } from './controllers/bot-contact.controller';
+import { BotAccountController } from './controllers/bot-account.controller';
 
 /**
  * The curated bot surface — mounted at `/api/internal/bot` (GAP-001).
@@ -61,12 +65,15 @@ import { BotMessagingController } from './controllers/bot-messaging.controller';
  * writes a real person's phone number into every access log on the path. `GET` is kept
  * only where there is no identity to carry — and on this surface there always is one.
  *
- * ⚠ **Three routes are `DELETE` WITH A BODY** (`/cart`, `/cart/items/:variantId`,
- * `/wishlist/:productId`), because the catalogue specifies those verbs and the envelope
- * still has to travel. Express parses a JSON `DELETE` body without complaint, but some
- * HTTP clients and intermediaries drop one — so a caller that finds `identity` missing on
- * exactly those three has hit that, not a bug here. Recorded in
+ * ⚠ **Several routes are `DELETE` WITH A BODY**, because the catalogue specifies those verbs
+ * and the envelope still has to travel. Express parses a JSON `DELETE` body without
+ * complaint, but some HTTP clients and intermediaries drop one — so a caller that finds
+ * `identity` missing on exactly those has hit that, not a bug here. Recorded in
  * `api-doc/n8n/bot-surface.md`.
+ *
+ * ⚠ **This said "three" and then "six", and both were prose nothing asserted.** Count the
+ * `DELETE` rows in `BOT_ROUTES` rather than trusting a sentence here — the number has been
+ * wrong twice, each time a step added one and nobody re-counted.
  *
  * ── THE ROUTES COME FROM THE TABLE, NOT FROM THIS FILE ──────────────────────
  * `domain/bot-route-table.ts` declares them, and the loop at the bottom mounts them. This
@@ -115,9 +122,12 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
 
     // ── Profile and addresses ────────────────────────────────────────────────
     profile_get_summary: BotProfileController.getSummary,
+    profile_update: BotProfileController.update,
     profile_set_language: BotProfileController.setLanguage,
     addresses_list: BotProfileController.listAddresses,
     addresses_add: BotProfileController.addAddress,
+    addresses_update: BotProfileController.updateAddress,
+    addresses_remove: BotProfileController.removeAddress,
     addresses_set_default: BotProfileController.setDefaultAddress,
 
     // ── Geo ──────────────────────────────────────────────────────────────────
@@ -130,6 +140,10 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     tickets_get: BotTicketController.get,
     tickets_add_note: BotTicketController.addNote,
     tickets_close: BotTicketController.close,
+    tickets_add_attachment: BotTicketController.addAttachment,
+
+    // ── Inbound files (Step 7b) ──────────────────────────────────────────────
+    files_receive_inbound: BotFileController.receiveInbound,
 
     // ── Support routing (GAP-004) ────────────────────────────────────────────
     support_resolve_contacts: BotSupportController.context,
@@ -139,16 +153,46 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     wishlist_add: BotCatalogController.addWishlist,
     wishlist_remove: BotCatalogController.removeWishlist,
     recently_viewed_record: BotCatalogController.recordView,
+    recently_viewed_list: BotCatalogController.listRecentlyViewed,
+    recently_viewed_clear: BotCatalogController.clearRecentlyViewed,
     digital_list_entitlements: BotCatalogController.listEntitlements,
     digital_create_download_link: BotCatalogController.createDownloadLink,
 
     // ── Bookings ─────────────────────────────────────────────────────────────
     bookings_list: BotBookingController.list,
+    bookings_get_availability: BotBookingController.availability,
+    bookings_create: BotBookingController.create,
     bookings_get: BotBookingController.get,
+    bookings_get_balance: BotBookingController.balance,
+    bookings_payment_status: BotBookingController.paymentStatus,
+    bookings_pay: BotBookingController.pay,
+    bookings_pay_balance: BotBookingController.payBalance,
     bookings_cancel: BotBookingController.cancel,
+    bookings_reschedule: BotBookingController.reschedule,
+
+    // ── Saved payment methods ────────────────────────────────────────────────
+    payment_methods_list: BotPaymentMethodController.list,
+    payment_methods_add: BotPaymentMethodController.add,
+    payment_methods_set_default: BotPaymentMethodController.setDefault,
+    payment_methods_remove: BotPaymentMethodController.remove,
+
+    // ── Contact changes (MCP parity step 6) ──────────────────────────────────
+    contact_get_state: BotContactController.getState,
+    contact_change_email: BotContactController.changeEmail,
+    contact_cancel_email_change: BotContactController.cancelEmailChange,
+    contact_change_phone: BotContactController.changePhone,
+    contact_confirm_phone: BotContactController.confirmPhone,
+    contact_cancel_phone_change: BotContactController.cancelPhoneChange,
+
+    // ── Connections and account closure (MCP parity step 7) ──────────────────
+    connections_list: BotAccountController.listConnections,
+    connections_disconnect: BotAccountController.disconnect,
+    account_close_preview: BotAccountController.closePreview,
+    account_close: BotAccountController.close,
 
     // ── Reviews ──────────────────────────────────────────────────────────────
     reviews_check_eligibility: BotReviewController.eligibility,
+    reviews_list_mine: BotReviewController.list,
     reviews_create: BotReviewController.create,
 
     // ── Proactive messaging (GAP-012) ────────────────────────────────────────
@@ -158,6 +202,10 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     // ── Notification preferences ─────────────────────────────────────────────
     notifications_get_preferences: BotNotificationController.get,
     notifications_update_preferences: BotNotificationController.update,
+    notifications_list: BotNotificationController.list,
+    notifications_unread_count: BotNotificationController.unreadCount,
+    notifications_mark_read: BotNotificationController.markRead,
+    notifications_mark_all_read: BotNotificationController.markAllRead,
 });
 
 /**

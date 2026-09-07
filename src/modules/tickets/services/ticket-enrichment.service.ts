@@ -168,6 +168,26 @@ export class TicketEnrichmentService {
              */
             obj.assigned_admin = publicAdminSnapshot(ticket.admin_assignment?.admin);
 
+            /**
+             * ⚠ AND THE RAW BLOCK MUST GO WITH IT. Fixed 2026-09-07 (DOC-PROGRAM § 30).
+             *
+             * `toObject({ virtuals: true })` above copies the document wholesale, so
+             * `obj.admin_assignment` was still on the payload — carrying `admin.tier` and
+             * `admin.id` — while the sanitised `assigned_admin` sat beside it. Adding a
+             * narrowed copy does not remove the wide one, and the comment above this line
+             * had asserted for months that `tier` "must not travel to a ticket follower"
+             * while it did, on every ticket read by a customer, vendor, agency or agent.
+             *
+             * `created_by_admin` needed no equivalent: it is ASSIGNED from
+             * `publicAdminSnapshot` above, so the raw snapshot is overwritten rather than
+             * accompanied. That asymmetry is exactly why this one was easy to miss.
+             *
+             * Nothing reads `admin_assignment` off the enriched payload — the repository
+             * queries it on the model directly (`ticket.repository.ts:348,367-368`), which
+             * is unaffected.
+             */
+            delete obj.admin_assignment;
+
             obj.entity = ticket.entity_type && ticket.entity_id
                 ? entityMap.get(this.entityKey(ticket.entity_type, ticket.entity_id))
                   ?? this.fallbackEntity(ticket.entity_type, ticket.entity_id)

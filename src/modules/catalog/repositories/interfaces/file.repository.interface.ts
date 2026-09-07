@@ -51,6 +51,27 @@ export interface IFileRepository {
   findLonely(cutoff: Date, limit: number, options?: RepositoryOptions): Promise<File[]>;
 
   /**
+   * Every one of an owner's live files, oldest first — the order the plan-quota sweep
+   * fills the storage allowance in, and so the order it blocks against. Narrowly
+   * projected: this walks an owner's whole library.
+   *
+   * Digital-product assets are deliberately NOT filtered out here; deciding what is
+   * metered is `MediaStorageService`'s rule and belongs to the caller.
+   */
+  listOwnedOldestFirst(
+    ownerType: string,
+    ownerId: string,
+    options?: RepositoryOptions,
+  ): Promise<Array<{ id: string; size: number; mimeType: string; createdAt: Date; quotaBlockedAt: Date | null }>>;
+
+  /**
+   * Stamp or clear `quotaBlockedAt` on a set of files. Reversible and lossless — it
+   * touches neither `deletedAt` nor `orphanedAt`, so a blocked file is never swept and
+   * comes back unchanged when the owner has room again.
+   */
+  setQuotaBlocked(fileIds: string[], blocked: boolean, options?: RepositoryOptions): Promise<number>;
+
+  /**
    * Update file metadata
    */
   update(id: string, updates: Partial<File>, options?: RepositoryOptions): Promise<File | null>;

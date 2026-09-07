@@ -1,7 +1,7 @@
 # Public API — the blog
 
 **No authentication.** Three endpoints, readable by a logged-out visitor, built to the ask in
-[BACKEND-BLOG-REQUIREMENTS.md](../BACKEND-BLOG-REQUIREMENTS.md). They exist so the article pages under
+[BACKEND-BLOG-REQUIREMENTS.md](./BACKEND-BLOG-REQUIREMENTS.md). They exist so the article pages under
 `src/app/[locale]/(marketing)/blog/` can run on real content instead of `blog.fixtures.ts`.
 
 The editor's side is **not in this service any more.** It moved to wi-admin at Phase 5 Part A and is
@@ -199,8 +199,10 @@ Returns every summary field above **plus `body`** (see [The block vocabulary](#t
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "BLOG_ARTICLE_MOVED",
+    "category": "not_found",
     "statusCode": 404,
     "details": {
       "locale": "en",

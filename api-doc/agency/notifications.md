@@ -324,6 +324,18 @@ Bearer token and `/api/agency/...` paths where the vendor doc says `/api/vendor/
 
 ### Error envelope
 
+`category` is one of the nine values listed in [`errors/README.md`](../errors/README.md) and is
+**always present**; `details` is omitted entirely when absent.
+
 ```json
-{ "success": false, "error": { "code": "ERROR_CODE", "message": "Human-readable description" } }
+{
+  "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
+  "error": {
+    "code": "DELIVERY_AGENCY_NOTIFICATION_NOT_FOUND",
+    "message": "Notification not found",
+    "statusCode": 404,
+    "category": "not_found"
+  }
+}
 ```

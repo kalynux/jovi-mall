@@ -9,7 +9,14 @@ What remains here is the bot bridge and one admin endpoint. Neither is a fronten
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `POST` | `/api/webhooks/telegram/webhook` | public (bot bridge) | Inbound bot messages — **not** a frontend endpoint |
-| `POST` | `/api/webhooks/telegram/send` | **admin** | Send a Telegram message to a user or chat |
+| `POST` | `/api/internal/admin/messaging/telegram` | **wi-admin service token** | Send one Telegram message to one recipient |
+
+> ⚠ **`POST /api/webhooks/telegram/send` no longer exists.** `telegram.routes.ts:39` registers
+> exactly one route — `/webhook`. The send endpoint moved to `/api/internal/admin/messaging/telegram`
+> behind `requireAdminCaller` (Phase 5 Part B), where wi-admin gates it on `messaging.telegram.send`
+> and an audit row carries a real administrator identity. The old path was guarded by a platform
+> `users` row holding the legacy `admin` role — a credential the Phase 5 cutover retired.
+> Corrected 2026-09-06 (DOC-PROGRAM F-29); this table listed the dead path.
 
 ## POST `/webhooks/telegram/webhook`
 
@@ -135,7 +142,13 @@ See [../auth/magic-login.md](../auth/magic-login.md).
 > credentials are inside `message` only. Relay it verbatim, store none of it, and set
 > `disable_web_page_preview: true`.
 
-## POST `/webhooks/telegram/send` (admin)
+## POST `/api/internal/admin/messaging/telegram` (wi-admin only)
+
+> **Not reachable from any browser or mobile client.** It sits behind `requireAdminCaller` and is
+> called server-to-server by wi-admin with `INTERNAL_ADMIN_SERVICE_TOKEN`. It is **one message to
+> one recipient** — there is no audience, no segmentation, no scheduling and no delivery record,
+> which is why wi-admin's permission family was renamed `broadcast` → `messaging` (Phase 5 D-11).
+> The reachable set is not "platform users" but the accounts that linked Telegram via `/connect`.
 
 | Field | Type | Required | Validation |
 |---|---|---|---|

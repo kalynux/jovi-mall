@@ -106,7 +106,7 @@ or `null`. Never a bare URL string, never the raw id:
   "plate_number": "LT-123-AB",
   "photo": {
     "id": "665f1c2a9b1e4a0012a3b4ee",
-    "key": "...", "url": "https://...", "mimeType": "image/jpeg",
+    "key": "images/2026/07/van.jpg", "url": "https://.../images/2026/07/van.jpg", "access": "public", "mimeType": "image/jpeg",
     "size": 284119, "originalName": "van.jpg"
   }
 }

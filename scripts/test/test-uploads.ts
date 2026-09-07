@@ -635,14 +635,50 @@ async function main(): Promise<void> {
     assert('…and still carries the id, which is the handle its authorized route takes', () =>
         privateDetail.id === 'f2' && privateDetail.key === 'shipments/2026/08/proof.jpg');
 
+    const blockedDetail = toFileDetail(
+        {
+            id: 'f3',
+            key: 'images/2026/08/b.png',
+            mimeType: 'image/png',
+            size: 30,
+            quotaBlockedAt: new Date('2026-09-01T00:00:00Z'),
+        },
+        { getPublicUrl: (key: string) => `http://x/api/files/${key}` } as any,
+    );
+    const blockedPrivateDetail = toFileDetail(
+        {
+            id: 'f4',
+            key: 'shipments/2026/08/proof.jpg',
+            mimeType: 'image/jpeg',
+            size: 40,
+            quotaBlockedAt: new Date('2026-09-01T00:00:00Z'),
+        },
+        { getPublicUrl: (key: string) => `http://x/api/files/${key}` } as any,
+    );
+
+    assert('a QUOTA-BLOCKED file has url: null and reports access: quota_blocked', () =>
+        blockedDetail.url === null && blockedDetail.access === 'quota_blocked');
+    assert('…and blocking OUTRANKS privacy — a blocked private file is not merely authorized', () =>
+        blockedPrivateDetail.access === 'quota_blocked' && blockedPrivateDetail.url === null);
+    assert('…and it still carries id, key and size, because blocking is not deletion', () =>
+        blockedDetail.id === 'f3' && blockedDetail.key === 'images/2026/08/b.png' && blockedDetail.size === 30);
+
     assert('no file under src/ builds a FileDetail by hand — toFileDetail is the choke point', () => {
         // Three sites used to, which is how a rule at the "single choke point" reached only
         // some of the platform's files. The tell is `getPublicUrl` outside the resolver and
         // the storage layer itself.
+        //
+        // ⚠ The pattern here used to anchor on the ASSIGNMENT — roughly
+        // "url: <something>storage<something>.getPublicUrl(" — and it MISSED ALL THREE
+        // offenders it was written to catch: VectorisationService put a ternary before the
+        // call, ticket-attachment.service returned the call directly with no `url:` at all,
+        // and ticket-reference.service named its field `firstFileUrl`. A guard anchored on
+        // one spelling only ever catches the shape somebody already thought of, so it now
+        // matches ANY call outside the two files allowed to make one.
         const offenders = srcFiles.filter((file) => {
             if (file.includes(path.join('core', 'storage'))) return false;
             if (file.endsWith('file-detail.resolver.ts')) return false;
-            return /url:\s*[\w.]*storage\w*\.getPublicUrl\(/.test(code(fs.readFileSync(file, 'utf8')));
+            return /[.]getPublicUrl[(]/.test(code(fs.readFileSync(file, 'utf8')));
         });
         if (offenders.length) {
             console.error(`     offenders: ${offenders.map((f) => path.relative(ROOT, f)).join(', ')}`);

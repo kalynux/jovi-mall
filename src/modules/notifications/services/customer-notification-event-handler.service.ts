@@ -1207,7 +1207,15 @@ export class CustomerNotificationEventHandler {
                     type: 'button',
                     sub_type: 'url',
                     index: 0,
-                    parameters: [{ type: 'text', text: button.urlSuffix }]
+                    /**
+                     * ⚠ **`whatsappSuffix`, never `urlSuffix`.** Meta's approved button URL is
+                     * `{STOREFRONT_URL}/{{1}}`, so what goes here is the whole path AFTER the
+                     * host — including the locale prefix, which no other consumer of this
+                     * component adds. `urlSuffix` is deliberately locale-free (it is stored as
+                     * the inbox row's `action.path`, which the bot surface prefixes itself), so
+                     * sending it here opens the English page for every customer.
+                     */
+                    parameters: [{ type: 'text', text: button.whatsappSuffix }]
                 });
             }
 

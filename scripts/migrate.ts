@@ -21,11 +21,19 @@
  * ── ORDER IS DECLARED, not discovered ─────────────────────────────────────────
  * `MIGRATIONS` below is the order. One rule produces it:
  *
- *   Index builds run LAST. Three of them claim UNIQUENESS
- *   (`migrate:payment-indexes`, `migrate:cod-late-deposit-index`), and a unique build
- *   fails outright against data that still holds duplicates. Letting the data
- *   migrations reach their final shape first turns "E11000, go and investigate" into a
- *   build that simply succeeds.
+ *   Index builds run LAST. FOUR of them claim UNIQUENESS — `migrate:payment-indexes` (5
+ *   unique indexes), `migrate:customer-catalog-indexes` (2), `migrate:review-indexes` (2)
+ *   and `migrate:inventory-indexes` (2) — and a unique build fails outright against data
+ *   that still holds duplicates. Letting the data migrations reach their final shape first
+ *   turns "E11000, go and investigate" into a build that simply succeeds.
+ *
+ *   Re-count rather than trusting this line:  grep -c 'unique: *true' scripts/migrate-*.ts
+ *
+ *   ⚠ `migrate:cod-late-deposit-index` was named here as one of them until 2026-09-06 and
+ *   is NOT (DOC-PROGRAM P-11). It creates no index at all — it only DROPS a superseded
+ *   unique one, re-scoping late-deposit uniqueness from agent to contract. The rule and its
+ *   reasoning were right the whole time; only the example list was wrong, which is the
+ *   failure mode a stated count invites.
  *
  * ⚠ There used to be a second rule — `migrate:agent-memberships` FIRST, because the whole
  * agent domain reads contracts. That migration was DELETED 2026-08-23 (Phase 6 Step 17)
@@ -218,10 +226,22 @@ export const MIGRATIONS: Migration[] = [
         note: 'ONE REVIEW PER AUTHOR IS ENFORCED BY NOTHING — the pre-check is a race, and duplicates inflate ratings and agent trust scores',
     },
     {
+        name: 'migrate:booking-number-index',
+        file: 'scripts/migrate-booking-number-index.ts',
+        dryRun: true,
+        note: "THE BOOKING HANDLE'S UNIQUENESS IS ENFORCED BY NOTHING — the generator's counter is the only guard, so a restored database that lost the counter re-issues numbers customers are already holding, silently",
+    },
+    {
         name: 'migrate:inventory-indexes',
         file: 'scripts/migrate-inventory-indexes.ts',
         dryRun: true,
         note: 'AN ORDER-PATH STOCK PROJECTION CAN APPLY TWICE — the idempotency pre-read is a race, so a retried payment webhook sells the same depot shelf twice; and the monthly storage run can issue two statements for one month',
+    },
+    {
+        name: 'migrate:plan-quota-indexes',
+        file: 'scripts/migrate-plan-quota-indexes.ts',
+        dryRun: true,
+        note: 'the plan-quota sweep collection-scans every owner it visits, and TWO ENFORCEMENT STAMPS PER OWNER become possible — the unique index is what stops two passes each believing they enforced the current plan',
     },
 ];
 

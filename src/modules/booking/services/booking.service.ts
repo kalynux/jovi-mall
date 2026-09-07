@@ -6,6 +6,7 @@ import { transactionManager } from '../../../core/database/transaction.manager';
 import { isCalendarNotConnected } from '../utils/calendar-error.util';
 import { SlotLockService } from './slot-lock.service';
 import { SlotGeneratorService } from './slot-generator.service';
+import { GroupBookingService } from './group-booking.service';
 import { CalendarClientFactory } from '../../integrations/calendar/calendar-client.factory';
 import { CalendarEventInput } from '../../integrations/calendar/interfaces/calendar-client.interface';
 import { ProductModel } from "../../catalog/models";
@@ -20,17 +21,28 @@ import { earningsSplitService } from '../../earnings/services/earnings-split.ser
 import { bookingRefundService } from './booking-refund.service';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { assertCancellationAllowed } from '../../vendors/utils/cancellation-policy.util';
+import { BookingNumberGenerator } from '../utils/booking-number.generator';
+import { CustomerModel } from '../../customers/customer.model';
 import { format } from 'date-fns';
 
 export class BookingService {
   private slotLockService: SlotLockService;
   private slotGenerator: SlotGeneratorService;
+  /**
+   * Group ("capacity") services — classes, tours, workshops — differ from single-occupancy
+   * bookings in three ways that cannot be expressed as an `if` inside this class: the hold
+   * key is owner-scoped, occupancy is a seat count rather than a yes/no, and the calendar
+   * event is shared by every seat. All of that lives in `GroupBookingService`; this class
+   * asks it whether a product is a group service and hands the group-specific work over.
+   */
+  private groupBookingService: GroupBookingService;
 
   private vendorRepo: VendorRepository;
 
   constructor() {
     this.slotLockService = new SlotLockService();
     this.slotGenerator = new SlotGeneratorService();
+    this.groupBookingService = new GroupBookingService();
     this.vendorRepo = new VendorRepository();
   }
 
@@ -68,6 +80,12 @@ export class BookingService {
     // it no longer depends on a calendar event being written.
     const isManual = bookingMode === 'manual';
 
+    // The booking's handle. Drawn BEFORE the transaction on purpose — the counter
+    // behind it is a single document, so incrementing it inside would make every
+    // concurrent booking conflict on that one row. A booking that then fails
+    // burns its number, which the format explicitly does not promise against.
+    const bookingNumber = await BookingNumberGenerator.generate();
+
     // Step 3: Re-check occupancy and create, in ONE transaction.
     //
     // The Redis hold is the first line of defence, but it is released the moment
@@ -88,6 +106,7 @@ export class BookingService {
       const [created] = await Booking.create(
         [
           {
+            bookingNumber,
             productId,
             userId,
             vendorId,
@@ -118,7 +137,7 @@ export class BookingService {
       const paymentPrefix = needsPayment ? '[UNPAID]' : '[FREE]';
       const eventInput: CalendarEventInput = {
         title: `${paymentPrefix} ${product.title}`,
-        description: `Booked by ${user.login_email}\nPrice: ${priceSnapshot} ${currency || 'XAF'}\nBooking #${booking._id}${metadata?.notes ? `\nNotes: ${metadata.notes}` : ''}`,
+        description: `Booked by ${user.login_email}\nPrice: ${priceSnapshot} ${currency || 'XAF'}\nBooking #${booking.bookingNumber ?? booking._id}${metadata?.notes ? `\nNotes: ${metadata.notes}` : ''}`,
         start,
         end,
         colorId: getCalendarColorIdByStatus(paymentStatus),
@@ -157,9 +176,14 @@ export class BookingService {
    * Creates a booking for a capacity-mode slot, where up to `maxBookings` seats may be
    * booked for the same time window. Unlike createBooking:
    * - Multiple bookings share ONE calendar event per slot, whose title shows `[x/N]`.
-   * - There is no exclusive slot lock; capacity is enforced here under a short per-slot
-   *   mutex so concurrent commits can't oversell.
+   * - There is no exclusive slot lock; capacity is enforced under a short per-slot mutex
+   *   so concurrent commits can't oversell.
    * - Bookings are confirmed immediately.
+   *
+   * The seat-taking itself is `GroupBookingService`'s, so that the create path and the
+   * reschedule path count seats, take the mutex and render the shared `[x/N]` event
+   * through **one** implementation. They did not before, and the two drifting apart is
+   * what produced KI-1.
    *
    * @param input Booking details
    * @param maxBookings Seats per slot (from serviceConfig.maxBookings)
@@ -170,85 +194,30 @@ export class BookingService {
     maxBookings: number,
     holdOwnerId: string
   ): Promise<IBooking> {
-    const { slotId, userId, productId, vendorId, metadata, priceSnapshot, currency, requiresPayment } = input;
-
-    const product = await ProductModel.findById(productId);
+    const product = await ProductModel.findById(input.productId);
     if (!product) {
       throw createAppError(ERROR_CODES.BOOKING_PRODUCT_NOT_FOUND, 404, 'Product not found');
     }
 
-    const user = await UserModel.findById(userId);
+    const user = await UserModel.findById(input.userId);
     if (!user) {
       throw createAppError(ERROR_CODES.BOOKING_USER_NOT_FOUND, 404, 'User not found');
     }
 
-    const { start, end } = this.slotGenerator.parseSlotId(slotId);
-    const needsPayment = requiresPayment !== false;
+    // Drawn outside the slot mutex `GroupBookingService` takes, for the same
+    // reason `createBooking` draws it outside its transaction.
+    const bookingNumber = await BookingNumberGenerator.generate();
 
-    // Serialise the count-and-create critical section for this slot.
-    const token = await this.acquireCapacityMutexWithRetry(slotId);
-    if (!token) {
-      throw createAppError(ERROR_CODES.BOOKING_SLOT_FULL, 409, 'Slot is busy, please retry');
-    }
+    const booking = await this.groupBookingService.createBooking(
+      input,
+      maxBookings,
+      holdOwnerId,
+      product.title,
+      bookingNumber
+    );
 
-    try {
-      // Count current active bookings for this exact window.
-      const existing = await Booking.find({
-        productId,
-        startAt: start,
-        endAt: end,
-        status: { $in: [BookingStatus.PENDING, BookingStatus.CONFIRMED] },
-        deletedAt: null,
-      });
-
-      if (existing.length >= maxBookings) {
-        throw createAppError(ERROR_CODES.BOOKING_SLOT_FULL, 409, `This slot is full (${maxBookings} seats)`);
-      }
-
-      const newCount = existing.length + 1;
-
-      // Shared calendar event: reuse the slot's event if one exists, else create it.
-      // Calendar sync is best-effort for capacity — booking proceeds even if it fails.
-      let sharedEventId = existing.find((b) => b.externalCalendarEventId)?.externalCalendarEventId;
-      try {
-        const calendarClient = await CalendarClientFactory.forVendor(vendorId);
-        const title = `[${newCount}/${maxBookings}] ${product.title}`;
-        const description = `Capacity booking — ${newCount}/${maxBookings} seats filled`;
-
-        if (sharedEventId) {
-          await calendarClient.updateEvent(sharedEventId, { title, description, start, end });
-        } else {
-          const event = await calendarClient.createEvent(
-            { title, description, start, end },
-            { idempotencyKey: slotId }
-          );
-          sharedEventId = event.externalId;
-        }
-      } catch (calendarError) {
-        console.error('[BookingService] Capacity calendar sync error:', calendarError);
-      }
-
-      const booking = await Booking.create({
-        productId,
-        userId,
-        vendorId,
-        startAt: start,
-        endAt: end,
-        status: BookingStatus.CONFIRMED,
-        externalCalendarEventId: sharedEventId,
-        metadata,
-        priceSnapshot,
-        currency: currency || 'XAF',
-        requiresPayment: needsPayment,
-      });
-
-      await this.emitBookingCreatedEvent(booking, product.title);
-      return booking;
-    } finally {
-      await this.slotLockService.releaseCapacityMutex(slotId, token);
-      // Release the per-user checkout hold (best-effort).
-      await this.slotLockService.release(slotId, holdOwnerId, true);
-    }
+    await this.emitBookingCreatedEvent(booking, product.title);
+    return booking;
   }
 
   /**
@@ -315,18 +284,41 @@ export class BookingService {
     }).session(session ?? null);
   }
 
-  /** Tries to acquire the per-slot capacity mutex, retrying briefly under contention. */
-  private async acquireCapacityMutexWithRetry(
-    slotId: string,
-    attempts = 5,
-    delayMs = 100
-  ): Promise<string | null> {
-    for (let i = 0; i < attempts; i++) {
-      const token = await this.slotLockService.acquireCapacityMutex(slotId);
-      if (token) return token;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+  /**
+   * Detaches a cancelled booking from its calendar event.
+   *
+   * Single occupancy: the event IS this booking, so it goes.
+   *
+   * ⚠ A group service's event is **shared by every seat in that class**. Deleting it
+   * because one attendee dropped out takes the whole class off the vendor's calendar —
+   * which is what all three cancellation paths did, since each simply called
+   * `deleteEvent` on `externalCalendarEventId`. The group service re-renders it at the
+   * new `[x/N]` count instead, and deletes it only when the last seat goes.
+   *
+   * Best-effort throughout: a calendar failure must never block a cancellation or its
+   * refund.
+   */
+  private async detachFromCalendarOnCancel(booking: IBooking): Promise<void> {
+    try {
+      const group = await this.groupBookingService.resolveCapacity(booking.productId.toString());
+
+      if (group) {
+        const product = await ProductModel.findById(booking.productId);
+        await this.groupBookingService.releaseSeat(
+          booking,
+          group.maxBookings,
+          product?.title ?? 'Booking'
+        );
+        return;
+      }
+
+      if (!booking.externalCalendarEventId) return;
+
+      const calendarClient = await CalendarClientFactory.forVendor(booking.vendorId.toString());
+      await calendarClient.deleteEvent(booking.externalCalendarEventId);
+    } catch (error) {
+      console.error('[BookingService] Failed to detach calendar event on cancel:', error);
     }
-    return null;
   }
 
   /**
@@ -377,18 +369,8 @@ export class BookingService {
       isPending: booking.status === BookingStatus.PENDING,
     });
 
-    // Delete from calendar if exists
-    if (booking.externalCalendarEventId) {
-      try {
-        const calendarClient = await CalendarClientFactory.forVendor(
-          booking.vendorId.toString()
-        );
-        await calendarClient.deleteEvent(booking.externalCalendarEventId);
-      } catch (error) {
-        console.error('Failed to delete calendar event:', error);
-        // Continue with cancellation even if calendar delete fails
-      }
-    }
+    // Take it off the calendar — or, for a group service, take one seat off the class.
+    await this.detachFromCalendarOnCancel(booking);
 
     // Update booking status
     booking.status = BookingStatus.CANCELLED;
@@ -478,37 +460,64 @@ export class BookingService {
       );
     }
 
-    // Step 1: Assert new slot is locked
-    await this.slotLockService.assertLocked(newSlotId, lockOwnerId);
+    // Step 1: Is this a group service? Everything below branches on the answer, and the
+    // FIRST thing it decides is which Redis key the hold lives under.
+    //
+    // ⚠ THIS IS KI-1. A group service's checkout hold is owner-scoped
+    // (`slot:lock:{slotId}:{userId}`) so several customers can hold one class at once —
+    // but this method asserted the UNSCOPED key, defaulting `scopeToOwner` to false. It
+    // read a key `lockSlot` had never written, found nothing, and refused every move of
+    // every group booking with BOOKING_SLOT_NOT_LOCKED — on the storefront and in chat
+    // alike, even when the target slot was wide open. `SlotLockService.extend` carried the
+    // same bug and its docstring still warns about it.
+    const group = await this.groupBookingService.resolveCapacity(booking.productId.toString());
+    const scopeToOwner = group !== null;
+
+    await this.slotLockService.assertLocked(newSlotId, lockOwnerId, scopeToOwner);
 
     // Step 2: Parse new slot
     const { start, end } = this.slotGenerator.parseSlotId(newSlotId);
 
-    // Step 3: The target must actually be free. The hold guards concurrent movers;
-    // this guards against moving onto an interval that is already sold.
-    const overlapping = await this.countOverlappingBookings(
-      booking.productId.toString(),
-      start,
-      end
-    );
-    const selfOverlaps =
-      booking.startAt.getTime() < end.getTime() && booking.endAt.getTime() > start.getTime();
-    if (overlapping > (selfOverlaps ? 1 : 0)) {
-      throw createAppError(
-        ERROR_CODES.BOOKING_SLOT_UNAVAILABLE,
-        409,
-        'That time is no longer free. Please choose another slot.',
-        { slotId: newSlotId }
-      );
-    }
-
-    // Step 4: Move the booking. This is the authoritative record of the new time,
-    // so it is written FIRST — a calendar outage must not be able to reject a
-    // reschedule the customer and vendor have already agreed.
     const previousStartAt = booking.startAt;
-    booking.startAt = start;
-    booking.endAt = end;
-    await booking.save();
+    const previousEndAt = booking.endAt;
+    const previousEventId = booking.externalCalendarEventId;
+
+    // Steps 3+4: check occupancy and move. Both are mode-specific, and inseparable —
+    // a group move counts seats and writes under the target slot's capacity mutex, so
+    // that a concurrent booking cannot slip into the last seat between the two.
+    if (group) {
+      await this.groupBookingService.moveIntoSlot(
+        booking,
+        newSlotId,
+        { start, end },
+        group.maxBookings
+      );
+    } else {
+      // Single occupancy: the target must actually be free. The hold guards concurrent
+      // movers; this guards against moving onto an interval that is already sold.
+      const overlapping = await this.countOverlappingBookings(
+        booking.productId.toString(),
+        start,
+        end
+      );
+      const selfOverlaps =
+        booking.startAt.getTime() < end.getTime() && booking.endAt.getTime() > start.getTime();
+      if (overlapping > (selfOverlaps ? 1 : 0)) {
+        throw createAppError(
+          ERROR_CODES.BOOKING_SLOT_UNAVAILABLE,
+          409,
+          'That time is no longer free. Please choose another slot.',
+          { slotId: newSlotId }
+        );
+      }
+
+      // Move the booking. This is the authoritative record of the new time, so it is
+      // written FIRST — a calendar outage must not be able to reject a reschedule the
+      // customer and vendor have already agreed.
+      booking.startAt = start;
+      booking.endAt = end;
+      await booking.save();
+    }
 
     // Step 5: Mirror onto the calendar, best-effort.
     //
@@ -516,7 +525,21 @@ export class BookingService {
     // so a Google hiccup left the booking at its OLD time while the customer had
     // been told it moved. It also resolved a calendar client unconditionally, which
     // failed outright for a vendor who has none — even with no event to update.
-    if (booking.externalCalendarEventId) {
+    if (group) {
+      // ⚠ A group booking's event is SHARED with the rest of its class, so the
+      // single-occupancy `updateEvent` below would drag every other attendee to the new
+      // time. Two events are re-rendered instead: the class left (one seat lighter) and
+      // the class joined.
+      const product = await ProductModel.findById(booking.productId);
+      await this.groupBookingService.syncCalendarForMove(
+        booking,
+        { start: previousStartAt, end: previousEndAt },
+        previousEventId,
+        group.maxBookings,
+        product?.title ?? 'Booking',
+        newSlotId
+      );
+    } else if (booking.externalCalendarEventId) {
       try {
         // Rebuild the event title/description to match createBooking's formatting,
         // so a reschedule doesn't degrade '[UNPAID] Haircut' into raw ObjectIds.
@@ -534,7 +557,7 @@ export class BookingService {
         );
         await calendarClient.updateEvent(booking.externalCalendarEventId, {
           title,
-          description: `Rescheduled booking by ${user?.login_email || 'Unknown'}\nBooking #${booking._id}`,
+          description: `Rescheduled booking by ${user?.login_email || 'Unknown'}\nBooking #${booking.bookingNumber ?? booking._id}`,
           start,
           end,
           colorId: getCalendarColorIdByStatus(booking.paymentStatus), // Preserve payment status color
@@ -545,8 +568,8 @@ export class BookingService {
       }
     }
 
-    // Step 6: Release slot lock
-    await this.slotLockService.release(newSlotId, lockOwnerId);
+    // Step 6: Release slot lock — under the same key namespace it was asserted with.
+    await this.slotLockService.release(newSlotId, lockOwnerId, scopeToOwner);
 
     // Step 7: Tell the customer, with BOTH times — a message carrying only the
     // new one is indistinguishable from a duplicate of the original booking.
@@ -702,7 +725,7 @@ export class BookingService {
 
             const calendarEvent = await calendarClient.createEvent({
               title: `${paymentPrefix} ${product.title}`,
-              description: `Booked by ${user?.login_email || 'Unknown'}\nBooking #${booking._id}`,
+              description: `Booked by ${user?.login_email || 'Unknown'}\nBooking #${booking.bookingNumber ?? booking._id}`,
               start: booking.startAt,
               end: booking.endAt,
               colorId,
@@ -712,13 +735,11 @@ export class BookingService {
             booking.externalCalendarEventId = calendarEvent.externalId;
             await booking.save();
           }
-        } else if (
-          currentStatus === 'confirmed' &&
-          newStatus === 'cancelled' &&
-          booking.externalCalendarEventId
-        ) {
-          // Delete calendar event when cancelling a confirmed booking
-          await calendarClient.deleteEvent(booking.externalCalendarEventId);
+        } else if (currentStatus === 'confirmed' && newStatus === 'cancelled') {
+          // Take it off the calendar when cancelling a confirmed booking — or, for a
+          // group service, take one seat off the shared class event rather than
+          // deleting the class.
+          await this.detachFromCalendarOnCancel(booking);
         }
         // no-show: intentionally no calendar action
       }
@@ -940,15 +961,9 @@ export class BookingService {
       throw createAppError(ERROR_CODES.BOOKING_TERMINAL_STATE, 409, `Cannot cancel a booking that is already '${booking.status}'`);
     }
 
-    // Delete from calendar (non-blocking, once)
-    if (booking.externalCalendarEventId) {
-      try {
-        const calendarClient = await CalendarClientFactory.forVendor(vendorId);
-        await calendarClient.deleteEvent(booking.externalCalendarEventId);
-      } catch (calendarError) {
-        console.error('[BookingService] Failed to delete calendar event on vendor cancel:', calendarError);
-      }
-    }
+    // Take it off the calendar — or, for a group service, take one seat off the class.
+    // Non-blocking, once.
+    await this.detachFromCalendarOnCancel(booking);
 
     booking.status = BookingStatus.CANCELLED;
     booking.cancelledAt = new Date();
@@ -1036,13 +1051,40 @@ export class BookingService {
    *
    * `status` is on the payload because the customer's copy depends on it: a
    * `manual` booking lands `pending` and the customer must be told they are
-   * waiting on the vendor, rather than assuming it is settled.
+   * waiting on the vendor, rather than assuming it is settled. The VENDOR's copy
+   * depends on the same field for the mirror-image reason — a pending booking is
+   * one they still have to accept, and their message has to say so.
+   *
+   * ⚠ THIS PAYLOAD IS THE MESSAGE. Both consumers are forbidden to enrich from
+   * the database ("No DB enrichment - use event payload only" —
+   * `VendorNotificationEventHandler`), so a field that is not here cannot appear
+   * in any notification. Four of them exist purely to be rendered:
+   *
+   *   `bookingNumber`   the handle the message names
+   *   `customerName`    who booked it — the vendor's first question
+   *   `vendorTimezone`  the zone `startAt` must be rendered in; without it the
+   *                    time is formatted in whatever zone the server runs in
+   *   `productTitle`    what was booked
+   *
+   * The vendor handler used to read `bookingNumber`, `serviceName` and
+   * `startTime`, and this payload has never carried any of those three names.
+   * Every value rendered empty and the date rendered the literal string
+   * "Invalid Date" (`new Date(undefined)`), so every vendor was sent
+   * "New booking # for scheduled on Invalid Date." — and the WhatsApp send failed
+   * outright, because Meta rejects an empty template parameter. Renaming a field
+   * on either side without the other is the way back to that.
    *
    * @param booking - Created booking
    * @param productTitle - Product title for notification message
    */
   private async emitBookingCreatedEvent(booking: IBooking, productTitle: string): Promise<void> {
     try {
+      // Read before the literal, and spelled out field-by-field below rather than
+      // spread into it. A spread is opaque to `test:booking-notification`'s source
+      // scan — the one thing that can see a producer and a consumer disagreeing —
+      // so a payload field hidden inside one is a field nothing checks.
+      const vendor = await this.resolveVendorIdentity(booking.vendorId.toString());
+
       await eventBus.publish('booking.created', {
         eventType: 'booking.created',
         aggregateId: booking._id.toString(),
@@ -1052,8 +1094,11 @@ export class BookingService {
           vendorId: booking.vendorId.toString(),
           userId: booking.userId.toString(),
           productId: booking.productId.toString(),
+          bookingNumber: booking.bookingNumber ?? null,
           productTitle,
-          vendorName: await this.resolveVendorName(booking.vendorId.toString()),
+          vendorName: vendor.vendorName,
+          vendorTimezone: vendor.vendorTimezone,
+          customerName: await this.resolveCustomerName(booking.userId.toString()),
           startAt: booking.startAt,
           endAt: booking.endAt,
           status: booking.status,
@@ -1079,6 +1124,10 @@ export class BookingService {
    * SAME message. A separate refund notification arriving minutes later (or not
    * at all, if the refund path fails) is how a cancellation reads as theft.
    *
+   * `bookingNumber` is here for the vendor's copy, which is a single sentence
+   * naming the booking and nothing else — without it that message read
+   * "Booking # has been cancelled.", which identifies no booking at all.
+   *
    * @param booking - Cancelled booking
    * @param cancelledByRole - Which side ended it
    */
@@ -1096,6 +1145,7 @@ export class BookingService {
           vendorId: booking.vendorId.toString(),
           userId: booking.userId.toString(),
           productId: booking.productId.toString(),
+          bookingNumber: booking.bookingNumber ?? null,
           productTitle: await this.resolveProductTitle(booking.productId.toString()),
           startAt: booking.startAt,
           endAt: booking.endAt,
@@ -1134,6 +1184,7 @@ export class BookingService {
           vendorId: booking.vendorId.toString(),
           userId: booking.userId.toString(),
           productId: booking.productId.toString(),
+          bookingNumber: booking.bookingNumber ?? null,
           productTitle: await this.resolveProductTitle(booking.productId.toString()),
           vendorName: await this.resolveVendorName(booking.vendorId.toString()),
           startAt: booking.startAt,
@@ -1222,6 +1273,61 @@ export class BookingService {
     try {
       const vendor = await this.vendorRepo.findById(vendorId);
       return vendor?.display_name ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The vendor's name AND the timezone their notifications must render times in,
+   * from ONE read.
+   *
+   * Both go on `booking.created`, and the timezone is the load-bearing half. The
+   * notification handlers are forbidden to enrich from the database, so without
+   * this the vendor's start time is formatted in whatever zone the Node process
+   * happens to run in — which for a containerised deployment is UTC, an hour off
+   * for every vendor in Douala, and silently wrong rather than obviously wrong.
+   * A vendor's availability rules are already authored in this zone
+   * (`availability-rule.model.ts`), so it is the zone they think in.
+   *
+   * `Vendor.timezone` is `required` with a default, so the null is only the
+   * lookup failing. The consumer supplies its own fallback rather than one being
+   * baked in here.
+   */
+  private async resolveVendorIdentity(
+    vendorId: string
+  ): Promise<{ vendorName: string | null; vendorTimezone: string | null }> {
+    try {
+      const vendor = await this.vendorRepo.findById(vendorId);
+      return {
+        vendorName: vendor?.display_name ?? null,
+        vendorTimezone: vendor?.timezone ?? null,
+      };
+    } catch {
+      return { vendorName: null, vendorTimezone: null };
+    }
+  }
+
+  /**
+   * The customer's name, for the vendor's copy of `booking.created`.
+   *
+   * Keyed on `user_id` because a booking references the `users` row, not the
+   * `customers` profile. Null when there is no customer profile (a booking made
+   * by a user who never completed one) or the lookup fails — the consumer then
+   * says "a customer" rather than leaving a hole in the sentence.
+   *
+   * Not a privacy widening: the vendor is already sent the customer's LOGIN EMAIL
+   * in the calendar event this same method's caller writes, and a display name is
+   * strictly less identifying than that. They are about to provide this person a
+   * service in person.
+   */
+  private async resolveCustomerName(userId: string): Promise<string | null> {
+    try {
+      const customer = await CustomerModel.findOne({ user_id: userId })
+        .select('name')
+        .lean()
+        .exec();
+      return customer?.name ?? null;
     } catch {
       return null;
     }

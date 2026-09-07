@@ -1,5 +1,9 @@
 # Vendor Customer Management API
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
+
 API reference for the vendor dashboard **Customer Management** tab.
 
 It covers four areas:
@@ -44,28 +48,39 @@ It covers four areas:
 
 ### Error envelope
 
-Two slightly different shapes exist depending on the endpoint (see notes per
-section). Both always include `success: false` and `error.code`:
+**One shape, on every endpoint on this page.** `category` is one of the nine values listed in
+[`errors/README.md`](../errors/README.md) and is **always present**; `details` is omitted
+entirely when absent.
 
 ```jsonc
-// Customer + flag endpoints (global handler)
 {
   "success": false,
   "requestId": "abc123",
-  "error": { "code": "VENDOR_CUSTOMER_NOT_FOUND", "message": "...", "statusCode": 404, "details": { } }
-}
-
-// Refund + eligibility endpoints (order controller)
-{
-  "success": false,
-  "error": { "code": "REFUND_WINDOW_EXPIRED", "message": "..." }
+  "error": {
+    "code": "VENDOR_CUSTOMER_NOT_FOUND",
+    "message": "...",
+    "statusCode": 404,
+    "category": "not_found",
+    "details": { }
+  }
 }
 ```
 
 Always branch on `error.code` (stable machine-readable string), not on `message`.
 
-Validation failures (Zod) return HTTP `400` with code `VALIDATION_ERROR` and a
-`details` object/array describing the offending fields.
+> [!IMPORTANT]
+> **`refund-eligibility` does not report ineligibility as an error.** This page previously
+> described a second, shorter envelope for the refund and eligibility endpoints. There is no such
+> shape. `GET /api/vendor/orders/:id/refund-eligibility` answers **`200` with `success: true`**
+> and puts the verdict in the body — `data.eligible: false` plus a `data.reasonCode` such as
+> `REFUND_WINDOW_EXPIRED`, `REFUND_POLICY_DISABLED` or `REFUND_ORDER_NOT_PAID`
+> (`vendor-refund.service.ts:205-207`: *"Never throws. Ineligibility is a `reasonCode`, not an
+> exception."*). A client looking for `error.code` on that route never finds one. The refund
+> **mutation** (`POST …/refund`) throws normally and uses the single envelope above.
+
+Validation failures (Zod) return HTTP `400` with code `VALIDATION_ERROR` and
+`details.fields[]` describing the offending fields — `path` is the dot-joined location, `code`
+is the Zod issue kind.
 
 ---
 
@@ -172,6 +187,7 @@ override the displayed name (locally only) and assign flags.
     "id": "665f0c1a2b3c4d5e6f705678",
     "key": "images/2026/07/jane-avatar.png",
     "url": "https://.../a.png",
+    "access": "public",
     "mimeType": "image/png",
     "size": 15360,
     "originalName": "avatar.png"
@@ -182,6 +198,42 @@ override the displayed name (locally only) and assign flags.
   "flags": [ { /* Flag object */ } ]
 }
 ```
+
+> ⚠ **A customer who CLOSED their account still appears in this list, and there is no flag or
+> status field to detect it by.** Closure anonymises-and-retains (`docs/ADR-A02`): the row keeps
+> its `_id` — so the orders stay attributed and your totals do not move — and loses every
+> identifier. `anonymiseCustomer` (`account-closure.repository.ts:144-167`) sets `name` to the
+> literal **`"Closed account"`**, `$unset`s `email` and `phone`, and nulls the avatar, so the
+> item reads:
+>
+> ```jsonc
+> {
+>   "customerId": "665a...e1",
+>   "realName": "Closed account",   // the literal ANONYMISED_CUSTOMER_NAME
+>   "displayName": "Closed account", // your override was CLEARED — see below
+>   "hasNameOverride": false,
+>   "email": null,
+>   "avatar": null,
+>   "orderCount": 12,               // your business record is retained
+>   "totalSpent": 145000,
+>   "flags": [ /* retained */ ]
+> }
+> ```
+>
+> ⚠ **Your `display_name_override` IS cleared, and the rest of your annotations are not.**
+> `vendor_customers` is the one row closure writes partially
+> (`account-closure.repository.ts:233-239`): the override is nulled because it is a **name** —
+> the source calls it *"the most visible place the person survives, since it is what the
+> vendor's customer list literally prints"* — while `order_count`, `total_spent`,
+> `last_order_at` and `flag_ids` stay, as the vendor's own record of a trading relationship
+> (ADR-A02 D-1, the same reason the orders stay).
+>
+> **Detect closure on `realName === "Closed account"`** — that literal
+> (`ANONYMISED_CUSTOMER_NAME`) is the only signal on the wire. There is no `status` field, no
+> flag, and no `closedAt`. A vendor re-typing an override on such a row is not prevented, so a
+> UI is the only place that can decline to offer it.
+>
+> This page documented none of the above until 2026-09-06.
 
 ### GET `/api/vendor/customers`
 

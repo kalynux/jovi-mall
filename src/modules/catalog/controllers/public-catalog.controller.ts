@@ -5,6 +5,7 @@ import { relatedProductsService } from '../services/related-products.service';
 import {
     PublicProductIdParamSchema,
     PublicProductListQuerySchema,
+    PublicProductsByIdsQuerySchema,
     PublicProductSlugsParamSchema,
     PublicSkuParamSchema,
     PublicSlugParamSchema,
@@ -49,6 +50,39 @@ export class PublicCatalogController {
         const query = PublicProductListQuerySchema.parse(req.query);
         const page = await publicCatalogService.listProducts(query);
         cacheable(res).json({ success: true, data: page.data, meta: page.meta });
+    });
+
+    /**
+     * GET /api/public/products/by-ids?ids=a,b,c
+     *
+     * The same browse rows, for a set of ids the caller already holds — one request instead
+     * of N. Built for **search-result hydration**: the n8n product-search tool retrieves
+     * ranked ids out of the pgvector index and comes here for what they currently cost and
+     * whether they are actually in stock.
+     *
+     * Three properties are the contract, and each is load-bearing for that caller:
+     *
+     *  - **Order is the caller's.** Rows come back in the order the ids were sent, so a
+     *    relevance ranking computed elsewhere survives hydration without the caller having
+     *    to re-sort. `listByIds` returns a Map precisely so each caller can impose its own.
+     *  - **`missing` is an answer, not an error.** An id that is no longer publishable —
+     *    archived, suspended, deleted since the row referencing it was written — is named
+     *    there rather than 404ing the request. For the search tool this is the freshness
+     *    gate: a product still sitting in the vector index but withdrawn from sale is
+     *    dropped from the results by its absence here.
+     *  - **It is the same DTO as the browse grid**, through the same `decorateRows`. A
+     *    second product shape for this surface is the mistake `api-doc/public/catalog.md`
+     *    warns about — `inStock` is a boolean and never a count, and two shapes is how that
+     *    becomes two answers.
+     */
+    static listProductsByIds = asyncHandler(async (req: Request, res: Response) => {
+        const { ids } = PublicProductsByIdsQuerySchema.parse(req.query);
+        const byId = await publicCatalogService.listByIds(ids);
+
+        const products = ids.map((id) => byId.get(id)).filter((p): p is NonNullable<typeof p> => p != null);
+        const missing = ids.filter((id) => !byId.has(id));
+
+        cacheable(res).json({ success: true, data: { products, missing } });
     });
 
     /**

@@ -115,10 +115,18 @@ the result. Frontends have no reason to call it directly.
 ## How the event push works
 
 1. A shipment status changes (`ShipmentService`) or COD cash is recorded
-   (`CashCollectionService`) → a domain event is published.
-2. `tracking-integration`'s subscriber writes a row to the **`tracking_outbox`**
-   collection (durable: a crash never loses a pending revocation — the
-   in-process event bus alone would).
+   (`CashCollectionService`), **inside a Mongo transaction**.
+2. **Inside that same transaction**, `TrackingOutboxEmitter` writes a row to the
+   **`tracking_outbox`** collection, passing the transaction's `ClientSession`. The row commits
+   with the state change or not at all, so a crash cannot lose a pending revocation.
+
+   > ⚠ **Corrected 2026-09-06** (DOC-PROGRAM F-42). This step used to say *"`tracking-integration`'s
+   > subscriber writes a row"* — that subscriber (`TrackingEventSubscriber`) was **deleted** at plan
+   > step 3.A.1 and the event bus is no longer on this path at all. The durability claim was true of
+   > a mechanism the sentence did not name: the bus cannot carry a Mongo session, and
+   > `EventBus.publish` swallows handler errors, so a failed enqueue through it was silent. A domain
+   > event *is* still published for in-process consumers (customer notifications, assignment) — it
+   > simply no longer reaches the outbox.
 3. `TrackingDispatchWorker` drains the outbox every ~2s and POSTs each event to
    geo-tracker's `/webhooks/node`, HMAC-SHA256 signed, retrying with a bounded
    attempt count before parking the row as `failed`.

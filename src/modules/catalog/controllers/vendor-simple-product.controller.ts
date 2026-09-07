@@ -179,6 +179,17 @@ export class VendorSimpleProductController {
         if (input.publish === true && product.status === 'draft') {
             // Explicit opt-in only. An edit must never silently republish a
             // product the vendor deliberately unpublished via /status.
+            //
+            // ⚠ **No plan-quota check here, and that is deliberate — do not add one.**
+            // `draft -> active` takes no catalog slot: `countActiveByVendor` counts
+            // drafts, so both sides of this transition already occupy one and the number
+            // the plan caps does not move. A gate here would refuse a vendor who is
+            // comfortably inside their plan, for publishing a product they had already
+            // been allowed to create. The slot was charged at creation
+            // (`createSimpleProduct` above), which is the only moment it is owed.
+            //
+            // A quota-suspended product cannot reach this branch either way: it sits at
+            // `status: 'suspended'`, not `draft`.
             const result = await attemptPublish(product, vendorId);
             product = result.product;
             outcome = result.outcome;

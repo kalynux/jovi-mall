@@ -10,7 +10,7 @@ import { ERROR_CATEGORIES, ErrorCategory } from './error-category';
  * `{ cause: error.message }`, which is raw axios/gateway prose, and
  * `google-calendar.client.ts:246` carries Google's own error body. Not one of those files
  * is edited by Phase 16: they are `external_service`, and this module drops their details
- * on the way out. A rule enforced at 1362 call sites is a rule enforced at 1361 of them.
+ * on the way out. A rule enforced at ~1517 call sites is a rule enforced at ~1516 of them.
  *
  * ── And it is not environment-gated ───────────────────────────────────────────
  * `internal` and `external_service` are filtered in development exactly as in production.

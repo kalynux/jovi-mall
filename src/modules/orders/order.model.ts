@@ -70,6 +70,31 @@ export interface IOrderItem {
   price: number;                        // Unit price at time of order
   currency: string;                     // Currency code
 
+  // === NEGOTIATED PRICE (bargaining agent — absent on an ordinary line) ===
+  /**
+   * The haggled price, and the marker that this line was haggled. Equal to
+   * `price` above, which stays the one field every existing reader uses.
+   *
+   * `EarningsSplitService` keys the platform's AI margin on the PAIR of this and
+   * `floor_price_snapshot` — a line with neither yields zero uplift and zero
+   * margin, which is what makes a mixed order work with no branch at the call
+   * site.
+   */
+  negotiated_unit_price?: number | null;
+  /**
+   * The vendor's floor as of the verdict that CONSUMED the lock at checkout —
+   * not the cart's copy, and not a live read.
+   *
+   * ⚠ This is the input to invariant 1 (`vendorGross >= floor x qty`). Re-reading
+   * `variant.price` at split time would read a number the vendor may have
+   * changed since the sale, so the platform's share would be a cut of an uplift
+   * that never existed — and the vendor could be paid below the floor they
+   * actually agreed to sell at.
+   *
+   * ⚠ Vendor-facing at most. It must never reach a customer DTO.
+   */
+  floor_price_snapshot?: number | null;
+
   // === DELIVERY (Optional - only for physical products) ===
   delivery?: {
     agency_id: mongoose.Types.ObjectId;
@@ -241,6 +266,20 @@ const OrderItemSchema = new Schema({
   currency: {
     type: String,
     required: true
+  },
+
+  // Negotiated price — see IOrderItem. Absent (null) on every ordinary line, and
+  // on every order placed before the bargaining agent existed; the split reads
+  // the pair and computes a zero margin for either.
+  negotiated_unit_price: {
+    type: Number,
+    default: null,
+    min: 0
+  },
+  floor_price_snapshot: {
+    type: Number,
+    default: null,
+    min: 0
   },
 
   // Delivery (optional - only for physical orders)

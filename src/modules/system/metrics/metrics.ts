@@ -190,7 +190,7 @@ export const mongoOperationErrorsTotal = new Counter({
  * Deliberately NOT labelled by route. `httpRequestsTotal` already carries `route_group`, so
  * a route label here would answer no new question and multiply the series by the size of
  * the allowlist — and `route-group.ts` exists precisely because prom-client enforces no
- * cardinality cap of its own. Never label this by code either: the registry has 541 entries
+ * cardinality cap of its own. Never label this by code either: the registry has 623 entries
  * and grows.
  */
 export const errorsTotal = new Counter({

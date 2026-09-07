@@ -29,7 +29,9 @@ const MIN_SECRET_LENGTH = 16;
 /** Values that are obviously not a real secret, regardless of length. */
 const REJECTED_SECRETS = new Set(['secret', 'changeme', 'password', 'development_secret_do_not_use_in_prod']);
 
-function requireSecret(name: 'JWT_SECRET' | 'JWT_REFRESH_SECRET'): string {
+function requireSecret(
+  name: 'JWT_SECRET' | 'JWT_REFRESH_SECRET' | 'BOT_IDENTITY_TOKEN_SECRET',
+): string {
   const value = process.env[name];
 
   if (!value || value.trim().length === 0) {
@@ -72,10 +74,31 @@ export function getJwtRefreshSecret(): string {
 }
 
 /**
+ * Signs and verifies the bot surface's **sealed identity token**
+ * (`modules/bot-surface/domain/bot-identity-token.ts`).
+ *
+ * Falls back to `JWT_SECRET`, on the same reasoning as `getJwtRefreshSecret` above: one
+ * real secret doing two jobs is weaker than two, and infinitely stronger than a default.
+ *
+ * ⚠ **Deliberately NOT a cross-service value.** jovi-mall both mints and verifies these;
+ * neither geo-tracker nor wi-admin nor the automation layer ever holds this secret, and
+ * nothing outside this service can produce a token. So it does not join the five shared
+ * secrets in the workspace CLAUDE.md and needs no lock-step rotation window — rotating it
+ * invalidates tokens minted before the restart, which costs one conversational turn and
+ * self-heals on the next `/identity/sync`.
+ */
+export function getBotIdentityTokenSecret(): string {
+  return process.env.BOT_IDENTITY_TOKEN_SECRET?.trim()
+    ? requireSecret('BOT_IDENTITY_TOKEN_SECRET')
+    : getJwtSecret();
+}
+
+/**
  * Boot guard. Call before the server starts listening so a missing secret is a
  * startup crash, not a 500 on whichever request happens to need a token first.
  */
 export function assertSigningSecrets(): void {
   getJwtSecret();
   getJwtRefreshSecret();
+  getBotIdentityTokenSecret();
 }

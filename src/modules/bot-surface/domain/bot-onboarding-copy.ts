@@ -1,6 +1,7 @@
 import { MessagingChannel } from '../../channel-connections';
 import { BOT_COPY_LANGUAGES, BotCopyLanguage, toBotCopyLanguage } from './bot-error-copy';
 import { BOT_ONBOARDING_STEPS, BotOnboardingStep, isRequiredStep } from './bot-onboarding';
+import { botChrome } from './bot-chrome-copy';
 
 /**
  * What the bot SAYS when it asks for an onboarding field — a sentence, in the customer's
@@ -106,18 +107,18 @@ const PROMPTS: Readonly<Record<Exclude<BotOnboardingStep, 'phone'>, Copy>> = Obj
      * differently or cannot draw it at all.
      */
     email: {
-        en: 'Would you like to add an email address?',
-        fr: 'Souhaitez-vous ajouter une adresse e-mail ?',
-        pt: 'Quer adicionar um endereço de e-mail?',
-        es: '¿Quieres añadir un correo electrónico?',
-        ar: 'هل تودّ إضافة بريد إلكتروني؟',
+        en: 'Would you like to add an email address? Send it here.',
+        fr: "Souhaitez-vous ajouter une adresse e-mail ? Envoyez-la ici.",
+        pt: 'Quer adicionar um endereço de e-mail? Envie-o aqui.',
+        es: '¿Quieres añadir un correo electrónico? Envíalo aquí.',
+        ar: 'هل تودّ إضافة بريد إلكتروني؟ أرسله هنا.',
     },
     address: {
-        en: 'Last one: where should I deliver to?',
-        fr: 'Dernière question : où dois-je livrer ?',
-        pt: 'Última pergunta: onde devo entregar?',
-        es: 'Última pregunta: ¿dónde te entrego?',
-        ar: 'السؤال الأخير: إلى أين أوصل طلبك؟',
+        en: 'Last one: where should I deliver to? Tap the button to send your location, or type a street and city.',
+        fr: "Dernière question : où dois-je livrer ? Appuyez sur le bouton pour envoyer votre position, ou tapez une rue et une ville.",
+        pt: 'Última pergunta: onde devo entregar? Toque no botão para enviar a sua localização, ou escreva uma rua e cidade.',
+        es: 'Última pregunta: ¿dónde te entrego? Toca el botón para enviar tu ubicación, o escribe una calle y ciudad.',
+        ar: 'السؤال الأخير: إلى أين أوصل طلبك؟ اضغط على الزر لإرسال موقعك، أو اكتب اسم شارع ومدينة.',
     },
 });
 
@@ -133,6 +134,29 @@ export interface BotOnboardingPrompt {
      * branches on presence and an older handler that does not know the key is unaffected.
      */
     requestContact?: true;
+    /**
+     * Attach a location-request control to this reply.
+     *
+     * Present only on the address step, on **both** channels — Telegram draws a
+     * `request_location` keyboard button, WhatsApp a `location_request_message`. Absent, not
+     * `false`, everywhere else, exactly as `requestContact` is.
+     *
+     * ⚠ **It does not mean the customer MUST pin.** Typing an address still works and still
+     * goes through `/geo/search`; the pin is the shortcut, and the prompt offers both.
+     */
+    requestLocation?: true;
+    /**
+     * The exact string a Telegram Skip **keyboard** button will send back, in the customer's
+     * language. Present only when the step is skippable AND the control is a reply keyboard.
+     *
+     * ⚠ **This is handed over precisely so the automation layer does not need a copy table.**
+     * A reply-keyboard press arrives as an ordinary text message — Telegram's `reply_markup`
+     * is a union, so a turn asking for a location cannot also carry an inline keyboard with a
+     * machine token. Comparing the inbound text to THIS string is an equality check against a
+     * value the caller was just given; it is not the five-spellings-of-"skip" table §14.6
+     * abolished, which lived in the layer that has no copy at all.
+     */
+    skipLabel?: string;
 }
 
 /**
@@ -159,7 +183,25 @@ export function onboardingPromptFor(
     }
 
     const copy = PROMPTS[step];
-    return { prompt: copy[lang] ?? copy.en };
+    const prompt = copy[lang] ?? copy.en;
+
+    if (step === 'address') {
+        return {
+            prompt,
+            requestLocation: true,
+            // ⚠ Telegram only. The location control there is a REPLY KEYBOARD, and Telegram's
+            // `reply_markup` is a union — so the Skip a skippable step is entitled to cannot
+            // be an inline button carrying a machine token, and has to be a second keyboard
+            // button whose press arrives as this exact text. WhatsApp's
+            // `location_request_message` admits no second button at all, so there is nothing
+            // to name and the key is absent.
+            ...(channel === 'telegram' && !isRequiredStep(step)
+                ? { skipLabel: botChrome('skipButton', language) }
+                : {}),
+        };
+    }
+
+    return { prompt };
 }
 
 /**

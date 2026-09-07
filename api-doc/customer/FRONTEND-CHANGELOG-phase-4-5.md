@@ -30,7 +30,7 @@ their documents describe.
 
 ## 1 · 🔴 The 90-day absolute session cap
 
-Full explanation in [the cross-role page § 2](../FRONTEND-CHANGELOG-phase-4-5.md#2--a-sign-in-is-now-bounded-at-90-days-whatever-it-does-in-between).
+Full explanation in [the cross-role page § 2](../FRONTEND-CHANGELOG-phase-4-5.md#2---a-sign-in-is-now-bounded-at-90-days-whatever-it-does-in-between).
 
 Before Phase 4, a customer who opened the app at all never had to sign in again: every client
 calls `auth-me` on launch and was re-issued **both** tokens at full lifetime, so the 30-day

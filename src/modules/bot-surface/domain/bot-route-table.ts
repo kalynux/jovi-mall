@@ -150,7 +150,20 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     { tool: 'profile_set_language', method: 'PATCH', path: '/profile/language', mutating: true, requiresCustomerRole: true },
     { tool: 'addresses_list', method: 'POST', path: '/addresses/list', mutating: false, requiresCustomerRole: true },
     { tool: 'addresses_add', method: 'POST', path: '/addresses', mutating: true, requiresCustomerRole: true },
+    { tool: 'profile_update', method: 'PATCH', path: '/profile', mutating: true, requiresCustomerRole: true },
+    /**
+     * ⚠ **ORDER: `/default` is declared BEFORE the bare `:addressId`.**
+     *
+     * The two do not actually collide — Express matches `/addresses/:addressId` against one
+     * segment and `/addresses/:addressId/default` against two — so `assertNoShadowedRoutes`
+     * passes either way. It is written in this order anyway because the next person adding
+     * `/addresses/:addressId/<something>` will copy the line above it, and the habit is
+     * what keeps this table out of the trap that put `/articles/index` behind
+     * `/articles/:slug` and `/orders/groups/:cartId` behind `/orders/:id`.
+     */
     { tool: 'addresses_set_default', method: 'PATCH', path: '/addresses/:addressId/default', mutating: true, requiresCustomerRole: true },
+    { tool: 'addresses_update', method: 'PATCH', path: '/addresses/:addressId', mutating: true, requiresCustomerRole: true },
+    { tool: 'addresses_remove', method: 'DELETE', path: '/addresses/:addressId', mutating: true, requiresCustomerRole: true },
 
     // ── Geo ──────────────────────────────────────────────────────────────────
     // Both mint a single-use candidate handle, which IS a write to Redis — and both are
@@ -166,6 +179,26 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     { tool: 'tickets_get', method: 'POST', path: '/tickets/:ticketId', mutating: false, requiresCustomerRole: true },
     { tool: 'tickets_add_note', method: 'POST', path: '/tickets/:ticketId/notes', mutating: true, requiresCustomerRole: true },
     { tool: 'tickets_close', method: 'POST', path: '/tickets/:ticketId/close', mutating: true, requiresCustomerRole: true },
+    /**
+     * ⚠ **Three segments, and it CANNOT be declared before `/tickets/:ticketId`** — the
+     * shadowing rule runs the other way here. `/tickets/:ticketId` is two segments and
+     * matches nothing three long, so the literal tail is what distinguishes this from
+     * `/notes` and `/close`. `assertNoShadowedRoutes()` checks it either way.
+     */
+    { tool: 'tickets_add_attachment', method: 'POST', path: '/tickets/:ticketId/attachments', mutating: true, requiresCustomerRole: true },
+
+    // ── Inbound files (Step 7b) ──────────────────────────────────────────────
+    /**
+     * The one row on this surface that carries a PAYLOAD rather than a reference, and the
+     * one the automation layer calls before the model runs at all.
+     *
+     * ⚠ **`mutating: true`, and a read-only maintenance window must refuse it.** It writes
+     * a `files` row and bytes into storage. The consequence is worth stating because it is
+     * mild and easy to mistake for a bug: during such a window a customer's photo is
+     * refused with a sentence they can read, the conversation carries on, and nothing else
+     * on the ticket path stops working.
+     */
+    { tool: 'files_receive_inbound', method: 'POST', path: '/files/inbound', mutating: true, requiresCustomerRole: true },
 
     // ── Support routing (GAP-004) ────────────────────────────────────────────
     // A read, and one whose `mutating: false` is worth a word: it is the FIRST step of the
@@ -181,6 +214,15 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     // Naturally idempotent — re-viewing moves the entry to the head rather than adding a
     // second one — but it WRITES, and a read-only window must not accept it.
     { tool: 'recently_viewed_record', method: 'POST', path: '/recently-viewed', mutating: true, requiresCustomerRole: true },
+    { tool: 'recently_viewed_list', method: 'POST', path: '/recently-viewed/list', mutating: false, requiresCustomerRole: true },
+    /**
+     * Destructive and not recoverable — the rows are deleted, not flagged — so `mutating`
+     * carries its full weight here rather than the "would a retry surprise anybody" reading
+     * the record above gets. A retry of a clear is harmless; the FIRST call is the one that
+     * needs the customer to have asked for it, which is why the catalogue marks it
+     * `requires_confirmation`.
+     */
+    { tool: 'recently_viewed_clear', method: 'DELETE', path: '/recently-viewed', mutating: true, requiresCustomerRole: true },
 
     // ── Digital delivery ─────────────────────────────────────────────────────
     { tool: 'digital_list_entitlements', method: 'POST', path: '/digital/my-products', mutating: false, requiresCustomerRole: true },
@@ -188,11 +230,119 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
 
     // ── Bookings ─────────────────────────────────────────────────────────────
     { tool: 'bookings_list', method: 'POST', path: '/bookings/list', mutating: false, requiresCustomerRole: true },
+    /**
+     * ⚠ **A LITERAL among the `:bookingId` rows, and it must stay above them.**
+     * `/bookings/availability` and `/bookings/:bookingId` are both two segments, so this is
+     * the real shadowing case rather than the habitual one — `assertNoShadowedRoutes` refuses
+     * the table if these two are swapped, which is the guard `/articles/index` did not have.
+     *
+     * It reads a PRODUCT's slots, not a booking, and it is filed here anyway: the identity
+     * envelope is a body, `productId` rides in it, and adding a `/products/*` family to this
+     * surface for one read would be a second place to look for booking things.
+     */
+    { tool: 'bookings_get_availability', method: 'POST', path: '/bookings/availability', mutating: false, requiresCustomerRole: true },
+    /**
+     * ⚠ **This TAKES THE SLOT HOLD ITSELF**, which is why there is no `bookings_lock_slot`
+     * beside it. The hold is acquired and released inside this one request, so no chat turn
+     * can end with a slot held. See `BotBookingController.create`.
+     */
+    { tool: 'bookings_create', method: 'POST', path: '/bookings', mutating: true, requiresCustomerRole: true },
     { tool: 'bookings_get', method: 'POST', path: '/bookings/:bookingId', mutating: false, requiresCustomerRole: true },
+    { tool: 'bookings_get_balance', method: 'POST', path: '/bookings/:bookingId/balance', mutating: false, requiresCustomerRole: true },
+    { tool: 'bookings_payment_status', method: 'POST', path: '/bookings/:bookingId/payment-status', mutating: false, requiresCustomerRole: true },
+    /**
+     * Both money rows. `mutating` for the reason the column actually asks about: each one
+     * pushes a USSD prompt to a real handset, and a second unasked-for prompt is a second
+     * interruption — even though the orchestrator's own idempotency key would refuse to
+     * charge twice (`PAYMENT_BOOKING_IN_PROGRESS`).
+     */
+    { tool: 'bookings_pay', method: 'POST', path: '/bookings/:bookingId/pay', mutating: true, requiresCustomerRole: true },
+    { tool: 'bookings_pay_balance', method: 'POST', path: '/bookings/:bookingId/pay-balance', mutating: true, requiresCustomerRole: true },
     { tool: 'bookings_cancel', method: 'POST', path: '/bookings/:bookingId/cancel', mutating: true, requiresCustomerRole: true },
+    /** Takes the hold on the NEW slot itself, for the same reason `bookings_create` does. */
+    { tool: 'bookings_reschedule', method: 'PATCH', path: '/bookings/:bookingId/reschedule', mutating: true, requiresCustomerRole: true },
+
+    // ── Saved payment methods ────────────────────────────────────────────────
+    { tool: 'payment_methods_list', method: 'POST', path: '/payment-methods/list', mutating: false, requiresCustomerRole: true },
+    /**
+     * ⚠ **Mobile money only, and the reason is structural rather than cautious.** The
+     * customer API takes `gateway_customer_id` and `gateway_instrument_id`, which for a CARD
+     * are produced by the gateway's own SDK running in a browser. A chat has no browser and
+     * therefore no way to obtain one — a model asked for those fields would invent them. For
+     * a WALLET the two values are simply the customer's phone number, so this route takes
+     * the number and builds the rest itself. See `BotPaymentMethodController.add`.
+     */
+    { tool: 'payment_methods_add', method: 'POST', path: '/payment-methods', mutating: true, requiresCustomerRole: true },
+    { tool: 'payment_methods_set_default', method: 'PATCH', path: '/payment-methods/:methodId/default', mutating: true, requiresCustomerRole: true },
+    // The SIXTH `DELETE` with a body on this surface. Count the table, not the sentence in § 3.
+    { tool: 'payment_methods_remove', method: 'DELETE', path: '/payment-methods/:methodId', mutating: true, requiresCustomerRole: true },
+
+    // ── Contact changes (MCP parity step 6) ──────────────────────────────────
+    /**
+     * ⚠ **The five writes below move or abandon WHAT THE ACCOUNT SIGNS IN WITH**, which is
+     * why every one of them is `flow_only` in the catalogue and none reaches a model. The
+     * read is not: "what am I signed in with, and is anything in flight?" is the question a
+     * customer actually asks, and answering it is what stops the flow being entered blind.
+     *
+     * ⚠ **`/contact/email/pending` and `/contact/phone/pending` are literals under a family
+     * that carries NO `:param`**, so nothing can shadow anything today. Keep it that way: a
+     * `/contact/email/:something` added later must be declared AFTER them — the same note
+     * `user.routes.ts` carries about the endpoints these delegate to.
+     */
+    { tool: 'contact_get_state', method: 'POST', path: '/contact', mutating: false, requiresCustomerRole: true },
+    { tool: 'contact_change_email', method: 'PATCH', path: '/contact/email', mutating: true, requiresCustomerRole: true },
+    { tool: 'contact_cancel_email_change', method: 'DELETE', path: '/contact/email/pending', mutating: true, requiresCustomerRole: true },
+    { tool: 'contact_change_phone', method: 'PATCH', path: '/contact/phone', mutating: true, requiresCustomerRole: true },
+    /**
+     * Confirming takes NO arguments and is still `mutating` — it is the single write that
+     * moves `login_phone`, and the pending block it spends is gone afterwards. A retry
+     * answers `409 CONTACT_CHANGE_NOT_PENDING`, which is the correct outcome and not one a
+     * caller should reach by accident.
+     */
+    { tool: 'contact_confirm_phone', method: 'POST', path: '/contact/phone/confirm', mutating: true, requiresCustomerRole: true },
+    { tool: 'contact_cancel_phone_change', method: 'DELETE', path: '/contact/phone/pending', mutating: true, requiresCustomerRole: true },
+
+    // ── Messaging connections and account closure (MCP parity step 7) ────────
+    { tool: 'connections_list', method: 'POST', path: '/connections/list', mutating: false, requiresCustomerRole: true },
+    /**
+     * ⚠ **The SEVENTH `DELETE` with a body on this surface**, and the only route here that
+     * refuses on a property of the CALLER rather than of the argument: disconnecting the
+     * channel the request arrived on is `409 BOT_CONNECTION_ACTIVE_CHANNEL`. See
+     * `BotAccountController.disconnect`.
+     */
+    { tool: 'connections_disconnect', method: 'DELETE', path: '/connections/:channel', mutating: true, requiresCustomerRole: true },
+    /**
+     * ⚠ **A READ that exists so the write below can be a two-step**, and it is declared
+     * first for the habitual reason even though the two cannot collide (`/account/close` is
+     * two segments and `/account/close/preview` is three, and neither carries a `:param`).
+     *
+     * It is a separate route rather than a no-argument branch of `account_close` because
+     * that row is `mutating`: `botIdempotency` demands a key on it, and a preview sharing
+     * one with the close collides on the request fingerprint. See
+     * `BotAccountController.closePreview`.
+     */
+    { tool: 'account_close_preview', method: 'POST', path: '/account/close/preview', mutating: false, requiresCustomerRole: true },
+    /**
+     * Irreversible, and the most destructive row on this surface — the identifiers are
+     * removed rather than archived (ADR-A02 D-1). `mutating` carries its full weight: it is
+     * the FIRST call that needs the customer to have asked for it, which is what the typed
+     * confirmation phrase is for, and a retry answers `409` from the compare-and-set on
+     * `active` rather than re-running the cascade.
+     *
+     * `POST`, not `DELETE`, mirroring `POST /api/me/close`: the account row is not removed,
+     * and a `DELETE` would promise on the wire exactly the thing the design refuses to do.
+     */
+    { tool: 'account_close', method: 'POST', path: '/account/close', mutating: true, requiresCustomerRole: true },
 
     // ── Reviews ──────────────────────────────────────────────────────────────
     { tool: 'reviews_check_eligibility', method: 'POST', path: '/reviews/eligibility', mutating: false, requiresCustomerRole: true },
+    /**
+     * ⚠ **`/reviews/list` is a literal beside `/reviews`, and the order below is the safe
+     * one.** This family has no `:param` route today, so nothing can shadow anything — but
+     * `POST /reviews/:reviewId` is the obvious next row, and it would swallow both literals.
+     * Declared before the bare mount for the same reason `/notifications/read-all` is.
+     */
+    { tool: 'reviews_list_mine', method: 'POST', path: '/reviews/list', mutating: false, requiresCustomerRole: true },
     { tool: 'reviews_create', method: 'POST', path: '/reviews', mutating: true, requiresCustomerRole: true },
 
     // ── Proactive messaging (GAP-012) ────────────────────────────────────────
@@ -208,6 +358,18 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     // ── Notification preferences ─────────────────────────────────────────────
     { tool: 'notifications_get_preferences', method: 'POST', path: '/notifications/preferences', mutating: false, requiresCustomerRole: true },
     { tool: 'notifications_update_preferences', method: 'PATCH', path: '/notifications/preferences', mutating: true, requiresCustomerRole: true },
+    { tool: 'notifications_list', method: 'POST', path: '/notifications/list', mutating: false, requiresCustomerRole: true },
+    { tool: 'notifications_unread_count', method: 'POST', path: '/notifications/unread-count', mutating: false, requiresCustomerRole: true },
+    /**
+     * ⚠ **Literals before the parameter, and here it is not merely habit.** The customer
+     * API's own router carries a comment about this exact path family: `read-all` and
+     * `preferences` would each match a bare `:id` segment. These two do not collide —
+     * `/notifications/read-all` is one segment and `/notifications/:notificationId/read` is
+     * two — but the family is one `PATCH /notifications/:id` away from the trap, so the
+     * order is written the safe way round.
+     */
+    { tool: 'notifications_mark_all_read', method: 'PATCH', path: '/notifications/read-all', mutating: true, requiresCustomerRole: true },
+    { tool: 'notifications_mark_read', method: 'PATCH', path: '/notifications/:notificationId/read', mutating: true, requiresCustomerRole: true },
 ]);
 
 /** Where this surface is mounted. One literal, read by the router and by maintenance mode. */

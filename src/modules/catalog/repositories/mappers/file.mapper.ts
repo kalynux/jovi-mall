@@ -20,6 +20,12 @@ export interface File {
 
   orphanedAt?: Date | null;
 
+  /**
+   * Set while the owner is over their plan storage cap and this file falls outside it.
+   * Read on the way out by `toFileDetail` — see `modules/plan-quota/`. Never a deletion.
+   */
+  quotaBlockedAt?: Date | null;
+
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;
@@ -45,6 +51,7 @@ export class FileMapper implements IMapper<File, IFile> {
       ownerType: doc.ownerType,
       ownerId: doc.ownerId?.toString(),
       orphanedAt: doc.orphanedAt,
+      quotaBlockedAt: doc.quotaBlockedAt ?? null,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       deletedAt: doc.deletedAt,

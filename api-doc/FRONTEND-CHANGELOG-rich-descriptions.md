@@ -16,7 +16,7 @@
 
 `frontend/vendor-dash/src/lib/richtext/wire.ts`. **That is the whole change.**
 Nothing else in the dashboard needs editing, and there is no ordering
-requirement — see [Deploy order](#deploy-order).
+requirement — see [Deploy order](#4-deploy-order).
 
 Everything below is either confirmation that a decision of yours was honoured, or
 one of **four small deltas** you should know about. None of them require code
@@ -211,6 +211,21 @@ Backend-side: `npm run test:rich-description` (149 assertions, no database).
 ---
 
 ## 6. Not built, and why
+
+> ✅ **SUPERSEDED 2026-09-06 — it was built.** `POST /api/vendor/products/:id/share`
+> (`vendor-products.routes.ts:164` → `ProductShareService`) is live and **is** the first caller
+> of these formatters, added at Phase 6 Step 5 (6.J). Its contract is
+> [vendor/product-share.md](./vendor/product-share.md).
+>
+> The section below is **left standing as the dated record it is**, and one paragraph of it is
+> still true and load-bearing: the share goes to the **vendor's own** connected WhatsApp or
+> Telegram and carries **no recipient field**, for exactly the reasons argued here. So the ask
+> in the last paragraph — *"send this product to a customer's WhatsApp"* — remains unbuilt and
+> unbuildable on either platform's terms. What changed is the half that was a send path at all.
+>
+> Found by DOC-PROGRAM F-17 class 6, from the other end: `product-share.md` had **no inbound
+> link anywhere in `api-doc/`**, and the only mention of "product-share" in the tree was this
+> paragraph saying it did not exist.
 
 **There is no endpoint that sends a product description to WhatsApp or
 Telegram.** The formatters are implemented, tested and exported from

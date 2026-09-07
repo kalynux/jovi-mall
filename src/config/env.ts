@@ -9,12 +9,24 @@ import { ERROR_CODES } from '../core/error-codes';
  * `process.env` at a call site. This file does not do that, and the difference is a decision
  * rather than an omission.
  *
- * This service reads 254 variables through ~15 module-level `*.config.ts` objects
+ * This service reads 300 variables through 27 module-level `*.config.ts` objects
  * (`modules/agents/config/agent.config.ts`, `modules/system/config/system.config.ts`, …), a
  * shape its own CLAUDE.md documents as intentional: "never a literal in a rule and never a bare
  * `process.env` read at a call site". Those modules already centralise their defaults. Moving
- * all 254 into one schema would rewrite every one of them plus ~40 inline sites, in a service
- * with no test framework, to end up where the defaults already are.
+ * all 300 into one schema would rewrite every one of them plus 182 inline sites across 46 files,
+ * to end up where the defaults already are.
+ *
+ * ⚠ Re-measure rather than trusting those three figures — they are the kind that decays:
+ *
+ *   npm run test:env                                       # variables read / documented
+ *   find src -name "*.config.ts" | wc -l                    # config objects
+ *   grep -rIo "process\.env" src --include=*.ts \
+ *     | grep -v "\.config\.ts" | grep -v "^src/config/" | grep -v "^src/scripts/" | wc -l
+ *
+ * This line said "254 … ~15 … ~40 … in a service with no test framework" until 2026-09-06
+ * (DOC-PROGRAM P-12 and P-17). Every figure had decayed, and the last clause was never true in
+ * the sense a reader takes it: there is no Jest or Vitest here, but there are 54 `test:*` and
+ * 14 `verify:*` suites, one of which — `test:env` — measures the first number above.
  *
  * So the division of labour is:
  *

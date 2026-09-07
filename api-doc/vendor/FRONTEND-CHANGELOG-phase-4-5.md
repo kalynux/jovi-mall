@@ -29,7 +29,7 @@ formatter contract and every payout surface answer exactly as their documents de
 
 ## 1 · 🔴 The 90-day absolute session cap
 
-Full explanation in [the cross-role page § 2](../FRONTEND-CHANGELOG-phase-4-5.md#2--a-sign-in-is-now-bounded-at-90-days-whatever-it-does-in-between).
+Full explanation in [the cross-role page § 2](../FRONTEND-CHANGELOG-phase-4-5.md#2---a-sign-in-is-now-bounded-at-90-days-whatever-it-does-in-between).
 The dashboard-specific version:
 
 Your dashboard is a **cookie** client, so it has always renewed silently inside an ordinary

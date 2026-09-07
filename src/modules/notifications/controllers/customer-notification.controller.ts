@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
 import { CustomerNotificationService } from '../services/customer-notification.service';
+import { CUSTOMER_AGGREGATE_TYPES, CustomerAggregateType } from '../models/customer-notification.model';
 
 const service = new CustomerNotificationService();
 
@@ -14,7 +15,19 @@ const ListSchema = z.object({
         .enum(['true', 'false'])
         .optional()
         .transform(v => v === 'true'),
-    aggregateType: z.enum(['booking', 'order', 'shipment', 'payment']).optional()
+    /**
+     * ⚠ **Spread from `CUSTOMER_AGGREGATE_TYPES`, not re-typed.**
+     *
+     * This was the hand-written literal `['booking','order','shipment','payment']`, and
+     * GAP-012 added `ticket` to the union without it — so a customer could receive ticket
+     * notifications and had no way to filter to them, answering `400` on a value the
+     * platform itself writes. Exactly the drift `customer-notification.model.ts` warns
+     * about at its own Mongoose enum, one layer up. Widening only, so no existing caller
+     * changes behaviour.
+     */
+    aggregateType: z
+        .enum(CUSTOMER_AGGREGATE_TYPES as unknown as readonly [CustomerAggregateType, ...CustomerAggregateType[]])
+        .optional()
 });
 
 const UpdatePreferencesSchema = z.object({

@@ -16,6 +16,7 @@ import { ShipmentService } from '../../shipments/shipment.service';
 import { ShipmentRepository } from '../../shipments/shipment.repository';
 import { EARNINGS_CONFIG, daysAgo } from '../config/earnings.config';
 import { IEarningsAllocation, EarningsAllocationModel } from '../models/earnings-allocation.model';
+import { isPlatformOwnerType } from '../models/earnings-account.model';
 import { EarningsReserveHoldModel } from '../models/earnings-reserve-hold.model';
 import { CashCollectionModel } from '../../cod/models/cash-collection.model';
 import { COD_CONFIG, daysFromNow } from '../../cod/config/cod.config';
@@ -402,9 +403,13 @@ export class EarningsReleaseWorker implements ObservableWorker {
     const accounts = await this.accountRepo.findOverThreshold(EARNINGS_CONFIG.AUTO_PAYOUT_THRESHOLD);
 
     for (const account of accounts) {
-      // The platform account has no owner_id and nobody to pay itself; skip it
-      // rather than let it fail the missing-payout-method check every sweep.
-      if (account.owner_type === 'platform' || !account.owner_id) continue;
+      // A platform-owned account has no owner_id and nobody to pay itself; skip
+      // it rather than let it fail the missing-payout-method check every sweep.
+      // There are TWO of them now — `platform` (commission) and `platform_ai`
+      // (the bargaining agent's share) — so this reads the list rather than
+      // comparing to one literal. The `!account.owner_id` half already covered
+      // the new one, but only by accident.
+      if (isPlatformOwnerType(account.owner_type) || !account.owner_id) continue;
 
       const ownerType = account.owner_type as 'vendor' | 'agency' | 'agent';
       const ownerId = account.owner_id.toString();

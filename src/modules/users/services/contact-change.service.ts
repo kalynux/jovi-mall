@@ -363,12 +363,23 @@ export class ContactChangeService {
    * re-derived precisely because there must be one of it: this is the single easiest way to
    * ship the whole flow broken, and `identity-resolver.service.ts` has the fixture that
    * catches it.
+   *
+   * ── PUBLIC, because a caller needs to ASK before it acts ────────────────────
+   * The bot surface reports `phoneChangeProved` on `contact_get_state` so a chat can tell a
+   * customer their pending change is not completable from where they are standing — rather
+   * than letting them try and answering `422`. That caller must not re-derive the rule: the
+   * E.164 mismatch above is exactly the kind of near-miss a second copy gets wrong while
+   * looking right. So the predicate is here, once, and `confirmPhoneChange` raises off it.
    */
-  private async assertPhoneProved(userId: string, pendingNumber: string): Promise<void> {
+  async isPhoneChangeProved(userId: string, pendingNumber: string): Promise<boolean> {
     const connection = await this.connections.getConnection(userId, 'whatsapp');
     const proved = connection ? messagingPhoneToE164(connection.external_id) : null;
 
-    if (!proved || proved !== normalizePhoneNumber(pendingNumber)) {
+    return proved !== null && proved === normalizePhoneNumber(pendingNumber);
+  }
+
+  private async assertPhoneProved(userId: string, pendingNumber: string): Promise<void> {
+    if (!(await this.isPhoneChangeProved(userId, pendingNumber))) {
       throw createAppError(ERROR_CODES.CONTACT_CHANGE_PHONE_UNPROVEN, 422, undefined, {
         channel: 'whatsapp',
       });

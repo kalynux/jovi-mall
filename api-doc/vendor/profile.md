@@ -1,5 +1,9 @@
 # Vendor Profile Management API Documentation
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–26). Corrections are marked inline with ⚠ and a source citation.
+
 ## Overview
 
 The Vendor Profile Management API allows vendors to view and update their profile information, manage notification preferences, and change their password. All endpoints require authentication and are restricted to vendor accounts only.
@@ -14,6 +18,28 @@ The Vendor Profile Management API allows vendors to view and update their profil
 ---
 
 ## Endpoints
+
+| Method | Path | Documented |
+|---|---|---|
+| `GET` | `/api/vendor/profile` | [below](#get-apivendorprofile) |
+| `PATCH` | `/api/vendor/profile` | [below](#patch-apivendorprofile) |
+| `PATCH` | `/api/vendor/profile/password` | [below](#patch-apivendorprofilepassword) |
+| `GET` | `/api/vendor/profile/default-delivery-agency` | [below](#get-apivendorprofiledefault-delivery-agency) |
+| `PUT` | `/api/vendor/profile/default-delivery-agency` | [below](#put-apivendorprofiledefault-delivery-agency) |
+| `GET` | `/api/vendor/profile/auto-redirect-orders` | [below](#get-apivendorprofileauto-redirect-orders) |
+| `PUT` | `/api/vendor/profile/auto-redirect-orders` | [below](#put-apivendorprofileauto-redirect-orders) |
+| `GET` | `/api/vendor/profile/auto-cancel-unpaid-days` | [below](#get-apivendorprofileauto-cancel-unpaid-days) |
+| `PUT` | `/api/vendor/profile/auto-cancel-unpaid-days` | [below](#put-apivendorprofileauto-cancel-unpaid-days) |
+| `GET` | `/api/vendor/profile/completion-status` | Onboarding progress — [onboarding.md](./onboarding.md#option-b--simple-status) |
+| `POST` | `/api/vendor/profile/policy-documents` | [onboarding.md](./onboarding.md) |
+
+> ⚠ **This table is new on 2026-09-06** (DOC-PROGRAM F-17 class 6), and the row it exists for is
+> `completion-status`: it is served under `/api/vendor/profile`, and this page did not mention it
+> **once**. The other three role profile pages all carry it —
+> [customer](../customer/profile.md#get-customerprofilecompletion-status) and
+> [agency](../agency/profile.md#get-apiagencyprofilecompletion-status) specify it in full,
+> [agent](../agent/profile.md#endpoints) lists it with a pointer — which is what makes this an
+> omission rather than a house style.
 
 ### GET /api/vendor/profile
 
@@ -44,10 +70,12 @@ Authorization: Bearer <jwt_token>
     "phone": "+237612345678",
     "phoneVerified": false,
     "displayName": "TechSol",
+    "country": "CM",
     "avatar": {
       "id": "507f1f77bcf86cd799439040",
-      "key": "vendors/avatar-xyz789.png",
-      "url": "https://cdn.example.com/vendors/avatar-xyz789.png",
+      "key": "images/2026/07/avatar-xyz789.png",
+      "url": "https://cdn.example.com/images/2026/07/avatar-xyz789.png",
+      "access": "public",
       "mimeType": "image/png",
       "size": 15360,
       "originalName": "me.png"
@@ -60,8 +88,28 @@ Authorization: Bearer <jwt_token>
         "address_line2": "Suite 4B",
         "city": "Douala",
         "state": "Littoral",
-        "location": null
+        "geo": {
+          "formatted_address": "123 Commerce Ave, Akwa, Douala, Cameroun",
+          "coordinates": { "type": "Point", "coordinates": [9.7043, 4.0483] },
+          "provider": "geoapify",
+          "provider_place_id": "way:98765432",
+          "components": {
+            "street": "Commerce Ave",
+            "neighbourhood": "Akwa",
+            "city": "Douala",
+            "region": "Littoral",
+            "country": "Cameroon",
+            "country_code": "CM",
+            "postal_code": null
+          },
+          "raw_input": "123 Commerce Ave Akwa",
+          "resolved_at": "2026-07-18T10:20:30.000Z"
+        }
       }
+    ],
+    "operatingHours": [
+      { "day": "monday", "open_time": "08:00", "close_time": "18:00", "is_closed": false },
+      { "day": "sunday", "open_time": "00:00", "close_time": "00:00", "is_closed": true }
     ],
     "payoutDetails": {
       "method": "mobile_money",
@@ -73,19 +121,52 @@ Authorization: Bearer <jwt_token>
       "bank": null,
       "card": null
     },
+    "kycVerified": true,
+    "socialLinks": {
+      "instagram": "https://instagram.com/techsol",
+      "facebook": null,
+      "twitter": null
+    },
+    "policies": {
+      "return_policy": { "..." : "see onboarding Step 4" },
+      "cancellation_policy": null,
+      "support_policy": null,
+      "documents": ["https://cdn.example.com/vendor-policy-documents/terms-addendum.pdf"]
+    },
     "notificationPreferences": {
       "email": true,
       "whatsapp": false,
       "phone": false
     },
     "twoFactorEnabled": false,
+    "preferredLanguage": "en",
     "status": "active",
+    "onboardingStep": 0,
     "version": 3,
     "createdAt": "2024-01-15T10:30:00.000Z",
     "updatedAt": "2024-01-20T14:22:00.000Z"
   }
 }
 ```
+
+> [!IMPORTANT]
+> ⚠ **This example was missing SEVEN of the response's keys until 2026-09-06** — `country`,
+> `operatingHours`, `kycVerified`, `socialLinks`, `policies`, `preferredLanguage` and
+> `onboardingStep`. `GetVendorProfileResponseDto` has **22** fields
+> (`vendor-profile.dto.ts:49-78`), every one of them assigned unconditionally by
+> `VendorProfileMapper.toResponseDto` (`:184-211`), so all 22 are on the wire. The one
+> exception is `displayName`, which is optional on the DTO and therefore absent from the JSON
+> when the vendor has never set one — count on 21 or 22, never on the 15 this example showed.
+>
+> ⚠ **`businessAddresses[]` entries always carry `geo`, and never carry a null `location`.**
+> `geo` is schema-defaulted to `null` (`vendor.model.ts:149`), so the **key is always present**
+> — `null` only on legacy plain-text entries written before geocoding, populated on anything
+> new or edited (see the field reference below). The deprecated `location` is
+> `default: undefined` (`vendor.model.ts:143`) precisely so the key is **omitted** rather than
+> stored null: this array is 2dsphere-indexed, and one entry holding an explicit `null` beside
+> one holding a real point fails index-key extraction and makes **every subsequent write to
+> that vendor** fail, whatever it touches (`geo-address.types.ts:169-184`, measured
+> 2026-08-23). A client must not send `location: null` back either.
 
 > [!NOTE]
 > **`payoutDetails` is the PREFERRED method only** — a single object (or `null`), not the array you
@@ -115,7 +196,16 @@ Authorization: Bearer <jwt_token>
 > [Vendor Product Upload Reference — Media Handling](./product-upload-flow.md#media-handling)):
 > the vendor uploads the image via `POST /api/files/upload` and gets back a file `id`; that `id` is
 > what gets submitted as `avatarFileId` via `PATCH /api/vendor/profile`. Reads always resolve the
-> stored file reference into `{ id, key, url, mimeType, size, originalName }`, or `null` if unset.
+> stored file reference into `{ id, key, url, access, mimeType, size, originalName }`, or `null` if unset.
+>
+> ⚠ **`url` is `string | null` on the shared `FileDetail` shape** (`product-detail.read-model.ts:40`)
+> — it is `null`, with `access: "authorized"`, whenever the file sits in a private storage tree
+> (`digital/`, `shipments/`, `ticket-attachments/` — ADR-A01 D-2). **A vendor avatar is never one
+> of those**: it is uploaded into `images/`, which is classified `public`
+> (`storage-trees.ts:40`), so here `url` is always a real URL and `access` is always `"public"`.
+> Write the client against the nullable type anyway if the same rendering code also draws
+> ticket attachments or delivery proof, where `null` is the normal case and the bytes come from
+> the owning entity's own authorized read keyed on `id`.
 >
 > **`avatar` is the vendor's personal profile picture**, distinct from the **business** logo/banner,
 > which live on the [Store](./store.md). Like any file reference, while set it counts as *in use*
@@ -125,19 +215,34 @@ Authorization: Bearer <jwt_token>
 
 #### Error Responses
 
-**Unauthorized (401)**:
+**Unauthorized (401)** — no credential presented (`auth.middleware.ts:126`):
 
 ```json
 {
-  "error": "Unauthorized: Missing token"
+  "success": false,
+  "requestId": "req_01J…",
+  "error": {
+    "code": "AUTH_MISSING_TOKEN",
+    "message": "Authentication token required",
+    "statusCode": 401,
+    "category": "authentication"
+  }
 }
 ```
 
-**Forbidden (403)**:
+**Forbidden (403)** — signed in as the wrong role (`requireRole`, `auth.middleware.ts:365`):
 
 ```json
 {
-  "error": "Forbidden: Insufficient permissions"
+  "success": false,
+  "requestId": "req_01J…",
+  "error": {
+    "code": "AUTH_ROLE_NOT_FOUND",
+    "message": "Insufficient permissions",
+    "statusCode": 403,
+    "category": "authorization",
+    "details": { "required": ["vendor"], "actual": "customer" }
+  }
 }
 ```
 
@@ -146,9 +251,12 @@ Authorization: Bearer <jwt_token>
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "NOT_FOUND",
-    "message": "Vendor profile not found"
+    "code": "AUTH_USER_NOT_FOUND",
+    "message": "Vendor profile not found",
+    "statusCode": 404,
+    "category": "not_found"
   }
 }
 ```
@@ -230,7 +338,7 @@ All fields are **optional except `version`**. Every field below maps to a profil
 | `policies` | `object \| null` | `{ return_policy?, cancellation_policy?, support_policy?, documents? }` (sub-policies nullable) | Step 4 (Policy Setup) | Full replace of the **whole** `policies` object — include every sub-policy you want to keep. `documents` (max 2 URLs) is cleared if omitted. See [Step 4 field reference](./onboarding.md#step-4-policy-setup-optional--skippable). |
 | `kyc_details` | `object` | `{ national_id_number }` | — (general) | `legit_verified` is **admin-only** and ignored if sent. |
 | `social_links` | `object` | `instagram`, `facebook`, `twitter` — valid URLs or `null` | — (general) | Full replace. |
-| `notificationPreferences` | `object` | `{ email?, whatsapp?, phone? }` booleans | — (general) | `whatsapp`/`phone` are feature-flagged (see below). |
+| `notificationPreferences` | `object` | `{ email?, whatsapp?, phone? }` booleans | — (general) | **Only `phone` is gated** — `phone: true` is refused with `403 AUTH_FORBIDDEN` (`vendor-profile.service.ts:297-302`). `email` and `whatsapp` are both accepted. See below. |
 | `version` | `number` (integer) | **Required**, must match current profile `version` | — | Optimistic-locking guard. Mismatch → `409`. |
 
 > **Not editable here:** `default_delivery_agency_id` (onboarding Step 2). Use the dedicated delivery-agency routes below. `legit_verified`, `status`, and `onboarding_step` are server/admin-controlled.
@@ -257,8 +365,9 @@ All fields are **optional except `version`**. Every field below maps to a profil
     "displayName": "TechSolutions",
     "avatar": {
       "id": "507f1f77bcf86cd799439040",
-      "key": "vendors/avatar-xyz789.png",
-      "url": "https://cdn.example.com/vendors/avatar-xyz789.png",
+      "key": "images/2026/07/avatar-xyz789.png",
+      "url": "https://cdn.example.com/images/2026/07/avatar-xyz789.png",
+      "access": "public",
       "mimeType": "image/png",
       "size": 15360,
       "originalName": "me.png"
@@ -285,15 +394,21 @@ All fields are **optional except `version`**. Every field below maps to a profil
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Request validation failed",
-    "details": [
-      {
-        "field": "displayName",
-        "message": "String must contain at least 2 character(s)"
-      }
-    ]
+    "statusCode": 400,
+    "category": "validation",
+    "details": {
+      "fields": [
+        {
+          "path": "displayName",
+          "message": "String must contain at least 2 character(s)",
+          "code": "too_small"
+        }
+      ]
+    }
   }
 }
 ```
@@ -306,9 +421,12 @@ All fields are **optional except `version`**. Every field below maps to a profil
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "FORBIDDEN",
-    "message": "Email changes are not allowed. Please contact support if you need to update your email address."
+    "code": "AUTH_FORBIDDEN",
+    "message": "Email changes are not allowed. Contact support to update your email.",
+    "statusCode": 403,
+    "category": "authorization"
   }
 }
 ```
@@ -316,14 +434,27 @@ All fields are **optional except `version`**. Every field below maps to a profil
 **Feature Not Available (403)**:
 
 > [!NOTE]
-> WhatsApp and phone notifications are feature-flagged OFF in the initial release. This creates an upgrade path for premium plans.
+> ⚠ **This said "WhatsApp and phone notifications are feature-flagged OFF" until 2026-09-06, and
+> the WhatsApp half was wrong.** Only `phone` is refused — the guard checks
+> `input.notificationPreferences.phone` and nothing else
+> (`vendor-profile.service.ts:297-302`), and its own comment states the reason: *"WhatsApp is
+> available on ALL plans — usage is metered via credits at send time, not gated here.
+> Phone/SMS remains disabled platform-wide (no SMS provider integrated yet)."* Sending
+> `whatsapp: true` **succeeds**.
+>
+> ⚠ **`VendorConfig.ENABLE_WHATSAPP_NOTIFICATIONS` still exists and is READ BY NOTHING** —
+> `vendor.config.ts:26` is the only occurrence of the name in `src/`. Do not infer the wire
+> behaviour from that constant.
 
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "FORBIDDEN",
-    "message": "WhatsApp notifications are not available on your current plan. Please upgrade to enable this feature."
+    "code": "AUTH_FORBIDDEN",
+    "message": "Phone notifications are not available on your current plan.",
+    "statusCode": 403,
+    "category": "authorization"
   }
 }
 ```
@@ -336,9 +467,12 @@ All fields are **optional except `version`**. Every field below maps to a profil
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "PROFILE_COUNTRY_IMMUTABLE",
     "message": "Country cannot be changed once set. It was fixed during onboarding for tax, shipping and address policy.",
+    "statusCode": 403,
+    "category": "authorization",
     "details": { "currentCountry": "CM" }
   }
 }
@@ -352,9 +486,12 @@ All fields are **optional except `version`**. Every field below maps to a profil
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "ADDRESS_GEO_REQUIRED",
     "message": "New or edited addresses must include a geocoded location (`geo`) selected from /api/geo/search.",
+    "statusCode": 400,
+    "category": "validation",
     "details": { "index": 1, "label": "Warehouse" }
   }
 }
@@ -365,9 +502,12 @@ All fields are **optional except `version`**. Every field below maps to a profil
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "ADDRESS_COUNTRY_MISMATCH",
     "message": "Addresses must be located in your registered country (CM). Pick the address again from /api/geo/search within that country.",
+    "statusCode": 400,
+    "category": "validation",
     "details": { "index": 1, "label": "Warehouse", "addressCountryCode": "NG", "requiredCountry": "CM" }
   }
 }
@@ -381,9 +521,12 @@ All fields are **optional except `version`**. Every field below maps to a profil
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "CONFLICT",
-    "message": "Profile was modified by another request. Please refresh the page and try again."
+    "code": "VENDOR_ONBOARDING_CONCURRENT_MODIFICATION",
+    "message": "Profile was modified by another request. Please refresh and try again.",
+    "statusCode": 409,
+    "category": "conflict"
   }
 }
 ```
@@ -397,9 +540,12 @@ All fields are **optional except `version`**. Every field below maps to a profil
   ```json
   {
     "success": false,
+    "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
     "error": {
       "code": "VENDOR_BUSINESS_ADDRESS_IN_USE",
       "message": "One or more business addresses you removed are still set as a pickup location on a product. Reassign or remove that pickup location first.",
+      "statusCode": 409,
+      "category": "conflict",
       "details": {
         "blockedAddresses": [
           { "addressId": "683abc1234567890abcdef02", "label": "Main Shop", "productCount": 3 }
@@ -411,14 +557,23 @@ All fields are **optional except `version`**. Every field below maps to a profil
   Reassign or clear those products' `delivery.pickupLocation` first (`PATCH /api/vendor/products/:id` — see [Update Product](./products.md#update-product)), then retry the address removal.
 - **Optimistic Locking**: The `version` field prevents concurrent update conflicts. Always include the current version number from the GET response.
 - **Email Changes**: If `ALLOW_EMAIL_CHANGE=false`, email updates are rejected. Contact support to change email.
-- **Notification Preferences**: Only `email` notifications are available. `whatsapp` and `phone` are feature-flagged for future pricing tiers.
+- **Notification Preferences**: `email` and `whatsapp` are both settable; only `phone` is refused (`403 AUTH_FORBIDDEN`, `vendor-profile.service.ts:297-302`) because no SMS provider is integrated. WhatsApp sends are metered against the credit wallet at send time rather than gated here.
 
 ---
 
 ### PATCH /api/vendor/profile/password
 
 > [!WARNING]
-> **Deprecated alias.** Password change is now a shared, role-agnostic endpoint: **`PATCH /api/me/password`** — same body, same responses, works for every role. See [me/password.md](../me/password.md). This vendor path routes to the same handler and is kept only so existing frontends don't break.
+> **Deprecated alias.** Password change is now a shared endpoint: **`PATCH /api/me/password`** — same body, same responses. See [me/password.md](../me/password.md). This vendor path routes to the same handler (`UserController.updatePassword`) and is kept only so existing frontends don't break.
+>
+> ⚠ **The two are NOT fully equivalent, and this warning claimed they were until 2026-09-06.**
+> The handler is shared; the **guards are not**. `/api/me/password` is mounted on a router with
+> `requireAuth` and **no role guard** — its own comment reads *"Shared across all roles — no
+> `requireRole` guard"* (`users/user.routes.ts:11-15`). This alias sits under the vendor
+> router's blanket `router.use(requireRole(['vendor']))` (`vendor/routes.ts:22`), so it
+> **additionally** requires the vendor role. A signed-in agency, agent or customer gets
+> `403 AUTH_ROLE_NOT_FOUND` here and succeeds on the shared path. "Works for every role" is
+> true of `/api/me/password` only.
 
 Change the authenticated vendor's password.
 
@@ -475,15 +630,21 @@ Also sets fresh `access_token` and `refresh_token` cookies — see the session n
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Request validation failed",
-    "details": [
-      {
-        "field": "newPassword",
-        "message": "Password must contain at least one uppercase letter"
-      }
-    ]
+    "statusCode": 400,
+    "category": "validation",
+    "details": {
+      "fields": [
+        {
+          "path": "newPassword",
+          "message": "Password must contain at least one uppercase letter",
+          "code": "invalid_string"
+        }
+      ]
+    }
   }
 }
 ```
@@ -493,9 +654,12 @@ Also sets fresh `access_token` and `refresh_token` cookies — see the session n
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
-    "code": "FORBIDDEN",
-    "message": "Current password is incorrect"
+    "code": "USER_INVALID_PASSWORD",
+    "message": "Current password is incorrect",
+    "statusCode": 403,
+    "category": "authorization"
   }
 }
 ```
@@ -543,7 +707,7 @@ Returns the agency details as a vendor-safe `VendorAgencyListItemDto`. Returns `
   "data": {
     "id": "683abc1234567890abcdef01",
     "agencyName": "Swift Deliveries Cameroon",
-    "logo": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
+    "logo": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "access": "public", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
     "kycVerified": true,
     "headquartersAddress": {
       "region": "Littoral",
@@ -639,7 +803,7 @@ Returns the configured agency details as a vendor-safe `VendorAgencyListItemDto`
   "data": {
     "id": "683abc1234567890abcdef01",
     "agencyName": "Swift Deliveries Cameroon",
-    "logo": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
+    "logo": { "id": "507f1f77bcf86cd799439030", "key": "images/2026/07/swift-logo.png", "url": "https://cdn.example.com/logos/swift-deliveries.png", "access": "public", "mimeType": "image/png", "size": 24576, "originalName": "logo.png" },
     "kycVerified": true,
     "headquartersAddress": {
       "region": "Littoral",
@@ -686,15 +850,21 @@ Returns the configured agency details as a vendor-safe `VendorAgencyListItemDto`
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "Request validation failed",
-    "details": [
-      {
-        "field": "agencyId",
-        "message": "Invalid input: Must be a valid agency ID"
-      }
-    ]
+    "statusCode": 400,
+    "category": "validation",
+    "details": {
+      "fields": [
+        {
+          "path": "agencyId",
+          "message": "Must be a valid MongoDB ObjectId",
+          "code": "invalid_string"
+        }
+      ]
+    }
   }
 }
 ```
@@ -704,9 +874,12 @@ Returned if the agency does not exist, is inactive, or has not completed onboard
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "DELIVERY_AGENCY_NOT_FOUND",
-    "message": "The selected delivery agency does not exist."
+    "message": "The selected delivery agency does not exist.",
+    "statusCode": 400,
+    "category": "validation"
   }
 }
 ```
@@ -716,9 +889,12 @@ Returned if you don't have an `active` connection with this agency (never reques
 ```json
 {
   "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "CONNECTION_NOT_ACTIVE",
-    "message": "You need an active, approved connection with this agency before setting it as your default. Send or check your connection request first."
+    "message": "You need an active, approved connection with this agency before setting it as your default. Send or check your connection request first.",
+    "statusCode": 422,
+    "category": "business_rule"
   }
 }
 ```
@@ -850,16 +1026,22 @@ Set the unpaid-order auto-cancel window.
 ### Notification Channels
 
 **WhatsApp Notifications**:
-- **Status**: Feature-flagged OFF (hardcoded)
-- **Future**: Enable for premium plans
+- **Status**: **Available on every plan.** `whatsapp: true` is accepted by `PATCH /api/vendor/profile`.
+- **How it is limited**: not by a flag — by **credits**. Each outbound template message is metered against the credit wallet at send time (see [Billing overview](./billing-overview.md)).
 
 **Phone Notifications**:
-- **Status**: Feature-flagged OFF (hardcoded)
-- **Future**: Enable for premium plans
+- **Status**: Refused — `403 AUTH_FORBIDDEN` on `phone: true` (`vendor-profile.service.ts:297-302`).
+- **Why**: no SMS provider is integrated yet. `VendorConfig.ENABLE_PHONE_NOTIFICATIONS` is hardcoded `false` (`vendor.config.ts:34`).
 
 **Email Notifications**:
 - **Status**: Always available
 - **Default**: Enabled
+
+> ⚠ **This block listed WhatsApp as "Feature-flagged OFF (hardcoded)" until 2026-09-06.** The
+> flag it referred to — `VendorConfig.ENABLE_WHATSAPP_NOTIFICATIONS` (`vendor.config.ts:26`) —
+> is **read by no code at all**; the service's gate tests `phone` alone. A vendor dashboard
+> that hid or disabled the WhatsApp toggle on the strength of this section was hiding a
+> working control.
 
 ---
 
@@ -940,13 +1122,17 @@ The system is designed for future 2FA integration:
 
 ### Pricing Plans
 
-Notification preferences are already structured for plan-based enablement:
+> ⚠ **This section sketched plan-gating WhatsApp behind
+> `VendorConfig.ENABLE_WHATSAPP_NOTIFICATIONS`. That is not the direction the platform took**,
+> and the snippet was removed on 2026-09-06 because it read as a description of current
+> behaviour. WhatsApp shipped **available on every plan and metered by credits** at send time
+> (`vendor-profile.service.ts:293-295`); the constant it named is dead
+> (`vendor.config.ts:26`, referenced nowhere in `src/`). Billing shapes WhatsApp through the
+> credit wallet and the plan's caps — see [Billing overview](./billing-overview.md) — not
+> through this flag.
 
-```typescript
-if (vendor.plan === 'pro' || vendor.plan === 'enterprise') {
-  VendorConfig.ENABLE_WHATSAPP_NOTIFICATIONS = true;
-}
-```
+`phone` is the only channel still behind a flag (`VendorConfig.ENABLE_PHONE_NOTIFICATIONS`,
+hardcoded `false`), and it is waiting on an SMS provider rather than on a pricing tier.
 
 ### Session Management
 
@@ -966,14 +1152,33 @@ both credential paths — every authenticated request and every refresh — refu
 
 ## Error Codes Reference
 
-| Code | HTTP Status | Description |
-|------|-------------|-------------|
-| `VALIDATION_ERROR` | 400 | Request body failed validation |
-| `UNAUTHORIZED` | 401 | Missing or invalid JWT token |
-| `FORBIDDEN` | 403 | Insufficient permissions or business rule violation |
-| `NOT_FOUND` | 404 | Vendor profile not found |
-| `CONFLICT` | 409 | Optimistic locking version mismatch |
-| `INTERNAL_ERROR` | 500 | Unexpected server error |
+| Code | HTTP Status | Category | Description |
+|---|---|---|---|
+| `VALIDATION_ERROR` | 400 | `validation` | Request body failed validation. `details.fields[]` names each one |
+| `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_INVALID` · `AUTH_TOKEN_EXPIRED` | 401 | `authentication` | Missing, malformed or expired token |
+| `AUTH_ROLE_NOT_FOUND` | 403 | `authorization` | The caller is not a vendor |
+| `AUTH_FORBIDDEN` | 403 | `authorization` | A vendor, but refused — email changes locked, or a plan-gated notification channel (`vendor-profile.service.ts:288,301`) |
+| `USER_INVALID_PASSWORD` | 403 | `authorization` | The current password supplied to the password change is wrong (`users/user.service.ts:70`) |
+| `ADDRESS_GEO_REQUIRED` | 400 | `validation` | A **new or edited** `business_addresses[]` entry carried no `geo` (`address-country.helper.ts:57-64`, reached from `vendor-profile.service.ts:315`). `details` names the offending `{ index, label }` |
+| `ADDRESS_COUNTRY_MISMATCH` | 400 | `validation` | A new/edited address geocodes outside the profile's `country` (`address-country.helper.ts:69-82`) — or, when `country` is being set for the first time on a legacy profile, an **existing** address already sits outside it (`vendor-profile.service.ts:246-252`). The two raise the same code with different `details` |
+| `AUTH_USER_NOT_FOUND` | 404 | `not_found` | No vendor profile for this account (`vendor-profile.service.ts:260`) |
+| `PROFILE_COUNTRY_IMMUTABLE` | 403 | `authorization` | `country` is set once at onboarding Step 1; a *different* value is refused, an echo of the current one is accepted (`vendor-profile.service.ts:226-231`) |
+| `VENDOR_BUSINESS_ADDRESS_IN_USE` | 409 | `conflict` | The `business_addresses` array you sent drops an address still set as a product's `delivery.pickupLocation`. **Nothing is partially saved.** `details.blockedAddresses[]` lists each with its `productCount` (`vendor-profile.service.ts:176-181`) |
+| `VENDOR_FISCAL_CALENDAR_INVALID` | 409 | `conflict` | **Optimistic-locking version mismatch.** ⚠ The code is misnamed on the wire and says nothing about a fiscal calendar (`vendor-profile.service.ts:334`) — **branch on `statusCode === 409 && category === 'conflict'`**, not on this string, which may be corrected in a future wire change |
+| `INTERNAL_SERVER_ERROR` | 500 | `internal` | Unexpected server error. The message is replaced with the registry default and `details` is dropped, in every environment |
+
+**Additionally, on the two default-delivery-agency routes only** (`GET`/`PUT /api/vendor/profile/default-delivery-agency`, and the pickup-location read beside them):
+
+| Code | HTTP Status | Category | Description |
+|---|---|---|---|
+| `DELIVERY_AGENCY_NOT_FOUND` | 404 · **also 400** | `not_found` · `validation` | 404 when the `agencyId` matches no agency (`vendor-profile.service.ts:762`, `:828`). ⚠ **The same code is also raised at 400** for an agency that exists but is `inactive` or has not finished onboarding (`:831`, `:834`) — so branch on `statusCode`, not on the code alone |
+| `CONNECTION_NOT_ACTIVE` | 422 | `business_rule` | You have no `active` connection with that agency. Send or check a connection request first (`vendor-profile.service.ts:767-771`, `:838-843`) |
+
+> ⚠ **This table named six codes and FIVE OF THEM DID NOT EXIST** until 2026-09-06 —
+> `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT` and `INTERNAL_ERROR` are in no registry.
+> A client branching on any of them never matched, and fell through to its generic handler. Every
+> row above was read from the source line it cites. Re-check rather than trusting the table:
+> `grep -n "ERROR_CODES\." src/modules/vendor/service/vendor-profile.service.ts`.
 
 ---
 

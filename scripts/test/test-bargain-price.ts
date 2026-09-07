@@ -499,21 +499,66 @@ function runOperatorAndSourceGroups(): void {
     assert(read('modules/catalog/domain/services/VectorisationService.ts').includes('bargain:'),
       'scan: the vectoriser payload carries the window');
 
-    // Scope guarantee: this phase configures a window, it does not spend one. Cart,
-    // orders, COD, earnings and shipments must not know the field exists.
-    for (const mod of ['cart', 'orders', 'earnings', 'cod', 'shipments']) {
-      const dir = path.join(SRC, 'modules', mod);
-      const stack = [dir];
-      let hits = 0;
+    /**
+     * ⚠ **The scope guarantee changed on 2026-09-07, and the change is the point.**
+     *
+     * This block used to assert that cart, orders, earnings, COD and shipments
+     * "must not know the field exists", on the grounds that bargainable pricing
+     * was configuration only: a vendor could describe a window and nothing could
+     * spend one. That is no longer true. BARGAINING-AGENT-PLAN Stream C+E built
+     * the spending path — a negotiated price reaches the cart, is consumed at
+     * order creation, and its floor drives the platform's AI margin in both
+     * earnings splits.
+     *
+     * Deleting the assertion would have been wrong, because the load-bearing half
+     * of it survives and is now MORE important than it was. What must never
+     * happen is that any of these modules READS THE WINDOW — `variant.bargain`,
+     * `minPrice`, `maxPrice`. The floor they work from is a snapshot taken when
+     * the lock was honoured (`floor_price_snapshot`), and a live re-read would
+     * compute a share of an uplift nobody agreed to, and could pay a vendor below
+     * the floor they actually sold at. So the rule is narrowed rather than
+     * dropped, and it is now a rule about CODE:
+     *
+     *   - cod / shipments: unchanged — not one mention, comments included. The
+     *     bargaining path does not reach them at all, and if it ever does, this
+     *     failing is the notification.
+     *   - cart / orders / earnings: no window read in code. Comments are exempt,
+     *     because the whole reason those modules are legible is that they explain
+     *     which number they are using and why it is not the live one.
+     */
+    const stripComments = (text: string): string =>
+      text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+    const tsFilesIn = (mod: string): string[] => {
+      const stack = [path.join(SRC, 'modules', mod)];
+      const files: string[] = [];
       while (stack.length > 0) {
         const cur = stack.pop() as string;
         for (const entry of fs.readdirSync(cur, { withFileTypes: true })) {
           const full = path.join(cur, entry.name);
           if (entry.isDirectory()) stack.push(full);
-          else if (entry.name.endsWith('.ts') && fs.readFileSync(full, 'utf8').includes('bargain')) hits++;
+          else if (entry.name.endsWith('.ts')) files.push(full);
         }
       }
-      assert(hits === 0, `scan: modules/${mod} does not mention bargain (config-only scope, ${hits} file(s) do)`);
+      return files;
+    };
+
+    // Never reached by the bargaining path — the original rule, unchanged.
+    for (const mod of ['cod', 'shipments']) {
+      const hits = tsFilesIn(mod).filter((f) => fs.readFileSync(f, 'utf8').includes('bargain'));
+      assert(hits.length === 0,
+        `scan: modules/${mod} does not mention bargain at all (${hits.length} file(s) do)`);
+    }
+
+    // Spend a window, yes; read one, never.
+    for (const mod of ['cart', 'orders', 'earnings']) {
+      const hits = tsFilesIn(mod).filter((f) => {
+        const code = stripComments(fs.readFileSync(f, 'utf8'));
+        return /\bbargain\b/.test(code) || code.includes('minPrice') || code.includes('maxPrice');
+      });
+      assert(hits.length === 0,
+        `scan: modules/${mod} never READS the bargain window in code — the floor is a `
+        + `snapshot, not a live read (${hits.map((f) => path.basename(f)).join(', ')})`);
     }
   }
 

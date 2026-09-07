@@ -70,7 +70,10 @@ export const commandBus = new CommandBus();
 register_all_commands(commandBus);
 
 /**
- * One rate-limit mount in front of ALL THREE auth routers, choosing between two buckets.
+ * One rate-limit mount in front of ALL FIVE auth routers, choosing between two buckets.
+ * (`authRouter`, `browserAuthRoutes`, `mobileAuthRoutes`, `messagingLoginRoutes` and
+ * `mobileMessagingLoginRoutes` — this said "ALL THREE" until 2026-09-07 and predated the two
+ * magic-login mounts below.)
  *
  * The credential bucket is the only strict limit in the service — 20 per minute per IP, where
  * everything else is in the hundreds. The two kinds of limit protect against different things:
@@ -442,6 +445,37 @@ router.use('/internal/shipments', internalShipmentRoutes);
  */
 import botRoutes from '../modules/bot-surface/bot.routes';
 router.use('/internal/bot', botRoutes);
+
+/**
+ * The VECTORISER door — the fourth member of the `/internal` family (README
+ * `api-doc/n8n/vectoriser/README.md` § 4).
+ *
+ * Same guard as the two geo-tracker mounts above: `requireServiceToken` on the
+ * existing INTERNAL_SERVICE_TOKEN, one credential rather than the bot surface's
+ * two — see the routes file for why the value class here does not warrant a
+ * second secret.
+ *
+ * It exists because the vectoriser went ASYNCHRONOUS. `POST <base>` answers 202
+ * and reports each product's outcome minutes later, so jovi-mall needs somewhere
+ * to be told: `/callback` is where a vectorisation actually finishes, and the
+ * only place in this service that writes `vectorisationStatus: 'completed'`.
+ * `/payloads` is the read half, used only by the spreadsheet upload path.
+ */
+import internalVectoriserRoutes from '../modules/catalog/routes/internal-vectoriser.routes';
+router.use('/internal/vectoriser', internalVectoriserRoutes);
+
+/**
+ * The NEGOTIATION door — the fifth member of the `/internal` family. The caller is
+ * the n8n bargaining sub-agent's flow, fetching the playbook it puts in the model
+ * request's SYSTEM position. One GET, one static document, no identity.
+ *
+ * Same `requireServiceToken` as `/internal/vectoriser` and the two geo-tracker
+ * mounts, and deliberately NOT on the maintenance exemption list — blocking it
+ * stops bargaining, which degrades to the asking price rather than to an outage.
+ * Reasoning in the route file's header.
+ */
+import internalNegotiationRoutes from '../modules/negotiation/routes/internal-negotiation.routes';
+router.use('/internal/negotiation', internalNegotiationRoutes);
 
 // Service-to-service API consumed by the wi-admin backend. Same shape as the
 // geo-tracker door above, a SEPARATE secret (INTERNAL_ADMIN_SERVICE_TOKEN), and

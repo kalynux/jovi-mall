@@ -4,7 +4,7 @@ The monthly record of what a vendor owes this agency for warehousing their stock
 statement per (agency, vendor, month).
 
 > Related docs: [Inventory](./inventory.md) (the shelves being billed) ·
-> [Magazin](./magazin.md) (the depots) · [Onboarding](./onboarding.md#pricing-policies)
+> [Magazin](./magazin.md) (the depots) · [Onboarding](./onboarding.md#field-reference--policiespricing)
 > (where `monthly_storage_fee_per_sku` is set) ·
 > [Vendor side](../vendor/storage-invoices.md).
 

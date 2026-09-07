@@ -97,13 +97,13 @@ and what it pays — because the shipment itself is not readable until you accep
       "items": [
         {
           "productId": "...", "quantity": 1, "title": "Wireless Headphones", "variantTitle": "Black",
-          "image": { "id": "...", "key": "products/abc.jpg", "url": "https://…/products/abc.jpg", "mimeType": "image/jpeg", "size": 84213, "originalName": "headphones.jpg" }
+          "image": { "id": "...", "key": "products/abc.jpg", "url": "https://…/products/abc.jpg", "access": "public", "mimeType": "image/jpeg", "size": 84213, "originalName": "headphones.jpg" }
         }
       ],
       "agency": {
         "id": "6640...",
         "name": "Douala Express Logistics",
-        "logo": { "id": "...", "key": "images/2026/07/logo.png", "url": "https://…/logo.png", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
+        "logo": { "id": "...", "key": "images/2026/07/logo.png", "url": "https://…/logo.png", "access": "public", "mimeType": "image/png", "size": 8213, "originalName": "logo.png" },
         "supportPhone": "+2376...",
         "supportEmail": "support@douala-express.cm",
         "supportWhatsapp": "+2376..."
@@ -138,7 +138,7 @@ carries. You hold contracts with several agencies at once and their terms differ
 is part of the decision, not an after-the-fact detail. It is **not** redacted before acceptance: the
 agency is your own contracted counterparty, not a third party whose privacy the offer protects.
 
-**`items[].image`** is what the thing looks like — the **thumbnail only**, `{ id, key, url, mimeType,
+**`items[].image`** is what the thing looks like — the **thumbnail only**, `{ id, key, url, access, mimeType,
 size, originalName }` or `null` when the item has no picture. You cannot open the shipment until you
 accept, so this is part of what makes the decision an informed one: an offer is judged on whether the
 parcel fits your vehicle as much as on distance and pay. It is the **variant's** own image where the

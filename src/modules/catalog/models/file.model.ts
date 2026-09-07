@@ -38,6 +38,28 @@ export interface IFile extends IBaseDocument {
    * Drives the lonely-file deletion grace period. See file-cleanup module.
    */
   orphanedAt?: Date | null;
+
+  /**
+   * When this file was blocked for exceeding the owner's plan storage cap.
+   * Null = not blocked, which is every file until a plan downgrade puts the owner
+   * over their allowance. Written only by `PlanQuotaEnforcementService`, which
+   * blocks strictly newest-first and lifts strictly oldest-first.
+   *
+   * ── A TIMESTAMP rather than a boolean, deliberately ─────────────────────────
+   * "blocked since" is reportable and answers a support question a boolean cannot
+   * ("did this go dark before or after they downgraded?"). It also keeps the
+   * default `null` meaningful, so no backfill is needed — every existing row is
+   * correctly unblocked on the day this ships.
+   *
+   * ⚠ This is NOT a deletion and NOT a soft delete. The bytes stay, the row stays,
+   * the file keeps counting toward `MediaStorageService.getUsedBytes` — blocking is
+   * what the owner gets *instead* of losing data, and an upgrade must restore the
+   * exact same files. Never let a cleanup sweep key on this field.
+   *
+   * Read at exactly one place on the way out: `toFileDetail`, which turns it into
+   * `access: 'quota_blocked'` + `url: null`.
+   */
+  quotaBlockedAt?: Date | null;
 }
 
 const FileSchema = new Schema<IFile>({
@@ -60,6 +82,8 @@ const FileSchema = new Schema<IFile>({
 
   orphanedAt: { type: Date, default: null },
 
+  quotaBlockedAt: { type: Date, default: null },
+
   ...BaseSchemaFields
 }, BaseSchemaOptions);
 
@@ -67,6 +91,11 @@ const FileSchema = new Schema<IFile>({
 FileSchema.index({ key: 1, provider: 1 }, { unique: true }); // Unique file per provider
 FileSchema.index({ ownerId: 1, checksum: 1 }); // Per-vendor duplicate detection by content hash
 FileSchema.index({ orphanedAt: 1 }); // Lonely-file deletion sweep (file-cleanup module)
+// The plan-quota sweep's ordering index. `createdAt` ASC is the blocking order itself
+// (oldest-first until the cap is reached), so this is not merely a filter — the sweep
+// walks it in index order. Built by `migrate:plan-quota-indexes`; autoIndex is off in
+// production, and without it every recompute collection-scans `files`.
+FileSchema.index({ ownerType: 1, ownerId: 1, deletedAt: 1, createdAt: 1 });
 // FileSchema.index({ deletedAt: 1 }); // Soft delete queries
 
 export const FileModel =

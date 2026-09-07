@@ -387,14 +387,33 @@ function main(): void {
     return writes === 2 && inside === 2;
   });
 
-  // The two decision points. Reading `agent.cod.trust_score` at either of these
-  // is exactly the regression that makes an override look implemented and do
-  // nothing — the same failure class as the stock `$inc` that never ran.
+  // The two decision points — the trust FLOOR (below the reduced threshold, COD is
+  // blocked outright) and the TIER that scales the limit. Reading
+  // `agent.cod.trust_score` at either is exactly the regression that makes an
+  // override look implemented and do nothing — the same failure class as the stock
+  // `$inc` that never ran.
+  //
+  // ⚠ This assertion USED TO require both `resolveEffectiveTrustScore(agent)` and
+  // `effectiveTrustScore(agent)`, one per decision point, and that pinned the old
+  // SHAPE rather than the rule. The two points now share a single resolution —
+  // `limitBreakdown` resolves once and the floor reads `limit.trustScore` off it —
+  // which is strictly stronger (there is no second call site that could be given a
+  // different argument), and the old form failed on it. What must hold is the rule,
+  // so that is what is asserted: the resolver is used, the raw field is never read,
+  // and the floor comparison reads the resolved value rather than re-deriving.
   assert('CodExposureService gates on the EFFECTIVE score, never the raw one', () => {
     const exposure = stripComments(read('modules/cod/services/cod-exposure.service.ts'));
     return exposure.includes('resolveEffectiveTrustScore(agent)')
-        && exposure.includes('effectiveTrustScore(agent)')
-        && !exposure.includes('agent.cod?.trust_score');
+        && exposure.includes('limit.trustScore < COD_CONFIG.TRUST_REDUCED_THRESHOLD')
+        && !exposure.includes('agent.cod?.trust_score')
+        && !exposure.includes('agent.cod.trust_score');
+  });
+
+  // The consequence of sharing one resolution: exactly ONE call, so the two decision
+  // points cannot drift apart by being handed different arguments.
+  assert('…and it resolves the score exactly once', () => {
+    const exposure = stripComments(read('modules/cod/services/cod-exposure.service.ts'));
+    return exposure.split('resolveEffectiveTrustScore(').length - 1 === 1;
   });
 
   assert('setOverride does NOT write the computed score', () => {

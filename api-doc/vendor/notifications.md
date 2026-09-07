@@ -1,5 +1,10 @@
 # Vendor Notifications
 
+**Verified against source on 2026-09-06** — every claim on this page was checked against
+`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
+(DOC-PROGRAM § 24–27). All six of its rows were already closed by earlier passes; the citations
+were re-checked against the source lines rather than trusted.
+
 ## Base Path
 
 ```
@@ -65,7 +70,8 @@ A vendor's notification settings — the values the backend reads when deciding 
       "connectionUpdated": true,
       "payoutUpdates": true,
       "shipmentRejected": true,
-      "planUpdates": true
+      "planUpdates": true,
+      "agencyStorageUpdates": true
     }
   }
 }
@@ -111,15 +117,17 @@ The `*Verified` flags are **computed live** from the vendor's account (email ver
     "connectionUpdated": true,
     "payoutUpdates": true,
     "shipmentRejected": true,
-    "planUpdates": true
+    "agencyStorageUpdates": true
   }
 }
 ```
 
 **Behaviour**:
-- Setting one of `emailEnabled` / `telegramEnabled` / `whatsappEnabled` to `true` **auto-disables the other two** (single secondary channel). To turn off all secondary channels, send the relevant flag(s) as `false`.
+- Setting one of `emailEnabled` / `telegramEnabled` / `whatsappEnabled` to `true` **auto-disables the other two** (single secondary channel).
+- ⚠ **Turning a secondary channel OFF requires sending ALL THREE flags as `false` in one request.** `upsertPreferences` branches on `=== true` for each channel in turn and has exactly one `false` branch, which requires `telegramEnabled === false && emailEnabled === false && whatsappEnabled === false` (`vendor-notification-preference.repository.ts:94-123`). Anything else — `{ "emailEnabled": false }` on its own, or two of the three — falls through every branch and the channel block is **left completely unchanged**, with a `200` and the unchanged preferences echoed back. This page said "send the relevant flag(s) as `false`", which is the one phrasing that does not work.
 - Enabling a channel that is **not verified** is **rejected** with `400 VENDOR_NOTIFICATION_CHANNEL_NOT_VERIFIED` — the vendor must verify/link that channel first.
 - `preferences` fields not included are left unchanged.
+- ⚠ **`planUpdates` is READ-ONLY over HTTP.** It exists on the stored preferences and is returned by `GET`, but it is **not in `UpdateNotificationPreferencesSchema`** (`vendor-notification.validator.ts:44-56`), and that inner object is not `.strict()` — so sending it is silently stripped, the request succeeds, and the value does not change. Billing notifications cannot be muted from this endpoint. The example above therefore does not include it.
 
 **Success Response** — `200 OK`: same shape as `GET`, plus `"message": "Preferences updated successfully"`.
 
@@ -134,7 +142,7 @@ The `*Verified` flags are **computed live** from the vendor's account (email ver
 **Description**: List notifications (newest first), with optional filtering and pagination.
 
 **Query Parameters**:
-- `isRead` (string, optional) — `true` or `false`
+- `isRead` (string, optional) — `true` or `false`. ⚠ **Omitting it is NOT "no filter" — it means `false`.** The schema is `z.string().optional().transform(v => v === 'true')` (`vendor-notification.validator.ts:9-13`), so an absent value becomes the boolean `false` and is passed straight to the query: **the default call returns UNREAD notifications only.** Any value other than the exact string `true` (including `TRUE` and `1`) also reads as `false`. There is no way to ask for *all* notifications regardless of read state.
 - `page` (integer, optional, default `1`)
 - `limit` (integer, optional, default `20`, max `50`)
 
@@ -514,6 +522,18 @@ Each notification carries `aggregateType` + `aggregateId` for frontend deeplinks
 
 ### Error envelope
 
+`category` is one of the nine values listed in [`errors/README.md`](../errors/README.md) and is
+**always present**; `details` is omitted entirely when absent.
+
 ```json
-{ "success": false, "error": { "code": "ERROR_CODE", "message": "Human-readable description" } }
+{
+  "success": false,
+  "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
+  "error": {
+    "code": "VENDOR_NOTIFICATION_NOT_FOUND",
+    "message": "Notification not found",
+    "statusCode": 404,
+    "category": "not_found"
+  }
+}
 ```

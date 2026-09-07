@@ -891,7 +891,8 @@
             ]
           },
           "storeSlug": {
-            "type": "string"
+            "type": "string",
+            "description": "Narrow to one seller, by the slug from a product card's store.slug. Leave empty unless the customer named a shop."
           },
           "minPrice": {
             "type": "integer",
@@ -900,7 +901,8 @@
           },
           "maxPrice": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Whole units of currency."
           },
           "inStock": {
             "type": "string",
@@ -1134,10 +1136,12 @@
         ],
         "properties": {
           "storeSlug": {
-            "type": "string"
+            "type": "string",
+            "description": "The seller's slug — the first slug in a storefront product URL, or a product card's store.slug."
           },
           "productSlug": {
-            "type": "string"
+            "type": "string",
+            "description": "The product's slug — the second slug in a storefront product URL, or a product card's slug. Never the 24-character id."
           }
         }
       },
@@ -1337,7 +1341,8 @@
         "properties": {
           "productId": {
             "type": "string",
-            "pattern": "^[a-f0-9]{24}$"
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The 24-character id of the product to find alternatives for."
           }
         }
       },
@@ -1411,7 +1416,8 @@
         ],
         "properties": {
           "slug": {
-            "type": "string"
+            "type": "string",
+            "description": "The seller's slug, from a product card's store.slug."
           }
         }
       },
@@ -1491,11 +1497,13 @@
         ],
         "properties": {
           "slug": {
-            "type": "string"
+            "type": "string",
+            "description": "The seller's slug, from a product card's store.slug."
           },
           "q": {
             "type": "string",
-            "maxLength": 200
+            "maxLength": 200,
+            "description": "Whole-word text search inside this seller's products. Searching 'dres' will NOT find 'dress' — pass the customer's words, not a prefix."
           },
           "sort": {
             "type": "string",
@@ -1592,7 +1600,8 @@
         "properties": {
           "productId": {
             "type": "string",
-            "pattern": "^[a-f0-9]{24}$"
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The 24-character id of the product whose reviews to read."
           },
           "page": {
             "type": "integer",
@@ -1751,7 +1760,8 @@
         "properties": {
           "productId": {
             "type": "string",
-            "pattern": "^[a-f0-9]{24}$"
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The 24-character product id, from catalog_get_product or a product search result."
           },
           "variantId": {
             "type": "string",
@@ -1893,7 +1903,8 @@
         "properties": {
           "variantId": {
             "type": "string",
-            "pattern": "^[a-f0-9]{24}$"
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The variant id of the basket line to change, from cart_get items[].variantId."
           },
           "quantity": {
             "type": "integer",
@@ -2001,7 +2012,8 @@
         "properties": {
           "variantId": {
             "type": "string",
-            "pattern": "^[a-f0-9]{24}$"
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The variant id of the basket line to remove, from cart_get items[].variantId."
           }
         }
       },
@@ -2710,7 +2722,8 @@
         ],
         "properties": {
           "transactionId": {
-            "type": "string"
+            "type": "string",
+            "description": "The payment's transaction id, from bookings_payment_status transaction.transactionId or from the payment that was just initiated. Must be one of this customer's own."
           }
         }
       },
@@ -2915,7 +2928,8 @@
         ],
         "properties": {
           "cartId": {
-            "type": "string"
+            "type": "string",
+            "description": "The order-group id, from orders_list_groups cartId. One checkout, not one seller’s order."
           }
         }
       },
@@ -3103,7 +3117,8 @@
         ],
         "properties": {
           "orderId": {
-            "type": "string"
+            "type": "string",
+            "description": "One seller's order id, from orders_list_groups orders[].id. NOT the group's cartId."
           }
         }
       },
@@ -3640,6 +3655,95 @@
       ]
     },
     {
+      "name": "profile_update",
+      "version": 1,
+      "title": "Change the name we call the customer",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Change the name the customer is called.",
+      "when_to_use": "When they ask to be called something else, or correct the name the bot greets them by.",
+      "when_not_to_use": "Not for language — profile_set_language owns that. Not for a phone, an email or an address; each has its own tool, and this route accepts nothing but the name.",
+      "operation": {
+        "method": "PATCH",
+        "path": "/api/internal/bot/profile"
+      },
+      "backing_endpoint": {
+        "method": "PATCH",
+        "path": "/api/customer/profile",
+        "doc": "customer/profile.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "The name the customer wants to be called, exactly as they gave it. Do not translate it or capitalise it differently."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "name"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "name",
+          "emailMasked",
+          "phoneMasked",
+          "emailVerified",
+          "phoneVerified",
+          "preferences.language",
+          "preferences.currency",
+          "timezone",
+          "savedAddressCount",
+          "status"
+        ],
+        "result_kind": "profile_summary"
+      },
+      "errors": [
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "A field fails its constraint",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "fields"
+          ]
+        }
+      ],
+      "mutating": true,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "side_effects": [
+        "Changes the display name used in every later greeting and on the storefront"
+      ],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "not_applicable"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "This is the ONLY profile field this surface can change. The answer is the whole profile summary, with the email and phone masked — read it back as confirmation rather than reading the number aloud."
+      },
+      "commands": [
+        "profile"
+      ]
+    },
+    {
       "name": "profile_set_language",
       "version": 1,
       "title": "Change the customer's language",
@@ -3974,6 +4078,213 @@
       },
       "audit": true,
       "requires_customer_role": true,
+      "commands": [
+        "address"
+      ]
+    },
+    {
+      "name": "addresses_update",
+      "version": 1,
+      "title": "Change a saved address",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Rename a saved address, change the flat-number line, or re-point it at a different place.",
+      "when_to_use": "Only from the address flow, and — when the place itself is moving — only with a candidate handle that came from geo_search_address or geo_reverse_address in that same flow.",
+      "when_not_to_use": "NEVER to re-point an address from text the customer typed. Not to make one the default: that clears the flag on every sibling, and addresses_set_default owns both halves.",
+      "operation": {
+        "method": "PATCH",
+        "path": "/api/internal/bot/addresses/{addressId}"
+      },
+      "backing_endpoint": {
+        "method": "PATCH",
+        "path": "/api/customer/addresses/:addressId",
+        "doc": "customer/profile.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "addressId"
+        ],
+        "properties": {
+          "addressId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The saved address to change, from addresses_list."
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 50,
+            "description": "What the customer calls it — Home, Work."
+          },
+          "addressLine2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 200,
+            "description": "Flat number, landmark, directions. Send null to clear the line; omit it to leave it alone."
+          },
+          "geoCandidateRef": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Re-point the address at a different place. An opaque single-use handle from geo_search_address or geo_reverse_address; coordinates are never sent by the caller."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "addressId"
+        ],
+        "body": [
+          "label",
+          "addressLine2",
+          "geoCandidateRef"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "id",
+          "label",
+          "formattedAddress",
+          "addressLine2",
+          "city",
+          "country",
+          "isDefault",
+          "deliverable"
+        ],
+        "result_kind": "address_list"
+      },
+      "errors": [
+        {
+          "code": "BOT_GEO_CANDIDATE_EXPIRED",
+          "status": 400,
+          "category": "validation",
+          "when": "The candidate handle is unknown or older than the flow window",
+          "customer_action": "abandon_flow"
+        },
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's address",
+          "customer_action": "explain"
+        },
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "No field named at all, or a field fails its constraint. An empty change is refused rather than answered 200.",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "fields"
+          ]
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "The candidate handle is single-use, so a retry cannot re-point the address twice.",
+      "requires_confirmation": true,
+      "risk": "high",
+      "side_effects": [
+        "Changes a saved delivery address",
+        "A new candidate handle replaces the geocoded location"
+      ],
+      "context_resolution": {
+        "subject": "address",
+        "policy": "explicit_only"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "isDefault is deliberately absent here — it is a relationship BETWEEN addresses, and setting it means clearing every sibling. A null location inside the indexed address array makes the whole customer document unwritable, which is why re-pointing takes a candidate handle rather than coordinates.",
+        "telegram": "Accept a shared location as the input to geo_reverse_address, then confirm the formatted address before saving. A pin is not an address."
+      },
+      "commands": [
+        "address"
+      ]
+    },
+    {
+      "name": "addresses_remove",
+      "version": 1,
+      "title": "Forget a saved address",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Delete one of the customer's saved delivery addresses.",
+      "when_to_use": "Only from the address flow, after the customer has named the address and confirmed the deletion.",
+      "when_not_to_use": "Never inferred from \"I do not live there any more\" without an explicit confirmation. Nothing restores a deleted address.",
+      "operation": {
+        "method": "DELETE",
+        "path": "/api/internal/bot/addresses/{addressId}"
+      },
+      "backing_endpoint": {
+        "method": "DELETE",
+        "path": "/api/customer/addresses/:addressId",
+        "doc": "customer/profile.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "addressId"
+        ],
+        "properties": {
+          "addressId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The saved address to delete, from addresses_list."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "addressId"
+        ],
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "removed",
+          "remaining",
+          "hasDefault"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's address",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": true,
+      "risk": "high",
+      "side_effects": [
+        "Deletes a saved address permanently"
+      ],
+      "context_resolution": {
+        "subject": "address",
+        "policy": "explicit_only"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Deleting the DEFAULT address leaves the customer without one — this route elects no replacement, by design. hasDefault: false in the answer is the signal to say so, rather than letting them find out at checkout. addresses_set_default is how they fix it."
+      },
       "commands": [
         "address"
       ]
@@ -4324,8 +4635,7 @@
         "type": "array",
         "paginated": true,
         "important_fields": [
-          "_id",
-          "ticket_number",
+          "id",
           "subject",
           "status",
           "type",
@@ -4399,7 +4709,7 @@
         "source": "body.data",
         "type": "object",
         "important_fields": [
-          "ticket_number",
+          "id",
           "subject",
           "description",
           "status",
@@ -4520,8 +4830,7 @@
         "source": "body.data",
         "type": "object",
         "important_fields": [
-          "_id",
-          "ticket_number",
+          "id",
           "status",
           "subject"
         ],
@@ -4591,11 +4900,13 @@
         ],
         "properties": {
           "ticketId": {
-            "type": "string"
+            "type": "string",
+            "description": "The ticket id, from tickets_list."
           },
           "body": {
             "type": "string",
-            "maxLength": 5000
+            "maxLength": 5000,
+            "description": "What the customer wants added to the ticket, in their own words. Do not summarise it."
           }
         }
       },
@@ -4611,7 +4922,7 @@
         "source": "body.data",
         "type": "object",
         "important_fields": [
-          "_id",
+          "id",
           "createdAt"
         ],
         "result_kind": "status"
@@ -4686,7 +4997,7 @@
         "source": "body.data",
         "type": "object",
         "important_fields": [
-          "ticket_number",
+          "id",
           "status"
         ],
         "result_kind": "status"
@@ -4713,6 +5024,208 @@
       "commands": [
         "ticket"
       ]
+    },
+    {
+      "name": "tickets_add_attachment",
+      "version": 1,
+      "title": "Attach a photo the customer sent to a ticket",
+      "tier": "extended",
+      "status": "available",
+      "gap_ref": "GAP-001",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Put a photo or PDF the customer just sent in this chat onto one of their support tickets. You do not upload anything — the file is already stored and you name it by the reference you were given when it arrived.",
+      "when_to_use": "When the customer has sent a file in this conversation and it is evidence for a support request — a damaged item, a wrong delivery, a receipt. Open the ticket first if there is not one yet, then attach.",
+      "when_not_to_use": "Never invent a reference. If you were not given one for a file in this conversation, the file is not available and the customer must send it again. Not for a file the customer sent in an earlier conversation — references expire after 30 minutes.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/tickets/{ticketId}/attachments"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/customer/tickets/:ticketId/attachments",
+        "doc": "customer/tickets.md"
+      },
+      "doc": "customer/tickets.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ticketId",
+          "ref"
+        ],
+        "properties": {
+          "ticketId": {
+            "type": "string",
+            "description": "The ticket id or the TKT- number the customer quoted."
+          },
+          "ref": {
+            "type": "string",
+            "description": "The file reference you were given when the customer sent the file, e.g. att_… . Copy it exactly; never construct one."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "ticketId"
+        ],
+        "body": [
+          "ref"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "id",
+          "fileName",
+          "kind",
+          "attachmentCount",
+          "attachmentLimit"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "BOT_INBOUND_FILE_EXPIRED",
+          "status": 404,
+          "category": "not_found",
+          "when": "The reference is unknown, already used, or older than 30 minutes",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "TICKET_ATTACHMENT_LIMIT_EXCEEDED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The ticket already holds five files",
+          "customer_action": "explain"
+        },
+        {
+          "code": "TICKET_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "No such ticket",
+          "customer_action": "disambiguate"
+        },
+        {
+          "code": "TICKET_ACCESS_DENIED",
+          "status": 403,
+          "category": "authorization",
+          "when": "Not this customer's ticket",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "ticket",
+        "policy": "focus_or_most_recent",
+        "must_echo": true
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "The reference is single-use — one call per file. `attachmentCount` and `attachmentLimit` come back on success; when they are equal, say so, because the next photo will be refused. You cannot see what is in the file: describe it as what the customer called it, never as what you assume it shows."
+      },
+      "commands": [
+        "ticket",
+        "tickets"
+      ]
+    },
+    {
+      "name": "files_receive_inbound",
+      "version": 1,
+      "title": "Deliver a file the customer sent in the chat",
+      "tier": "flow_only",
+      "status": "available",
+      "gap_ref": "GAP-001",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Store a photo or PDF the customer sent on WhatsApp or Telegram, and return an opaque reference the model can later name. Called by the deterministic flow on every inbound media message, before the model runs.",
+      "when_to_use": "Never by the model. The automation layer calls this because it, and only it, holds the channel credentials needed to fetch the bytes.",
+      "when_not_to_use": "Not reachable by the model at all — it carries a payload, not a reference, and a language model has no bytes to send.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/files/inbound"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "fileName",
+          "mimeType",
+          "contentBase64"
+        ],
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "description": "The name the channel gave the file, or a generated one."
+          },
+          "mimeType": {
+            "type": "string",
+            "description": "image/jpeg, image/png, image/webp, image/gif or application/pdf. Anything else is refused."
+          },
+          "contentBase64": {
+            "type": "string",
+            "description": "The file bytes, base64-encoded. Up to 8 MB decoded."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "fileName",
+          "mimeType",
+          "contentBase64"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "ref",
+          "fileName",
+          "kind",
+          "size"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "UPLOAD_POLICY_VIOLATION",
+          "status": 400,
+          "category": "validation",
+          "when": "Empty content, or a type a chat may not send",
+          "customer_action": "explain",
+          "details_fields": [
+            "violations"
+          ]
+        },
+        {
+          "code": "UPLOAD_POLICY_VIOLATION",
+          "status": 413,
+          "category": "validation",
+          "when": "Larger than 8 MB decoded",
+          "customer_action": "explain",
+          "details_fields": [
+            "violations"
+          ]
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": false,
+      "risk": "low",
+      "side_effects": [
+        "Stores a file against the customer, scanned and sniffed by the ordinary upload pipeline. A file nobody attaches is reclaimed by orphan garbage collection."
+      ],
+      "context_resolution": {
+        "policy": "not_applicable"
+      },
+      "audit": true,
+      "requires_customer_role": true
     },
     {
       "name": "wishlist_list",
@@ -4822,7 +5335,8 @@
         "properties": {
           "productId": {
             "type": "string",
-            "pattern": "^[a-f0-9]{24}$"
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The 24-character product id to save, from catalog_get_product or a product search result."
           }
         }
       },
@@ -4897,7 +5411,8 @@
         "properties": {
           "productId": {
             "type": "string",
-            "pattern": "^[a-f0-9]{24}$"
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The 24-character product id to drop, from wishlist_list productId."
           }
         }
       },
@@ -5015,6 +5530,144 @@
         "whatsapp": "There is deliberately no client-supplied timestamp and sending one is a 400 — the server clock is the only source, because the list is ordered and capped by it."
       },
       "commands": []
+    },
+    {
+      "name": "recently_viewed_list",
+      "version": 1,
+      "title": "What the customer was looking at",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "The products the customer has opened recently, newest first.",
+      "when_to_use": "When they refer to something they were looking at earlier — \"the one I saw yesterday\", \"that blue one\" — and you need to know what they mean.",
+      "when_not_to_use": "Not as a recommendation source. It is a history, and it says nothing about what is in stock now.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/recently-viewed/list"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/customer/recently-viewed",
+        "doc": "customer/saved-and-viewed.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "default": 5,
+            "description": "At most 5. A chat answer cannot carry more, and the surface refuses a larger value rather than clamping it silently. When more exist, the response reports meta.hasMore and meta.moreUrl — offer that link instead of paging."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "page",
+          "limit"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "array",
+        "paginated": true,
+        "important_fields": [
+          "productId",
+          "at",
+          "product.title",
+          "product.price",
+          "product.currency",
+          "product.inStock",
+          "product.store.slug"
+        ],
+        "result_kind": "product_list"
+      },
+      "errors": [],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "recent_interaction",
+        "policy": "not_applicable"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "An entry whose product is gone comes back with product: null — say it is no longer available rather than skipping the row. This list has NO meta.moreUrl; do not invent a link to a history page, because there is not one."
+      },
+      "commands": [
+        "saved"
+      ]
+    },
+    {
+      "name": "recently_viewed_clear",
+      "version": 1,
+      "title": "Forget the browsing history",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Delete the customer's recently-viewed history.",
+      "when_to_use": "Only when the customer has asked for their browsing history to be cleared, in those words.",
+      "when_not_to_use": "NEVER inferred from \"I am not interested in those\". The rows are deleted, not flagged, and nothing reconstructs them.",
+      "operation": {
+        "method": "DELETE",
+        "path": "/api/internal/bot/recently-viewed"
+      },
+      "backing_endpoint": {
+        "method": "DELETE",
+        "path": "/api/customer/recently-viewed",
+        "doc": "customer/saved-and-viewed.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "cleared",
+          "removed"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [],
+      "mutating": true,
+      "idempotent": true,
+      "requires_confirmation": true,
+      "risk": "medium",
+      "side_effects": [
+        "Deletes the browsing history permanently",
+        "Also clears the legacy recentProductCode mirror, which is the support-routing ladder last fallback"
+      ],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "not_applicable"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "After this, \"who do I contact about that thing I was looking at\" may reach the platform rung rather than the vendor, because the ladder last fallback is gone too. Correct, and worth saying if the customer asks straight afterwards."
+      },
+      "commands": [
+        "saved"
+      ]
     },
     {
       "name": "digital_list_entitlements",
@@ -5182,6 +5835,253 @@
       ]
     },
     {
+      "name": "bookings_get_availability",
+      "version": 1,
+      "title": "When a service is free",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "A service product's bookable time slots, soonest first.",
+      "when_to_use": "Whenever the customer asks when they can have an appointment. Reading availability reserves nothing, so it is always safe to ask.",
+      "when_not_to_use": "Not for a physical product — only a service has a calendar. Not to check an appointment the customer already has: that is bookings_get.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/bookings/availability"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/products/:productId/availability",
+        "doc": "customer/bookings.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "productId"
+        ],
+        "properties": {
+          "productId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The service product id, from a product search or from a booking's service.id."
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-8601 start of the range. OMIT unless the customer named a date — it defaults to now."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-8601 end of the range. OMIT unless the customer named a date — it defaults to 21 days after `from`."
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "default": 5,
+            "description": "At most 5. A chat answer cannot carry more, and the surface refuses a larger value rather than clamping it silently. When more exist, the response reports meta.hasMore and meta.moreUrl — offer that link instead of paging."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "productId",
+          "from",
+          "to",
+          "page",
+          "limit"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "array",
+        "paginated": true,
+        "important_fields": [
+          "slotId",
+          "start",
+          "end",
+          "spotsRemaining"
+        ],
+        "result_kind": "booking_list"
+      },
+      "errors": [
+        {
+          "code": "CATALOG_PRODUCT_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "No such product, or it is not a service",
+          "customer_action": "explain"
+        },
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "`from` is after `to`, or a date is not ISO-8601",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "fields"
+          ]
+        }
+      ],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "none",
+      "context_resolution": {
+        "subject": "product",
+        "policy": "single_unambiguous_focus",
+        "must_echo": true
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "slotId is OPAQUE — it looks like slot_1757494800000_1757498400000 and must be echoed exactly, never built or edited. Do NOT send from/to unless the customer named a date: a range computed in the chat is how you end up reporting \"no availability\" for a service with plenty. spotsRemaining is null on an ordinary one-at-a-time service and that does NOT mean full; only a class or a group tour reports a number."
+      },
+      "commands": [
+        "bookings"
+      ]
+    },
+    {
+      "name": "bookings_create",
+      "version": 1,
+      "title": "Book an appointment",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Book one of a service's slots for the customer.",
+      "when_to_use": "From the booking flow only, with a slotId echoed verbatim from bookings_get_availability and after the customer has confirmed the exact time.",
+      "when_not_to_use": "Never on the model initiative, and never with a slot id that was not returned by an availability read in this same conversation.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/bookings"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/products/:productId/book",
+        "doc": "customer/bookings.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "productId",
+          "slotId"
+        ],
+        "properties": {
+          "productId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The service product id, the same one the availability read was for."
+          },
+          "slotId": {
+            "type": "string",
+            "pattern": "^slot_\\d{1,15}_\\d{1,15}$",
+            "description": "The opaque slot handle from bookings_get_availability, echoed exactly. Never constructed."
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "The customer's own words about the appointment. This reaches the vendor's calendar, so pass what they said rather than a summary."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "productId",
+          "slotId",
+          "notes"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "id",
+          "bookingNumber",
+          "status",
+          "startAt",
+          "endAt",
+          "service.name",
+          "vendor.name",
+          "price.quoted",
+          "price.currency",
+          "payment.status",
+          "payment.required",
+          "awaitingVendorApproval"
+        ],
+        "result_kind": "booking_detail"
+      },
+      "errors": [
+        {
+          "code": "BOOKING_SLOT_LOCKED",
+          "status": 409,
+          "category": "conflict",
+          "when": "Somebody else is holding that exact slot right now",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "slotId"
+          ]
+        },
+        {
+          "code": "BOOKING_SLOT_UNAVAILABLE",
+          "status": 409,
+          "category": "conflict",
+          "when": "The slot has been taken, or the calendar moved under it",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "BOOKING_SLOT_FULL",
+          "status": 409,
+          "category": "conflict",
+          "when": "A capacity product has no seats left in that slot",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "A malformed slot id, or notes over 500 characters",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "fields"
+          ]
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "The slot hold is taken and released inside this one request, so a retry after a failure finds the slot free rather than held by the attempt that failed.",
+      "requires_confirmation": true,
+      "risk": "high",
+      "side_effects": [
+        "Creates a booking",
+        "May create an event in the vendor's calendar",
+        "Notifies the vendor"
+      ],
+      "context_resolution": {
+        "subject": "product",
+        "policy": "explicit_only",
+        "must_echo": true
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "There is deliberately no separate lock step on this surface: a chat turn can take minutes and can simply never come back, so a hold taken on the model initiative would take a real appointment off sale. The hold lives inside this request. Read awaitingVendorApproval on the answer — a manual-mode service comes back status:pending, which means the VENDOR has not accepted it yet, not that a payment is pending."
+      },
+      "commands": [
+        "bookings"
+      ]
+    },
+    {
       "name": "bookings_list",
       "version": 1,
       "title": "The customer's appointments",
@@ -5208,7 +6108,8 @@
         "additionalProperties": false,
         "properties": {
           "status": {
-            "type": "string"
+            "type": "string",
+            "description": "Narrow to one state: pending, confirmed, completed, no_show or cancelled. Leave empty unless the customer named one."
           },
           "page": {
             "type": "integer",
@@ -5236,13 +6137,17 @@
         "important_fields": [
           "id",
           "bookingNumber",
-          "productTitle",
-          "vendorName",
-          "startAt",
           "status",
-          "paymentStatus",
-          "quotedPrice",
-          "currency"
+          "startAt",
+          "endAt",
+          "service.name",
+          "vendor.name",
+          "price.quoted",
+          "price.currency",
+          "payment.status",
+          "payment.required",
+          "awaitingVendorApproval",
+          "outstandingBalance"
         ],
         "result_kind": "booking_list"
       },
@@ -5258,7 +6163,7 @@
       "audit": false,
       "requires_customer_role": true,
       "platform_notes": {
-        "whatsapp": "Times are formatted in the customer's own timezone. The pagination block here uses totalPages, not pages."
+        "whatsapp": "Read awaitingVendorApproval, NOT status, to say whether an appointment is settled: status:pending means the VENDOR has not accepted it, while payment.status:pending means a charge is live on the handset. Two different pendings on one row. outstandingBalance above zero means a completed appointment cost more than it was quoted — bookings_get_balance explains it. Times are ISO-8601 UTC; render them in the customer timezone. The pagination block here uses totalPages, not pages."
       },
       "commands": [
         "bookings"
@@ -5273,9 +6178,9 @@
       "gap_ref": "GAP-001",
       "service": "jovi-mall",
       "surface": "bot_internal",
-      "description": "One appointment, including anything still owed after it was settled.",
+      "description": "One appointment in full: when it is, who provides it, what it costs and where its payment got to.",
       "when_to_use": "When the customer asks about a specific appointment, or about a balance they were told about.",
-      "when_not_to_use": "Not to list — bookings_list is cheaper.",
+      "when_not_to_use": "Not to list — bookings_list is cheaper. Not for the balance on a completed appointment: bookings_get_balance owns that, and this row carries only the outstanding total.",
       "operation": {
         "method": "POST",
         "path": "/api/internal/bot/bookings/{bookingId}"
@@ -5294,7 +6199,8 @@
         ],
         "properties": {
           "bookingId": {
-            "type": "string"
+            "type": "string",
+            "description": "The appointment id, from bookings_list."
           }
         }
       },
@@ -5309,16 +6215,20 @@
         "important_fields": [
           "id",
           "bookingNumber",
-          "productTitle",
-          "vendorName",
-          "startAt",
           "status",
-          "paymentStatus",
-          "quotedPrice",
-          "finalPrice",
-          "outstanding",
-          "creditDue",
-          "currency"
+          "startAt",
+          "endAt",
+          "service.name",
+          "vendor.name",
+          "price.quoted",
+          "price.currency",
+          "payment.status",
+          "payment.required",
+          "awaitingVendorApproval",
+          "outstandingBalance",
+          "payment.method",
+          "cancelledAt",
+          "cancelledReason"
         ],
         "result_kind": "booking_detail"
       },
@@ -5343,10 +6253,475 @@
       "audit": false,
       "requires_customer_role": true,
       "platform_notes": {
-        "whatsapp": "creditDue is RECORDED, not refunded — if the provider settled below what was paid, say the provider intends to hand it back and offer support, never promise a refund."
+        "whatsapp": "Read awaitingVendorApproval, NEVER status: status:pending means the VENDOR has not accepted the appointment, not that a payment is pending. Telling a customer they are booked when the vendor has not looked is the mistake this field exists to prevent. outstandingBalance above zero means the appointment cost more than it was quoted; bookings_get_balance explains the difference, including the overpaid case, which is RECORDED and not refunded."
       },
       "commands": [
         "bookings"
+      ]
+    },
+    {
+      "name": "bookings_get_balance",
+      "version": 1,
+      "title": "What the appointment came to",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "What a finished appointment actually cost against what it was quoted, and what is still owed.",
+      "when_to_use": "When the customer asks why they owe more, or when a booking row shows outstandingBalance above zero.",
+      "when_not_to_use": "Not before the appointment happened — there is no balance until the vendor settles it. Not for the original price, which is on the booking as price.quoted.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/bookings/{bookingId}/balance"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/customer/bookings/:id/balance",
+        "doc": "customer/bookings.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bookingId"
+        ],
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The appointment id, from bookings_list."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "bookingId"
+        ],
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "bookingId",
+          "currency",
+          "quotedPrice",
+          "finalPrice",
+          "balanceDue",
+          "balancePaid",
+          "outstanding",
+          "creditDue",
+          "settled"
+        ],
+        "result_kind": "booking_detail"
+      },
+      "errors": [
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's booking",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "booking",
+        "policy": "focus_or_most_recent",
+        "must_echo": true
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "creditDue is the OTHER direction — the provider settled BELOW the quote, so the customer overpaid. It is recorded and is NOT refunded automatically, by platform decision: say the provider settled below the quote and offer support, never promise money is on its way back. settled:false means the provider has not closed the appointment yet, so every number is provisional."
+      },
+      "commands": [
+        "bookings"
+      ]
+    },
+    {
+      "name": "bookings_payment_status",
+      "version": 1,
+      "title": "Where an appointment payment got to",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "The payment state of one appointment, and the live charge behind it when there is one.",
+      "when_to_use": "When the customer asks whether their booking is paid for, or to check whether a mobile-money charge settled.",
+      "when_not_to_use": "Not as a substitute for bookings_get — this answers only about money.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/bookings/{bookingId}/payment-status"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/bookings/:id/payment-status",
+        "doc": "customer/bookings.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bookingId"
+        ],
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The appointment id, from bookings_list."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "bookingId"
+        ],
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "bookingId",
+          "status",
+          "method",
+          "required",
+          "amount",
+          "currency",
+          "transaction.transactionId",
+          "transaction.status",
+          "transaction.gateway"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's booking",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "booking",
+        "policy": "focus_or_most_recent",
+        "must_echo": true
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "status:pending means a charge is LIVE on the customer's handset right now — do not suggest paying again while it is. transaction.transactionId is the handle the money tools take: payment_get_transaction, payment_authorize_otp and payment_create_pay_link all want it, and it is named transactionId rather than id precisely so it is not confused with the bookingId beside it."
+      },
+      "commands": [
+        "bookings"
+      ]
+    },
+    {
+      "name": "bookings_pay",
+      "version": 1,
+      "title": "Pay for an appointment",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Charge the quoted price of an appointment.",
+      "when_to_use": "From the payment flow only, after the customer has confirmed the amount and given the wallet number and network.",
+      "when_not_to_use": "Never to settle an overrun — bookings_pay_balance is a different charge against the same booking. Never while bookings_payment_status reports pending.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/bookings/{bookingId}/pay"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/bookings/:id/pay",
+        "doc": "customer/bookings.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bookingId",
+          "gateway"
+        ],
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The appointment id, from bookings_list."
+          },
+          "gateway": {
+            "type": "string",
+            "enum": [
+              "NOTCHPAY",
+              "MYCOOLPAY",
+              "STRIPE"
+            ],
+            "description": "Which processor to charge through. STRIPE is the card path and finishes on a web page, not in chat."
+          },
+          "phoneNumber": {
+            "type": "string",
+            "maxLength": 20,
+            "description": "The mobile-money number to charge. Required for every gateway except STRIPE."
+          },
+          "phoneOperator": {
+            "type": "string",
+            "enum": [
+              "MTN",
+              "ORANGE",
+              "MOOV"
+            ],
+            "description": "The wallet's network. ASK the customer — never infer it from the number."
+          },
+          "customerEmail": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254,
+            "description": "Where the processor sends its receipt. Optional."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "bookingId"
+        ],
+        "body": [
+          "gateway",
+          "phoneNumber",
+          "phoneOperator",
+          "customerEmail"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "transactionId",
+          "status",
+          "gateway",
+          "instructions",
+          "amount",
+          "currency"
+        ],
+        "result_kind": "payment_instruction"
+      },
+      "errors": [
+        {
+          "code": "PAYMENT_BOOKING_ALREADY_PAID",
+          "status": 409,
+          "category": "conflict",
+          "when": "The appointment is already settled",
+          "customer_action": "explain"
+        },
+        {
+          "code": "PAYMENT_BOOKING_IN_PROGRESS",
+          "status": 409,
+          "category": "conflict",
+          "when": "A charge is already live on the customer's handset",
+          "customer_action": "explain"
+        },
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's booking",
+          "customer_action": "explain"
+        },
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "A mobile-money gateway without a phoneNumber, or an unknown gateway",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "fields"
+          ]
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "The orchestrator keys its own idempotency on (bookingId, userId, price) and refuses a second live charge, so the surface's Idempotency-Key is the outer of two guards rather than the only one.",
+      "requires_confirmation": true,
+      "risk": "critical",
+      "side_effects": [
+        "Moves money",
+        "Raises a charge on the customer's handset"
+      ],
+      "context_resolution": {
+        "subject": "booking",
+        "policy": "explicit_only",
+        "must_echo": true
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "phoneOperator must be ASKED, never guessed — sending MTN for an Orange number reaches the customer as \"payment declined\". On the mobile-money path the answer carries instructions: a USSD code to dial, or an OTP to relay back through payment_authorize_otp. On STRIPE it is a client secret no chat can use, and the answer there is payment_create_pay_link."
+      },
+      "commands": [
+        "pay"
+      ]
+    },
+    {
+      "name": "bookings_pay_balance",
+      "version": 1,
+      "title": "Settle what an appointment came to",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Charge the difference when a completed appointment cost more than it was quoted.",
+      "when_to_use": "From the payment flow only, after bookings_get_balance has been read aloud and the customer has agreed to the outstanding amount.",
+      "when_not_to_use": "Never before the vendor has settled the appointment — there is nothing owed until then, and the route refuses it.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/bookings/{bookingId}/pay-balance"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/bookings/:id/pay-balance",
+        "doc": "customer/bookings.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bookingId",
+          "gateway"
+        ],
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The appointment id, from bookings_list."
+          },
+          "gateway": {
+            "type": "string",
+            "enum": [
+              "NOTCHPAY",
+              "MYCOOLPAY",
+              "STRIPE"
+            ],
+            "description": "Which processor to charge through. STRIPE is the card path and finishes on a web page, not in chat."
+          },
+          "phoneNumber": {
+            "type": "string",
+            "maxLength": 20,
+            "description": "The mobile-money number to charge. Required for every gateway except STRIPE."
+          },
+          "phoneOperator": {
+            "type": "string",
+            "enum": [
+              "MTN",
+              "ORANGE",
+              "MOOV"
+            ],
+            "description": "The wallet's network. ASK the customer — never infer it from the number."
+          },
+          "customerEmail": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254,
+            "description": "Where the processor sends its receipt. Optional."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "bookingId"
+        ],
+        "body": [
+          "gateway",
+          "phoneNumber",
+          "phoneOperator",
+          "customerEmail"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "transactionId",
+          "status",
+          "gateway",
+          "instructions",
+          "amount",
+          "currency"
+        ],
+        "result_kind": "payment_instruction"
+      },
+      "errors": [
+        {
+          "code": "BOOKING_NO_BALANCE_DUE",
+          "status": 409,
+          "category": "conflict",
+          "when": "Nothing is owed, or the vendor has not settled the appointment yet",
+          "customer_action": "explain"
+        },
+        {
+          "code": "PAYMENT_BOOKING_ALREADY_PAID",
+          "status": 409,
+          "category": "conflict",
+          "when": "The appointment is already settled",
+          "customer_action": "explain"
+        },
+        {
+          "code": "PAYMENT_BOOKING_IN_PROGRESS",
+          "status": 409,
+          "category": "conflict",
+          "when": "A charge is already live on the customer's handset",
+          "customer_action": "explain"
+        },
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's booking",
+          "customer_action": "explain"
+        },
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "A mobile-money gateway without a phoneNumber, or an unknown gateway",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "fields"
+          ]
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "A SECOND charge against the same booking, through a separate orchestrator method, so it cannot be confused with the original payment by the idempotency key either side uses.",
+      "requires_confirmation": true,
+      "risk": "critical",
+      "side_effects": [
+        "Moves money",
+        "Raises a charge on the customer's handset"
+      ],
+      "context_resolution": {
+        "subject": "booking",
+        "policy": "explicit_only",
+        "must_echo": true
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "This charges settlement.balanceDue, not the quote — quote the number bookings_get_balance returned as `outstanding`, never one computed in the chat. The overpaid direction (creditDue) has no counterpart tool, because it is recorded rather than refunded."
+      },
+      "commands": [
+        "pay"
       ]
     },
     {
@@ -5400,8 +6775,10 @@
         "type": "object",
         "important_fields": [
           "id",
+          "bookingNumber",
           "status",
-          "paymentStatus"
+          "cancelledAt",
+          "cancelledReason"
         ],
         "result_kind": "status"
       },
@@ -5448,6 +6825,1274 @@
       ]
     },
     {
+      "name": "bookings_reschedule",
+      "version": 1,
+      "title": "Move an appointment",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Move an existing appointment to another slot.",
+      "when_to_use": "From the booking flow only, with a slotId echoed verbatim from a fresh bookings_get_availability read and after the customer has confirmed the new time.",
+      "when_not_to_use": "Not to cancel — bookings_cancel is its own tool. Not for a group service: see the known problem in the parity plan.",
+      "operation": {
+        "method": "PATCH",
+        "path": "/api/internal/bot/bookings/{bookingId}/reschedule"
+      },
+      "backing_endpoint": {
+        "method": "PATCH",
+        "path": "/api/customer/bookings/:id/reschedule",
+        "doc": "customer/bookings.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bookingId",
+          "slotId"
+        ],
+        "properties": {
+          "bookingId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The appointment to move, from bookings_list."
+          },
+          "slotId": {
+            "type": "string",
+            "pattern": "^slot_\\d{1,15}_\\d{1,15}$",
+            "description": "The opaque slot handle from bookings_get_availability, echoed exactly. Never constructed."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "bookingId"
+        ],
+        "body": [
+          "slotId"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "id",
+          "bookingNumber",
+          "status",
+          "startAt",
+          "endAt",
+          "service.name",
+          "vendor.name",
+          "awaitingVendorApproval"
+        ],
+        "result_kind": "booking_detail"
+      },
+      "errors": [
+        {
+          "code": "BOOKING_NOT_RESCHEDULABLE",
+          "status": 409,
+          "category": "conflict",
+          "when": "The appointment is finished, cancelled, or inside the vendor's cut-off",
+          "customer_action": "explain"
+        },
+        {
+          "code": "BOOKING_SLOT_LOCKED",
+          "status": 409,
+          "category": "conflict",
+          "when": "Somebody else is holding the new slot right now",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "slotId"
+          ]
+        },
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's booking",
+          "customer_action": "explain"
+        },
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "A malformed slot id",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "fields"
+          ]
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": true,
+      "risk": "high",
+      "side_effects": [
+        "Moves the appointment",
+        "May move the event in the vendor's calendar",
+        "Notifies the vendor"
+      ],
+      "context_resolution": {
+        "subject": "booking",
+        "policy": "explicit_only",
+        "must_echo": true
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Read availability again before offering times — a slot list from earlier in the conversation may have been taken since. Echo the new start time back so the customer sees which slot was understood."
+      },
+      "commands": [
+        "bookings"
+      ]
+    },
+    {
+      "name": "payment_methods_list",
+      "version": 1,
+      "title": "The saved ways to pay",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "The ways to pay the customer has saved — mobile-money wallets, and any cards they added on the website.",
+      "when_to_use": "When they ask what they have saved, before offering to change their default, or when a payment is about to be taken and you want to name the wallet they usually use.",
+      "when_not_to_use": "Not to fill in a payment — the number is never returned, so checkout still asks for it. Not for a booking payment state, which is bookings_payment_status.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/payment-methods/list"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/me/payment-methods",
+        "doc": "customer/payment-methods.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "array",
+        "important_fields": [
+          "id",
+          "label",
+          "type",
+          "provider",
+          "brand",
+          "last4",
+          "isDefault",
+          "expires",
+          "expired"
+        ],
+        "result_kind": "chip_list"
+      },
+      "errors": [],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "medium",
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "not_applicable"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Check `expired` before ever suggesting a card — an expired one stays in the list and still looks usable, and recommending it produces a decline the customer has to work out for themselves. Never work the expiry out yourself from the date; read the field. The wallet's phone number is NEVER returned, so you cannot fill in a payment from this: name the wallet by its label and let the customer give the number. The default is first in the list."
+      },
+      "commands": [
+        "pay",
+        "profile"
+      ]
+    },
+    {
+      "name": "payment_methods_add",
+      "version": 1,
+      "title": "Save a mobile-money wallet",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Save a mobile-money wallet so checkout can offer it by name.",
+      "when_to_use": "From the payment-methods flow only, after the customer has given the number and confirmed the network.",
+      "when_not_to_use": "There is NO card path and there cannot be one — a card needs the gateway own browser SDK, which a chat does not have. Never ask a customer for card details.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/payment-methods"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/me/payment-methods",
+        "doc": "customer/payment-methods.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "phoneNumber"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "mtn_momo",
+              "orange_money",
+              "moov_money"
+            ],
+            "description": "The wallet's network. ASK the customer — never infer it from the number."
+          },
+          "phoneNumber": {
+            "type": "string",
+            "description": "The wallet's own number, in strict E.164 (for example +237600123456). A locally formatted number is refused at the door rather than saved."
+          },
+          "makeDefault": {
+            "type": "boolean",
+            "default": false,
+            "description": "Make it the one checkout reaches for first."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "provider",
+          "phoneNumber",
+          "makeDefault"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "id",
+          "label",
+          "type",
+          "provider",
+          "brand",
+          "last4",
+          "isDefault",
+          "expires",
+          "expired"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "The number is not strict E.164, or the provider is not one of the three wallets",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "fields"
+          ]
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": true,
+      "risk": "high",
+      "side_effects": [
+        "Saves a payment method",
+        "makeDefault: true clears the flag on every other method"
+      ],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "explicit_only"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "The label and the last four digits are composed by the backend, not accepted — a label a model wrote could name the wrong network, and that label is what the customer then picks at checkout. E.164 is enforced here because the value is stored as the thing a gateway will later be asked to debit: a locally formatted number saved today is a payment that fails weeks later with nothing to point at."
+      },
+      "commands": [
+        "pay",
+        "profile"
+      ]
+    },
+    {
+      "name": "payment_methods_set_default",
+      "version": 1,
+      "title": "Choose the usual way to pay",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Make one saved method the one checkout reaches for first.",
+      "when_to_use": "From the payment-methods flow only, after the customer has named which one.",
+      "when_not_to_use": "Not to pay with it — this only changes which one is offered first.",
+      "operation": {
+        "method": "PATCH",
+        "path": "/api/internal/bot/payment-methods/{methodId}/default"
+      },
+      "backing_endpoint": {
+        "method": "PATCH",
+        "path": "/api/me/payment-methods/:id/default",
+        "doc": "customer/payment-methods.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "methodId"
+        ],
+        "properties": {
+          "methodId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The saved method to promote, from payment_methods_list."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "methodId"
+        ],
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "array",
+        "important_fields": [
+          "id",
+          "label",
+          "type",
+          "provider",
+          "brand",
+          "last4",
+          "isDefault",
+          "expires",
+          "expired"
+        ],
+        "result_kind": "chip_list"
+      },
+      "errors": [
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's payment method",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": true,
+      "requires_confirmation": true,
+      "risk": "medium",
+      "side_effects": [
+        "Clears the default flag on every other saved method"
+      ],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "explicit_only"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "The answer is the WHOLE list rather than the one method, because setting a default clears the flag on every sibling — a single row would leave the caller holding a list it now knows to be stale."
+      },
+      "commands": [
+        "pay",
+        "profile"
+      ]
+    },
+    {
+      "name": "payment_methods_remove",
+      "version": 1,
+      "title": "Forget a saved way to pay",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Delete one of the customer's saved payment methods.",
+      "when_to_use": "From the payment-methods flow only, after the customer has named it and confirmed the deletion.",
+      "when_not_to_use": "Never inferred from \"that card does not work any more\" without an explicit confirmation.",
+      "operation": {
+        "method": "DELETE",
+        "path": "/api/internal/bot/payment-methods/{methodId}"
+      },
+      "backing_endpoint": {
+        "method": "DELETE",
+        "path": "/api/me/payment-methods/:id",
+        "doc": "customer/payment-methods.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "methodId"
+        ],
+        "properties": {
+          "methodId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The saved method to delete, from payment_methods_list."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "methodId"
+        ],
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "removed",
+          "remaining",
+          "hasDefault"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "Not this customer's payment method",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": true,
+      "risk": "high",
+      "side_effects": [
+        "Deletes a saved payment method permanently"
+      ],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "explicit_only"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Removing the DEFAULT does not elect a replacement — the same rule addresses_remove settled on. hasDefault: false in the answer is the signal to say so, rather than letting the customer find out at checkout."
+      },
+      "commands": [
+        "pay",
+        "profile"
+      ]
+    },
+    {
+      "name": "contact_get_state",
+      "version": 1,
+      "title": "What the account signs in with",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "The email address and phone number the customer signs in with, masked, plus any change that is waiting to be confirmed.",
+      "when_to_use": "When the customer asks what email or number is on their account, or asks what happened to a change they started.",
+      "when_not_to_use": "Not for the customer's name, language or addresses — profile_get_summary and addresses_list answer those.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/contact"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/me/contact",
+        "doc": "me/contact-change.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "emailMasked",
+          "phoneMasked",
+          "pendingEmail",
+          "pendingPhone",
+          "phoneChangeProved"
+        ],
+        "result_kind": "state"
+      },
+      "errors": [],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "side_effects": [],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "not_applicable"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "The CURRENT email and number come back MASKED and the field names say so — read emailMasked and phoneMasked, and never present them as the full value. A PENDING change carries its target in full, because the whole point of the read is telling the customer which address to check. If pendingPhone is set, read phoneChangeProved: false means the customer cannot finish that change yet, and the remedy is to connect the new number on WhatsApp first."
+      },
+      "commands": [
+        "profile"
+      ]
+    },
+    {
+      "name": "contact_change_email",
+      "version": 1,
+      "title": "Start a change of login email",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Send a confirmation link to a new email address. The address the customer signs in with does not move until that link is opened.",
+      "when_to_use": "From the contact-change flow only, after the customer has given the new address and confirmed it is right.",
+      "when_not_to_use": "Never from a sentence like \"my email is wrong\" alone — this sends real mail to a real address, and a mistyped one is a link nobody will ever open. Ask for the address and read it back first.",
+      "operation": {
+        "method": "PATCH",
+        "path": "/api/internal/bot/contact/email"
+      },
+      "backing_endpoint": {
+        "method": "PATCH",
+        "path": "/api/me/email",
+        "doc": "me/contact-change.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The new email address, exactly as the customer gave it."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "email"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "target",
+          "expiresAt"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "CONTACT_CHANGE_SAME_IDENTIFIER",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The address given is the one already on the account",
+          "customer_action": "explain"
+        },
+        {
+          "code": "CONTACT_CHANGE_IDENTIFIER_TAKEN",
+          "status": 409,
+          "category": "conflict",
+          "when": "Another account already signs in with that address",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "The address is not a valid email address",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "fields"
+          ]
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": true,
+      "risk": "high",
+      "side_effects": [
+        "Sends a confirmation email to the new address",
+        "Replaces any email change already in flight, which invalidates the earlier link"
+      ],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "explicit_only"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "The address the customer signs in with does NOT move here — it moves when the link in the email is opened, on the website. Relay the reply verbatim: it says so, and a customer who believes the change is already done will read the old address still working as a fault. A second call replaces the first, so a mistyped address is corrected by simply giving the right one again."
+      },
+      "commands": [
+        "profile"
+      ]
+    },
+    {
+      "name": "contact_cancel_email_change",
+      "version": 1,
+      "title": "Abandon a pending email change",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Cancel an email change that is waiting to be confirmed. Nothing about how the customer signs in changes.",
+      "when_to_use": "From the contact-change flow only, when the customer has said they no longer want the change they started.",
+      "when_not_to_use": "Never from \"I did not get the email\". That is a reason to look in the spam folder or start again with a corrected address — cancelling kills the link that is already sitting in their inbox.",
+      "operation": {
+        "method": "DELETE",
+        "path": "/api/internal/bot/contact/email/pending"
+      },
+      "backing_endpoint": {
+        "method": "DELETE",
+        "path": "/api/me/email/pending",
+        "doc": "me/contact-change.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "cancelled"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "CONTACT_CHANGE_NOT_PENDING",
+          "status": 409,
+          "category": "conflict",
+          "when": "There is no email change waiting on this account",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": true,
+      "risk": "medium",
+      "side_effects": [
+        "Invalidates the confirmation link already sent to the new address"
+      ],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "explicit_only"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "This destroys nothing durable — the customer simply starts again — but it does invalidate a link that may already be open in their mail client, so the failure the customer meets next is a link that no longer works. Check with contact_get_state that a change is actually pending before offering this."
+      },
+      "commands": [
+        "profile"
+      ]
+    },
+    {
+      "name": "contact_change_phone",
+      "version": 1,
+      "title": "Start a change of login phone",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Record a new phone number for the account. The number the customer signs in with does not move until they prove they control the new one.",
+      "when_to_use": "From the contact-change flow only, after the customer has given the new number in full international form and confirmed it.",
+      "when_not_to_use": "Never as a way to fix a wrong number on an order — that is a delivery address, not a login. And never without telling the customer what proving the number involves.",
+      "operation": {
+        "method": "PATCH",
+        "path": "/api/internal/bot/contact/phone"
+      },
+      "backing_endpoint": {
+        "method": "PATCH",
+        "path": "/api/me/phone",
+        "doc": "me/contact-change.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phone"
+        ],
+        "properties": {
+          "phone": {
+            "type": "string",
+            "description": "The new number in strict international form, for example +237600123456. A locally formatted number is refused at the door rather than saved."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "phone"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "target",
+          "expiresAt"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "CONTACT_CHANGE_SAME_IDENTIFIER",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The number given is the one already on the account",
+          "customer_action": "explain"
+        },
+        {
+          "code": "CONTACT_CHANGE_IDENTIFIER_TAKEN",
+          "status": 409,
+          "category": "conflict",
+          "when": "Another account already signs in with that number",
+          "customer_action": "reprompt"
+        },
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "The number is not in strict international form",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "fields"
+          ]
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": true,
+      "risk": "high",
+      "side_effects": [
+        "Replaces any phone change already in flight"
+      ],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "explicit_only"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "The number the customer signs in with does NOT move here, and the change usually cannot be finished from this conversation. The only proof the platform accepts is a WhatsApp connection whose number IS the new one, and an account holds at most one WhatsApp connection — so a customer whose WhatsApp is bound to the OLD number has to disconnect it and reconnect from the new one, and a customer on Telegram has to connect WhatsApp for the first time. Relay the reply verbatim: it states that path. Then contact_confirm_phone finishes it."
+      },
+      "commands": [
+        "profile"
+      ]
+    },
+    {
+      "name": "contact_confirm_phone",
+      "version": 1,
+      "title": "Finish a change of login phone",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Complete a pending phone change, once the customer has connected the new number on WhatsApp.",
+      "when_to_use": "From the contact-change flow only, after contact_get_state reports phoneChangeProved: true, or after the customer says they have connected the new number.",
+      "when_not_to_use": "Not as a retry after a refusal saying the number is not proved yet — nothing changes by asking again. The customer has to connect the number first.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/contact/phone/confirm"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/me/phone/confirm",
+        "doc": "me/contact-change.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "phoneChanged",
+          "phoneMasked"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "CONTACT_CHANGE_NOT_PENDING",
+          "status": 409,
+          "category": "conflict",
+          "when": "There is no phone change waiting on this account",
+          "customer_action": "explain"
+        },
+        {
+          "code": "CONTACT_CHANGE_EXPIRED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The pending change sat unconfirmed for too long",
+          "customer_action": "explain"
+        },
+        {
+          "code": "CONTACT_CHANGE_PHONE_UNPROVEN",
+          "status": 422,
+          "category": "business_rule",
+          "when": "No WhatsApp connection on this account matches the pending number",
+          "customer_action": "explain",
+          "details_fields": [
+            "channel"
+          ]
+        },
+        {
+          "code": "CONTACT_CHANGE_IDENTIFIER_TAKEN",
+          "status": 409,
+          "category": "conflict",
+          "when": "Another account claimed that number while the change was pending",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": true,
+      "risk": "high",
+      "side_effects": [
+        "Moves the number the customer signs in with",
+        "Copies the confirmed number onto every role profile the account holds"
+      ],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "explicit_only"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Takes no arguments — the pending change names the number and the account carries the proof. The number comes back MASKED (phoneMasked), because once it is the account's own identifier it is no longer a value the customer just typed to be checked. A CONTACT_CHANGE_PHONE_UNPROVEN refusal is not a retry: relay its customer message, which names the remedy."
+      },
+      "commands": [
+        "profile"
+      ]
+    },
+    {
+      "name": "contact_cancel_phone_change",
+      "version": 1,
+      "title": "Abandon a pending phone change",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Cancel a phone change that is waiting to be confirmed. Nothing about how the customer signs in changes.",
+      "when_to_use": "From the contact-change flow only, when the customer has said they no longer want the change they started.",
+      "when_not_to_use": "Never because confirming failed. A change that cannot be proved yet is still the change the customer asked for — cancelling it means starting over.",
+      "operation": {
+        "method": "DELETE",
+        "path": "/api/internal/bot/contact/phone/pending"
+      },
+      "backing_endpoint": {
+        "method": "DELETE",
+        "path": "/api/me/phone/pending",
+        "doc": "me/contact-change.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "cancelled"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "CONTACT_CHANGE_NOT_PENDING",
+          "status": 409,
+          "category": "conflict",
+          "when": "There is no phone change waiting on this account",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": true,
+      "risk": "medium",
+      "side_effects": [],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "explicit_only"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Cancelling does NOT disconnect anything the customer connected on WhatsApp in order to prove the number — that connection is a separate thing and stays. It only forgets the pending change."
+      },
+      "commands": [
+        "profile"
+      ]
+    },
+    {
+      "name": "connections_list",
+      "version": 1,
+      "title": "Which messaging apps reach this account",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Both messaging channels and whether each one is connected to the customer's account, with a hint at the connected identity.",
+      "when_to_use": "When the customer asks which apps are linked to their account, or before offering to disconnect one.",
+      "when_not_to_use": "Not for notification preferences — notifications_get_preferences answers which channels the platform may write to.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/connections/list"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/me/connections",
+        "doc": "connections/README.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "array",
+        "important_fields": [
+          "channel",
+          "connected",
+          "displayName",
+          "identityHint",
+          "connectedAt",
+          "isCurrentChannel"
+        ],
+        "result_kind": "state"
+      },
+      "errors": [],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "side_effects": [],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "not_applicable"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Always exactly two rows, connected or not — there is no paging and nothing is truncated. identityHint is the ONLY form of the identity that ever comes back; there is no full number or chat id and asking for one will not produce it. isCurrentChannel marks the app this conversation is happening in, which is the one connections_disconnect refuses to cut."
+      },
+      "commands": [
+        "connect",
+        "profile"
+      ]
+    },
+    {
+      "name": "connections_disconnect",
+      "version": 1,
+      "title": "Unlink a messaging app",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Remove the link between the customer's account and one messaging app.",
+      "when_to_use": "From the connections flow only, after the customer has named the app and confirmed. Only for the app they are NOT currently writing from.",
+      "when_not_to_use": "NEVER for the channel this conversation is happening in — it is refused, and it would leave the customer unable to undo it from chat. Never as a way to stop notifications; notifications_update_preferences does that without breaking sign-in.",
+      "operation": {
+        "method": "DELETE",
+        "path": "/api/internal/bot/connections/{channel}"
+      },
+      "backing_endpoint": {
+        "method": "DELETE",
+        "path": "/api/me/connections/{channel}",
+        "doc": "connections/README.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "channel"
+        ],
+        "properties": {
+          "channel": {
+            "type": "string",
+            "enum": [
+              "whatsapp",
+              "telegram"
+            ],
+            "description": "Which messaging app to unlink. Never the one this conversation is happening in."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "channel"
+        ],
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "disconnected",
+          "channel"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "BOT_CONNECTION_ACTIVE_CHANNEL",
+          "status": 409,
+          "category": "conflict",
+          "when": "The channel named is the one this request arrived on",
+          "customer_action": "explain",
+          "details_fields": [
+            "channel"
+          ]
+        },
+        {
+          "code": "MESSAGING_CONNECTION_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "That app is not connected to this account",
+          "customer_action": "explain",
+          "details_fields": [
+            "channel"
+          ]
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": true,
+      "risk": "high",
+      "side_effects": [
+        "The customer can no longer sign in or be recognised from that app until they connect it again",
+        "Notifications the platform sent on that channel stop arriving"
+      ],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "explicit_only"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Read connections_list first and use isCurrentChannel: disconnecting the app this conversation is in is refused, because the customer could not undo it from here. Reconnecting means sending /connect to the bot and redeeming the code while signed in on the website, so this is not a small change to offer casually."
+      },
+      "commands": [
+        "connect",
+        "profile"
+      ]
+    },
+    {
+      "name": "account_close_preview",
+      "version": 1,
+      "title": "What closing the account would do",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Whether this account can be closed, what would stop it, and the exact sentence describing what closing does — in the customer's language.",
+      "when_to_use": "Whenever the customer asks about closing or deleting their account, and ALWAYS before account_close. It changes nothing.",
+      "when_not_to_use": "Not for suspending, pausing or hiding an account — none of those exist. This is the only closure there is.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/account/close/preview"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/me/close",
+        "doc": "me/account-closure.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "canClose",
+          "blockingRoles",
+          "activeOrderCount",
+          "consequence",
+          "confirmWith"
+        ],
+        "result_kind": "state"
+      },
+      "errors": [],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "side_effects": [],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "not_applicable"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "Relay `consequence` VERBATIM — it is written in the customer's language and it is the sentence they are entitled to read before deciding. Say CLOSED and say that past orders are kept as business records without their details; never say deleted or erased, because that is not what happens. canClose false means it is refused today: blockingRoles non-empty means the account also sells or delivers and support has to handle it, and activeOrderCount above zero means orders are still on the way and closing can happen once they arrive."
+      },
+      "commands": [
+        "profile"
+      ]
+    },
+    {
+      "name": "account_close",
+      "version": 1,
+      "title": "Close the account",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Close the customer's account and remove their personal details. Irreversible. Past orders are kept as pseudonymous business records.",
+      "when_to_use": "From the account-closure flow only, as the SECOND step: account_close_preview first, its consequence shown to the customer, and the customer having confirmed after reading it.",
+      "when_not_to_use": "Never on a first mention of closing, never inferred from frustration, and never without account_close_preview having been shown. There is no undo and there is no support path to reverse it.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/account/close"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/me/close",
+        "doc": "me/account-closure.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "confirm"
+        ],
+        "properties": {
+          "confirm": {
+            "type": "string",
+            "enum": [
+              "CLOSE MY ACCOUNT"
+            ],
+            "description": "The confirmation token, exactly as account_close_preview returned it in confirmWith. It is an untranslated token, not a sentence the customer types."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "confirm"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "closed",
+          "closedAt"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "ACCOUNT_CLOSURE_ROLE_NOT_ELIGIBLE",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The account also sells or delivers on the platform",
+          "customer_action": "escalate_to_support",
+          "details_fields": [
+            "blockingRoles"
+          ]
+        },
+        {
+          "code": "ACCOUNT_CLOSURE_ORDERS_IN_FLIGHT",
+          "status": 422,
+          "category": "business_rule",
+          "when": "Orders are still on the way",
+          "customer_action": "explain",
+          "details_fields": [
+            "activeOrderCount"
+          ]
+        },
+        {
+          "code": "USER_STATUS_CONFLICT",
+          "status": 409,
+          "category": "conflict",
+          "when": "The account is not active — most often because it has already been closed",
+          "customer_action": "explain",
+          "details_fields": [
+            "expected"
+          ]
+        },
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "The confirmation token was missing or wrong",
+          "customer_action": "abandon_flow",
+          "details_fields": [
+            "fields"
+          ]
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "requires_confirmation": true,
+      "risk": "critical",
+      "side_effects": [
+        "Removes the customer's name, contact details, saved addresses and date of birth",
+        "Deletes every messaging connection, so this conversation stops being recognised",
+        "Deletes saved payment methods and notifications",
+        "Past orders and money records are kept, without the customer's details",
+        "Irreversible — there is no un-close"
+      ],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "explicit_only"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "This deletes the messaging connection this conversation runs on, so the customer's NEXT message arrives as a stranger. The reply is therefore the last thing the platform says to them as themselves — relay it verbatim. Never describe this as deleting their data or their orders: the orders survive as business records without their name, which is what the reply says and what account_close_preview said before it."
+      },
+      "commands": [
+        "profile"
+      ]
+    },
+    {
       "name": "reviews_check_eligibility",
       "version": 1,
       "title": "May the customer review this?",
@@ -5486,7 +8131,8 @@
             "description": "delivery takes a SHIPMENT id, not an order id."
           },
           "subjectId": {
-            "type": "string"
+            "type": "string",
+            "description": "The id of the thing being reviewed: a product id when subjectType is product, a SHIPMENT id when it is delivery — never an order id."
           }
         }
       },
@@ -5523,6 +8169,109 @@
       },
       "commands": [
         "review"
+      ]
+    },
+    {
+      "name": "reviews_list_mine",
+      "version": 1,
+      "title": "The reviews the customer wrote",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "The reviews the customer has written themselves, newest first — products and deliveries, in every moderation state.",
+      "when_to_use": "For \"what have I reviewed\", \"did my review go up\", \"why can I not see my review\", and to check whether they have already rated something.",
+      "when_not_to_use": "NOT other people's reviews of a product — that is catalog_list_product_reviews.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/reviews/list"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/customer/reviews",
+        "doc": "customer/profile.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "published",
+              "rejected"
+            ],
+            "description": "Narrow to one moderation state. Leave empty unless the customer asked for one — the default returns all three, which is usually what they mean."
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "default": 5,
+            "description": "At most 5. A chat answer cannot carry more, and the surface refuses a larger value rather than clamping it silently. When more exist, the response reports meta.hasMore and meta.moreUrl — offer that link instead of paging."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "status",
+          "page",
+          "limit"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "array",
+        "paginated": true,
+        "important_fields": [
+          "id",
+          "rating",
+          "title",
+          "body",
+          "status",
+          "createdAt",
+          "subject.type",
+          "subject.id",
+          "subjectLabel",
+          "orderId",
+          "publiclyVisible"
+        ],
+        "result_kind": "review_list"
+      },
+      "errors": [
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "An unknown status",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "fields"
+          ]
+        }
+      ],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "not_applicable"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "To say whether a review is visible, read publiclyVisible and NEVER status. A delivery review is stored as status:published and appears on no page anywhere, because it is internal feedback about the carrier — so status alone would have you tell the customer their review is live and send them looking for it. subjectLabel is the product's name; it is null on a delivery review and null on a product no longer for sale, and in that case talk about the order via orderId rather than reading an id aloud. There is no subjectType filter, deliberately: pairing it with status would invite a query whose name promises a page nothing will ever appear on."
+      },
+      "commands": [
+        "reviews"
       ]
     },
     {
@@ -5798,6 +8547,311 @@
       ]
     },
     {
+      "name": "notifications_list",
+      "version": 1,
+      "title": "The notification inbox",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "The customer's notifications — order progress, payments, bookings, ticket replies — newest first.",
+      "when_to_use": "When they ask what is new or what they missed, and to work out what a vague reference is about: each row carries subject.type and subject.id, which is exactly what the order or ticket tools want.",
+      "when_not_to_use": "NOT authoritative for live order status — a notification records one past moment. Read the order.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/notifications/list"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/customer/notifications",
+        "doc": "customer/notifications.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unreadOnly": {
+            "type": "boolean",
+            "description": "Set true only if the customer asked specifically for what they have not seen yet. There is deliberately no \"read only\"."
+          },
+          "aggregateType": {
+            "type": "string",
+            "enum": [
+              "order",
+              "shipment",
+              "payment",
+              "booking",
+              "ticket"
+            ],
+            "description": "Narrow to one subject kind. Leave empty unless the customer named one."
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "default": 5,
+            "description": "At most 5. A chat answer cannot carry more, and the surface refuses a larger value rather than clamping it silently. When more exist, the response reports meta.hasMore and meta.moreUrl — offer that link instead of paging."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "unreadOnly",
+          "aggregateType",
+          "page",
+          "limit"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "array",
+        "paginated": true,
+        "important_fields": [
+          "id",
+          "type",
+          "title",
+          "message",
+          "isRead",
+          "createdAt",
+          "subject.type",
+          "subject.id",
+          "actionLabel",
+          "actionUrl"
+        ],
+        "result_kind": "chip_list"
+      },
+      "errors": [
+        {
+          "code": "VALIDATION_ERROR",
+          "status": 400,
+          "category": "validation",
+          "when": "An aggregateType outside the five customer subjects",
+          "customer_action": "reprompt",
+          "details_fields": [
+            "fields"
+          ]
+        }
+      ],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "not_applicable"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "meta.unreadCount rides on the response, so \"you have N unread\" needs no second call. actionUrl is absolute and already in the customer language — relay it as written and never rebuild one. The five aggregate types are derived from the platform own list, so a sixth appearing later is a backend change rather than something to guess at here."
+      },
+      "commands": [
+        "notifications"
+      ]
+    },
+    {
+      "name": "notifications_unread_count",
+      "version": 1,
+      "title": "How many are unread",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "How many notifications the customer has not read — one number.",
+      "when_to_use": "To answer \"anything new?\" without pulling a page of rows.",
+      "when_not_to_use": "Not on every message. It answers a question the customer asked.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/notifications/unread-count"
+      },
+      "backing_endpoint": {
+        "method": "GET",
+        "path": "/api/customer/notifications/unread-count",
+        "doc": "customer/notifications.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "unreadCount"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [],
+      "mutating": false,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "none",
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "not_applicable"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "A count of zero is a successful answer, not an error. If the customer then asks what they are, notifications_list already reports the same number in meta.unreadCount — so do not call this first as a matter of routine."
+      },
+      "commands": [
+        "notifications"
+      ]
+    },
+    {
+      "name": "notifications_mark_read",
+      "version": 1,
+      "title": "Mark one notification read",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Mark a single notification as read.",
+      "when_to_use": "Right after relaying that notification to the customer — reading it aloud to them IS them seeing it.",
+      "when_not_to_use": "NEVER on a notification you did not show them. There is no way to mark one unread again, so an acknowledgement they did not make cannot be taken back.",
+      "operation": {
+        "method": "PATCH",
+        "path": "/api/internal/bot/notifications/{notificationId}/read"
+      },
+      "backing_endpoint": {
+        "method": "PATCH",
+        "path": "/api/customer/notifications/:id/read",
+        "doc": "customer/notifications.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "notificationId"
+        ],
+        "properties": {
+          "notificationId": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "The id of the notification you just showed the customer, from notifications_list."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "notificationId"
+        ],
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "id",
+          "type",
+          "title",
+          "isRead",
+          "subject.type",
+          "subject.id"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "No such notification for this customer — never a 403, so a caller learns nothing about whether the id exists",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": true,
+      "requires_confirmation": false,
+      "risk": "low",
+      "side_effects": [
+        "Clears the unread flag, which cannot be set again"
+      ],
+      "context_resolution": {
+        "subject": "recent_interaction",
+        "policy": "explicit_only"
+      },
+      "audit": false,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "One-way: there is no mark-unread route anywhere on this platform. That is why this tool is model-facing while notifications_mark_all_read is not — acknowledging the one you just read out is honest, and doing it to a whole inbox on your own initiative is not."
+      },
+      "commands": [
+        "notifications"
+      ]
+    },
+    {
+      "name": "notifications_mark_all_read",
+      "version": 1,
+      "title": "Acknowledge the whole inbox",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Mark every one of the customer's notifications as read.",
+      "when_to_use": "From a deterministic flow step only, when the customer has asked for exactly this.",
+      "when_not_to_use": "NEVER on a model reading of \"yeah I know about those\". Nothing can undo it, and the unread flag is how a customer finds what they have not seen.",
+      "operation": {
+        "method": "PATCH",
+        "path": "/api/internal/bot/notifications/read-all"
+      },
+      "backing_endpoint": {
+        "method": "PATCH",
+        "path": "/api/customer/notifications/read-all",
+        "doc": "customer/notifications.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "updated"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [],
+      "mutating": true,
+      "idempotent": true,
+      "requires_confirmation": true,
+      "risk": "medium",
+      "side_effects": [
+        "Clears the unread flag on every notification, irreversibly"
+      ],
+      "context_resolution": {
+        "subject": "customer",
+        "policy": "explicit_only"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "whatsapp": "The answer reports how many rows actually moved, so a flow can say \"cleared 4\" rather than asserting something it did not measure."
+      },
+      "commands": [
+        "notifications"
+      ]
+    },
+    {
       "name": "payment_create_pay_link",
       "version": 1,
       "title": "Get a page the customer can pay by card on",
@@ -5827,7 +8881,8 @@
         ],
         "properties": {
           "transactionId": {
-            "type": "string"
+            "type": "string",
+            "description": "The CARD payment’s transaction id, from the payment that was just initiated. Mobile money never needs a link."
           }
         }
       },

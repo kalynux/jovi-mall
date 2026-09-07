@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-18 (evidence gathered 2026-08-17)
 **Status:** Accepted. **D-1 IMPLEMENTED 2026-08-19** (plan step 4.A.4a) · D-2 awaits its own
-release window (step 4.A.4b), which is deliberate — see [D-2](#d-2) of the Phase 4 plan
+release window (step 4.A.4b), which is deliberate — see [D-2](../../PRODUCTION-READINESS/PHASE-4-HARDENING-PLAN.md#d-2) of the Phase 4 plan
 **Scope:** jovi-mall
 **Answers:** [Q-5](../../PRODUCTION-READINESS/11-DECISIONS-REGISTER.md#q-5--who-can-download-whose-uploads)
 of the Phase D register · closes **S-2** and **F-25**
