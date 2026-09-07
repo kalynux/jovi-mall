@@ -1,5 +1,7 @@
 # Customer Booking Flow API
 
+**Verified against source on 2026-09-08** — the reschedule rules for single-occupancy and capacity services, `bookingNumber`, and the slot error codes, against `src/modules/booking/` (`booking.service.ts`, `group-booking.service.ts`, `slot-lock.service.ts`, `models/booking.model.ts`).
+
 Complete API reference for the **customer-facing** booking flow on service products: discover slots → lock a slot → create a booking → pay.
 
 > [!NOTE]

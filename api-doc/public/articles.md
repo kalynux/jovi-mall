@@ -1,5 +1,7 @@
 # Public API — the blog
 
+**Verified against source on 2026-09-08** — the per-locale `cover.alt` resolution, against `src/modules/blog/dto/public-article.dto.ts`.
+
 **No authentication.** Three endpoints, readable by a logged-out visitor, built to the ask in
 [BACKEND-BLOG-REQUIREMENTS.md](./BACKEND-BLOG-REQUIREMENTS.md). They exist so the article pages under
 `src/app/[locale]/(marketing)/blog/` can run on real content instead of `blog.fixtures.ts`.

@@ -1,5 +1,7 @@
 # Customer — Digital Products (library & downloads)
 
+**Verified against source on 2026-09-08** — all three routes, the `EntitlementSummary` shape, the `canDownload` rule and the 15-minute single-use token, against `src/modules/digital-delivery/` (routes, `digital-entitlement.service.ts`, `download-link.service.ts`, `types/index.ts`).
+
 Customers view the digital products they've purchased and download them through secure, single-use,
 short-lived links. **Entitlements are granted automatically** when a digital order is paid — there is
 no manual "grant" step for the customer.
@@ -69,6 +71,7 @@ computed status.
 | `maxDownloads` | `null` = unlimited |
 | `expiresAt` | `null` = never expires |
 | `canDownload` | `!isExpired && !isRevoked && (maxDownloads === null || downloadsUsed < maxDownloads)` — use this to enable/disable the button |
+| `productTitle` · `variantName` | Resolved by `populate` from the product and variant. **Both can be missing** if the referenced document was deleted since purchase — an entitlement is never removed with its product. Fall back to `originalName`, which comes from the asset. |
 
 ---
 

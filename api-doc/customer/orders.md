@@ -1,5 +1,11 @@
 # Customer Orders
 
+**Verified against source on 2026-09-08** — the checkout request/response shapes, the full
+checkout error set, the 9-value fulfilment enum and the payment hand-off, against
+`src/modules/orders/` (routes, controller, `order.service.ts`, `order.model.ts`),
+`src/modules/cod/services/cod-eligibility.service.ts` and
+`src/modules/payments/validators/payment.validators.ts`.
+
 Customer-facing order actions.
 
 **Base path:** `/api/customer/orders`
@@ -98,13 +104,19 @@ transaction. A **cash_on_delivery** checkout requires no payment call — see
 | 400 | `ORDER_CART_INVALID` | Missing product type / cart id, service product present, missing variant/SKU, or mixed currency. |
 | 404 | `ORDER_PRODUCT_NOT_FOUND` | A cart item's product no longer exists. |
 | 404 | `ORDER_VENDOR_NOT_FOUND` | A vendor referenced by the cart no longer exists. |
+| 404 | `CUSTOMER_ADDRESS_NOT_FOUND` | `deliveryAddressId` is not one of this customer’s saved addresses. `details.addressId` echoes it. |
+| 400 | `VALIDATION_ERROR` | Malformed body — including sending **both** `deliveryAddressId` and `deliveryAddress`, which is refused rather than resolved. |
 | 422 | `ORDER_NO_DELIVERY_AGENCY` | A physical product has no resolvable delivery agency. |
 | 422 | `COD_NOT_AVAILABLE_FOR_DIGITAL` | `paymentMethod: "cash_on_delivery"` on a digital cart. |
-| 422 | `COD_AGENCY_NOT_SUPPORTED` | A delivery agency on the order doesn't handle COD. `details.agencyName` names it. |
-| 422 | `COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | One vendor-order's total exceeds an agency's COD cap. `details: { agencyName, maxOrderAmount, orderTotal }`. |
+| 422 | `COD_AGENCY_NOT_SUPPORTED` | A delivery agency on the order doesn't handle COD. `details: { agencyId, agencyName }`. |
+| 422 | `COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | One vendor-order's total exceeds an agency's COD cap. `details: { agencyId, agencyName, maxOrderAmount, orderTotal }`. |
 | 422 | `ORDER_DELIVERY_ADDRESS_REQUIRED` | **New.** A physical checkout resolved no geocoded drop-off. `details.reason` is `no_delivery_address` or `selected_address_not_geocoded`. |
 | 422 | `CATALOG_INSUFFICIENT_STOCK` | **New.** A line cannot be satisfied. `details: { variantId, sku, requested, available }`. |
 | 404/409/422 | `NEGOTIATION_LOCK_*` | **New.** A line carrying a price agreed in chat could not spend its lock. Five codes — see [Negotiated lines at checkout](#negotiated-lines-at-checkout). |
+
+⚠ **`details.agencyName` on the two COD refusals can be `null`.** The business name lives on
+the agency’s Magazin and is resolved separately; an agency without one yields `null` while
+`agencyId` is always present. Fall back to a generic phrasing rather than interpolating it.
 
 > **⚠️ Two new ways a physical checkout can fail, and both were previously silent successes.**
 >

@@ -1,5 +1,7 @@
 # Customer — Profile, Addresses & Saved Payment Methods
 
+**Verified against source on 2026-09-08** — the ten route rows and the `FileDetail` avatar shape, against `src/modules/customers/routes.ts` and `src/modules/catalog/read-models/product-detail.read-model.ts`.
+
 Self-service management of the authenticated customer's profile, saved delivery addresses, and saved
 payment-method metadata.
 

@@ -1,5 +1,7 @@
 # Customer Notifications API
 
+**Verified against source on 2026-09-08** — all six routes, the list query schema (including the `ticket` aggregate type) and the notification document shape, against `src/modules/notifications/` (routes, controller, `models/customer-notification.model.ts`).
+
 The customer's notification inbox and channel preferences. This is the **fourth** multi-channel notification stack on the platform, alongside vendor, agency and agent — customers previously received nothing at all except the COD delivery code.
 
 > [!NOTE]
@@ -56,7 +58,7 @@ GET /api/customer/notifications
 | `page` | number | Default `1` |
 | `limit` | number | Default `20`, max `100` |
 | `unreadOnly` | `'true'` \| `'false'` | Only unread rows |
-| `aggregateType` | `booking` \| `order` \| `shipment` \| `payment` | Narrow to one subject area |
+| `aggregateType` | `booking` \| `order` \| `shipment` \| `payment` \| `ticket` | Narrow to one subject area. **`ticket` was added by GAP-012** and this row omitted it — a customer receiving ticket notifications had no way to filter to them. |
 
 **Response:** `200 OK`
 
@@ -89,6 +91,10 @@ GET /api/customer/notifications/unread-count
 ```
 
 Returns `{ "success": true, "data": { "unreadCount": 5 } }`. Use this for a badge rather than fetching a page of rows to render one integer.
+
+> ⚠ **`action` is OMITTED, not `null`, when a notification has nowhere to go**
+> (`default: undefined` on the sub-schema). Test for the key before reading `action.label`.
+> When present, `label` and `path` are always set; `url` is optional.
 
 ### Get preferences
 

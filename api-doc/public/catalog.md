@@ -1,5 +1,9 @@
 # Public catalog (no auth)
 
+**Verified against source on 2026-09-08** — every route, query parameter, response field, enum
+and error code on this page, against `src/modules/catalog/` (routes, controller, validators,
+service, `dto/public-product.dto.ts`, `read-models/public-display-price.ts`).
+
 **No authentication.** These endpoints are readable by a logged-out visitor, and they exist
 for the storefront: it browses, searches and opens products, so it needs to *read* the
 catalogue rather than render a mock.

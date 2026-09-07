@@ -442,9 +442,11 @@ shopper back to chat to negotiate again. Never retry the same lock.
 
 ### Where the lock is actually spent
 
-**At order creation, not at add-to-cart.** `POST /api/customer/orders` consumes it inside the
-checkout transaction, so a checkout that rolls back leaves the lock spendable. That means a lock
-that passed when the item went into the basket **can still be refused at checkout** — the window
-is re-read as it stands at that moment. Handle the five codes on both calls.
+**At order creation, not at add-to-cart.** It is
+[`POST /api/customer/orders/checkout`](orders.md#post-apicustomerorderscheckout) that consumes
+the lock, inside the checkout transaction — so a checkout that rolls back leaves it spendable.
+That means a lock that passed when the item went into the basket **can still be refused at
+checkout**: the window is re-read as it stands at that moment. Handle the five codes on both
+calls.
 
 See [Customer → Orders](orders.md) for the checkout side.
