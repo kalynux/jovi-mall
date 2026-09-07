@@ -1,5 +1,12 @@
 # Agent Tickets
 
+**Verified against source on 2026-09-08** — the 14-route set, the create schema and its length
+limits, the `TicketType` / `EntityType` / `TicketImportance` casings and every error code, against
+`src/modules/tickets/{routes/agent-ticket.routes.ts, validators/ticket.validator.ts,
+types/ticket.types.ts, services/ticket.service.ts}` and `src/core/error-codes.ts`.
+**Two corrections: the create example used a ticket type that does not exist, and the 404 row named
+`NOT_FOUND` instead of `TICKET_NOT_FOUND`.**
+
 Support ticketing for delivery **agents**. Same ticketing engine as the other roles — the same
 `TicketController` / `TicketNoteController` / `TicketAttachmentController` are mounted per role and
 scoped to the caller.
@@ -58,17 +65,31 @@ scoped to the caller.
 
 ### Example — create
 
+`POST /api/agent/tickets`:
+
 ```json
-POST /api/agent/tickets
 {
   "subject": "Wrong drop-off address on shipment",
   "description": "The address on shipment SHP-1024 is missing the building number.",
-  "type": "delivery_issue",
+  "type": "ADDRESS_CHANGE",
   "importance": "high",
   "entityType": "SHIPMENT",
-  "entityId": "664shp..."
+  "entityId": "664shp...",
+  "trackingNumber": "FDO-260705-090000-K7Q2M"
 }
 ```
+
+⚠ **`type` and `entityType` are SCREAMING_SNAKE; `importance` is lowercase.** They are different
+casings in the same body and that is not a typo — `TicketType`/`EntityType` are uppercase enums,
+`TicketImportance` is `low` | `medium` | `high` | `critical`. **Compare exactly and do not
+lower-case before matching.** (This example said `"delivery_issue"` until 2026-09-08; no such value
+has ever existed, and the request `400`s with *"Invalid ticket type"*.) The delivery-shaped types
+are `SHIPPING_ISSUE`, `DELIVERY_DELAY`, `DELIVERY_CONFIRMATION` and `ADDRESS_CHANGE`; the full list
+is [ticket_types.txt](../ticket_types.txt).
+
+Other limits worth knowing before building the form: `subject` ≤ **200** chars, `description` ≤
+**700**, `attachments` ≤ **5** file ids, `trackingNumber` ≤ 120. `entityId` is required for every
+`entityType` except `OTHER`, where the server defaults it to the requester's own id.
 
 ```json
 { "success": true, "data": { "id": "664tkt...", "subject": "Wrong drop-off address on shipment", "status": "open", "...": "..." } }
@@ -81,7 +102,11 @@ POST /api/agent/tickets
 | `VALIDATION_ERROR` | 400 | Body/query fails the schema |
 | `AUTH_MISSING_TOKEN` / `AUTH_TOKEN_EXPIRED` | 401 | Not authenticated |
 | `AUTH_ROLE_NOT_FOUND` | 403 | Non-agent caller |
-| `NOT_FOUND` | 404 | Ticket id not found / not visible to this agent |
+| `TICKET_NOT_FOUND` | 404 | Ticket id not found, or not visible to this agent. **Not** `NOT_FOUND`, which this row named until 2026-09-08 — that code is reserved for unmatched routes and never comes out of the ticket module |
+| `TICKET_PRIORITY_LOCKED` | 403 | An administrator has set the priority; it never unlocks |
+| `TICKET_CLOSED` | 409 | The ticket is closed and no longer editable |
+| `TICKET_WAITING_TARGET_NOT_PARTICIPANT` | 400 | `waiting_on_<role>` for a role nobody on the ticket holds. `waiting_on_admin` is always allowed |
+| `TICKET_REQUIRED_INFO_MISSING` | 400 | The vendor's support policy needs more. Read `details.missing[]` — `tracking_number` and `product_photo_video` need opposite things from the agent |
 
 ## Related
 - [vendor/tickets.md](../vendor/tickets.md) — full payload & enum reference

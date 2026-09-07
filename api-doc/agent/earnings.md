@@ -1,5 +1,12 @@
 # Agent Earnings
 
+**Verified against source on 2026-09-08** — the balance shape, the hold/maturity rules, the payout
+thresholds (min 10 000, auto 2 000 000) and every error code, against
+`src/modules/earnings/{routes/agent-earnings.routes.ts,
+controllers/agent-earnings.controller.ts, services/earnings-account.service.ts,
+services/payout-request.service.ts, config/earnings.config.ts}` and
+`src/modules/agents/routes/agent.routes.ts` (the payout-method pair).
+
 ## Base Path
 
 ```

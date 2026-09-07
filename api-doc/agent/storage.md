@@ -1,5 +1,12 @@
 # Agent Media Storage
 
+**Verified against source on 2026-09-08** — the plan caps, the storage response shape, both upload
+routes with their per-type and per-request ceilings, and the error codes, against
+`src/core/uploads/upload-config.ts`, `src/api/controllers/file-upload.controller.ts`,
+`src/api/controllers/file-management.controller.ts`,
+`src/modules/billing/services/entitlement.service.ts` and
+`scripts/seed/seed-pricing-plans.ts`.
+
 How media storage works for a delivery agent: the per-plan limit, reading usage,
 the upload quota gate, and storage alerts. Mirrors the vendor/agency model.
 
@@ -78,9 +85,18 @@ deleting unreferenced files (`DELETE /api/files/:id`).
 | `POST /api/files/upload` | image (jpeg/png/webp) **10 MB**, gif **5 MB**, pdf **25 MB**, zip **50 MB** |
 | `POST /api/files/upload/video` | **70 MB** per video, max **3** per request |
 
-A coarse per-role request ceiling of **1 GB per file** also applies to
-`POST /api/files/upload` for agents, but the per-type caps above are stricter and
-are what you will actually hit.
+Two request-level ceilings sit above those, and both are looser than the per-type caps, so the
+table above is what you will actually hit:
+
+- **100 MB total per request** across all files (`maxTotalSizeBytes` on the general upload policy);
+- **1 GB per file** for the `agent` role specifically (`ROLE_UPLOAD_LIMITS` in
+  `file-upload.controller.ts`) — this is the figure sometimes quoted for "the agent upload limit",
+  and it governs **this** route, never the delivery-proof route, which is capped at 10 MB. See
+  [delivery-proof.md](./delivery-proof.md#size-limits-and-the-1-gb-figure-that-is-not-this-route).
+
+**Images are transformed on this route too**: resized to fit 2048 × 2048 and recompressed, with PNG
+converted to WebP (GIF is resized to 1024 × 1024 and not converted). So the stored `mimeType` and
+`size` may differ from what you sent.
 
 ---
 

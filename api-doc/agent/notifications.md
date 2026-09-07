@@ -1,5 +1,12 @@
 # Agent Notifications
 
+**Verified against source on 2026-09-08** — all **eighteen** situations, the five preference keys,
+the channel-priority rule, both device-token schemas and the list `limit` ceiling, against
+`src/modules/notifications/{models/agent-notification.model.ts,
+catalog/agent-notification-catalog.ts, services/agent-notification-event-handler.service.ts,
+validators/device-token.validator.ts}` and
+`src/modules/delivery/validators/agent-notification.validator.ts`.
+
 Full multi-channel parity with vendor and agency notifications — in-app, push, and one
 preference-gated secondary channel (email/Telegram/WhatsApp), catalog-driven and localized.
 Architecture mirrors [Agency Notifications](../agency/notifications.md) exactly; this doc follows the

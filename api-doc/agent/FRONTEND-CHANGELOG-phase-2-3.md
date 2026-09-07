@@ -1,5 +1,11 @@
 # Agency / agent mobile app — what Phase 2 and Phase 3 changed
 
+**Verified against source on 2026-09-08** — § 1 (the outbox row now commits inside the transaction:
+`TrackingOutboxRepository.enqueue` takes a `ClientSession` and `TrackingEventSubscriber` is gone),
+§ 2 (`ErrTrackingAllowLocked` is agent-only; `TRACKING_ALLOW_LOCKED` is its wire code), § 3 (the
+three `permission_revoked` reasons in `geo-tracker/internal/modules/tracking/domain/entity.go`) and
+§ 7 (the colour migration ran: 8 agents, `"bleu"` left verbatim). Everything here still holds.
+
 Your slice of Phases **2** (Deployability) and **3** (Cross-service correctness) of
 [`PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md`](../../../PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md).
 

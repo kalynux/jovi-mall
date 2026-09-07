@@ -1,5 +1,13 @@
 # Agent — Profile, Preferences & Dispatch Settings
 
+**Verified against source on 2026-09-08** — every field of the profile response, all three write
+schemas, the read-only capacity rule and the auth error codes, against
+`src/modules/agents/{routes/agent.routes.ts, controllers/agent-self.controller.ts,
+dto/agent-profile.dto.ts, validators/agent.validator.ts,
+domain/services/agent-profile.service.ts}` and `src/core/error-codes.ts`.
+**One field was removed: `wa` is not on this response** — `AgentProfileMapper.toResponseDto` does not
+build it and nothing adds it afterwards.
+
 Read and update the authenticated agent's own record: identity, vehicle, contacts, the
 navigation preference, and the one dispatch flag the agent controls.
 
@@ -66,7 +74,7 @@ document. An agent can only ever act on their own record.
     "avatar": {
       "id": "664fil...",
       "key": "images/2026/07/avatar.jpg",
-      "url": "http://localhost:8022/api/files/agents/664agt.../avatar.jpg",
+      "url": "http://localhost:8022/api/files/images/2026/07/avatar.jpg",
       "access": "public",
       "mimeType": "image/jpeg",
       "size": 84213,
@@ -79,7 +87,7 @@ document. An agent can only ever act on their own record.
       "photo": {
         "id": "665f1c2a9b1e4a0012a3b4ee",
         "key": "images/2026/07/vehicle.jpg",
-        "url": "http://localhost:8022/api/files/agents/664agt.../vehicle.jpg",
+        "url": "http://localhost:8022/api/files/images/2026/07/vehicle.jpg",
         "access": "public",
         "mimeType": "image/jpeg",
         "size": 284119,
@@ -115,7 +123,6 @@ document. An agent can only ever act on their own record.
     "preferences": { "navigation_app": "google_maps" },
     "settings": { "auto_accept_assignments": false },
     "capacity": { "maxActiveShipments": 20, "activeShipmentCount": 3, "remaining": 17 },
-    "wa": { "verified": false },
     "timezone": "Africa/Douala",
     "preferredLanguage": "fr",
     "status": "active",
@@ -131,7 +138,7 @@ document. An agent can only ever act on their own record.
 
 | Field | Notes |
 |---|---|
-| `avatar` | A resolved file object `{ id, key, url, access, mimeType, size, originalName }`, or `null` — **never a bare URL string**. Written as `avatar_file_id`. |
+| `avatar` | A resolved file object `{ id, key, url, access, mimeType, size, originalName }`, or `null` — **never a bare URL string**. Written as `avatar_file_id`. `key` is `{folder}/{yyyy}/{mm}/{filename}` and `url` is `STORAGE_LOCAL_URL` + `/` + `key`, so the two always agree — never build one from the other by hand. |
 | `capacity` | **Read-only.** `maxActiveShipments` comes from the agent's billing plan, not from any profile write. `remaining` is `max - active`, floored at 0. See [Capacity](#capacity-is-read-only). |
 | `workingState.active_shipment_count` | A derived label input. For the count the dispatcher actually admits against, use `capacity.activeShipmentCount` — the two can drift, and only `capacity` is compare-and-set on accept. |
 | `tracking.allowed` | **Read-only here.** Whether the platform permits live tracking of this agent; written by an admin. See [Not settable here](#not-settable-here). |
@@ -373,7 +380,7 @@ carries a card number or CVV).
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | Body failed schema validation, or no field was provided |
 | `AUTH_MISSING_TOKEN` / `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` | 401 | Missing, malformed or expired token. There is **no** `AUTH_UNAUTHORIZED` — this row named it until 2026-09-06, so a client branching on that string never matched |
-| `AUTH_FORBIDDEN` | 403 | Caller is not an `agent` |
+| `AUTH_ROLE_NOT_FOUND` | 403 | Caller is not an `agent`. `details: { required, actual }`. **Not** `AUTH_FORBIDDEN`, which this row named until 2026-09-08 — `requireRole` never raises that code; it is a file-ownership and vendor-profile code |
 | `AGENT_NOT_FOUND` | 404 | No agent record for this user |
 
 ## Related

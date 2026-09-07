@@ -1,5 +1,12 @@
 # Agent Billing API
 
+**Verified against source on 2026-09-08** — every route, the three seeded agent tiers and their
+limits, and the settings schema, against `src/modules/billing/{routes/agent-billing.routes.ts,
+controllers/subscriber-billing.controller.ts, validators/billing.validators.ts,
+services/entitlement.service.ts, dto/public-plan.dto.ts}` and
+`scripts/seed/seed-pricing-plans.ts`.
+**One correction: `max_storage_bytes` is NOT a vendor-only null field on an agent plan.**
+
 Agent-facing endpoints for pricing plans, the credit wallet, top-up purchases
 and billing settings. **The agent billing engine is the same engine as the
 vendor's** — same endpoints, same shapes, same payment flow — only the plan
@@ -85,7 +92,7 @@ List the **active** agent pricing plans, sorted by `sort_order` then `price`.
       "max_unterminated_shipments": 20,
       "live_tracking_enabled": true,
       "max_active_products": null,
-      "max_storage_bytes": null,
+      "max_storage_bytes": 1073741824,
       "commission_percent": null,
       "is_active": true,
       "sort_order": 1
@@ -97,7 +104,13 @@ List the **active** agent pricing plans, sorted by `sort_order` then `price`.
 Field notes (agent plans):
 - `max_unterminated_shipments` (number | `null`) — the agent's **concurrent-delivery cap**. This value becomes the agent's `capacity.max_active_shipments` when the plan activates, and is enforced **hard** at offer-accept time (see below). Free = `20`.
 - `live_tracking_enabled` — always `true` today; reserved for a future free-tier restriction.
-- vendor-only fields (`max_active_products`, `max_storage_bytes`, `commission_percent`) are always `null` — ignore them.
+- `max_storage_bytes` (number | `null`) — the cap on the agent's **own** media library. It is **not**
+  a vendor-only field and it is **not** null: the seeded tiers are **1 GB** (free), 3 GB (Plus) and
+  10 GB (Pro). A plan that omits it falls back to 1 GB. This is the number behind
+  [storage.md](./storage.md); an agent's delivery-proof photos are charged to the **agency** and do
+  not count here.
+- genuinely vendor-only fields (`max_active_products`, `commission_percent`) are always `null` on an
+  agent plan — ignore them.
 
 ---
 

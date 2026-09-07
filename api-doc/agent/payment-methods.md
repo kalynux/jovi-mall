@@ -1,5 +1,11 @@
 # Saved Payment Methods API
 
+**Verified against source on 2026-09-08** — the five routes, the returned DTO (gateway ids are
+never in it), the create schema field-by-field, and the 10-method limit, against
+`src/modules/payment-methods/{routes.ts, controllers/payment-method.controller.ts,
+validators/payment-method.validators.ts, dto/payment-method.dto.ts,
+services/payment-method.service.ts}`.
+
 Reference for managing a user's **saved payment methods** — the tokenized cards / mobile-money / bank instruments used to **pre-fill the checkout page** on the frontend.
 
 > [!IMPORTANT]

@@ -1,5 +1,12 @@
 # Agent Payout Methods
 
+**Verified against source on 2026-09-08** — the two routes, the ordered 1–3 list rule, all three
+sub-schemas field-by-field, the nine card brands, the forbidden-card-field list, the expiry check
+and the masking, against `src/core/types/payout.types.ts`,
+`src/modules/agents/{routes/agent.routes.ts, validators/agent.validator.ts,
+controllers/agent-self.controller.ts}`. `ENABLED_PAYOUT_METHODS` is `['mobile_money']` — the
+switch below is real and current.
+
 **Where the platform sends your money.** This page is the complete field reference for
 `payout_details` on the agent side; [Earnings](./earnings.md) links here from the withdrawal flow.
 

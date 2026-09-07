@@ -1,5 +1,14 @@
 # Agent Shipments
 
+**Verified against source on 2026-09-08** — every route, query parameter, transition, enum
+value, response field and error code below, against `src/modules/delivery/agent.routes.ts`,
+`src/modules/shipments/{shipment.service.ts, shipment.validator.ts, shipment.model.ts,
+shipment.repository.ts}`,
+`src/modules/shipment-assignment/domain/services/shipment-assignment.service.ts`,
+`src/modules/agents/config/agent.config.ts` and
+`src/modules/tracking-integration/services/visible-agents.service.ts`.
+The transition table was re-derived from `TRIGGERABLE_TRANSITIONS` (not copied).
+
 ## Base Path
 
 ```
@@ -530,4 +539,30 @@ offerable, non-terminal state) and a handover collection point is recorded for t
 - `400` – `VALIDATION_ERROR` – Missing/invalid `reason`, `note` too long, or `note` missing when `reason` is `other`.
 - `404` – `SHIPMENT_NOT_FOUND` – Shipment does not exist or is not assigned to this agent.
 - `422` – `SHIPMENT_CANCEL_NOT_ALLOWED` – The shipment's status is not agent-cancellable (e.g. already `delivered`/`returned`), or its order is already completed.
-- `409` – `SHIPMENT_CANCEL_CONFLICT` – The shipment moved (a concurrent reassignment/status change) between read and write; retry from a fresh read.
+- `409` – `SHIPMENT_CANCEL_CONFLICT` – The shipment moved (a concurrent reassignment/status change) between read and write. `details: { expectedAgentId, expectedStatus }`. Retry from a fresh read.
+
+---
+
+## Three status subsets, and why they must not be derived from each other
+
+`ShipmentStatus` has **eleven** members, and three different subsets of it drive three different
+decisions. They overlap without agreeing, and each is defined in a different file.
+
+| Set | Members | Decides | Defined in |
+|---|:--:|---|---|
+| `ACTIVE_SHIPMENT_STATUSES` | 6 | the agent's capacity, and `?scope=active` | `src/modules/agents/config/agent.config.ts` |
+| `TRACKABLE_SHIPMENT_STATUSES` | 5 | whether geo-tracker will stream a position | `src/modules/tracking-integration/services/visible-agents.service.ts` |
+| `UNTERMINATED_SHIPMENT_STATUSES` | 7 | the agency's plan cap | `src/modules/shipments/shipment.model.ts` |
+
+🔴 **`failed` is the row that breaks clients.** It is **active** (the parcel is still in the van,
+`failed → in_transit | returned` are both legal, it still holds a capacity slot and a COD cash
+obligation) but **not trackable** (geo-tracker never opens a session for it). A client that gates
+its live map on the *active* set — the natural move, since `?scope=active` is right there in the
+list query — renders a map for a `failed` shipment and waits forever for a broadcast that will
+never arrive. No error; the map is simply blank. **Gate the map on the trackable set and the work
+queue on the active set.**
+
+Two more in the same family: `handing_over` **is** trackable (a reassigned post-pickup delivery is
+the one most in need of watching), and a trackable *status* is not trackability *in fact* — the
+visibility rule also requires `agent_id != null`, so a shipment offered but not yet accepted has
+nobody to track.

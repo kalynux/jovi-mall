@@ -1,5 +1,13 @@
 # Agency Memberships (Agent-Facing)
 
+**Verified against source on 2026-09-08** — all 22 routes on this page, the contract status and
+origin vocabularies, the browse query parameters, the `AgentMembershipDto` field list, and the
+`awaitingDecisionFrom` button rule (against `proposerOf` / `assertProposerRule`, not against another
+document), from `src/modules/agents/{routes/agent.routes.ts,
+controllers/agent-self.controller.ts, validators/agent.validator.ts,
+dto/agent-membership.dto.ts, models/agent-agency-membership.model.ts,
+domain/services/agent-contract.service.ts}`.
+
 ## Base Path
 
 ```
@@ -39,9 +47,23 @@ raise the request answers it.
 | **An agency approaches you** | the agency | **you** — `POST /memberships/:id/approve` or `/reject` | they withdraw |
 | **You apply** | **you** — `POST /memberships/requests` | the agency | `POST /memberships/:id/withdraw` |
 
-Read `initiatedBy` (`agent` \| `agency`) on the contract to know which pair of buttons applies.
-**Calling the wrong verb is a `403`** — the initiator may only withdraw, the counterparty may only
-approve/reject. The four verbs (`approve`, `reject`, `withdraw`, `terminate`) mean the same thing
+Read **`awaitingDecisionFrom`** on the contract to know which pair of buttons applies.
+**Calling the wrong verb is a `403`** — the party whose terms are standing may only withdraw, the
+counterparty may only approve/reject/counter.
+
+> 🔴 **Corrected 2026-09-08 — this line said `initiatedBy`, contradicting this document's own
+> field reference 550 lines further down** (*"`initiatedBy` is **not** the button rule any more …
+> driving buttons from it shows Accept to whoever just made the offer"*). FRONTEND-SYNC finding
+> F-49.
+>
+> Source settles it: `AgentContractService.proposerOf` is
+> `contract.terms_proposed_by ?? initiatorOf(contract)`, and `assertProposerRule` is what raises
+> the `403`. `origin` — which is what `initiatedBy` reports — is only the **fallback**, used when
+> nobody has proposed terms yet. So `initiatedBy` is right for a fresh contract and **wrong after
+> any counter**, because a counter flips `terms_proposed_by` and does not move `initiatedBy`.
+> The `403` carries `{ transition, party, proposer, hint }`; read `proposer` when debugging.
+
+The four verbs (`approve`, `reject`, `withdraw`, `terminate`) mean the same thing
 here, on the agency's router, and in the vendor↔agency flow.
 
 > **Email invites are gone.** `GET /api/agent/invites` and `POST /api/agent/invites/:id/accept` no

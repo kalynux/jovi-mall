@@ -1,5 +1,11 @@
 # Agent Delivery Proof
 
+**Verified against source on 2026-09-08** — routes, ownership scoping, allowed statuses, upload
+limits, server-side transforms and every error code below, against
+`jovi-mall/src/modules/delivery/agent.routes.ts`,
+`jovi-mall/src/modules/shipments/{agent-delivery-proof.controller.ts,delivery-proof.service.ts}`
+and `jovi-mall/src/core/uploads/upload-config.ts` (`getDeliveryProofUploadConfig`).
+
 An agent may attach **one optional image** as proof of a delivery. The image is
 uploaded to (and charged against) the **agency's** media storage — not the
 agent's — and is attached to the shipment.
@@ -31,6 +37,15 @@ image (the old one is removed and its bytes freed from the agency).
 Attach or replace the proof. `multipart/form-data`, single field **`file`**.
 
 - Allowed types: `image/jpeg`, `image/png`, `image/webp`. Max **10 MB**, exactly **1** file.
+- **The image is transformed server-side**, so what comes back is not what was sent:
+  every proof is resized to fit **2048 × 2048** and recompressed, and a **PNG is converted to
+  WebP**. So the `mimeType` in the response may differ from the file's, `size` is the
+  *stored* size, and `originalName` keeps the name the client gave it. Do not assume the
+  response describes the bytes you uploaded — and compress on the device first, since anything
+  larger than 2048 × 2048 is pure upload cost.
+- Duplicate collapsing is **off** for this route (`duplicateDetection.enabled: false`): two
+  shipments photographed against the same wall produce two separate files, never one shared
+  record.
 - The file is owned by the shipment's agency and counts toward the
   **agency's** storage cap. If the agency is at 100% of its cap, the upload is
   rejected with `UPLOAD_POLICY_VIOLATION` (`QUOTA_EXCEEDED`).
@@ -108,3 +123,24 @@ shipment detail for both the agent (`GET /api/agent/shipments/:id`) and the agen
 | `SHIPMENT_PROOF_FILE_REQUIRED` | 400 | No `file` field in the request. |
 | `SHIPMENT_PROOF_NOT_FOUND` | 404 | DELETE with no proof attached. |
 | `UPLOAD_POLICY_VIOLATION` | 400 | Not an image / >10 MB / >1 file, or the agency is over its storage cap (`QUOTA_EXCEEDED`). |
+
+---
+
+## Size limits, and the "1 GB" figure that is **not** this route
+
+| | `POST /api/agent/shipments/:id/delivery-proof` | `POST /api/files/upload` |
+|---|---|---|
+| Files per request | **1** | up to 10 |
+| Size ceiling | **10 MB** | **1 GB** per file for the `agent` role (100 MB total per request) |
+| Types | `image/jpeg` · `image/png` · `image/webp` | the general media set |
+| Owner charged | the shipment's **agency** | the **agent** |
+
+⚠ `getDeliveryProofUploadConfig()` sets `maxFilesPerRequest: 1` and `maxTotalSizeBytes: 10 * MB`,
+and every per-MIME entry is also 10 MB — **there is no 1 GB anywhere near this route.** The 1 GB is
+the `agent` row of `ROLE_UPLOAD_LIMITS` in `file-upload.controller.ts`, which governs the *general*
+upload endpoint documented in [uploads/README.md](../uploads/README.md).
+
+It matters because a client sized for 1 GB will let an agent take a full-resolution photo on a
+modern phone, spend their data uploading it over a field connection, and receive
+`UPLOAD_POLICY_VIOLATION`. **Compress on the device before uploading** — the server resizes to
+2048 × 2048 regardless, so anything larger is pure upload cost.

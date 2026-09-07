@@ -1,5 +1,14 @@
 # Offer quick actions — what the backend has to change
 
+**Verified against source on 2026-09-08** — the "DONE" claim is true and the five proposed changes
+are all present as described: `sendToUser` omits the `notification` block entirely when `dataOnly`,
+`androidConfig` drops its sub-block, `apnsConfig` adds the category, and
+`ACTIONABLE_OFFER_SITUATIONS` is exactly `{shipment.offer.received, shipment.offer.reminder}` —
+`shipment.offer.expired` is correctly excluded. Read from
+`src/modules/notifications/services/{fcm-push.service.ts,
+agent-notification-event-handler.service.ts}`. **Note the composing site is
+`agent-notification-event-handler.service.ts`, not `agent-notification.service.ts` as § 5 guesses.**
+
 > **Status: DONE.** Implemented in `fcm-push.service.ts` (`dataOnly` + `category`,
 > `APNS_CATEGORIES`) and `agent-notification-event-handler.service.ts`
 > (`ACTIONABLE_OFFER_SITUATIONS`, previously `OFFER_CHANNEL_SITUATIONS`). The live

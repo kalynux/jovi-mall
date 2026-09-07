@@ -1,5 +1,16 @@
 # Agent Assignment Offers
 
+**Verified against source on 2026-09-08** — the offer/origin/status vocabularies, the expiry
+asymmetry, PII redaction, and every accept/reject error code, against
+`src/modules/shipment-assignment/{models/shipment-assignment-offer.model.ts,
+config/assignment.config.ts, domain/services/shipment-assignment.service.ts,
+validators/assignment.validator.ts}`.
+
+> 🔴 **`origin` is `"manual"`, not `"agency"` — corrected 2026-09-08.** The model enum is
+> `['manual', 'auto']` (`shipment-assignment-offer.model.ts:180`) and `toOfferSummary` passes it
+> through unchanged, so `"agency"` never appears on the wire. A client written from the old text
+> would treat every manual offer as an auto one and hide its 120-second countdown.
+
 The agent's side of the **agent-acceptance workflow**. An offer is the agency (or the system)
 asking this agent to take a shipment. The shipment becomes the agent's **only when they accept** —
 until then it carries no `agent_id`. A **manual** offer expires on a timeout if ignored; an **auto**
@@ -39,7 +50,7 @@ pending ─┬─ accept          → accepted    (agent bound to the shipment; 
 
 **`origin` tells you which kind of offer you hold, and the two behave differently on timeout:**
 
-- **`origin: "agency"` (manual pick)** — one-shot. If ignored it **expires** at `expiresAt`
+- **`origin: "manual"` (an agency picked you)** — one-shot. If ignored it **expires** at `expiresAt`
   (`SHIPMENT_OFFER_TIMEOUT_SECONDS`, default **120s**) and the shipment returns to the agency queue.
   Here `expiresAt` is a real deadline — count down to it.
 - **`origin: "auto"` (system auto-assignment)** — one candidate in a **broadcast**. It does **NOT**
@@ -81,6 +92,7 @@ and what it pays — because the shipment itself is not readable until you accep
       "agentId": "6612...",
       "status": "pending",
       "origin": "auto",
+      "round": 1,
       "expiresAt": "2026-07-17T10:32:00.000Z",
       "respondedAt": null,
       "rejectionReason": null,
@@ -133,13 +145,20 @@ and what it pays — because the shipment itself is not readable until you accep
 Addresses use the [`AddressDetail` shape](./shipments.md#address); `earning` is documented
 [here](./shipments.md#earning).
 
+**`round`** is which pass of the auto-assignment broadcast produced this offer — `1` on the first
+offer, `2` on the round-2 re-nudge of an offer you ignored. `0` on a manual offer, which has no
+broadcast. It exists so a reminder can be told from a new job: a `shipment.offer.reminder` push
+carries the **same** `offerId` you already hold, so update that card rather than adding another.
+After round 2 the agency is told automatic assignment failed, but **any offer you are still
+holding stays acceptable** until the shipment is assigned or the ranking is disposed of.
+
 **`agency`** is who is offering the job — the same block the [shipment detail](./shipments.md#detail)
 carries. You hold contracts with several agencies at once and their terms differ, so *who is asking*
 is part of the decision, not an after-the-fact detail. It is **not** redacted before acceptance: the
 agency is your own contracted counterparty, not a third party whose privacy the offer protects.
 
 **`items[].image`** is what the thing looks like — the **thumbnail only**, `{ id, key, url, access, mimeType,
-size, originalName }` or `null` when the item has no picture. You cannot open the shipment until you
+access, size, originalName }` or `null` when the item has no picture. You cannot open the shipment until you
 accept, so this is part of what makes the decision an informed one: an offer is judged on whether the
 parcel fits your vehicle as much as on distance and pay. It is the **variant's** own image where the
 variant has one, else the product's first — the variant is what is actually in the box. The full
@@ -182,8 +201,22 @@ before accepting:
 ```
 
 `location` (GeoJSON `[lng, lat]`) and/or `address` is populated; `is_fallback: true` means the exact
-point couldn't be resolved and a sensible default (the agency) was used. After you accept, the same
-data is on the shipment detail under `handover`.
+point couldn't be resolved and a sensible default (the agency) was used.
+
+> 🔴 **The same handover point reaches you in THREE different shapes, and only one of them is the
+> normalised one.** Use `pickup`, not `pickupLocation`, unless you specifically need the raw record.
+>
+> | Where | Field | Shape |
+> |---|---|---|
+> | this offer | **`pickup`** | the normalised `{ address: AddressDetail, mode, count }` — `mode` is always `"pickup_based"` and `count` always `1` for a handover |
+> | this offer | `pickupLocation` | the **raw** stored sub-document, exactly as shown above: `snake_case`, `address.line1`, GeoJSON `location` as `[lng, lat]`, `is_fallback` |
+> | the shipment detail, after accepting | `handover.pickup` | `{ source, address: AddressDetail, note, isFallback }` — camelCase, no separate `location` |
+>
+> `pickup` is built from `pickupLocation` when the offer has one and falls back to the shipment's
+> resolved pickup otherwise, so **one component reads `pickup` on every offer**, reassignment or
+> not. Writing your parser against `pickupLocation` means writing a second one for
+> `handover.pickup` the moment the agent accepts, and getting `[lng, lat]` the wrong way round is
+> the classic way to put a pin in the sea.
 
 <a name="detail"></a>
 ## GET /api/agent/offers/:id
@@ -256,6 +289,9 @@ Decline the job. Body: `{ "reason"?: string }` (optional, ≤ 500 chars).
 
 - **`shipment.offer.received`** — a new offer to answer (push is the load-bearing channel; it's
   time-sensitive). Deep-links to the offer.
+- **`shipment.offer.reminder`** — a still-open **auto** offer you have not answered, re-pushed on
+  round 2 of the broadcast. It is the SAME offer, not a new one: the `offerId` matches the one you
+  already hold, so replace the existing card rather than adding a second.
 - **`shipment.offer.expired`** — a **manual** offer you didn't answer in time lapsed. (Auto offers
   don't expire this way — an ignored one stays open until another agent is bound or the search ends.)
 - **`shipment.reassigned_away`** — a shipment you were handling was reassigned to another agent. You

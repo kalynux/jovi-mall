@@ -1,5 +1,15 @@
 # Agency / agent mobile app — what Phase 4 and Phase 5 changed
 
+**Verified against source on 2026-09-08** — § 1 (`AUTH_SESSION_CAP_REACHED` at 401, raised inside
+`requireAuth` as well as on refresh, `auth_time` copied not re-stamped) and § 2 (the proof photo:
+`url: null`, `access: "authorized"`, bytes from `/delivery-proof/file`) against
+`jovi-mall/src/api/middlewares/auth.middleware.ts`, `jovi-mall/src/core/auth/session-cap.ts` and
+`jovi-mall/src/modules/shipments/{agent-delivery-proof.controller.ts,delivery-proof.service.ts}`.
+
+> ✅ **§ 2 is now DONE in `lib/`** — re-verified 2026-09-08. The app fetches the bytes and renders
+> them with `Image.memory`; see [delivery-proof.md](./delivery-proof.md). The section stays as the
+> contract that code has to keep.
+
 Your slice of Phases **4** (Per-service hardening) and **5** (Legacy close-out) of
 [`PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md`](../../../PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md).
 

@@ -1,5 +1,12 @@
 # Agent — Availability, Working State & Device
 
+**Verified against source on 2026-09-08** — the four state axes and their writers, both request
+schemas, the `AGENT_NOT_ACTIVE` guard and the device-location eligibility rules, against
+`src/modules/agents/{routes/agent.routes.ts, routes/admin-agent.routes.ts,
+controllers/agent-self.controller.ts, validators/agent.validator.ts,
+domain/services/{agent-availability.service.ts,agent-eligibility.service.ts},
+config/agent.config.ts}`.
+
 ## Base Path
 
 ```
@@ -22,7 +29,7 @@ different actors — collapsing any two makes it impossible to tell *why* an age
 | `status` | May this account work at all? | admin | `pending_verification` `active` `inactive` `suspended` |
 | `availability` | Does the agent *want* work now? | **the agent** | `online` `offline` `on_break` |
 | `workingState` | How loaded is the agent? | system (derived) | `idle` `working` `at_capacity` |
-| `tracking.allowed` | May this agent be tracked? | admin / agency | `true` `false` |
+| `tracking.allowed` | May this agent be tracked? | **admin only** | `true` `false` |
 
 `workingState` is **derived from live shipment counts**, never set by hand — an agent is `at_capacity`
 because they hold N shipments, not because someone said so.
@@ -139,8 +146,11 @@ permission changes.
 | Field | Values |
 |---|---|
 | `platform` | `android` `ios` `web` `unknown` |
+| `app_version` | free text, **≤ 50 chars**; `null` or `""` clears it |
 | `location_permission` | `always` `while_in_use` `denied` `unknown` |
 | `*_enabled`, `*_exempt` | `true` `false` `null` |
+
+An empty body is `400 VALIDATION_ERROR` — *"At least one capability is required"*.
 
 **Every capability is tri-state, and the difference matters:**
 

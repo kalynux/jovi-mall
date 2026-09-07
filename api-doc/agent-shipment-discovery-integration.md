@@ -1,5 +1,12 @@
 # Frontend Integration Guide — Agent Shipment Discovery
 
+**Verified against source on 2026-09-08** — both §2 breaking shapes, the `AddressDetail` / `Pickup` /
+`Earning` types, the `q` rules, the offer enrichment and its PII redaction, and the `/route`
+degradation, against `src/modules/shipments/{shipment.service.ts, shipment.validator.ts,
+shipment.repository.ts}`,
+`src/modules/shipment-assignment/domain/services/shipment-assignment.service.ts` and
+`src/modules/earnings/services/earnings-quote.service.ts`.
+
 **Status:** shipped, backend-complete. **Audience:** whoever integrates the agent app (and the agency
 dashboard, which is affected in two places).
 

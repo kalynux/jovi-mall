@@ -1,5 +1,10 @@
 # Agent File Management
 
+**Verified against source on 2026-09-08** — the seven routes, the `FileDetail` shape and the
+non-owner `403`, against `src/api/routes/file-upload.routes.ts`,
+`src/api/controllers/{file-upload.controller.ts,file-management.controller.ts}` and
+`src/core/uploads/upload-config.ts`.
+
 The agent's personal media library, on the shared `/api/files` surface, scoped to
 the authenticated agent (`ownerType: "agent"`).
 

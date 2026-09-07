@@ -1,5 +1,10 @@
 # Delivery Agent Onboarding API Documentation
 
+**Verified against source on 2026-09-08** — both step schemas, the merge-on-resubmit rule, the
+completion-status shape and its three `stepLabel` values, and the completion lock, against
+`src/modules/agents/{controllers/agent-self.controller.ts, validators/agent.validator.ts,
+domain/services/agent-profile.service.ts, domain/vehicle-info.ts}`.
+
 This documentation provides frontend developers with the specifications needed to build the delivery agent onboarding flow. 
 
 Unlike the agency onboarding which has been upgraded to a more RESTful structure recently, the agent onboarding currently relies on a generic `PATCH` endpoint for step progression.
@@ -117,13 +122,13 @@ If the user clicks "Skip" on the UI, send this payload to immediately complete t
 
 ### Successful Response (Applies to both steps)
 
-```json
+```jsonc
 {
   "success": true,
   "data": {
     "profile": {
        // ... full agent profile object
-       "onboardingStep": 2 
+       "onboardingStep": 2
     },
     "completionStatus": {
       "onboardingStep": 2,
@@ -131,9 +136,16 @@ If the user clicks "Skip" on the UI, send this payload to immediately complete t
       "missingFields": [],
       "stepLabel": "Identity Setup (Optional)"
     }
-  }
+  },
+  "message": "Vehicle setup saved."   // step 2 answers "Onboarding complete."
 }
 ```
+
+`stepLabel` is one of exactly three strings — `"Onboarding Complete"` (0), `"Vehicle Setup"` (1),
+`"Identity Setup (Optional)"` (2). `missingFields` today has exactly one possible entry,
+`"vehicle_info (vehicle_type, color required)"`, present only while no vehicle has been saved.
+**Both are English and are not localized** — treat them as tokens to switch on, or ignore them and
+switch on `onboardingStep`, rather than showing them to the agent.
 *Note: The backend recalculates the step and returns the next appropriate `onboardingStep` in the response, so the frontend can immediately transition to the next screen based on `completionStatus.onboardingStep`.*
 
 ---
@@ -148,7 +160,7 @@ If validation fails, the API responds with a `400 Bad Request` containing detail
   "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
-    "message": "Request validation failed",
+    "message": "Validation failed",
     "statusCode": 400,
     "category": "validation",
     "details": {

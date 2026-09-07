@@ -1,5 +1,11 @@
 # Agent Push Notifications — Flutter Integration Guide
 
+**Verified against source on 2026-09-08** — both message shapes, the Android channel and APNs
+category ids, which situations are data-only, and all twenty rows of the deep-link table, against
+`src/modules/notifications/{services/fcm-push.service.ts,
+services/agent-notification-event-handler.service.ts, catalog/agent-notification-catalog.ts,
+models/agent-notification.model.ts}` and `src/modules/delivery/agent.routes.ts`.
+
 How the agent mobile app receives notifications **without polling**, and what the client must
 implement to match what the backend actually sends.
 
@@ -380,6 +386,10 @@ failures that matter (`SHIPMENT_ALREADY_HAS_AGENT`, `AGENT_AT_CAPACITY`,
 For the two offer situations it is also the **only** source of the offer id the buttons act on, so a
 push without it must render no buttons rather than guess.
 
+All **eighteen** situations in `AGENT_NOTIFICATION_TYPES` are listed. Five distinct `path` shapes
+cover seventeen of them — the eight `agent_contract.*` situations share one — and the eighteenth
+(`shipment.reassigned_away`) deliberately carries none.
+
 | `type` | `aggregateType` | `data.path` | Screen |
 |---|---|---|---|
 | `shipment.offer.received` | `offer` | `offers/{offerId}` | Offer detail — accept/reject |
@@ -394,6 +404,9 @@ push without it must render no buttons rather than guess.
 | `agent_contract.rejected` | `contract` | `memberships/{contractId}` | Contract detail (terminal) |
 | `agent_contract.status_request_raised` | `contract` | `memberships/{contractId}` | Contract detail — approve/reject the proposed change |
 | `agent_contract.status_request_resolved` | `contract` | `memberships/{contractId}` | Contract detail |
+| `agent_contract.terms_countered` | `contract` | `memberships/{contractId}` | Contract detail — a **pending** contract whose offer moved back to you: accept, counter or reject |
+| `agent_contract.terms_proposed` | `contract` | `memberships/{contractId}` | Contract detail — a change to a **live** contract; it takes effect only if you accept |
+| `agent_contract.terms_resolved` | `contract` | `memberships/{contractId}` | Contract detail — the answer to either of the two above, neutral about whose proposal it was |
 | `plan.expiring` | `plan` | `plans` | Plans / billing |
 | `plan.expired` | `plan` | `plans` | Plans / billing |
 | `storage.alert` | `storage` | `settings/storage` | Storage usage |

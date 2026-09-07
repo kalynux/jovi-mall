@@ -1,5 +1,13 @@
 # Agent — Cash on Delivery (COD)
 
+**Verified against source on 2026-09-08** — collectible statuses, the 6-digit code format, attempt
+and resend limits, the balance/allocation/ledger/deposit shapes, the trust tiers and penalties, and
+the 7-day auto-collection, against `src/modules/cod/{services/cash-collection.service.ts,
+services/delivery-code.service.ts, validators, controllers/agent-cod.controller.ts,
+config/cod.config.ts, models/cash-collection.model.ts, workers/cod-deposit-deadline.worker.ts}`,
+`src/modules/earnings/config/earnings.config.ts` and
+`src/modules/agents/domain/services/agent-trust-override.ts`.
+
 ## Base Path
 
 ```
@@ -71,7 +79,11 @@ collected, marks the shipment `delivered`, updates the order's payment status
 (`partially_paid`/`paid`), and raises your cash balance.
 
 **Path Parameters**:
-- `id` (string, required) — Shipment ID (must be assigned to this agent, status `picked_up` or `in_transit`).
+- `id` (string, required) — Shipment ID, assigned to this agent. The shipment must be in one of
+  **`picked_up`, `in_transit` or `agent_delivered`** (`COLLECTIBLE_SHIPMENT_STATUSES`). `agent_delivered`
+  is the ordinary case — step 3 above puts you there — so do **not** gate the code entry on the two
+  earlier statuses. Anything else is `422 COD_COLLECTION_NOT_COLLECTIBLE` with
+  `details.shipmentStatus`.
 
 **Request Body**:
 ```json
@@ -81,7 +93,9 @@ collected, marks the shipment `delivered`, updates the order's payment status
   "deviceInfo": "Pixel 7; app 2.4.1"
 }
 ```
-- `code` (string, required) — the 6-digit code the customer gives you.
+- `code` (string, required) — the delivery code the customer gives you. Validated as **exactly six
+  digits** (`/^d{6}$/`) before it reaches the server's check, so strip spaces the customer reads out;
+  a malformed one is `400 VALIDATION_ERROR`, not a wrong-code attempt, and costs no try.
 - `location` (object, optional) — GPS fix at submission. Send it whenever available; it is stored
   as fraud-investigation evidence.
 - `deviceInfo` (string, optional, ≤300 chars) — device identifier of the agent app.

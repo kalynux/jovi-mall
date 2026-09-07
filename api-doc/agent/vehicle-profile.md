@@ -1,9 +1,15 @@
 # Vehicle colour & photo
 
-> **Status: built.** Both halves of this document are implemented. The photo
-> persists and comes back as `vehicle_info.photo`; colours are normalized on
-> write. One operational step is outstanding — the colour migration has been
-> dry-run but **not applied**. See [What is left](#what-is-left).
+**Verified against source on 2026-09-08** — the 13-token palette, the free-text-with-normalization
+decision, the merge rule and the photo reference-counting, against
+`src/modules/agents/{domain/vehicle-info.ts, validators/agent.validator.ts,
+dto/agent-profile.dto.ts, domain/services/agent-profile.service.ts}`. `npm run test:vehicle-profile`
+was **run** on 2026-09-08: **31 passed, 0 failed**, so the "31 assertions" figure below is current.
+
+> **Status: built, and the migration has now run.** Both halves of this document
+> are implemented: the photo persists and comes back as `vehicle_info.photo`, and
+> colours are normalized on write. The colour migration was **applied** on
+> 2026-08-19 — see [What is left](#what-is-left), which no longer lists it.
 
 The agent app replaced the free-text vehicle colour box with a swatch palette,
 and added an optional photo of the vehicle, both in onboarding step 1
@@ -167,10 +173,20 @@ or `null`. Never a bare URL string, never the raw id:
 
 ## What is left
 
-- **Run the colour migration.** `npm run migrate:agent-vehicle-colors --dry-run`
-  first; the unmapped report is the interesting output. On the dev database it
-  surfaces French colour names (`rouge`, `bleu`) — decide whether those become
-  aliases (`rouge → red`) or a signal that the app should offer more of the
-  palette, then add the aliases before running it for real.
+- ✅ **The colour migration has RUN** — corrected 2026-09-08. It was applied and stamped against the
+  dev database on 2026-08-19 as part of Phase 2 step 2.C.3 (*"All 15 rehearsed, then applied and
+  stamped"*, `PRODUCTION-READINESS/PHASE-2-DEPLOYABILITY-PLAN.md`): **8 agents** rewritten
+  (`"Red"` → `"red"`, `"Gray"` → `"grey"`), and **one off-vocabulary value left verbatim**
+  (`"bleu"`), which is the escape hatch working as designed rather than a miss.
+
+  ⚠ **Keep the unknown-token fallback in every picker and every display.** That one row is the
+  proof it is needed, and a new agent can create another at any time — the field is still
+  `z.string()`, not an enum.
+
+  This entry read *"dry-run but not applied"* until 2026-09-08, which contradicted
+  [FRONTEND-CHANGELOG-phase-2-3.md § 7](./FRONTEND-CHANGELOG-phase-2-3.md) in the same folder.
+  Note the scope: applied to the **dev** database. There is no production database yet.
 - **Localize the colour tokens** in the agency dashboard and admin views, the
   way `vehicle_type` already is.
+- **Decide whether `rouge`/`bleu` become aliases.** The migration's unmapped report is the
+  evidence, and the alias map is deliberately tiny — grow it from that report, not from guesses.
