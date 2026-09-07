@@ -1,5 +1,7 @@
 # Rich Product Descriptions (`descriptionRich`)
 
+**Re-verified in part on 2026-09-08** — the rollout status only: the vendor dashboard's `RICH_DESCRIPTION_WIRE_ENABLED` is `true` (`vendor-dash/src/lib/richtext/wire.ts:36`), reversing what this page said.
+
 The structured description a vendor writes in the dashboard's formatting editor, and the source of truth for how a product reads when it is shared into **WhatsApp** or **Telegram**.
 
 > [!IMPORTANT]
@@ -12,11 +14,11 @@ The structured description a vendor writes in the dashboard's formatting editor,
 > data.
 
 > [!NOTE]
-> **Implementation status: shipped.** The field is accepted on all four product
+> **Implementation status: shipped, both sides.** The field is accepted on all four product
 > write endpoints — including the two `.strict()` quick-add ones — persisted,
-> and returned on every vendor-facing product read. The frontend gate
-> (`RICH_DESCRIPTION_WIRE_ENABLED`) can be flipped to `true`. See
-> [Rollout](#rollout).
+> and returned on every vendor-facing product read. The vendor dashboard's gate
+> (`RICH_DESCRIPTION_WIRE_ENABLED`) **is `true`** — checked in that repository on 2026-09-08.
+> See [Rollout](#rollout).
 
 ## Table of contents
 
@@ -203,11 +205,15 @@ Full algorithms, including truncation rules and test vectors, are in
 
 ## Rollout
 
-**The backend half is live.** The frontend still gates the field behind a single
-constant (`RICH_DESCRIPTION_WIRE_ENABLED`, `src/lib/richtext/wire.ts`), and
-flipping it to `true` is the only frontend change needed. While it stays `false`:
+**Both halves are live.** The vendor dashboard gates the field behind a single constant
+(`RICH_DESCRIPTION_WIRE_ENABLED`, its `src/lib/richtext/wire.ts:36`) and that constant is
+**`true`** — checked in that repository on 2026-09-08. ⚠ This paragraph said the gate was still
+off until then; it had been flipped some time after the field shipped and nobody came back to
+either copy of this page.
 
-- The editor is fully functional and `description` persists as always.
+The constant is kept as a kill switch rather than deleted. If it is ever set back to `false`:
+
+- The editor stays fully functional and `description` persists as always.
 - Paragraphs, lists, line breaks, emoji and URLs survive a reload — the frontend
   reconstructs the document by parsing `description`.
 - Inline marks (bold / italic / strikethrough) and link labels do not survive,

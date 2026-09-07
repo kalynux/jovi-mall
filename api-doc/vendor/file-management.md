@@ -1,10 +1,66 @@
 # File Management Service API Documentation
 
-**Version:** 1.2  
-**Last Updated:** 2026-06-11  
+**Version:** 1.2 · **Written:** 2026-06-11
+**Verified against source on 2026-09-08** — the live route list, guards, query schema, list
+response shape and storage summary, against `jovi-mall/src/api/routes/file-upload.routes.ts`,
+`src/api/validators/file-management.validator.ts`,
+`src/api/controllers/file-management.controller.ts` and
+`src/modules/catalog/repositories/mappers/file.mapper.ts`.
 **Audience:** Frontend Developers, Backend Engineers, Platform Documentation
 
 ---
+
+> # 🔴 Read this box before anything else on this page
+>
+> This is a **long-form design reference**, and the most useful thing in the doc set for
+> understanding the upload policy pipeline, reference counting and the deletion lifecycle.
+> **It is also the oldest page here, and parts of it describe a 2026-06 API.** It has not been
+> rewritten — it has been *audited*, and every deviation found is listed below.
+>
+> **The page that is current, and wins wherever it disagrees with this one:**
+> [`../uploads/README.md`](../uploads/README.md) — the seven live routes, the real query schema,
+> the real response shapes. For `FileDetail.url` / `access`, see
+> [`../FRONTEND-CHANGELOG-private-files.md`](../FRONTEND-CHANGELOG-private-files.md) and
+> [`../FRONTEND-CHANGELOG-plan-quota.md`](../FRONTEND-CHANGELOG-plan-quota.md).
+>
+> ### Nine deviations, each checked against source on 2026-09-08
+>
+> | § of this page | Says | Source says |
+> |---|---|---|
+> | `DELETE /api/files/:id/permanent` | an admin route on this router | 🔴 **gone** — moved to `/api/internal/admin/files` behind `requireAdminCaller`, not browser-reachable (`file-upload.routes.ts:15-23`, `internal-admin.routes.ts:241`) |
+> | `GET /api/files/orphans` | an admin route on this router | 🔴 **gone** — same move |
+> | *(throughout)* | this router has admin-only routes | there is **no role guard anywhere** on `file-upload.routes.ts` — `requireAuth` and nothing else. The seven live routes are `POST /upload`, `POST /upload/video`, `GET /storage`, `GET /`, `GET /:id`, `PATCH /:id`, `DELETE /:id` |
+> | `GET /api/files` response | `data` array + `meta` | `data: { files, storage, pagination }`, **no `meta`** (`file-management.controller.ts:186-198`) |
+> | `GET /api/files` `limit` | up to 100 | **50** (`file-management.validator.ts:26`) |
+> | `GET /api/files` date filters | `startDate` / `endDate` | **`createdAfter` / `createdBefore`** (`:38-39`) |
+> | `GET /api/files` sorting | `sort` with a `-` prefix | **`sortBy` + `sortOrder`**, `sortBy` allow-listed to `createdAt` · `updatedAt` · `size` · `originalName` (`:42`) |
+> | `GET /api/files/storage` | `usedBytes`, `limitBytes`, `fileCount`, `plan` | `limitBytes`, `usedBytes`, `remainingBytes`, `byCategory` — and `limitBytes`/`remainingBytes` are **`null` for customers**, who have no plan |
+> | *(nothing about it)* | — | 🔴 **`GET /api/files` returns soft-deleted rows.** The filter builder applies no `deletedAt` condition at all (`file-management.controller.ts:108-150`). Filter them client-side |
+>
+> **What is still accurate and worth reading here:** the upload policy pipeline and its eleven
+> violation codes, reference counting and the orphan sweep, the storage-provider abstraction,
+> ownership and linking rules, and the concurrency notes. Those are the reason this page was
+> kept rather than replaced.
+>
+> ### 🔴 One thing this page could not have known: a file can be QUOTA-BLOCKED
+>
+> Added 2026-08 (`src/modules/plan-quota/`). When a plan downgrade puts an owner over
+> `max_storage_bytes`, the files outside the allowance are **blocked**, newest first — the row
+> and the bytes are kept, the file simply stops being served, and an upgrade restores exactly
+> the same files. It is **not** a deletion and it is **not** the soft-delete this page
+> describes; nothing on the deletion-lifecycle sections below covers it.
+>
+> It surfaces in **two different dialects**, and that is the trap:
+>
+> | Where | Field | Blocked value |
+> |---|---|---|
+> | any `FileDetail` (product media, branding, avatars) | `access` | `"quota_blocked"`, with **`url: null`** |
+> | `GET /api/files` · `GET /api/files/:id` — these routes | `quotaBlockedAt` | an ISO timestamp instead of `null`; there is **no `access` and no `url` key on this shape at all** |
+>
+> These routes return the raw `File` domain object (`file.mapper.ts:41-59`), not a `FileDetail`.
+> Also: `quota_blocked` **outranks** `authorized`, so test it first; a blocked file's bytes
+> **still count** toward `usedBytes` (blocking frees no space); and a vendor's
+> **digital-product asset files are exempt** from the media cap and are never blocked.
 
 ## Table of Contents
 

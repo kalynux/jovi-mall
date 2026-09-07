@@ -1,6 +1,7 @@
 # Vendor Billing API
 
 **Verified against source on 2026-09-07** — every claim on this page was checked against
+**Re-verified in part on 2026-09-08** — the `BILLING_LIMIT_EXCEEDED` `details` shape only (`services/entitlement.service.ts:100-113`).
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
 
@@ -441,7 +442,8 @@ Credits are consumed as a side effect of other vendor actions — there is no
 ## Related: plan product limit
 
 Creating a product is blocked with `403 BILLING_LIMIT_EXCEEDED` once the vendor
-reaches their plan's `max_active_products` cap (response `details: { limit, current }`).
+reaches their plan's `max_active_products` cap (response
+`details: { limit, current, requested, available }`).
 Use `GET /vendor/plan` + the product count to show remaining slots and prompt an
 upgrade. Vendors **upgrade themselves** via `POST /vendor/plans/:planId/purchase`
 (auto-activates on payment). Admins can also assign a plan manually for

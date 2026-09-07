@@ -1,6 +1,7 @@
 # Variant Management API
 
 **Verified against source on 2026-09-06** — every claim on this page was checked against
+**Re-verified in part on 2026-09-08** — the bargainable-pricing section, plus the new storefront-flip subsection, against `domain/services/bargain-price.rule.ts` and `read-models/public-display-price.ts`.
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–26). Corrections are marked inline with ⚠ and a source citation.
 
@@ -917,6 +918,28 @@ consequences worth designing for:
   `vectorisationStatus` is `pending`, every variant write returns
   `409 CATALOG_PRODUCT_VECTORISATION_PENDING` — do not reveal a bargain editor on the
   strength of the flag alone without handling that window.
+
+#### ⚠ What the STOREFRONT quotes — the vendor needs to be told this
+
+**Changed 2026-09-07.** A bargainable variant is shelved on the shop at **`bargain.maxPrice`**,
+not at `price`. `price` becomes the vendor's **floor** — the number they will not go below in a
+negotiation — and it is **never published on any public route, under any key**
+(`read-models/public-display-price.ts`).
+
+So `maxPrice` is not a private headroom setting. It is **the price a shopper sees**, it drives
+`priceMin`/`priceMax`, the `price_asc`/`price_desc` sort and the `?minPrice=&maxPrice=` filter
+band, and it is what `GET /api/public/variants/by-sku/:sku` resolves. A vendor who sets a generous
+ceiling has raised their shelf price, and a vendor editor that labels the field "maximum" without
+saying so will surprise them.
+
+One consequence to surface in the editor: **`compareAtPrice` is suppressed on a bargainable
+variant unless it is strictly above the ask.** A vendor holding `price 24 000 · compareAtPrice
+30 000 · maxPrice 45 000` loses their "was" price on the storefront entirely, because publishing
+it would render a struck-through 30 000 above a live 45 000 — "was cheaper, now dearer". Nothing
+about the stored value changes; only what the shop publishes.
+
+Full detail for the storefront side:
+[FRONTEND-CHANGELOG-storefront-price-semantics.md](../FRONTEND-CHANGELOG-storefront-price-semantics.md).
 
 #### Not supported on service products
 

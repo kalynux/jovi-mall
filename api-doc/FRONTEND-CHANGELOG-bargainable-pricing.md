@@ -3,6 +3,26 @@
 **Audience:** whoever builds the **vendor dashboard** (product + variant editors).
 **Status:** backend shipped. Nothing is behind a flag. Everything is **additive** — no
 existing field changed type, moved, or disappeared.
+**Verified against source on 2026-09-08** — every claim below re-read from
+`jovi-mall/src/modules/catalog/domain/services/bargain-price.rule.ts`,
+`read-models/public-display-price.ts`, `modules/negotiation/` and
+`modules/cart/services/cart.service.ts`.
+
+> ⛔ **TWO THINGS ON THIS PAGE WERE OVERTAKEN AFTER IT WAS WRITTEN. Read this box before §1.**
+>
+> **1 · `bargain.maxPrice` is now the price shoppers see** (2026-09-07). The storefront quotes
+> the **ask**, and `variant.price` became the vendor's **floor**, never published on any public
+> route. Nothing on the *vendor* wire changed — `price` is still `price` — but the meaning of
+> what your editor writes did. **§6's suggested editor is now wrong where it labels the fields
+> "Minimum / Maximum"**; see the corrected version there. Full detail:
+> [FRONTEND-CHANGELOG-storefront-price-semantics.md](./FRONTEND-CHANGELOG-storefront-price-semantics.md).
+>
+> **2 · §1.5 "Explicitly not built" is no longer true.** A negotiating agent, a price lock and a
+> negotiated cart line all shipped afterwards. §1.5 is corrected in place rather than deleted,
+> because the *reasoning* it records is still the reasoning that was followed.
+>
+> Everything else on this page — the invariant, the write rules, the error table, the
+> vectorisation gate — was re-verified against source on 2026-09-08 and is unchanged.
 
 This is the reply to your bargainable-pricing requirements. §1 answers each requirement
 point-by-point, §2–§5 are what you need to build against. **If you read only one thing,
@@ -100,14 +120,28 @@ unremovable.
 **The vectorisation gate is a display gate, not a write gate.** See §2 — this is the only
 part of the contract that is likely to surprise you.
 
-### 1.5 Explicitly not built
+### 1.5 Explicitly not built — ⛔ SUPERSEDED, and this is what replaced it
 
-This phase is **configuration and validation only**. There is no offer/counter-offer
-endpoint, no way for a customer to submit a bargained price, and no path by which a
-negotiated price reaches a cart or an order. The window is stored, validated, shown back to
-you, and shipped to the AI index. Everything downstream of "a buyer proposes a number" is a
-separate phase and will need its own decisions (cart price provenance, order snapshotting,
-COD expected amounts, abuse limits).
+**As written (and true when written):** *"This phase is configuration and validation only. There
+is no offer/counter-offer endpoint, no way for a customer to submit a bargained price, and no path
+by which a negotiated price reaches a cart or an order. Everything downstream of 'a buyer proposes
+a number' is a separate phase and will need its own decisions (cart price provenance, order
+snapshotting, COD expected amounts, abuse limits)."*
+
+**That separate phase has since shipped**, and the sentence above is now false. Verified in source
+on 2026-09-08:
+
+- A negotiating agent reads the window and proposes prices, served by
+  `/api/internal/negotiation/*` (`src/modules/negotiation/`). Those routes are **service-token
+  internal** — they are not a vendor-dashboard surface and you do not call them.
+- **A negotiated price does reach a cart.** A cart line can carry
+  `negotiated_unit_price`, `floor_price_snapshot` and `negotiation_lock_ref`
+  (`cart.service.ts`), resolved through a lock the agent mints.
+
+**What this changes for the vendor dashboard: nothing on the wire.** The four write endpoints,
+the shapes and the errors in §3 and §4 are unchanged. What it changes is the *story* you tell the
+vendor — the window is no longer inert configuration awaiting a future phase; it is live, and the
+ceiling they type is the price their shop displays (see the box at the top of this page).
 
 ---
 
@@ -270,6 +304,10 @@ request in an agency's queue.
 - **`maxPrice` is a ceiling, never a "was" price.** Do not render it struck through or feed it
   to a discount calculation — that is `compareAtPrice`, which is unrelated and unchanged. A
   bargainable variant might have both, meaning different things.
+  ⚠ **Since 2026-09-07 it is also the storefront's live price**, so the vendor editor should
+  present it as such. And `compareAtPrice` is **suppressed on the shop** unless it is strictly
+  above `maxPrice` — the stored value is untouched and still returned on the vendor routes, but
+  the shopper sees no "was" price. Warn when `compareAtPrice <= maxPrice`.
 - **Typos behave differently on the two editors.** `PATCH /variants/:variantId` does not
   reject unknown body keys, so `{"bargin": {...}}` returns **200 with nothing written**. The
   simple-product endpoints are strict and **400** the same typo. Pre-existing asymmetry, but a
@@ -283,23 +321,36 @@ request in an agency's queue.
 
 ## 6. Suggested editor shape
 
+⚠ **Corrected 2026-09-08.** The original mock labelled the two numbers "Minimum" and "Maximum".
+Since the storefront flip that is actively misleading: the "maximum" is the number shoppers see.
+
 ```
 Price                    [ 32 000 ]  FCFA        ← writes `price`
 Compare-at price         [ 45 000 ]  FCFA        ← unchanged, unrelated
 ─────────────────────────────────────────────
 ☑ Allow customers to bargain
-    Minimum (selling price)   32 000  (read-only, mirrors the field above)
-    Maximum                 [ 45 000 ]  FCFA     ← writes `bargain.maxPrice`
+    Asking price            [ 45 000 ]  FCFA     ← writes `bargain.maxPrice`
+                                                   👁 THIS is what shoppers see
+    Your floor                32 000  (read-only, mirrors Price above)
+                                                   🔒 never shown to anyone
 
     ⓘ Bargaining starts applying once AI search is enabled
       for this product.                          ← when bargainable === false
+    ⚠ Your compare-at price (45 000) is not above your asking price,
+      so it will not appear on the shop.         ← when compareAtPrice <= maxPrice
 ```
 
+- **Lead with the ask, not the floor.** It is the larger number, it is the shelf price, and a
+  vendor who reads the block top-to-bottom must not reach the end still thinking the ceiling is
+  private.
 - The checkbox maps to presence: ticked ⇒ send `bargain`, unticked ⇒ send `"bargain": null`.
-- Show the minimum as a **read-only mirror** of the price input. That makes the
-  "minPrice is the selling price" rule visible instead of something the user discovers via a 422.
+  ⚠ **Un-ticking it lowers the shelf price back to `price`.** Say so before saving.
+- Show the floor as a **read-only mirror** of the price input. That makes the "minPrice is the
+  selling price" rule visible instead of something the user discovers via a 422.
 - Show the inert hint whenever `bargainable === false` while `bargain` exists, with a link to
   the product's vectorisation toggle.
+- Show the compare-at warning whenever `compareAtPrice != null && compareAtPrice <= maxPrice` —
+  the storefront suppresses it in exactly that case and the vendor gets no other signal.
 - Hide the whole block for `type: "service"`.
 
 ---
@@ -310,6 +361,9 @@ Compare-at price         [ 45 000 ]  FCFA        ← unchanged, unrelated
    your original wording? It is a contained change if the two-input widget is easier for you.
 2. **Should `bargainable: false` be visually distinct from "not configured"** in list views, or
    is it enough on the detail screen? Right now the API gives you everything needed for either.
-3. **What does the negotiation phase need from the catalogue?** Before that is designed it
-   would help to know whether an accepted price is per-customer, per-cart or per-order, since
-   that decides where it gets snapshotted.
+3. ~~**What does the negotiation phase need from the catalogue?**~~ **Answered by the build.**
+   The negotiation phase shipped: an accepted price is carried **per cart line**, as
+   `negotiated_unit_price` with a `floor_price_snapshot` and a `negotiation_lock_ref`
+   (`cart.service.ts`). None of it is a vendor-dashboard surface — the vendor configures the
+   window and the shop does the rest — so nothing on this page needed to change for it beyond
+   the corrections at the top.

@@ -1,6 +1,7 @@
 # Simple Products — Vendor API Reference
 
 **Verified against source on 2026-09-06** — every claim on this page was checked against
+**Re-verified in part on 2026-09-08** — the `BILLING_LIMIT_EXCEEDED` `details` shape only (`services/entitlement.service.ts:100-113`).
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
 
@@ -387,7 +388,7 @@ until the vendor opts the new product in.
 | 400 | `VALIDATION_ERROR` | Zod failure — see `details.fields[]` |
 | 400 | `CATALOG_IMAGE_LIMIT_EXCEEDED` | More than 7 `fileIds` |
 | 403 | `CATALOG_PRODUCT_ACCESS_DENIED` | A `fileId` belongs to another vendor. **Nothing is created** — the whole transaction rolls back. |
-| 403 | `BILLING_LIMIT_EXCEEDED` | Plan's active-product cap reached |
+| 403 | `BILLING_LIMIT_EXCEEDED` | Plan's active-product cap reached. `details: { limit, current, requested, available }` |
 | 404 | `CATALOG_PRODUCT_NOT_FOUND` | Not yours, or does not exist |
 | 409 | `CATALOG_VARIANT_SKU_EXISTS` | Supplied SKU already taken (globally) |
 | 409 | `CATALOG_PRODUCT_SIMPLE_MODE_LOCKED` | Advanced operation on a simple product |

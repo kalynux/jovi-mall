@@ -44,7 +44,7 @@ but a link update — and one thing worth knowing about support-ticket notes (§
 | **Agency / agent mobile app** | [agent/FRONTEND-CHANGELOG-phase-4-5.md](./agent/FRONTEND-CHANGELOG-phase-4-5.md) | 🔴 [private-files](./FRONTEND-CHANGELOG-private-files.md) · [geo-tracker](../../geo-tracker/api-doc/FRONTEND-CHANGELOG-phase-4-5.md) |
 | **Customer app** | [customer/FRONTEND-CHANGELOG-phase-4-5.md](./customer/FRONTEND-CHANGELOG-phase-4-5.md) | this page |
 | **Marketing landing + shop** | [public/FRONTEND-CHANGELOG-phase-4-5.md](./public/FRONTEND-CHANGELOG-phase-4-5.md) | this page |
-| **Admin dashboard** (wi-admin, `/api/v1/*`) | [`admin/docs/FRONTEND-CHANGELOG-phase-4-5.md`](../../admin/docs/FRONTEND-CHANGELOG-phase-4-5.md) | this page — **§ 6 deletes your old endpoints** |
+| **Admin dashboard** (wi-admin, `/api/v1/*`) | [`admin/api-doc/FRONTEND-CHANGELOG-phase-4-5.md`](../../admin/api-doc/FRONTEND-CHANGELOG-phase-4-5.md) | this page — **§ 6 deletes your old endpoints** |
 | **Any live-tracking client** | [`geo-tracker/api-doc/FRONTEND-CHANGELOG-phase-4-5.md`](../../geo-tracker/api-doc/FRONTEND-CHANGELOG-phase-4-5.md) | — |
 
 ---
@@ -87,7 +87,7 @@ deletions in § 6. The response envelope, the nine-value error taxonomy and ever
 | Field | Type | Meaning |
 |---|---|---|
 | `url` | `string \| null` | Fetchable directly when a string. **`null` means there is no public URL.** |
-| `access` | `"public" \| "authorized"` | Which of the two this is. **Always present**, on every file. |
+| `access` | `"public" \| "authorized" \| "quota_blocked"` | Which of the **three** this is. **Always present**, on every file. ⚠ `quota_blocked` was added after this changelog was written — see the note below. |
 
 **Which trees went private:** `digital/` (a vendor's digital product) and `shipments/`
 (delivery-proof photos), plus the legacy `ticket-attachments/` directory that holds exactly one
@@ -98,6 +98,18 @@ policy-document trees.
 The mount is now an **allowlist derived from one classification table**, so a storage tree added
 next year is private until somebody says otherwise. That is the opposite of the old default and
 it is why this is worth knowing rather than just absorbing.
+
+> ⚠ **`access` gained a third value after this changelog was written: `quota_blocked`.**
+> It has nothing to do with storage trees. It means the file's **owner** — a vendor or an
+> agency — is over their plan's `max_storage_bytes`, so this file is one of the ones being held
+> back: kept, never deleted, and restored on upgrade. `url` is `null` exactly as for
+> `authorized`, but no authorized route will serve it either, because nothing is wrong with the
+> caller's permissions.
+>
+> It is checked **before** the private-tree classification
+> (`read-models/file-detail.resolver.ts:67-77`), so a blocked file inside a private tree reports
+> `quota_blocked`. A `switch` written against the two values this page originally named falls
+> through to `authorized` and tells the user the wrong thing.
 
 ⚠ **A ticket attachment uploaded today is still public.** It is an ordinary
 `POST /api/files/upload` that lands in `documents/` or `images/` and is attached to the ticket
@@ -299,7 +311,7 @@ is **0**.
 ## 7 · The blog editor moved; the public blog read did not
 
 Ownership of `articles` and `article_authors` **writes** moved to wi-admin
-([`admin/docs/api/content.md`](../../admin/docs/api/content.md), 14 routes at `/api/v1/content`).
+([`admin/api-doc/api/content.md`](../../admin/api-doc/api/content.md), 14 routes at `/api/v1/content`).
 jovi-mall keeps the Mongoose schema, the indexes — including the unique multikey index on
 `slug_keys` that exists only because Mongo refuses a compound index on two parallel array paths
 — and the whole public read half.
@@ -311,7 +323,7 @@ thing that *does* move for the marketing site: **the authority for the nine-type
 now wi-admin's validator**, not this service's.
 
 `jovi-mall/api-doc/admin/articles.md` was deleted. The editor contract is
-[`admin/docs/api/content.md`](../../admin/docs/api/content.md).
+[`admin/api-doc/api/content.md`](../../admin/api-doc/api/content.md).
 
 ---
 
@@ -381,6 +393,6 @@ standing between a regression and you**. Test your own integration.
 | Uploads (role-neutral) | [uploads/README.md](./uploads/README.md) |
 | Error catalog | [errors/README.md](./errors/README.md) |
 | The surviving internal admin door | [admin/internal-service-api.md](./admin/internal-service-api.md) |
-| The blog editor's new home | [`admin/docs/api/content.md`](../../admin/docs/api/content.md) |
+| The blog editor's new home | [`admin/api-doc/api/content.md`](../../admin/api-doc/api/content.md) |
 | The tracking session TTL | [`geo-tracker/docs/ADR-B01-SESSION-TTL.md`](../../geo-tracker/docs/ADR-B01-SESSION-TTL.md) |
 | Phase 5 decisions | [`admin/docs/ADR-017-PHASE-17-CLOSEOUT.md`](../../admin/docs/ADR-017-PHASE-17-CLOSEOUT.md) |

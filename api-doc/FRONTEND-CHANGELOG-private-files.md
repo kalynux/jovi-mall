@@ -57,7 +57,22 @@ nullable:
 | Field | Type | Meaning |
 |---|---|---|
 | `url` | `string \| null` | fetchable directly when a string. **`null` means there is no public URL** — use the authorized route below. |
-| `access` | `"public" \| "authorized"` | which of the two this is. Always present. |
+| `access` | `"public" \| "authorized" \| "quota_blocked"` | which of the **three** this is. Always present. |
+
+> ⚠ **`quota_blocked` was added after this page was written** (plan-quota enforcement,
+> `modules/plan-quota/`), and it is **tested first** — before the private-tree check — so a
+> blocked file inside a private tree reports `quota_blocked`, not `authorized`
+> (`read-models/file-detail.resolver.ts:67-77`).
+>
+> It means **the owner is over their plan's storage cap and this file is one of the ones being
+> held back**. `url` is `null`, exactly as for `authorized`, but the authorized byte routes below
+> will not help — there is nothing wrong with the caller's permissions. It is **not a deletion**:
+> the row, the bytes and the file's contribution to the owner's used-bytes total all survive, and
+> an upgrade restores exactly the same files. Say "locked — over the storage limit", never
+> "deleted".
+>
+> A two-value `switch` written against the table above will fall through to its `authorized`
+> branch and send the user to the wrong support conversation.
 
 **`url` is `null` rather than the authorized path on purpose.** An authorized path is a string
 that looks exactly like a public URL, so a client keeps `<img src={url}>` and silently renders
@@ -73,7 +88,9 @@ missing" and takes a week to find. `null` breaks the build instead.
 if (file.access === 'public' && file.url) {
   return <img src={file.url} />;
 }
-// authorized: fetch through the owning entity's route (below), with credentials.
+// authorized:     fetch through the owning entity's route (below), with credentials.
+// quota_blocked:  no route will serve it. The OWNER is over their storage cap —
+//                 show "locked, upgrade the plan", not a permissions error.
 ```
 
 **2. Delivery-proof photos: use the new route.**

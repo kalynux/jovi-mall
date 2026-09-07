@@ -1,6 +1,7 @@
 # Vendor Product Management API
 
 **Verified against source on 2026-09-06** — every claim on this page was checked against
+**Re-verified in part on 2026-09-08** — the plan-quota material added below (`modules/plan-quota/`, `controllers/vendor-product.controller.ts:129-135, 183-185, 322-324, 369-371`, `domain/services/ProductBulkOperationsService.ts:33-72`, `services/entitlement.service.ts:76-113`, `repositories/mongo/product.repository.mongo.ts:82-93`, `models/product.model.ts:60-101`), and the Duplicate-Product section, which was **wrong** about simple-mode variants (`domain/services/ProductDuplicateService.ts:88-155`).
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation. Re-opened on
 the same date to take `product-upload-flow.md`'s five inherited rows, which name endpoints this
@@ -38,6 +39,7 @@ Complete API reference for managing products in the Jovi Mall multi-vendor platf
 - [Product Options](#product-options)
 - [Vectorisation](#vectorisation)
 - [Activation Requirements](#activation-requirements)
+- [Plan quota enforcement](#plan-quota-enforcement)
 - [Error Codes](#error-codes)
 
 ### Product routes documented on their own page
@@ -369,8 +371,10 @@ All products start in `draft` status. The `type` cannot be changed after creatio
 **Error Responses:**
 - `403 CATALOG_PRODUCT_ACCESS_DENIED` — the vendor does not own this product
 - `403 BILLING_LIMIT_EXCEEDED` — **the plan's active-product cap is reached.** `details` carries
-  `{ limit, current }` and the message names the plan: *"Your 'starter' plan allows up to N active
-  products. Upgrade to add more."*
+  `{ limit, current, requested, available }` and the message names the plan: *"Your 'starter' plan
+  allows up to N active products. Upgrade to add more."* On a batch the message instead reads
+  *"…allows up to N products, and you have room for A more. Upgrade, or archive some first."*
+  (`entitlement.service.ts:100-113`).
 - `400 VALIDATION_ERROR` — Request body failed schema validation (includes duplicate `fileIds`)
 - `400 CATALOG_IMAGE_LIMIT_EXCEEDED` — More images than the per-type cap (physical/service 7, digital 1)
 
@@ -536,7 +540,7 @@ PATCH /api/vendor/products/:id/status
 | `active` | Live and purchasable |
 | `archived` | Hidden, data preserved |
 | `pending_review` | Awaiting admin moderation |
-| `suspended` | **System lock — vendors can neither set nor leave it.** Applied by the delivery-agency cascade (agency deactivated, connection paused/terminated, default removed) to **`active` products only** — drafts stay drafts (and stay editable) while an agency problem lasts. Any attempt to change a suspended product's status here returns `422 CATALOG_PRODUCT_INVALID_STATE`. It clears **automatically** when the cause is fixed: new active default agency set, connection (re)approved, agency reactivated, or the product's own `delivery.agencyId` repointed at a working agency via [Update Product](#update-product) — each re-validates the activation gate before restoring. |
+| `suspended` | **System lock — vendors can neither set nor leave it.** Any attempt to change a suspended product's status here returns `422 CATALOG_PRODUCT_INVALID_STATE`. **Read `suspension.reason` before writing any copy** — the reasons are disjoint and they clear by different means (`product.model.ts:85-93`). The delivery-agency cascade (agency deactivated, connection paused/terminated, default removed) applies to **`active` products only** — drafts stay drafts (and stay editable) while an agency problem lasts — and it clears **automatically** when the cause is fixed: new active default agency set, connection (re)approved, agency reactivated, or the product's own `delivery.agencyId` repointed at a working agency via [Update Product](#update-product), each re-validating the activation gate before restoring. **`plan_quota_exceeded` is different on both counts**: it *does* suspend drafts, and no restore endpoint anywhere lifts it — see [Plan quota enforcement](#plan-quota-enforcement). |
 
 > [!IMPORTANT]
 > **Allowed transitions (vendor-triggered).** The current status constrains what you may request:
@@ -580,6 +584,16 @@ PATCH /api/vendor/products/:id/status
 ```
 
 > **Vectorisation on status change:** The status is saved first and the response returned immediately. A lightweight status-only notification is then sent asynchronously to the vectoriser. This does **not** re-vectorise the product's data — it only updates the searchability metadata on the vectoriser side. If the product was never vectorised (e.g., `vectorisationEnabled` was `false` when it was first activated), no notification is sent.
+
+> [!WARNING]
+> **`archived → draft` is plan-quota gated.** Un-archiving is the one vendor transition on this
+> route that takes a catalogue slot *back*, so it can be refused with **`403
+> BILLING_LIMIT_EXCEEDED`** (`details: { limit, current, requested, available }`) even though the
+> vendor owns the product and the transition is legal
+> (`vendor-product.controller.ts:322-324`). Without this gate the remedy for the cap would also
+> be the way around it: archive one, create one, un-archive the first, repeat. Every other
+> transition here moves between two statuses that both occupy a slot, so none of them can raise
+> it. See [Plan quota enforcement](#plan-quota-enforcement).
 
 **Error Responses `422`:**
 
@@ -627,6 +641,14 @@ POST /api/vendor/products/:id/duplicate
 
 Creates an independent copy of the product in `draft` status.
 
+> [!WARNING]
+> **Plan-quota gated.** The copy lands as a `draft` and a draft occupies a catalogue slot, so a
+> vendor at their cap gets **`403 BILLING_LIMIT_EXCEEDED`** with
+> `details: { limit, current, requested, available }` and no product is created
+> (`vendor-product.controller.ts:369-371`). This was the one create path that never asked, so a
+> vendor at 15/15 could duplicate to 16, 17, 18 indefinitely. See
+> [Plan quota enforcement](#plan-quota-enforcement).
+
 **Response `201`:**
 
 ```json
@@ -653,8 +675,10 @@ Creates an independent copy of the product in `draft` status.
 | `slug` | `{original-slug}-copy`, then `-copy-2`, `-copy-3` on collision |
 | `fileIds` | Copied — same file references (usage count incremented per file) |
 | `tags`, `seo`, `category` | Copied as-is |
-| `hasVariants` | Always `false` — variants are NOT copied |
-| `defaultVariantId` | Always `null` — must create new variants for the clone |
+| `mode` | Copied — a `simple` product duplicates to a `simple` one |
+| `hasVariants` | **`advanced`: always `false`** — variants are NOT copied. **`simple`: `true`** — see the row below |
+| `defaultVariantId` | **`advanced`: `null`** — must create new variants for the clone. **`simple`: the id of the cloned variant** |
+| **`simple` mode: the lone variant** | ⚠ **IS cloned** (`ProductDuplicateService.ts:105-155`), because a simple product's contract is "exactly one variant" and a variant-less copy would be born violating it. `price`, `compareAtPrice`, the `bargain` window, stock fields and dimensions are copied verbatim; the **SKU is regenerated** (it is globally unique and doubles as the option-less `optionSignature`) and the variant's **images are NOT carried over**. The response's `hasVariants`/`defaultVariantId` therefore differ from the `advanced` example above |
 | Digital: `digitalConfig.isActive` | Always `false` |
 | Digital: variants & per-variant assets/limits | **NOT copied** — variants aren't cloned, so the vendor must re-create each format variant and re-upload its asset |
 | Service: variant (`serviceConfig` + price) | **NOT copied** — variants aren't cloned, so the vendor must re-create the service variant with its config + price |
@@ -662,7 +686,11 @@ Creates an independent copy of the product in `draft` status.
 | `vectorisationStatus` | Always `not_started` |
 | `vectorisedDataId` | Always `null` |
 
-> After duplication, the vendor must create at least one variant and upload a new digital asset (for digital products) before the clone can be activated.
+> After duplication, an **advanced** product's clone has no variants — the vendor must create at
+> least one, and upload a new digital asset (for digital products), before it can be activated. A
+> **simple** product's clone already has its variant and can be activated once the rest of the
+> gate passes. Tell the vendor which of the two just happened; "duplicated" means two different
+> things.
 
 ---
 
@@ -794,6 +822,20 @@ POST /api/vendor/products/bulk/status
 > When changing status to `active`, the backend validates each product individually using the same rules as the single-product status endpoint — **including the allowed-transitions table** (activation from `draft` only; `suspended`/`pending_review` products can never be moved by a vendor). Products failing either check are not updated and are reported in the `errors` array. This is a partial-success operation.
 >
 > For `draft`/`archived` targets, products whose current status doesn't permit the transition (e.g. `suspended`) are silently skipped and show up in the `failed` count without a per-product error entry.
+
+> [!WARNING]
+> **A `draft` target is plan-quota gated, and it refuses the WHOLE batch.** `archived → draft` is
+> the one vendor transition that takes a catalogue slot back, so the batch is counted as
+> arithmetic — "is there room for all *N* of the archived ones", not "is there room for one" —
+> and a batch that would not fit returns **`403 BILLING_LIMIT_EXCEEDED`** with
+> `details: { limit, current, requested, available }` and applies **nothing**
+> (`ProductBulkOperationsService.ts:56-72`). It is a whole-request `403`, not rows in `errors[]`,
+> so the partial-success shape above does not describe it. `available` is the number of free
+> slots to show the vendor.
+>
+> No other target can raise it — `draft` is the only one whose allowed sources include
+> `archived` — and [Bulk Archive](#bulk-archive) never can, because archiving frees slots.
+> See [Plan quota enforcement](#plan-quota-enforcement).
 
 **Response `200`:**
 
@@ -1476,6 +1518,78 @@ Summary of what the backend validates when changing status to `active`. Frontend
 > **The first two are skipped when there is no default variant**, because `serviceConfig` lives on
 > it — the universal `CATALOG_PRODUCT_NO_DEFAULT_VARIANT` blocker already names the fix, and
 > restating it as three would be noise. The availability check runs regardless.
+
+---
+
+## Plan quota enforcement
+
+**New since 2026-08-24** (`src/modules/plan-quota/`). The plan's `max_active_products` and
+`max_storage_bytes` used to bind only at creation time, on two endpoints. They now also bind
+**retroactively**: every time a vendor's active plan changes, the backend recounts and brings the
+catalogue and the media library back inside the new allowance.
+
+### Nothing is deleted
+
+The allowance is filled **from the oldest end**, and whatever no longer fits is held back:
+
+| Axis | What happens to what does not fit |
+|---|---|
+| Products (`max_active_products`) | `status` → `"suspended"`, with `suspension.reason: "plan_quota_exceeded"` and `suspension.previousStatus` recording what to return it to |
+| Files (`max_storage_bytes`) | the file stops being served — its `FileDetail` comes back with `access: "quota_blocked"` and **`url: null`** |
+
+Both are **reversible and lossless**. An upgrade re-runs the identical computation against the
+larger number, so restoration is oldest-first for free. Do not present either to a vendor as
+deletion.
+
+### What counts against the product cap
+
+Every product that is not deleted, not `archived`, and not already quota-suspended
+(`product.repository.mongo.ts:86-93`). **Drafts count.** `null` on the plan means unlimited and
+skips the check entirely.
+
+### `plan_quota_exceeded` is a suspension reason unlike the other six
+
+- **No restore path lifts it.** Not the vendor's, not the agency's, not an administrator's — none
+  of them buys a bigger plan. Only `PlanQuotaEnforcementService` writes or clears it. The two
+  things that work are **upgrading the plan** and **archiving something older**: archiving
+  publishes a capacity-freed signal and the next-oldest suspended product returns on its own
+  (`vendor-product.controller.ts:129-135`).
+- **It is the only reason that can attach to a product that is not `active`.** A draft occupies a
+  slot, so the sweep suspends drafts too.
+- **Suspensions belonging to somebody else are pinned.** A product suspended by an administrator,
+  by an agency or by the vendor cascade keeps its slot and is never touched by this sweep — room
+  reappearing in a plan says nothing about why somebody else took a listing down.
+- **A restored product that no longer passes the activation gate is returned to `draft`, not left
+  suspended.** The vendor bought the room; holding it under a *quota* suspension would be a lie
+  about why it is off sale and would keep consuming the slot the next product is waiting for.
+
+### Files: two exemptions worth knowing
+
+- **Digital-product asset files are outside the media cap and are never blocked.** They are
+  metered under their own per-asset cap, and they are goods a customer has already paid for.
+- **`quota_blocked` outranks `authorized`.** A blocked file inside a private tree reports
+  `quota_blocked`, not `authorized`, so a client is told it is a billing problem rather than sent
+  to an authorized byte route to discover a permissions-shaped error about a billing fault.
+
+### Where the refusals show up
+
+| Endpoint | Raises `403 BILLING_LIMIT_EXCEEDED` |
+|---|---|
+| `POST /api/vendor/products` | at the cap |
+| `POST /api/vendor/products/simple` | at the cap |
+| `POST /api/vendor/products/:id/duplicate` | at the cap — **new** |
+| `PATCH /api/vendor/products/:id/status`, `archived → draft` only | at the cap — **new** |
+| `POST /api/vendor/products/bulk/status`, `draft` target only | if the whole batch would not fit — **new**, all-or-nothing |
+
+`details` carries `{ limit, current, requested, available }` on every one of them.
+
+### Timing
+
+Enforcement is driven by a `plan.activated` event and normally lands within a second of the plan
+change; a nightly sweep (`PLAN_QUOTA_RECONCILE_CRON`, default `45 3 * * *`) is the durable
+backstop. Neither runs on a request path — a plan purchase returns before the recount finishes, so
+a client should **re-fetch after an upgrade** rather than assume the purchase response reflects
+it.
 
 ---
 

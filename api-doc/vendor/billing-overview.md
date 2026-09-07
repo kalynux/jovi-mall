@@ -1,5 +1,7 @@
 # Billing Module — Overview (Pricing Plans & Credit Wallet)
 
+**Verified against source on 2026-09-08** — the seeded plan table (`scripts/seed/seed-pricing-plans.ts:44-52`), the `BILLING_LIMIT_EXCEEDED` `details` shape (`services/entitlement.service.ts:100-113`), the bulk-vectorise route, and the new § 3.1 on plan-quota enforcement (`modules/plan-quota/`).
+
 The billing module monetizes vendors through **pricing plans** and meters two
 costly platform actions (AI product **vectorisation** and outbound **WhatsApp
 template messages**) through a **credit wallet**.
@@ -89,6 +91,39 @@ Each vendor has **one** credit wallet. Credits **never expire or reset** — the
 A new (pending) plan's allowance is added **only when it activates**, not when it is queued/purchased.
 
 > The free Starter grants its 50 credits **once**, the first time a vendor's plan is resolved (effectively at signup). A later downgrade back to free does **not** re-grant credits.
+
+### 3.1 🔴 A downgrade now bites the catalogue and the media library
+
+**New since 2026-08-24** (`src/modules/plan-quota/`). `max_active_products` and
+`max_storage_bytes` used to bind **only at creation time**, on two endpoints. A vendor who
+dropped from Business (unlimited products, 100 GB) to Starter (15, 1 GB) kept every product live
+and every byte served forever, because nothing ever recounted.
+
+On **every** plan transition — purchase, admin assignment, a queued plan promoted at expiry, a
+lapse to free, a chargeback reversal — the allowance is now refilled **from the oldest item** and
+whatever no longer fits is held back:
+
+- **Products** → `status: "suspended"` with `suspension.reason: "plan_quota_exceeded"`. Drafts
+  count toward the cap, so drafts get suspended too.
+- **Files** → served no longer: `access: "quota_blocked"` and `url: null` on every `FileDetail`
+  (or `quotaBlockedAt` set, on the raw media-library shape).
+
+**Nothing is deleted, and an upgrade restores exactly the same items in the same order.** Never
+word this to a vendor as deletion.
+
+Three consequences for a dashboard:
+
+1. **Three endpoints can now refuse where they used to succeed** — un-archiving a product,
+   duplicating one, and a bulk status change to `draft` — all with
+   `403 BILLING_LIMIT_EXCEEDED` and `details: { limit, current, requested, available }`.
+2. **No restore endpoint lifts a quota suspension.** Only room reappearing does: upgrade, or
+   archive something older (archiving publishes a capacity-freed signal and the next-oldest
+   suspended product returns on its own).
+3. **It is not synchronous with the purchase.** The recount runs off an event within about a
+   second, with a nightly sweep as the backstop, so a purchase response does not reflect it —
+   **re-fetch** the product list and the storage summary after an upgrade.
+
+Detail: [products.md](./products.md) and [storage.md](./storage.md).
 
 ### 4. What credits are spent on
 
@@ -244,7 +279,7 @@ Vendors choose how many days **before** plan expiry they want to be warned (`not
 | `BILLING_PLAN_CODE_EXISTS` | 409 | Creating a plan with a `code` already used for that role |
 | `BILLING_PENDING_PLAN_EXISTS` | 409 | A pending plan is already queued for this vendor |
 | `BILLING_INSUFFICIENT_CREDITS` | 402 | Wallet balance can't cover the action (`details: { balance, requested }`) |
-| `BILLING_LIMIT_EXCEEDED` | 403 | Active-product cap reached (`details: { limit, current }`) |
+| `BILLING_LIMIT_EXCEEDED` | 403 | Active-product cap reached (`details: { limit, current, requested, available }`) |
 | `BILLING_TOPUP_NOT_FOUND` | 404 | Top-up id not found / not owned by the vendor |
 | `BILLING_TOPUP_PACK_NOT_FOUND` | 404 | Unknown credit pack `code` |
 | `BILLING_TOPUP_INVALID_STATE` | 409 | Top-up has no gateway reference yet (cannot verify) |
