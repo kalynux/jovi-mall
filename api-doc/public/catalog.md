@@ -184,7 +184,18 @@ together, so a client cannot end up comparing one kind of price against another.
 **a filtered page is still guaranteed to quote prices inside the band you asked for** — filter
 `maxPrice=40000` and nothing displaying 45 000 comes back.
 
-Two consequences worth knowing:
+⚠ **A configured window is not always an effective one, so "has a window" is not the
+condition.** The rule is `isBargainEffective = vectorisationEnabled === true && bargain != null`
+(`src/modules/catalog/domain/services/bargain-price.rule.ts:162-167`): a window on a product
+whose **vectorisation opt-in is off** is kept, fully validated, and **inert** — and such a
+variant is shelved at its ordinary `price`, not at its ask. Nothing on this surface lets you
+tell the two apart, and nothing needs to; it matters only if you are reconciling a shop price
+against what a vendor configured, where the flag is the missing half of the explanation. The
+vendor-side view of the same rule is
+[Vendor → Variants § Bargainable pricing](../vendor/variants.md#bargainable-pricing), which
+publishes a `bargainable` boolean this surface deliberately does not.
+
+Three consequences worth knowing:
 
 - **There is no `bargainable` flag on this surface, and no "make an offer" control.**
   Negotiation happens in chat only. If you want one, ask — it is a deliberate omission rather
@@ -192,6 +203,9 @@ Two consequences worth knowing:
 - **`compareAtPrice` is suppressed on a bargainable variant unless it is strictly above the
   ask.** A vendor may legitimately hold a "was" price that sits above their floor and below
   their ask; publishing that pair would render a strikethrough *beneath* the live price.
+- **A cart line is not bound by any of this.** The price a variant is *shelved* at and the
+  price a line is *sold* at are resolved by different code, and a negotiated line carries a
+  number the shop never displayed. See [Customer → Cart](../customer/cart.md).
 
 ---
 
@@ -677,7 +691,10 @@ See [rate-limits.md](../rate-limits.md).
   bargainable variant, and its **bottom** is the vendor's floor and stays server-side forever.
   So the *window* is still not published — no `bargain` object, no `minPrice`, no `maxPrice`
   key — while one of its two numbers now **is** the price. See
-  [A bargainable variant is quoted at its ASK](#-a-bargainable-variant-is-quoted-at-its-ask).
+  [A bargainable variant is quoted at its ASK](#-a-bargainable-variant-is-quoted-at-its-ask), and
+  — if you are propagating this to a storefront —
+  [the front-end changelog](../FRONTEND-CHANGELOG-storefront-price-semantics.md), which is the
+  page written for that audience.
 - **A `bargainable` flag** — not published, and unlike the entry above this one is still open.
   Negotiation is chat-only (D-6), so the storefront has nothing to *do* with the flag today;
   the cost is that a shopper cannot tell a negotiable price from a fixed one, which is a

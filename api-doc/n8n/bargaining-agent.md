@@ -4,13 +4,14 @@
 The backend half is Streams A (session, profile, gate), B (the five read tools) and C+E
 (the lock and the money split); this page is the automation layer that uses them.
 
-Three workflows, two of them new:
+Four workflows, two of them new:
 
 | Workflow | id | What |
 |---|---|---|
 | **wi-mall-bargain** | `lJdli0uwOtWBGx5R` | the sub-agent: the playbook, the model, the memory, the seven tools, the send |
 | **wi-mall-bargain-tools** | `tdCmCgwaGwp7epEV` | one door for all seven tool calls: seals the identity, builds the request, echoes the gate |
-| **wi-mall-core** | `vvbouV2136P5weCs` | ⚠ **edited, live** — a routing flag check and one new tool. Nothing else on any existing path changed |
+| **wi-mall-core** | `vvbouV2136P5weCs` | ⚠ **edited, live** — a routing flag check, one new tool, and the agreed price in the system prompt. Nothing else on any existing path changed |
+| **wi-mall-mcp** | `3X8oYCQZkCi7Wg4r` | ⚠ **edited, live** — `cart_add_item` alone, regenerated from the catalogue so the agreed price can be spent (§ 7) |
 
 ---
 
@@ -35,6 +36,14 @@ customer: "alors?"
                  …reads…
                  negotiation_record   ← the gate. Echoes its verdict to Redis
               decide send → sends THE SENTENCE THE GATE APPROVED
+   │
+   … they agree. The gate mints a lock; `store price lock` leaves the ref in Redis,
+   the flag is cleared, and the conversation goes back to wi-mall-core.
+   │
+customer: "ok, mets-le dans mon panier"
+   │
+   └─ wi-mall-core · check price lock → the ref is in the system prompt
+        main agent · cart_add_item(… , negotiationLockRef) → charged what they agreed
 ```
 
 **A hand-off costs one conversational turn**, deliberately. The main agent says a bridging
@@ -70,10 +79,13 @@ That is not only cheaper. See § 3.
 
 ### wi-mall-core is live
 
-Every edit was an `update_workflow` operation with a `versionName`. The diff is seven added
-nodes, one removed connection, nine added connections, and **one modified node** — the AI
-Agent's `systemMessage`, with the previous text preserved byte-for-byte and one section
-inserted. No existing node's parameters, credentials or wiring were otherwise touched.
+Every edit was an `update_workflow` operation with a `versionName`, never a wholesale replace.
+Across three versions the diff is **eight added nodes**, two removed connections, eleven added
+connections, and **two modified nodes** — the AI Agent's `systemMessage` (previous text preserved
+byte-for-byte, two sections inserted) and `read bargain flag`, which is itself new. No
+pre-existing node's parameters, credentials or wiring were otherwise touched, and the same rule
+governed `wi-mall-mcp`: **one** node changed there, regenerated from the catalogue rather than
+hand-edited.
 
 ---
 
@@ -194,23 +206,59 @@ renders `{"quantity": }`, and a quoted one fails the strict Zod schemas on the f
 
 ---
 
-## 7 · What Stream F did NOT build, and what is still owed
+## 7 · ✅ The agreed price reaches the basket — and how it gets there
 
-### ⛔ The negotiated price cannot reach the cart yet
+**This section used to open with a ⛔.** `negotiationLockRef` was plumbed through the backend by
+Stream C+E — `cart.validator.ts`, `cart.service.ts`, `cart.model.ts` and `bot.validators.ts:155`
+all accept it — but `tools/catalog.json`'s `cart_add_item` did not carry it, so the MCP tool the
+main agent fills the basket with had no way to spend a lock and every lock this feature minted
+expired unspent. Closed 2026-09-07 on the owner's instruction.
 
-`negotiationLockRef` is plumbed through the backend — `cart.validator.ts`, `cart.service.ts`,
-`cart.model.ts` and `bot.validators.ts:155` all accept it (Stream C+E). **`tools/catalog.json`'s
-`cart_add_item` does not carry it**: its parameter schema is `additionalProperties: false` with
-`productId` / `variantId` / `quantity`, and its `request.body` lists those three. So the MCP
-tool the main agent uses to fill the basket has no way to spend a lock, and a minted lock
-currently expires unspent.
+Three pieces, and the middle one is the interesting part:
 
-Closing it is one optional property in the catalogue plus a regeneration of `wi-mall-mcp`
-(`scripts/gen-mcp-workflow.ts` — edit the catalogue, not the nodes). It is left here rather
-than done because `wi-mall-mcp` is a live published workflow and the catalogue belongs to no
-stream on this plan. **This is the one thing standing between the feature and end-to-end.**
+1. **The catalogue** gained `negotiationLockRef` on `cart_add_item` (plus the five
+   `NEGOTIATION_LOCK_*` failures, each telling the model to retry **without** it), and
+   `npm run gen:mcp-workflow` re-rendered the node. One `updateNodeParameters` was applied to the
+   live `wi-mall-mcp`; nothing else on that server was touched.
+2. **The reference travels through Redis, not through the model.** `decide send` reads
+   `lock.ref` off the gate echo and `store price lock` writes
+   `wi-mall:bargain:lock:{channel}:{externalId}`. wi-mall-core's `check price lock` reads it back
+   and `read bargain flag` renders it; the main agent's system prompt carries it beside
+   `botToken`, in the same shape and for the same reason.
+3. **The bargaining model still never sees it.** `shape tool result` strips `lock.ref` exactly as
+   before — that model has no cart tools and the playbook forbids mentioning locks at all.
 
-### Known artifacts, measured not guessed
+### ⚠ Why it is safe for the MAIN agent to hold a ref, and not the bargaining one
+
+Not a contradiction, and worth stating because the two look alike. The lock is bound server-side
+to **(customer, variant, quantity)**, is single-use, and is re-validated when it is spent
+(D-10). So a leaked ref buys its own owner their own already-agreed price and buys anyone else
+nothing at all — strictly weaker than the `botToken` the same prompt already carries, which acts
+on the account. The bargaining model is denied it not because it is dangerous there but because
+it is **useless** there: giving a model a credential it has no call to spend is how one ends up
+in a sentence to a customer.
+
+⚠ **The variant and quantity in the prompt come from the routing flag, not from the gate** — the
+gate's response does not echo them. A model that pivoted to a different variant mid-haggle
+therefore produces a hint that is wrong. It fails safely: the server re-checks the binding and
+answers `NEGOTIATION_LOCK_VARIANT_MISMATCH`, and the assistant is told to add the item again
+without the ref.
+
+⚠ **A spent ref stays in Redis until it expires** (the n8n Redis node's `set` has no TTL), so a
+customer adding the same item again inside the lock's 20 minutes can present a consumed one. That
+is a `NEGOTIATION_LOCK_CONSUMED` refusal the prompt handles by retrying without it — the customer
+pays the shelf price and is told so, rather than the add failing.
+
+### The better shape, if this is ever revisited
+
+Have the **backend** resolve it: `POST /api/internal/bot/cart/items` could look up the caller's
+own live lock for that variant and quantity when no ref is presented. No credential in any model
+context, no stale-ref refusal, and nothing to keep in step across three workflows. It was not
+done here because it is new code in `modules/negotiation` and `modules/bot-surface` — two
+modules this stream does not own — and because the n8n route delivers the same customer outcome
+today.
+
+## 8 · Known artifacts, measured not guessed
 
 - **A hand-back turn writes `#HANDBACK#` into the shared transcript**, followed by the main
   agent writing the same customer message again. Both agents read one memory key, and only one
@@ -228,9 +276,10 @@ stream on this plan. **This is the one thing standing between the feature and en
 
 ### Deliberately not built
 
-- **No lock ref stored in n8n's Redis.** It lives on the negotiation session in Mongo. Stashing
-  a bearer credential for a price in the automation layer, for a consumer that does not exist
-  yet, buys nothing.
+- ~~**No lock ref stored in n8n's Redis.**~~ **REVERSED the same day, and the original reasoning
+  is why.** It read *"stashing a bearer credential for a price in the automation layer, for a
+  consumer that does not exist yet, buys nothing"* — and the second clause was the load-bearing
+  one. The consumer exists now (§ 7), so the ref is stored and the argument no longer holds.
 - **No copy table.** Every sentence a customer reads on this path is either the gate's approved
   `reply` or the main agent's. When bargaining cannot answer it sends nothing and hands the turn
   back, rather than inventing a fallback line in a language n8n cannot translate into.
@@ -239,9 +288,15 @@ stream on this plan. **This is the one thing standing between the feature and en
 
 ---
 
-## 8 · Publishing
+## 9 · Publishing
 
-All three are **published**, 2026-09-07. `wi-mall-core` went live under the version
-*"Hand price haggling to wi-mall-bargain"*; the previous version is one restore away in the
-version history, and every failure path on the new branch falls back to the ordinary agent
-(§ 5), so a rollback is a convenience rather than the safety net.
+All four are **published and live**, 2026-09-07. Every failure path on the new branch falls back
+to the ordinary agent (§ 5), so a rollback is a convenience rather than the safety net — but the
+version history holds each step:
+
+| Workflow | Versions, in order |
+|---|---|
+| `wi-mall-bargain-tools` | *Skeleton* → *Seven tools behind one door + gate echo* → *Redis echo fails soft* |
+| `wi-mall-bargain` | *Skeleton* → *Open + turn branches…* → *Error routing…* → *The seven tools* → *Design notes on canvas* → *An agent error is not a handback* → *Hand the agreed price back for the basket* |
+| `wi-mall-core` | *Hand price haggling to wi-mall-bargain* → *Bargaining hand-off: error routing + agent brief* → *The assistant can spend the agreed price* |
+| `wi-mall-mcp` | *cart_add_item carries the agreed price* |

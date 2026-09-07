@@ -104,6 +104,7 @@ transaction. A **cash_on_delivery** checkout requires no payment call — see
 | 422 | `COD_ORDER_AMOUNT_EXCEEDS_LIMIT` | One vendor-order's total exceeds an agency's COD cap. `details: { agencyName, maxOrderAmount, orderTotal }`. |
 | 422 | `ORDER_DELIVERY_ADDRESS_REQUIRED` | **New.** A physical checkout resolved no geocoded drop-off. `details.reason` is `no_delivery_address` or `selected_address_not_geocoded`. |
 | 422 | `CATALOG_INSUFFICIENT_STOCK` | **New.** A line cannot be satisfied. `details: { variantId, sku, requested, available }`. |
+| 404/409/422 | `NEGOTIATION_LOCK_*` | **New.** A line carrying a price agreed in chat could not spend its lock. Five codes — see [Negotiated lines at checkout](#negotiated-lines-at-checkout). |
 
 > **⚠️ Two new ways a physical checkout can fail, and both were previously silent successes.**
 >
@@ -118,6 +119,29 @@ transaction. A **cash_on_delivery** checkout requires no payment call — see
 >
 > **Not enough stock.** Checkout now holds every line for 30 minutes. Nothing in the order
 > path used to touch `variant.stock` at all, so overselling was unconstrained.
+
+### Negotiated lines at checkout
+
+A cart line may carry a price the customer agreed **in chat**
+([Cart → Negotiated prices](./cart.md#negotiated-prices)). Checkout is where that agreement is
+**spent**: the lock is consumed inside the order-creation transaction, so a checkout that rolls
+back leaves it spendable and the customer may simply try again.
+
+Three consequences for a client:
+
+- **A lock that passed at add-to-cart can still be refused here.** Adding only *peeked* at it;
+  this consumes it, and the vendor's window is re-read as it stands now. Handle all five
+  `NEGOTIATION_LOCK_*` codes on **both** calls.
+- ⚠ **A refusal fails the WHOLE checkout, not the line.** The alternative — dropping the
+  negotiated price and charging list — would charge the customer more than they agreed to, so
+  the order is refused instead. Send them back to chat to re-negotiate, or remove the line.
+- **The charged price comes from the consume verdict, not from the cart's snapshot.** They are
+  normally the same number; `price_breakdown` always describes what was actually charged.
+
+⚠ **No negotiated field appears anywhere in an order response.** `negotiated_unit_price` and
+`floor_price_snapshot` are persisted on the order item and are excluded from the customer DTO by
+explicit field mapping (`orders/dto/customer-order.dto.ts`) — the floor is the vendor's secret.
+Do not expect the cart's `negotiatedUnitPrice` to survive into the order; read `price`.
 
 ---
 

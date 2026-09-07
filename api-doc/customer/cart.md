@@ -1,5 +1,11 @@
 # Customer Cart
 
+**Verified against source on 2026-09-08** — every claim on this page was checked against
+`jovi-mall/src/`: all 8 routes against the live census, all 11 error codes against the registry,
+the 5 merge drop-reasons and the 100-line cap against `cart.validator.ts` and `cart.service.ts`.
+**The negotiated-price contract is new on this page** and was previously documented nowhere —
+see [Negotiated prices](#negotiated-prices).
+
 Shopping-cart management. The cart is **variant-first** (the variant is the sellable unit) and is
 keyed to the authenticated customer — the same identity used at checkout, so a cart built here is
 exactly what [`POST /api/customer/orders/checkout`](orders.md#post-apicustomerorderscheckout) reads.
@@ -19,7 +25,7 @@ exactly what [`POST /api/customer/orders/checkout`](orders.md#post-apicustomeror
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/customer/cart` | Current cart |
-| POST | `/api/customer/cart/items` | Add a variant, or **increment** it |
+| POST | `/api/customer/cart/items` | Add a variant, or **increment** it — but **set** it when a negotiation lock is presented |
 | PATCH | `/api/customer/cart/items/:variantId` | Set an **absolute** quantity |
 | DELETE | `/api/customer/cart/items/variant/:variantId` | Remove **one line** |
 | DELETE | `/api/customer/cart/items/:productId` | Remove **every variant** of a product |
@@ -65,12 +71,41 @@ Returns the current cart. If the customer has no cart yet, returns an empty cart
 
 An empty cart returns `{ "userId": "...", "items": [], "totalItems": 0 }` (no `cartId`/`productType`).
 
+A line whose price was **haggled in chat** carries two extra keys. They are **omitted entirely**
+when absent — never `null` — so `"negotiatedUnitPrice" in item` is the test, not a truthiness
+check (`cart.service.ts:693-696`):
+
+```json
+{
+  "variantId": "507f1f77bcf86cd799439077",
+  "quantity": 1,
+  "price": 30001,
+  "currency": "XAF",
+  "negotiatedUnitPrice": 30001,
+  "negotiationLockRef": "lk_9f2c…"
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `negotiatedUnitPrice` | integer | **The same number as `price`.** It exists so you can label the line *"your agreed price"* rather than *"price"*. Never compute a total from it — `price` is the total's input. |
+| `negotiationLockRef` | string | The lock this line will spend at checkout. The customer's own handle. |
+
+⚠ **The vendor's floor is never on this response.** `floor_price_snapshot` is stored on the cart
+document and deliberately excluded from the DTO (`cart.service.ts:56-73`) — it is the same secret
+as `bargain.minPrice` on the [public catalogue](../public/catalog.md). If you find it on a cart
+payload, that is a leak, not a feature.
+
 ---
 
 ## POST /api/customer/cart/items
 
 Add a variant to the cart. If the variant is already present, its quantity is incremented (physical);
 digital items stay at quantity `1`.
+
+⚠ **One exception, and it is the only one:** presenting a `negotiationLockRef` **sets** the quantity
+instead of incrementing it, because the lock is bound to a quantity. See
+[Negotiated prices](#negotiated-prices).
 
 ### Request Body
 
@@ -89,6 +124,7 @@ digital items stay at quantity `1`.
 | `variantId` | string | yes | The variant (sellable unit). Must belong to `productId`. |
 | `quantity` | integer ≥ 1 | no | Defaults to `1`. Must be `1` for digital products. |
 | `currency` | string | no | Defaults to `XAF`. |
+| `negotiationLockRef` | string 1–200 | no | A price agreed in chat. **Opaque** — do not parse it. See [Negotiated prices](#negotiated-prices) for what presenting one changes. |
 
 ### Response
 
@@ -106,6 +142,7 @@ digital items stay at quantity `1`.
 | 400 | `CART_DIGITAL_QUANTITY_MUST_BE_ONE` | Digital product with quantity ≠ 1. |
 | 409 | `CART_MIXED_PRODUCT_TYPES` | Cart already holds a different product type. |
 | 409 | `CART_DIGITAL_LIMIT_REACHED` | A digital product is already in the cart. |
+| 404/409/422 | `NEGOTIATION_LOCK_*` | Only when `negotiationLockRef` was presented. Five codes — see [The five refusals](#the-five-refusals). |
 
 ---
 
@@ -133,6 +170,10 @@ Two behaviours inherited from the increment path on purpose:
   *inserts* a line; re-pricing here would mean the same button behaves differently on two
   paths. The price is re-resolved at checkout, which is the moment that binds.
 - **Digital lines stay at 1.**
+
+⚠ **A negotiated line LOSES its agreed price here.** The lock is bound to a quantity, so changing
+it reverts the line to the ordinary shelf price and drops all three negotiation fields — silently,
+in a 200. **Re-read the response and re-render.** See [Negotiated prices](#negotiated-prices).
 
 ### Response
 
@@ -339,3 +380,71 @@ the whole checkout with `422 CATALOG_INSUFFICIENT_STOCK` and
 `available` is `stock − units held by other in-flight checkouts`, so it is what the shopper
 can actually buy, not the raw counter. An abandoned checkout's hold lapses on its own and the
 units return without any action.
+
+---
+
+## Negotiated prices
+
+A customer can haggle **in chat** (WhatsApp or Telegram) and reach an agreed price. There is no
+"make an offer" control on the storefront and none is planned — bargaining is chat-only. When a
+haggle closes, the bargaining agent mints a **lock**: an opaque, single-use handle bound to
+*this customer, this variant, this quantity*.
+
+A client's whole involvement is: pass the lock through, render what comes back, and handle the
+five refusals.
+
+### Presenting a lock
+
+`POST /api/customer/cart/items` with `negotiationLockRef`. The lock is validated but **not spent**
+— it is only *peeked* (`negotiated-price.port.ts:33-37`), so a shopper may remove and re-add the
+item, or leave the basket overnight, without burning the price they haggled for.
+
+⚠ **Presenting a lock SETS the quantity; it does not increment it.** An ordinary add of a line
+already in the cart adds to it. A locked add replaces the quantity outright, because the lock is
+bound to a quantity and incrementing would silently sell a different deal from the one agreed
+(`cart.service.ts:232-251`).
+
+### Two things that silently drop a negotiated price
+
+Both are deliberate. In each case the line survives, reverts to the ordinary shelf price, and
+loses all three negotiation fields (`cart.service.ts:384-387`):
+
+| What the customer does | Why it drops |
+|---|---|
+| **Changes the quantity** — `PATCH /items/:variantId` | The lock is bound to a quantity. A different quantity is a different deal. (`cart.service.ts:357-361`) |
+| **Signs in with an anonymous cart** — `POST /merge` | The merge re-resolves every line from the shelf; an anonymous cart cannot carry a lock. (`cart.service.ts:566-575`) |
+
+**Re-read the cart after either call and re-render the price.** Nothing warns you: the response
+is a valid cart whose `price` has changed and whose `negotiatedUnitPrice` is simply gone. A UI
+that caches the agreed price and shows it beside a refreshed total will show two different
+numbers for one line.
+
+### The five refusals
+
+Raised at **add-to-cart** (peek) and again at **checkout** (consume). All five are client-safe —
+the message survives the error boundary — so you may show them to the shopper as-is
+(`PriceResolverService.ts:233-258`):
+
+| HTTP | Code | What happened | What the shopper should be told |
+|---|---|---|---|
+| 404 | `NEGOTIATION_LOCK_INVALID` | No such lock | *"That agreed price could not be found"* |
+| 422 | `NEGOTIATION_LOCK_EXPIRED` | The lock aged out | *"That agreed price has expired"* |
+| 409 | `NEGOTIATION_LOCK_CONSUMED` | Already spent on an order | *"That agreed price has already been used on an order"* |
+| 422 | `NEGOTIATION_LOCK_VARIANT_MISMATCH` | Presented for a different variant or quantity | *"That agreed price was for a different item or quantity"* |
+| 409 | `NEGOTIATION_LOCK_WINDOW_MOVED` | The vendor changed the price since the deal | *"The seller has changed this price since it was agreed"* |
+
+⚠ **Treat an unrecognised `NEGOTIATION_LOCK_*` code as `NEGOTIATION_LOCK_INVALID`.** The resolver
+lives in another module and may grow a reason before the mapping table does; the fall-through is
+always a refusal, never permission.
+
+**Recovery is always the same:** drop the lock and add the line at its ordinary price, or send the
+shopper back to chat to negotiate again. Never retry the same lock.
+
+### Where the lock is actually spent
+
+**At order creation, not at add-to-cart.** `POST /api/customer/orders` consumes it inside the
+checkout transaction, so a checkout that rolls back leaves the lock spendable. That means a lock
+that passed when the item went into the basket **can still be refused at checkout** — the window
+is re-read as it stands at that moment. Handle the five codes on both calls.
+
+See [Customer → Orders](orders.md) for the checkout side.

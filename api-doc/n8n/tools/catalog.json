@@ -1774,6 +1774,12 @@
             "maximum": 999,
             "default": 1,
             "description": "This ADDS to any quantity already on the line. To set an exact number use cart_set_item_quantity."
+          },
+          "negotiationLockRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "The agreed-price reference from a price negotiation, when the system prompt has given you one AND this is the exact item and quantity that was negotiated. Pass it so the customer is charged the price they agreed instead of the shelf price. Never show it or mention it to the customer, and never pass it for any other product. If the call is refused because of it, add the item again without it."
           }
         }
       },
@@ -1781,7 +1787,8 @@
         "body": [
           "productId",
           "variantId",
-          "quantity"
+          "quantity",
+          "negotiationLockRef"
         ]
       },
       "response": {
@@ -1802,6 +1809,41 @@
           "status": 409,
           "category": "conflict",
           "when": "The cart already holds the other product type",
+          "customer_action": "explain"
+        },
+        {
+          "code": "NEGOTIATION_LOCK_INVALID",
+          "status": 404,
+          "category": "not_found",
+          "when": "A negotiationLockRef was passed and no such agreed price exists. Add the item again WITHOUT it",
+          "customer_action": "explain"
+        },
+        {
+          "code": "NEGOTIATION_LOCK_EXPIRED",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The agreed price aged out. Add the item again WITHOUT it, at the shelf price",
+          "customer_action": "explain"
+        },
+        {
+          "code": "NEGOTIATION_LOCK_CONSUMED",
+          "status": 409,
+          "category": "conflict",
+          "when": "The agreed price was already spent on an order. Add the item again WITHOUT it",
+          "customer_action": "explain"
+        },
+        {
+          "code": "NEGOTIATION_LOCK_VARIANT_MISMATCH",
+          "status": 422,
+          "category": "business_rule",
+          "when": "The agreed price was for a different item or quantity. Add the item again WITHOUT it",
+          "customer_action": "explain"
+        },
+        {
+          "code": "NEGOTIATION_LOCK_WINDOW_MOVED",
+          "status": 409,
+          "category": "conflict",
+          "when": "The seller changed this price since it was agreed. Offer to check the price again rather than dead-ending",
           "customer_action": "explain"
         },
         {

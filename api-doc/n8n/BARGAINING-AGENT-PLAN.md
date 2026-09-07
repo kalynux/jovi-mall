@@ -426,7 +426,7 @@ Three things Stream C should build against:
 | B | ✅ done 2026-09-07 | All five read tools at `POST /internal/negotiation/tools/*`, `test:negotiation-tools` **50/0**. Contract published: [negotiation-tools.md](./negotiation-tools.md) — **Stream F is unblocked on B**. ⚠ Read the notes: the search kernel is **Mongo, not `product_search()`**, and two tools stayed re-scoped. |
 | C+E | ✅ done 2026-09-07 | The lock seam + the third allocation, `test:negotiation-pricing` **63/0**. Port published below — **Stream A is unblocked**. ⚠ Read the notes: D's handed-over gap is **closed**, and `test:bargain-price`'s scope guarantee was **narrowed, not deleted**. |
 | D | ✅ done 2026-09-07 | The flip, with all five derivations moved together. `test:public-catalog` **148/0** (was 100), `verify:storefront` **47/0** (was 36). ⚠ Read the notes — **one gap belongs to C+E and it is load-bearing for D-5**. |
-| F | ✅ done 2026-09-07 | Two new n8n workflows (`wi-mall-bargain`, `wi-mall-bargain-tools`), published; `wi-mall-core` edited and left as a **draft version**. Record: [bargaining-agent.md](./bargaining-agent.md). ⚠ Read the notes: **the lock cannot reach the cart yet** — `cart_add_item` in `tools/catalog.json` has no `negotiationLockRef`, and that belongs to nobody on this plan. |
+| F | ✅ done 2026-09-07 | Two new n8n workflows (`wi-mall-bargain`, `wi-mall-bargain-tools`) plus a surgical edit to `wi-mall-core` — **all three published and LIVE**. Record: [bargaining-agent.md](./bargaining-agent.md). ⚠ Read the notes: **the lock cannot reach the cart yet** — `cart_add_item` in `tools/catalog.json` has no `negotiationLockRef`, and that belongs to nobody on this plan. |
 
 ---
 
@@ -901,14 +901,14 @@ including the flow diagram and every failure path, is
 |---|---|---|
 | `wi-mall-bargain` — the sub-agent | `lJdli0uwOtWBGx5R` | ✅ |
 | `wi-mall-bargain-tools` — one door for the seven tools | `tdCmCgwaGwp7epEV` | ✅ |
-| `wi-mall-core` — flag check + `open_negotiation` tool | `vvbouV2136P5weCs` | **draft, deliberately** |
+| `wi-mall-core` — flag check + `open_negotiation` tool | `vvbouV2136P5weCs` | ✅ |
 
 `wi-mall-core` was edited with `update_workflow` operations under the `versionName`
 *"Hand price haggling to wi-mall-bargain"*. The diff against the live version is seven added
 nodes, one removed connection, nine added connections and **one modified node** — the AI
 Agent's `systemMessage`, previous text preserved byte-for-byte with one section inserted.
-Nothing else on any existing path changed. It is left unpublished because publishing is the
-moment real customers see it, and that is an owner's call rather than a build step.
+Nothing else on any existing path changed. It was held as a draft until the owner said to go —
+publishing is the moment real customers see it — and was **published 2026-09-07**.
 
 ---
 
@@ -988,20 +988,38 @@ instead of promising a haggle that cannot happen. `negotiable: null` is delibera
 
 ---
 
-#### ⛔ For whoever owns `tools/catalog.json` — the lock cannot reach the cart
+#### ✅ The lock reaches the cart — `tools/catalog.json` and `wi-mall-mcp` were changed
 
-C+E plumbed `negotiationLockRef` all the way through: `cart.validator.ts`, `cart.service.ts`,
-`cart.model.ts` and `bot.validators.ts:155` all accept it. **The MCP tool does not carry it.**
-`cart_add_item` in `tools/catalog.json` is `additionalProperties: false` over
-`productId`/`variantId`/`quantity`, with `request.body` listing the same three — so the tool the
-main agent uses to fill the basket has no way to spend a lock, and every lock this feature mints
-expires unspent.
+This section was written as a ⛔ and closed the same day, on the owner's instruction.
 
-Closing it is one optional property plus a regeneration of `wi-mall-mcp` via
-`scripts/gen-mcp-workflow.ts` (edit the catalogue, not the nodes). Not done here: `wi-mall-mcp` is
-a live published workflow and the catalogue is allocated to no stream in § 5. **It is the one
-thing between this feature and end-to-end**, and it needs a decision first — whether the main
-agent may hold a lock ref at all, or whether the sub-agent should be the one to fill the cart.
+C+E plumbed `negotiationLockRef` all the way through — `cart.validator.ts`, `cart.service.ts`,
+`cart.model.ts`, `bot.validators.ts:155` — and **the MCP tool did not carry it**: `cart_add_item`
+was `additionalProperties: false` over `productId`/`variantId`/`quantity`, so the tool the main
+agent fills the basket with had no way to spend a lock and every lock this feature minted expired
+unspent, silently, in the customer-favourable direction that nobody reports.
+
+`cart_add_item` now takes `negotiationLockRef`, plus the five `NEGOTIATION_LOCK_*` failure rows —
+each worded to tell the model to **add the item again without it**. `npm run gen:mcp-workflow`
+re-rendered the node and **one** `updateNodeParameters` was applied to the live `wi-mall-mcp`;
+nothing else on that server was touched. `test:bot-surface` **257/0**.
+
+⚠ **The ref travels through Redis, not through the model's memory.** `wi-mall-bargain` writes
+`wi-mall:bargain:lock:{channel}:{externalId}` on a minted lock; wi-mall-core reads it and puts it
+in the main agent's system prompt beside `botToken`. The **bargaining** model still never sees it
+(`shape tool result` strips it), which is not a contradiction: the lock is bound server-side to
+(customer, variant, quantity), single-use and re-validated at D-10, so a leaked ref buys its own
+owner their own agreed price and nobody else anything — strictly weaker than the `botToken` that
+prompt already carries. It is withheld from the bargaining model because it is **useless** there,
+and a credential a model cannot spend is one it may say out loud.
+
+Two known edges, both failing safely and both written up in
+[bargaining-agent.md](./bargaining-agent.md) § 7: the variant/quantity hint comes from the routing
+flag rather than the gate (a mid-haggle pivot makes it wrong → `NEGOTIATION_LOCK_VARIANT_MISMATCH`
+→ retry without), and a spent ref survives in Redis until its `expiresAt` (→
+`NEGOTIATION_LOCK_CONSUMED` → retry without). **The better shape is for the backend to resolve the
+lock itself** when the bot cart route is called with none — no credential in any model context and
+no stale-ref refusal. That is new code in `modules/negotiation` and `modules/bot-surface`, so it is
+recorded rather than built.
 
 ---
 
@@ -1015,7 +1033,11 @@ agent may hold a lock ref at all, or whether the sub-agent should be the one to 
   next turn's `negotiation_context` default is stale until the model passes `quantity` itself.
   The context tool is authoritative, so nothing is mispriced; the default is simply wrong.
 
-**No jovi-mall source was touched.** No route, model, error code, environment variable, npm
-script or `.env.example` row — nothing in § 5's shared registries. The only repository changes
-are this section, the F row above, `bargaining-agent.md`, and its index row in
-`api-doc/n8n/README.md`.
+**No jovi-mall `src/` was touched.** No route, model, error code, environment variable, npm
+script or `.env.example` row — nothing in § 5's shared registries. The repository changes are
+this section, the F row above, `bargaining-agent.md`, its index row in `api-doc/n8n/README.md`,
+and — from the close-out above — `api-doc/n8n/tools/catalog.json` plus the two regenerated files
+under `api-doc/n8n/generated/`.
+
+Guards after the catalogue change: `test:bot-surface` **257/0** · `test:env` **38/0** ·
+`test:errors` **74/0** · `test:system` **231/0**.
