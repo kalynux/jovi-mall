@@ -163,10 +163,17 @@ an error page. Your null-to-inbox fallback is the correct handling.
 
 ---
 
-## ⛔ The one thing that is still broken: emailed buttons
+## Emailed buttons — decided 2026-09-08, and both halves are yours
 
 Everything above concerns the in-app inbox and push, which work. The **email, WhatsApp and
-Telegram** buttons are a different matter, and they are broken for all three of you.
+Telegram** buttons are a different matter, and today they do not land correctly for any of
+the three of you.
+
+> **✅ The owner's decision (2026-09-08): the buttons STAY on every channel.**
+> The backend keeps sending them, unchanged, on email, WhatsApp and Telegram. Nothing on the
+> backend side is being removed or gated. **Both fixes below are front-end side**, and each
+> is the owning team's to schedule and to implement however they see fit — what follows is a
+> description of the problem and a suggestion, not a specification.
 
 Those channels can only carry a URL, so the button is `{APP_URL}/{path}` — for example
 `https://agency.wi-mall.com/shipments/665f…`. Two problems:
@@ -175,9 +182,16 @@ Those channels can only carry a URL, so the button is `{APP_URL}/{path}` — for
 path with `Navigate to="/dashboard"`. So the recipient lands on the dashboard home with no
 explanation. Not a 404 — a silent wrong page, which is worse.
 
-*To fix on your side:* translate at the web-route level too, in the top-level catch-all —
-try `dashboardRoute(path)` (or your resolver) before falling back to `/dashboard`. That is
-the same translation you already do for push, applied one layer up.
+*A suggestion, not a requirement — you own this and may solve it any way you prefer.* The
+smallest change we can see is to reuse the translation you already do for push, one layer
+up: in the top-level catch-all route, try your existing resolver on the incoming path before
+falling back to `/dashboard`. That keeps one vocabulary and one resolver rather than two.
+
+If you would rather handle it differently — a dedicated `/link/:path` entry route, a
+server-side redirect, or anything else — that is entirely fine. **The backend does not care
+how you route it**, and nothing here needs to be agreed with us before you build it. The
+only thing worth telling us is if you decide *not* to fix it, so the owner can weigh that
+against leaving the buttons switched on.
 
 **The agent app** — it cannot receive one at all. It is a Flutter mobile app with **no App
 Links and no custom scheme** in its `AndroidManifest.xml` — measured 2026-09-08: **zero**
@@ -187,9 +201,22 @@ on its own host). Its own `api-doc/agent/push-notifications.md` already says
 `url` is *"Web-oriented; ignore it on mobile"*, which is correct advice and also means the
 emailed button has nowhere to go.
 
-*This one needs a decision rather than a fix*, and it is the platform owner's: configure App
-Links for the agent app, or stop putting a button on the agent's external channels. Say
-which and the backend side is a small change.
+> **✅ Decided (2026-09-08): configure App Links for the agent app. The buttons stay.**
+> This was put to the platform owner as a choice between configuring App Links and dropping
+> the button from the agent's external channels, and the answer was **configure**. So this is
+> now an agent-app task, not an open question.
+
+*A suggestion, not a requirement.* What is missing is an `<intent-filter>` in
+`android/app/src/main/AndroidManifest.xml` carrying a `<data android:scheme…>` entry — a
+custom scheme (`wiagent://…`), an `autoVerify` App Link on the agent's host, or both, which
+is the shape vendor-dash and agency-dash already use. Once the app can be opened by a link,
+the `path` you receive is the same vocabulary as the tables above, so your existing
+`resolveDeepLink` should be able to take it unchanged.
+
+⚠ **One thing to know before you start:** an `autoVerify` App Link needs a
+`assetlinks.json` published on the agent host, and Android verifies it at install time — so
+this is a deployment step as well as a manifest change. A custom scheme has no such
+requirement and is the cheaper first move if you want the button working sooner.
 
 ### Why nobody is complaining
 
