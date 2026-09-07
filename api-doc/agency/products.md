@@ -1,5 +1,7 @@
 # Agency Products
 
+**Verified against source on 2026-09-08** — `GET /api/agency/products` and the error catalogue, against `jovi-mall/src/modules/delivery/agency.routes.ts` and `src/core/error-codes.ts`.
+
 ## Base Path
 
 ```
@@ -64,6 +66,6 @@ Authorization: Bearer <token>
 
 | Status | Code | Reason |
 |---|---|---|
-| `401` | `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` | Missing or invalid JWT token |
-| `403` | `AUTH_ROLE_NOT_FOUND` | Authenticated user is not an agency |
-| `500` | `INTERNAL_SERVER_ERROR` | Unexpected server error |
+| `401` | `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` | No token, an expired one, or a malformed one. ⚠ **There is no bare `UNAUTHORIZED` code** |
+| `403` | `AUTH_ROLE_NOT_FOUND` | Authenticated user is not an agency. ⚠ **There is no bare `FORBIDDEN` code** |
+| `500` | `INTERNAL_SERVER_ERROR` | Unexpected server error. ⚠ **Not `INTERNAL_ERROR`** |

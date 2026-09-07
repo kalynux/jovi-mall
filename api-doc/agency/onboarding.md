@@ -1,5 +1,7 @@
 # Delivery Agency Onboarding API Documentation
 
+**Verified against source on 2026-09-08** — the 4 step routes plus `POST /profile/policy-documents` and `GET /onboarding/status`, all four step schemas field-for-field, the optional `version` guard (read in the controller, steps only), and the validation-error envelope, against `jovi-mall/src/modules/delivery/`.
+
 This documentation provides frontend developers with the complete specifications needed to build the delivery agency onboarding flow.
 
 The flow uses dedicated `PUT` endpoints for each step with strict step-order enforcement. A step that has already been completed can be re-submitted to update its data — the backend will save the new data while keeping the current `onboarding_step` unchanged.
@@ -670,7 +672,8 @@ All `PUT` step submissions return the full updated profile and a `completionStat
 ### Validation Errors (`400 VALIDATION_ERROR`)
 
 Returned when the request body fails Zod schema validation. `details.fields[]` pinpoints each
-invalid field: `path` is the dot-joined location, `code` is the Zod issue kind.
+invalid field: `path` is the dot-joined location, `message` is the rule that failed, and `code` is
+the Zod issue kind (`error-handler.middleware.ts:101-117`).
 
 ```json
 {
@@ -678,7 +681,7 @@ invalid field: `path` is the dot-joined location, `code` is the Zod issue kind.
   "requestId": "3f8a1c74-9b2e-4d10-8c55-6a0f2b7e19dd",
   "error": {
     "code": "VALIDATION_ERROR",
-    "message": "Request validation failed",
+    "message": "Validation failed",
     "statusCode": 400,
     "category": "validation",
     "details": {

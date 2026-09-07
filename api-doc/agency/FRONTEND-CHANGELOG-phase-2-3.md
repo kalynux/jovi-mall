@@ -1,5 +1,7 @@
 # Agency dashboard — what Phase 2 and Phase 3 changed
 
+**Verified against source on 2026-09-08** — the route claims on this page against `jovi-mall/src/modules/delivery/agency.routes.ts` and `src/api/index.ts`.
+
 Your slice of Phases **2** (Deployability) and **3** (Cross-service correctness) of
 [`PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md`](../../../PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md).
 

@@ -1,5 +1,9 @@
 # Rate limits
 
+**Verified against source on 2026-09-08** — every ceiling, both `/auth` bucket lists and the
+six exempt prefixes, against `jovi-mall/src/api/rate-limit/` (`policy.ts`, `auth-paths.ts`,
+`exempt-paths.ts`, `rate-limit.middleware.ts`).
+
 **New in Phase 16.** This API had no rate limiting of any kind before it. If you have been
 building against it, nothing you were doing at a normal pace will start failing — the
 ceilings are set so that no realistic client reaches them.
@@ -79,8 +83,14 @@ per request, so `RateLimit: remaining=…` always describes the counter that is 
 
 | Bucket | Paths |
 |---|---|
-| **credential**, 20/min/IP | `login` · `register` · `forgot-password` · `reset-password` · `add-role` · `send-email-verification` · `request-wa-verification` · `verify-email` · `logout` · `browser/login` · `browser/logout` · `mobile/login` · `mobile/register` · `mobile/add-role` |
-| **session**, 300/min/IP | `me` · `auth-me/:role` · `mobile/auth-me/:role` · `browser/refresh` · `mobile/refresh` |
+| **credential**, 20/min/IP | `login` · `register` · `forgot-password` · `reset-password` · `add-role` · `send-email-verification` · `verify-email` (both verbs) · `email-change/confirm` · `logout` · `browser/login` · `browser/logout` · `mobile/login` · `mobile/register` · `mobile/add-role` · **and all four magic-login routes** — `magic/link` · `magic/code` · `mobile/magic/link` · `mobile/magic/code` |
+| **session**, 300/min/IP | `me` · `auth-me/:role` · `mobile/auth-me/:role` · `browser/refresh` · `mobile/refresh` — the complete list (`auth-paths.ts:38-77`) |
+
+> ⚠ **Corrected 2026-09-08.** The credential row listed `request-wa-verification`, which **no
+> longer exists** (it was replaced by `POST /api/me/connections`, which has its own bucket —
+> see Layer C above), and it omitted `email-change/confirm` and all four magic-login routes.
+> The magic routes *are* passwordless sign-in, which is exactly the surface the 20 exists to
+> bound: **a magic-link client gets 20/min/IP**, so budget for it.
 
 > ⚠ **The credential bucket is the DEFAULT.** Anything added under `/api/auth` later lands in
 > it unless it is named on the session list — the safe direction, since the mistake it prevents

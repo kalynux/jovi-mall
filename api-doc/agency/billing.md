@@ -1,5 +1,7 @@
 # Agency Billing API
 
+**Verified against source on 2026-09-08** — all 10 routes on the shared owner-scoped plan/credit engine, against `jovi-mall/src/modules/billing/routes/agency-billing.routes.ts` and the `/api/agency/transactions` mount.
+
 Agency-facing endpoints for pricing plans, the credit wallet, top-up purchases
 and billing settings. **The agency billing engine is the same engine as the
 vendor's** — same endpoints, same request/response shapes, same payment flow —

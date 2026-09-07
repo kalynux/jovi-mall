@@ -1,5 +1,11 @@
 # Onboarding API Endpoints Documentation
 
+**Verified against source on 2026-09-08** — every route in the three step tables exists and is
+named correctly (`PUT /api/vendor/onboarding/{basic-setup,delivery-linking,branding,policy-setup}`,
+`PUT /api/agency/onboarding/{logistics,payout,branding,policies}`,
+`PATCH /api/agent/onboarding/step`, and the four `*/completion-status` reads), against the live
+route table for `jovi-mall/src/`.
+
 This document provides details on the onboarding flows and endpoints for the different roles in the Jovi Mall platform: **Vendor**, **Delivery Agent**, and **Delivery Agency**. 
 
 Note: **Customers** do not have an onboarding flow (their `onboarding_step` is inherently `0` or complete upon registration).

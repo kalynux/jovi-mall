@@ -1,5 +1,7 @@
 # Agency Stock Requests
 
+**Verified against source on 2026-09-08** — all 6 routes, the server-supplied `availableActions` verdict and the `403 STOCK_REQUEST_NOT_YOURS` authority rule, against `jovi-mall/src/modules/stock-requests/`.
+
 Changing the recorded stock of a SKU you warehouse. Every change needs both
 signatures — yours and the vendor's.
 

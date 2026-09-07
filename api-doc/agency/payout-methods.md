@@ -1,5 +1,7 @@
 # Agency Payout Methods
 
+**Verified against source on 2026-09-08** — the payout-method shape and the routes that write it, against `jovi-mall/src/modules/delivery/validators/agency-onboarding.validator.ts`.
+
 **Where the platform sends your money.** This page is the complete field reference for
 `payout_details` on the agency side — [Onboarding Step 2](./onboarding.md#step-2-payout-setup-required),
 [Profile](./profile.md) and [Profile schema](./profile-schema.md) link here for the sub-schema.

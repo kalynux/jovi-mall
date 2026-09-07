@@ -1,7 +1,35 @@
 # Backend requirements — unified email verification across all four apps
 
-**Authored, not a mirror.** No backend counterpart exists yet; this is the ask. Written
-2026-08-24 against `jovi-mall` at `contact-change.service.ts`, `auth.service.ts`,
+**Verified against source on 2026-09-08** — ✅ **all five checklist items in § 5 have SHIPPED.**
+Every claim below was re-read against `jovi-mall/src/modules/users/services/contact-change.service.ts`,
+`src/modules/auth/auth.service.ts`, `auth.schemas.ts`, `auth.routes.ts` and
+`frontend/vendor-dash/src/pages/auth/`.
+
+> ### ⚠ Read the status lines below as HISTORY, not as current state
+>
+> This document was written 2026-08-24 as an **ask**, and its present tense ("the backend does
+> not send it yet", "not built for any dashboard today") described that day. It is now wrong in
+> every instance. What the source says on 2026-09-08:
+>
+> | § | Asked for | Status |
+> |---|---|---|
+> | 1 | `buildEmailChangeLink(token, app?)`, called with `actor.role` | ✅ shipped — `contact-change.service.ts:105` and the call site at `:216` |
+> | 2 | verification link → `{STOREFRONT_URL}/verify-email?token=…&app={role}` | ✅ shipped — `auth.service.ts:562-563`, with the `API_PUBLIC_URL` fallback exactly as specified |
+> | 3 | `VerifyEmailSchema`, `.strict()`, 512-char bound | ✅ shipped — `auth.schemas.ts:217-219` |
+> | 4 | `POST /api/auth/verify-email`, keeping the `GET` | ✅ shipped — `auth.routes.ts:25-26` |
+> | 5 | delete `vendor-dash/src/pages/auth/ConfirmEmailChange.tsx` | ✅ done — the file is gone |
+>
+> **The one thing still open is § 3.1's own follow-up:** the landing client still POSTs first and
+> falls back to the legacy `GET` on 404/405 (`src/lib/auth/auth.api.ts:161-170`). That fallback
+> was to be deleted "once every environment serves the POST" — every environment now does, so it
+> is a frontend cleanup nobody has done. It is harmless: the fallback fires only on statuses that
+> mean nothing was spent.
+>
+> The document is kept rather than deleted because the *reasoning* — why one page serves four
+> apps, why `app` is a role key and never a URL, why the `GET` must stay for 24 hours — is still
+> the record for that design, and § 4 records what was deliberately **not** asked for.
+
+Written 2026-08-24 against `jovi-mall` at `contact-change.service.ts`, `auth.service.ts`,
 `auth.routes.ts`, `auth.controller.ts`.
 
 The landing app now hosts **both** emailed-token pages on behalf of the storefront, the vendor
@@ -25,9 +53,13 @@ The one thing a role-free confirm cannot answer is *where to send the person aft
 
 ## 1 · Stamp the requesting role into the email-change link
 
-**Status: the page already reads this. The backend does not send it yet.** Absent, the flow still
-works — the page falls back to storefront links, which is the wrong destination for three of the
-four audiences.
+**Status (2026-08-24): the page already reads this. The backend does not send it yet.** Absent,
+the flow still works — the page falls back to storefront links, which is the wrong destination for
+three of the four audiences.
+
+> ✅ **Shipped since.** `buildEmailChangeLink(token, app?)` is at
+> `contact-change.service.ts:105` and `requestEmailChange` passes `actor.role` at `:216`,
+> exactly as written below.
 
 `src/modules/users/services/contact-change.service.ts`
 
@@ -61,15 +93,22 @@ Do not "improve" this into a `?return=` parameter; the page is reachable with no
 
 ## 2 · 🔴 Point registration verification at the storefront
 
-This is the flow that is **not built for any dashboard today**, and the reason is one line.
+This was the flow that was **not built for any dashboard** on 2026-08-24, and the reason was one
+line.
 
-`src/modules/auth/auth.service.ts:537`
+> ✅ **Shipped since.** `auth.service.ts:562-563` now reads exactly the replacement proposed at
+> the bottom of this section. The three consequences listed below described the state on
+> 2026-08-24 and are **no longer live** — they are kept because they are the argument for the
+> change, and the next person proposing a mutating `GET` needs to be able to read it.
+
+`src/modules/auth/auth.service.ts:537` **(as it was on 2026-08-24)**
 
 ```ts
 const verifyLink = `${API_PUBLIC_URL}/api/auth/verify-email?token=${token}`;
 ```
 
-The link points at **the API**, so no frontend is ever involved. Three consequences, all live now:
+The link points at **the API**, so no frontend is ever involved. Three consequences, all live on
+2026-08-24 and all closed since:
 
 1. A person who clicks it gets a **raw JSON envelope** in their browser. There is no page, no
    branding, and no way onward — for customers, vendors, agencies and agents alike.
@@ -91,7 +130,7 @@ uses.
 
 ---
 
-## 3 · Add `POST /api/auth/verify-email`, keep the `GET`
+## 3 · Add `POST /api/auth/verify-email`, keep the `GET` — ✅ shipped
 
 Same handler, same service call, different verb — so the page can spend the token deliberately
 instead of a prefetcher spending it first.
@@ -136,7 +175,7 @@ route there is how it gets the strict counter.
 **Do not remove the `GET`.** Registration tokens live 24 hours (`EMAIL_VERIFY_EXPIRE`), so links
 minted before the deploy stay valid for a day after it.
 
-### 3.1 The frontend already tolerates this not being deployed
+### 3.1 The frontend already tolerates this not being deployed — ⚠ the fallback is now dead code
 
 `verifyEmail()` in `src/lib/auth/auth.api.ts` POSTs first and falls back to the legacy `GET` **only
 on 404/405** — statuses that mean nothing was spent. Every other failure is the real answer and

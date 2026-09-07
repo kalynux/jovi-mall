@@ -1,5 +1,7 @@
 # Agent Roster (Agency-Facing)
 
+**Verified against source on 2026-09-08** — all 30 routes (the `DELETE` terminate alias included), the `terms_proposed_by` authority rule and its `details.proposer` payload, `awaitingDecisionFrom`, the four negotiable term groups and the agent-only pair, the COD-headroom error shape, the multi-agency cap and the eight contract notification templates, against `jovi-mall/src/modules/agents/`.
+
 ## Base Path
 
 ```
@@ -47,11 +49,37 @@ request answers it.
 | **You approach an agent** | you — `POST /requests`, after finding them in `GET /browse` | the agent — `approve` or `reject` | `POST /:id/withdraw` while pending |
 | **An agent applies** | the agent — `POST /api/agent/memberships/requests` | you — `approve` or `reject` | they withdraw |
 
-`initiatedBy` (`agent` \| `agency`) on every contract tells you which case you are looking at, and
-therefore which buttons to render. It is derived from `origin`: `join_request` means the agent
+`initiatedBy` (`agent` \| `agency`) on every contract tells you which of the two cases above you are
+looking at. It is derived from `origin`: `join_request` means the agent
 raised it, every other origin (`invitation`, `transfer`, `admin`, `migration`) means you or an
-admin did. **Calling the wrong verb is a `403`, not a no-op** — the initiator may only withdraw,
-the counterparty may only approve/reject.
+admin did.
+
+> ### ⚠ `initiatedBy` is AUDIT, not the button rule — use `awaitingDecisionFrom`
+>
+> This is the single easiest thing to get wrong on this page, and the source says so in as many
+> words (`dto/agent-membership.dto.ts:79-83`): *"**Audit, not the button rule.** It used to be
+> both, back when terms could not change after creation. Now a counter moves the right to approve
+> to the other side while `origin` stays put, so a client rendering buttons from this field would
+> offer Approve to the party who just made the offer."*
+>
+> The server's authority discriminator is **`terms_proposed_by`** — *"which party's terms are
+> currently standing"* (`agent-contract.service.ts:1941-1957`). It **flips on every counter**, so
+> the party entitled to answer changes as the negotiation moves, while `initiatedBy` never does.
+> `awaitingDecisionFrom` on the DTO is that same rule, pre-computed for you
+> ([DTO reference](#agentmembershipdto)).
+>
+> | Render | For |
+> |---|---|
+> | **Approve / Reject / Counter** | the party named by `awaitingDecisionFrom` |
+> | **Withdraw** | the other party (the one whose terms are standing) |
+> | **Propose terms** (no Approve at all) | either party when `termsProposedBy` is `null` |
+>
+> Keying off `initiatedBy` renders the wrong pair the moment anybody counters — and in the case
+> where the **agent** countered an agency-raised contract, it offers the agency "Withdraw" on an
+> offer it is supposed to answer, and offers the agent nothing at all to escape their own counter.
+
+**Calling the wrong verb is a `403`, not a no-op** — whoever's terms are standing may only
+withdraw, the counterparty may only approve/reject/counter.
 
 > **There are no email invites.** `POST /api/agency/agents/invites` and its `GET`/`DELETE`
 > siblings are gone, as is `GET /api/agent/invites`. You reach an agent by finding them in the
@@ -435,7 +463,7 @@ rejects an amount above it with `CONTRACT_SETTLEMENT_EXCEEDS_OUTSTANDING`.
 | Status | Code | Description |
 |--------|------|-------------|
 | `404` | `CONTRACT_NOT_FOUND` | Unknown, or not on your roster |
-| `403` | `CONTRACT_TRANSITION_NOT_PERMITTED` | **You** raised this request — the agent answers it. `details: { transition, party, initiator, hint }` |
+| `403` | `CONTRACT_TRANSITION_NOT_PERMITTED` | **Your** terms are the ones standing — the agent answers them. `details: { transition, party, proposer, hint }` (`proposer`, **not** `initiator`) |
 | `409` | `CONTRACT_INVALID_TRANSITION` | Not `pending` any more. `details: { transition, from, allowedFrom }` |
 | `422` | `AGENT_KYC_NOT_VERIFIED` | Re-checked **here**, not at request time |
 | `403` | `AGENT_PLATFORM_BANNED` | Likewise |
@@ -470,11 +498,12 @@ Optional, ≤300 chars.
 
 | Status | Code | Description |
 |--------|------|-------------|
-| `403` | `CONTRACT_TRANSITION_NOT_PERMITTED` | The **agent** raised this one — you `reject` it, you do not withdraw it |
+| `403` | `CONTRACT_TRANSITION_NOT_PERMITTED` | The **agent's** terms are the ones standing — you `reject` or `counter` them, you do not withdraw them. `details.proposer` names the party whose terms they are |
 | `409` | `CONTRACT_INVALID_TRANSITION` | Not `pending` any more |
 
 > `approve`/`reject` and `withdraw` are **not interchangeable**, and the server decides which
-> applies from `initiatedBy`. Render the matching pair.
+> applies from **`termsProposedBy`** — *not* from `initiatedBy`, which does not move when somebody
+> counters. Render the pair `awaitingDecisionFrom` implies.
 
 ---
 

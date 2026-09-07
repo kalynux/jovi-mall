@@ -1,5 +1,7 @@
 # Agency Inventory
 
+**Verified against source on 2026-09-08** — all 11 routes and the counted-vs-derived stock distinction that decides what is billed, against `jovi-mall/src/modules/inventory/routes.ts`, `repositories/agency-stock-level.repository.ts` and `services/`.
+
 Which SKUs this agency warehouses, at which depot, **how many are physically on the
 shelf**, what they cost in storage rent, and what the agency can do about them. Backs the
 agency dashboard's inventory screen.
@@ -331,8 +333,8 @@ same variant at two depots is two rows and this drills into one shelf.
 | Code | HTTP | Meaning |
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | Bad query param, or `:id` is not an ObjectId |
-| `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` | 401 | Missing or invalid token |
-| `AUTH_ROLE_NOT_FOUND` | 403 | Wrong role |
+| `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` · `AUTH_SESSION_EXPIRED` | 401 | No token, an expired one, a malformed one, or a session past its cap. ⚠ **There is no bare `UNAUTHORIZED` code** — it is not in the registry and nothing emits it |
+| `AUTH_ROLE_NOT_FOUND` | 403 | Signed in, but not as an agency (`requireRole`, `auth.middleware.ts:366`). `details` carries `{ required, actual }`. ⚠ **There is no bare `FORBIDDEN` code** |
 | `INVENTORY_STOCK_LEVEL_NOT_FOUND` | 404 | No such row **for this agency** — another agency's row 404s rather than 403s |
 
 ---

@@ -1,9 +1,19 @@
 # Change Password API
 
+**Verified against source on 2026-09-08** — the route, the strength rule, the response shape,
+the cookie re-issue and the 90-day cap reset, against
+`jovi-mall/src/modules/users/user.controller.ts`, `user.validator.ts`, `user.routes.ts` and
+`src/core/auth/token.issuer.ts`.
+
 Reference for changing the authenticated user's **account password**.
 
 > [!IMPORTANT]
-> This is a **shared, role-agnostic** API mounted at `/api/me/password`. The **same endpoint, request body, and responses** work for **every** authenticated role (customer, vendor, admin, agent, agency). The account is resolved from the auth token — the password lives on the **User** record, not on any role entity, so there is exactly one password per account regardless of role.
+> This is a **shared, role-agnostic** API mounted at `/api/me/password`. The **same endpoint, request body, and responses** work for **every** authenticated role. The account is resolved from the auth token — the password lives on the **User** record, not on any role entity, so there is exactly one password per account regardless of role.
+>
+> ⚠ **Corrected 2026-09-08:** this used to list the roles as *"customer, vendor, admin, agent,
+> agency"*. There are **four** — `customer`, `vendor`, `agency`, `agent`. `admin` is not a role
+> you can authenticate as on this service and has no password here; administrators are a
+> separate identity in wi-admin. See [../auth/README.md](../auth/README.md#roles).
 
 ---
 
@@ -66,6 +76,22 @@ change invalidates every token minted under the old password — including the p
 request arrived with — so the caller is handed a replacement pair and stays signed in. Every
 *other* session is signed out on its next request. A client that discards cookies from this
 response will find itself logged out.
+
+> ### 🔴 A BEARER client is signed out by its own password change
+>
+> The replacement pair is delivered **as cookies only** — the body carries no `tokens` object,
+> deliberately (`user.controller.ts:44-46`: "a token in a response body is a token in a client
+> log"). A Capacitor / native client on `/api/auth/mobile/*` therefore has nothing to store, and
+> its existing bearer token is refused with `401 AUTH_PASSWORD_CHANGED` on the **next** request.
+>
+> Plan for it: warn before the form, then sign the user back in with the new password
+> (`POST /api/auth/mobile/login`) as soon as the `200` returns.
+
+> **This is one of the four things that RESET the 90-day session cap.** `auth_time` is stamped
+> fresh here, because the caller proved a credential (the old password) — so a password change
+> is a complete remedy after a compromise rather than one that leaves the victim's new session
+> carrying the attacker-era start date. `auth-me`, `add-role` and every refresh **copy**
+> `auth_time` instead. See [../auth/README.md](../auth/README.md#the-90-day-absolute-cap).
 
 ### Error Responses
 

@@ -1,5 +1,10 @@
 # Change Email / Phone API
 
+**Verified against source on 2026-09-08** — all six routes, all six `CONTACT_CHANGE_*` codes with
+their statuses and derived categories, the 1-hour email token TTL and 24-hour phone TTL, and the
+optional `app=` role key, against `jovi-mall/src/modules/users/services/contact-change.service.ts`
+and `src/modules/users/config/contact-change.config.ts`.
+
 Reference for changing the **email address or phone number an account signs in with**.
 
 > [!IMPORTANT]

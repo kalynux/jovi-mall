@@ -1,5 +1,7 @@
 # Agency dashboard — what Phase 4 and Phase 5 changed
 
+**Verified against source on 2026-09-08** — every route claim on this page against the mount it is written under — in particular that the agency serves only `GET /shipments/:id/delivery-proof/file` (`agency.routes.ts:128`) and not the metadata read (`agent.routes.ts:139`) — plus the 10 MB / one-image proof limits, against `jovi-mall/src/modules/delivery/` and `src/core/uploads/upload-config.ts`.
+
 Your slice of Phases **4** (Per-service hardening) and **5** (Legacy close-out) of
 [`PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md`](../../../PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md).
 

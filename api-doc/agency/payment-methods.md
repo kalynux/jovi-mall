@@ -1,5 +1,7 @@
 # Saved Payment Methods API
 
+**Verified against source on 2026-09-08** — all 5 routes on the shared `/api/me/payment-methods` surface, against `jovi-mall/src/modules/payment-methods/routes.ts`.
+
 Reference for managing a user's **saved payment methods** — the tokenized cards / mobile-money / bank instruments used to **pre-fill the checkout page** on the frontend.
 
 > [!IMPORTANT]

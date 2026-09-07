@@ -1,3 +1,10 @@
+# Uptime & status widget — an unserved spec
+
+**Verified against source on 2026-09-08** — still unserved. No public status or uptime route exists
+in `jovi-mall/src/` (zero matches under `/api/status` or `/api/uptime` in the live route table);
+the only health surfaces are the three in `health.md` and the operator ones behind
+`/api/internal/admin/system/*`, which no browser can reach.
+
 > ## ⚠ This is an unserved frontend spec. No backend implements it, and that is a decision.
 >
 > Nothing in this document is backed by an endpoint. The three-dot widget below describes what a

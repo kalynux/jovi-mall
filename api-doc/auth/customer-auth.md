@@ -1,5 +1,10 @@
 # Customer auth — registration and sign-in
 
+**Verified against source on 2026-09-08** — that `POST /auth/register` strips `password` for
+`role: "customer"`, that the magic routes mint a `customer` session and nothing else
+(`messaging-login.service.ts:221`), and that no storefront registration endpoint exists, against
+`jovi-mall/src/modules/auth/` and `src/modules/messaging-login/`.
+
 **The customer's whole auth story, in one page.** It is different from every other role's, and
 the difference is not a detail: a customer never types a password, and never fills in a
 registration form.

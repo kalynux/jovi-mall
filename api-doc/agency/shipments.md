@@ -1,5 +1,7 @@
 # Agency Shipments
 
+**Verified against source on 2026-09-08** — every route, the status enum and transition map, the three status subsets, the COD `delivered` refusal, the reject reason set and note rule, the tracking-number format and the `FileDetail` shape, against `jovi-mall/src/modules/shipments/`, `src/modules/cod/`, `src/modules/delivery/agency.routes.ts` and `src/modules/tracking-integration/`.
+
 ## Base Path
 
 ```
@@ -95,6 +97,56 @@ Every status change is appended to `status_history` (`{ status, changedAt, chang
 which feeds the merged multi-agency timeline returned on the [shipment detail](#detail) endpoint
 and on the vendor's `GET /api/vendor/orders/:id` (`deliveryTimeline`).
 
+<a name="status-subsets"></a>
+### ⚠ There are THREE status subsets, and they disagree
+
+The eleven statuses above are grouped **three different ways** for three different purposes, and
+no two groupings agree. A dashboard that derives one from another will be wrong — silently, and
+in a way that looks like a backend fault.
+
+| Status | **Trackable**<br>(live map) | **Active**<br>(agent capacity) | **Unterminated**<br>(agency plan cap) |
+|---|:---:|:---:|:---:|
+| `pending` | — | — | ✅ |
+| `assigned` | ✅ | ✅ | ✅ |
+| `handing_over` | ✅ | ✅ | ✅ |
+| `picked_up` | ✅ | ✅ | ✅ |
+| `in_transit` | ✅ | ✅ | ✅ |
+| `agent_delivered` | ✅ | ✅ | ✅ |
+| **`failed`** | **—** | **✅** | **—** |
+| `pending_agency_reassignment` | — | — | ✅ |
+| `delivered` | — | — | — |
+| `returned` | — | — | — |
+| `rejected` | — | — | — |
+| | **5 statuses** | **6 statuses** | **7 statuses** |
+
+| Subset | Source | What it decides |
+|---|---|---|
+| `TRACKABLE_SHIPMENT_STATUSES` | `src/modules/tracking-integration/services/visible-agents.service.ts:25-31` | whether this agency may watch the agent, and whether geo-tracker opens a tracking session |
+| `ACTIVE_SHIPMENT_STATUSES` | `src/modules/agents/config/agent.config.ts:164-171` | whether the shipment occupies one of the agent's capacity slots |
+| `UNTERMINATED_SHIPMENT_STATUSES` | `src/modules/shipments/shipment.model.ts:33-41` | whether it counts against the agency's plan cap (the soft-cap sweep) |
+
+**1. `failed` is *active* but not *trackable*.** The parcel is still in the agent's van, so it
+still consumes a capacity slot — but the shipment is not tracked. **This is the trap:** a
+dashboard that builds its live map from its own "active shipments" set will render a marker for a
+`failed` shipment, subscribe for that agent, and then show a map that never streams. Build the map
+from [`GET /api/agency/tracking/board`](./live-tracking.md) (which selects on
+`TRACKABLE_SHIPMENT_STATUSES`) and never from a locally-derived active set.
+
+**2. `failed` is *active* but not *unterminated*.** It does not count against the agency plan cap
+even while it occupies an agent's slot. So "shipments against my cap" and "shipments my agents are
+carrying" are genuinely different numbers, and neither is wrong.
+
+**3. `pending` and `pending_agency_reassignment` are *unterminated* only.** Neither is trackable
+(no agent) nor active (no agent). `pending` is additionally **invisible to the agency** — it has
+not been dispatched yet.
+
+**One more rule that is not a status subset.** `trackableShipmentsForAgency` adds
+**`agent_id: { $ne: null }`** on top of the trackable statuses (`visible-agents.service.ts:46-52`),
+and the source is explicit that this is part of the rule rather than an optimisation: *a shipment
+offered but not yet accepted is trackable in status only — there is no agent bound to it, so there
+is nobody to track.* So a shipment sitting on an unaccepted offer is `assigned` (a trackable
+status) and still absent from the board. It appears the moment the agent accepts.
+
 Each status change also recomputes the parent order's `fulfillment_status` — see
 [vendor/orders.md#fulfillment-lifecycle](../vendor/orders.md#fulfillment-lifecycle).
 
@@ -131,7 +183,7 @@ the whole cash chain), three rules change:
    > (`cash-collection.service.ts:58`) alongside `picked_up` and `in_transit`.
    >
    > ⚠ **The refusal of `delivered` is real but its bespoke message is UNREACHABLE**
-   > (DOC-PROGRAM F-44, a backend defect left unfixed). `shipment.service.ts:1219` throws
+   > (DOC-PROGRAM F-44, a backend defect left unfixed). `shipment.service.ts:1221` throws
    > *"COD shipments are delivered by the agent submitting the customer delivery code"*, but two
    > layers refuse `delivered` first: it is absent from the Zod `z.enum` on both status endpoints
    > and from every `TRIGGERABLE_TRANSITIONS` value. A client sending `{"status":"delivered"}`
@@ -157,6 +209,10 @@ same arithmetic the collection will snapshot; treat a `null` status as "no agent
 
 **Query Parameters**:
 - `status` (string, optional) — filter by shipment status (see lifecycle table above).
+  ⚠ **`pending` is NOT accepted here** and returns a `400` validation error — the filter enum is
+  the other ten statuses only (`shipment.validator.ts:23`), deliberately, because a `pending`
+  shipment is invisible to the agency. Build the filter control from those ten, not from the
+  eleven-row lifecycle table.
 - `q` (string, optional, **min 2 chars**, max 100) — free-text search over the customer's name and
   phone, the product titles on the shipment, the order number and the tracking number. Identical to
   the agent list's search — see [agent/shipments.md](../agent/shipments.md#list) for the full table.
@@ -646,4 +702,3 @@ show up in `GET /api/agency/shipments` immediately.
 
 Toggle via the `shipmentAssigned` flag on [notification preferences](./notifications.md) (default:
 on).
-- `404` – `SHIPMENT_NOT_FOUND` – Shipment does not exist or is not handled by this agency.

@@ -1,5 +1,7 @@
 # Delivery Agency Profile Schema & Data Dictionary
 
+**Verified against source on 2026-09-08** — the agency profile field reference against `jovi-mall/src/modules/delivery/delivery-agency.model.ts` and `validators/agency-onboarding.validator.ts`.
+
 This document is the authoritative reference for the Delivery Agency profile data structure. Use it to build TypeScript interfaces, form schemas, and validation logic in the frontend.
 
 > [!TIP]

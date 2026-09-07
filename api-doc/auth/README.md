@@ -1,8 +1,10 @@
 # Auth API
 
-**Verified against source on 2026-09-06** — every claim on this page was checked against
-`jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
-(DOC-PROGRAM § 24–27). Corrections are marked inline with ⚠ and a source citation.
+**Verified against source on 2026-09-08** — the 24-row route table, both refresh error tables,
+the two `/auth` rate-limit buckets, the token TTLs and the 90-day cap were re-checked against
+`jovi-mall/src/modules/auth/`, `src/api/middlewares/auth.middleware.ts`, `src/core/auth/` and
+`src/api/rate-limit/`. First verified 2026-09-06 (DOC-PROGRAM § 24–27). Corrections are marked
+inline with ⚠ and a source citation.
 
 ## Base URL
 
@@ -312,9 +314,10 @@ and applied before authentication:
 | **session** | **300/min/IP** | everything that merely extends a session you already hold. A closed, five-entry **allowlist** (`auth-paths.ts:38-77`): `/auth/me`, `/auth/auth-me` (prefix, covers `/:role`), `/auth/mobile/auth-me`, `/auth/browser/refresh`, `/auth/mobile/refresh` |
 
 > ⚠ **Two corrections here, 2026-09-06.** This said "all **three** routers" — there are **five**
-> mounted under `/auth` (`api/index.ts:94, 95, 96, 104, 119`), the two extra being the magic-login
-> pair. ⚠ **The source comment at `api/index.ts:73` still says "ALL THREE" and is the stale
-> half** — it predates the magic mounts and is documented here rather than edited.
+> mounted under `/auth` (`api/index.ts:96, 97, 98, 107, 122`), the two extra being the magic-login
+> pair. ✅ **The source comment that said the same thing has since been fixed** — `api/index.ts:73`
+> now reads "ALL FIVE" and names all five routers (corrected 2026-09-07). An earlier revision of
+> this note called it "the stale half"; that is no longer true.
 >
 > And the credential list omitted `email-change/confirm` and all four magic routes. The
 > **direction** of the split is what makes that safe rather than dangerous: the session list is
@@ -503,7 +506,7 @@ Sets cookies `access_token` and `refresh_token`.
 |---|---|---|
 | `AUTH_INVALID_CREDENTIALS` | `401` | Unknown identifier, or the wrong password |
 | `AUTH_ROLE_REQUIRED` | `400` | The account holds several roles and `role` was not specified |
-| `AUTH_ROLE_NOT_FOUND` | `403` | The requested `role` is not on the account. `details.role` echoes it |
+| `AUTH_ROLE_NOT_FOUND` | `403` | The requested `role` is not on the account. ⚠ **No `details`** — see the note under this table |
 | `AUTH_ACCOUNT_SUSPENDED` | `403` | `User.status` is not `active`. Raised **after** the password is verified, so it is never an oracle for which accounts exist |
 | `AUTH_VENDOR_SUSPENDED` | `403` | The vendor **profile** is `inactive` — a different axis from the account above, and its own code because the remedy differs |
 | `VALIDATION_ERROR` | `400` | `identifier` is not a well-formed E.164 phone or email address, or `password` is empty |
@@ -511,6 +514,23 @@ Sets cookies `access_token` and `refresh_token`.
 > **A customer who has never run a password reset always gets `AUTH_INVALID_CREDENTIALS`
 > here**, correctly — they hold a system-generated password nobody knows. Send them to
 > [the bot flow](./customer-auth.md) instead of showing them a password field.
+
+> ### ⚠ `AUTH_ROLE_NOT_FOUND` carries no `details` — corrected 2026-09-08
+>
+> Both this table and [`GET /auth/auth-me/:role`](#get-authauth-merole) said *"`details.role`
+> echoes it"*, and **it never arrives.** The service does raise the code with `{ role }`
+> (`auth.service.ts:364` and `:431`), but a 403 puts it in the **`authorization`** category, and
+> that category's `details` is cut down at the response boundary to a four-key allowlist —
+> `required`, `requiredAny`, `resource`, `hint` and nothing else
+> (`core/error-detail-policy.ts:29-33`). `role` is not on the list, so the projected object is
+> empty and, per ADR-005 D-9, **`details` is omitted from the response entirely.**
+>
+> Echo back the `role` you sent; do not try to read it off the error. This is a property of the
+> **category**, not of this code: the same filter applies to every `authorization` error on the
+> platform. See [../errors/README.md](../errors/README.md#two-more-categories-are-allowlisted).
+>
+> The `409 AUTH_ROLE_ALREADY_EXISTS` and `404 AUTH_PROFILE_NOT_FOUND` rows further down **are**
+> unaffected and do carry `details.role` — `conflict` and `not_found` are not allowlisted.
 
 ---
 
@@ -823,7 +843,7 @@ Sets fresh `access_token` and `refresh_token` cookies.
 |---|---|---|
 | `AUTH_MISSING_TOKEN` | `401` | No valid token reached the handler |
 | `AUTH_ACCOUNT_NOT_FOUND` | `401` | The `userId` in the token no longer exists |
-| `AUTH_ROLE_NOT_FOUND` | `403` | The account does not hold `:role`. `details.role` echoes it |
+| `AUTH_ROLE_NOT_FOUND` | `403` | The account does not hold `:role`. ⚠ **No `details`** — see [the note on `/auth/login`](#post-authlogin) |
 | `VALIDATION_ERROR` | `400` | `:role` is not one of the four authenticatable roles |
 | `AUTH_SESSION_CAP_REACHED` | `401` | The sign-in is older than 90 days. **Terminal** |
 

@@ -1,5 +1,7 @@
 # Agency Tickets
 
+**Verified against source on 2026-09-08** — all 14 routes, the `id`-vs-`_id` identifier rule (`core/base.schema.ts` + `TicketEnrichmentService.toObject`), and the agency actor-name resolution `display_name || Magazin.name || ""`, against `jovi-mall/src/modules/tickets/`.
+
 ## Base Path
 
 All endpoints in this document share this base path:

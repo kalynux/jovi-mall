@@ -1,5 +1,7 @@
 # Vendor Connections (Agency-Facing)
 
+**Verified against source on 2026-09-08** — all 8 routes and their verbs, against `jovi-mall/src/modules/agency-connections/routes/agency-connection.routes.ts`.
+
 ## Base Path
 
 ```

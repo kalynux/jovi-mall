@@ -1,5 +1,10 @@
 # Bot sign-in and password recovery — `/login` and `/reset-password`
 
+**Verified against source on 2026-09-08** — the two routes, all six `MAGIC_*` codes and their
+statuses, the 8-character code (`LOGIN_CODE_LENGTH`), the 10-minute TTL
+(`LOGIN_SESSION_TTL_SECONDS = 600`), the 5-attempt ceiling and the hardcoded `customer` role,
+against `jovi-mall/src/modules/messaging-login/`.
+
 Two commands on the same bots. **`/login`** signs a *customer* in without a password;
 **`/reset-password`** hands *any* account — vendor, agency, agent or customer — the same reset
 link `POST /auth/forgot-password` sends by email and WhatsApp. See

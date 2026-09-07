@@ -1,5 +1,10 @@
 # Front-end changelog — mobile client auth
 
+**Verified against source on 2026-09-08** — the five `/auth/mobile/*` routes, the `tokens`
+envelope, the absence of any `X-Client-Type` read anywhere in `src/`, and the 300/min session
+bucket, against `jovi-mall/src/modules/auth/routes/mobile-auth.routes.ts`,
+`controllers/mobile-auth.controller.ts` and `src/api/rate-limit/auth-paths.ts`.
+
 **Audience:** whoever wraps **agency-dash** (or any dashboard) in Capacitor.
 **Status:** backend shipped. Nothing is behind a flag. Everything is **additive** — no existing
 endpoint changed its request, its response, or its cookies.

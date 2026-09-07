@@ -1,5 +1,7 @@
 # Agency — COD Cash Management
 
+**Verified against source on 2026-09-08** — all 9 COD routes, every request validator, the COD config constants (exposure default 300 000, trust 80/50/×0.5, penalties −5/−20, reserve 10 %/30 d, both 2-day deadlines), the per-contract `late_deposit` scoping, the per-contract `remittance_terms` deadline and the AGENT-WIDE exposure sum, against `jovi-mall/src/modules/cod/` and `src/modules/shipment-assignment/`.
+
 ## Base Path
 
 ```
@@ -148,6 +150,7 @@ If the agent hands over **less** than they hold, record what you actually receiv
     "amount": 130000,
     "currency": "XAF",
     "note": "Evening cash desk",
+    "status": "confirmed",
     "recordedAt": "2026-07-11T18:00:00.000Z"
   },
   "message": "Deposit recorded — the agent's outstanding cash was reduced."
@@ -181,7 +184,7 @@ agent is holding 300,000 of which only 100,000 was collected for you, you can re
 ### GET /api/agency/cod/deposits
 
 **Description**: Deposit history. Query: `agentId?`, `status?` (`declared` | `confirmed` |
-`rejected`), `page?`, `limit?`.
+`rejected`), `page?` (default 1), `limit?` (default 20, max 100).
 
 **`?status=declared` is your inbox** — hand-overs your agents say they made and you have not
 answered. Anything sitting there past **2 days** gets flagged against you and freezes your reserve
@@ -232,7 +235,8 @@ flagged is silence, not disagreement.
 ```json
 { "reason": "Nothing was handed over at the desk on the 10th; our till reconciles." }
 ```
-- `reason` (string, required, ≤500 chars).
+- `reason` (string, required, **min 1** after trimming, ≤500 chars) — an all-whitespace reason is
+  rejected as a `400`.
 
 **Success Response** (`200 OK`): the deposit, `status: "rejected"`.
 
@@ -366,10 +370,54 @@ resolves the flag.
   (`COD_AGENT_EXPOSURE_EXCEEDED`) when the agent's held + expected cash would exceed their
   effective limit. The base limit is the **COD threshold on your contract with that agent** — a
   per-contract sub-allocation of the agent's own shared COD pool (an agent serving several agencies
-  splits one pool between them, so your slice binds only your dispatches). Set it via
+  splits one pool between them, so your slice binds only your dispatches).
+
+  ⚠ **The limit is yours; the exposure it is measured against is NOT.** `exposureBreakdown` sums
+  the agent's whole cash balance and **every** pending collection they hold, regardless of which
+  agency dispatched it (`cod/services/cod-exposure.service.ts:311-336`) — the source says so in
+  as many words: *"some of them may belong to a different agency than the one being refused."*
+  So a refusal can be caused entirely by cash another agency's delivery put in the agent's hands,
+  and raising **your** threshold will not always clear it. Set it via
   [`PATCH /api/agency/agents/:membershipId/cod-limit`](./agent-roster.md) with `{ "threshold": … }`;
   `0` grants no COD headroom at all. A raise can be refused if the agent's pool is already fully
   allocated across their contracts.
+
+  > ### ⚠ `threshold: 0` is the DEFAULT, and on two of the three paths it fails silently
+  >
+  > The sentence above is true and badly understated. Three facts compose into the most likely
+  > "why can I not dispatch this agent" support ticket a dashboard will generate:
+  >
+  > **1. Every new contract starts at zero.** `cod.threshold` has `default: 0` in the schema and
+  > in `contractDefaults` (`agents/models/agent-agency-membership.model.ts:348,406`). Approving
+  > an agent grants them **no** cash headroom.
+  >
+  > **2. Zero is not "unset".** The gate reads `contract.cod?.threshold ?? 0` and passes it as
+  > the base limit — `shipment-assignment.service.ts:1004` → `contract-policy.service.ts:383` on
+  > the manual path, `assignment-candidate.service.ts:226` on the ranking path. In
+  > `limitBreakdown`, `base = maxExposureOverride ?? COD_CONFIG.AGENT_MAX_EXPOSURE_DEFAULT`
+  > (`cod/services/cod-exposure.service.ts:265`) — and **`0` is not nullish**, so the platform
+  > default of 300,000 minor units (`cod.config.ts:32`) is never reached. `base` is `0`, and
+  > `exposure + amount > 0` refuses every COD shipment however small.
+  >
+  > **3. Two of the three dispatch paths say nothing.**
+  >
+  > | Path | What you see |
+  > |---|---|
+  > | `PATCH /api/agency/shipments/:id/assign-agent` | ✅ **Loud** — `422 COD_AGENT_EXPOSURE_EXCEEDED`, `details: { currentExposure, additionalAmount, effectiveLimit: 0 }` |
+  > | `GET /api/agency/shipments/:id/assignment-candidates` | ❌ **Silent** — the agent is simply absent from the list |
+  > | `POST /api/agency/shipments/:id/auto-assign` | ❌ **Silent** — no candidate, so nothing is offered |
+  >
+  > Both silent paths share one cause: `canTakeCod` wraps the gate in `try { … } catch { return
+  > false }` (`shipment-assignment/domain/services/assignment-candidate.service.ts:320-331`), so
+  > the reason is discarded along with the candidate.
+  >
+  > **What to build.** Treat `threshold === 0` on an `active` contract as an actionable warning in
+  > the roster and on the assignment panel, not as a neutral value — and when
+  > `assignment-candidates` comes back short for a COD shipment, check the contracts of the
+  > missing agents before reporting a platform fault.
+  > [`GET /api/agency/agents/:agentId/eligibility`](./agent-roster.md) reports every blocker at
+  > once and is the right diagnostic to link to.
+
 - **Trust tiers** — the base threshold is then scaled by the agent's trust score
   (≥80 → full, 50–79 → halved, <50 → blocked: `COD_AGENT_TRUST_TOO_LOW`). An open `cash_shortfall`
   discrepancy also blocks new COD assignments outright until an admin resolves it.

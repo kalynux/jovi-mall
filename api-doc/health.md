@@ -1,5 +1,10 @@
 # Health probes and metrics
 
+**Verified against source on 2026-09-08** — the three probe paths, their exact bodies, the
+Redis `up`/`idle`/`down` states and all three `/metrics` gates, against
+`jovi-mall/src/api/routes/health.routes.ts`, `src/app.ts:165-171` and
+`src/modules/system/metrics/metrics.routes.ts`.
+
 Unauthenticated, mounted on the bare app, and **ahead of the maintenance gate** — a probe that
 fails during a maintenance window makes the orchestrator restart the fleet, and telemetry matters
 most during an incident.

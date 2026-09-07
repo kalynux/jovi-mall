@@ -1,5 +1,7 @@
 # Agency — Live Tracking
 
+**Verified against source on 2026-09-08** — the board route and its guards, every `TrackingBoard*` field, the trackable-agent rule, the 200-shipment cap, the three `permission_revoked` reasons and the four-step ETA destination chain, against `jovi-mall/src/modules/tracking-integration/` and `geo-tracker/internal/modules/tracking/service/service.go`.
+
 The agency live-tracking map is served by **two** services, and the split is the
 point:
 

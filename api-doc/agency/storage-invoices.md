@@ -1,7 +1,22 @@
 # Storage statements
 
+**Verified against source on 2026-09-08** — all 4 routes, the counted-stock-only billing basis (`source: "counted"`, `quantity_on_hand > 0`), the `0 2 1 * *` schedule and the `409 STORAGE_INVOICE_NOT_OPEN` compare-and-set, against `jovi-mall/src/modules/inventory/`.
+
 The monthly record of what a vendor owes this agency for warehousing their stock. One
 statement per (agency, vendor, month).
+
+> ⚠ **A statement is a RECORD. The platform moves none of this money.** It does not collect the
+> rent from the vendor and does not pay it to the agency. The statement exists so both sides read
+> one durable number instead of an agency quoting a live figure off its own screen, and **`settle`
+> is the agency stating it was paid out of band** — not a payment. The vendor's mirror of this page
+> is read-only and has deliberately **no dispute verb**, for the same reason: the platform is not a
+> party to this money. Say all of that plainly in the UI; a "Settle" button that reads like "Pay"
+> is the one way this screen can mislead.
+>
+> A `void` keeps the row rather than deleting it — a missing month is indistinguishable from a
+> month nobody billed, and this record is what tells them apart. `settle` and `void` are
+> compare-and-set from `open`; a statement already settled or voided answers
+> **`409 STORAGE_INVOICE_NOT_OPEN`** (`agency-storage-invoice.service.ts:168,180`), never a 404.
 
 > Related docs: [Inventory](./inventory.md) (the shelves being billed) ·
 > [Magazin](./magazin.md) (the depots) · [Onboarding](./onboarding.md#field-reference--policiespricing)

@@ -1,5 +1,7 @@
 # Agency Earnings
 
+**Verified against source on 2026-09-08** — the 3 routes and the auth/error codes, against `jovi-mall/src/modules/earnings/routes/agency-earnings.routes.ts` and `src/core/error-codes.ts`.
+
 ## Base Path
 
 ```
@@ -132,8 +134,8 @@ balance.
 | `currency` | `string` | Currency code for all balances. |
 
 **Error Responses**:
-- `401` – `AUTH_MISSING_TOKEN` · `AUTH_TOKEN_EXPIRED` · `AUTH_TOKEN_INVALID` – Missing or invalid auth token.
-- `403` – `AUTH_ROLE_NOT_FOUND` – Valid token but not an agency.
+- `401` – `AUTH_MISSING_TOKEN` / `AUTH_TOKEN_EXPIRED` / `AUTH_TOKEN_INVALID` – Missing, expired or malformed token. ⚠ **There is no bare `UNAUTHORIZED` code in the registry.**
+- `403` – `AUTH_ROLE_NOT_FOUND` – Valid token but not an agency. ⚠ **There is no bare `FORBIDDEN` code in the registry.**
 
 ---
 

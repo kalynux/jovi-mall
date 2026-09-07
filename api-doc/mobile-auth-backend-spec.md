@@ -1,5 +1,28 @@
 # Mobile client auth — backend work specification
 
+**Verified against source on 2026-09-08** — ⚠ **this is a HISTORICAL ASK, and every item in it
+has been answered.** Do not build from the "Required" column below; build from the reply,
+[auth/FRONTEND-CHANGELOG-mobile-auth.md](./auth/FRONTEND-CHANGELOG-mobile-auth.md), and from
+[auth/README.md § Mobile namespace](./auth/README.md#mobile-namespace--bearer-clients).
+
+| # | Asked for | What actually happened |
+|---|---|---|
+| **C0** | restore the password check in `login` | ✅ **shipped** — `auth.service.ts:330-331` compares with bcrypt and throws `401 AUTH_INVALID_CREDENTIALS`; pinned by a source scan in `test:mobile-auth` |
+| **C1** | an `X-Client-Type: mobile` request marker | 🔴 **DECLINED.** The route namespace is the switch instead. No such header is read anywhere in `src/` — sending one does nothing. The reason crosses a service boundary: geo-tracker's CORS allows a closed header list, so a new non-safelisted request header would have forced an edit in two repositories |
+| **C2** | tokens in the response body, mobile mode only | ✅ **shipped**, but as a namespace rather than a mode — `POST /api/auth/mobile/login`, `/register`, `GET /mobile/auth-me/:role`, `POST /mobile/add-role` return `data.tokens` and set no cookie |
+| **C3** | a refresh endpoint taking the token in the body | ✅ **shipped** — `POST /api/auth/mobile/refresh`, and it returns a fresh **pair**, not just an access token |
+| **C4** | read the bearer header, ignore cookies | ✅ **shipped, and stronger than asked**: the bearer is read **first** on every route, and an expired bearer is never silently refreshed from an ambient cookie (`auth.middleware.ts`) |
+| **C5** | CORS for the Capacitor origins | ✅ **configuration, not code** — add them to `ALLOWED_ORIGINS`. No new header was needed, because C1 was declined |
+| **C6** | the `/auth` IP bucket will not survive mobile refresh traffic | ✅ **shipped** — `/api/auth/mobile/refresh` sits in a second, looser bucket at **300/min/IP** (`rate-limit/auth-paths.ts`), while credential paths stay at 20 |
+| **C7** | geo-tracker: same origin allowance | ✅ **configuration** — geo-tracker's `ALLOWED_ORIGINS` drives both its HTTP CORS and its WebSocket `CheckOrigin`; no Go source changed |
+
+The document is kept because § 1's argument — *why* a WebView cannot use the cookie session — is
+still the reason the mobile namespace exists, and § 7's "no change needed" findings are still
+true.
+
+---
+
+
 **For:** jovi-mall backend team
 **From:** agency-dash frontend
 **Why:** we are wrapping the agency dashboard in Capacitor (iOS + Android). The app runs our
