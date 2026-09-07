@@ -1,6 +1,8 @@
 # Geospatial Addresses & Address Search
 
-**Verified against source on 2026-09-06** — every claim on this page was checked against
+**Verified against source on 2026-09-06**, and the geocoding-ownership claim re-checked against
+**geo-tracker's** Go source on **2026-09-08** (see the ⚠ at the foot of this page) — every claim
+was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). This page had gone stale against the 2026-08-23 provider-chain work;
 corrections are marked inline with ⚠ and a source citation.
@@ -275,5 +277,21 @@ window stays short.
 
 The seam is `IGeocodingProvider` (`src/core/geocoding/`). Adding Google/Mapbox/HERE/Geoapify is one
 adapter file + a factory case; **no consumer changes**. Because geocoding is an address concern and
-jovi-mall owns addresses, the whole provider abstraction lives in jovi-mall — geo-tracker owns live
-positions and road networks, not address resolution.
+jovi-mall owns addresses, the whole provider abstraction **for the order and profile model** lives
+in jovi-mall.
+
+> ⚠ **This sentence ended "— geo-tracker owns live positions and road networks, not address
+> resolution" until 2026-09-08, and that last clause is false.** geo-tracker exposes
+> `GET /routing/geocode` and `GET /routing/reverse-geocode`, registered at
+> `geo-tracker/internal/modules/routing/delivery/http/routes.go:17-18` and implemented against the
+> live provider at `handler.go:122-160` — real calls, not stubs. Whether they answer depends on
+> that service's own `ROUTING_PROVIDER`; its default `chain`
+> (`geoapify,locationiq,osrm`) **can** geocode as soon as either key is set, and a keyless host
+> falls back to OSRM alone and returns `501`. See
+> [`geo-tracker/api-doc/routing.md`](../../../geo-tracker/api-doc/routing.md), which documented
+> this correctly the whole time.
+>
+> **The narrower claim is the true one, and it is the one that matters here:** resolving an address
+> *for an order or a profile* is jovi-mall's alone, and the `GeoAddress` value object above has no
+> counterpart in geo-tracker. A client already authenticated to geo-tracker may legitimately use
+> its geocoder — it simply must not be the thing that produces a stored `GeoAddress`.

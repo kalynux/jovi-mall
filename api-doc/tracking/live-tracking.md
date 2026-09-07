@@ -1,5 +1,14 @@
 # Live Tracking
 
+**Verified against source on 2026-09-08** — both routes under `/api/tracking`, the five per-role
+visibility rules, the five trackable statuses, the response shape, the three `permission_revoked`
+reasons and the outbox→dispatcher mechanism (2 s drain, batch 50, 10 attempts), against
+`jovi-mall/src/modules/tracking-integration/` (`routes/tracking.routes.ts`,
+`controllers/tracking.controller.ts`, `services/visible-agents.service.ts`,
+`config/tracking-integration.config.ts`, `workers/tracking-dispatch.worker.ts`) and, for the
+frame contract, `geo-tracker/internal/modules/tracking/domain/entity.go`. No factual errors were
+found; one gap filled — `POST /api/tracking/agent-state` shares this mount and was unlisted.
+
 Live agent tracking is served by a **separate service** — `geo-tracker`
 ("Project B", Go) — not by this backend. This backend remains the source of
 truth: it owns the authorization policy and tells geo-tracker when a shipment
@@ -101,6 +110,22 @@ the result. Frontends have no reason to call it directly.
 |---|---|
 | `all` | `true` only for `admin` — the wildcard "sees everyone". `agents` is then empty and irrelevant. |
 | `agents` | Delivery-agent ids (`DeliveryAgent._id`) the caller may track. Empty for vendors, and for anyone with no active shipments/orders. |
+
+---
+
+## POST /api/tracking/agent-state
+
+The other half of this seam, and the **inbound** direction: geo-tracker POSTs an
+agent's tracking-state change here. **Not for frontends** — it is guarded by
+`requireServiceToken` (`INTERNAL_SERVICE_TOKEN`), not by a user session, and it is
+declared *before* this router's `requireAuth` for exactly that reason.
+
+It always answers `200`, reporting the outcome in the body as `applied`,
+`ignored_stale` or `unknown_agent`. Full contract:
+[`geo-tracker/api-doc/tracking-notifications.md`](../../../geo-tracker/api-doc/tracking-notifications.md).
+
+Named here because these are the **only two routes** under `/api/tracking`, and a
+reader who found just one would reasonably conclude the mount had only one.
 
 ---
 
