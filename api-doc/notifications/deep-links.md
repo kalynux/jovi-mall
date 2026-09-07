@@ -180,8 +180,10 @@ try `dashboardRoute(path)` (or your resolver) before falling back to `/dashboard
 the same translation you already do for push, applied one layer up.
 
 **The agent app** — it cannot receive one at all. It is a Flutter mobile app with **no App
-Links and no custom scheme** in its `AndroidManifest.xml`, where vendor-dash and agency-dash
-each have four such entries. Its own `api-doc/agent/push-notifications.md` already says
+Links and no custom scheme** in its `AndroidManifest.xml` — measured 2026-09-08: **zero**
+`<data android:scheme…>` entries, against **two each** for vendor-dash (`wivendor://` plus an
+`autoVerify` App Link on `vendor.wi-mall.com`) and agency-dash (`wiagency://` plus the same
+on its own host). Its own `api-doc/agent/push-notifications.md` already says
 `url` is *"Web-oriented; ignore it on mobile"*, which is correct advice and also means the
 emailed button has nowhere to go.
 
