@@ -111,6 +111,11 @@ an admin marks it paid, or returns to `available` if the admin rejects it.
 | `pending` | `number` | Sum of net shares from paid/collected-but-not-yet-released sources (still within the completion/hold window, or COD cash not yet settled). Minor currency units. |
 | `available` | `number` | Sum of net shares whose hold window has elapsed (and, for COD, whose cash was settled). Withdrawable via a payout request (see below). Minor currency units. |
 | `reserve` | `number` | Always `0` for vendors (see above). Minor currency units. |
+
+> ⚠ **"Minor currency units" does not mean "divide by 100" here.** `EARNINGS_CURRENCY` defaults to
+> **XAF**, a zero-decimal currency whose minor unit *is* the franc — so `142000` is XAF 142,000,
+> not 1,420. A client that applies the Stripe habit will under-report every balance by two orders
+> of magnitude. Read `currency` and pick the exponent from it rather than assuming either way.
 | `requested` | `number` | Earmarked for a pending payout request (see below). Minor currency units. |
 | `currency` | `string` | Currency code for all balances. |
 

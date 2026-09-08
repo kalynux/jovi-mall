@@ -1,5 +1,13 @@
 # Vendor Inventory Management API
 
+**Verified against source on 2026-09-08** — re-verified after 2026-09-06; three further defects
+fixed (the `availableStock` formula ignored `allowOversell`, the alert status condition on the
+variant was undocumented, and the bulk-update failure body was shown as a bespoke
+`{ success, errors }` instead of the standard envelope), against
+`src/modules/catalog/controllers/vendor-inventory.controller.ts`,
+`domain/services/inventory/InventoryAvailabilityCalculator.ts` and
+`repositories/mongo/variant.repository.mongo.ts`.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–26). Corrections are marked inline with ⚠ and a source citation.
@@ -106,7 +114,7 @@ Returns a paginated list of variants that are at or below their configured `lowS
 | `sku` | string | Variant SKU |
 | `currentStock` | number | Raw stock count stored on the variant |
 | `activeReservations` | number | Units currently locked by in-flight orders |
-| `availableStock` | number | `currentStock - activeReservations` (what customers can actually buy) |
+| `availableStock` | number | What customers can actually buy. ⚠ **The formula depends on `allowOversell`** — `allowOversell ? currentStock : currentStock - activeReservations` (`InventoryAvailabilityCalculator.calculate:32-39`). On an oversell-enabled variant reservations do **not** reduce it, so `availableStock === currentStock` there and the two numbers agreeing is not a bug |
 | `threshold` | number | The `lowStockThreshold` value configured on the variant |
 | `stockPercentage` | number \| null | `availableStock / threshold * 100`; null if not calculable |
 
@@ -114,6 +122,7 @@ Returns a paginated list of variants that are at or below their configured `lowS
 
 **Business Rules:**
 - Only variants with `lowStockThreshold` set (non-null) are evaluated
+- ⚠ **The status condition is on the VARIANT, not the product.** `findByVendorWithThreshold` matches `status: 'active'` and `deletedAt: null` on the *variant* document (`variant.repository.mongo.ts:152-178`) and puts **no condition on the product's status at all** — the `$lookup` on the product is used only to resolve `vendorId`. Archiving a product does not touch its variants (`ProductArchiveService.ts:27-29` writes the product row alone), so **a draft or archived product still raises low-stock alerts** for every variant of its own that is `active`. Do not build a screen that assumes an alert implies a live listing
 - ⚠ **A variant with `isInfiniteStock: true` CAN appear.** The flag is not consulted anywhere on this path: `InventoryAvailabilityCalculator.calculate` reads `stock`, `activeReservations` and `allowOversell` only (`InventoryAvailabilityCalculator.ts:29-39`), so an infinite-stock variant whose stored `stock` number happens to sit at or under its threshold produces an alert about a quantity that means nothing. Filter these out client-side
 - `availableStock` accounts for active reservations — a variant with 5 stock and 5 active reservations shows `availableStock: 0`
 
@@ -124,7 +133,7 @@ Returns a paginated list of variants that are at or below their configured `lowS
 Set absolute stock levels for multiple physical product variants in a single atomic operation.
 
 > [!IMPORTANT]
-> **All-or-nothing semantics** — for the rows this endpoint actually writes. The batch runs inside a database transaction. If any row fails validation, **no rows are updated** and a `{ "success": false, "errors": [...] }` response is returned. There is no partial success.
+> **All-or-nothing semantics** — for the rows this endpoint actually writes. The batch runs inside a database transaction. If any row fails validation, **no rows are updated** and a `400 VALIDATION_ERROR` is returned in the **standard error envelope**, with the per-row failures at `error.details.errors` (`vendor-inventory.controller.ts:130`). There is no partial success, and there is no bespoke `{ success: false, errors }` body — see [Validation Failure Response](#validation-failure-response-400) below.
 
 > [!WARNING]
 > **Rows on an agency-warehoused product are not written.** A SKU whose product has
@@ -255,23 +264,38 @@ Returned when **all rows** pass validation and are updated:
 
 Returned when **any row** fails validation. No rows are updated.
 
+⚠ **This is the ordinary error envelope, and the rows are two levels down at
+`error.details.errors`** — not a top-level `errors` array. The controller raises
+`createAppError(VALIDATION_ERROR, 400, 'Bulk update failed', { errors })`
+(`vendor-inventory.controller.ts:130`), and `validation` is not one of the two categories whose
+`details` the boundary strips, so the rows survive to the client in every environment.
+
 ```json
 {
   "success": false,
-  "errors": [
-    {
-      "row": 2,
-      "variantId": "507f1f77bcf86cd799439061",
-      "error": "VARIANT_ARCHIVED",
-      "message": "Cannot update stock for archived variant"
-    },
-    {
-      "row": 3,
-      "variantId": "507f1f77bcf86cd799439062",
-      "error": "FORBIDDEN",
-      "message": "Variant does not belong to vendor"
+  "requestId": "req_a1b2c3",
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Bulk update failed",
+    "statusCode": 400,
+    "category": "validation",
+    "details": {
+      "errors": [
+        {
+          "row": 2,
+          "variantId": "507f1f77bcf86cd799439061",
+          "error": "VARIANT_ARCHIVED",
+          "message": "Cannot update stock for archived variant"
+        },
+        {
+          "row": 3,
+          "variantId": "507f1f77bcf86cd799439062",
+          "error": "FORBIDDEN",
+          "message": "Variant does not belong to vendor"
+        }
+      ]
     }
-  ]
+  }
 }
 ```
 
@@ -415,7 +439,7 @@ Active stock reservations — units temporarily locked by in-flight orders that 
   "success": true,
   "data": [
     {
-      "reservationId": "res-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "reservationId": "66b2f0a1c3d4e5f60718293a:507f1f77bcf86cd799439060",
       "variantId": "507f1f77bcf86cd799439060",
       "sku": "SHIRT-BLK-M",
       "productTitle": "Blue T-Shirt",
@@ -440,7 +464,7 @@ Active stock reservations — units temporarily locked by in-flight orders that 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `reservationId` | string | Unique idempotency key for this reservation |
+| `reservationId` | string | The idempotency key, **not a UUID** — it is the literal `"<cartId>:<variantId>"` (`OrderStockService.reservationIdFor:104-106`). Treat it as opaque; do not split it to recover the cart |
 | `variantId` | string | Reserved variant |
 | `sku` | string | Variant SKU (enriched) |
 | `productTitle` | string | Product title (enriched) |

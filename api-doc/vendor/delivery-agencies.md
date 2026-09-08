@@ -1,5 +1,13 @@
 # Delivery Agencies (Vendor-Facing)
 
+**Verified against source on 2026-09-08** — the listing's DTO and its rating resolution, against
+`src/modules/vendor/controller/vendor-profile.controller.ts:84-108`,
+`src/modules/vendor/service/vendor-profile.service.ts:871-899,737-743,786`,
+`src/modules/vendor/dto/vendor-agency.dto.ts:155-190` and
+`src/modules/agency-connections/connection.service.ts:576-590`. **One live defect fixed:**
+`rating`/`ratingCount` never populate on this endpoint and this page told the reader to render
+them.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
@@ -88,8 +96,8 @@ Only agencies that meet **both** of the following conditions are returned:
       },
       "country": "CM",
       "coverageAreas": ["littoral", "centre", "west"],
-      "rating": 4.6,          // null when nobody has rated them
-      "ratingCount": 38,      // 0 when rating is null
+      "rating": null,         // 🔴 ALWAYS null on this endpoint — see the field table
+      "ratingCount": 0,       // 🔴 ALWAYS 0 on this endpoint
       "policies": {
         "pricing": {
           "storage_based_enabled": true,
@@ -141,8 +149,18 @@ Only agencies that meet **both** of the following conditions are returned:
 | `headquartersAddress` | `object \| null` | Primary headquarters address (always index 0). See below. |
 | `country` | `string \| null` | 🆕 ISO-2 country the agency operates in (e.g. `"CM"`), set once at their onboarding. What scopes `coverageAreas` to a region catalogue. `null` on legacy agencies. |
 | `coverageAreas` | `string[]` | Region keys this agency serves (e.g. `["littoral", "centre"]`), from `locations.json`, always within `country`. |
-| `rating` | `number \| null` | Service rating, 0–5, from this agency's **customers'** delivery reviews. `null` when nobody has rated them — never `0`. Only customer reviews feed it: an agency's own reviews of its agents move the *agent's* score, so a directory rating can never be self-reported. See [reviews.md](../reviews.md). |
-| `ratingCount` | `number` | How many reviews `rating` averages. `0` when `rating` is `null`. **Render it** — 5.0 from one delivery and 4.6 from two hundred are not the same claim. |
+| `rating` | `number \| null` | 🔴 **Always `null` on THIS endpoint.** `VendorAgencyMapper.toListItemDto` takes the rating as its **fourth** parameter, defaulting to `null` (`vendor-agency.dto.ts:165,190`), and `listAvailableAgencies` calls it with **three** arguments (`vendor-profile.service.ts:887-891`). `GET /api/vendor/profile/default-delivery-agency` is the same (`:786`). Definitionally it is a 0–5 service rating from this agency's **customers'** delivery reviews, `null` when nobody has rated them — but nothing populates it here. See [reviews.md](../reviews.md). |
+| `ratingCount` | `number` | 🔴 **Always `0` on this endpoint**, for the same reason. |
+
+> 🔴 **Do not build a stars UI on this endpoint.** This table said *"**Render it** — 5.0 from one
+> delivery and 4.6 from two hundred are not the same claim"* until 2026-09-08, and the example
+> above showed `4.6` / `38`. Both were wrong: a client following them displays "no ratings" for
+> every agency, forever.
+>
+> **Ratings that do resolve** are on `GET /api/vendor/agency-connections/browse`, which passes the
+> fourth argument (`connection.service.ts:579-584`) — and which also carries the connection status
+> this endpoint does not. Use that one when you need ratings. See
+> [agency-connections.md](./agency-connections.md).
 | `policies` | `object \| null` | Policy summary. See below. Always present for agencies with `onboardingStep = 0`. |
 
 ### `headquartersAddress`

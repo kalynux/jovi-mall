@@ -1,5 +1,14 @@
 # Vendor Tickets
 
+**Re-verified against source on 2026-09-08** — the enum sizes (39 `TicketType`, 9 `TicketStatus`,
+11 `EntityType`, 4 `TicketPriority`) and, in particular, **every open-defect box on this page**,
+against `src/modules/tickets/`. Two of them had been fixed since 2026-09-06 and were still being
+reported as live: the missing follower check on `PATCH /:id/priority`
+(`ticket.service.ts:422-423`) and the `admin_assignment` / `tier` disclosure
+(`ticket-enrichment.service.ts:189`). `PATCH /:id/assign` (`:254-255`) and `POST /:ticketId/notes`
+(`ticket-note.service.ts:65-66`) are also guarded now. **Three routes are still unguarded** —
+`GET /:ticketId/notes`, `GET`/`POST /:ticketId/attachments`.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–26). Corrections are marked inline with ⚠ and a source citation.
@@ -657,10 +666,11 @@ Body:
 - `403` – `TICKET_PRIORITY_LOCKED` – Priority is locked by an admin and cannot be modified. ⚠ There is no `PRIORITY_LOCKED` in the registry
 - `400` – `VALIDATION_ERROR` – Invalid priority value
 
-> ⚠ **This route performs NO follower check.** `TicketService.updatePriority` looks up the
-> ticket, refuses a closed one, refuses a locked one — and never asks whether the caller
-> follows it. Any signed-in vendor can raise or lower the priority of any ticket whose id they
-> hold. Reported as a backend defect; **do not build on it.**
+> ✅ **The follower check is now present — re-verified 2026-09-08.** This box said the route had
+> none. `TicketService.updatePriority` calls `followerService.isFollower` at
+> `ticket.service.ts:422-423` and refuses a non-follower, so a `403` on someone else's ticket is
+> now the expected answer rather than a silent success. Order of guards: ticket lookup → closed →
+> **follower** → locked.
 
 ---
 
@@ -831,7 +841,7 @@ Body:
 ```
 
 **Error Responses**:
-- ~~`404` – `TICKET_NOT_FOUND` – Ticket not found~~ — **UNREACHABLE.** This route performs no ticket lookup at all; an unknown `ticketId` returns an empty list, and there is no follower check either. Reported as a backend defect.
+- ~~`404` – `TICKET_NOT_FOUND` – Ticket not found~~ — **UNREACHABLE.** This route performs no ticket lookup at all; an unknown `ticketId` returns an empty list, and there is no follower check either. Reported as a backend defect; **still open, re-verified 2026-09-08.**
 
 ---
 
@@ -908,7 +918,7 @@ Body:
 ```
 
 **Error Responses**:
-- ~~`404` – `TICKET_NOT_FOUND` – Ticket not found~~ — **UNREACHABLE.** `TicketAttachmentService.attachFile` never loads the ticket, so an unknown `ticketId` attaches the file to a ticket that does not exist. No follower check either. Reported as a backend defect.
+- ~~`404` – `TICKET_NOT_FOUND` – Ticket not found~~ — **UNREACHABLE.** `TicketAttachmentService.attachFile` (`ticket-attachment.service.ts:65`) never loads the ticket, so an unknown `ticketId` attaches the file to a ticket that does not exist. No follower check either. Reported as a backend defect; **still open, re-verified 2026-09-08** (unlike the priority and assign routes, which have since been fixed).
 - `404` – `TICKET_ATTACHMENT_MISSING` – `fileId` does not reference an existing file
 - `403` – `TICKET_ACCESS_DENIED` – The file belongs to another user (only the file owner or an admin can attach it)
 - `422` – `TICKET_ATTACHMENT_LIMIT_EXCEEDED` – Maximum 5 attachments per ticket reached
@@ -962,7 +972,7 @@ Body:
 ```
 
 **Error Responses**:
-- ~~`404` – `TICKET_NOT_FOUND` – Ticket not found~~ — **UNREACHABLE.** This route performs no ticket lookup at all; an unknown `ticketId` returns an empty list, and there is no follower check either. Reported as a backend defect.
+- ~~`404` – `TICKET_NOT_FOUND` – Ticket not found~~ — **UNREACHABLE.** This route performs no ticket lookup at all; an unknown `ticketId` returns an empty list, and there is no follower check either. Reported as a backend defect; **still open, re-verified 2026-09-08.**
 
 ---
 
@@ -1028,13 +1038,12 @@ documented shape goes stale unnoticed.
   `avatar_url` and drops the rest, and the hierarchy is deliberately not disclosed to a ticket
   follower.
 
-  ⚠ **The response as a whole does not keep that promise, and this page used to imply it did.**
-  Beside `assigned_admin` the same body carries the raw **`admin_assignment`** block, because
-  `TicketEnrichmentService` builds its payload with `toObject({ virtuals: true })` and never
-  deletes the field (`ticket-enrichment.service.ts:123,169`). So an assigned ticket discloses
-  `admin_assignment.admin.id`, `.source` and **`.tier`** to every follower — vendor, customer,
-  agency and agent alike. **Reported as a backend defect; render from `assigned_admin` and do
-  not build on `admin_assignment`,** which is expected to be projected away.
+  ✅ **The response now keeps that promise — re-verified 2026-09-08.** This block used to record
+  the opposite: `TicketEnrichmentService` built its payload with `toObject({ virtuals: true })`
+  and never deleted the raw `admin_assignment`, so `.id`, `.source` and `.tier` reached every
+  follower. It now ends with `delete obj.admin_assignment`
+  (`ticket-enrichment.service.ts:189`), and the field is **absent from the wire**. Render from
+  `assigned_admin`; a client reading `admin_assignment` gets `undefined`, not stale data.
 
 - `admin_assignment.admin.id` is an `admin_accounts._id` in the **administration service**.
   **It resolves to nothing here** — there is no cross-database join at any price — so treat it

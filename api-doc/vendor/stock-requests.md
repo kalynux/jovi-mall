@@ -216,7 +216,7 @@ variant PATCH. No notification is sent, matching the connection flow.
 | Code | HTTP | Meaning |
 |---|---|---|
 | `STOCK_REQUEST_NOT_FOUND` | 404 | Not yours |
-| `STOCK_REQUEST_NOT_PENDING` | 409 | Already resolved. **Reload — do not retry** |
+| `STOCK_REQUEST_NOT_PENDING` | 409 | Already resolved. **Reload — do not retry.** `details: { status }` on the up-front guard (`stock-request.service.ts:469`) and **no `details`** on the compare-and-set race (`:291`, `:340`, `:384`) — do not require the field |
 | `STOCK_REQUEST_NOT_YOURS` | 403 | Wrong verb for your side; `details.availableActions` |
 | `STOCK_REQUEST_STALE` | 409 | The product stopped being warehoused by that agency |
 | `CATALOG_VARIANT_NOT_FOUND` | 404 | The SKU was deleted under the request |

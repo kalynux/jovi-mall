@@ -1,5 +1,15 @@
 # File Management Service API Documentation
 
+**Verified against source on 2026-09-08** — the file-listing query schema, the row shape, the
+`url`/`access` addition on both read paths and the reference/deletion contract, against
+`src/api/validators/file-management.validator.ts:24-55`,
+`src/modules/catalog/repositories/mappers/file.mapper.ts:41-59`,
+`src/api/controllers/file-management.controller.ts:185,325,340-385,599-600` and
+`src/modules/catalog/read-models/file-detail.resolver.ts:114-120`. **Two defects fixed:**
+`usageCount` is no longer on the wire (it still appears ~40 times below), and the quota-blocked box
+described a shape the source has since changed. The lifecycle, storage-provider and security
+sections were **not** re-read.
+
 **Version:** 1.2 · **Written:** 2026-06-11
 **Verified against source on 2026-09-08** — the live route list, guards, query schema, list
 response shape and storage summary, against `jovi-mall/src/api/routes/file-upload.routes.ts`,
@@ -42,6 +52,27 @@ response shape and storage summary, against `jovi-mall/src/api/routes/file-uploa
 > ownership and linking rules, and the concurrency notes. Those are the reason this page was
 > kept rather than replaced.
 >
+> ### 🔴🔴 `usageCount` IS NOT ON THE WIRE — it does not exist any more
+>
+> Measured 2026-09-08. `File.usageCount` was replaced by the **`file_references`** collection
+> (`file-reference.model.ts:17`, `FileAttachService.ts:110`, `FileDetachService.ts:86`), and
+> `FileMapper.toDomain` (`file.mapper.ts:41-59`) does not emit it. **A client reading
+> `file.usageCount` gets `undefined`**, so a guard like `if (file.usageCount === 0)` never fires.
+>
+> | You want | Read |
+> |---|---|
+> | how many entities use this file | `GET /api/files/:id` → **`usage.totalReferences`** |
+> | where exactly | `usage.references[]` (`{ entityType, entityId, field, label }`), plus the legacy `usage.products[]` / `usage.variants[]` / `usage.digitalAssets[]` |
+> | may I delete it | call `DELETE /api/files/:id`; it answers `409 CATALOG_FILE_STILL_REFERENCED` while `totalReferences > 0` (`file-management.controller.ts:599-600`) |
+>
+> ⚠ **`usageCount` still appears ~40 times below this box**, describing the retired counter and
+> its `$inc` mechanics. That is an accurate account of how reference counting used to work and a
+> wrong account of the current wire. The full row is `id · key · provider · mimeType · size ·
+> checksum · originalName · ownerType · ownerId · orphanedAt · quotaBlockedAt · createdAt ·
+> updatedAt · deletedAt · purgeAt`, plus `url` and `access`.
+
+---
+
 > ### 🔴 One thing this page could not have known: a file can be QUOTA-BLOCKED
 >
 > Added 2026-08 (`src/modules/plan-quota/`). When a plan downgrade puts an owner over
@@ -50,14 +81,20 @@ response shape and storage summary, against `jovi-mall/src/api/routes/file-uploa
 > the same files. It is **not** a deletion and it is **not** the soft-delete this page
 > describes; nothing on the deletion-lifecycle sections below covers it.
 >
-> It surfaces in **two different dialects**, and that is the trap:
+> **These two routes report it TWICE, and `access` is the one to read:**
 >
 > | Where | Field | Blocked value |
 > |---|---|---|
 > | any `FileDetail` (product media, branding, avatars) | `access` | `"quota_blocked"`, with **`url: null`** |
-> | `GET /api/files` · `GET /api/files/:id` — these routes | `quotaBlockedAt` | an ISO timestamp instead of `null`; there is **no `access` and no `url` key on this shape at all** |
+> | `GET /api/files` · `GET /api/files/:id` — these routes | `access` **and** `quotaBlockedAt` | `"quota_blocked"` / `url: null`, **plus** an ISO timestamp on `quotaBlockedAt` |
 >
-> These routes return the raw `File` domain object (`file.mapper.ts:41-59`), not a `FileDetail`.
+> ⚠ **This box said these routes carried `quotaBlockedAt` and "no `access` and no `url` key at
+> all". Re-measured 2026-09-08 and that is no longer true.** Both handlers map the row through
+> `withUrlAndAccess` (`file-management.controller.ts:185` list, `:325` detail), which spreads the
+> raw `File` from `file.mapper.ts:41-59` and **adds** `url` and `access`
+> (`file-detail.resolver.ts:114-120`). One check — `access === "quota_blocked"` — now works on
+> every surface. ⚠ **That change is uncommitted working-tree state** (`git show HEAD` of the
+> controller has no `withUrlAndAccess`); confirm against the deployed build.
 > Also: `quota_blocked` **outranks** `authorized`, so test it first; a blocked file's bytes
 > **still count** toward `usedBytes` (blocking frees no space); and a vendor's
 > **digital-product asset files are exempt** from the media cap and are never blocked.
@@ -624,7 +661,9 @@ GET /api/files?ownerType=vendor&provider=cloudinary
 
 Lightweight storage usage + plan limit summary for the authenticated owner — the same `storage` object embedded in `GET /api/files`, without the file list. Use it for a storage usage widget.
 
-**Authentication:** Required (vendor / customer / agent). Admins receive `403 FORBIDDEN` (no owner scope).
+**Authentication:** Required (vendor / customer / agent). Admins receive **`403 AUTH_FORBIDDEN`**
+(no owner scope) — `file-management.controller.ts:216-221`. ⚠ Not `FORBIDDEN`, which is in no
+registry.
 
 **Success Response (200):**
 ```json

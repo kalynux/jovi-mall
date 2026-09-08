@@ -1,5 +1,19 @@
 # Vendor Media Storage
 
+**Verified against source on 2026-09-08** — the `storage` object and its six category keys, the
+per-type upload caps, the video route's limits, the alert thresholds and the plan-quota blocking,
+against `src/api/controllers/file-management.controller.ts:183-225`,
+`src/api/validators/file-management.validator.ts:14`, `src/core/uploads/upload-config.ts:130-195,329-338`,
+`src/api/routes/file-upload.routes.ts:29-47`, `src/config/file-cleanup.config.ts:124`,
+`src/modules/file-cleanup/services/StorageAlertService.ts` and `src/modules/plan-quota/`.
+**§ 3.1 is new** — the downgrade-blocking behaviour was documented in the `vendor-dash` copy on
+2026-09-08 and was missing from this page entirely.
+
+> ⚠ The `byCategory` keys are **singular** — `image`, `video`, `audio`, `document`, `archive`,
+> `other` (`file-management.validator.ts:14`) — while the *storage folders* a file lands in are
+> **plural** (`images/`, `videos/`, …). Two vocabularies for the same six groups; do not key one
+> off the other.
+
 How product-media storage works for vendors: the per-plan limit, how to read
 usage/analytics, how uploads are gated, the storage-alert notifications, and the
 automated storage lifecycle (cleanup) that can detach/delete unused media.
@@ -101,7 +115,10 @@ breakdown, limit and remaining — without listing files.
 | `remainingBytes` | number\|null | `max(0, limitBytes − usedBytes)`. `null` when there is no limit. |
 | `byCategory` | object | Per-category `bytes` + file `count`. Categories: `image, video, document, audio, archive, other`. |
 
-**Errors**: `401 UNAUTHORIZED`, `403 FORBIDDEN` (admin or unsupported role).
+**Errors**: `401` — `AUTH_MISSING_TOKEN` / `AUTH_TOKEN_EXPIRED` / `AUTH_TOKEN_INVALID`
+(`auth.middleware.ts:126`) · `403 AUTH_FORBIDDEN` for an admin or unsupported role
+(`file-management.controller.ts:216-221`). ⚠ **Neither `UNAUTHORIZED` nor `FORBIDDEN` is in the
+registry** — this line named both until 2026-09-08.
 
 **Frontend tips:**
 - Render a usage bar from `usedBytes / limitBytes`; show the per-category split from `byCategory`.
@@ -183,6 +200,63 @@ reason as a per-file `violations[].code`: `FILE_TOO_LARGE` (413, exceeds the per
 Delete unreferenced files via `DELETE /api/files/:id` (only allowed when the file
 has no live references — detach it from products/variants first; see
 [File Management](./file-management.md)). Deleting media reduces `usedBytes`.
+
+---
+
+## 3.1 🔴 Going over the cap by DOWNGRADING — files are blocked, not refused
+
+`src/modules/plan-quota/`. Section 3 above is the *upload* gate: it refuses new bytes at the door,
+and it can do nothing about a vendor who is **already** over the limit. Until plan-quota landed, a
+vendor who downgraded from 100 GB to 1 GB kept every byte served forever, because nothing ever
+recounted.
+
+Now, on **every** plan change, the backend refills the allowance **from the oldest file** and
+**blocks** whatever no longer fits, newest first. Blocking is not deletion:
+
+| | Blocked file |
+|---|---|
+| the database row | **kept** |
+| the bytes in storage | **kept** |
+| its contribution to `usedBytes` | **still counted** — it did not free space |
+| what a client gets | `url: null` |
+| reversible? | yes — an upgrade restores exactly the same files, oldest first |
+
+⚠ **Never present this to the vendor as "your files were deleted."** The word is *hidden* or
+*locked*, and the fix is *upgrade* or *delete something older*.
+
+### The same condition is reported two different ways
+
+| Where | Field | Value when blocked |
+|---|---|---|
+| Any `FileDetail` — product media, variant media, branding, avatars | **`access`** | `"quota_blocked"`, and **`url: null`** (`read-models/file-detail.resolver.ts:67-77`) |
+| `GET /api/files` and `GET /api/files/:id` (the media library) | **`access` and `quotaBlockedAt`** | `"quota_blocked"` with `url: null`, **plus** an ISO timestamp on `quotaBlockedAt` (`repositories/mappers/file.mapper.ts:41-59`) |
+
+Both handlers map the row through `withUrlAndAccess` (`file-management.controller.ts:185` for the
+list, `:325` for the detail), which spreads the raw `File` and **adds** `url` and `access`
+(`file-detail.resolver.ts:114-120`). **One check — `access === "quota_blocked"` — works on every
+surface.**
+
+⚠ **That is uncommitted working-tree state** — `git show HEAD` of the controller contains no
+`withUrlAndAccess`, so this section was written against the committed shape ("no `access` key and
+no `url` key at all") and is corrected here to what the source does today. Keep `quotaBlockedAt` as
+a fallback until the deployed build is confirmed.
+
+⚠ **`quota_blocked` outranks `authorized`.** It is tested first, so a blocked file inside a private
+tree reports `quota_blocked` rather than `authorized` — a two-value `switch` falls through and
+tells the vendor it is a permissions problem when it is a billing one.
+
+### Digital-product assets are exempt
+
+Files backing a digital product's downloadable asset sit **outside** the media cap — metered under
+their own per-asset cap — so they are never blocked, and a customer's paid download does not break
+because their vendor downgraded. They are excluded from `usedBytes` here for the same reason
+(`plan-quota-enforcement.service.ts:263-285`, mirroring `MediaStorageService.getUsageBreakdown:45-52`).
+
+### Timing
+
+The recount runs within a second of the plan change, with a nightly sweep as the backstop. It is
+not on the request path, so **re-fetch after an upgrade** rather than assuming the purchase
+response reflects it.
 
 ---
 

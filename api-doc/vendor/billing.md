@@ -91,7 +91,10 @@ Every endpoint is automatically scoped to the authenticated vendor.
 }
 ```
 
-**Error Responses**: `401 UNAUTHORIZED`, `403 FORBIDDEN` (non-vendor token).
+**Error Responses**: `401` — `AUTH_MISSING_TOKEN` / `AUTH_TOKEN_EXPIRED` / `AUTH_TOKEN_INVALID`
+(`auth.middleware.ts:126`) · `403 AUTH_ROLE_NOT_FOUND` on a non-vendor token
+(`auth.middleware.ts:366`). ⚠ **Neither `UNAUTHORIZED` nor `FORBIDDEN` is in the registry** — this
+line named both until 2026-09-08.
 
 ---
 

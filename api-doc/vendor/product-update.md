@@ -383,7 +383,13 @@ PATCH /api/vendor/products/:id
 }
 ```
 
-Allowed while `draft` or `active`. Not allowed on `archived` products.
+Allowed while `draft`, `active` **or `suspended`** — `ProductUpdateService.ts:97` refuses only the
+statuses outside those three, with `422 CATALOG_PRODUCT_INVALID_STATE` and `details: { status }`.
+
+⚠ **This line said `draft` or `active` only until 2026-09-08, and the omission matters.** Editing
+is often exactly how a vendor fixes the thing that got their product suspended, so a dashboard
+that greys out the editor on `suspended` blocks the remedy. (Lifting the suspension is still an
+agency/admin action — the vendor cannot do that from here.) `archived` is genuinely refused.
 
 ### Updating a Variant
 

@@ -1,5 +1,12 @@
 # Shipping Configuration
 
+**Verified against source on 2026-09-08** — the request schema, the units and the serialised key,
+against `src/modules/catalog/controllers/vendor-shipping.controller.ts:13-21`,
+`src/modules/catalog/models/shipping-config.model.ts:21` and `src/core/base.schema.ts:17-26`.
+**Two live defects fixed:** `weight` is in **grams**, not kilograms (stated wrongly in two
+places), and all four measurements accept **`0`** — the "must be positive (> 0)" table was reading
+the Zod *message*, not the constraint.
+
 ## Base Path
 
 All endpoints in this document share this base path:
@@ -38,7 +45,7 @@ Authorization: Bearer <access_token>
 **Request Body**:
 ```json
 {
-  "weight": "number (required, >= 0) - Weight in kilograms",
+  "weight": "number (required, >= 0) - Weight in GRAMS (not kilograms)",
   "length": "number (required, >= 0) - Length in centimeters",
   "width": "number (required, >= 0) - Width in centimeters",
   "height": "number (required, >= 0) - Height in centimeters",
@@ -223,7 +230,10 @@ Only **physical products** can have shipping configuration. Attempting to config
 
 ### Units
 
-- **Weight**: Kilograms (kg)
+- 🔴 **Weight: GRAMS (g).** This page said *kilograms* in two places until 2026-09-08 and was
+  wrong in both. `shipping-config.model.ts:21` reads *"Default weight in grams"*, and the variant
+  documentation has always agreed with the model. **Label the input "g"** — a vendor typing `2`
+  for a 2 kg parcel otherwise records a 2 g one.
 - **Dimensions**: Centimeters (cm)
 - **Handling Days**: Integer representing business days
 
@@ -239,10 +249,15 @@ There is no separate `PUT` or `PATCH` endpoint for updates.
 
 | Field | Constraint |
 |-------|------------|
-| `weight` | Must be positive (> 0) |
-| `length` | Must be positive (> 0) |
-| `width` | Must be positive (> 0) |
-| `height` | Must be positive (> 0) |
+| `weight` | `>= 0` — **`0` is accepted** |
+| `length` | `>= 0` — **`0` is accepted** |
+| `width` | `>= 0` — **`0` is accepted** |
+| `height` | `>= 0` — **`0` is accepted** |
+
+> ⚠ These four rows said *"Must be positive (> 0)"* until 2026-09-08. The schema is
+> `z.number().min(0, 'Weight must be positive')` (`vendor-shipping.controller.ts:14-17`) — the
+> **message** says "positive", the **constraint** is `>= 0`, and that message is where the wrong
+> claim came from. Do not add a client-side `> 0` rule the server does not have.
 | `originZipCode` | Required, 1-20 characters |
 | `handlingDays` | Non-negative integer |
 
