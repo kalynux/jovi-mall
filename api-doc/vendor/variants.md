@@ -1,9 +1,12 @@
 # Variant Management API
 
+**Verified against source on 2026-09-08** — R7 re-read the field reference, the `optionSignature` rule and the digital-variant initial status (`controllers/vendor-variant.controller.ts:172-186`), `displayName` (`read-models/enrich-product-detail.ts:89-160`), and the whole bargainable-pricing section against `domain/services/bargain-price.rule.ts` and `read-models/public-display-price.ts` — plus `npm run test:bargain-price` (148 passed, 0 failed). **Two defects fixed:** the header sentence had been split in half by a later insertion, and the `files` row omitted `access` from `FileDetail`.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
-**Re-verified in part on 2026-09-08** — the bargainable-pricing section, plus the new storefront-flip subsection, against `domain/services/bargain-price.rule.ts` and `read-models/public-display-price.ts`.
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–26). Corrections are marked inline with ⚠ and a source citation.
+
+**Re-verified in part on 2026-09-08** — the bargainable-pricing section, plus the new storefront-flip subsection, against `domain/services/bargain-price.rule.ts` and `read-models/public-display-price.ts`.
 
 > Bargainable pricing (`bargain` / `bargainable`) is new. Dashboard hand-off:
 > [Front-end changelog](../FRONTEND-CHANGELOG-bargainable-pricing.md).
@@ -175,7 +178,7 @@ For the single variant of a `type: "service"` product, read endpoints also retur
 | `width` | number \| undefined | Width in cm (physical products only) |
 | `height` | number \| undefined | Height in cm (physical products only) |
 | `optionValueIds` | string[] | Option value ObjectIds this variant represents (physical products only) |
-| `files` | FileDetail[] | Variant-specific image/media files, fully populated. Each entry: `{ id, key, url, mimeType, size, originalName? }` |
+| `files` | FileDetail[] | Variant-specific image/media files, fully populated. Each entry: `{ id, key, url, access, mimeType, size, originalName? }` — ⚠ **`access` was missing from this list until 2026-09-08.** `url` is `string \| null` and `access` is `"public" \| "authorized" \| "quota_blocked"`; both come from `read-models/file-detail.resolver.ts:67-88`. A variant image is normally `public`, but a vendor over their plan's storage cap gets `quota_blocked` with `url: null` |
 | `deliveryAgencyId` | string \| undefined | Override delivery agency for this variant (physical products only) |
 
 ---

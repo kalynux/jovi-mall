@@ -1,5 +1,7 @@
 # PROPOSAL — a supported way to display a file you just uploaded
 
+**Verified against source on 2026-09-08** — every line reference in it re-read (`file-detail.resolver.ts:67`, `file-management.validator.ts:42`, `admin-file.routes.ts:109`), the 15-field record against `file.mapper.ts:41-59`, and the implementation claim by running `npm run test:uploads` (83 passed, 0 failed).
+
 **Status: ✅ APPROVED by the owner and IMPLEMENTED, 2026-09-08.** All four recommendations in § 4
 were taken as written. The contract page is [README.md](./README.md); the behaviour is covered by
 `npm run test:uploads` (83 assertions — the helper, the superset property, all three `access`

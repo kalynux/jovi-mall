@@ -1,5 +1,11 @@
 # Frontend hand-off — structured descriptions (`descriptionRich`) are live
 
+**Verified against source on 2026-09-08** — R7 re-checked every ✅ in § 1 against source
+(`catalog/models/product.model.ts:201,313,489`, `core/richtext/schema.ts:23-30`,
+`core/richtext/format/`, the four write schemas, `modules/telegram/services/telegram-bot.service.ts:26,91-93`)
+and ran the suite. **Two things corrected:** the suite reports **148** assertions, not 149; and the
+TL;DR asked the dashboard team to flip a flag they have since flipped.
+
 **To:** the vendor dashboard team
 **From:** backend (`backend/jovi-mall`)
 **Re:** [`api-doc/vendor/docs_requirement.md`](./vendor/docs_requirement.md) — implemented
@@ -17,6 +23,10 @@
 `frontend/vendor-dash/src/lib/richtext/wire.ts`. **That is the whole change.**
 Nothing else in the dashboard needs editing, and there is no ordering
 requirement — see [Deploy order](#4-deploy-order).
+
+> ✅ **DONE — the dashboard flipped it.** Confirmed 2026-09-08 (R7):
+> `RICH_DESCRIPTION_WIRE_ENABLED` is **`true`** at `vendor-dash/src/lib/richtext/wire.ts:36`.
+> This hand-off has no outstanding ask; it is now a record of what shipped.
 
 Everything below is either confirmation that a decision of yours was honoured, or
 one of **four small deltas** you should know about. None of them require code
@@ -49,7 +59,7 @@ changes; two are worth a glance.
 | `description` still fed to the vectoriser and the text index, unchanged | ✅ |
 | Shared formatter (`toPlainText` / `toWhatsApp` / `toTelegramHtml`) | ✅ |
 | `telegram-bot.service.ts` no longer sends prose under `parse_mode: 'Markdown'` | ✅ (see §2.4) |
-| §9 test vectors reproduce byte-for-byte | ✅ — 149 assertions, `npm run test:rich-description` |
+| §9 test vectors reproduce byte-for-byte | ✅ — **148** assertions, `npm run test:rich-description` (re-run 2026-09-08: 148 passed, 0 failed; this row said 149) |
 
 The document model, validator and both formatters live in
 `src/core/richtext/` — a **file-for-file mirror** of your

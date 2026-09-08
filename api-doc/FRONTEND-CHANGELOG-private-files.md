@@ -1,5 +1,7 @@
 # Frontend changelog — private files leave the public URL
 
+**Verified against source on 2026-09-08** — the three private trees against `core/storage/storage-trees.ts:34-88`, the `FileDetail` shape and the blocked-outranks-private order against `catalog/read-models/file-detail.resolver.ts:67-88`, and the two proof routes, their three response headers and their 404-never-403 rule against `modules/delivery/agent.routes.ts:128,139`, `agency.routes.ts:128` and `modules/shipments/agent-delivery-proof.controller.ts:113-116`. No defects found.
+
 **Date:** 2026-08-19 · **Breaking** · jovi-mall
 **Design record:** [`docs/ADR-A01-UPLOAD-DOWNLOAD-MAP.md`](../docs/ADR-A01-UPLOAD-DOWNLOAD-MAP.md) D-2
 

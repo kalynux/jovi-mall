@@ -1,5 +1,7 @@
 # Vendor Product Upload Reference
 
+**Verified against source on 2026-09-08** — R7 re-checked the advanced-flow routes against the live route dump, the `fileIds` full-replacement semantics, and the `413 CATALOG_FILE_TOO_LARGE` mapping. **One defect fixed, in three places:** the page still taught `File.usageCount` — a counter **replaced** by the `file_references` collection (`catalog/models/file-reference.model.ts:17`, `domain/services/media/FileAttachService.ts:110`, `FileDetachService.ts:86`) and not emitted by `FileMapper.toDomain`. One of the three was a `"usageCount": 0` line in an upload-response example, i.e. a field shown on the wire that no response carries.
+
 > **Document Purpose**: Frontend-consumable API reference for building the product management UI in Jovi Mall.
 >
 > **Intended Audience**: Frontend engineers implementing product creation, editing, and publishing flows.
@@ -115,7 +117,7 @@ Phase 5: VALIDATION & PUBLISHING
 | `tags` | string[] | Unique, non-empty strings |
 | `seoTitle` | string | Max 60 chars |
 | `seoDescription` | string | Max 160 chars |
-| `fileIds` | string[] | Media to attach at creation. Each id must reference a file the vendor owns (uploaded via `POST /api/files/upload`); their `usageCount` is incremented. Omit to attach media later via `PATCH`. |
+| `fileIds` | string[] | Media to attach at creation. Each id must reference a file the vendor owns (uploaded via `POST /api/files/upload`); a reference row is written for each. Omit to attach media later via `PATCH`. ⚠ **This said "their `usageCount` is incremented" until 2026-09-08 (R7)** — that counter is retired; see § File Reuse. |
 
 #### Example Request
 
@@ -755,7 +757,6 @@ const res = await fetch('/api/files/upload', {
       "mimeType": "image/jpeg",
       "size": 245678,
       "originalName": "product1.jpg",
-      "usageCount": 0,
       "ownerType": "vendor",
       "ownerId": "507f191e810c19729de860ea"
     }
@@ -800,10 +801,26 @@ Same replacement logic applies.
 
 ### File Reuse
 
-The same file ID can appear in both `product.fileIds` and `variant.fileIds`. The file is stored once in storage; `usageCount` is incremented for each reference. The backend's garbage collector handles cleanup when `usageCount` reaches 0.
+The same file ID can appear in both `product.fileIds` and `variant.fileIds`. The file is stored
+once in storage, and **one row per reference** is written to the `file_references` collection. The
+backend's garbage collector cleans up a file once it has **no live reference rows left**.
+
+> 🔴 **`usageCount` IS NOT ON THE WIRE — corrected 2026-09-08 (R7).** This section described a
+> `File.usageCount` counter that was **replaced** by the `file_references` collection
+> (`catalog/models/file-reference.model.ts:17`, `domain/services/media/FileAttachService.ts:110`,
+> `FileDetachService.ts:86`). `FileMapper.toDomain` does not emit the field, so **a client reading
+> `file.usageCount` gets `undefined`** — "used in undefined places", and a guard like
+> `if (file.usageCount === 0)` never fires. The upload-response example above carried a
+> `"usageCount": 0` line that no response contains; it has been removed.
+>
+> | You want | Read |
+> |---|---|
+> | how many entities use this file | `GET /api/files/:id` → **`usage.totalReferences`** |
+> | where exactly | `usage.references[]` — `{ entityType, entityId, field, label }` |
+> | may I delete it | just call `DELETE /api/files/:id`; it answers `409 CATALOG_FILE_STILL_REFERENCED` while any reference is live |
 
 **Frontend must never:**
-- Manually track or modify `usageCount`
+- Try to track or modify reference counts itself — they are derived from `file_references`
 - Hard-delete files directly (only the backend GC does this)
 
 ---

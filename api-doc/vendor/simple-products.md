@@ -1,9 +1,12 @@
 # Simple Products — Vendor API Reference
 
+**Verified against source on 2026-09-08** — R7 re-checked the three routes, the strict create/patch schemas (`validators/simple-product.validator.ts`) and the five simple-mode refusal sites (`domain/services/simple/mode-guard.ts:17-31` and its five callers). **One defect fixed:** this header sentence had been split in half by a later insertion.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
-**Re-verified in part on 2026-09-08** — the `BILLING_LIMIT_EXCEEDED` `details` shape only (`services/entitlement.service.ts:100-113`).
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
+
+**Re-verified in part on 2026-09-08** — the `BILLING_LIMIT_EXCEEDED` `details` shape only (`services/entitlement.service.ts:100-113`).
 
 > **Document Purpose**: Frontend-consumable reference for the one-shot product editor.
 >

@@ -1,5 +1,7 @@
 # Vendor Payout Methods
 
+**Verified against source on 2026-09-08** — R7 re-checked the mobile-money-only write gate against `core/types/payout.types.ts:180-194`, and confirmed the three payout kinds are all still validated while only `mobile_money` passes the write. No defects found.
+
 **Where the platform sends your money.** This page is the complete field reference for
 `payout_details` on the vendor side — the [Onboarding](./onboarding.md) and
 [Profile](./profile.md) docs link here for the sub-schema.

@@ -1,5 +1,7 @@
 # Vendor Google Calendar Connection
 
+**Verified against source on 2026-09-08** — R7 re-checked the six reachable callback reasons and that `state_mismatch` is unreachable (`modules/integrations/calendar/google/google.routes.ts:189,199-244`), and the asymmetric branch keys `calendarEmail` / `email` (`catalog/controllers/vendor-service-calendar.controller.ts:55,59`). **One note corrected:** the stale source `STUB` comment it documented was fixed at source on 2026-09-07 and no longer exists.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
@@ -193,11 +195,13 @@ prompt for a calendar without a second lookup of which product it is talking abo
 > and succeeds without one (`booking.service.ts:130-135`). Prompt with what is actually true —
 > *"connect a calendar so we don't book over your other commitments"*.
 >
-> ⚠ **The route's own source comment calls this endpoint a STUB returning a "placeholder
-> response"** (`vendor-products.routes.ts:545-546`). It is not: `VendorServiceCalendarController`
-> reads the real `ConnectedCalendarAccount`, which is what the shapes below describe. The comment
-> is stale and is **documented rather than edited** here — but do not let it persuade you the
-> endpoint is unfinished.
+> ✅ **The stale `STUB` comment this box warned about is GONE** — re-checked 2026-09-08 (R7).
+> `vendor-products.routes.ts:545` now reads *"⚠ NOT a stub. This said 'STUB: Returns placeholder
+> response' until 2026-09-07"*, and the controller header was corrected the same way on 2026-08-19
+> (`vendor-service-calendar.controller.ts:14-23`). The endpoint was never a stub in behaviour —
+> `VendorServiceCalendarController` reads the real `ConnectedCalendarAccount`, which is what the
+> shapes below describe. Kept, rather than deleted, because the misreading it corrects had already
+> reached `PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md` step 2.D.3 as evidence.
 
 **Response — connected:** `200 OK`
 

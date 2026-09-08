@@ -1,5 +1,7 @@
 # Digital Products API — Multi-Variant Guide
 
+**Verified against source on 2026-09-08** — R7 re-checked the four asset/config routes (`catalog/routes/vendor-products.routes.ts:257-292`), the `AssetDetail` shape without a `url` (`read-models/product-detail.read-model.ts:64-71`) and the POST/PUT preconditions and status invariant (`domain/services/digital/VariantDigitalService.ts:11-122`). No defects found.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.

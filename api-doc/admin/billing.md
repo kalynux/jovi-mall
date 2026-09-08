@@ -98,10 +98,10 @@ the contract.
   "data": {
     "ownerType": "vendor",
     "ownerId": "664ven...",
-    "planCode": "vendor_growth",
-    "maxActiveProducts": 500,
-    "maxStorageBytes": 5368709120,
-    "commissionPercent": 8,
+    "planCode": "growth",
+    "maxActiveProducts": 150,
+    "maxStorageBytes": 10737418240,
+    "commissionPercent": 5,
     "maxUnterminatedShipments": null,
     "liveTrackingEnabled": true
   }

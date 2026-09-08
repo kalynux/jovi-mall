@@ -1,5 +1,7 @@
 # Vendor Orders
 
+**Verified against source on 2026-09-08** — R7 re-checked the fourteen routes against the live route dump and every enum against `modules/orders/order.model.ts:38,44,102,292,401`, plus the two list-filter omissions (`disputed`, `returned`) at `modules/vendor/validators/vendor-order.validator.ts:14-15`. No defects found.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–26). Corrections are marked inline with ⚠ and a source citation.

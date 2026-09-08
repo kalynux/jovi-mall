@@ -1,5 +1,7 @@
 # Option / Value / Variant Management — Frontend Developer Guide
 
+**Verified against source on 2026-09-08** — R7 re-checked the option/value/variant routes against the live route dump, the 50-value bulk cap (`catalog/validators/option.validator.ts:64`), the case-insensitive value uniqueness — a `collation: { locale: en, strength: 2 }` unique index (`models/product-option-value.model.ts:20`) — and the `optionSignature` trap: it is computed only on CREATE (`controllers/vendor-variant.controller.ts:178-193`) and `updateVariant` contains **zero** references to it, so a PATCH really does rewrite `optionValueIds` without recomputing the signature. No defects found.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–27). Corrections are marked inline with ⚠ and a source citation.

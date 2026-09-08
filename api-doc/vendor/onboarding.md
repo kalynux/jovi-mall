@@ -1,5 +1,7 @@
 # Vendor Onboarding API Documentation
 
+**Verified against source on 2026-09-08** — R7 re-checked the five onboarding routes (`modules/vendor/routes.ts:152-180`), the optimistic-`version` 409 (`service/vendor-profile.service.ts:477`), the `409 VENDOR_ONBOARDING_ALREADY_COMPLETED` guard on every step (`:377,456,505`), and the claim that Step 2 re-submission is a **complete no-op** — confirmed at `:466-473`, which returns the unchanged profile whatever the body contains. No defects found.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–27). Corrections are marked inline with ⚠ and a source citation.

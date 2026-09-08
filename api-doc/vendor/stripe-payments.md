@@ -1,5 +1,7 @@
 # Vendor Frontend — Stripe Card Payments
 
+**Verified against source on 2026-09-08** — R7 re-confirmed the three-member gateway enum on both billing initiate schemas (`modules/billing/validators/billing.validators.ts:77,83`) and the billing-vs-payments separation. No defects found.
+
 Stripe card payments are now **live** (previously a stub that returned mock data).
 This doc describes the **frontend changes** required to support Stripe alongside
 the existing mobile-money gateways. It complements [billing.md](./billing.md),

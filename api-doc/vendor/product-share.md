@@ -1,5 +1,13 @@
 # Vendor · Share a product to a chat app
 
+**Verified against source on 2026-09-08** — R7 read the whole page: the route
+(`catalog/routes/vendor-products.routes.ts:164`), the unmasked `sentTo` and its WhatsApp `null`
+(`controllers/vendor-product-share.controller.ts:53`, `ProductShareService.ts:139`,
+`channel-connections/channel-connection.model.ts:63`), the 200-character title clamp
+(`ProductShareService.ts:100`), the shared 4096 cap (`core/richtext/limits.ts:6-13`) and the three
+`PRODUCT_SHARE_*` codes (`core/error-codes.ts:1155,1168,1177`). No defects found — the 2026-09-07
+correction below still holds exactly.
+
 **Verified against source on 2026-09-07** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.

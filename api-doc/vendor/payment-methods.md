@@ -1,6 +1,29 @@
 # Saved Payment Methods API
 
+**Verified against source on 2026-09-08** — R7 re-read the five routes, the DTO, the 10-method cap and its `409 PAYMENT_METHOD_LIMIT_REACHED`, and the default rules against `modules/payment-methods/` (`services/payment-method.service.ts:9,29-72`, `repositories/payment-method.repository.ts:26-124`, `routes.ts:15-27`). **One gap closed:** the page never said that nothing charges a saved method — verified by a repo-wide consumer scan and added as a warning box at the top.
+
 Reference for managing a user's **saved payment methods** — the tokenized cards / mobile-money / bank instruments used to **pre-fill the checkout page** on the frontend.
+
+> [!WARNING]
+> ## 🔴 Nothing on this platform CHARGES a saved method — they are display metadata
+>
+> **Added 2026-09-08 (R7)**, because this page said only "pre-fill the checkout page", which a
+> reader can fairly take to mean one-click payment. It does not exist.
+>
+> Verified by a repository-wide scan: outside `modules/payment-methods/` the only consumers are
+> `modules/customers/services/customer-profile.service.ts` and
+> `modules/bot-surface/controllers/bot-payment-method.controller.ts`, and both call
+> `list` / `add` / `setDefault` / `remove` only. **`modules/payments/` and `modules/billing/`
+> reference the collection nowhere at all.**
+>
+> Plan purchases, credit top-ups and `POST /api/payments/initiate` each take a **fresh `channel`
+> object every time** (`modules/payments/validators/payment.validator.ts:56-64`). Saving a card
+> enables no one-click anything.
+>
+> **Do not build a "pay with saved method" flow — there is no endpoint behind it.** What these are
+> good for is showing "your cards" and remembering which one the user prefers, so a payment form
+> can pre-fill a *label*. Never the credential: `gateway_customer_id` and `gateway_instrument_id`
+> are write-only and are returned by no route.
 
 > [!IMPORTANT]
 > This is a **shared, role-agnostic** API mounted at `/api/me/payment-methods`. The **same endpoints, request bodies, and responses** work for **every** authenticated role (customer, vendor, admin, agent, agency). The owner is resolved from the auth token — a user only ever sees and manages **their own** methods.

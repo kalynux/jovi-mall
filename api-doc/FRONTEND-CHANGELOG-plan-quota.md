@@ -1,5 +1,7 @@
 # Frontend changelog — plan limits are now enforced after a downgrade
 
+**Verified against source on 2026-09-08** — the three refusal endpoints and the `details` shape against `billing/services/entitlement.service.ts:100-115` and `catalog/controllers/vendor-product.controller.ts:323,371`, the suspension-reason enum against `catalog/models/product.model.ts:85-101`, the gallery filter against `catalog/read-models/product-image.resolver.ts:41-42`, the release path against `plan-quota/events/plan-quota.consumer.ts` and `config/plan-quota.config.ts`. **Three defects fixed** — the content-route claim in §1.3 contradicted §5 and named an admin-only route, and §4 named an `/api/tickets/…` mount that does not exist.
+
 **Applies to:** vendor dashboard · agency dashboard · agent app · admin dashboard · storefront
 **Status:** shipped 2026-09-06
 **Wire changes:** one new `FileDetail.access` value and one new product suspension reason (both
@@ -64,8 +66,17 @@ independently, so do not infer one from the other.
 2. **It outranks `authorized`.** A blocked file that also sits in a private tree reports
    `quota_blocked`. So branch on `quota_blocked` **before** `authorized`, or you will send the user
    to a content route that cannot help them.
-3. **The authorized content route will not serve it either.** `GET /files/:fileId/content` and the
-   per-entity byte routes are not a way around this.
+3. **There is no byte route to fall back to, and the one that exists is not a way around this.**
+   ⚠ **Corrected 2026-09-08 (R7): this item used to say "the authorized content route will not
+   serve it either", and it was wrong twice.** There is **no** `GET /api/files/:id/content` on the
+   session-reachable router at all (`api/routes/file-upload.routes.ts` declares seven routes and
+   none of them streams bytes), so a vendor, agency or agent client has nothing to try. The route
+   it named is wi-admin's `GET /api/v1/files/:fileId/content`, which a dashboard cannot call — and
+   that route **does** serve a blocked file, deliberately (see § 5). The two per-entity byte routes
+   (the digital download and the delivery-proof photo) are not gated on the quota either, but they
+   are scoped to the entity's own customer/agent/agency and a quota-blocked file is by definition
+   ordinary media — digital assets are exempt from the cap. **Render the placeholder; there is no
+   second attempt worth making.**
 
 ```ts
 // Before
@@ -159,8 +170,15 @@ storage tree. Both now return `null` in that case, honestly:
 
 | Field | Endpoint |
 |---|---|
-| `url` on a ticket attachment | `POST /api/tickets/:ticketId/attachments`, `GET /api/tickets/:ticketId/attachments` |
-| `firstFileUrl` on a ticket product reference | the ticket product-reference lookup |
+| `url` on a ticket attachment | `POST` and `GET /api/<role>/tickets/:ticketId/attachments` |
+| `firstFileUrl` on a ticket product reference | `GET /api/<role>/tickets/reference/products` |
+
+⚠ **Corrected 2026-09-08 (R7): there is no `/api/tickets/…` mount.** This table named one, and it
+does not exist. Every ticket route is **role-prefixed** — `/api/vendor/tickets`,
+`/api/agency/tickets`, `/api/agent/tickets`, `/api/customer/tickets` (`api/index.ts:349-352`), plus
+wi-admin's own `/api/internal/admin/tickets`. Use your own role's prefix; the attachment and
+product-reference routes are declared identically on all four
+(`modules/tickets/routes/vendor-ticket.routes.ts:25,39-40`).
 
 **In practice you will rarely see it**, because ticket attachments land in the public
 `documents/`/`images/` trees today rather than in `ticket-attachments/`. But the field is now
@@ -197,9 +215,11 @@ Administrative staff keep full visibility:
 - quota-suspended products appear in the vendor's product list with no extra filter, carry
   `suspension.reason: "plan_quota_exceeded"`, and are counted in the status breakdown;
 - blocked files appear in the media library as `access: "quota_blocked"` with `url: null`;
-- **the bytes are still viewable** via `GET /files/:fileId/content` (permission
-  `files.content.read`, audited) — the content route is deliberately not gated on the quota, so an
-  administrator investigating "why did this vendor's image vanish" can look at it.
+- **the bytes are still viewable** via wi-admin's `GET /api/v1/files/:fileId/content` (permission
+  `files.content.read`, tier-3/support, **audited** — `admin/src/modules/files/routes/file.routes.ts:187`)
+  — that route carries no quota check at all and streams any tree identically, so an administrator
+  investigating "why did this vendor's image vanish" can look at it. It is an **administrator-only**
+  door: no vendor, agency or agent session can reach it.
 
 There is deliberately **no admin un-suspend** for this reason. The admin remedy is to assign a
 bigger plan.

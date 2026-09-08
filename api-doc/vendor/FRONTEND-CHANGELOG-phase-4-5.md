@@ -1,5 +1,7 @@
 # Vendor dashboard — what Phase 4 and Phase 5 changed
 
+**Verified against source on 2026-09-08** — R7 re-checked the seven ranked changes: the 90-day absolute session cap (`core/auth/token.issuer.ts:27-49`), the nullable `FileDetail.url` plus `access` (`catalog/read-models/file-detail.resolver.ts:67-88`), magic-byte sniffing and ClamAV on every upload (`core/uploads/processors/file-sniffing.processor.ts:10`, `scanners/clamav-scanner.ts:56`, `upload-config.ts:231`) and the 5 MB policy-document cap (`modules/vendor/controller/vendor-profile.controller.ts:23,159`). No defects found.
+
 Your slice of Phases **4** (Per-service hardening) and **5** (Legacy close-out) of
 [`PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md`](../../../PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md).
 

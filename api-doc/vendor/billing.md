@@ -1,9 +1,12 @@
 # Vendor Billing API
 
+**Verified against source on 2026-09-08** — R7 re-read the eight routes and both lazily-creating GETs (`modules/billing/routes/vendor-billing.routes.ts:16-28`, `services/subscriber-plan.service.ts:66-85`, `services/credit-wallet.service.ts:106-109`). **One defect fixed:** this header sentence had been split in half by a later insertion.
+
 **Verified against source on 2026-09-07** — every claim on this page was checked against
-**Re-verified in part on 2026-09-08** — the `BILLING_LIMIT_EXCEEDED` `details` shape only (`services/entitlement.service.ts:100-113`).
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
+
+**Re-verified in part on 2026-09-08** — the `BILLING_LIMIT_EXCEEDED` `details` shape only (`services/entitlement.service.ts:100-113`).
 
 Vendor-facing endpoints for pricing plans, the credit wallet, top-up purchases
 and billing settings. Read [billing-overview.md](./billing-overview.md) first for

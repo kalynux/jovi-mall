@@ -1,5 +1,7 @@
 # Ticket entity pickers — `reference/*`
 
+**Verified against source on 2026-09-08** — R7 confirmed the two reference routes are mounted on every role namespace with the same handlers, the `{ success, data, pagination }` envelope — `pagination`, not `meta` (`modules/tickets/services/ticket-reference.service.ts:35,173`) — the 50-row limit cap, and that the `q` term **is** escaped before it becomes a `$regex` (`:39,87`), unlike the product-list `q`. No defects found.
+
 > **Status: DONE.** Every field and query parameter requested below has been implemented in
 > `src/modules/tickets/services/ticket-reference.service.ts`. The frontend can drive both
 > pickers from these two endpoints alone — no fallback to `/vendor/orders` + `/vendor/products`,

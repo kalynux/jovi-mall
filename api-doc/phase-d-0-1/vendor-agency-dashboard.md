@@ -1,5 +1,16 @@
 # Phase D · 0 · 1 — vendor and agency dashboards
 
+**Verified against source on 2026-09-08** — R7 read the whole page. The eighteen billing routes
+(`modules/billing/routes/vendor-billing.routes.ts:16-32`), the plan codes
+(`billing.types.ts:30-34`, `scripts/seed/seed-pricing-plans.ts:45-52`), `plan_code`'s provenance
+(`services/plan-purchase.service.ts:82`), the `jm_<kind>_<32 hex>` merchant reference
+(`modules/payments/domain/merchant-reference.ts:46,70`), the reconciliation sweep's cadence and
+horizon (`modules/payments/config/payments.config.ts:90-92` — `*/10 * * * *`, 72 hours) and the
+four credit packs (`modules/billing/config/credit.config.ts:42-45`). **Two defects fixed:** the
+`201` example and the field table both used `vendor_growth`, a plan code that does not exist; and
+§ 6's Q-4 row still said a negotiation product was "closed as not planned" and told readers not to
+build against `bargain` — the product shipped and `bargain.maxPrice` is now the storefront price.
+
 Everything Phases D, 0 and 1 changed for the two self-serve dashboards. Base URL
 `http://localhost:8022/api` in development; every route here needs a session
 (cookie or `Bearer`) and the matching role.
@@ -81,8 +92,8 @@ Consequences for the dashboard:
       "owner_type": "vendor",
       "owner_id": "66a0d1c2e4b1d2c3a4b5c101",
       "plan_id": "66909aa1e4b1d2c3a4b5c001",
-      "plan_code": "vendor_growth",
-      "price": 15000,
+      "plan_code": "growth",
+      "price": 5000,
       "currency": "XAF",
       "status": "pending",
       "gateway": "NOTCHPAY",
@@ -109,7 +120,7 @@ Consequences for the dashboard:
 | `owner_type` | `"vendor"` \| `"agency"` \| `"agent"` | Fixed per mount |
 | `owner_id` | string | The role entity, not the user |
 | `plan_id` | string | The pricing plan bought |
-| `plan_code` | string | Stable code, e.g. `vendor_growth` |
+| `plan_code` | string | Stable code, e.g. `growth`. ⚠ **Corrected 2026-09-08 (R7): vendor plan codes are NOT role-prefixed.** The seeded vendor codes are `starter`, `growth` and `business` (`scripts/seed/seed-pricing-plans.ts:45-52`, `modules/billing/billing.types.ts:30-34`); this page and the `201` example above both said `vendor_growth`, which matches no plan. Only the *agency* and *agent* free tiers carry a role prefix (`agency_free`, `agent_free`). `plan_code` is copied verbatim from `plan.code` (`services/plan-purchase.service.ts:82`) |
 | `price` | number | Whole XAF |
 | `currency` | string | `"XAF"` |
 | `status` | `"pending"` \| `"paid"` \| `"failed"` \| `"reversed"` | `paid` is the only one that applies the plan |
@@ -382,8 +393,31 @@ All ten were answered on 2026-08-18. Four touch these dashboards, and **none is 
 |---|---|---|
 | **Q-5 · Who can download whose uploads?** | Scan on ingest **and** move the three private upload trees behind auth. The whole upload tree is currently served by an unauthenticated static mount | Decided (`jovi-mall/docs/ADR-A01-UPLOAD-DOWNLOAD-MAP.md`). **Implemented in Phase 4.A.4.** When it lands, a direct URL to a private file stops working without a session — do not hard-code storage URLs into a dashboard |
 | **Q-3 · Bearer session cap** | A **90-day absolute cap**, stateless `auth_time` claim | Decided (`ADR-A03-SESSION-CAP.md`). **Phase 4.A.5.** A 90-day-old session will stop refreshing |
-| **Q-4 · Is the bargain range buyer-facing?** | **Neither** — it stays configuration-only. **No negotiation product is planned** | Decided (`ADR-A05-BARGAIN.md`). **Closed as not planned.** `bargain: { minPrice, maxPrice }` is validated and persisted, is never published to a buyer, and nothing downstream reads it. Do not build an offer/counter-offer UI |
+| **Q-4 · Is the bargain range buyer-facing?** | ⛔ **This row is OBSOLETE — the answer was REVERSED and the product shipped.** See the box below | **Superseded.** Do not act on it |
 | **Q-8 · Own the geocoding or rent it?** | **Cache first**, then rent one adapter. Both call sites (`GET /api/geo/search`, `GET /api/geo/reverse`) already sit behind `requireAuth`, so no anonymous traffic reaches the provider | Decided (`ADR-A04-GEOCODING.md`). **Phase 6.H.** Address search behaviour is unchanged today; expect it to get faster, not different |
+
+> ### ⛔ Q-4 was reversed, and this page told you the opposite until 2026-09-08 (R7)
+>
+> The row above used to read *"it stays configuration-only · no negotiation product is planned ·
+> `bargain` … is never published to a buyer, and nothing downstream reads it · **do not build an
+> offer/counter-offer UI**"*. **Every clause of that is now false**, and a vendor dashboard built
+> on it prices products wrongly:
+>
+> - **A negotiation product exists and is live.** `src/modules/negotiation/` is a full module —
+>   playbook, gate, tools — mounted at `/api/internal/negotiation` (`api/index.ts:504-505`) and
+>   driven by the customer bot.
+> - **`bargain.maxPrice` IS published to a buyer.** It is the **shelf price** a bargainable
+>   variant is quoted at on the storefront (`read-models/public-display-price.ts`), and it drives
+>   `priceMin`/`priceMax`, the price sorts and the price-band filter.
+> - **`variant.price` became the vendor's FLOOR** on a bargainable variant, and it is the value
+>   that is now never published.
+> - `compareAtPrice` is suppressed on a bargainable variant unless it is strictly above
+>   `maxPrice`.
+>
+> **What a vendor dashboard must do about it:** do not label the `maxPrice` field "maximum" and
+> leave it there — a vendor who sets generous headroom has raised the price shoppers see. The
+> full rules are in [`../vendor/variants.md` § Bargainable pricing](../vendor/variants.md) and
+> [`../FRONTEND-CHANGELOG-storefront-price-semantics.md`](../FRONTEND-CHANGELOG-storefront-price-semantics.md).
 
 ---
 

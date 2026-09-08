@@ -86,15 +86,20 @@ response shape and storage summary, against `jovi-mall/src/api/routes/file-uploa
 > | Where | Field | Blocked value |
 > |---|---|---|
 > | any `FileDetail` (product media, branding, avatars) | `access` | `"quota_blocked"`, with **`url: null`** |
-> | `GET /api/files` · `GET /api/files/:id` — these routes | `access` **and** `quotaBlockedAt` | `"quota_blocked"` / `url: null`, **plus** an ISO timestamp on `quotaBlockedAt` |
+> | all **four** `/api/files/*` routes | `access` **and** `quotaBlockedAt` | `"quota_blocked"` / `url: null`, **plus** an ISO timestamp on `quotaBlockedAt` |
 >
 > ⚠ **This box said these routes carried `quotaBlockedAt` and "no `access` and no `url` key at
-> all". Re-measured 2026-09-08 and that is no longer true.** Both handlers map the row through
-> `withUrlAndAccess` (`file-management.controller.ts:185` list, `:325` detail), which spreads the
+> all". Re-measured 2026-09-08 and that is no longer true.** The handlers map each row through
+> `withUrlAndAccess` (`file-management.controller.ts:185` list, `:325` detail;
+> `file-upload.controller.ts:247` and `:362` for the two upload routes), which spreads the
 > raw `File` from `file.mapper.ts:41-59` and **adds** `url` and `access`
 > (`file-detail.resolver.ts:114-120`). One check — `access === "quota_blocked"` — now works on
-> every surface. ⚠ **That change is uncommitted working-tree state** (`git show HEAD` of the
-> controller has no `withUrlAndAccess`); confirm against the deployed build.
+> every surface.
+>
+> ✅ **Corrected 2026-09-08 (R7): it is FOUR routes, not two, and it is COMMITTED.** The two
+> upload routes carry `url`/`access` on every element of their `data` array as well. The caveat
+> that stood here — *"that change is uncommitted working-tree state"* — **is no longer true**:
+> it landed in `141bc5c` and both source files are clean against `HEAD`.
 > Also: `quota_blocked` **outranks** `authorized`, so test it first; a blocked file's bytes
 > **still count** toward `usedBytes` (blocking frees no space); and a vendor's
 > **digital-product asset files are exempt** from the media cap and are never blocked.
@@ -647,7 +652,12 @@ GET /api/files?ownerType=vendor&provider=cloudinary
 }
 ```
 
-**`storage` block:** owner-scoped media usage analytics, returned for **vendor / customer / agent** callers (and **omitted — `null` — for admins**, whose listing is global). See the **[Vendor Media Storage guide](./storage.md)** for the full storage feature (limits, alerts, quota errors, lifecycle). `usedBytes` is the total of `byCategory` bytes. For **vendors**, `limitBytes` is the active plan's media storage limit (`max_storage_bytes`) and `remainingBytes = max(0, limitBytes − usedBytes)`; for other roles `limitBytes`/`remainingBytes` are `null`. **Digital-product asset files are excluded** from these figures (they have their own 500 MB/asset cap, independent of plan). Categories follow the same `category` mapping used for filtering.
+**`storage` block:** owner-scoped media usage analytics, returned for **vendor / agency / agent / customer** callers (and **omitted — `null` — for admins**, whose listing is global). See the **[Vendor Media Storage guide](./storage.md)** for the full storage feature (limits, alerts, quota errors, lifecycle). `usedBytes` is the total of `byCategory` bytes. For the three **plan-metered** owner types — **vendor, agency and agent** — `limitBytes` is the active plan's media storage limit (`max_storage_bytes`) and `remainingBytes = max(0, limitBytes − usedBytes)`. **Customers** have no plan, so both are `null` (= unlimited). **A vendor's digital-product asset files are excluded** from these figures (their own per-asset cap is `MAX_DIGITAL_ASSET_SIZE`, default 500 MB, independent of plan). Categories follow the same `category` mapping used for filtering.
+
+> ✅ **Corrected 2026-09-08 (R7), three ways**, against `file-management.controller.ts:238-281`.
+> This paragraph named only *vendor / customer / agent* — **`agency` was missing**; it said
+> `limitBytes` is `null` "for other roles", which is **false for agency and agent**; and the
+> digital-asset exclusion is **vendor-only** (`MediaStorageService.getUsageBreakdown:45-52`).
 
 **Authorization Rules:**
 - **Vendors**: See only files where `ownerType === 'vendor'` and `ownerId === vendorId`
@@ -661,7 +671,8 @@ GET /api/files?ownerType=vendor&provider=cloudinary
 
 Lightweight storage usage + plan limit summary for the authenticated owner — the same `storage` object embedded in `GET /api/files`, without the file list. Use it for a storage usage widget.
 
-**Authentication:** Required (vendor / customer / agent). Admins receive **`403 AUTH_FORBIDDEN`**
+**Authentication:** Required (vendor / agency / agent / customer — `agency` was missing here until
+2026-09-08). Admins receive **`403 AUTH_FORBIDDEN`**
 (no owner scope) — `file-management.controller.ts:216-221`. ⚠ Not `FORBIDDEN`, which is in no
 registry.
 

@@ -1,5 +1,7 @@
 # Vendor Analytics API
 
+**Verified against source on 2026-09-08** — R7 re-checked the four routes, the un-enveloped `{data, meta}` success body (`modules/vendors/controllers/vendor-analytics.controller.ts:44,77,110,142`), the 365-day cap, and that `timezone` is echoed and never used at read time. **One gap closed:** the `limit` row did not say that out-of-range and non-numeric values are silently coerced to 5 (`validators/analytics.validator.ts:84-91`).
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
@@ -235,7 +237,7 @@ Get top-performing products by revenue and quantity.
 |-----------|------|----------|-------------|
 | `from` | string (ISO date) | Yes | Start date (YYYY-MM-DD) |
 | `to` | string (ISO date) | Yes | End date (YYYY-MM-DD) |
-| `limit` | number | No | Top N products (1-50, default: 5) |
+| `limit` | number | No | Top N products (1-50, default: 5). ⚠ **Out-of-range and non-numeric values are SILENTLY COERCED to 5**, not rejected — `parseInt`, then `isNaN \|\| < 1 \|\| > 50 → 5` (`validators/analytics.validator.ts:84-91`). So `?limit=200` and `?limit=abc` both return five rows and no error. Added 2026-09-08 (R7) |
 | `timezone` | string (IANA) | No | ⚠ **Echoed into `meta.timezone` and otherwise ignored** — see "Date Range Parameters" above |
 | `fiscalCalendar` | enum | No | Must be `'gregorian'` |
 

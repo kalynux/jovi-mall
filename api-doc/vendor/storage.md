@@ -229,17 +229,20 @@ Now, on **every** plan change, the backend refills the allowance **from the olde
 | Where | Field | Value when blocked |
 |---|---|---|
 | Any `FileDetail` — product media, variant media, branding, avatars | **`access`** | `"quota_blocked"`, and **`url: null`** (`read-models/file-detail.resolver.ts:67-77`) |
-| `GET /api/files` and `GET /api/files/:id` (the media library) | **`access` and `quotaBlockedAt`** | `"quota_blocked"` with `url: null`, **plus** an ISO timestamp on `quotaBlockedAt` (`repositories/mappers/file.mapper.ts:41-59`) |
+| all **four** `/api/files/*` routes (the media library, and both uploads) | **`access` and `quotaBlockedAt`** | `"quota_blocked"` with `url: null`, **plus** an ISO timestamp on `quotaBlockedAt` (`repositories/mappers/file.mapper.ts:41-59`) |
 
-Both handlers map the row through `withUrlAndAccess` (`file-management.controller.ts:185` for the
-list, `:325` for the detail), which spreads the raw `File` and **adds** `url` and `access`
+All four handlers map the row through `withUrlAndAccess` (`file-management.controller.ts:185` for
+the list, `:325` for the detail; `file-upload.controller.ts:247` and `:362` for the two upload
+routes), which spreads the raw `File` and **adds** `url` and `access`
 (`file-detail.resolver.ts:114-120`). **One check — `access === "quota_blocked"` — works on every
 surface.**
 
-⚠ **That is uncommitted working-tree state** — `git show HEAD` of the controller contains no
-`withUrlAndAccess`, so this section was written against the committed shape ("no `access` key and
-no `url` key at all") and is corrected here to what the source does today. Keep `quotaBlockedAt` as
-a fallback until the deployed build is confirmed.
+✅ **Corrected 2026-09-08 (R7): it is FOUR routes, not two, and it is COMMITTED.** This section
+previously carried a caveat that the change was *"uncommitted working-tree state"*. It landed in
+`141bc5c` (*feat(files): return url and access on all four `/api/files/*` responses*, 2026-09-08
+02:44) and `file-management.controller.ts`, `file-upload.controller.ts` and
+`file-detail.resolver.ts` are all clean against `HEAD`. Rely on `access`; `quotaBlockedAt` is
+belt-and-braces, not a required fallback.
 
 ⚠ **`quota_blocked` outranks `authorized`.** It is tested first, so a blocked file inside a private
 tree reports `quota_blocked` rather than `authorized` — a two-value `switch` falls through and

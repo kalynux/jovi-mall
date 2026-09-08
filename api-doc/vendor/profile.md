@@ -1,5 +1,7 @@
 # Vendor Profile Management API Documentation
 
+**Verified against source on 2026-09-08** — R7 re-checked the profile routes against the live route dump and the four sharp behaviours against `modules/vendor/service/vendor-profile.service.ts:227,334,347-352,400`. No defects found.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–26). Corrections are marked inline with ⚠ and a source citation.

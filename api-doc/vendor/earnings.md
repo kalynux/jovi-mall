@@ -1,5 +1,7 @@
 # Vendor Earnings
 
+**Verified against source on 2026-09-08** — R7 re-checked the three routes (`modules/earnings/routes/vendor-earnings.routes.ts:15,18,19`), the commission snapshot taken from the vendor's live plan entitlements at split time (`services/earnings-split.service.ts:173-174`) and the delivery-fee / `rto_fee` credit-back path (`services/earnings-quote.service.ts:116-117,196`). No defects found.
+
 **Verified against source on 2026-09-07** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.

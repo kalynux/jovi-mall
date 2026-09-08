@@ -1,5 +1,7 @@
 # Vendor dashboard — what Phase 2 and Phase 3 changed
 
+**Verified against source on 2026-09-08** — R7 re-checked the two load-bearing claims: a vendor resolves to **no** tracking visibility (`modules/tracking-integration/services/visible-agents.service.ts:17,109`), and the chat-formatter fixtures really are vendored from the dashboard — `scripts/test/test-rich-description.ts:6-9` names `frontend/vendor-dash/tools/richtext/fixtures.ts` as their origin, so the asymmetry § 1 describes is real. Suite green (148/148). No defects found.
+
 Your slice of Phases **2** (Deployability) and **3** (Cross-service correctness) of
 [`PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md`](../../../PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md).
 

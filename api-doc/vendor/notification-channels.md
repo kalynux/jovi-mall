@@ -1,5 +1,7 @@
 # Linking Notification Channels (Email / Telegram / WhatsApp)
 
+**Verified against source on 2026-09-08** — the two email-verification verbs (`modules/auth/auth.routes.ts:25-26,70`), the connections routes (`modules/channel-connections/channel-connection.routes.ts:27,42,44`), and the single-secondary-channel rule and its priority against `repositories/vendor-notification-preference.repository.ts:83-116`. **One defect fixed** — only the legacy `GET /api/auth/verify-email` was documented; `POST` is what new mail reaches. ⚠ **The `telegram → email → whatsapp` priority on this page is CORRECT and the backend's own docstring is wrong** — `vendor-notification.service.ts:156` says "email > telegram > whatsapp"; the repository that applies it tests telegram first. Filed as a source-comment defect.
+
 To receive notifications on a secondary channel, a vendor completes **two independent steps**:
 
 1. **Verify / link the channel** (the flows on this page) → flips the read-only `*Verified` flag to `true`.
@@ -33,9 +35,18 @@ Sets `emailVerified: true` (backed by the vendor's `email_verified`).
 - `422 AUTH_EMAIL_MISSING` — vendor has no email on file
 
 ### Step 2 — Vendor clicks the emailed link
-`GET /api/auth/verify-email?token=<token>`
+`POST /api/auth/verify-email` — body `{ "token": "<token>" }` · **also** `GET /api/auth/verify-email?token=<token>`
 
-- Public endpoint; the link is opened from the vendor's inbox (frontend does not build it).
+- ⚠ **Corrected 2026-09-08 (R7): there are TWO verbs on this path and this page named only the
+  legacy one** (`modules/auth/auth.routes.ts:25-26`). **`POST` is what new mail reaches.** The
+  emailed link points at the storefront's own `/verify-email` page, which holds the token until a
+  person acts and then POSTs it here — so a frontend *does* handle the token, contrary to what
+  this bullet used to say.
+- The `GET` is a **mutating GET**, which means any mail client that prefetches the link spends
+  it. It is kept only because these tokens live 24 hours, so links minted before the change stay
+  valid for a day. Do not build anything new against it.
+- Both are public — the token arrives in a mail client, routinely not the browser that
+  registered — and both sit in the strict credential rate-limit bucket (**20/min/IP**).
 - Marks the email verified.
 
 **Success** — `200 OK`:

@@ -1,5 +1,7 @@
 # Vendor Product Workflow Guide
 
+**Verified against source on 2026-09-08** — R7 re-checked every route in the walkthrough against the live route dump, and the two "Universal Rule" guarantees at source: `defaultVariantId` is auto-set when the first variant is created (`catalog/controllers/vendor-variant.controller.ts:245-251`) and reassigned when the default is archived (`:497-510`). The activation gate requires an active default variant with `price > 0` (`ProductStatusValidationService.ts`). No defects found.
+
 Step-by-step API instruction sequences for creating Physical and Digital products. Intended for frontend developers implementing the Add/Edit Product UI.
 
 > [!IMPORTANT]

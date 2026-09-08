@@ -1,5 +1,7 @@
 # Agency Connections (Vendor-Facing)
 
+**Verified against source on 2026-09-08** — R7 re-checked the eight routes against the live route dump and the six-member status enum (`modules/agency-connections/connection.model.ts:5-16,88,105`); confirmed the model carries no `terms_proposed_by`. No defects found.
+
 **Verified against source on 2026-09-07** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.

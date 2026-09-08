@@ -1,8 +1,35 @@
 # Backend requirements — structured product descriptions (`descriptionRich`)
 
+**Verified against source on 2026-09-08** — R7 checked all twelve items in § 10 against source and
+ran `npm run test:rich-description` (**148 passed, 0 failed**). **Every one is done.** The banner
+below is the correction; the body is preserved as the requirements record it was written as.
+
+> # ✅ BUILT — this entire document describes work that has SHIPPED
+>
+> **Added 2026-09-08 (R7).** Read the body below as a **historical requirements record**, not as a
+> to-do list. Every unchecked box in [§ 10](#10-checklist) is in fact complete, and § 1's "Lost on
+> reload" column no longer describes anything. Verified item by item:
+>
+> | § 10 item | Where it landed |
+> |---|---|
+> | `descriptionRich` on `IProduct` + Mongoose as `Mixed`, default `null` | `catalog/models/product.model.ts:201,313` |
+> | **Not** in the `product_storefront_text` index | `product.model.ts:489` — an explicit ⚠ saying it must never be added |
+> | `richDocSchema` + `href` scheme allowlist at parse time | `core/richtext/schema.ts:23-30` (`isAllowedHref`; relative hrefs rejected too) |
+> | Accepted on **all four** write endpoints, the two `.strict()` ones included | `catalog/validators/product.validator.ts:54,90` · `simple-product.validator.ts:51,97`, all four via one shared `descriptionRichSchema` |
+> | `null` clears, absent leaves alone | `catalog/validators/rich-description.validator.ts:39` |
+> | Shared formatters (`toPlainText` / `toWhatsApp` / `toTelegramHtml`) | `core/richtext/format/{shared,whatsapp,telegram}.ts` |
+> | `telegram-bot.service.ts` no longer sends vendor prose as `parse_mode: 'Markdown'` | `modules/telegram/services/telegram-bot.service.ts:26,91-93` — `'none'` sends no `parse_mode` at all |
+> | Test vectors reproduce | `npm run test:rich-description` → **148 passed, 0 failed** |
+>
+> ⚠ **The `RICH_DESCRIPTION_WIRE_ENABLED` note in § 1 is also out of date.** It says the gate is
+> "currently `false`". It is **`true`** (`vendor-dash/src/lib/richtext/wire.ts:36`), and the
+> `.strict()` hazard it guarded against is gone, because `descriptionRich` is now a known key on
+> both simple-product schemas. The contract page is
+> [`product-description-rich.md`](./product-description-rich.md).
+
 **Audience:** backend developer on `backend/jovi-mall`
-**Frontend status:** shipped and merged. Everything below is what the frontend needs from the backend for the feature to be complete.
-**Blocking?** No. The vendor dashboard works today without any of this. What is missing without it is *persistence of inline formatting* — see [§1](#1-what-works-today-and-what-does-not).
+**Frontend status:** shipped and merged. Everything below is what the frontend needed from the backend for the feature to be complete — and it is now all built.
+**Blocking?** No — and nothing is outstanding either.
 
 ---
 

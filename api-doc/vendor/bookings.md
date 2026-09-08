@@ -1,5 +1,7 @@
 # Vendor Booking Management API
 
+**Verified against source on 2026-09-08** — R7 re-checked the nine routes (`modules/booking/routes/vendor-booking.routes.ts:23-86`), the payment enum (`models/booking.model.ts:159`), the transition map (`services/booking.service.ts:684-689`) and the refunding vs non-refunding cancel paths (`:377-386` vs `:709-746`). **One defect fixed:** the § summary at the end still described the calendar-view key as `YYYY-MM-DD` **(UTC)** — the exact claim the ⚠ box earlier on this page corrects. It is the server local day (`format(booking.startAt, ...)`, `:1017`).
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–26). Corrections are marked inline with ⚠ and a source citation.
@@ -560,7 +562,7 @@ Stripe. Just add `disputed` to your payment-status badges/filters and treat a
 3. **Calendar Sync**: Non-blocking — failures are logged but never break API responses
 4. **State Machine**: Enforced at service layer; invalid transitions return structured errors
 5. **Cash Payments**: `paidAt` is persisted when a cash booking is manually marked as paid
-6. **Calendar View**: Returns bookings grouped by `YYYY-MM-DD` (UTC), max 90-day range
+6. **Calendar View**: Returns bookings grouped by `YYYY-MM-DD` in the **server's local day**, max 90-day range. ⚠ **This line still said "(UTC)" until 2026-09-08 (R7)** — the same claim the ⚠ box above corrects, left uncorrected here. The key comes from `format(booking.startAt, 'yyyy-MM-dd')` (`services/booking.service.ts:1017`), which formats in the server zone; group client-side off `startAt` if the day boundary matters
 7. **Reschedule**: Requires the vendor to hold a slot lock via the existing slot-locking mechanism
 8. **Capacity bookings**: For service products with `serviceConfig.bookingMode: "capacity"`, multiple customers book the same slot (up to `maxBookings`). All seats for a slot share **one** Google Calendar event titled `[x/N] <Product>`, updated as seats fill. Each seat is a separate booking row, visible here and in the calendar view; cancelling one frees a seat. Per-seat payment/status is tracked per booking as usual.
 

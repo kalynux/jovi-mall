@@ -1,5 +1,7 @@
 # Vendor Stock Requests
 
+**Verified against source on 2026-09-08** — R7 re-checked the six routes and their actor rules (`modules/stock-requests/routes/vendor-stock-request.routes.ts:28,37,40,43,46,49` — approve/reject only if the AGENCY raised it, withdraw only if the VENDOR did), the four-value status enum (`models/stock-request.model.ts:8,87,138`), the absolute-not-delta `quantity`, and the `409 STOCK_REQUEST_ALREADY_PENDING` with its `details.hint` (`services/stock-request.service.ts:144-150`). No defects found.
+
 **Verified against source on 2026-09-07** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.

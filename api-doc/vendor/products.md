@@ -1,11 +1,28 @@
 # Vendor Product Management API
 
+**Verified against source on 2026-09-08** — R7 re-read the route inventory
+(`routes/vendor-products.routes.ts`, 46 routes), the query/create/bulk schemas
+(`validators/product.validator.ts:162-207`), the transition map and the silent demote
+(`ProductStatusValidationService.ts:47-53,439-453`), the image limits
+(`domain/services/media/image-limits.ts:14-29`) and the duplicate split by `mode`
+(`ProductDuplicateService.ts:13-152`). No new defects; one broken sentence in this header fixed.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
-**Re-verified in part on 2026-09-08** — the plan-quota material added below (`modules/plan-quota/`, `controllers/vendor-product.controller.ts:129-135, 183-185, 322-324, 369-371`, `domain/services/ProductBulkOperationsService.ts:33-72`, `services/entitlement.service.ts:76-113`, `repositories/mongo/product.repository.mongo.ts:82-93`, `models/product.model.ts:60-101`), and the Duplicate-Product section, which was **wrong** about simple-mode variants (`domain/services/ProductDuplicateService.ts:88-155`).
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation. Re-opened on
 the same date to take `product-upload-flow.md`'s five inherited rows, which name endpoints this
 page owns — the retry error list and the `pending` write lock.
+
+**Re-verified in part on 2026-09-08** — the plan-quota material added below
+(`modules/plan-quota/`, `controllers/vendor-product.controller.ts:129-135, 183-185, 322-324,
+369-371`, `domain/services/ProductBulkOperationsService.ts:33-72`,
+`services/entitlement.service.ts:76-113`, `repositories/mongo/product.repository.mongo.ts:82-93`,
+`models/product.model.ts:60-101`), and the Duplicate-Product section, which was **wrong** about
+simple-mode variants (`domain/services/ProductDuplicateService.ts:88-155`).
+
+> ⚠ **The 2026-09-06 line above was split in half by the 2026-09-08 insertion** — its sentence
+> ran "…was checked against" · *(whole paragraph)* · "`jovi-mall/src/`, including…". Repaired
+> 2026-09-08 (R7). Nothing was removed; the three notes are simply no longer interleaved.
 
 Complete API reference for managing products in the Jovi Mall multi-vendor platform.
 
@@ -230,7 +247,7 @@ GET /api/vendor/products
 | `status` | `"draft" \| "active" \| "archived" \| "pending_review" \| "suspended"` | Passed to `StatusBadge`; used for client-side filtering. |
 | `mode` | `"simple" \| "advanced"` | ⚠ **Present on every row and missing from this table until 2026-09-06** (`ProductListService.ts:87`). It decides which edit route the row action opens: a `simple` product **rejects** the variant and option endpoints, so sending a row into the advanced editor is a dead end. |
 | `category` | string | Category label/badge text. |
-| `fileIds` | `FileDetail[]` | Populated product images. Empty array when none. Each entry: `{ id, key, url, mimeType, size, originalName? }`. The frontend's `ProductThumbnail` shows the first entry. |
+| `fileIds` | `FileDetail[]` | Populated product images. Empty array when none. Each entry: `{ id, key, url, access, mimeType, size, originalName? }` — ⚠ **`access` was missing from this list until 2026-09-08**; `url` is `string \| null` and `access` is `"public" \| "authorized" \| "quota_blocked"` (`read-models/file-detail.resolver.ts:67-88`). The frontend's `ProductThumbnail` shows the first entry. |
 | `hasVariants` | boolean | Drives the "Has variants" / "Variants" badge. |
 | `vectorisationEnabled` | boolean | Vendor opt-in flag. Passed to `VectorisationBadge`. |
 | `vectorisationStatus` | `"not_started" \| "pending" \| "completed" \| "failed" \| "skipped_no_credits"` | Indexing state. Passed to `VectorisationBadge`; row edit menu is locked while `pending`. |

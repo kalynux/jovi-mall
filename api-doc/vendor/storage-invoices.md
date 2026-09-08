@@ -1,5 +1,7 @@
 # Storage statements (vendor side)
 
+**Verified against source on 2026-09-08** — R7 confirmed the vendor side is exactly the two read routes (`modules/inventory/storage-invoice.routes.ts:64,67` — no settle, void or dispute verb on this router), the three-value status filter (`controllers/storage-invoice.controller.ts:17`, matching the stored enum at `models/agency-storage-invoice.model.ts:10,112`) and the 404-never-403 rule (`controllers/storage-invoice.controller.ts:75,136`). No defects found.
+
 What each delivery agency says you owe it for warehousing your stock, per month.
 
 > The full contract — how a statement is produced, what its quantities mean, and why the

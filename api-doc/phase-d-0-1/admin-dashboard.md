@@ -1,5 +1,7 @@
 # Phase D · 0 · 1 — admin dashboard
 
+**Verified against source on 2026-09-08** — R7 re-read the refund-capability derivation (`modules/payments/gateways/registry.ts:89-107`, `payments/config/payments.config.ts:51`, `orders/admin-refund.service.ts:79,180,317`) and the two wi-admin routes and their permissions (`admin/src/modules/orders/routes/order.routes.ts:100-146`, `system/routes/system.routes.ts:63`). **One defect fixed:** § 8's Q-4 row said the bargain range was "closed as not planned" and told readers not to build an offer/counter-offer surface — the negotiation module shipped and `bargain.maxPrice` is now the storefront price.
+
 Everything Phases D, 0 and 1 changed for the administration dashboard. The dashboard talks to
 **wi-admin** at `/api/v1/*`; wi-admin reads some records straight out of `jovi_mall` and
 delegates the rest over jovi-mall's internal admin API. Both sides are named below wherever it
@@ -367,7 +369,7 @@ All ten were answered on 2026-08-18. **Six are decided and unbuilt**, one is clo
 | **Q-7 · What is the longest plausible delivery in this market?** | **`TRACKING_SESSION_TTL = 72h`** | `geo-tracker/docs/ADR-B01-SESSION-TTL.md` | **Decided, unbuilt (Phase 4.C.2).** The constant still defaults to **48h** in geo-tracker's config |
 | **Q-2 · What does "delete my account" mean?** | **Anonymise-and-retain.** No legal enquiry; a new market or processor is the trigger | `jovi-mall/docs/ADR-A02-ACCOUNT-CLOSURE.md` | **Decided, unbuilt (Phase 6.D).** Nothing exists today — no deletion, no export, no session revocation |
 | **Q-8 · Own the geocoding or rent it?** | Cache first, then rent one adapter | `jovi-mall/docs/ADR-A04-GEOCODING.md` | **Decided, unbuilt (Phase 6.H)** |
-| **Q-4 · Is the bargain range buyer-facing?** | **Neither** — configuration-only, no negotiation product planned | `jovi-mall/docs/ADR-A05-BARGAIN.md` | **Closed as not planned.** Do not build an offer/counter-offer surface |
+| **Q-4 · Is the bargain range buyer-facing?** | ⛔ **REVERSED — the product shipped.** `bargain.maxPrice` is now the storefront **shelf price** and `variant.price` is the vendor's unpublished floor (`read-models/public-display-price.ts`); a negotiating agent is live at `/api/internal/negotiation/*` (`src/modules/negotiation/`, mounted at `api/index.ts:504-505`) | `jovi-mall/docs/ADR-A05-BARGAIN.md`, superseded | ⚠ **This row said "closed as not planned · do not build an offer/counter-offer surface" until 2026-09-08 (R7), and every clause of that is now false.** The negotiation surface is **service-token only** — the customer bot drives it, not a dashboard — so there is still nothing for *this* dashboard to build; what changed is the pricing semantics, which an admin reading a product's price must understand |
 
 The register itself, with the evidence behind each answer, is
 [`11-DECISIONS-REGISTER.md`](../../../PRODUCTION-READINESS/11-DECISIONS-REGISTER.md).

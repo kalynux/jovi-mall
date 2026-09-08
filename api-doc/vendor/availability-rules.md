@@ -1,5 +1,7 @@
 # Availability Rules
 
+**Verified against source on 2026-09-08** — R7 re-checked the six routes, the weekly-only rule shape with `isActive` defaulting to false and `timezone` absent-not-null (`modules/booking/models/availability-rule.model.ts:5-62`), the three accepted create body shapes (`controllers/vendor-availability.controller.ts:72-78`) and the claim that `isActive` cannot be PATCHed — confirmed at `:30`, `CreateAvailabilityRuleSchema.omit({ isActive: true }).partial()`. No defects found.
+
 **Verified against source on 2026-09-07** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.

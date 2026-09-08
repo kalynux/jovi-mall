@@ -1,5 +1,7 @@
 # Vendor Customer Management API
 
+**Verified against source on 2026-09-08** — R7 re-checked the eight routes (`modules/vendor/routes.ts:340-358`) against the live route dump, and the data-model note — the list is backed by the first-class `vendor_customers` collection (`core/database/collections.ts:336`) and flags live on the vendor settings document (`service/vendor-customer.service.ts:30`). No defects found.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.

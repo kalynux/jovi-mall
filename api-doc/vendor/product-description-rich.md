@@ -1,5 +1,7 @@
 # Rich Product Descriptions (`descriptionRich`)
 
+**Verified against source on 2026-09-08** — R7 re-checked the four write schemas against the one shared `descriptionRichSchema` (`catalog/validators/rich-description.validator.ts:39`, used at `product.validator.ts:54,90` and `simple-product.validator.ts:51,97`) and the dashboard gate (`vendor-dash/src/lib/richtext/wire.ts:36`). No defects found.
+
 **Re-verified in part on 2026-09-08** — the rollout status only: the vendor dashboard's `RICH_DESCRIPTION_WIRE_ENABLED` is `true` (`vendor-dash/src/lib/richtext/wire.ts:36`), reversing what this page said.
 
 The structured description a vendor writes in the dashboard's formatting editor, and the source of truth for how a product reads when it is shared into **WhatsApp** or **Telegram**.

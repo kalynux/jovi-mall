@@ -1,5 +1,7 @@
 # Vendor Tickets
 
+**Verified against source on 2026-09-08** — R7 re-counted all four enums from source and every figure is exact — **39** `TicketType`, **9** `TicketStatus`, **4** `TicketPriority`, **11** `EntityType` (`modules/tickets/types/ticket.types.ts:10,74,89,120`) — re-confirmed the `max(5)` attachment cap (`validators/ticket.validator.ts:61`), and re-checked the guard claims: the follower check on `PATCH /:id/priority` is present (`services/ticket.service.ts:421-425`, added 2026-09-07) exactly as the note below says, and the three routes it lists as still unguarded still are. No defects found.
+
 **Re-verified against source on 2026-09-08** — the enum sizes (39 `TicketType`, 9 `TicketStatus`,
 11 `EntityType`, 4 `TicketPriority`) and, in particular, **every open-defect box on this page**,
 against `src/modules/tickets/`. Two of them had been fixed since 2026-09-06 and were still being

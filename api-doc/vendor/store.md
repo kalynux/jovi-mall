@@ -1,5 +1,7 @@
 # Store Profile Management API Documentation
 
+**Verified against source on 2026-09-08** — R7 re-checked the three routes (`modules/store/routes.ts:25,44,53`), the twelve-field model (`models/store.model.ts:11-27`) and the `publicUrl` base and default (`config/store.config.ts:19` — `/shop/stores`, correct at all five occurrences on this page). No defects found.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–26). Corrections are marked inline with ⚠ and a source citation.

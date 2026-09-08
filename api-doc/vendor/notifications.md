@@ -1,5 +1,7 @@
 # Vendor Notifications
 
+**Verified against source on 2026-09-08** — R7 re-checked the seven routes against the live dump, the read-only `planUpdates` claim — genuinely absent from `UpdateNotificationPreferencesSchema` (`modules/vendor/validators/vendor-notification.validator.ts:38-58`), so it is silently stripped — and the secondary-channel priority. ✅ **The `telegram → email → whatsapp` order on this page is CORRECT** and the backend's own service docstring (`notifications/services/vendor-notification.service.ts:156`, "email > telegram > whatsapp") is wrong: the repository that applies it tests telegram first (`repositories/vendor-notification-preference.repository.ts:90-111`). No doc defects found.
+
 **Verified against source on 2026-09-06** — every claim on this page was checked against
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–27). All six of its rows were already closed by earlier passes; the citations
