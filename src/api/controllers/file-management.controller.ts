@@ -107,7 +107,18 @@ export class FileManagementController {
         // Admins: no owner filter (see all files)
 
         // Build characteristic filters on top of the ownership scope.
-        const filters: any = { ...ownerFilter };
+        //
+        // `deletedAt: null` IS LOAD-BEARING AND MUST NOT BE DROPPED. This handler queries
+        // `FileModel` directly (see the note at the fetch below) instead of going through
+        // `FileRepositoryMongo`, whose `findOne`/`findManyByIds` add this filter for every
+        // other read. Without it, `GET /api/files` was the ONE read on this router that
+        // returned soft-deleted files — `GET /:id`, `PATCH /:id` and `DELETE /:id` all
+        // exclude them, and so does the `storage` summary returned in this very response
+        // (`MediaStorageService.getUsageBreakdown` matches on `deletedAt: null`). So a
+        // media library showed files the owner had already deleted, and the byte total
+        // printed beside them disagreed with the list — as did `pagination.total`, which
+        // counts the same filter.
+        const filters: any = { ...ownerFilter, deletedAt: null };
 
         // Name search: case-insensitive substring match on originalName.
         if (query.search) {

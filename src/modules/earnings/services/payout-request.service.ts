@@ -310,9 +310,17 @@ export class PayoutRequestService {
 
   /**
    * Auto-resolve the linked ticket as a side effect of mark-paid/reject.
-   * Best-effort: a ticket-workflow conflict (e.g. locked to a different admin)
-   * must never undo an already-committed financial action, so failures here
-   * are logged, not thrown.
+   * Best-effort: a ticket-workflow refusal (the ticket was closed by hand first,
+   * so RESOLVED is no longer a legal transition from where it now is) must never
+   * undo an already-committed financial action, so failures here are logged, not
+   * thrown.
+   *
+   * The example used to read "locked to a different admin", which named a mechanism
+   * that does not exist: the only lock on a ticket is `priority_locked_by`, which
+   * pins the PRIORITY field against re-prioritisation and has no bearing on who may
+   * change a status. `updateStatus` refuses on a missing ticket, an illegal
+   * transition, or a waiting status whose target does not participate — never on a
+   * holder.
    */
   private async resolveTicketBestEffort(
     payoutRequest: IPayoutRequest,
