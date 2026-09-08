@@ -1,5 +1,7 @@
 # Order administration
 
+**Verified against source on 2026-09-08** — the six `/api/internal/admin/orders` routes and the absence of any `/api/admin/*` mount, the four request schemas (`outcome`, `page`/`limit`, cancel `reason` 3-500, refund `{amount?, reason, overridePolicy?}`), the refund-eligibility verdict fields and the `REFUND_POLICY_OVERRIDE_REQUIRED` details, against `jovi-mall/src/modules/orders/{admin-order.routes.ts,admin-order.controller.ts,admin-refund.service.ts}`; every error code named here is raised in `src/`.
+
 > **ONE mount. There were two, and the legacy one was deleted at the Phase 5 cutover.**
 >
 > - `/api/internal/admin/orders` — called by the **wi-admin backend**, never by a browser.
@@ -190,7 +192,8 @@ Without the flag, a refund beyond the vendor's terms is refused so the operator 
 ```jsonc
 // 422 REFUND_POLICY_OVERRIDE_REQUIRED
 { "overrides": ["return_window_expired"], "requested": 45000,
-  "vendorMaxRefundable": 0, "vendorReasonCode": "REFUND_WINDOW_EXPIRED" }
+  "vendorMaxRefundable": 0, "vendorReasonCode": "REFUND_WINDOW_EXPIRED",
+  "maxRefundable": 45000 }   // the PLATFORM ceiling — what the override would actually allow
 ```
 
 | Refusal | Code | Status |

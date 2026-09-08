@@ -1,5 +1,7 @@
 # Billing Module — Overview (Pricing Plans & Credit Wallet)
 
+**Verified against source on 2026-09-08** — the three vendor plan tiers and the four credit packs against `jovi-mall/scripts/seed/seed-pricing-plans.ts:45-51` and `jovi-mall/src/modules/billing/config/credit.config.ts:42-45` — every price, allowance, product cap, storage cap, commission and term matches.
+
 The billing module monetizes vendors through **pricing plans** and meters two
 costly platform actions (AI product **vectorisation** and outbound **WhatsApp
 template messages**) through a **credit wallet**.

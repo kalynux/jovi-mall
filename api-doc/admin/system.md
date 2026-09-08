@@ -1,5 +1,7 @@
 # System operations — read-only diagnostics
 
+**Verified against source on 2026-09-08** — the twelve `/api/internal/admin/system` routes, the `GET /workers` report shape and the worker inventory count, and which workers instrument their scheduled path, against `jovi-mall/src/modules/dev-tools/worker-registry.ts:132-346`, `jovi-mall/src/modules/system/admin-system.routes.ts` and every `recordWorkerRun` call site in `src/`. The inventory was documented as fourteen (thirteen triggerable) and is **nineteen** (eighteen triggerable); the instrumented set was four and is **five**.
+
 `/api/internal/admin/system/*` · service-token only (`requireAdminCaller`) · **every route is a GET**
 
 The operator surface wi-admin renders at `/api/v1/system/*`. Nothing here changes anything, so
@@ -187,14 +189,29 @@ number, and rendering 100% would be actively misleading.
 
 ## `GET /workers`
 
-All **fourteen** workers — the thirteen triggerable ones in `WORKER_REGISTRY` plus
+All **nineteen** workers — the eighteen triggerable ones in `WORKER_REGISTRY` plus
 `inbound-calendar-sync`, which is observable but not runnable — with **three distinct booleans**
 rather than one:
 
-> The fourteenth is **`payment-reconciliation`**, added in Phase 1: it re-verifies mobile-money
-> transactions (and pending plan purchases and credit top-ups) whose gateway callback never
-> arrived. Its `runOnce` returns a **count**, and `null` from it means the pass was *refused by
-> the worker lock* — a different statement from `0`, which means nothing was due.
+> ⚠ **This said "fourteen … thirteen triggerable" until 2026-09-08, and had said ten, eleven,
+> twelve and thirteen before that.** The registry is now **18** triggerable entries; the count
+> in this document has trailed it at every step, which is what a hand-typed total does.
+>
+> **How to re-measure, rather than trusting this number.** From `backend/jovi-mall`:
+>
+> ```bash
+> node -e "const s=require('fs').readFileSync('src/modules/dev-tools/worker-registry.ts','utf8');\
+>   const b=s.slice(s.indexOf('export const WORKER_REGISTRY'),s.indexOf('export type WorkerKey'));\
+>   console.log([...b.matchAll(/^    '([a-z0-9-]+)':/gm)].length)"   # → 18 triggerable
+> ```
+>
+> `NOT_TRIGGERABLE` holds the rest (`worker-registry.ts:334-346`) — one entry today,
+> `inbound-calendar-sync`.
+>
+> One entry worth knowing individually is **`payment-reconciliation`** (Phase 1): it re-verifies
+> mobile-money transactions — and pending plan purchases and credit top-ups — whose gateway
+> callback never arrived. Its `runOnce` returns a **count**, and `null` from it means the pass
+> was *refused by the worker lock*, a different statement from `0`, which means nothing was due.
 
 | field | means |
 |---|---|
@@ -296,18 +313,25 @@ a published event nobody handles collapses to `unhandled`, which is itself a use
   > needs a global Mongoose plugin registered before the first `model()` call, which is a
   > bootstrap-ordering change across 182 models; it is a named debt in ADR-015, not done here.
 
-- `jovimall_worker_*` — **four of fourteen workers are instrumented on their scheduled path**:
-  `tracking-dispatch`, `assignment-sweep`, `earnings-release` and `analytics-aggregation`. Every
-  manual `POST /dev-tools/workers/:key/run` is instrumented too, for any worker, so a manually
-  triggered sweep of the other ten does report. The first three are the ones whose silent stall
-  is most expensive (a delivered shipment still broadcasting, shipments sitting on offer forever,
-  and money not released); `analytics-aggregation` is instrumented because Phase 15 built its
-  scheduler. The other ten — `payment-reconciliation` among them — report nothing on their
-  scheduled path, so
-  `time() - jovimall_worker_last_success_timestamp_seconds > 86400` is a valid alert **for the
-  instrumented workers only**. These instruments were declared in Phase 14 and incremented by
-  nothing at all until Phase 15. A pass refused by the overlap lock records
-  `outcome="skipped"` and deliberately does not advance the success timestamp.
+- `jovimall_worker_*` — **five of the nineteen workers are instrumented on their scheduled
+  path**: `tracking-dispatch`, `assignment-sweep`, `earnings-release`, `analytics-aggregation`
+  and `tracking-allow-reconcile`. Every manual `POST /dev-tools/workers/:key/run` is
+  instrumented too, for any worker, so a manually triggered sweep of the other fourteen does
+  report. The first three are the ones whose silent stall is most expensive (a delivered
+  shipment still broadcasting, shipments sitting on offer forever, and money not released);
+  `analytics-aggregation` is instrumented because Phase 15 built its scheduler, and
+  `tracking-allow-reconcile` because it pushes revocations across a service boundary. The other
+  fourteen — `payment-reconciliation` among them — report nothing on their scheduled path, so `time() -
+  jovimall_worker_last_success_timestamp_seconds > 86400` is a valid alert **for the instrumented
+  workers only**. These instruments were declared in Phase 14 and incremented by nothing at all
+  until Phase 15. A pass refused by the overlap lock records `outcome="skipped"` and deliberately
+  does not advance the success timestamp.
+
+  > ⚠ **This read "four of fourteen" until 2026-09-08 and omitted `tracking-allow-reconcile`,
+  > which calls `recordWorkerRun('tracking-allow-reconcile', 'scheduled', …)` at three sites
+  > (`agents/workers/tracking-allow-reconcile.worker.ts:140,161,166`). Verify the set with
+  > `grep -rn "recordWorkerRun('" src/ | grep scheduled`.
+
 
 A counter that silently under-reports is worse than no counter, because somebody will read zero as
 "no errors".

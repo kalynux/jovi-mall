@@ -1,5 +1,7 @@
 # Vendor administration — the internal API
 
+**Verified against source on 2026-09-08** — the eight `/api/internal/admin/vendors` routes, the suspend/restore cascade response, the `PATCH /settings` three-field schema, and every error code named here (all seven are raised in `src/`), against `jovi-mall/src/modules/vendors/{admin-vendor.routes.ts,admin-vendor.service.ts}`. The plan-assignment route was named on the deleted `/api/admin/*` prefix in two places.
+
 > **This is not a dashboard surface.** Every endpoint here lives under
 > `/api/internal/admin/vendors` and is called by the **wi-admin backend**, never by a
 > browser. The dashboard talks to wi-admin's `/api/v1/vendors`, which reads `jovi_mall`
@@ -142,7 +144,7 @@ the agency receiving the shipment, the customer waiting on the order.
 Deliberately absent: `notify_days_before_expiry` (notifies the vendor, about the vendor)
 and `customer_flags` (their private CRM vocabulary, referenced by `VendorCustomer.flag_ids`).
 **Commission is absent and is not an oversight** — it lives on `PricingPlan.commission_percent`
-and is set by assigning a plan through `POST /api/admin/vendors/:vendorId/plan`.
+and is set by assigning a plan through `POST /api/internal/admin/billing/vendors/:vendorId/plan`.
 
 ---
 
@@ -156,5 +158,11 @@ routing one through here would put an HTTP hop in front of a `find()`.
 and catalogue content are theirs. An administrator suspends, verifies and oversees; they do
 not act as the vendor.
 
-**No plan assignment.** `POST /api/admin/vendors/:vendorId/plan` already exists in the
+**No plan assignment.** `POST /api/internal/admin/billing/vendors/:vendorId/plan` already exists in the
 billing module, behind `billing.subscriptions.assign`. Nothing here duplicates it.
+
+> ⚠ **Both mentions of that route named `POST /api/admin/vendors/:vendorId/plan` until
+> 2026-09-08.** No `/api/admin/*` route has existed since the Phase 5 Part E cutover, and the
+> billing router mounts this one under its own `/billing` segment
+> (`billing/routes/admin-billing.routes.ts:52`), so the old path was wrong twice over.
+> `billing.md` is the contract; wi-admin surfaces it at `POST /api/v1/billing/vendors/:vendorId/plan`.

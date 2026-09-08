@@ -1,5 +1,7 @@
 # Admin Delivery Agencies API
 
+**Verified against source on 2026-09-08** — the six `/api/internal/admin/agencies` routes, the `.strict()` reject body (`reason` 3-500 required), the verify/reject compare-and-set on `pending_verification` and the fields each verdict moves, against `jovi-mall/src/modules/delivery/{admin-agency.routes.ts,validators/admin-agency.validator.ts:25-34}`. Three defects: the Base Path read `/api/admin`, the Authentication section described the deleted `requireRole([\x27admin\x27])` session, and a leftover two-mount note claimed five routes on a second mount that no longer exists.
+
 > ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
 >
 > **The public mount `/api/admin/delivery-agencies` is DELETED.** It was served to any platform session
@@ -25,14 +27,27 @@ historical orders/shipments and can't be safely removed).
 
 ## Base Path
 ```
-/api/admin
+/api/internal/admin/agencies
 ```
 
 ## Authentication
-All requests require a valid Bearer token with the **admin** role:
-```
-Authorization: Bearer <access_token>
-```
+
+`requireAdminCaller` (`src/api/middlewares/admin-caller.middleware.ts`) — a **service** call from
+wi-admin, not a browser session:
+
+| Header | Required | Meaning |
+|---|---|---|
+| `X-Service-Token` | yes | `INTERNAL_ADMIN_SERVICE_TOKEN`, compared in constant time. `Authorization: Bearer <token>` is accepted as an alternative |
+| `X-Actor-Id` | yes | The acting administrator’s `admin_accounts._id` from the **wi-admin** database. Must be a valid ObjectId |
+| `X-Actor-Name` | no | Snapshotted onto the actor stamps this surface writes. Defaults to `Administrator` |
+| `X-Request-Id` | no | Correlation id, echoed into logs |
+
+Unset secret ⇒ `503`; bad token ⇒ `401`; missing or malformed actor ⇒ `400`.
+
+> ⚠ **This section said *"a valid Bearer token with the admin role"* until 2026-09-08** — the
+> deleted public mount’s `requireRole(['admin'])` guard, on a platform `users` row. There is no
+> such mount: every `/api/admin/*` route went at the Phase 5 Part E cutover, and this router is
+> instantiated once, with `[requireAdminCaller]` (`api/routes/internal-admin.routes.ts`).
 
 ---
 
@@ -47,9 +62,10 @@ Authorization: Bearer <access_token>
 | PATCH | `/api/internal/admin/agencies/:id/deactivate` | Deactivate an agency |
 | PATCH | `/api/internal/admin/agencies/:id/reactivate` | Reactivate an agency |
 
-> **The same five routes are also mounted at `/api/internal/admin/agencies/*`** behind the
-> service token, for wi-admin. One factory, two guard chains; the paths after the prefix are
-> identical.
+> ⚠ **This note said *"the same five routes are also mounted at `/api/internal/admin/agencies/*`
+> behind the service token"* until 2026-09-08, and it is now circular** — the six rows above ARE
+> that mount, and there is no second one. The public `/api/admin/delivery-agencies` twin the note
+> was contrasting against went at the Phase 5 Part E cutover. Note also **six** routes, not five.
 
 ---
 

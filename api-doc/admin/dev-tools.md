@@ -1,5 +1,7 @@
 # Developer tools — operations that change things
 
+**Verified against source on 2026-09-08** — the seven `/api/internal/admin/dev-tools` routes, the eleven-row Redis cache-flush policy table (indexes, `wholeDbAllowed` and `destructive` on every row) and the maintenance-mode exemption list, against `jovi-mall/src/modules/system/domain/{cache-flush-policy.ts,maintenance-mode.ts}`, `jovi-mall/src/infra/redis/redis.factory.ts:37-47,155-270` and `jovi-mall/src/app.ts:163-200`. Three defects: `/api/internal/shipments/*` was missing from the exemption list, `/api/admin/*` was described in the present tense, and the destructive-row count was three-of-five where it is four. Also: the worker-inventory total, which read thirteen and is **nineteen** (`worker-registry.ts:132-346`).
+
 `/api/internal/admin/dev-tools/*` · service-token only (`requireAdminCaller`) · **no public twin,
 deliberately**
 
@@ -39,7 +41,7 @@ Two fields became strictly more truthful at an unchanged shape, which needed no 
 were wrong for eight of ten workers), and `running` is now `executing || manualClaim` rather than
 manual claims alone.
 
-Use [`GET /system/workers`](./system.md#get-workers) for the full picture — all **thirteen**
+Use [`GET /system/workers`](./system.md#get-workers) for the full picture — all **nineteen**
 workers, three distinct booleans, structured schedules, `enabled`, `pausedByMaintenance`.
 
 > **The array grew in Phase 15 and the SHAPE did not.** `analytics-aggregation` was the
@@ -48,8 +50,9 @@ workers, three distinct booleans, structured schedules, `enabled`, `pausedByMain
 > hardcoded schedule, and — the part nobody had noticed — **no `maintenanceBlocksWorkers()`
 > guard**, meaning a full-table sweep over every active vendor ran happily inside a `down`
 > window. It is now an `ObservableWorker` like the rest and is triggerable, so this endpoint
-> returns **12** triggerable workers where it returned 11. Frozen means the field set, not the
-> length.
+> returned **12** triggerable workers where it had returned 11. Frozen means the field set, not
+> the length — and the length has moved again since: the registry holds **18** triggerable
+> entries today (2026-09-08). Re-measure rather than trusting a number in prose.
 
 ---
 
@@ -167,15 +170,22 @@ cases into somebody else's outage. **Exempt in every mode:**
    authorization and every watcher is dropped. A jovi-mall maintenance window becomes a geo-tracker
    outage.
 3. **`/api/tracking/*`** — same family, read-only, same reason.
-4. **`/api/health*`** — a probe must always answer. If readiness 503s during a window, the
+4. **`/api/internal/shipments/*`** — the drop-off coordinate geo-tracker pulls once per tracking
+   session. Same family as the two above (read-only, service-token, geo-tracker-facing) and listed
+   last in the source for the reason that makes it easy to forget: blocking it drops **no** watcher.
+   It silently removes the ETA from every tracking session that *opens* during the window, and
+   geo-tracker does not re-ask until the next activation or subscribe.
+5. **`/api/health*`** — a probe must always answer. If readiness 503s during a window, the
    orchestrator kills the instances and the window becomes an outage nobody can exit. Corollary:
    **`/api/health/ready` returns 200 during maintenance**, reporting the mode in its body. Draining
    traffic is a load-balancer action, not a maintenance-mode side effect.
-5. **`/metrics`** — telemetry matters most during the incident.
+6. **`/metrics`** — telemetry matters most during the incident. ⚠ **The last two reach the same result by a different mechanism.** `/api/health` is in `ALWAYS_EXEMPT` *and* mounted ahead of the gate; `/metrics` is **only** mounted ahead of it (`app.ts:163-171` vs `app.use(maintenanceModeMiddleware)` at `:200`), so it does not appear in the exemption list in source at all. Both are reachable in every mode.
 
-**Not exempt: `/api/admin/*`.** The legacy public admin surface is guarded by `requireRole(['admin'])`
-on a platform `users` row. An admin with a users row is still a user; the operator's door is
-`/api/internal/admin/*`.
+⚠ **This list said `/api/admin/*` was "not exempt" until 2026-09-08, in the present tense.**
+There is no such surface: every `/api/admin/*` mount was deleted at the Phase 5 Part E cutover
+(0 hits in the live route census). The point it was making still holds and is worth keeping —
+**the operator's door is `/api/internal/admin/*`**, and a platform session carrying
+`roles: ['admin']` was never it.
 
 Prefix matching is on **segment boundaries**, so naming a route `/api/healthcheck-bypass` does not
 exempt it.
@@ -286,9 +296,19 @@ Response: `{ matched, deleted, truncated, cursor, sample, blastRadius, destructi
 | 14 | `LOGIN_CODE_DB` | yes | Every magic link and /login code in flight stops working, and sessions already issued are unaffected. Nothing durable is lost — users send /login again. Rated higher than CONNECTION_CODE_DB despite the identical mechanics: /login is the PRIMARY customer sign-in path (customers hold a generated password they have never been told), so everyone signing in at that moment fails and has no password to fall back on. Moderate, and worst during exactly the incident that tempts it. |
 | 15 | `CACHE_DB` | yes | TWO PREFIXES, and only one of them costs anything. `geo:` — address search re-asks the geocoding provider until the cache refills. Nothing durable is lost (a stored GeoAddress lives on the order or the profile, not here), but on the keyless default the cost is real: Nominatim's public instance permits roughly one request per second and bans for abuse. Low during ordinary traffic; do not do it repeatedly. `related:` — the next view of each affected product page recomputes its related-products strip, one aggregation over that product's past order lines. Nothing durable is lost and no third party is called. Negligible, and safe during an incident. A whole-database flush takes both, so it carries the geocoding cost above. |
 
-Three of the five destructive rows require a prefix, so with `confirm` and `dryRun` they are
-effectively a two-step. (`WORKER_LOCK_DB` and the `bot:idem:` half of `BOT_SURFACE_DB` are the
-exceptions, each argued in its own policy row.) The blast-radius note is echoed in every response, so it travels into wi-admin's audit row
+**Four** of the five destructive rows require a prefix — `WA_IDEMPOTENCY_DB`, `SLOT_LOCK_DB`,
+`DOWNLOAD_TOKEN_DB` and `BOT_SURFACE_DB` — so with `confirm` and `dryRun` they are effectively a
+two-step. **`WORKER_LOCK_DB` is the only exception**: the one destructive database that permits a
+whole-database flush, argued in its own policy row.
+
+> ⚠ **This read *"three of the five … `WORKER_LOCK_DB` and the `bot:idem:` half of
+> `BOT_SURFACE_DB` are the exceptions"* until 2026-09-08, and it was wrong in both halves.**
+> `BOT_SURFACE_DB` carries `wholeDbAllowed: false` — its own source comment calls it *"the fourth
+> database in this table to be refused a whole-DB flush"* (`cache-flush-policy.ts:107`) — so it is
+> one of the four that DO require a prefix, not an exception to them. Naming `bot:idem:` is the
+> safety step, not a way round it.
+
+The blast-radius note is echoed in every response, so it travels into wi-admin’s audit row
 and reaches whoever reads the trail afterwards.
 
 `npm run test:system` asserts that **every catalogued Redis database has a policy row** — a database

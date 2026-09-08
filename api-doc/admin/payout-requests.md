@@ -1,5 +1,7 @@
 # Admin Payout Requests API
 
+**Verified against source on 2026-09-08** — the four routes, the list query schema, the `payout_method_snapshot` unmasking rule and the two 409 paths, against `jovi-mall/src/modules/earnings/{routes/admin-payout-requests.routes.ts,services/payout-request.service.ts,config/earnings.config.ts:77,87}`. Three defects: the Base Path and Authentication sections still described the deleted public `/api/admin` mount, and the ticket note gave the Phase-17 exclusivity lock as a live failure cause.
+
 > ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
 >
 > **The public mount `/api/admin/payout-requests` is DELETED.** It was served to any platform session
@@ -39,14 +41,27 @@ there beyond following up with the vendor/agency if it persists.
 
 ## Base Path
 ```
-/api/admin
+/api/internal/admin/payout-requests
 ```
 
 ## Authentication
-All requests require a valid Bearer token with the **admin** role:
-```
-Authorization: Bearer <access_token>
-```
+
+`requireAdminCaller` (`src/api/middlewares/admin-caller.middleware.ts`) — a **service** call from
+wi-admin, not a browser session:
+
+| Header | Required | Meaning |
+|---|---|---|
+| `X-Service-Token` | yes | `INTERNAL_ADMIN_SERVICE_TOKEN`, compared in constant time. `Authorization: Bearer <token>` is accepted as an alternative |
+| `X-Actor-Id` | yes | The acting administrator’s `admin_accounts._id` from the **wi-admin** database. Must be a valid ObjectId |
+| `X-Actor-Name` | no | Snapshotted onto the actor stamps this surface writes. Defaults to `Administrator` |
+| `X-Request-Id` | no | Correlation id, echoed into logs |
+
+Unset secret ⇒ `503`; bad token ⇒ `401`; missing or malformed actor ⇒ `400`.
+
+> ⚠ **These two sections said `/api/admin` and *"a valid Bearer token with the admin role"*
+> until 2026-09-08.** That was the deleted public mount and its `requireRole(['admin'])` guard.
+> Every `/api/admin/*` route went at the Phase 5 Part E cutover, and this router is instantiated
+> once, with `[requireAdminCaller]` (`api/routes/internal-admin.routes.ts`).
 
 ---
 
@@ -155,9 +170,17 @@ the linked ticket with a system note and notifies the requester.
 - `404` – `EARNINGS_PAYOUT_REQUEST_NOT_FOUND`
 - `409` – `EARNINGS_PAYOUT_REQUEST_NOT_PENDING` – Already paid or rejected.
 
-> If the linked ticket can't be auto-resolved (e.g. it's locked to a different admin), the payout
-> is still marked paid — the financial action is never rolled back by a ticket-workflow conflict.
-> Resolve the ticket manually in that case.
+> **The linked ticket is auto-resolved best-effort, and a failure there never rolls the payout
+> back** — the financial action stands and the ticket is left for a human
+> (`earnings/services/payout-request.service.ts:312-330`). What can actually fail is
+> `404 TICKET_NOT_FOUND`, `403 TICKET_ACCESS_DENIED` (the resolver is not a follower) or a
+> `500 TICKET_UPDATE_FAILED`. Resolve the ticket manually in that case.
+>
+> ⚠ **This note gave *"locked to a different admin"* as the example cause until 2026-09-08.**
+> That exclusivity lock was removed at Phase 17 — `assigned_admin_id`, `setActiveAdminIfNotSet`
+> and `validateActiveAdminPermission` are all gone, and no ticket refuses an administrator on
+> the grounds that another one touched it first. See [tickets.md](./tickets.md). The stale
+> phrase also survives in the service’s own comment at `payout-request.service.ts:313`.
 
 ### POST /api/internal/admin/payout-requests/:id/reject
 

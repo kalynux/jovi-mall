@@ -1,5 +1,7 @@
 # Shipment administration — the internal API
 
+**Verified against source on 2026-09-08** — both routes, the `ReassignShipmentSchema` / `CancelShipmentSchema` bodies (reassign `reason` 3-500; cancel `note` 3-200 and `reason` defaulting to `platform_intervention`) and the 409 compare-and-set codes, against `jovi-mall/src/modules/shipments/{admin-shipment.routes.ts,admin-shipment.controller.ts}`.
+
 > **This is not a dashboard surface.** Every endpoint here lives under
 > `/api/internal/admin/shipments` and is called by the **wi-admin backend**, never by a
 > browser. There has never been an `/api/admin/shipments` mount, so unlike the order router
@@ -94,7 +96,9 @@ COD collection or second reassign. Reload and retry; it is never a reason to for
 
 ## `POST /:shipmentId/cancel`
 
-Body: `{ "reason"?: ShipmentRejectionReason, "note": string }`.
+Body: `{ "reason"?: ShipmentRejectionReason, "note": string }` — `note` is **3–200**
+characters (`CancelShipmentSchema`, `admin-shipment.controller.ts:42`); the reassign `reason`
+above is 3–500, which is a different bound on a similarly-named field.
 
 `reason` defaults to **`platform_intervention`**, the reason an administrator owns — added
 in Phase 10 and deliberately disjoint from every agency-driven reason, so a later reader can

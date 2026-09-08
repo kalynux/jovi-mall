@@ -1,5 +1,7 @@
 # Admin — Platform Earnings & owner balances
 
+**Verified against source on 2026-09-08** — the four routes and their relative-path mount, the platform balance and ledger shapes, the `/accounts` query schema and its `meta.totals` array, and the zero-not-404 rule on `/balances`, against `jovi-mall/src/modules/earnings/{routes/admin-earnings.routes.ts,controllers/admin-earnings.controller.ts,services/earnings-account.service.ts}`. The page described the deleted `requireRole([\x27admin\x27])` cookie session as its auth model, and omitted `meta.totals`.
+
 > ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
 >
 > **The public mount `/api/admin/earnings` is DELETED.** It was served to any platform session
@@ -24,8 +26,16 @@ commission — and its append-only ledger, plus the **per-owner balances** ("wha
 vendor / agency / agent").
 
 - **Base URL**: `http://localhost:8022/api`
-- **Auth**: Required (cookie or `Bearer`) — see [../auth/README.md](../auth/README.md)
-- **Permissions**: `admin` only (`requireRole(['admin'])`)
+- **Auth**: `requireAdminCaller` — a **service** call from wi-admin. `X-Service-Token`
+  (`INTERNAL_ADMIN_SERVICE_TOKEN`, or the same value as `Authorization: Bearer`) plus `X-Actor-Id`,
+  the administrator’s `admin_accounts._id`. **No user session, no cookie.**
+- **Permissions**: resolved in **wi-admin**, before the call, and re-checked nowhere here — the
+  token is a full-privilege credential.
+
+> ⚠ **These two lines read *"Auth: Required (cookie or `Bearer`)"* and *"Permissions: `admin` only
+> (`requireRole(['admin'])`)"* until 2026-09-08.** That is the authorization model deleted at the
+> Phase 5 Part E cutover, and following it would mean building against a mount that does not exist.
+
 - **Response envelope**: standard `{ success, data, meta? }` — see [../README.md](../README.md#the-response-envelope-read-this-first).
 
 > The marketplace never pays *itself* out — there is no payout pipeline for the platform account
@@ -56,7 +66,7 @@ vendor / agency / agent").
 
 **Purpose**: Return the platform account's current balances.
 
-**Auth**: Required · **Permissions**: `admin`
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller)
 
 ### Example success `200`
 
@@ -88,7 +98,7 @@ vendor / agency / agent").
 **Purpose**: Return the platform's append-only earnings ledger, newest first. Every balance movement
 (hold, release, reserve, reversal) writes one row.
 
-**Auth**: Required · **Permissions**: `admin`
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller)
 
 ### Query parameters
 
@@ -137,7 +147,7 @@ vendor / agency / agent").
 **Purpose**: Every owner account the platform holds money for, **sorted by `available` descending**
 (ties broken by `_id`) — i.e. ranked by what is withdrawable right now.
 
-**Auth**: Required · **Permissions**: `admin`
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller)
 
 ### Query parameters
 
@@ -164,9 +174,24 @@ vendor / agency / agent").
       "updatedAt": "2026-08-11T09:12:00.000Z"
     }
   ],
-  "meta": { "total": 87, "page": 1, "limit": 20, "pages": 5 }
+  "meta": {
+    "total": 87, "page": 1, "limit": 20, "pages": 5,
+    "totals": [
+      { "currency": "XAF", "pending": 1420000, "available": 8830000, "reserve": 210000, "requested": 95000 }
+    ]
+  }
 }
 ```
+
+> ⚠ **`meta.totals` was missing from this example until 2026-09-08, and it is the field the
+> screen is for.** It is an **array**, one entry per currency present in the *filtered* set — it
+> respects the active `ownerType`, so it can never disagree with the table above it. An array
+> rather than an object deliberately: a single object would force a currency choice the data does
+> not support (`admin-earnings.controller.ts:57-73`,
+> `earnings/services/earnings-account.service.ts:265-310`).
+>
+> There is **no sum across the four balances** and there must not be — see
+> `EarningsAccountRepository.totalsForAdmin`.
 
 ---
 
@@ -174,7 +199,7 @@ vendor / agency / agent").
 
 **Purpose**: One owner's four balances.
 
-**Auth**: Required · **Permissions**: `admin`
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller)
 
 ### Path parameters
 

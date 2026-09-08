@@ -1,5 +1,7 @@
 # The internal admin API — `/api/internal/admin/*`
 
+**Verified against source on 2026-09-08** — the "120 routes in sixteen groups" figure and every per-group count in the table, re-measured against the live route census (`DOC-PROGRAM/evidence/jovi-routes.txt`, regenerated 2026-09-08) with the command the page itself prints. All sixteen group counts match, and they sum to 120.
+
 **Not a frontend surface.** This is the service-to-service door the **wi-admin** backend calls. No
 user session is involved: wi-admin is a service, holds no `users` row here, and carries the
 administrator who asked in headers instead of impersonating them.

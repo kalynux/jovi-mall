@@ -1,5 +1,7 @@
 # Admin — Cash on Delivery (COD) Oversight
 
+**Verified against source on 2026-09-08** — the fourteen `/api/internal/admin/cod` routes, the `/agents` row shape (`trustScore` as the EFFECTIVE score beside `computedTrustScore` and `trustSource`), the `PUT /agents/:id/trust-override` body and both response messages, and the `AGENT_NOT_FOUND`-not-`DELIVERY_AGENT_NOT_FOUND` claim, against `jovi-mall/src/modules/cod/{admin-cod.routes.ts,controllers/admin-cod.controller.ts:69-72,285-355,services/{cod-summary,cod-trust}.service.ts}`. `DELIVERY_AGENT_NOT_FOUND` is in the registry (`error-codes.ts:975`) and raised nowhere in `src/` — confirmed.
+
 > ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
 >
 > **The public mount `/api/admin/cod` is DELETED.** It was served to any platform session

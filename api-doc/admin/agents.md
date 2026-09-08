@@ -1,5 +1,7 @@
 # Admin — Agent Administration
 
+**Verified against source on 2026-09-08** — the 15-route surface (12 in `admin-agent.routes.ts` + 3 contract routes + `assignability` on its own router), the `AgentProfileMapper.toResponseDto` response shape, the transfer/status/tracking-allow response bodies, the eligibility `{eligible, reasons, rules}` shape, and the assignability gate statuses and remedy actions, against `jovi-mall/src/modules/agents/{routes/admin-agent.routes.ts,controllers/admin-agent.controller.ts,dto/agent-profile.dto.ts,domain/services/{agent-eligibility,agent-contract}.service.ts}` and `jovi-mall/src/modules/shipment-assignment/{admin-assignability.routes.ts,domain/services/{agent-assignability,contract-policy}.service.ts}`.
+
 > ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
 >
 > **The public mount `/api/admin/agents` is DELETED.** It was served to any platform session
@@ -23,8 +25,16 @@ Platform-level administration of delivery agents: view an agent's full record, c
 control the tracking-allow flag, transfer an agent between agencies, and inspect eligibility/history.
 
 - **Base URL**: `http://localhost:8022/api`
-- **Auth**: Required (cookie or `Bearer`) — see [../auth/README.md](../auth/README.md)
-- **Permissions**: `admin` only (`requireRole(['admin'])`)
+- **Auth**: `requireAdminCaller` — a **service** call from wi-admin. `X-Service-Token`
+  (`INTERNAL_ADMIN_SERVICE_TOKEN`, or the same value as `Authorization: Bearer`) plus `X-Actor-Id`,
+  the administrator’s `admin_accounts._id`. **No user session, no cookie.**
+- **Permissions**: resolved in **wi-admin**, before the call, and re-checked nowhere here — the
+  token is a full-privilege credential.
+
+> ⚠ **These two lines read *"Auth: Required (cookie or `Bearer`)"* and *"Permissions: `admin` only
+> (`requireRole(['admin'])`)"* until 2026-09-08.** That is the authorization model deleted at the
+> Phase 5 Part E cutover, and following it would mean building against a mount that does not exist.
+
 - **Response envelope**: standard `{ success, data, message? }` — see [../README.md](../README.md#the-response-envelope-read-this-first).
 
 > **Model note.** An agent is a **platform identity**, not an agency-owned record — they may serve
@@ -82,7 +92,7 @@ control the tracking-allow flag, transfer an agent between agencies, and inspect
 **Purpose**: Move an agent from one agency's roster to another. **Admin-only** — an agency must not be
 able to pull an agent off a rival's roster.
 
-**Auth**: Required · **Permissions**: `admin`
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller)
 
 ### Request body
 
@@ -129,7 +139,7 @@ able to pull an agent off a rival's roster.
 
 **Purpose**: Return the agent's profile and **every** membership (across all agencies).
 
-**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
 
 ### Example success `200` (representative shape)
 
@@ -207,7 +217,7 @@ endpoints.
 **Purpose**: Set the agent's account status. Memberships are intentionally left intact so reinstatement
 restores them.
 
-**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
 
 ### Request body
 
@@ -245,7 +255,7 @@ restores them.
 **Purpose**: Enable or disable the **tracking-allow** flag. jovi-mall owns this flag; geo-tracker
 enforces it — flipping it here revokes/permits live tracking downstream.
 
-**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
 
 ### Request body
 
@@ -288,7 +298,7 @@ enforces it — flipping it here revokes/permits live tracking downstream.
 **Purpose**: Return the tracking policy geo-tracker would resolve for this agent (what the tracking
 service sees). Read-only.
 
-**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
 
 ---
 
@@ -296,7 +306,7 @@ service sees). Read-only.
 
 **Purpose**: Record the KYC verdict for an agent.
 
-**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
 
 > **This is what lets an agent work.** `kyc.status` starts at `unverified` and assignment
 > eligibility passes only on `verified` — so until an admin calls this, every offer the agent tries
@@ -344,7 +354,7 @@ Side effects: `verified_at` and `verified_by_user_id` are stamped only on `verif
 
 **Purpose**: Ban or unban an agent platform-wide.
 
-**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
 
 ### Request body
 
@@ -375,7 +385,7 @@ Side effects: `verified_at` and `verified_by_user_id` are stamped only on `verif
 
 **Purpose**: Set the agent's **whole COD pool** — the most cash they may carry across every agency.
 
-**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
 
 ### Request body
 
@@ -407,7 +417,7 @@ Returns the same shape as `GET /internal/admin/agents/:agentId/cod-allocation`.
 **Purpose**: The agent's pool, each contract's slice of it, and the unallocated headroom. The view
 to consult before changing either level.
 
-**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
 
 ### Example success `200`
 
@@ -438,7 +448,7 @@ to consult before changing either level.
 
 **Purpose**: Return the agent's append-only membership/lifecycle history.
 
-**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
 
 ---
 
@@ -454,7 +464,7 @@ under capacity).
 > predate the `approved` → `active` status rename and are kept because they are part of the wire
 > contract. See [agency/agent-roster.md](../agency/agent-roster.md#get-apiagencyagentsagentideligibility).
 
-**Auth**: Required · **Permissions**: `admin` · **Path param**: `agentId` (ObjectId)
+**Auth**: `requireAdminCaller` · **Permissions**: `admin` (service caller) · **Path param**: `agentId` (ObjectId)
 
 ### Query parameters
 

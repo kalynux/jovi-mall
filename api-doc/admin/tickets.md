@@ -1,6 +1,6 @@
 # Admin Tickets
 
-**Verified against source on 2026-09-08** — the follower add/remove contract, the priority-lock rule and the three per-endpoint "exclusive admin lock" descriptions, against `jovi-mall/src/modules/tickets/{controllers/ticket.controller.ts,services/ticket-follower.service.ts,services/ticket.service.ts}`. The lock was removed at Phase 17 and three endpoint descriptions still asserted it in the present tense.
+**Verified against source on 2026-09-08** — the follower add/remove contract, the priority-lock rule and the three per-endpoint "exclusive admin lock" descriptions, against `jovi-mall/src/modules/tickets/{controllers/ticket.controller.ts,services/ticket-follower.service.ts,services/ticket.service.ts}`. The lock was removed at Phase 17 and three endpoint descriptions still asserted it in the present tense. Re-verified 2026-09-08 (R5): the administrator snapshot on every JSON example, against `jovi-mall/src/modules/tickets/services/ticket-enrichment.service.ts:169,189`, `jovi-mall/src/core/types/admin-snapshot.types.ts:49-67,113-122` and `jovi-mall/src/modules/tickets/models/ticket.model.ts:26-31` — the three enriched reads carry `assigned_admin` and no `admin_assignment` at all, and every example showed a two-field snapshot that does not exist.
 
 > ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
 >
@@ -72,6 +72,25 @@ on ticket responses (`null` when omitted).
 > because `TicketEnrichmentService` builds its payload with `toObject({ virtuals: true })`, which
 > applies no transform. **Key on `id`**: it is the only identifier present on all of them. A
 > client that keys on `_id` reads `undefined` the first time it patches a ticket.
+
+> [!IMPORTANT]
+> **The administrator holding a ticket comes back under TWO DIFFERENT KEYS, and neither page
+> said so until 2026-09-08.** Which one you get depends on whether the endpoint enriches:
+>
+> | Endpoints | Key | Shape |
+> |---|---|---|
+> | **create · list · detail** (the three enriched reads) | **`assigned_admin`** | `{ name, job_title, department, avatar_url }` — `null` when unassigned |
+> | every other endpoint (status, priority, assign, admin-snapshot, close, reopen, `PATCH`) | **`admin_assignment`** | `{ admin, assigned_by, assigned_at }`, each snapshot `{ id, source, name, tier, job_title, department, avatar_url }` — `null` when unassigned |
+>
+> **`admin_assignment` is NOT on the three enriched reads.** `TicketEnrichmentService` narrows
+> the snapshot through `publicAdminSnapshot()` onto `assigned_admin` and then
+> `delete obj.admin_assignment` (`ticket-enrichment.service.ts:169,189`), because those three
+> reads also serve customers, vendors, agencies and agents, and `tier` decides who may see a
+> ticket. A screen that renders the holder from `admin_assignment` on a list or detail read
+> shows nothing.
+>
+> The same narrowing applies to the ticket's **creator**: `created_by_admin` is a
+> `PublicAdminSnapshot` on the enriched reads, beside the role-agnostic `created_by`.
 
 ## Endpoints
 
@@ -152,7 +171,7 @@ Body:
     "created_by_user_id": "string",
     "created_by_role": "admin",
     "assigned_to_role": "admin",
-    "admin_assignment": { "admin": { "id": "string", "name": "string" }, "assigned_by": { "id": "string", "name": "string" }, "assigned_at": "2026-02-09T23:54:00.000Z" },
+    "assigned_admin": { "name": "string", "job_title": null, "department": null, "avatar_url": null },
     "priority_locked": false,
     "createdAt": "2026-02-11T19:00:00.000Z",
     "updatedAt": "2026-02-11T19:00:00.000Z"
@@ -208,7 +227,7 @@ Body:
       "priority": "high",
       "type": "PAYMENT_ISSUE",
       "created_by_role": "vendor",
-      "admin_assignment": { "admin": { "id": "string", "name": "string" }, "assigned_by": { "id": "string", "name": "string" }, "assigned_at": "2026-02-09T23:54:00.000Z" },
+      "assigned_admin": { "name": "string", "job_title": null, "department": null, "avatar_url": null },
       "priority_locked": true,
       "createdAt": "2026-02-11T19:00:00.000Z",
       "updatedAt": "2026-02-11T19:00:00.000Z"
@@ -265,7 +284,7 @@ Body:
     "created_by_user_id": "string",
     "created_by_role": "vendor",
     "assigned_to_role": "admin",
-    "admin_assignment": { "admin": { "id": "string", "name": "string" }, "assigned_by": { "id": "string", "name": "string" }, "assigned_at": "2026-02-09T23:54:00.000Z" },
+    "assigned_admin": { "name": "string", "job_title": null, "department": null, "avatar_url": null },
     "priority_locked": true,
     "createdAt": "2026-02-11T19:00:00.000Z",
     "updatedAt": "2026-02-11T19:00:00.000Z"
@@ -359,7 +378,7 @@ Body:
   "data": {
     "id": "string",
     "status": "in_progress",
-    "admin_assignment": { "admin": { "id": "string", "name": "string" }, "assigned_by": { "id": "string", "name": "string" }, "assigned_at": "2026-02-09T23:54:00.000Z" },
+    "admin_assignment": { "admin": { "id": "string", "source": "admin", "name": "string", "tier": 3, "job_title": null, "department": null, "avatar_url": null }, "assigned_by": { "id": "string", "source": "admin", "name": "string", "tier": 3, "job_title": null, "department": null, "avatar_url": null }, "assigned_at": "2026-02-09T23:54:00.000Z" },
     "updatedAt": "2026-02-11T19:30:00.000Z"
   },
   "message": "Status updated successfully"
@@ -384,6 +403,14 @@ Body:
 > wi-admin's gateway (`support/gateways/ticket.gateway.ts:250`) has always sent the correct shape,
 > so nothing was broken in practice; but this page is the only contract a reader has, and it
 > described a call that cannot work. Same failure mode as BR-014.
+>
+> **The cause is worth knowing, because it is a trap that can be fallen into again.** jovi-mall
+> has **four** `/:id/assign` routes — vendor, agency, agent and admin. The first three genuinely
+> take `{ targetRole, targetUserId }` (`AssignTicketSchema` → `TicketController.assignTicket`,
+> `{vendor,agency,agent}-ticket.routes.ts:30`). The **admin** one is a different handler with a
+> different body (`AssignToAdministratorSchema` → `assignToAdministrator`,
+> `admin-ticket.routes.ts:68`). They share a path suffix and nothing else, and this page had the
+> role-scoped body pasted under the admin route.
 
 **Authorization**: wi-admin service token (`requireAdminCaller`).
 
@@ -430,7 +457,7 @@ filled — so the two cannot disagree.
 Status: `200 OK` — the updated ticket. **There is no `message` field** on this response.
 
 ```json
-{ "success": true, "data": { "id": "string", "admin_assignment": { "admin": "…", "assigned_by": null }, "updatedAt": "2026-02-11T19:30:00.000Z" } }
+{ "success": true, "data": { "id": "string", "admin_assignment": { "admin": { "id": "string", "source": "admin", "name": "string", "tier": 3, "job_title": null, "department": null, "avatar_url": null }, "assigned_by": null, "assigned_at": "2026-02-11T19:30:00.000Z" }, "updatedAt": "2026-02-11T19:30:00.000Z" } }
 ```
 
 **Error Responses**:
@@ -551,12 +578,16 @@ Body:
   "data": {
     "id": "string",
     "status": "closed",
-    "admin_assignment": null,
+    "admin_assignment": { "admin": { "id": "string", "source": "admin", "name": "string", "tier": 3, "job_title": null, "department": null, "avatar_url": null }, "assigned_by": null, "assigned_at": "2026-02-11T19:20:00.000Z" },
     "updatedAt": "2026-02-11T19:30:00.000Z"
   },
   "message": "Ticket closed successfully"
 }
 ```
+
+> The assignment above is **unchanged by the close** — it is shown populated for exactly that
+> reason. This example carried `"admin_assignment": null` until 2026-09-08, which read as though
+> closing released the ticket. It does not; that was the deleted auto-unlock.
 
 **Error Responses**:
 - `404` – `NOT_FOUND` – Ticket not found
@@ -591,7 +622,7 @@ Body:
   "data": {
     "id": "string",
     "status": "open",
-    "admin_assignment": { "admin": { "id": "string", "name": "string" }, "assigned_by": { "id": "string", "name": "string" }, "assigned_at": "2026-02-09T23:54:00.000Z" },
+    "admin_assignment": { "admin": { "id": "string", "source": "admin", "name": "string", "tier": 3, "job_title": null, "department": null, "avatar_url": null }, "assigned_by": { "id": "string", "source": "admin", "name": "string", "tier": 3, "job_title": null, "department": null, "avatar_url": null }, "assigned_at": "2026-02-09T23:54:00.000Z" },
     "updatedAt": "2026-02-11T19:30:00.000Z"
   },
   "message": "Ticket reopened successfully"
