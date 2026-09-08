@@ -1,6 +1,12 @@
 # PROPOSAL — a supported way to display a file you just uploaded
 
-**Status: awaiting an owner decision. Nothing has been implemented.**
+**Status: ✅ APPROVED by the owner and IMPLEMENTED, 2026-09-08.** All four recommendations in § 4
+were taken as written. The contract page is [README.md](./README.md); the behaviour is covered by
+`npm run test:uploads` (83 assertions — the helper, the superset property, all three `access`
+values, and a source scan asserting all four endpoints go through it).
+
+This document is kept as the **decision record**, in the tense it was written in. § 4's
+"RECOMMEND" lines are what was approved.
 **Raised:** 2026-09-08 (session S9) · **Scope:** jovi-mall only · **Decision needed on:** 4 points in § 4
 
 Everything below was verified against source on 2026-09-08. Line references are real and were

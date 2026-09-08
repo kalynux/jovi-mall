@@ -89,6 +89,37 @@ export function toFileDetail(file: FileLike, storage: IStorageProvider): FileDet
 }
 
 /**
+ * Add the two COMPUTED fields — `url` and `access` — to a stored file record, leaving every
+ * other field on it untouched.
+ *
+ * ── Why this exists ──────────────────────────────────────────────────────────
+ * `/api/files/*` answers the stored RECORD (provider, checksum, ownerType, the timestamps,
+ * the soft-delete marks…), not a `FileDetail`. Those endpoints carried no `url` at all, so a
+ * media library — or an "you just uploaded this, here it is" confirmation — had nowhere to
+ * get a thumbnail from. Those are exactly the two screens that show a file BEFORE it is
+ * attached to anything, and therefore before any owning entity can return a `FileDetail`
+ * for it. Attached files were never the gap; the window before attachment was.
+ *
+ * This ADDS rather than replaces, deliberately. `GET /api/files` sorts on `createdAt` /
+ * `updatedAt`, and a `FileDetail` carries neither — swapping the shape would let a client
+ * sort by upload date and never display it. The result is a strict superset of what these
+ * endpoints already returned, so no existing consumer breaks.
+ *
+ * ⚠ **Both fields come from `toFileDetail`, and a second computation here would BE the
+ * defect this closed.** The privacy rule, the quota rule and the order between them
+ * (blocked outranks private) live in exactly one place. A client left to re-derive them
+ * gets them wrong: the vendor dashboard's hand-rolled copy could not express
+ * `quota_blocked` at all, and failed OPEN on an unclassified tree where this fails closed.
+ */
+export function withUrlAndAccess<T extends FileLike>(
+  file: T,
+  storage: IStorageProvider,
+): T & Pick<FileDetail, 'url' | 'access'> {
+  const { url, access } = toFileDetail(file, storage);
+  return { ...file, url, access };
+}
+
+/**
  * Batch-resolve file ids to `FileDetail` objects, keyed by id. Deduplicates,
  * issues one lookup, and omits missing/deleted files from the map. Use for
  * list/enrichment paths (orders, tickets, rosters, agency browse, …).

@@ -55,7 +55,7 @@ import {
     PRIVATE_STORAGE_TREES,
     STORAGE_TREE_VISIBILITY,
 } from '../../src/core/storage/storage-trees';
-import { toFileDetail } from '../../src/modules/catalog/read-models/file-detail.resolver';
+import { toFileDetail, withUrlAndAccess } from '../../src/modules/catalog/read-models/file-detail.resolver';
 import { MEDIA_CATEGORY_FOLDERS } from '../../src/core/uploads/media-folder';
 import { ERROR_CODES } from '../../src/core/error-codes';
 import { AppError } from '../../src/core/errors';
@@ -683,6 +683,95 @@ async function main(): Promise<void> {
         if (offenders.length) {
             console.error(`     offenders: ${offenders.map((f) => path.relative(ROOT, f)).join(', ')}`);
         }
+        return offenders.length === 0;
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // `/api/files/*` answers the RECORD, plus url + access
+    //
+    // The gap this closes: a media library and an "you just uploaded this" confirmation
+    // show a file BEFORE it is attached to anything, so no owning entity can hand them a
+    // FileDetail. Those four endpoints answered a record with no URL, and the vendor
+    // dashboard responded by rebuilding the rules client-side — a copy that could not
+    // express quota_blocked at all and failed OPEN on an unclassified tree.
+    // ─────────────────────────────────────────────────────────────────────────
+    console.log('\n▶ /api/files/* records carry url + access (the pre-attachment window)');
+
+    const fakeStorage = { getPublicUrl: (key: string) => `http://x/api/files/${key}` } as any;
+    const record = {
+        id: 'r1',
+        key: 'images/2026/08/a.png',
+        provider: 'local' as const,
+        mimeType: 'image/png',
+        size: 10,
+        originalName: 'a.png',
+        ownerType: 'vendor' as const,
+        ownerId: 'v1',
+        quotaBlockedAt: null,
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+        updatedAt: new Date('2026-08-02T00:00:00Z'),
+    };
+    const enriched = withUrlAndAccess(record, fakeStorage);
+
+    assert('withUrlAndAccess adds a url and an access to a stored record', () =>
+        enriched.url === 'http://x/api/files/images/2026/08/a.png' && enriched.access === 'public');
+
+    // This is the property decision 4.1 rests on. GET /api/files sorts on createdAt and
+    // updatedAt, which a FileDetail does not carry — replacing the shape would let a client
+    // sort by upload date and never display it. So the result must be a strict SUPERSET.
+    assert('…and is a strict SUPERSET — every field of the record survives', () =>
+        Object.keys(record).every((k) => (enriched as any)[k] === (record as any)[k])
+        && Object.keys(enriched).length === Object.keys(record).length + 2);
+    assert('…including createdAt/updatedAt, which the list endpoint sorts on and FileDetail lacks', () =>
+        enriched.createdAt === record.createdAt && enriched.updatedAt === record.updatedAt);
+
+    assert('…a PRIVATE record gets url: null / access: authorized, exactly as toFileDetail says', () => {
+        const r = withUrlAndAccess({ ...record, key: 'shipments/2026/08/proof.jpg' }, fakeStorage);
+        return r.url === null && r.access === 'authorized';
+    });
+    assert('…a QUOTA-BLOCKED record reports quota_blocked, and blocking still outranks privacy', () => {
+        const blocked = withUrlAndAccess(
+            { ...record, quotaBlockedAt: new Date('2026-09-01T00:00:00Z') }, fakeStorage);
+        const blockedPrivate = withUrlAndAccess(
+            { ...record, key: 'shipments/2026/08/p.jpg', quotaBlockedAt: new Date('2026-09-01T00:00:00Z') },
+            fakeStorage);
+        return blocked.access === 'quota_blocked' && blocked.url === null
+            && blockedPrivate.access === 'quota_blocked' && blockedPrivate.url === null;
+    });
+
+    // A source scan, because the behavioural half above only proves the HELPER works. The
+    // defect was four endpoints that never called anything of the sort, and a fifth added
+    // next year would reproduce it silently — the response simply lacks a field, which no
+    // type error and no runtime failure reports.
+    assert('all FOUR /api/files/* responses go through withUrlAndAccess', () => {
+        const sites: Array<[string, number]> = [
+            ['src/api/controllers/file-management.controller.ts', 2], // list + get
+            ['src/api/controllers/file-upload.controller.ts', 2],     // files + video
+        ];
+        return sites.every(([rel, expected]) => {
+            const body = code(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
+            const hits = (body.match(/withUrlAndAccess\(/g) || []).length;
+            if (hits < expected) {
+                console.error(`     ${rel}: ${hits} call(s), expected at least ${expected}`);
+                return false;
+            }
+            return true;
+        });
+    });
+
+    assert('…and neither controller re-derives the rules instead of calling the resolver', () => {
+        // The whole point of routing through toFileDetail is that the privacy rule, the quota
+        // rule and the order between them exist ONCE. A controller that reached for the tree
+        // classifier itself would be the vendor-dashboard defect, reproduced server-side and
+        // wearing an authoritative address.
+        const offenders = [
+            'src/api/controllers/file-management.controller.ts',
+            'src/api/controllers/file-upload.controller.ts',
+        ].filter((rel) => {
+            const body = code(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
+            return /isPrivateStorageKey|quotaBlockedAt\s*[?&|]/.test(body);
+        });
+        if (offenders.length) console.error(`     offenders: ${offenders.join(', ')}`);
         return offenders.length === 0;
     });
 

@@ -8,6 +8,15 @@ parameter and error code below, against `jovi-mall/src/api/routes/file-upload.ro
 `src/core/storage/storage-trees.ts`,
 `src/modules/catalog/read-models/file-detail.resolver.ts` and `src/api/index.ts`.
 
+⚠ **CHANGED 2026-09-08 (session S9) — all four `/api/files/*` responses gained `url` and
+`access`.** Both upload routes, `GET /files` and `GET /files/:id`. It is an **additive** change:
+every field these endpoints returned before is still there, in the same place, so no client had to
+change. What it reverses is the advice this page used to give — *"do not build a display URL out of
+the upload response, and do not expect one there"* — which was a true description of a gap, not a
+design rule. The proposal and its four decisions are
+[PROPOSAL-file-url-on-read.md](./PROPOSAL-file-url-on-read.md); two malformed JSON examples were
+repaired in the same pass.
+
 The `/api/files` surface is **shared by every authenticated role** (customer, vendor, agency, agent),
 with per-role size limits. Uploaded files are referenced elsewhere by their returned `id`
 (product images, vendor/agency branding, KYC documents, ticket attachments, etc.).
@@ -75,6 +84,8 @@ An unrecognised role falls back to the **customer** limit (100 MB).
     {
       "id": "664file0000000000000001",
       "key": "images/2026/07/9f2c1a30-4d21-4a3e-bb70-1d5f0c2b7a44_product-front.jpg",
+      "url": "http://localhost:8022/api/files/images/2026/07/9f2c1a30-4d21-4a3e-bb70-1d5f0c2b7a44_product-front.jpg",
+      "access": "public",
       "provider": "local",
       "mimeType": "image/jpeg",
       "size": 254013,
@@ -95,13 +106,30 @@ An unrecognised role falls back to the **customer** limit (100 MB).
 }
 ```
 
-⚠ **`data` is an array of file *records*, not `FileDetail` objects — they carry no `url` and no
-`access` field.** The upload response goes out straight from the intake service and never passes
-through the resolver, which is the only place on the platform where a URL is ever computed.
+⚠ **`data` is an array of file *records* — the full record, PLUS the two computed fields `url`
+and `access`.** It is not a `FileDetail`: it is a strict superset of one, keeping `provider`,
+`checksum`, the owner fields and the timestamps that a `FileDetail` does not carry.
 
-**So: upload, keep the `id`, attach the `id`, and render from whatever the owning entity gives you
-back.** Do not build a display URL out of the upload response, and do not expect one there. See
-[`FileDetail` vs the file record](#filedetail-vs-the-file-record) below.
+> ### ✅ Changed 2026-09-08: `url` and `access` are now on every `/api/files/*` response
+>
+> **This reverses advice that stood here.** This section used to read *"they carry no `url` and no
+> `access` field … do not build a display URL out of the upload response, and do not expect one
+> there."* That was true, and it is not any more. The two fields are computed by the same
+> `toFileDetail` resolver every other file on the platform passes through, so they carry the same
+> privacy and quota rules — see [`FileDetail` vs the file record](#filedetail-vs-the-file-record).
+>
+> **Attaching by `id` is still the right thing to do with the file.** `url` is for *showing* it —
+> a media library, or a "you just uploaded this, here it is" confirmation. It is not a reference:
+> never store a URL where an `id` belongs, and never derive an id from a URL.
+>
+> ⚠ **Do not hand-build a URL from `key` — that is what this change exists to stop.** A client
+> that did was wrong three ways: it could not express `quota_blocked` at all, it treated an
+> unclassified storage tree as **public** where the server treats it as private, and it did not
+> normalise the backslashes a key written on Windows carries. Read `url` and `access`; derive
+> neither.
+
+**So: upload, keep the `id`, attach the `id` — and render from `url` if you need to show the file
+before it is attached to anything.**
 
 ⚠ `meta.roleLimit` is a **display string** (`"500 MB"`), not a byte count.
 
@@ -160,7 +188,7 @@ map `fileIndex` back to the file in your upload list so the reason shows inline.
 - **Per-file size limit**: 70 MB — **not** the role ceiling from the route above. A vendor's 500 MB
   allowance does not apply here.
 - **Per-actor count limit**: customers max **1**, all other roles max **3**.
-- `201` mirrors the shape above (file records, no `url`), with
+- `201` mirrors the shape above (file records, `url` and `access` included), with
   `meta: { count, perFileLimit: "70 MB" }`.
 
 ### Errors
@@ -188,7 +216,9 @@ through to an unscoped listing.
     "files": [
       {
         "id": "664file0000000000000001",
-        "key": "images/2026/07/9f2c1a30-4d21-4a3e-bb70-1d5f0c2b7a44_logo.png",        "provider": "local",        "ownerType": "vendor",
+        "key": "images/2026/07/9f2c1a30-4d21-4a3e-bb70-1d5f0c2b7a44_logo.png",
+        "url": "http://localhost:8022/api/files/images/2026/07/9f2c1a30-4d21-4a3e-bb70-1d5f0c2b7a44_logo.png",
+        "access": "public",
         "provider": "local",
         "mimeType": "image/png",
         "size": 12044,
@@ -213,6 +243,11 @@ through to an unscoped listing.
   }
 }
 ```
+
+⚠ **This is the endpoint a media library calls, and since 2026-09-08 every row carries `url` and
+`access`.** A library is a *list* screen, so this — not `GET /files/:id` — is where thumbnails come
+from. Branch on `access`; `url` is `null` for two of its three values. See
+[`FileDetail` vs the file record](#filedetail-vs-the-file-record).
 
 ⚠ **Pagination lives inside `data`, not in `meta`.** This is one of the few list endpoints on the
 platform that does not use the house `meta` envelope. Read `data.pagination`.
@@ -281,15 +316,19 @@ Plan caps by role and tier: [../billing-plans-across-roles.md](../billing-plans-
 
 ## GET `/files/:id` · PATCH `/files/:id` · DELETE `/files/:id`
 
-**GET** — the file record, plus a `usage` object saying where it is referenced, so a UI can show what
-would break before offering a delete:
+**GET** — the file record (`url` and `access` included), plus a `usage` object saying where it is
+referenced, so a UI can show what would break before offering a delete:
 
 ```json
 {
   "success": true,
   "data": {
     "id": "664file0000000000000001",
-    "key": "images/2026/07/9f2c1a30-4d21-4a3e-bb70-1d5f0c2b7a44_logo.png",    "provider": "local",    "ownerType": "vendor",
+    "key": "images/2026/07/9f2c1a30-4d21-4a3e-bb70-1d5f0c2b7a44_logo.png",
+    "url": "http://localhost:8022/api/files/images/2026/07/9f2c1a30-4d21-4a3e-bb70-1d5f0c2b7a44_logo.png",
+    "access": "public",
+    "provider": "local",
+    "ownerType": "vendor",
     "mimeType": "image/png",
     "size": 12044,
     "usage": {
@@ -305,6 +344,11 @@ would break before offering a delete:
   }
 }
 ```
+
+⚠ **`usage` is unaffected by the 2026-09-08 addition and stays exactly where it was.** It answers
+a different question — *what breaks if I delete this?* — and has no overlap with rendering. That the
+two can coexist is a consequence of the record gaining fields rather than being replaced by a
+`FileDetail`, which has nowhere to put it.
 
 `references[]` is the shape to build against — one entry per live reference, with a human-readable
 `label`, covering **every** entity type (product, variant, digital asset, ticket, vendor, store,
@@ -334,15 +378,28 @@ existing file you do not own tells you so.
 
 ## `FileDetail` vs the file record
 
-These are two different shapes, and mixing them up is the most common mistake on this surface.
+These are two different shapes. Since 2026-09-08 they **overlap** rather than being disjoint —
+the record is a strict superset of the detail — so the old mistake ("the record has no URL") is
+gone and a new one is possible: assuming they are the same object.
 
-- **The file record** is what `/api/files/*` returns: `{ id, key, provider, mimeType, size,
-  checksum?, originalName?, ownerType?, ownerId?, orphanedAt, quotaBlockedAt, createdAt, updatedAt,
-  deletedAt, purgeAt }`. **No `url`, no `access`.**
+- **The file record** is what `/api/files/*` returns: `{ id, key, url, access, provider, mimeType,
+  size, checksum?, originalName?, ownerType?, ownerId?, orphanedAt, quotaBlockedAt, createdAt,
+  updatedAt, deletedAt, purgeAt }`. **`url` and `access` are computed** — by the same resolver
+  below — and everything else is stored.
 - **`FileDetail`** is what every *other* entity returns when it references a file — a vendor avatar, a
   store logo or banner, product images, a delivery proof:
   `{ id, key, url, access, mimeType, size, originalName? }`. It is built in exactly one place on the
   platform, and that is the only place a URL is ever computed.
+
+⚠ **A record is NOT a `FileDetail`, even though it now carries both of its computed fields.** It
+keeps ten more — `provider`, `checksum`, the owner fields, the timestamps and the soft-delete
+marks. Do not pass a record where a `FileDetail` is expected on a write, and do not expect
+`createdAt` on a `FileDetail`.
+
+> **Why the record gained the fields rather than becoming a `FileDetail`.** `GET /files` sorts on
+> `createdAt` and `updatedAt` (see `sortBy` below), and a `FileDetail` carries neither — replacing
+> the shape would have let you sort by upload date and never display it. Adding is also a strict
+> superset, so nothing that read these endpoints before needed changing.
 
 ```json
 {
@@ -432,6 +489,8 @@ tag will not carry the header.
   an unauthorised or non-existent id fails the whole request with nothing persisted.
 
 ## Related
+- [PROPOSAL-file-url-on-read.md](./PROPOSAL-file-url-on-read.md) — why the four endpoints gained
+  `url`/`access`, and the four decisions behind the shape
 - [../vendor/storage.md](../vendor/storage.md) · [../vendor/file-management.md](../vendor/file-management.md)
 - [../errors/README.md](../errors/README.md) · [../billing-plans-across-roles.md](../billing-plans-across-roles.md)
 - [../auth/README.md](../auth/README.md)

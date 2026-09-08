@@ -5,6 +5,7 @@ import { ERROR_CODES } from '../../core/error-codes';
 import { FileRepositoryMongo } from '../../modules/catalog/repositories/mongo/file.repository.mongo';
 import { FileReferenceRepositoryMongo } from '../../modules/catalog/repositories/mongo/file-reference.repository.mongo';
 import { getStorageProvider } from '../../core/storage';
+import { withUrlAndAccess } from '../../modules/catalog/read-models/file-detail.resolver';
 import {
     ListFilesQuerySchema,
     UpdateFileSchema,
@@ -174,7 +175,14 @@ export class FileManagementController {
         // Map to domain
         const FileMapper = (await import('../../modules/catalog/repositories/mappers/file.mapper')).FileMapper;
         const mapper = new FileMapper();
-        const domainFiles = files.map(f => mapper.toDomain(f as any));
+        // Each record gains the two computed fields (`url`, `access`) it could never carry
+        // itself — the URL is derived from the storage key and `access` from the privacy and
+        // quota rules, both of which live in `toFileDetail`. This is the LIST endpoint, which
+        // is what a media library calls: a library is a list screen, not a by-id screen.
+        const storageProvider = getStorageProvider();
+        const domainFiles = files
+            .map(f => mapper.toDomain(f as any))
+            .map(f => withUrlAndAccess(f, storageProvider));
 
         // Storage analytics for owner-scoped (non-admin) callers.
         const storage = await FileManagementController.buildStorageSummary(
@@ -308,9 +316,13 @@ export class FileManagementController {
         // break before deleting it.
         const usage = await FileManagementController.resolveFileUsage(id);
 
+        // `usage` is untouched by the `url`/`access` addition and stays where it was: it
+        // answers a different question ("what breaks if I delete this?") and has no overlap
+        // with rendering. Adding fields rather than replacing the shape is what keeps the
+        // two able to coexist.
         res.json({
             success: true,
-            data: { ...file, usage },
+            data: { ...withUrlAndAccess(file, getStorageProvider()), usage },
         });
     });
 

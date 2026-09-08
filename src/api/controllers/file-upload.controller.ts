@@ -4,6 +4,7 @@ import { UploadIntakeService } from '../../core/uploads/upload-intake.service';
 import { loadUploadConfig, getVideoUploadConfig } from '../../core/uploads/upload-config';
 import { getAcceptableClaimedMimeTypes, isAcceptableClaimedMimeType } from '../../core/uploads/mime-aliases';
 import { getStorageProvider } from '../../core/storage';
+import { withUrlAndAccess } from '../../modules/catalog/read-models/file-detail.resolver';
 import { FileRepositoryMongo } from '../../modules/catalog/repositories/mongo/file.repository.mongo';
 import { IUploadObserver } from '../../core/uploads/upload-policy.types';
 import { resolveVirusScanner } from '../../core/uploads/scanners';
@@ -231,9 +232,19 @@ export class FileUploadController {
                 })),
             });
 
+            // The intake service answers stored records, which carry no URL. Adding the two
+            // computed fields here means a client can render what it just uploaded without a
+            // second round trip — the "you just uploaded this, here it is" confirmation.
+            //
+            // ⚠ This REVERSES advice this contract used to give ("do not build a display URL
+            // out of the upload response, and do not expect one there"). That advice was
+            // correct while the field did not exist; api-doc/uploads/README.md is updated in
+            // the same change. Attaching by `id` is still the right thing to do with the
+            // file — `url` is for showing it, not for referencing it.
+            const uploadStorage = getStorageProvider();
             res.status(201).json({
                 success: true,
-                data: uploadedFiles,
+                data: uploadedFiles.map(f => withUrlAndAccess(f, uploadStorage)),
                 message: `Successfully uploaded ${uploadedFiles.length} file(s)`,
                 meta: {
                     count: uploadedFiles.length,
@@ -345,9 +356,10 @@ export class FileUploadController {
                 })),
             });
 
+            const uploadStorage = getStorageProvider();
             res.status(201).json({
                 success: true,
-                data: uploadedFiles,
+                data: uploadedFiles.map(f => withUrlAndAccess(f, uploadStorage)),
                 message: `Successfully uploaded ${uploadedFiles.length} video(s)`,
                 meta: {
                     count: uploadedFiles.length,
