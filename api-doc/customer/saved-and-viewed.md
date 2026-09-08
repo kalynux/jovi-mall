@@ -1,5 +1,14 @@
 # Wishlist & Recently Viewed API
 
+**Verified against source on 2026-09-08** — all seven routes and their declaration order, the
+two `.strict()` bodies and the 1–100 `productIds` bound, the `200`-and-idempotent save, the
+recently-viewed cap and its `recent_product_code` write, against
+`jovi-mall/src/modules/customers/routes.ts:84-91`,
+`.../validators/customer-catalog.validator.ts`, `.../controllers/customer-catalog.controller.ts`,
+`.../services/recently-viewed.service.ts` and `.../config/customer-catalog.config.ts:31`.
+**Two gaps were closed:** the error list was missing `AUTH_ROLE_NOT_FOUND` (403), and
+`saved-among` refuses an **empty** `productIds` array as well as one over 100.
+
 A signed-in customer's own view of the catalogue: the products they **saved**, and the products
 they **looked at**. Both are mounted under `/api/customer`, behind a customer session.
 
@@ -127,8 +136,9 @@ Which of these products are saved? One call per rendered grid, rather than one p
 { "success": true, "data": { "savedProductIds": ["68a1…"] } }
 ```
 
-Max **100** ids per call. A `POST` because 100 ids is ~2.5 KB of query string; it reads nothing
-and writes nothing.
+**One to 100 ids per call** — `productIds: []` is a `400 VALIDATION_ERROR`, not an empty result,
+so guard the call rather than firing it for an empty grid. A `POST` because 100 ids is ~2.5 KB of
+query string; it reads nothing and writes nothing.
 
 ---
 
@@ -197,10 +207,11 @@ is the product's `id`**.
 
 ## Error codes, in one list
 
-| Code | Status | Category |
-|---|---|---|
-| `WISHLIST_ITEM_NOT_FOUND` | 404 | `not_found` |
-| `CATALOG_PRODUCT_NOT_FOUND` | 404 | `not_found` |
-| `VALIDATION_ERROR` | 400 | `validation` |
+| Code | Status | Category | When |
+|---|---|---|---|
+| `WISHLIST_ITEM_NOT_FOUND` | 404 | `not_found` | removing something not on **your** list — also the answer for another customer's row |
+| `CATALOG_PRODUCT_NOT_FOUND` | 404 | `not_found` | saving or recording a product that is not publishable to you |
+| `VALIDATION_ERROR` | 400 | `validation` | a `productId` that is not 24 hex; an unknown body key (every schema is `.strict()`); `productIds` empty or over 100 |
+| `AUTH_ROLE_NOT_FOUND` | 403 | `authorization` | authenticated, but not as a customer — the whole `/api/customer` router is behind `requireRole(['customer'])` |
 
 Branch on `error.code`, never on `error.message`. See [errors/README.md](../errors/README.md).

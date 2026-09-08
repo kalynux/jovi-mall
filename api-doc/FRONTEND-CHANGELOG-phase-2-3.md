@@ -1,5 +1,12 @@
 # Frontend changelog — Phase 2 (Deployability) and Phase 3 (Cross-service correctness)
 
+**Verified against source on 2026-09-08** — the drain and keep-alive numbers
+(`src/lifecycle.ts:243-244`, `src/modules/system/config/system.config.ts:108`), the three probe
+paths (`src/api/routes/health.routes.ts`) and the frozen `GET /api/health` contract (re-run
+`npm run test:system`, 231/0), and the three dependency versions in `package.json`. The
+migration counts in § 7 are a **historical record of one run against the dev database** and are
+not re-derivable today; the page says so. No corrections were needed.
+
 What [`PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md`](../../PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md)
 Phases **2** and **3** changed, written for the people who build against the API.
 

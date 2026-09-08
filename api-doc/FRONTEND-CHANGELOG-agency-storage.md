@@ -1,5 +1,10 @@
 # Front-end changelog — agency storage management
 
+**Verified against source on 2026-09-08** — every route named here is served (whole-tree phantom
+scan, 0 suspect) and **all twelve** error codes on this page exist in `src/core/error-codes.ts`:
+the six `INVENTORY_*` / `CATALOG_PRODUCT_AGENCY_STORAGE_INFINITE_STOCK` and the six
+`STOCK_REQUEST_*`. No corrections were needed.
+
 **Audience:** whoever builds the **agency dashboard** and the **vendor dashboard**.
 **Status:** backend shipped. Nothing here is behind a flag.
 

@@ -1,5 +1,11 @@
 # Service Booking — Frontend Implementation Guide
 
+**Verified against source on 2026-09-08** — every endpoint named in the seventeen steps is
+served (checked against the live route table; the abbreviated forms in Steps 10–12b resolve to
+`PATCH /api/vendor/bookings/:id/{reschedule,payment-status}` and
+`POST /api/vendor/bookings/:id/cancel`). No corrections were needed. This page is a **reading
+order**, not a route census — the full contract is in the pages it links.
+
 This is the **reading order** for implementing the full service-product booking feature. Each step names the doc to open and the endpoints to wire, in the order a frontend should build them. Two audiences are involved: the **vendor** app (set up + manage) and the **customer** app (discover + book + pay).
 
 ```

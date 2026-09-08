@@ -1,16 +1,26 @@
 # Public API
 
+**Verified against source on 2026-09-08** — both routes and their query parameters, the
+15-field plan projection, the credit packs and action costs, the cache header and the two
+rate-limit ceilings, against `jovi-mall/src/modules/billing/routes/public-billing.routes.ts`,
+`.../controllers/public-billing.controller.ts`, `.../dto/public-plan.dto.ts`,
+`.../validators/billing.validators.ts:50-56`, `.../config/credit.config.ts` and
+`src/api/rate-limit/policy.ts:88-93,236-241`. **Two counts on this page were wrong** and are
+corrected above: the prefix carries **four** routers, not two, and the catalog serves **ten**
+routes, not seven.
+
 **No authentication.** These endpoints are readable by a logged-out visitor, and they exist for the
 marketing site: it prints real prices and real articles, so it needs to *read* them rather than keep
 a hand-copy.
 
-Two groups, documented separately:
+**Four routers share this prefix**, documented separately:
 
 | | Contract |
 |---|---|
-| The published **price list** | this file |
-| The **catalog** (`/products`, `/categories`, `/stores`) | [catalog.md](./catalog.md) |
+| The published **price list** (`/plans`, `/credit-packs`) | this file |
+| The **catalog** (`/products`, `/variants`, `/categories`, `/stores`) | [catalog.md](./catalog.md) |
 | The **blog** (`/articles`) | [articles.md](./articles.md) |
+| Published **product reviews** (`/products/:productId/reviews`) | [../reviews.md](../reviews.md) |
 
 Everything else in this API is behind `requireAuth`. `/api/public` is the only exception, so the rule
 for anything added here is narrow: **read-only, no identity, and already published on a public page.**
@@ -29,8 +39,9 @@ An endpoint that needs to know who is asking belongs on a role router instead.
 | GET | `/api/public/plans` | Pricing-plan catalog for every role |
 | GET | `/api/public/credit-packs` | Credit top-up packs + per-action credit costs |
 
-The blog's three endpoints and the catalog's seven share this prefix and these rules — see
-[articles.md](./articles.md) and [catalog.md](./catalog.md).
+**These two are not the whole prefix.** Thirteen more routes live on it under the same rules —
+the catalog's **ten**, the blog's **three** — plus the one published-reviews read. See
+[catalog.md](./catalog.md), [articles.md](./articles.md) and [../reviews.md](../reviews.md).
 
 > **This prefix now has its own rate-limit bucket.** `RATE_LIMIT_PUBLIC_PER_MIN` (default
 > 3000/min per IP) applies **in addition to** the global 1200/min backstop, so the effective

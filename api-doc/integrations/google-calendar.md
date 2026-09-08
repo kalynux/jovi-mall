@@ -1,5 +1,9 @@
 # Google Calendar Integration (OAuth)
 
+**Verified against source on 2026-09-08** — all six routes and their methods against the live
+route table (`GET /connect`, `POST /connect-url`, `GET /callback`, `GET /status`,
+`POST /disconnect`, `GET /test`, all under `/api/integrations/google`). No corrections were needed.
+
 Connect a user's Google Calendar via OAuth 2.0 so calendar-backed features (e.g. vendor booking
 availability) can sync. Any authenticated user can connect; it is most relevant to **vendors**.
 

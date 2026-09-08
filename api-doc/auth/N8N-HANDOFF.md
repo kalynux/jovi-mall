@@ -1,5 +1,13 @@
 # n8n handoff — what has to change outside this repository
 
+**Verified against source on 2026-09-08** — the two webhook URLs
+(`POST /api/webhooks/whatsapp/`, `POST /api/webhooks/telegram/webhook`), the four registered bot
+commands (`connect`, `login`, `login_contact`, `reset_password`), `WEBHOOK_SECRET_INVALID` in
+`src/core/error-codes.ts`, and the passwordless-customer premise —
+`RegisterSchema` requires a password for every role **except** `customer`
+(`src/modules/auth/auth.schemas.ts:93-119`), so `POST /auth/login` cannot succeed for a customer
+who has never reset. No corrections were needed.
+
 **Audience:** whoever maintains the n8n workflow that relays the WhatsApp and Telegram bots.
 **Status:** handed off **2026-08-21** · Phase 6, Step 1 of
 [`PRODUCTION-READINESS/PHASE-6-UNBUILT-SCOPE-PLAN.md`](../../../PRODUCTION-READINESS/PHASE-6-UNBUILT-SCOPE-PLAN.md).

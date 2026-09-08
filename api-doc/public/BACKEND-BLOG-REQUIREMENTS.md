@@ -1,5 +1,26 @@
 # Backend requirements — blog / articles
 
+**Verified against source on 2026-09-08** — the three read endpoints asked for in § 5 and § 10
+are all served (`GET /api/public/articles`, `/articles/index`, `/articles/:slug`), and § 5d
+`GET /api/public/authors` is still deliberately absent. **A status banner was missing** and is
+added above: this page reads as an open ask and the work has shipped.
+
+> ## ✅ All three read endpoints are BUILT, and so is the editor
+>
+> **👉 The contract is [articles.md](./articles.md)** — build from that page, not from this one.
+> `GET /api/public/articles`, `GET /api/public/articles/index` and
+> `GET /api/public/articles/:slug` are all served, with `Cache-Control: public, max-age=300`, and
+> the editor that produces § 2 blocks lives in **wi-admin** at `/api/v1/content` (ownership of
+> article *writes* moved there; jovi-mall keeps the schema, the indexes and the whole public read
+> half).
+>
+> **§ 5d `GET /api/public/authors` is the one item deliberately NOT built** — authors are resolved
+> inline on every article, so with two house bylines a separate round-trip buys nothing.
+>
+> This document is kept as **the ask and its reasoning**: the three non-negotiable model
+> decisions (§ 1), the block vocabulary (§ 2) and the `BLOG_IS_PLACEHOLDER` precaution (§ 8) are
+> all still live constraints. Read it for *why*; read `articles.md` for *what to call*.
+
 What `backend/jovi-mall` has to provide for the article pages under
 `src/app/[locale]/(marketing)/blog/` to run on real content instead of fixtures.
 

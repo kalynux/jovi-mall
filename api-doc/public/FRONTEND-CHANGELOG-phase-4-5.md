@@ -1,5 +1,10 @@
 # Marketing landing + shop — what Phase 4 and Phase 5 changed
 
+**Verified against source on 2026-09-08** — the four routes in the "what a public client sees"
+table, `BLOG_ARTICLE_MOVED` in `src/core/error-codes.ts`, and the frozen `GET /api/health`
+contract (`npm run test:system`, 231/0). **One row was misleading** — there is no
+`/api/public/catalog` path segment — and is corrected below.
+
 Your slice of Phases **4** (Per-service hardening) and **5** (Legacy close-out) of
 [`PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md`](../../../PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md).
 
@@ -127,7 +132,7 @@ Verified against a running server after the Phase 5 cutover:
 | `GET /api/public/plans` | **200** — plan catalog and credit packs, unchanged |
 | `GET /api/public/articles` | **400** without `locale` — unchanged; `locale` has always been required |
 | `GET /api/health` | **200** — still the frozen contract: exact path, exact body, unconditional 200, no `{success,data}` envelope, exempt from rate limiting and maintenance mode |
-| `GET /api/public/catalog/*` | unchanged — products, categories, stores; product URLs still nested under their store |
+| the catalog reads — `GET /api/public/{products,categories,stores,variants}/…` | unchanged; product URLs still nested under their store. ⚠ **There is no `/api/public/catalog` path segment** — the ten catalog routes sit directly on `/api/public` |
 
 **Rate limits are unchanged.** The IP-scoped layer in front of the public routes is the same one
 Phase 16 introduced; ceilings are backstops, not budgets, and the store still fails **open** when

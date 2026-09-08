@@ -7,6 +7,12 @@ was checked against
 (DOC-PROGRAM § 24–28). This page had gone stale against the 2026-08-23 provider-chain work;
 corrections are marked inline with ⚠ and a source citation.
 
+**Verified against source on 2026-09-08** (a re-check of the 2026-09-06 pass above) — the two routes (`GET /api/geo/search`,
+`GET /api/geo/reverse`, `src/modules/geo/routes.ts:16,19`), the `q` / `limit` / `country` / `lang`
+bounds (`src/modules/geo/validators/`), and every environment default in the table below
+(`src/core/geocoding/geocoding.instance.ts:60-75`, `geocoding.factory.ts:145-160`). **One note on
+this page was itself out of date** — see the ✅ under the provider chain.
+
 > Provider-agnostic address search + the shared **GeoAddress** value object that every address in
 > jovi-mall now carries. Users keep typing free-form text; the backend turns it into map-grade
 > candidates via the active geocoding provider, and the selected candidate is stored with full
@@ -156,10 +162,13 @@ Turn a coordinate into its best-matching address (e.g. "use my current location"
 > asked"* and *"everybody said no"* are different answers and a client must be able to tell them
 > apart. An empty `results: []` therefore genuinely means no match.
 >
-> ⚠ **One source comment is stale and is documented rather than edited**:
-> `geocoding.instance.ts:17` still says the chain default is `'geoapify,locationiq'`. The order
-> was **reversed by measurement on 2026-08-23** and the running default is `locationiq,geoapify`
-> (`geocoding.factory.ts:153-155`, whose own comment explains why). Trust the factory.
+> ✅ **The chain default is `locationiq,geoapify` — LocationIQ FIRST — and both source comments
+> now say so.** The order was **reversed by measurement on 2026-08-23** because the chain only
+> consults the second provider when the first returns empty or errors: a first provider that
+> answers *confidently and wrongly* is never corrected, while one that 429s is. The default array
+> is `geocoding.factory.ts:153-155`; `geocoding.instance.ts:17-20` describes it. (This paragraph
+> reported the instance comment as stale until 2026-09-08; it has since been corrected at source,
+> and re-reading it was the only way to find that out.)
 
 ---
 

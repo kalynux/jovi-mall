@@ -1,5 +1,13 @@
 # Phase D · 0 · 1 — frontend documentation
 
+**Verified against source on 2026-09-08** — every route named across the three pages of this
+folder is served (whole-tree phantom scan, 0 suspect), all **23** error codes cited exist exactly
+once in `src/core/error-codes.ts`, and the six-value `PaymentTransaction.status` enum
+(`INITIATED · PENDING · SUCCEEDED · FAILED · CANCELLED · REFUNDED`) matches
+`src/modules/payments/models/payment-transaction.model.ts:233`. No corrections were needed.
+This folder is a **historical instalment** — it records what Phases D · 0 · 1 changed, and later
+phases are covered by their own changelogs.
+
 What the first three phases of [`PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md`](../../../PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md)
 changed, written for the people who build against the API rather than for the people who
 shipped it.

@@ -1,5 +1,14 @@
 # Backend requirements — shop & customer account
 
+**Verified against source on 2026-09-08** — the Tier 1 / Tier 2 census and the six deliberate
+deviations still hold, and the six ⚠ marks below are still accurate. **Tier 3 was materially out
+of date and is corrected**: four of its seven items — reviews & ratings, wishlist,
+recently-viewed and the related strip — shipped in Phase 6, verified against
+`src/modules/reviews/routes/public-review.routes.ts:30`,
+`src/modules/customers/routes.ts:84-91` and
+`src/modules/catalog/routes/public-catalog.routes.ts:50`. A storefront built from the old § 4
+would have kept its wishlist in `localStorage` and shown "no reviews yet" against live data.
+
 > ## ✅ Tiers 1 and 2 are BUILT (2026-08-14)
 >
 > **👉 Start with [FRONTEND-CHANGELOG-shop.md](./FRONTEND-CHANGELOG-shop.md)** — the reply to
@@ -10,7 +19,10 @@
 > [customer/cart.md](../customer/cart.md), [customer/orders.md](../customer/orders.md),
 > [customer/profile.md](../customer/profile.md) and [auth/README.md](../auth/README.md).
 >
-> **Tier 3 (§4) is not built** and remains the open ask.
+> ⚠ **Tier 3 (§4) is now PARTLY BUILT — four of its seven items shipped after this line was
+> written.** Reviews & ratings, wishlist, recently-viewed and the related strip are all live;
+> coupons, back-in-stock alerts and returns/RMA remain the open ask. **Read § 4 before planning
+> around it** — it carries the routes.
 >
 > ### Six deviations from this document, all deliberate
 >
@@ -48,7 +60,8 @@
 >
 > ### Still open
 >
-> - **Tier 3** in full (§4).
+> - **Tier 3** — the three that are still open: coupons, back-in-stock alerts, returns/RMA (§4).
+>   Reviews, wishlist, recently-viewed and the related strip **shipped** and are no longer asks.
 > - Registration's 6-character password and its `role` default of `'vendor'` (§3.3) are
 >   unchanged; reset uses the strong rule.
 >
@@ -812,9 +825,22 @@ cannot be fetched, only the whole `cartId` group.
 
 ---
 
-## 4. Tier 3 — commerce-standard, and entirely greenfield
+## 4. Tier 3 — commerce-standard, and **four of the seven are now built**
 
-None of these exists. Verified against `core/database/collections.ts` — the
+> ⛔ **The census below is the state on 2026-08-14 and is no longer true.** Re-checked against
+> source on 2026-09-08: **reviews & ratings, wishlist, recently-viewed and the related strip all
+> shipped** in Phase 6 (steps 6.E.1 / 6.E.2 / 6.E.4). The table further down marks each row. The
+> `grep` output below is kept because it is the evidence for the three that are still open, and
+> because it records what the shop looked like when this was written.
+>
+> | Now live | Route | Contract |
+> |---|---|---|
+> | Reviews & ratings | `GET /api/public/products/:productId/reviews` | [../reviews.md](../reviews.md) |
+> | Wishlist | `GET`/`POST /api/customer/wishlist`, `DELETE /api/customer/wishlist/:productId`, `POST /api/customer/wishlist/saved-among` | [../customer/saved-and-viewed.md](../customer/saved-and-viewed.md) |
+> | Recently viewed | `GET`/`POST`/`DELETE /api/customer/recently-viewed` | same page |
+> | Related strip | `GET /api/public/products/:productId/related` | [catalog.md](./catalog.md) |
+
+The 2026-08-14 census, verified against `core/database/collections.ts` — the
 frozen registry every model name is drawn from — and all 88 `*.model.ts` files:
 
 ```
@@ -829,15 +855,15 @@ The only `discount` is the field pinned to `0` in §3.2. The only `rating` is th
 internal **agent** reputation score used for delivery assignment, which has no
 product linkage.
 
-| Feature | Note |
-|---|---|
-| **Reviews & ratings** | The biggest one. Needs verified-purchase gating and moderation, not just a model. Until it exists `src/lib/seo/jsonld.ts` deliberately omits `aggregateRating` (publishing invented review counts is a Google spam-policy violation that earns a manual action) and the product page's Reviews tab says "no reviews yet". |
-| **Wishlist / favourites** | `/shop/saved` works today from `localStorage` and does not sync across devices. A `GET/POST/DELETE /api/customer/wishlist` would fix that. |
-| **Related / "customers also bought"** | `getRelatedProducts` currently returns same-vendor-first from the mock. Note `Product.lastOrderedAt` exists and nothing reads it. |
-| **Coupons / promo codes** | No model, and `price_breakdown.discount` is the field waiting for it. |
-| **Back-in-stock & price-drop alerts** | Both depend on §3.1 being real first. |
-| **Recently viewed** | `Customer.recent_product_code` is a single unused string field. |
-| **Returns / RMA** | No module. Refunds today are vendor-initiated only, and only Stripe is implemented — NotchPay and MyCoolPay raise `REFUND_GATEWAY_NOT_SUPPORTED`. |
+| Feature | Status | Note |
+|---|---|---|
+| **Reviews & ratings** | ✅ **BUILT** | Verified-purchase gating and moderation both exist. Emit `aggregateRating` **if and only if** `rating` is non-null — the backend never sends a zero-count summary, so there is no way to publish an invented review count. |
+| **Wishlist / favourites** | ✅ **BUILT** | Server-side and cross-device. `saved-among` answers a whole grid in one call. `product` comes back **`null`** for a product that has left sale — render "no longer available" with a working remove button. |
+| **Related / "customers also bought"** | ✅ **BUILT** | `GET /api/public/products/:productId/related`. |
+| **Recently viewed** | ✅ **BUILT** | `Customer.recent_product_code` is no longer unused — `POST /api/customer/recently-viewed` maintains it, writing the product's **id**. The list is capped (20, `CUSTOMER_RECENTLY_VIEWED_CAP`) and re-viewing moves an entry to the head. |
+| **Coupons / promo codes** | ❌ open | No model, and `price_breakdown.discount` is the field waiting for it. |
+| **Back-in-stock & price-drop alerts** | ❌ open | Both depend on §3.1 being real first. |
+| **Returns / RMA** | ❌ open | No module. Refunds today are vendor-initiated only, and only Stripe is implemented — NotchPay and MyCoolPay raise `REFUND_GATEWAY_NOT_SUPPORTED`. |
 
 ---
 
@@ -980,7 +1006,7 @@ frontend branches on it whenever it has no specific handling for a code.
 | 18 | `POST/DELETE /api/customer/devices` | 2 | Customer push |
 | 19 | `updatedAt` on public products | 2 | Real sitemap `lastModified` |
 | 20 | Product-data i18n decision | 2 | Five-locale correctness |
-| 21 | Reviews, wishlist, related, coupons, alerts, returns | 3 | Feature parity with a normal store |
+| 21 | ~~Reviews, wishlist, recently-viewed, related~~ — **all four built**; coupons, alerts, returns still open | 3 | Feature parity with a normal store |
 
 **Environment, needed today regardless of tier:** set `ALLOWED_ORIGINS` (§6.2).
 

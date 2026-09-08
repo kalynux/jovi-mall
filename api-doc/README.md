@@ -1,5 +1,12 @@
 # jovi-mall API — Frontend Integration Guide
 
+**Verified against source on 2026-09-08** — the uploads section in full (field names `files` /
+`videos`, 1–10 files, and the per-role ceilings customer 100 MB · agency 200 MB · vendor 500 MB ·
+agent 1 GB · admin 2 GB · video 70 MB, against
+`src/api/controllers/file-upload.controller.ts:47-56,112-122` and
+`src/api/routes/file-upload.routes.ts:48-101`), and the internal-admin door.
+**One count had drifted** and is corrected in that section.
+
 > **Start here.** This is the index and the shared contract for every jovi-mall HTTP endpoint.
 > Read this page once, then jump to the per-feature docs linked below. Live GPS tracking lives in a
 > **separate service** (geo-tracker) — see [Live Tracking](#live-tracking-geo-tracker).
@@ -339,8 +346,10 @@ building an admin dashboard, you want the wi-admin backend** (`/api/v1/*`, docum
 `admin/api-doc/api/`), which resolves the administrator's permissions, writes the audit row, and
 calls the surface below on their behalf.
 
-The pages here document `/api/internal/admin/*` — 111 routes in fifteen groups, behind
-`requireAdminCaller`. They are kept because one factory always served both mounts, so they remain
+The pages here document `/api/internal/admin/*` — **120 routes in sixteen groups**, behind
+`requireAdminCaller` (re-counted 2026-09-08 against the live route table and the sixteen
+`router.use` mounts in `src/api/routes/internal-admin.routes.ts`; this line read *111 routes in
+fifteen groups*, which was the count before `reviews` and `messaging` were added). They are kept because one factory always served both mounts, so they remain
 exact for request and response shapes; each was **rewritten to the internal prefix**, not deleted.
 
 - [**The internal admin API**](./admin/internal-service-api.md) — start here: the door, its

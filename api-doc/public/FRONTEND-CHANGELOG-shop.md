@@ -1,5 +1,11 @@
 # Shop backend — what shipped, and what to do with it
 
+**Verified against source on 2026-09-08** — every route named here is served, and the login
+password check in § 9 is genuinely closed. **One section was superseded and is corrected**: the
+`bargain` range **is** published now, as the quoted `price` on a bargainable variant
+(`src/modules/catalog/read-models/public-display-price.ts`,
+`.../dto/public-product.dto.ts:149-158,235`). This page told the storefront to ignore it.
+
 **Reply to [BACKEND-SHOP-REQUIREMENTS.md](./BACKEND-SHOP-REQUIREMENTS.md). Built 2026-08-14.**
 
 **Tiers 1 and 2 are done — all 20 numbered items in your §7 table.** Tier 3 is untouched.
@@ -304,12 +310,25 @@ asks. If any is actually blocking a screen, say which and it can be scheduled �
 deletion is the one with real design weight (it interacts with order history, COD balances and
 the vendor↔customer relation, so "delete" almost certainly has to mean "anonymise").
 
-### `bargain` — a new field you will see and should ignore for now
+### ⛔ `bargain` — this section is SUPERSEDED, and the decision went the other way
 
-A negotiable price range (`min`/`max` a buyer can haggle within) landed on `ProductVariant`
-while this was being built. **It is not published**, pending a decision about whether the range
-is buyer-facing or a vendor-side floor. Do not build against it yet; we will tell you when it
-is public.
+**Do not build from the paragraph below.** It said the negotiable range was *"not published,
+pending a decision about whether the range is buyer-facing or a vendor-side floor"*. **That
+decision was taken on 2026-09-07 and it went the other way.** On a bargainable variant the shop
+now quotes **`bargain.maxPrice` — the vendor's ask** — under the ordinary `price` key, and
+`variant.price` becomes the vendor's **floor**, which is never published on any public route
+under any key.
+
+Nothing was added, removed or retyped: `price` is still an integer called `price` in the same
+position, so **your build cannot fail on this** and the only symptom is a price that disagrees
+with what the customer is charged. Read
+[`../FRONTEND-CHANGELOG-storefront-price-semantics.md`](../FRONTEND-CHANGELOG-storefront-price-semantics.md)
+before touching any price on a storefront screen — five values moved together.
+
+> ~~A negotiable price range (`min`/`max` a buyer can haggle within) landed on `ProductVariant`
+> while this was being built. **It is not published**, pending a decision about whether the range
+> is buyer-facing or a vendor-side floor. Do not build against it yet; we will tell you when it
+> is public.~~
 
 ---
 

@@ -1,5 +1,11 @@
 # Order detail — what the storefront needs
 
+**Verified against source on 2026-09-08** — the agent-identity block and its window
+(`AGENT_IDENTITY_VISIBLE_FROM = 'shipped'`, `src/modules/orders/dto/customer-shipment.dto.ts:131`;
+`displayName` partial, `photo: FileDetail | null`, **no phone number**), and the agency block as
+`AgencyIdentity` — whose logo field really is `logo`, not `logoUrl`
+(`src/modules/magazin/read-models/agency-identity.resolver.ts:23-30`). No corrections were needed.
+
 Raised 2026-08-23, from device testing of the customer app.
 
 > ## ✅ ANSWERED 2026-08-23 — read [FRONTEND-CHANGELOG-order-detail.md](./FRONTEND-CHANGELOG-order-detail.md)

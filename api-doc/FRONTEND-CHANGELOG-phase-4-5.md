@@ -1,5 +1,11 @@
 # Frontend changelog — Phase 4 (Per-service hardening) and Phase 5 (Legacy close-out)
 
+**Verified against source on 2026-09-08** — the 90-day absolute session cap, the
+policy-document upload rules (2 files × 5 MB, PDF-only, `src/core/uploads/upload-config.ts:457-470`),
+the 300-character ticket-note cap (`.../validators/ticket-note.validator.ts:12`), and the Phase 5
+admin cutover: `requireRole(['admin'])` has **25** textual occurrences in `src/` and **zero** live
+guard sites, re-counted today. **One count had drifted** — see § 6.
+
 What [`PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md`](../../PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md)
 Phases **4** and **5** changed, written for the people who build against the API.
 
@@ -294,9 +300,11 @@ deleted public paths answers 404**, and `requireRole(['admin'])` has **zero live
 
 **The internal door survives and is unchanged.** `/api/internal/admin/*` still serves its fifteen
 route groups — it is service-token-only, wi-admin is its only caller, and it is not a frontend
-surface. `api-doc/admin/*` therefore still exists (15 files, down from 17) and now documents
-**that** prefix; two genuinely dead pages were deleted and eight were repointed with a banner
-naming what moved and where a dashboard should go instead.
+surface. `api-doc/admin/*` therefore still exists and now documents **that** prefix; two genuinely
+dead pages were deleted and eight were repointed with a banner naming what moved and where a
+dashboard should go instead. Phase 5 left it at **15** files, down from 17; it holds **16** today
+(re-counted 2026-09-08 — `reviews.md` was added afterwards by Phase 6 · 6.E.4, and this line was
+the count at the time of writing rather than a standing figure).
 
 **One security consequence for any client holding an old token.** `rotateRefreshToken` used to
 copy the role straight out of the presented token with no filter, so a refresh token minted

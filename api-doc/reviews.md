@@ -4,6 +4,14 @@
 `jovi-mall/src/`, including the whole inherited defect list that `vendor-dash` carried for it
 (DOC-PROGRAM § 24–28). Corrections are marked inline with ⚠ and a source citation.
 
+**Verified against source on 2026-09-08** (a re-check of the 2026-09-07 pass above) — the ten-route census (three authoring routes each
+on `/customer`, `/vendor`, `/agency`, the one public read, four moderation routes), the
+prose-holds-it moderation rule (`domain/review-targets.ts` `initialStatusOf`, called at
+`services/review.service.ts:121`), the `.strict()` bodies and the `rating` integer 1–5 with
+`title` ≤ 120 / `body` ≤ 2000 (`validators/review.validator.ts:23-27`), and the public
+`meta.rating`-or-`null` shape (`controllers/public-review.controller.ts:44-62`). No corrections
+were needed.
+
 > **Cross-role.** One module, two subjects, three author roles, four HTTP surfaces.
 > Built 2026-08-21 (Phase 6 · 6.E.4). Moderation lives in wi-admin —
 > [admin/reviews.md](./admin/reviews.md).

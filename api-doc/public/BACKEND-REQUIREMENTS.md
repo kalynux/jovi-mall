@@ -1,5 +1,10 @@
 # Backend requirements — standalone marketing pages
 
+**Verified against source on 2026-09-08** — § 1 (the plan catalog) is built and its contract is
+accurate; `GET /api/public/coverage` and `GET /api/public/stats` (§ 3a, § 3b) are still **not**
+served, which is what this page says. No corrections were needed. Read this for the reasoning
+behind the asks; the live contract is [README.md](./README.md).
+
 What the pages under `src/app/[locale]/(marketing)/` need from `backend/jovi-mall`
 to stop being hand-maintained mirrors and start being live. Nothing here blocks
 shipping: every page renders and is correct today. Each item is either a

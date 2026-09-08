@@ -1,5 +1,12 @@
 # Notification deep links — the vendor, agency and agent apps
 
+**Verified against source on 2026-09-08** — the three vocabularies (8 vendor · 8 agency · 5
+agent), the five shape rules and the two deliberate absences re-checked by running
+`npm run test:notification-deeplinks` (13/13, and its last assertion pins this very document);
+the channel defaults against `src/modules/notifications/models/*-notification-preference.model.ts`;
+and the App Links census against the three apps' own `android/app/src/main/AndroidManifest.xml`
+(agent_app **0** `android:scheme` entries, vendor-dash and agency-dash **2** each).
+
 **Audience: whoever builds `vendor-dash`, `agency-dash` or `agent_app`.** One document
 rather than three, because the rules are shared and three copies drift — which is the
 failure this whole contract exists to prevent. Find your app's section; the rules above it

@@ -1,5 +1,13 @@
 # Customer app — what Phase 4 and Phase 5 changed
 
+**Verified against source on 2026-09-08** — the routes named here all exist (whole-tree phantom
+scan, 0 suspect), the drain / keep-alive figures (`src/lifecycle.ts:243-244`,
+`src/modules/system/config/system.config.ts:108`), `ETA_MIN_INTERVAL` on geo-tracker's side
+(`internal/platform/config/config.go:333`, default 30 s), and the four auth codes plus
+`UPLOAD_POLICY_VIOLATION` / `UPLOAD_VIRUS_SCAN_UNAVAILABLE` in `src/core/error-codes.ts`
+(`VIRUS_DETECTED` is a **violation** inside `details.violations[]`, not a registry code — as
+stated). No corrections were needed.
+
 Your slice of Phases **4** (Per-service hardening) and **5** (Legacy close-out) of
 [`PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md`](../../../PRODUCTION-READINESS/10-IMPLEMENTATION-PLAN.md).
 

@@ -1,5 +1,13 @@
 # Phase D · 0 · 1 — customer app / storefront
 
+**Verified against source on 2026-09-08** — every route named across the three pages of this
+folder is served (whole-tree phantom scan, 0 suspect), all **23** error codes cited exist exactly
+once in `src/core/error-codes.ts`, and the six-value `PaymentTransaction.status` enum
+(`INITIATED · PENDING · SUCCEEDED · FAILED · CANCELLED · REFUNDED`) matches
+`src/modules/payments/models/payment-transaction.model.ts:233`. No corrections were needed.
+This folder is a **historical instalment** — it records what Phases D · 0 · 1 changed, and later
+phases are covered by their own changelogs.
+
 Everything Phases D, 0 and 1 changed for the surface a shopper touches. Base URL
 `http://localhost:8022/api` in development.
 

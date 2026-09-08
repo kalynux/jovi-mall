@@ -1,5 +1,11 @@
 # Frontend changelog — unified email verification, all four apps
 
+**Verified against source on 2026-09-08** — the three error codes
+(`AUTH_VERIFY_TOKEN_INVALID`, `VALIDATION_ERROR`, `RATE_LIMIT_EXCEEDED`) in
+`src/core/error-codes.ts`, the 24-hour `EMAIL_VERIFY_EXPIRE` constant
+(`src/modules/auth/auth.service.ts:35`) and the `STOREFRONT_URL` → `API_PUBLIC_URL` link fallback
+(`auth.service.ts:39`, `src/core/utils/storefront-link.util.ts:79-87`). No corrections were needed.
+
 **Date:** 2026-08-24 · **Audience:** landing/storefront (owns both pages), vendor dashboard,
 agency dashboard, agent app · **Backend:** `jovi-mall`
 
