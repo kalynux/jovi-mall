@@ -1,5 +1,7 @@
 # Admin Tickets
 
+**Verified against source on 2026-09-08** — the follower add/remove contract, the priority-lock rule and the three per-endpoint "exclusive admin lock" descriptions, against `jovi-mall/src/modules/tickets/{controllers/ticket.controller.ts,services/ticket-follower.service.ts,services/ticket.service.ts}`. The lock was removed at Phase 17 and three endpoint descriptions still asserted it in the present tense.
+
 > ## ⚠️ This surface moved at the Phase 5 cutover — read this before the routes below
 >
 > **The public mount `/api/admin/tickets` is DELETED.** It was served to any platform session
@@ -278,7 +280,7 @@ Body:
 
 ### PATCH /api/internal/admin/tickets/:id
 
-**Description**: Update ticket subject and/or description. Requires exclusive admin lock.
+**Description**: Update ticket subject and/or description. ⚠ **It does NOT require an exclusive admin lock** — that mechanism was removed in Phase 17 and this line described it as live until 2026-09-08. The caller must be an administrator or a follower; no administrator holds the ticket against another.
 
 **Authorization**: Admin access required.
 
@@ -326,7 +328,7 @@ Body:
 
 ### PATCH /api/internal/admin/tickets/:id/status
 
-**Description**: Update ticket status. First admin action locks the ticket exclusively to that admin.
+**Description**: Update ticket status. ⚠ **No admin action locks the ticket to anybody** — the exclusivity lock was removed in Phase 17 and this line described it as live until 2026-09-08. Any administrator may drive the status; who *should* is wi-admin's tier decision, not a field on this row.
 
 **Authorization**: Admin access required.
 
@@ -477,7 +479,7 @@ sending it is a `400`.
 
 ### PATCH /api/internal/admin/tickets/:id/priority
 
-**Description**: Update ticket priority. When admin updates priority, it becomes **locked permanently**. Active admin can re-update locked priority.
+**Description**: Update ticket priority. When an **administrator** sets it, `priority_locked` becomes `true` permanently. ⚠ **"Active admin can re-update" is wrong and was live on this page until 2026-09-08** — there is no active admin. A locked priority is re-settable by **any** administrator: the guard is `role !== 'admin'` (`ticket.service.ts:437-441`), never an identity comparison. A non-admin follower is refused `403 TICKET_PRIORITY_LOCKED`.
 
 **Authorization**: Admin access required.
 
@@ -971,7 +973,7 @@ Body:
 **Permanent Locking**:
 - When admin updates priority → `priority_locked = true` **permanently**
 - Locked priorities **cannot** be changed by non-admin users
-- **Exception**: Active admin can re-update a locked priority
+- **Exception**: **any administrator** can re-update a locked priority — there is no "active admin", and the guard is a role test rather than an identity comparison (`ticket.service.ts:437-441`)
 
 ### Follower Management
 

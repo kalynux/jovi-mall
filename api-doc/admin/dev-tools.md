@@ -194,7 +194,7 @@ exempt it.
 - The counter-argument is real — a webhook is a write, and `readonly` exists to stop writes. The
   resolution: webhook writes are narrow and **idempotent by construction**, keyed off a gateway
   reference and already re-entrant because gateways send duplicates anyway. They are the one write
-  class safe to leave open in a way that `POST /customer/orders` is not.
+  class safe to leave open in a way that `POST /api/customer/orders/checkout` is not.
 - **Residual risk, plainly:** if the window exists *because of* a migration on orders or payments,
   an open webhook path writes into the collection being migrated. That is what `blockWebhooks` is
   for — the operator running that migration sets it and accepts the retry queue.
