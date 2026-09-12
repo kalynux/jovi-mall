@@ -10,3 +10,14 @@
 /src/scripts
 /build_output.txt
 /ticket_types.txt
+
+# ── Developer upload directory (STORAGE_PROVIDER=local) ──────────────────────
+# Runtime data, never source. Production uses Cloudflare R2, so nothing here is
+# needed to run or build the service.
+#
+# 93 files were tracked here until 2026-09-12, including customer-uploaded PDFs.
+# They are untracked now and remain on disk, but they REMAIN IN GIT HISTORY --
+# untracking does not remove a file from the commits that already added it.
+# Purging them needs a history rewrite (git filter-repo) and a force-push, which
+# is a separate, deliberate operation.
+storage/
