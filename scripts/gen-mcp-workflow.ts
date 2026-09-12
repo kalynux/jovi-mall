@@ -248,9 +248,35 @@ export function buildNodes(tools: readonly CatalogTool[]): EmittedNode[] {
             parameters.genericAuthType = 'httpBearerAuth';
             parameters.sendHeaders = true;
             const headers = [{ name: 'X-Webhook-Secret', value: '={{ $env.BOT_WEBHOOK_SECRET }}' }];
-            // ⚠ The surface REFUSES a mutating call without one.
+            /**
+             * ⚠ The surface REFUSES a mutating call without one.
+             *
+             * ⛔ **`$execution.id` ALONE IS NOT UNIQUE PER TOOL CALL HERE, and the failure is
+             * silent.** It is unique per turn inside `wi-mall-core`, which is where that
+             * pattern came from — but on the MCP server the tool node runs as a sub-node of
+             * the MCP Server Trigger, and the value demonstrably repeats across separate
+             * calls. Measured on 2026-09-08: `auth_send_login_link` was called four times and
+             * jovi-mall minted **one** session; the other calls hit the idempotency store and
+             * were answered with the FIRST call's stored body.
+             *
+             * That is invisible to the model, and specifically so: `replay()` announces itself
+             * with an `Idempotency-Replayed: true` **response header**, and the n8n HTTP node
+             * surfaces only the body. So the model reads `{ sent: true }`, tells the customer
+             * their link is on the way, and nothing was sent. The same mechanism silently
+             * swallows a second `cart_add_item`, `wishlist_add` or `tickets_add_note` in the
+             * same session.
+             *
+             * The millisecond makes it per-call. That deliberately gives up "a network retry
+             * is free" — which was never reachable anyway, because `neverError: true` means
+             * these nodes do not throw and n8n never retries them. What a model does when it
+             * calls a tool twice is send TWO requests, not retry one, and the key now says so.
+             * Rate limits, not this header, are what bound a loop.
+             */
             if (tool.mutating) {
-                headers.push({ name: 'Idempotency-Key', value: `={{ $execution.id }}-${tool.name}` });
+                headers.push({
+                    name: 'Idempotency-Key',
+                    value: `={{ $execution.id }}-{{ $now.toMillis() }}-${tool.name}`,
+                });
             }
             parameters.headerParameters = { parameters: headers };
             // Always a body, even on DELETE: `bot-identity.middleware.ts` reads the identity
@@ -409,7 +435,11 @@ export function renderSdk(nodes: readonly EmittedNode[]): string {
     out.push('');
     out.push(`const generatedNote = sticky(${JSON.stringify(STICKY_CONTENT)}, [], { color: 4, height: 460, width: 460 });`);
     out.push('');
-    out.push(`export default workflow('wi-mall-mcp', 'wi-mall-mcp').add(mcpServerTrigger).add(generatedNote);`);
+    // The SDK id stays `wi-mall-mcp`; only the DISPLAY NAME carries the `UP-` prefix the
+    // instance adopted on 2026-09-07. Kept in step deliberately — this file is the review
+    // artefact, and a rendering that disagrees with the live workflow's name is the kind of
+    // drift nobody notices until they diff the two.
+    out.push(`export default workflow('wi-mall-mcp', 'UP-wi-mall-mcp').add(mcpServerTrigger).add(generatedNote);`);
     out.push('');
 
     return out.join('\n');

@@ -1,5 +1,10 @@
 # Vendor Booking Management API
 
+**Source changed 2026-09-09 (DOC-PROGRAM close-out § 6, item 2)** — the calendar view's day key
+now groups in the **vendor's timezone** rather than the server's, and the response carries
+`meta.timezone`. The two ⚠ boxes this page kept about that defect are gone; the fix is described in
+[Calendar View](#calendar-view). Nothing else on this page changed.
+
 **Verified against source on 2026-09-08** — R7 re-checked the nine routes (`modules/booking/routes/vendor-booking.routes.ts:23-86`), the payment enum (`models/booking.model.ts:159`), the transition map (`services/booking.service.ts:684-689`) and the refunding vs non-refunding cancel paths (`:377-386` vs `:709-746`). **One defect fixed:** the § summary at the end still described the calendar-view key as `YYYY-MM-DD` **(UTC)** — the exact claim the ⚠ box earlier on this page corrects. It is the server local day (`format(booking.startAt, ...)`, `:1017`).
 
 **Verified against source on 2026-09-06** — every claim on this page was checked against
@@ -145,17 +150,20 @@ Returns bookings grouped by date for calendar display. Single query, no N+1.
 > [!NOTE]
 > A booking is included when its **`startAt`** falls within `[startDate, endDate]`, regardless of when it ends. Results are grouped under the `YYYY-MM-DD` of each booking's `startAt`.
 >
-> ⚠ **That date key is the SERVER'S LOCAL DAY, not UTC — this line said UTC until 2026-09-06.**
-> The grouping is `format(booking.startAt, 'yyyy-MM-dd')` with date-fns' `format`
-> (`booking.service.ts:23, 1002`), which renders in the process timezone. A booking at
-> `23:30Z` therefore lands under the **next** day on a server running UTC+1, and a client that
-> re-derives the day from `startAt` in UTC will disagree with the key it was given.
+> **The day key is the vendor's own wall-clock day**, and the zone it was computed in comes back
+> as **`meta.timezone`**. So `meta.timezone` is the one thing you need to re-derive a key from
+> `startAt` and agree with the server: format the instant in that zone, not in UTC and not in the
+> browser's zone.
 >
-> ⚠ **The source's own comment one line above the code also says "in UTC" and is wrong**
-> (`booking.service.ts:998`). Neither the doc nor the comment was checked against the call;
-> only `format`'s behaviour is authoritative. **Group by the returned `date` key rather than
-> recomputing it**, and treat the boundary as server-local until the server's timezone is
-> pinned.
+> The zone is `Vendor.timezone` — the same one availability rules are authored in — falling back to
+> `BOOKING_CONFIG.defaultTimezone` (`Africa/Douala`) only if the vendor lookup fails.
+>
+> ✅ **Fixed at source 2026-09-09, and `meta.timezone` is new with the fix.** Until then the key
+> was `format(booking.startAt, 'yyyy-MM-dd')` — date-fns' `format`, which renders in the **process**
+> timezone — under a source comment that said UTC. It was neither. A booking at `23:30Z` landed
+> under the next day on a server running UTC+1, the grouping moved if the host's zone changed, and
+> a client re-deriving the day in UTC disagreed with the key it had been given. This page carried
+> that warning in two places from 2026-09-06; both are now this note.
 
 **Response:**
 
@@ -179,9 +187,13 @@ Returns bookings grouped by date for calendar display. Single query, no N+1.
         }
       ]
     }
-  ]
+  ],
+  "meta": { "timezone": "Africa/Douala" }
 }
 ```
+
+> `data` keeps its array shape — `meta` was added beside it rather than wrapping the array, so
+> existing clients that read `data` are unaffected.
 
 **Error Responses:**
 
@@ -562,7 +574,7 @@ Stripe. Just add `disputed` to your payment-status badges/filters and treat a
 3. **Calendar Sync**: Non-blocking — failures are logged but never break API responses
 4. **State Machine**: Enforced at service layer; invalid transitions return structured errors
 5. **Cash Payments**: `paidAt` is persisted when a cash booking is manually marked as paid
-6. **Calendar View**: Returns bookings grouped by `YYYY-MM-DD` in the **server's local day**, max 90-day range. ⚠ **This line still said "(UTC)" until 2026-09-08 (R7)** — the same claim the ⚠ box above corrects, left uncorrected here. The key comes from `format(booking.startAt, 'yyyy-MM-dd')` (`services/booking.service.ts:1017`), which formats in the server zone; group client-side off `startAt` if the day boundary matters
+6. **Calendar View**: Returns bookings grouped by `YYYY-MM-DD` in **the vendor's own timezone**, max 90-day range. The zone comes back as `meta.timezone` — use it if you re-derive a day from `startAt`, or just group by the `date` key you were given. ⚠ **This line said "(UTC)" until 2026-09-08 and "server's local day" until 2026-09-09**; it was the server's local day, and that is now fixed at source rather than documented
 7. **Reschedule**: Requires the vendor to hold a slot lock via the existing slot-locking mechanism
 8. **Capacity bookings**: For service products with `serviceConfig.bookingMode: "capacity"`, multiple customers book the same slot (up to `maxBookings`). All seats for a slot share **one** Google Calendar event titled `[x/N] <Product>`, updated as seats fill. Each seat is a separate booking row, visible here and in the calendar view; cancelling one frees a seat. Per-seat payment/status is tracked per booking as usual.
 

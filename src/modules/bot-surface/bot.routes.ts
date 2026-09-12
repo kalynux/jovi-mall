@@ -13,6 +13,7 @@ import { BotGeoController } from './controllers/bot-geo.controller';
 import { BotTicketController } from './controllers/bot-ticket.controller';
 import { BotFileController } from './controllers/bot-file.controller';
 import { BotCatalogController } from './controllers/bot-catalog.controller';
+import { BotProductDisplayController } from './controllers/bot-product-display.controller';
 import { BotBookingController } from './controllers/bot-booking.controller';
 import { BotPaymentMethodController } from './controllers/bot-payment-method.controller';
 import { BotReviewController } from './controllers/bot-review.controller';
@@ -21,6 +22,8 @@ import { BotSupportController } from './controllers/bot-support.controller';
 import { BotMessagingController } from './controllers/bot-messaging.controller';
 import { BotContactController } from './controllers/bot-contact.controller';
 import { BotAccountController } from './controllers/bot-account.controller';
+import { BotAuthController } from './controllers/bot-auth.controller';
+import { BotCommandController } from './controllers/bot-command.controller';
 
 /**
  * The curated bot surface — mounted at `/api/internal/bot` (GAP-001).
@@ -148,6 +151,10 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     // ── Support routing (GAP-004) ────────────────────────────────────────────
     support_resolve_contacts: BotSupportController.context,
 
+    // ── Product cards ────────────────────────────────────────────────────────
+    catalog_show_products: BotProductDisplayController.show,
+    catalog_display_action: BotProductDisplayController.action,
+
     // ── Wishlist, recently viewed, digital ───────────────────────────────────
     wishlist_list: BotCatalogController.listWishlist,
     wishlist_add: BotCatalogController.addWishlist,
@@ -175,6 +182,10 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     payment_methods_add: BotPaymentMethodController.add,
     payment_methods_set_default: BotPaymentMethodController.setDefault,
     payment_methods_remove: BotPaymentMethodController.remove,
+
+    // ── Account access ───────────────────────────────────────────────────────
+    commands_dispatch: BotCommandController.dispatch,
+    auth_send_login_link: BotAuthController.sendLoginLink,
 
     // ── Contact changes (MCP parity step 6) ──────────────────────────────────
     contact_get_state: BotContactController.getState,

@@ -15,11 +15,12 @@ import { createStorageProvider } from './storage.factory';
  * ```
  * 
  * ENVIRONMENT VARIABLES:
- * - STORAGE_PROVIDER: 'local' | 'firebase' | 'cloudinary' (default: 'local')
+ * - STORAGE_PROVIDER: 'local' | 'firebase' | 'cloudinary' | 'r2' (default: 'local')
  * - STORAGE_LOCAL_PATH: Path for local storage (default: './storage')
  * - STORAGE_LOCAL_URL: Public URL for local storage (default: 'http://localhost:3000/storage')
  * - STORAGE_FIREBASE_*: Firebase configuration (only required if provider is 'firebase')
  * - STORAGE_CLOUDINARY_*: Cloudinary configuration (only required if provider is 'cloudinary')
+ * - STORAGE_R2_*: Cloudflare R2 configuration (only required if provider is 'r2')
  */
 
 /**
@@ -56,6 +57,28 @@ function loadStorageConfig(): StorageConfig {
             apiKey: process.env.STORAGE_CLOUDINARY_API_KEY || '',
             apiSecret: process.env.STORAGE_CLOUDINARY_API_SECRET || '',
             folderPrefix: process.env.STORAGE_CLOUDINARY_FOLDER_PREFIX || 'jovi',
+        };
+    }
+
+    // Load Cloudflare R2 config if available.
+    //
+    // ⚠ Keyed on ACCOUNT_ID, matching the firebase/cloudinary pattern above: a provider block is
+    // attached only when its FIRST credential is present, so a half-configured `r2` reaches the
+    // factory as `config.r2 === undefined` and gets a named 500 rather than an authentication
+    // error on the first upload. `config/env.ts` refuses the boot before it gets that far.
+    if (process.env.STORAGE_R2_ACCOUNT_ID) {
+        config.r2 = {
+            accountId: process.env.STORAGE_R2_ACCOUNT_ID,
+            accessKeyId: process.env.STORAGE_R2_ACCESS_KEY_ID || '',
+            secretAccessKey: process.env.STORAGE_R2_SECRET_ACCESS_KEY || '',
+            bucket: process.env.STORAGE_R2_BUCKET || '',
+            privateBucket: process.env.STORAGE_R2_PRIVATE_BUCKET || '',
+            // ⚠ Trailing slash stripped here AND refused at boot AND stripped again in
+            // wi-admin's copy. `getPublicUrl` concatenates as `${base}/${key}`, so a trailing
+            // slash emits `//key`, which an R2 custom domain treats as a DIFFERENT key and 404s
+            // — and it would be identically wrong on both sides, so the one check designed to
+            // catch divergence (`verify:files` § 6) would pass while every image was broken.
+            publicUrl: (process.env.STORAGE_R2_PUBLIC_URL || '').replace(/\/+$/, ''),
         };
     }
 

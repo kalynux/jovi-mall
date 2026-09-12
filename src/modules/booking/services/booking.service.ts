@@ -23,7 +23,8 @@ import { VendorRepository } from '../../vendors/vendor.repository';
 import { assertCancellationAllowed } from '../../vendors/utils/cancellation-policy.util';
 import { BookingNumberGenerator } from '../utils/booking-number.generator';
 import { CustomerModel } from '../../customers/customer.model';
-import { format } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
+import { BOOKING_CONFIG } from '../config/booking.config';
 
 export class BookingService {
   private slotLockService: SlotLockService;
@@ -985,18 +986,41 @@ export class BookingService {
   /**
    * Returns bookings for a vendor grouped by date, for calendar display.
    *
-   * Groups are keyed as 'YYYY-MM-DD' in UTC.
-   * N+1 queries are avoided by using a single populated query.
+   * Groups are keyed as 'YYYY-MM-DD' **in the vendor's own timezone**, which is
+   * also returned so a client can re-derive the key from `startAt` and agree with
+   * it. N+1 queries are avoided by using a single populated query.
+   *
+   * ⚠ Fixed 2026-09-09 (DOC-PROGRAM close-out § 6, item 2). The key was
+   * `format(booking.startAt, 'yyyy-MM-dd')` — date-fns' `format`, which renders in
+   * the PROCESS timezone — under a comment that said UTC. It was neither. A
+   * booking at `23:30Z` landed under the next day on a server running UTC+1, the
+   * grouping moved when the host's zone changed, and a client re-deriving the day
+   * in UTC disagreed with the key it had been given.
+   *
+   * The vendor's zone is the platform's answer for a vendor's wall clock —
+   * availability rules are authored in it (`availability-rule.model.ts`) and
+   * `AvailabilityService.resolveVendorTimezone` resolves the same way, down to the
+   * same `BOOKING_CONFIG.defaultTimezone` fallback whose own comment reads
+   * "Deliberately NOT the server's zone — that is the bug this replaces". This was
+   * the last site still carrying that bug.
    *
    * @param vendorId Authenticated vendor
-   * @param startDate Start of the date range (inclusive, UTC)
-   * @param endDate End of the date range (inclusive, UTC)
+   * @param startDate Start of the date range (inclusive), an absolute instant
+   * @param endDate End of the date range (inclusive), an absolute instant
    */
   async getCalendarView(
     vendorId: string,
     startDate: Date,
     endDate: Date
-  ): Promise<{ date: string; bookings: CalendarDayBooking[] }[]> {
+  ): Promise<{
+    timezone: string;
+    days: { date: string; bookings: CalendarDayBooking[] }[];
+  }> {
+    // Resolved BEFORE the query so a lookup failure cannot silently fall back to
+    // the server's zone mid-grouping — the failure mode this method just left.
+    const { vendorTimezone } = await this.resolveVendorIdentity(vendorId);
+    const timezone = vendorTimezone || BOOKING_CONFIG.defaultTimezone;
+
     const bookings = await Booking.find({
       vendorId,
       // Filter on startAt only: results are grouped by the booking's start date,
@@ -1010,11 +1034,11 @@ export class BookingService {
       .populate<{ userId: { _id: any; login_email: string } }>('userId', 'login_email')
       .lean();
 
-    // Group by date (YYYY-MM-DD in UTC)
+    // Group by date (YYYY-MM-DD as it reads on the VENDOR'S wall clock)
     const grouped = new Map<string, CalendarDayBooking[]>();
 
     for (const booking of bookings) {
-      const dateKey = format(booking.startAt, 'yyyy-MM-dd');
+      const dateKey = formatInTimeZone(booking.startAt, timezone, 'yyyy-MM-dd');
 
       if (!grouped.has(dateKey)) {
         grouped.set(dateKey, []);
@@ -1037,9 +1061,11 @@ export class BookingService {
     }
 
     // Return sorted by date
-    return Array.from(grouped.entries())
+    const days = Array.from(grouped.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, bookings]) => ({ date, bookings }));
+
+    return { timezone, days };
   }
 
   /**

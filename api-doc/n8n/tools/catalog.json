@@ -487,98 +487,148 @@
       "commands": []
     },
     {
-      "name": "auth_send_login_link",
+      "name": "commands_dispatch",
       "version": 1,
-      "title": "Send a passwordless sign-in link and code",
-      "tier": "core",
+      "title": "Run a typed slash command",
+      "tier": "flow_only",
       "status": "available",
       "service": "jovi-mall",
-      "surface": "webhook_command",
-      "description": "Send the customer a magic link to tap and an 8-character code to type. Both sign them in on the website, both last 10 minutes, and using one kills the other.",
-      "when_to_use": "When the customer asks to sign in on the website, or when a tool needs an account this sender has not connected yet.",
-      "when_not_to_use": "Not to authorise anything in chat — the bot surface never uses this credential, and a customer does not need it to shop through the bot. Not for a vendor, agency or agent: they get auth_send_password_reset_link instead.",
+      "surface": "bot_internal",
+      "description": "Forward the raw text of a message that begins with a slash. The platform parses it, runs the command, and answers with a channel-ready reply.",
+      "when_to_use": "Never call this as a model. wi-mall-core posts every /-prefixed message here with a deterministic node, before the agent runs.",
+      "when_not_to_use": "Not for ordinary prose. A message that does not begin with / is never a command and goes straight to the model.",
       "operation": {
         "method": "POST",
-        "path": "/api/webhooks/{channel}",
-        "command": "login"
+        "path": "/api/internal/bot/command"
       },
-      "doc": "auth/magic-login.md#post-apiauthmagiclink",
+      "doc": "n8n/bot-surface.md",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "text"
+        ],
         "properties": {
-          "name": {
+          "text": {
             "type": "string",
-            "description": "Messaging profile name. Cosmetic."
-          },
-          "username": {
-            "type": "string",
-            "description": "Telegram @handle. Cosmetic."
+            "description": "The RAW message text, exactly as the customer typed it. Never Telegram bot_command entity text: that entity stops at a hyphen."
           }
         }
       },
       "request": {
         "body": [
-          "name",
-          "username"
-        ],
-        "body_literal": {
-          "is_command": true,
-          "command": "login"
-        }
+          "text"
+        ]
       },
       "response": {
-        "source": "body",
+        "source": "body.data",
         "type": "object",
         "important_fields": [
-          "success",
-          "message",
-          "requestContact",
-          "expiresInSeconds"
+          "handled",
+          "command",
+          "outcome",
+          "reason"
         ],
-        "never_relay": [
-          "message"
+        "result_kind": "status"
+      },
+      "errors": [],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "Keyed per inbound message, so a retried webhook cannot run a write command twice.",
+      "requires_confirmation": false,
+      "risk": "medium",
+      "side_effects": [
+        "Runs whichever command the customer typed"
+      ],
+      "context_resolution": {
+        "subject": "sender",
+        "policy": "not_applicable"
+      },
+      "audit": true,
+      "requires_customer_role": true,
+      "platform_notes": {
+        "telegram": "handled:false means the platform declined the turn - hand it to the model unchanged.",
+        "whatsapp": "As Telegram."
+      },
+      "commands": []
+    },
+    {
+      "name": "auth_send_login_link",
+      "version": 2,
+      "title": "Send a passwordless sign-in link and code",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Send the customer a magic link to tap and an 8-character code to type, delivered straight to this chat. Both sign them in on the website, both last 10 minutes, and using one kills the other.",
+      "when_to_use": "When the customer asks to sign in on the website, or for their login code or link, in their own words. The slash command /login does the same thing without you.",
+      "when_not_to_use": "Not to authorise anything in chat — the bot surface never uses this credential, and a customer does not need it to shop through the bot. Not for a vendor, agency or agent: they must use /reset-password, which is a slash command only.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/auth/login-link"
+      },
+      "backing_endpoint": {
+        "method": "POST",
+        "path": "/api/webhooks/{channel}",
+        "doc": "auth/magic-login.md"
+      },
+      "doc": "n8n/bot-surface.md",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "body": []
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "sent",
+          "expiresInSeconds",
+          "expiresAt"
         ],
-        "result_kind": "verbatim_relay"
+        "result_kind": "acknowledgement"
       },
       "errors": [
         {
-          "code": "MAGIC_CONTACT_UNVERIFIED",
-          "status": 400,
-          "category": "validation",
-          "when": "A shared contact was not the sender's own",
+          "code": "USER_CREDENTIAL_LINK_THROTTLED",
+          "status": 429,
+          "category": "rate_limit",
+          "when": "Five sign-in links were already sent to this identity within the hour",
           "customer_action": "explain"
         },
         {
-          "code": "WEBHOOK_SECRET_INVALID",
-          "status": 401,
-          "category": "authentication",
-          "when": "Wrong or absent X-Webhook-Secret",
-          "customer_action": "escalate_to_support"
+          "code": "MESSAGING_DELIVERY_FAILED",
+          "status": 502,
+          "category": "external_service",
+          "when": "The channel refused the message",
+          "customer_action": "explain"
         }
       ],
       "mutating": true,
       "idempotent": false,
-      "idempotency": "A second /login revokes the first pair, so one identity never holds more than one live credential. That IS the repeat-safety property.",
+      "idempotency": "A second call revokes the first pair, so one identity never holds more than one live credential. That IS the repeat-safety property. The Idempotency-Key is per n8n execution, so asking twice in ONE turn sends one message and asking again in a later message sends a fresh pair.",
       "requires_confirmation": false,
       "risk": "medium",
       "side_effects": [
         "Mints a 10-minute single-use session credential",
         "Revokes any previously issued pair for this identity",
-        "Binds the messaging channel to the account on success, so notifications start working with no separate /connect"
+        "SENDS a message to this chat directly — the only tool on this surface that does"
       ],
       "context_resolution": {
         "subject": "sender",
         "policy": "not_applicable"
       },
       "rate_limit": {
-        "per_identity": "1 live pair"
+        "per_identity": "5 per hour, and 1 live pair"
       },
       "audit": true,
       "requires_customer_role": true,
       "platform_notes": {
-        "whatsapp": "Relay `message` verbatim with preview_url: false. The result carries NO code and NO token field — the credentials are inside `message` only, because a webhook response body is logged in more places than a chat message.",
-        "telegram": "`requestContact: true` on an unknown chat means attach the 'Share my phone number' keyboard. Relay with disable_web_page_preview: true."
+        "whatsapp": "The credential is delivered by the backend, not by you. The result carries NO code, NO link and NO token — say that it has been sent and stop there.",
+        "telegram": "As WhatsApp. Never guess, invent or reformat a code: you have not been given one."
       },
       "commands": [
         "login"
@@ -5268,6 +5318,176 @@
       },
       "audit": true,
       "requires_customer_role": true
+    },
+    {
+      "name": "catalog_show_products",
+      "version": 1,
+      "title": "Show products as cards",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Draw a set of products for the customer as real cards — picture, price, and buttons to add one to the basket. Pass the ids you want shown, in the order you want them, then write ONE short sentence introducing them. Never list products in your own text.",
+      "when_to_use": "Whenever you are presenting MORE THAN ONE product — a search result, a category, a set of recommendations.",
+      "when_not_to_use": "Not for a single product the customer asked a specific question about ('how much is the fan?') — answer that in a sentence. Not for a cart, an order or a booking. ⚠ This tool is `flow_only` and is the ONE row where that does not mean the model never calls it: you call it constantly, and it is kept off the MCP server only because its result is a rendering the flow must relay rather than data you read.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/catalog/display"
+      },
+      "doc": "n8n/bot-surface.md#147-product-cards",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "productIds"
+        ],
+        "properties": {
+          "productIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{24}$"
+            },
+            "description": "The 24-character product ids to draw, in the order you want them shown. Up to ten; the customer sees five at a time with a \"See more\" button."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "productIds"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "shown",
+          "total",
+          "hasMore"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "BOT_IDENTITY_UNRESOLVED",
+          "status": 404,
+          "category": "not_found",
+          "when": "The sender has no platform account",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "The drawing changes nothing, but every call mints a Mini App handle — a URL that lets a browser write to this basket — so the Idempotency-Key is what stops a retried message leaving a second one live.",
+      "requires_confirmation": false,
+      "risk": "low",
+      "audit": false,
+      "requires_customer_role": true,
+      "side_effects": [
+        "Persists the chosen set for 30 minutes, so a \"See more\" button can page through it.",
+        "Mints a Mini App handle on Telegram, valid for the same 30 minutes."
+      ],
+      "platform_notes": {
+        "telegram": "Renders as ONE sendMessage carrying a web_app button when BOT_MINIAPP_BASE_URL is an HTTPS origin; otherwise one sendPhoto per product with an inline keyboard. Relay every element of `replies` in order.",
+        "whatsapp": "Renders as a 5-card carousel template when WHATSAPP_PRODUCT_CAROUSEL_TEMPLATE is set AND there are exactly five cards — Meta requires a template to be sent with the exact card count it was approved with — and otherwise as one interactive image message per product. Relay every element of `replies` in order."
+      },
+      "context_resolution": {
+        "subject": "product",
+        "policy": "explicit_only",
+        "must_echo": true,
+        "notes": "You choose the ids; the platform chooses how they are drawn. The response deliberately does not say which shape was used, because that depends on the deployment and on whether a picture is fetchable — a sentence naming the interface would be wrong on the other channel. `shown` may be lower than the ids you sent: a product suspended since your search is dropped rather than refused."
+      }
+    },
+    {
+      "name": "catalog_display_action",
+      "version": 1,
+      "title": "A button under a product card",
+      "tier": "flow_only",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Act on a button the customer pressed under a product card.",
+      "when_to_use": "Never call this yourself. The flow routes a button press here; the token comes from the messaging platform, not from you.",
+      "when_not_to_use": "Use cart_add_item to put something in the basket in the course of a conversation.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/catalog/action"
+      },
+      "doc": "n8n/bot-surface.md#147-product-cards",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "The callback token exactly as the platform returned it — Telegram callback_query.data, WhatsApp interactive.button_reply.id. Forward it unmodified."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "token"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "added",
+          "shown",
+          "hasMore"
+        ],
+        "result_kind": "status"
+      },
+      "errors": [
+        {
+          "code": "BOT_ACTION_TOKEN_UNKNOWN",
+          "status": 422,
+          "category": "business_rule",
+          "when": "A button from a retired vocabulary, or a malformed token",
+          "customer_action": "explain"
+        },
+        {
+          "code": "BOT_PRODUCT_LIST_EXPIRED",
+          "status": 404,
+          "category": "not_found",
+          "when": "A \"See more\" token whose list is no longer held",
+          "customer_action": "explain"
+        },
+        {
+          "code": "CATALOG_PRODUCT_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "The product is no longer on sale",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "add: and buy: increment a cart line, exactly as cart_add_item does, so a retried press without a key doubles it.",
+      "requires_confirmation": false,
+      "risk": "low",
+      "audit": false,
+      "requires_customer_role": true,
+      "side_effects": [
+        "add: and buy: write a line to the customer's cart."
+      ],
+      "platform_notes": {
+        "telegram": "The token arrives as callback_query.data. Acknowledge the tap, then forward the token unmodified.",
+        "whatsapp": "The token arrives as interactive.button_reply.id, or as a template quick_reply payload on a carousel card."
+      },
+      "context_resolution": {
+        "subject": "product",
+        "policy": "explicit_only",
+        "must_echo": false,
+        "notes": "Genuinely flow_only: the model never sees this tool. 'Buy now' adds to the basket and names checkout in its reply — it does NOT place an order, because checkout needs a delivery address and a payment method a bot-registered customer routinely lacks."
+      }
     },
     {
       "name": "wishlist_list",

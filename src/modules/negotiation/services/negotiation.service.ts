@@ -3,9 +3,6 @@ import { Types } from 'mongoose';
 
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
-import { ProductRepositoryMongo } from '../../catalog/repositories/mongo/product.repository.mongo';
-import { VariantRepositoryMongo } from '../../catalog/repositories/mongo/variant.repository.mongo';
-import { isBargainEffective } from '../../catalog/domain/services/bargain-price.rule';
 import { botIdentityService } from '../../bot-surface/services/bot-identity.service';
 import { NEGOTIATION_CONFIG } from '../config/negotiation.config';
 import {
@@ -17,15 +14,8 @@ import {
 import { INegotiationSession, NegotiationSessionModel } from '../models/negotiation-session.model';
 import { negotiationProfileRepository } from '../repositories/negotiation-profile.repository';
 import { NegotiationContextInput, NegotiationRecordInput } from '../validators/negotiation.validator';
-
 /** The live window, read fresh on every turn. Never a snapshot — see invariant 3. */
-interface LiveWindow {
-    floor: number;
-    ask: number;
-    productId: string;
-    vendorId: string;
-    currency: string;
-}
+import { LiveWindow, liveWindowReader } from './live-window.reader';
 
 export interface NegotiationContextResult {
     sessionId: string;
@@ -94,10 +84,6 @@ export type NegotiationRecordResult =
  * (unknown session, unresolvable identity, a variant that is not bargainable).
  */
 export class NegotiationService {
-    constructor(
-        private readonly products = new ProductRepositoryMongo(),
-        private readonly variants = new VariantRepositoryMongo(),
-    ) {}
 
     /** Open or resume the session for (customer, variant, quantity). */
     async context(input: NegotiationContextInput): Promise<NegotiationContextResult> {
@@ -263,42 +249,35 @@ export class NegotiationService {
      * Refuses a variant with no effective window — `isBargainEffective` is the same
      * derivation the vendor's own read model reports as `bargainable`, so a variant
      * the dashboard shows as non-negotiable cannot be negotiated through this door.
+     *
+     * ⚠ **The READ lives in `LiveWindowReader`; only the mapping to codes is here.**
+     * `NegotiatedPriceResolver` asks the same reader when it re-validates a lock
+     * (D-10), and the two must agree about what the window is down to the
+     * `isBargainEffective` gate. What differs is what an absence MEANS: this door
+     * is a tool being told it named something unusable, so it raises the
+     * catalogue's own codes; the resolver holds a price promise, so it answers
+     * `window_moved`. Hence a shared reader returning a miss, and one switch each.
      */
     private async readLiveWindow(variantId: string): Promise<LiveWindow> {
-        const variant = await this.variants.findById(variantId);
-        if (!variant) throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
-        if (variant.status !== 'active') {
-            throw createAppError(ERROR_CODES.CATALOG_VARIANT_ARCHIVED, 422);
+        const read = await liveWindowReader.read(variantId);
+        if (read.ok) return read.window;
+
+        switch (read.miss) {
+            case 'variant_not_found':
+                throw createAppError(ERROR_CODES.CATALOG_VARIANT_NOT_FOUND, 404);
+            case 'variant_archived':
+                throw createAppError(ERROR_CODES.CATALOG_VARIANT_ARCHIVED, 422);
+            case 'product_not_found':
+                throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
+            case 'product_inactive':
+                throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_STATE, 422, undefined, {
+                    status: read.productStatus,
+                });
+            case 'not_bargainable':
+                throw createAppError(ERROR_CODES.NEGOTIATION_NOT_BARGAINABLE, 422, undefined, {
+                    variantId,
+                });
         }
-
-        const product = await this.products.findByIdUnscoped(variant.productId);
-        if (!product) throw createAppError(ERROR_CODES.CATALOG_PRODUCT_NOT_FOUND, 404);
-        if (product.status !== 'active') {
-            throw createAppError(ERROR_CODES.CATALOG_PRODUCT_INVALID_STATE, 422, undefined, {
-                status: product.status,
-            });
-        }
-
-        if (!isBargainEffective(product.vectorisationEnabled, variant.bargain)) {
-            throw createAppError(ERROR_CODES.NEGOTIATION_NOT_BARGAINABLE, 422, undefined, {
-                variantId,
-            });
-        }
-
-        // Non-null by `isBargainEffective`, which is the point of routing through it
-        // rather than testing `variant.bargain` here and having two opinions.
-        const bargain = variant.bargain!;
-
-        return {
-            // ⚠ `variant.price`, never `bargain.minPrice`. The two are kept identical by
-            // `resolveBargainWrite`, and reading the price is what keeps this correct if
-            // that invariant is ever relaxed.
-            floor: variant.price,
-            ask: bargain.maxPrice,
-            productId: variant.productId,
-            vendorId: product.vendorId,
-            currency: NEGOTIATION_CONFIG.DEFAULT_CURRENCY,
-        };
     }
 
     private async openOrResume(

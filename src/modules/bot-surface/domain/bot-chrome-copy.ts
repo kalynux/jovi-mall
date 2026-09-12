@@ -302,6 +302,131 @@ const ACCOUNT_CLOSED: Copy = {
     ar: 'أُغلق حسابك وحُذفت بياناتك الشخصية. تُحفظ طلباتك السابقة كسجلات تجارية دون اسمك أو بيانات تواصلك.',
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Product cards — the buttons under a picture, and the two sentences around them
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The button that opens the Telegram Mini App.
+ *
+ * ⚠ **Capped at 20 even though Telegram allows 64**, because the same label is the only
+ * candidate if this ever becomes a WhatsApp `cta_url`, where `WA_LIMITS.CTA_DISPLAY_TEXT` is
+ * 20. Sizing it to the tighter of the two costs nothing and stops a channel-specific second
+ * string being written later.
+ *
+ * It says what the customer will SEE, not what will happen technically. "Open Mini App" names
+ * a Telegram feature; "Browse the products" names the thing they asked for.
+ */
+const BROWSE_PRODUCTS_BUTTON: Copy = {
+    en: 'Browse the products',
+    fr: 'Voir les produits',
+    pt: 'Ver os produtos',
+    es: 'Ver los productos',
+    ar: 'تصفح المنتجات',
+};
+
+/**
+ * The message the Mini App button sits under.
+ *
+ * ⚠ **This is the sentence the whole Telegram path turns on**, and it is written to be read
+ * *after* the model's own answer: the model has just said what it found, and this says how to
+ * look at it. It names what the customer gets (pictures and prices) rather than what the
+ * button is, because "open the Mini App" describes Telegram's feature and not their shopping.
+ *
+ * It also stands alone. A "See more" page has no model sentence above it at all, and this has
+ * to make sense as the only thing in the message.
+ */
+const BROWSE_PRODUCTS_PROMPT: Copy = {
+    en: 'Tap below to see them with pictures and prices.',
+    fr: 'Appuyez ci-dessous pour les voir avec photos et prix.',
+    pt: 'Toque abaixo para vê-los com fotos e preços.',
+    es: 'Toca abajo para verlos con fotos y precios.',
+    ar: 'اضغط أدناه لرؤيتها بالصور والأسعار.',
+};
+
+/** `WA_LIMITS.BUTTON_REPLY_TITLE` is 20 characters, and Arabic is the tight one here. */
+const BUY_NOW_BUTTON: Copy = {
+    en: 'Buy now',
+    fr: 'Acheter',
+    pt: 'Comprar',
+    es: 'Comprar',
+    ar: 'اشترِ الآن',
+};
+
+/**
+ * ⚠ **French is 17 characters and is the reason this label is not "Add to basket".**
+ * *« Ajouter au panier »* is the only natural rendering, and a longer English original would
+ * have pushed it past 20 and been silently truncated by Meta into *« Ajouter au pani… »*.
+ */
+const ADD_TO_CART_BUTTON: Copy = {
+    en: 'Add to cart',
+    fr: 'Ajouter au panier',
+    pt: 'Adicionar',
+    es: 'Añadir',
+    ar: 'أضف إلى السلة',
+};
+
+/** Next page of the same list. On WhatsApp it is a reply button; on Telegram an inline one. */
+const SEE_MORE_BUTTON: Copy = {
+    en: 'See more',
+    fr: 'Voir plus',
+    pt: 'Ver mais',
+    es: 'Ver más',
+    ar: 'المزيد',
+};
+
+/** Opens the product's own storefront page. A URL button on both channels. */
+const DETAILS_BUTTON: Copy = {
+    en: 'Details',
+    fr: 'Détails',
+    pt: 'Detalhes',
+    es: 'Detalles',
+    ar: 'التفاصيل',
+};
+
+/**
+ * The line above a page of cards the PLATFORM produced rather than the model.
+ *
+ * ⚠ **Only ever used for a "See more" page.** The first page's intro is the model's own
+ * sentence, written in the conversation it is having — this table has no idea what the
+ * customer asked for and a generic "here are some products" over the top of a real answer is
+ * exactly the talking-over that `setOnboardingReply` refuses to do. A later page has no such
+ * sentence, because nobody asked the model anything; it is a button press.
+ */
+const MORE_PRODUCTS_PROMPT: Copy = {
+    en: 'Here are a few more.',
+    fr: 'En voici quelques autres.',
+    pt: 'Aqui estão mais alguns.',
+    es: 'Aquí tienes algunos más.',
+    ar: 'إليك المزيد.',
+};
+
+/** Confirmation after an `add:` tap. Names no product — see `contactChangeCancelled`. */
+const ADDED_TO_CART: Copy = {
+    en: 'Added to your basket.',
+    fr: 'Ajouté à votre panier.',
+    pt: 'Adicionado ao seu carrinho.',
+    es: 'Añadido a tu cesta.',
+    ar: 'أُضيف إلى سلتك.',
+};
+
+/**
+ * The same thing after a **Buy now** tap.
+ *
+ * ⚠ **It does not claim an order was placed, because none was.** Checkout on this platform
+ * needs a delivery address and a payment method, and a bot-registered customer routinely has
+ * neither — so the button adds the item and this sentence hands them back to the assistant
+ * with the next step named. Saying "purchased" here would be a lie the customer discovers at
+ * the worst possible moment.
+ */
+const ADDED_TO_CART_CHECKOUT: Copy = {
+    en: 'Added to your basket. Say "checkout" whenever you are ready and I will take you through it.',
+    fr: "Ajouté à votre panier. Dites « commander » quand vous êtes prêt et je m'occupe du reste.",
+    pt: 'Adicionado ao seu carrinho. Diga "finalizar" quando estiver pronto e eu trato do resto.',
+    es: 'Añadido a tu cesta. Di "pagar" cuando estés listo y te acompaño en el proceso.',
+    ar: 'أُضيف إلى سلتك. قل «إتمام الطلب» متى كنت مستعدًا وسأتولى الباقي.',
+};
+
 /**
  * Every chrome string, and the cap each one has to satisfy.
  *
@@ -333,6 +458,20 @@ const CHROME = Object.freeze({
     connectionDisconnected: { copy: CONNECTION_DISCONNECTED, cap: null },
     accountClosurePrompt: { copy: ACCOUNT_CLOSURE_PROMPT, cap: null },
     accountClosed: { copy: ACCOUNT_CLOSED, cap: null },
+    // ── Product cards ────────────────────────────────────────────────────────
+    // The four buttons are capped at WhatsApp's 20-character reply-button title, which is the
+    // tightest control any of them lands in. Telegram allows 64 and WhatsApp's carousel URL
+    // button 20 as well, so one number covers every placement — and a fifth language added
+    // later fails the boot here rather than arriving truncated in a customer's chat.
+    browseProductsPrompt: { copy: BROWSE_PRODUCTS_PROMPT, cap: null },
+    browseProductsButton: { copy: BROWSE_PRODUCTS_BUTTON, cap: 20 },
+    buyNowButton: { copy: BUY_NOW_BUTTON, cap: 20 },
+    addToCartButton: { copy: ADD_TO_CART_BUTTON, cap: 20 },
+    seeMoreButton: { copy: SEE_MORE_BUTTON, cap: 20 },
+    detailsButton: { copy: DETAILS_BUTTON, cap: 20 },
+    moreProductsPrompt: { copy: MORE_PRODUCTS_PROMPT, cap: null },
+    addedToCart: { copy: ADDED_TO_CART, cap: null },
+    addedToCartCheckout: { copy: ADDED_TO_CART_CHECKOUT, cap: null },
 } as const);
 
 export type BotChromeKey = keyof typeof CHROME;

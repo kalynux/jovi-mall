@@ -207,6 +207,25 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     // is written — the ladder only reads what other routes recorded.
     { tool: 'support_resolve_contacts', method: 'POST', path: '/support/context', mutating: false, requiresCustomerRole: true },
 
+    // ── Product cards ────────────────────────────────────────────────────────
+    /**
+     * ⚠ **`mutating: true` on a route that changes nothing about the customer**, and the
+     * reason is worth stating because the column's own docstring above says it answers
+     * *"would running this twice do something the customer did not ask for"*.
+     *
+     * It would. Each call mints a **Mini App handle** — a URL that lets a browser write to
+     * this customer's basket — and a retried chat message that minted a second one would
+     * leave the first live with nobody having asked for it. The drawing is free; the
+     * credential is not, and the `Idempotency-Key` is what collapses a retry onto one.
+     */
+    { tool: 'catalog_show_products', method: 'POST', path: '/catalog/display', mutating: true, requiresCustomerRole: true },
+    /**
+     * The customer pressed a button under a card. `add:` and `buy:` write to the basket, so
+     * a retry without a key would double a line — the same reason `cart_add_item` is
+     * classified this way, arriving through a different door.
+     */
+    { tool: 'catalog_display_action', method: 'POST', path: '/catalog/action', mutating: true, requiresCustomerRole: true },
+
     // ── Wishlist and recently viewed ─────────────────────────────────────────
     { tool: 'wishlist_list', method: 'POST', path: '/wishlist/list', mutating: false, requiresCustomerRole: true },
     { tool: 'wishlist_add', method: 'POST', path: '/wishlist', mutating: true, requiresCustomerRole: true },
@@ -276,6 +295,54 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     { tool: 'payment_methods_set_default', method: 'PATCH', path: '/payment-methods/:methodId/default', mutating: true, requiresCustomerRole: true },
     // The SIXTH `DELETE` with a body on this surface. Count the table, not the sentence in § 3.
     { tool: 'payment_methods_remove', method: 'DELETE', path: '/payment-methods/:methodId', mutating: true, requiresCustomerRole: true },
+
+    // ── Typed slash commands ─────────────────────────────────────────────────
+    /**
+     * ⭐ **One route for every command the customer types**, and the vocabulary lives here
+     * rather than in the automation layer. n8n forwards the raw text of any message starting
+     * with `/` and holds no command list, no alias table and no argument grammar — the same
+     * argument § 14.6 already makes about parsing a typed answer, applied to the alias table,
+     * which is a five-language table.
+     *
+     * ⚠ **NOT `anonymous`, and that was a deliberate reversal.** The first draft flagged it so
+     * `/help` could answer somebody whose identity had not resolved. `test:bot-surface` refused
+     * it, and the refusal was right: the exemption exists for rows that answer questions
+     * *about* the sender, and this one **acts for them** — it dispatches `/cancel` and
+     * `/cart clear`. An anonymous door onto every command is the one shape that rule forbids.
+     *
+     * The case it was protecting turns out to be mostly imaginary. `/identity/sync` runs on
+     * EVERY inbound message and auto-registers (GAP-002), so a sender reaching this route has
+     * an account and resolves. Where resolution genuinely fails, the identity refusal already
+     * carries `customerMessage` and — on an unbound Telegram chat — renders the
+     * `request_contact` keyboard, which is a better first turn than a command list to somebody
+     * the platform cannot yet act for.
+     *
+     * ⚠ **`mutating: true`, and the cost is recorded rather than solved.** This one route
+     * carries `/orders` (a read) and `/cancel` (a write), so a `readonly` maintenance window
+     * refuses the reads too. Splitting by verb is not available: only the parser knows which
+     * verb a message is, and it runs inside the handler — behind the guard that would have to
+     * decide. Per-command maintenance classification is the fix, and it is a follow-up.
+     */
+    { tool: 'commands_dispatch', method: 'POST', path: '/command', mutating: true, requiresCustomerRole: true },
+
+    // ── Account access ───────────────────────────────────────────────────────
+    /**
+     * ⚠ **The ONLY route on this surface that mints a credential, and the only one whose
+     * result the caller is not allowed to read.** Everything else here returns what it did;
+     * this returns whether it did it. The sign-in link and the eight-character code go
+     * straight to the customer's chat from `sender-login-delivery.service.ts`, because the
+     * catalogue's `never_relay: ["message"]` means exactly what it says and a tool response
+     * is read by a model and stored in its Redis chat memory.
+     *
+     * ⚠ **It does not contradict "not a session mint" in § 3 of `bot.routes.ts`.** That rule
+     * forbids issuing a customer bearer token TO THE AUTOMATION LAYER, and this issues
+     * nothing to the automation layer at all — the credential is redeemed by a human in a
+     * browser, and n8n never holds it. A route that answered with the token would be the
+     * thing that rule forbids, which is the second reason this one does not.
+     *
+     * `/reset-password` is deliberately absent — see `bot-auth.controller.ts`.
+     */
+    { tool: 'auth_send_login_link', method: 'POST', path: '/auth/login-link', mutating: true, requiresCustomerRole: true },
 
     // ── Contact changes (MCP parity step 6) ──────────────────────────────────
     /**

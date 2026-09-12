@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { CommandBus } from '../command-bus/command-bus';
+import { buildCommandChannelReply } from '../command-bus/command-reply';
 import { asyncHandler } from '../../api/middlewares/async-handler';
 import { AppError, createAppError } from '../../core/errors';
 import { ERROR_CODES } from '../../core/error-codes';
@@ -55,6 +56,23 @@ export class TelegramController {
                 console.log(`[Telegram-Webhook] Dispatching command: ${command}`);
                 const cmdResult = await this.commandBus.execute(command, payload, context);
                 result = { ...result, ...cmdResult };
+
+                /**
+                 * The channel-ready body, so the automation layer relays and never renders.
+                 *
+                 * ⚠ **Without this, `requestContact` is an instruction n8n has to obey**, and
+                 * the record shows what that is worth: the mapping was specified on
+                 * 2026-08-16, never built, and `/login` reached the model instead of the
+                 * command bus until 2026-09-08. A `reply` cannot be forgotten — it is either
+                 * sent or the turn is visibly silent.
+                 *
+                 * Attached after the spread so a command that ever returns its own `reply`
+                 * wins, which is the direction that lets one graduate to composing its own.
+                 */
+                const reply = buildCommandChannelReply(cmdResult, 'telegram', String(chat_id ?? ''));
+                if (reply && !(cmdResult as { reply?: unknown })?.reply) {
+                    result = { ...result, reply };
+                }
             }
 
             res.status(200).json(result);

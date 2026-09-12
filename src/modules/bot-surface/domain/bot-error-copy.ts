@@ -218,6 +218,61 @@ const CODE_COPY: Partial<Record<ErrorCode, Copy>> = Object.freeze({
         ar: 'انتهت صلاحية البحث عن هذا العنوان. أخبرني بالعنوان مرة أخرى وسأبحث عنه.',
     },
 
+    /**
+     * The basket already holds a different KIND of thing.
+     *
+     * ⚠ **The `conflict` category sentence — "That has already changed. Let me check where
+     * things stand and try again." — is wrong in a way that wastes the turn.** Nothing
+     * changed and retrying fails identically; what the customer has to do is finish or empty
+     * the basket first. Observed live while testing product cards, on a basket holding a
+     * physical item and a tap on a digital one.
+     */
+    [ERROR_CODES.CART_MIXED_PRODUCT_TYPES]: {
+        en: 'Your basket already has a different kind of item in it. Check out with what is there, or empty it, and I will add this one.',
+        fr: "Votre panier contient déjà un autre type d'article. Terminez la commande en cours ou videz-le, et j'ajoute celui-ci.",
+        pt: 'O seu carrinho já tem um tipo de artigo diferente. Finalize o que lá está ou esvazie-o, e eu adiciono este.',
+        es: 'Tu cesta ya tiene otro tipo de artículo. Termina el pedido o vacíala, y añado este.',
+        ar: 'سلتك تحتوي بالفعل على نوع مختلف من المنتجات. أكمل الطلب الحالي أو أفرغ السلة وسأضيف هذا.',
+    },
+
+    /**
+     * A bookable service cannot go in a basket — it is booked.
+     *
+     * ⚠ **Earns an entry because the `validation` category sentence is actively wrong here.**
+     * *"That does not look right. Could you send it again?"* invites the customer to repeat
+     * an action that will fail identically every time; nothing about what they sent was
+     * malformed. Observed live on a product card whose "Add to cart" button was offered on a
+     * yoga class — the card no longer offers one (`product-card.ts`), and this closes the
+     * other door: the model can still reach `cart_add_item` with a service id.
+     */
+    [ERROR_CODES.CART_SERVICE_PRODUCT_NOT_ALLOWED]: {
+        en: 'That one is booked rather than bought — tell me when suits you and I will check what is free.',
+        fr: "Celui-ci se réserve plutôt qu'il ne s'achète — dites-moi quand vous arrange et je regarde les disponibilités.",
+        pt: 'Esse é reservado, não comprado — diga-me quando lhe dá jeito e vejo as disponibilidades.',
+        es: 'Ese se reserva en vez de comprarse — dime cuándo te viene bien y miro la disponibilidad.',
+        ar: 'هذا يُحجز ولا يُشترى — أخبرني بالوقت المناسب لك وسأتحقق من المواعيد المتاحة.',
+    },
+
+    // ── Product cards ────────────────────────────────────────────────────────
+    // Both earn an entry for the reason the address flow does: the remedy is an ACTION, and
+    // the category sentences are actively wrong here. `not_found`'s "I could not find that"
+    // is false — nothing is missing, a window closed — and a customer tapping a stale button
+    // has done nothing they can correct by repeating it.
+    [ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED]: {
+        en: 'That list is no longer available. Tell me what you are looking for and I will search again.',
+        fr: "Cette liste n'est plus disponible. Dites-moi ce que vous cherchez et je relance la recherche.",
+        pt: 'Essa lista já não está disponível. Diga-me o que procura e volto a pesquisar.',
+        es: 'Esa lista ya no está disponible. Dime qué buscas y vuelvo a buscar.',
+        ar: 'لم تعد هذه القائمة متاحة. أخبرني بما تبحث عنه وسأبحث من جديد.',
+    },
+    [ERROR_CODES.BOT_ACTION_TOKEN_UNKNOWN]: {
+        en: 'That button is no longer active. Tell me what you would like to do and I will help.',
+        fr: "Ce bouton n'est plus actif. Dites-moi ce que vous souhaitez faire et je vous aide.",
+        pt: 'Esse botão já não está ativo. Diga-me o que pretende fazer e eu ajudo.',
+        es: 'Ese botón ya no está activo. Dime qué quieres hacer y te ayudo.',
+        ar: 'لم يعد هذا الزر فعّالًا. أخبرني بما تريد فعله وسأساعدك.',
+    },
+
     // ── Inbound files and ticket attachments (Step 7b) ───────────────────────
     // Both earn an entry, and both for the reason stated above: the remedy is an ACTION
     // the customer takes, and the category sentence would send them nowhere. The

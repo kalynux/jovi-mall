@@ -17,12 +17,16 @@
  *
  * ── Two things not copied from the vendor repository ─────────────────────────
  *
- * 1. **`searchListView` interpolates its search string straight into `$regex`.** Both it and
- *    `searchAndFilter` build `{ $regex: filters.searchQuery }` without `escapeRegex`, which
- *    `regex.util.ts` explicitly says every query string must pass through. Those two are
- *    vendor-scoped and behind auth so the blast radius is bounded; a world-readable endpoint
- *    has no such excuse. Search here goes through `$text` instead (see `search()`), which
- *    takes no regex at all.
+ * 1. **Regex search at all.** `searchListView` and `searchAndFilter` on the vendor repository
+ *    match with `$regex`; search here goes through `$text` instead (see `search()`), which is
+ *    indexed, carries a relevance score and takes no regex to escape in the first place.
+ *
+ *    ⚠ Until 2026-09-09 this note said something sharper — that those two built
+ *    `{ $regex: filters.searchQuery }` **without `escapeRegex`**, which `regex.util.ts`
+ *    explicitly says every query string must pass through, and that being vendor-scoped and
+ *    behind auth merely bounded the blast radius. That was true and is now fixed at source
+ *    (both sites pass `buildSearchRegex`). The reason to prefer `$text` here is no longer
+ *    the escaping — it is the index and the score.
  * 2. **`enrichProduct` / `EnrichedProduct`.** N+1 on files, one digital-asset query per
  *    variant, and a spread of the whole domain object. See `dto/public-product.dto.ts`.
  */

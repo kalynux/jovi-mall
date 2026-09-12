@@ -412,6 +412,12 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
         'That address candidate is unknown or has expired — run the search again',
     [ERROR_CODES.BOT_INBOUND_FILE_EXPIRED]:
         'That file reference is unknown or has expired — the customer must send the file again',
+    [ERROR_CODES.BOT_PRODUCT_LIST_EXPIRED]:
+        'That product list is unknown or has expired — run the search again',
+    [ERROR_CODES.BOT_ACTION_TOKEN_UNKNOWN]:
+        'That button carries a token this service does not recognise',
+    [ERROR_CODES.BOT_PRODUCT_NOT_IN_LIST]:
+        'Those products are not part of the list this page was opened for',
     [ERROR_CODES.BOT_REGISTRATION_IDENTITY_TAKEN]:
         'This messaging identity is already bound to a different platform account',
     [ERROR_CODES.BOT_ONBOARDING_NOT_REGISTERED]:

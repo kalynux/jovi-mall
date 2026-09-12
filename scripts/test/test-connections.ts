@@ -565,10 +565,28 @@ async function main(): Promise<void> {
     guard.includes('crypto.timingSafeEqual'));
   assert('a length mismatch short-circuits — timingSafeEqual throws on one', () =>
     /a\.length !== b\.length/.test(guard));
-  assert('production FAILS CLOSED when the secret is unset', () =>
-    /if \(!expected\)[\s\S]*NODE_ENV === 'production'[\s\S]*WEBHOOK_SECRET_INVALID/.test(guard));
-  assert('development stays open, so the guard is not something people disable', () =>
-    /return next\(\);\s*\r?\n\s*\}/.test(guard));
+  /**
+   * ⚠ Rewritten 2026-09-09. These two pinned the guard's PRE-GAP-011 shape and had gone
+   * stale in opposite directions — the dangerous one silently.
+   *
+   * The first required `NODE_ENV === 'production'` between `if (!expected)` and
+   * `WEBHOOK_SECRET_INVALID` and had been RED since that branch was removed. The second,
+   * "development stays open", was GREEN — but only because its regex `return next();\n}`
+   * matches the guard's final success return. It asserted a dev bypass that no longer
+   * exists, against a file whose own comment reads "⛔ No environment branch. An unset
+   * secret refuses, everywhere… Do not re-add it."
+   *
+   * A green assertion pinning a REMOVED, WEAKER behaviour is worse than a red one: it reads
+   * as coverage for the thing it would now fail to notice. Both are replaced by the
+   * property the source actually claims, plus a guard against the branch coming back.
+   */
+  assert('an unset secret FAILS CLOSED — in every environment, with no branch', () =>
+    /if \(!expected\)[\s\S]{0,400}?WEBHOOK_SECRET_INVALID/.test(guard)
+      && /reason: 'not_configured'/.test(guard));
+  assert('the guard has NO environment branch — an unset secret never opens', () =>
+    // The file names `NODE_ENV` once, in the comment explaining why the branch is gone.
+    // Any occurrence outside a comment is the removed bypass returning.
+    !/NODE_ENV/.test(stripComments(guard)));
   // `lifecycle.ts`, not `server.ts`: plan step 2.A moved the boot sequence out so the drain
   // could be exported and called directly (Windows delivers no SIGTERM to a child process).
   // `server.ts` is now a three-line entrypoint.

@@ -81,6 +81,13 @@ export interface CredentialDeliveryResult {
  * harassment and SMS-bill bound (the party did not ask for any of these), the
  * per-administrator one bounds a compromised or careless operator account. An unlimited
  * endpoint here is a way to make somebody's phone unusable.
+ *
+ * ⚠ **Because they bound different things, they are spent at different points in `send`**
+ * — the administrator's before the channel is resolved, the party's after. Anything that
+ * puts them back in one `assertWithinLimits` has to pick one of those points for both, and
+ * both choices are wrong: charging the party for a channel they do not have is a lockout,
+ * and not charging the operator for it is a free enumeration oracle. See the two
+ * `assert*WithinLimits` docblocks and BR-021.
  */
 const PER_PARTY_LIMIT = 3;
 const PER_PARTY_WINDOW_SECONDS = 60 * 60;
@@ -129,9 +136,28 @@ export class AdminCredentialDeliveryService {
             );
         }
 
+        /**
+         * ⚠ **The two counters are spent at DIFFERENT points, and the split is the whole
+         * point** (BR-021, 2026-09-12). Read `PER_PARTY_LIMIT`'s docblock: the two bound
+         * different things, so they cannot both be spent in the same place.
+         *
+         * The administrator's allowance is spent HERE, before anything is resolved, because
+         * what it bounds is *a compromised or careless operator account* — and a request
+         * that gets refused is still a request that operator made. Spending it first is
+         * what stops `resolveDestination`'s 409 being a free, unbounded oracle for which
+         * channels a party has on file.
+         *
+         * The party's allowance is spent BELOW, after a channel resolves, because what it
+         * bounds is *harassment and an SMS bill* — and a refused channel sends the party
+         * nothing at all. Charging them for it would let an operator who picks the wrong
+         * channel twice lock the party out of the right one for an hour, which is a worse
+         * outcome than the oracle and lands on the commonest mistake in that dialog.
+         */
+        await this.assertAdminWithinLimits(actorId);
+
         const destination = await this.resolveDestination(user, channel);
 
-        await this.assertWithinLimits(userId, actorId);
+        await this.assertPartyWithinLimits(userId);
 
         const issued =
             kind === 'password_reset'
@@ -183,23 +209,48 @@ export class AdminCredentialDeliveryService {
     }
 
     /**
-     * Two counters, checked before anything is minted.
+     * The operator's allowance — spent on the ATTEMPT, before a channel is resolved.
      *
-     * Incremented on the ATTEMPT rather than on success, so a caller cannot probe which
-     * channels a party has by burning failures for free — and so a delivery that fails
-     * downstream still costs the operator their allowance, which is the honest accounting
-     * for a message that may well have gone out.
+     * ⚠ **This docblock used to be one method's and claimed more than the code did**
+     * (BR-021, 2026-09-12). It said the count happens on the attempt "so a caller cannot
+     * probe which channels a party has by burning failures for free". Both counters were in
+     * fact spent *after* `resolveDestination`, which throws `409 USER_CHANNEL_UNAVAILABLE`
+     * for a channel the party does not have — so the probe was free and unbounded, and the
+     * sentence naming the attacker was the false half. The dashboard found it in five
+     * requests, which is the point: a claim about a rate limit is checkable.
+     *
+     * It is now true of THIS counter, which is the one it was ever an argument for. An
+     * enumeration sweep is a careless-or-compromised operator account, and that is exactly
+     * what this bound exists to catch. It does not make the oracle impossible — three
+     * requests still answer the question for one party — it makes it cost the operator the
+     * same allowance a real send costs, so a sweep across many parties runs out.
      */
-    private async assertWithinLimits(userId: string, actorId: string | null): Promise<void> {
-        const redis = await getRedisClient(LOGIN_CODE_DB);
+    private async assertAdminWithinLimits(actorId: string | null): Promise<void> {
+        if (!actorId) return;
 
+        const redis = await getRedisClient(LOGIN_CODE_DB);
+        const adminRetry = await bump(redis, adminKey(actorId), PER_ADMIN_LIMIT, PER_ADMIN_WINDOW_SECONDS);
+        if (adminRetry !== null) throw throttled(adminRetry, 'administrator');
+    }
+
+    /**
+     * The party's allowance — spent once a channel RESOLVES, and deliberately not before.
+     *
+     * Still spent on the attempt rather than on success, and that half of the original claim
+     * was always true and still is: `deliver` runs after this, so a delivery that fails
+     * downstream costs the allowance anyway — the honest accounting for a message that may
+     * well have gone out.
+     *
+     * What it must NOT count is a channel the party does not have, because nothing was sent
+     * to them and this counter is a harassment and SMS-bill bound. Counting it would spend a
+     * party's 3/hour on the operator's own mis-click and lock them out of the channel that
+     * does work — and the dialog has no way to discover which channels exist except by
+     * trying, so that mistake is the expected one rather than the careless one.
+     */
+    private async assertPartyWithinLimits(userId: string): Promise<void> {
+        const redis = await getRedisClient(LOGIN_CODE_DB);
         const partyRetry = await bump(redis, partyKey(userId), PER_PARTY_LIMIT, PER_PARTY_WINDOW_SECONDS);
         if (partyRetry !== null) throw throttled(partyRetry, 'party');
-
-        if (actorId) {
-            const adminRetry = await bump(redis, adminKey(actorId), PER_ADMIN_LIMIT, PER_ADMIN_WINDOW_SECONDS);
-            if (adminRetry !== null) throw throttled(adminRetry, 'administrator');
-        }
     }
 
     private async issueReset(user: IUser): Promise<IssuedCredential> {

@@ -1494,7 +1494,13 @@ where
 | channel | your base URL |
 |---|---|
 | `telegram` | `https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>` |
-| `whatsapp` | `https://graph.facebook.com/v18.0/<WHATSAPP_PHONE_NUMBER_ID>` |
+| `whatsapp` | `https://graph.facebook.com/v26.0/<WHATSAPP_PHONE_NUMBER_ID>` |
+
+⚠ **This table said `v18.0` until 2026-09-08 and had been wrong for months.** v18.0 expired
+2026-01-26; Meta reroutes an expired version silently, so nothing failed and nothing said
+anything. The live `send whatsapp` node reads `$env.WHATSAPP_API_URL` with `v26.0` as its
+literal fallback, which is what was actually in use. Pin the version in that variable, not
+in a node and not here.
 
 ⚠ **`method` is a PATH SEGMENT, not an HTTP verb.** It is always a POST with a JSON body. It
 is a segment rather than a whole URL because the base URL is where your bot token, your
@@ -1532,10 +1538,17 @@ is a new value in this field rather than a new branch in your workflow.
 | every **contact-change** write (§ 15) | text — what moved, what has not yet, and what the customer must do next |
 | `/connections/:channel` (disconnect) | text — that the app is no longer connected |
 | `/account/close` | text — the anonymise-and-retain promise, in the past tense. The last thing the platform says to that customer as themselves |
+| ⭐ `/catalog/display` · `/catalog/action` | **product cards** — a Mini App button, a carousel, or one image message per product. The one turn that renders to SEVERAL messages: see § 14.8 |
 
-Everything else — a cart, an order list, a product, a support context — is **data for your
-model to narrate**, and deliberately carries no `reply`. This service words the turns whose
-wording is fixed; it does not answer *"do you have red shoes?"*.
+Everything else — a cart, an order list, **one** product, a support context — is **data for
+your model to narrate**, and deliberately carries no `reply`. This service words the turns
+whose wording is fixed; it does not answer *"do you have red shoes?"*.
+
+⚠ **That sentence used to say "a product" flat, and it was right about ONE and wrong about a
+LIST.** Narrating a list is what shipped: five products as a numbered markdown list, no
+pictures, no prices anybody could tap, no way to buy. The model was doing exactly what it
+was asked and there was nothing else it could do. A **set the customer is meant to choose
+from** is a rendering, and renderings live on this side of the wire — § 14.8.
 
 ### 14.4 · Real captures
 
@@ -1642,6 +1655,14 @@ the turn that produced it. **Each verb has exactly one mapping, and it is this t
 | token | you POST | with body |
 |---|---|---|
 | `skip:<step>` | `/identity/onboarding` | `{ "step": "<step>", "action": "skip" }` |
+| `add:<productId>:<variantId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+| `buy:<productId>:<variantId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+| `more:<setId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+
+⚠ **The three product verbs all post to ONE route and you never parse them.** Forward the
+token exactly as the platform returned it; `/catalog/action` owns the vocabulary. Splitting
+it in the flow would put the verb table in the layer this whole section exists to keep it
+out of, and it would go stale the first time a verb is added.
 
 ⚠ **A picker row from `/geo/search` carries no verb** — its id is the bare `candidateRef`
 (recognisable: it begins `gc_`). That is deliberate, and it is the same rule taken one step
@@ -1713,6 +1734,170 @@ receive `callback_query.data` (Telegram) or `interactive.button_reply.id` /
 `interactive.list_reply.id` (WhatsApp), and map it through the table above. The ids are chosen
 so that the value you receive is either the value you send verbatim (a `gc_` ref) or a token
 with exactly one documented mapping — never a phrase to interpret.
+
+### 14.8 · ⭐ Product cards — the one turn that is SEVERAL messages
+
+Everything above renders to exactly one outbound body. A product list does not, and that is
+what `replies` exists for.
+
+#### The two tools
+
+| tool | who calls it | what it does |
+|---|---|---|
+| `catalog_show_products` | **the model**, with `productIds` | draws a page of cards and answers `{ shown, total, hasMore }` |
+| `catalog_display_action` | **your flow**, with a tapped `token` | adds to the basket, or pages to the next five |
+
+`catalog_show_products` is `flow_only` and is the **one row where that tier does not mean the
+model never calls it.** It is kept off the MCP server because its result is a *rendering* your
+flow must relay, not data the model reads — an MCP tool's output lands in the model's context,
+where a Telegram `sendPhoto` body can do nothing at all. Wire it as a tool sub-workflow
+instead, and have that sub-workflow hand the bodies to your send step.
+
+#### `reply` and `replies`
+
+A response that renders to more than one message carries **both**:
+
+```jsonc
+{
+  "success": true,
+  "data": { "shown": 5, "total": 8, "hasMore": true },
+  "reply":   { "channel": "telegram", "method": "sendPhoto", "body": { } },
+  "replies": [ { }, { }, { }, { }, { } ]
+}
+```
+
+- **`reply` is still a single object, always.** Nothing you have already wired breaks: a flow
+  that only knows about `reply` sends the first message and the customer sees a product.
+- **`replies` is present only when there is more than one**, and it **includes** the body that
+  is in `reply`. Send `replies` when it is there, `reply` otherwise. Never both.
+- ⚠ **Order is the rendering.** Intro, then cards, then "See more". Send them in order, one
+  after another — n8n's HTTP node already iterates its input items in order, so relaying the
+  array verbatim is correct. Do not parallelise it.
+
+#### What it renders to, and why you are not told
+
+The shape is decided by the backend from the channel, the deployment's configuration and
+whether the pictures are fetchable. **The response deliberately does not say which shape came
+back**, because all three inputs change without the model being told, and a sentence naming
+the interface ("tap the carousel below") is wrong on the other channel.
+
+| channel | condition | renders as |
+|---|---|---|
+| Telegram | `BOT_MINIAPP_BASE_URL` is an HTTPS origin | **one** `sendMessage` with a `web_app` button — the Mini App |
+| Telegram | otherwise | one `sendPhoto` per product, each with its own inline keyboard |
+| WhatsApp | `WHATSAPP_PRODUCT_CAROUSEL_TEMPLATE` is set **and** there are exactly five cards, all with pictures | **one** `template` message — a five-card carousel — plus a "See more" message if there is more |
+| WhatsApp | otherwise | one `interactive` image message per product |
+
+⚠ **Five is a hard number on WhatsApp, not a maximum.** A carousel there is a
+marketing-category **template**, pre-approved in Business Manager, and Meta will only send a
+template with the exact number of cards it was approved with. A four-product answer is not a
+shorter carousel — it is a rejected send — so it takes the card path even on a deployment that
+has the template. Each card also takes at most **two** buttons, which is why "See more" arrives
+as its own message afterwards rather than as a third button on a card.
+
+#### Telegram, with the Mini App — the whole `reply`
+
+```jsonc
+{
+  "channel": "telegram",
+  "method": "sendMessage",
+  "body": {
+    "chat_id": "900000881",
+    "text": "Tap below to see them with pictures and prices.",
+    "reply_markup": {
+      "inline_keyboard": [[{
+        "text": "Browse the products",
+        "web_app": { "url": "https://api.wi-mall.com/api/bot/miniapp/p/ma_9f3" }
+      }]]
+    }
+  }
+}
+```
+
+The page is served by jovi-mall. It shows the cards in a horizontal rail, lets the customer
+pick several, adds them to the basket and closes itself. **It sends nothing to the chat** —
+that would need the bot token, which your adapter holds and the backend deliberately does not.
+The customer's next message sees the updated basket.
+
+#### Telegram, without one — one message per product
+
+```jsonc
+{
+  "channel": "telegram",
+  "method": "sendPhoto",
+  "body": {
+    "chat_id": "900000881",
+    "photo": "https://api.wi-mall.com/api/files/images/2026/09/cover.jpg",
+    "caption": "<b>Wireless Noise-Cancelling Headphones</b>\n20 000 XAF · TechHub Electronic",
+    "parse_mode": "HTML",
+    "reply_markup": { "inline_keyboard": [
+      [{ "text": "Buy now", "callback_data": "buy:68b0aa:68c0bb" },
+       { "text": "Add to cart", "callback_data": "add:68b0aa:68c0bb" }],
+      [{ "text": "Details", "url": "https://shop.wi-mall.com/fr/shop/stores/techhub/products/anc" }]
+    ]}
+  }
+}
+```
+
+#### WhatsApp, the card path
+
+```jsonc
+{
+  "messaging_product": "whatsapp", "recipient_type": "individual",
+  "to": "237600000771", "type": "interactive",
+  "interactive": {
+    "type": "button",
+    "header": { "type": "image", "image": { "link": "https://api.wi-mall.com/api/files/images/a.jpg" } },
+    "body": { "text": "*Wireless Noise-Cancelling Headphones*\n20 000 XAF\nTechHub Electronic" },
+    "action": { "buttons": [
+      { "type": "reply", "reply": { "id": "buy:68b0aa:68c0bb", "title": "Buy now" } },
+      { "type": "reply", "reply": { "id": "add:68b0aa:68c0bb", "title": "Add to cart" } }
+    ]}
+  }
+}
+```
+
+#### The carousel template you have to get approved
+
+Set `WHATSAPP_PRODUCT_CAROUSEL_TEMPLATE` only once Meta has approved a template of exactly
+this shape. Until then leave it unset and the card path above is used.
+
+- **Category:** marketing. **Cards:** exactly 5.
+- **Message body:** one variable, `{{1}}` — the intro sentence.
+- **Each card:** an **image** header; a body with three variables (`{{1}}` title, `{{2}}`
+  price, `{{3}}` store); and two buttons, in this order —
+  1. a **quick reply**, whose payload is filled at send time with the `add:` token;
+  2. a **URL** button whose href is `https://<your storefront>/shop/p/{{1}}`.
+- ⚠ **That URL button's variable is the product ID ALONE.** A template URL button takes a
+  *suffix* Meta appends to the prefix you declared, not a whole URL. Sending an absolute URL
+  there produces `https://.../shop/p/https://...`, which Meta accepts and which opens nothing.
+- ⚠ All five cards must declare the **same** components — Meta requires it.
+
+#### Reading a tap
+
+Exactly as § 14.6 says: forward the token verbatim to `POST /catalog/action`. `add:` and
+`buy:` both put one of that variant in the basket; they differ in what the customer is then
+told, because **"Buy now" does not place an order** — checkout needs a delivery address and a
+payment method, and a bot-registered customer routinely has neither, so its reply names
+checkout and hands the turn back to your model. `more:` returns the next five as another
+`replies` array.
+
+⚠ **`add:` and `buy:` keep working forever; `more:` does not.** The first two carry ids and
+need no stored state, so a card scrolled back to an hour later still adds. `more:` names a set
+that lives thirty minutes, and a lapsed one answers `404 BOT_PRODUCT_LIST_EXPIRED` with a
+`customerMessage` inviting a fresh search — relay it and let the model search again.
+
+#### Two configuration facts that decide whether any of this is visible
+
+- ⚠ **Product images are fetched SERVER-SIDE by Telegram and by Meta.** A URL on a private,
+  loopback or carrier-NAT host — which is what `STORAGE_LOCAL_URL` points at on a development
+  box — is not a slow image: on Telegram the whole `sendPhoto` fails and the caption and the
+  keyboard go with it. The backend checks first and degrades to text cards, so nothing breaks,
+  but the pictures appear only once `BOT_MEDIA_PUBLIC_BASE_URL` names an origin the internet
+  can actually reach.
+- ⚠ **`BOT_MINIAPP_BASE_URL` must be `https://`.** Telegram refuses a `web_app` button on any
+  other scheme and refuses the entire message with it. The backend checks the scheme and falls
+  back to photo cards rather than sending a message Telegram will drop.
 
 ---
 
@@ -2113,6 +2298,73 @@ then told their broken item looks fine. Say it in the turn and in the system pro
 
 ⚠ **On a refusal, relay `error.customerMessage`** rather than composing your own — § 11.4's
 rule, and the reason `/files/inbound` returns a localised sentence at all.
+
+
+## 18 · Account access — the one route whose result the caller may not read
+
+`POST /api/internal/bot/auth/login-link` · tool `auth_send_login_link` · no arguments.
+
+Sends the customer a magic link and an 8-character code — the same pair `/login` produces,
+composed by the same `buildLoginReply`, spent the same way, dead in the same ten minutes.
+
+**Every other route on this surface returns what it did. This one returns whether it did it.**
+
+```jsonc
+// 200
+{ "success": true,
+  "data": { "sent": true, "expiresInSeconds": 600, "expiresAt": "2026-09-08T02:45:00.000Z" },
+  "message": "The sign-in link and code have been sent to this chat." }
+```
+
+There is no `token`, no `code`, no `link` and no `reply`. That is not an omission to work
+around — it is the contract, and `test:bot-surface` § 19 fails if a credential field ever
+appears here.
+
+### Why it sends instead of returning
+
+Every other credential entrance hands its `message` back and lets the automation layer relay
+it. This one cannot, because **its caller is a language model**:
+
+- The catalogue marks the row `never_relay: ["message"]` — the credential is never
+  summarised, never stored and **never shown to the model**. A tool response is both: it
+  lands in the model's context *and* in the `Chat Memory` Redis store.
+- A model rewrites for tone. An eight-character code that has been "helpfully" reformatted is
+  a code that arrives wrong, and the customer cannot tell why.
+
+So jovi-mall puts the message in the chat itself, over the same Telegram/WhatsApp senders the
+notification stack uses, and the tool answers only whether it went. Same division as
+`open_negotiation`: the tool acts, the model acknowledges.
+
+### What the model must be told
+
+It has not been given a code and must never invent, guess or reformat one. `wi-mall-core`'s
+system prompt carries this under **SIGNING IN ON THE WEBSITE**, including the sentence that
+matters most — *this platform has no SMS one-time password and no "enter the code we sent
+you" screen*. Without it the model cheerfully describes one; that is exactly what it did on
+2026-09-08 before this landed.
+
+### Where the slash command goes instead
+
+`/login` typed as a command never reaches this route or the model. `wi-mall-core`'s
+`detect command` branch posts it to `POST /api/webhooks/telegram/webhook` (or
+`/api/webhooks/whatsapp` — ⚠ **the two paths differ**) and relays the `reply` those commands
+now return. Two entrances, one `MessagingLoginService.mint`.
+
+⚠ **`/reset-password` has NO tool here, deliberately.** A reset token stamps
+`password_changed_at`, evicting every live session on the account, and it serves every role
+rather than customers alone. It stays a slash command; `test:bot-surface` § 19 pins that.
+
+### Rate limit
+
+Five per messaging identity per hour (`USER_CREDENTIAL_LINK_THROTTLED`, 429). Lower than the
+administrator path's three-per-party is *not* a contradiction — that caller is an operator
+watching a dialog, this one is a model that can be talked into repeating itself. Remember
+that **minting revokes the previous pair**, so an unbounded caller does not merely spam: it
+invalidates the code the customer is halfway through typing.
+
+The `Idempotency-Key` the generator emits is `{{ $execution.id }}-auth_send_login_link`, i.e.
+one per turn — asking twice in a single turn sends one message; asking again in a later
+message mints a fresh pair.
 
 
 ## Related

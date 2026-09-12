@@ -12,6 +12,9 @@ nothing.
 | **wi-mall-tg-adapter** | `siCyKSqWmgDGEmzW` | `start typing` + `stop typing` |
 | **wi-mall-wa-adapter** | `01h0wDrawM1rWtxm` | `typing (first)` + `start typing` + `stop typing` |
 
+⚠ On the instance these are displayed as **`UP-wi-mall-…`** since 2026-09-07 — the prefix every
+workflow belonging to this backend now carries. **Match on the id, never the name.**
+
 `wi-mall-core`, `wi-mall-bargain` and `wi-mall-mcp` are **unchanged**, and that is the design:
 the adapter wraps the entire turn, so everything downstream — the main agent, the bargaining
 sub-agent, every MCP tool call — is covered without knowing this exists.

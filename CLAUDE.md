@@ -1596,8 +1596,72 @@ pricing is written against the rule from the start.
 
 Covered DB-free by `npm run test:bargain-price` (145). Contract in
 `api-doc/vendor/variants.md#bargainable-pricing`; the dashboard hand-off is
-`api-doc/FRONTEND-CHANGELOG-bargainable-pricing.md`. **This phase is configuration only** — there
-is no offer/counter-offer flow and no path by which a bargained price reaches a cart or an order.
+`api-doc/FRONTEND-CHANGELOG-bargainable-pricing.md`.
+
+⚠ **This paragraph used to end "This phase is configuration only — there is no offer/counter-offer
+flow and no path by which a bargained price reaches a cart or an order", and BOTH halves are now
+false.** The offer/counter-offer flow is `src/modules/negotiation/` (the gate, the session ledger,
+the durable profile), and the path to a cart and an order is the negotiated-price port below. The
+sentence outlived its subject by a day in one half and by two in the other, which is what
+[verify-docs-against-code] is about. Two consequences of the flip are load-bearing here:
+**`bargain.maxPrice` is what the storefront DISPLAYS** (D-1), so `variant.price` is the vendor's
+FLOOR rather than the shelf price — and **the second sentence above, "nothing downstream reads
+`bargain`", is now true only of the un-negotiated path**; `LiveWindowReader` reads it on every
+haggling turn and on every lock verdict.
+
+### The negotiated price seam (`catalog/domain/ports/negotiated-price.port.ts`)
+
+**A bargained price reaches a cart and an order through a PORT, and never through an import.**
+`catalog` declares the interface, `modules/negotiation` implements it
+(`services/negotiated-price.resolver.ts`), and `negotiation.bootstrap.ts` — called from
+`lifecycle.ts` — joins them. A direct import would close a require cycle: `negotiation` needs
+`catalog` to read the vendor's window at gate time, and `PriceResolverService` would need
+`negotiation` to check the lock. This service has been broken by exactly that before
+(`modules/agents/index.ts`, "AuthService is not a constructor"), which is why the bootstrap is
+imported by **path** in `lifecycle.ts` and not through a module barrel.
+
+⚠ **Registering the resolver is not optional, and forgetting it is LOUD.** The port's default
+`UnregisteredNegotiatedPriceResolver` **refuses** a presented lock with a 500 rather than falling
+through to the shelf price — falling through would charge a customer more than they agreed, which
+is the one failure direction nobody reports as a bug (the customer assumes they misremembered and
+the vendor sees an ordinary sale). That default was live until 2026-09-08: nothing anywhere called
+`setNegotiatedPriceResolver`, so every haggled add-to-cart answered
+`500 "Negotiated pricing is not available on this deployment"`. `test:negotiation-lock` asserts
+the `lifecycle.ts` call, and is the one assertion that would have caught it.
+
+Five properties, and each is a decision rather than an implementation detail:
+
+- **The verdict is `negotiation`'s; the error mapping is `catalog`'s.** `judgeLock`
+  (`negotiation/domain/lock-verdict.rule.ts`) returns a closed five-value refusal set and **never
+  throws**; `PriceResolverService` maps it onto the `NEGOTIATION_LOCK_*` codes. Throwing from the
+  resolver bypasses that mapping and hands the chat a 500 it cannot explain to a customer.
+- **`peek` at add-to-cart, `consume` inside the order transaction (D-12).** A customer may remove
+  and re-add the line, or leave the basket overnight, without burning the price they haggled for —
+  and a checkout that rolls back does not burn it either. The burn is a **compare-and-set** on
+  `lock.consumed_at: null`, not a read-then-save: two checkouts racing for one single-use lock
+  otherwise both win.
+- ⚠ **`floorSnapshot` is the LIVE floor, not `lock.floor_snapshot`.** The two published
+  instructions look contradictory and agree once you read which MOMENT each is about — the floor is
+  read at the **verdict**, written onto the order item as `floor_price_snapshot`, and the earnings
+  split reads that column and never the variant again. Returning the stored agreement-time basis
+  would under-report a floor the vendor has since raised, and the AI margin would take 30% of an
+  uplift measured against a floor no longer in force.
+- **D-10's window re-read belongs to the resolver alone.** A lock whose price now falls outside the
+  live window is refused as `window_moved` — a vendor is never paid below the floor in force at the
+  moment of sale. That deliberately accepts stranding a customer who did nothing wrong, which is
+  why `NEGOTIATION_LOCK_TTL_MINUTES` must stay in minutes and why the refusal is recoverable copy
+  rather than a generic error. `catalog` must not re-derive it; `test:negotiation-pricing` § 7
+  asserts `PriceResolverService` mentions no `minPrice` or `maxPrice`.
+- **One definition of "the live window".** `negotiation/services/live-window.reader.ts` serves both
+  the gate (every turn) and the resolver (every verdict), down to the `isBargainEffective` gate — a
+  variant the dashboard calls non-negotiable cannot be negotiated *and* cannot be honoured at a
+  negotiated price. It reports a **miss** and maps nothing: the gate raises the catalogue's codes,
+  the resolver answers `window_moved`.
+
+Covered DB-free by `npm run test:negotiation-lock` (41 — the whole verdict table plus the boot
+wiring) and against real Mongo by `npm run verify:negotiation-lock` (15 — NEEDS a replica set;
+its subject is the three things no fake can reach, chiefly that **a rolled-back checkout leaves
+the lock spendable**).
 
 ### Structured product descriptions (`src/core/richtext/`)
 
@@ -2342,7 +2406,7 @@ reset token really changes a **vendor's** password and that the old one stops wo
 
 **The door the automation layer acts through**, and the only way anything can act *as a
 customer* without holding a customer session. A closed set of named operations at
-`/api/internal/bot/*` — **81 rows in `BOT_ROUTES` today, 9 of them `DELETE`** — each
+`/api/internal/bot/*` — **84 rows in `BOT_ROUTES` today, 9 of them `DELETE`** — each
 delegating to the same service the customer API calls, with a customer id the backend
 resolved from a **messaging identity**. Contract: `api-doc/n8n/bot-surface.md`; the plan it
 was built from is `api-doc/n8n/BACKEND-GAPS.md` § GAP-001, and the tool-parity work on top of
@@ -2625,6 +2689,83 @@ Three copy rules moved with it and one was **reversed**: `bot-onboarding-copy.ts
 require that a skippable step's prompt SAY it is skippable, and `test:bot-surface` asserted
 that word was present. Both are inverted — the prompt is a plain question, and the test now
 fails if any skippable prompt in any language contains a skip vocabulary again.
+
+#### ⭐ Product cards, and the Telegram Mini App (2026-09-08)
+
+**`bot-surface.md` § 14.3 used to end *"a product … is data for your model to narrate"*, and
+that was right about ONE product and wrong about a LIST of them.** Narrating a list is what
+shipped: five products as a numbered markdown list, no pictures, no price a customer could tap
+and no way to buy — a catalogue read aloud. The model was doing exactly what it was asked, and
+there was nothing else it could do: `BotReplyIntent` had five kinds and none of them was media,
+and no `catalog_*` route existed on this surface at all (the nine in the catalogue are
+`surface: public` and hit `/api/public/*`, so they carry no `reply`, no `customerMessage` and
+no window `meta`).
+
+Two routes now: `catalog_show_products` (`POST /catalog/display`) and `catalog_display_action`
+(`POST /catalog/action`). Design record is `api-doc/n8n/bot-surface.md` § 14.8.
+
+**The rule is narrowed, not reversed.** One product, a cart, an order, a support context — still
+data, still narrated. A **set the customer is meant to choose from** is a rendering, and a
+rendering belongs on this side of the wire for the reason every other one does.
+
+Six things are load-bearing:
+
+- ⭐ **`product_list` is the first intent that renders to SEVERAL messages**, which is why
+  `renderBotReplies` exists beside `renderBotReply`. ⚠ **`reply` stays a single object on the
+  wire, always**, and a multi-message turn gains a `replies` SIBLING that includes it. That
+  field is read by an n8n expression this repository does not own (`$json.reply.channel`);
+  widening it to an array would have broken every existing turn on both channels for a feature
+  none of them uses.
+- ⚠ **A WhatsApp carousel is a marketing-category TEMPLATE, and Meta sends it only with the
+  exact card count it was approved with.** So five is a hard number rather than a maximum, a
+  four-product answer takes the card path even where the template exists, and "See more"
+  follows as its own message because a card takes at most two buttons. Gated on
+  `WHATSAPP_PRODUCT_CAROUSEL_TEMPLATE`; unset renders interactive image cards, which need no
+  approval and work inside the 24-hour window. ⚠ `whatsapp/handlers/media-carousel-message.handler.ts`
+  builds `interactive.type: 'carousel'`, which **is not a Cloud API message type** — Meta
+  rejects it. It has no callers, and neither do the two Meta-catalogue product handlers beside
+  it (GAP-009). Nothing here builds on any of the three.
+- ⛔ **Pictures are fetched SERVER-SIDE by Telegram and by Meta**, so a URL on a loopback,
+  RFC1918 or carrier-NAT host is not a slow image — on Telegram the whole `sendPhoto` fails and
+  the caption and keyboard go with it. `isReachableByPlatformServers` refuses those and the card
+  degrades to text. `BOT_MEDIA_PUBLIC_BASE_URL` is what makes them appear; **`STORAGE_LOCAL_URL`
+  points at a `100.64/10` Tailscale address on the development box**, which is the case that
+  check was written against.
+- **The Mini App is Telegram-only and mounted OUTSIDE `/api/internal/bot`, deliberately.** A
+  browser cannot hold `INTERNAL_SERVICE_TOKEN` or `BOT_WEBHOOK_SECRET` — either in a page served
+  to a customer's phone hands every viewer the whole bot surface. `/api/bot/miniapp/*` is
+  authorised by an opaque handle naming one conversation's list for thirty minutes, the posture
+  `pay-link.ts` established. ⚠ The handle is a **different string** from the `more:` set id: one
+  travels in a callback payload, the other in a URL through a browser, and one string doing both
+  jobs is how a payload token becomes a bearer credential. ⚠ The page carries its **own CSP** —
+  `helmet()`'s `default-src 'self'` would refuse its inline script, its inline style and
+  Telegram's `telegram-web-app.js`, and the customer would see a blank white screen with no error
+  on this side.
+- ⚠ **`add:`/`buy:` carry IDS and `more:` carries a set handle, and the asymmetry is the point.**
+  A card sits in a chat history forever, so its buy buttons must not expire; `add:` plus two
+  ObjectIds is **53 bytes against Telegram's 64**, which is why ids were chosen over slugs (an
+  oversized `callback_data` is truncated SILENTLY and the button does nothing). "Show me more of
+  that list" has no meaning once the list is gone, so `more:` is allowed to lapse.
+- ⛔ **A SERVICE is drawn without buy buttons.** Found live: a seeded yoga class rendered a
+  working-looking "Add to cart" whose every tap came back `400
+  CART_SERVICE_PRODUCT_NOT_ALLOWED`. `CartService.addToCart` refuses a service by design, so the
+  card offers Details instead — as a WhatsApp `cta_url`, because a URL cannot ride a reply
+  button there.
+
+**"Buy now" does NOT place an order**, and the copy says so. Checkout needs a delivery address
+and a payment method, and a bot-registered customer routinely has neither (GAP-002 creates the
+account on their first message and the address step is skippable), so both verbs add to the
+basket and differ only in what the customer is told next.
+
+⚠ **The display set is a THIRD prefix on `BOT_SURFACE_DB` (10)** — `bot:display:` and
+`bot:miniapp:`, beside `bot:idem:` and `bot:geo:`. The 5–15 index budget is full and the ceiling
+is 16, so there was no database to take; the flush policy there is prefix-scoped for exactly
+this. Both are as cheap to lose as `bot:geo:` — the customer asks again and gets live prices.
+
+Covered by `test:bot-surface` § 18 (31 assertions, no DB) and by `verify:bot-surface`. The n8n
+half is `wi-mall-product-cards` (a tool sub-workflow that echoes the bodies to Redis, because an
+MCP tool result lands in the model's context where a `sendPhoto` body can do nothing) plus four
+edits to `wi-mall-core`.
 
 #### Proactive messaging and the card page (GAP-012 + GAP-008, 2026-08-26)
 

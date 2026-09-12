@@ -1,7 +1,12 @@
 import { NextFunction, Request, Response } from 'express';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { botChrome } from '../domain/bot-chrome-copy';
-import { BotChannelReply, BotReplyIntent, renderBotReply } from '../domain/channel-reply';
+import {
+    BotChannelReply,
+    BotReplyIntent,
+    renderBotReplies,
+    renderBotReply,
+} from '../domain/channel-reply';
 
 /**
  * Put the outbound message body on every bot response — success and failure alike.
@@ -125,21 +130,49 @@ function withReply(req: Request, body: unknown): unknown {
     // Already carries one: an idempotency replay, or a handler that composed its own.
     if ('reply' in envelope) return envelope;
 
-    const reply =
+    /**
+     * ⚠ **A failure is always ONE message and a success may be several.**
+     *
+     * The asymmetry is not an oversight. An error's reply is derived from
+     * `error.customerMessage` — one sentence, one widget — and there is no failure on this
+     * surface that wants a second message. A success can be a product list, which is a page
+     * of cards; see `renderBotReplies`.
+     */
+    const rendered: BotChannelReply[] =
         envelope.success === false
-            ? errorReply(req, (envelope.error ?? {}) as Record<string, unknown>)
+            ? [errorReply(req, (envelope.error ?? {}) as Record<string, unknown>)].filter(
+                  (reply): reply is BotChannelReply => reply !== null,
+              )
             : req.bot!.replyIntent
-                ? renderBotReply(
+                ? renderBotReplies(
                       req.bot!.replyIntent,
                       req.bot!.envelope.channel,
                       req.bot!.envelope.externalId,
                   )
-                : null;
+                : [];
 
     // Absent rather than null. A caller branches on presence — the convention
     // `requestContact` already established on this surface — and a null would make
     // "nothing to say" indistinguishable from "something went wrong composing it".
-    return reply ? { ...envelope, reply } : envelope;
+    if (rendered.length === 0) return envelope;
+
+    /**
+     * ⚠ **`reply` stays a single object, ALWAYS, and `replies` is a sibling that appears
+     * only when there is more than one.**
+     *
+     * The automation layer reads `$json.reply.channel` and `$json.reply.body` in an n8n
+     * expression this repository does not own and cannot type-check. Turning that field into
+     * an array would break every existing turn on both channels at once, for a feature none
+     * of them uses. A caller that never learns about `replies` therefore keeps working and
+     * sends the first message; one that knows about it sends the whole ordered list.
+     *
+     * ⚠ **Order is the rendering** — intro, then cards, then "See more". n8n's HTTP node
+     * iterates its input items in order, which is what makes relaying the array verbatim
+     * correct; sorting or parallelising it is not.
+     */
+    return rendered.length === 1
+        ? { ...envelope, reply: rendered[0] }
+        : { ...envelope, reply: rendered[0], replies: rendered };
 }
 
 export function attachBotReply(req: Request, res: Response, next: NextFunction): void {

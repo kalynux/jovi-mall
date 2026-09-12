@@ -590,6 +590,36 @@ export const BotProductIdSchema = z.object({ productId: objectId }).strict();
 export const BotProductParamSchema = z.object({ productId: objectId });
 export const BotEntitlementSchema = z.object({ entitlementId: objectId }).strict();
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Product cards
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `catalog_show_products` — the ids the model chose, in the order it ranked them.
+ *
+ * ⚠ **A minimum of ONE, deliberately, even though the model is told to narrate a single
+ * product in prose.** The rule about when to draw cards belongs in the system prompt, where
+ * it can be phrased as guidance; enforcing it here would turn a judgement call about a
+ * conversation into a 400 the customer experiences as the bot ignoring them.
+ *
+ * The ceiling is two pages of five. A model handed a bigger allowance fills it, and the
+ * eleventh product is one nobody scrolls to.
+ */
+export const BotProductDisplaySchema = z
+    .object({ productIds: z.array(objectId).min(1).max(10) })
+    .strict();
+
+/**
+ * `catalog_display_action` — a button the customer pressed.
+ *
+ * The token is opaque here on purpose: `parseBotActionId` owns the vocabulary, and a Zod
+ * `enum` of verbs would be a second copy of it that drifts. Bounded and trimmed because it
+ * arrives from a messaging platform and reaches a lookup.
+ */
+export const BotDisplayActionSchema = z
+    .object({ token: z.string().trim().min(1).max(128) })
+    .strict();
+
 export const BotBookingListSchema = z
     .object({
         status: z.enum(['pending', 'confirmed', 'completed', 'no_show', 'cancelled']).optional(),
@@ -844,6 +874,28 @@ export const BotMessagingNotifySchema = z
 
 /** Routes that take no arguments at all still reject a stray key. */
 export const BotNoArgsSchema = z.object({}).strict();
+
+/**
+ * `POST /command` — the raw text of one message, and nothing else.
+ *
+ * ⚠ **The automation layer sends the message VERBATIM and parses nothing.** No command name,
+ * no argument list, no alias resolution: the vocabulary is a five-language table and n8n is
+ * the one layer with no copy table. A `command` field here would be exactly the parse this
+ * route exists to keep server-side.
+ *
+ * ⚠ **It must be the RAW text, never Telegram's `bot_command` entity.** That entity stops at
+ * a hyphen, which is why `/reset-password` was only ever readable as `/reset` plus trailing
+ * text — the trap `commands.json`'s `canonical_name_rule` documents and the reason the
+ * vocabulary is now one word with no separators at all.
+ *
+ * The cap is Telegram's own message ceiling. A command line longer than that is not a
+ * command, and bounding it here keeps the edit-distance search off an unbounded string.
+ */
+export const BotCommandDispatchSchema = z
+    .object({
+        text: z.string().min(1).max(4096),
+    })
+    .strict();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Saved payment methods

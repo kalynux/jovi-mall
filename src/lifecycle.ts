@@ -15,6 +15,8 @@ import {
 import { assertBotErrorCopyComplete } from './modules/bot-surface/domain/bot-error-copy';
 import { assertBotOnboardingCopyComplete } from './modules/bot-surface/domain/bot-onboarding-copy';
 import { assertBotChromeCopyFits } from './modules/bot-surface/domain/bot-chrome-copy';
+import { assertCommandCopyComplete } from './modules/bot-commands/domain/command-copy';
+import { assertMiniAppCopyComplete } from './modules/bot-surface/miniapp/miniapp-copy';
 import { initAggregationScheduler } from './core/jobs/aggregation-scheduler';
 import { awaitWorkerLocksReleased, locksHeldInProcess } from './core/jobs/worker-lock';
 import { stopAllWorkers } from './modules/dev-tools/worker-registry';
@@ -43,6 +45,11 @@ import { codDepositDeadlineWorker } from './modules/cod/workers/cod-deposit-dead
 import { paymentReconciliationWorker } from './modules/payments/workers/payment-reconciliation.worker';
 import { trackingDispatchWorker } from './modules/tracking-integration/workers/tracking-dispatch.worker';
 import { initializeAgentDomain } from './modules/agents';
+// Imported by PATH rather than through a module barrel, deliberately. The port this
+// registers exists because a `negotiation` <-> `catalog` import cycle crashed this
+// service once before ("AuthService is not a constructor", `modules/agents/index.ts`),
+// and a barrel is how that cycle would come back in through the side door.
+import { initializeNegotiationDomain } from './modules/negotiation/negotiation.bootstrap';
 import { initializeShipmentAssignment } from './modules/shipment-assignment';
 import { agentCapacityReconcileWorker } from './modules/agents/workers/agent-capacity-reconcile.worker';
 import { agentTrustRecomputeWorker } from './modules/agents/workers/agent-trust-recompute.worker';
@@ -140,6 +147,16 @@ export async function startServer(): Promise<Server> {
     // characters over WhatsApp's twenty is silent forever and arrives cut in half to
     // exactly the customers who read Portuguese.
     assertBotChromeCopyFits();
+    // And again for the slash-command MENU. Its cap is Telegram's own 256 characters on a
+    // command description, and its failure mode is the worst of the four: an over-long or
+    // missing string makes `setMyCommands` reject the ENTIRE batch, so the customer keeps
+    // the old menu — or none — and nothing on this side reports anything at all.
+    assertCommandCopyComplete();
+    // And once more for the Mini App PAGE. It is a static asset the build copies verbatim,
+    // so every word on it arrives with the data from `miniapp-copy.ts` rather than being
+    // templated in — which means a missing translation there is exactly as silent as one in
+    // the three tables above, and closed the same way.
+    assertMiniAppCopyComplete();
 
     // Database Connection
     //
@@ -221,6 +238,13 @@ export async function startServer(): Promise<Server> {
     // eligibility rules. Must run before any dispatch path evaluates an agent;
     // swapping in geo-tracker's provider later is a change HERE and nowhere else.
     initializeAgentDomain();
+
+    // Negotiation: installs the resolver behind catalog's negotiated-price port.
+    // Must run before the listener opens — until it does, the port's default
+    // REFUSES every presented price lock with a 500 rather than silently charging
+    // the shelf price, so a late registration is a window of failed haggled
+    // checkouts, not a window of degraded ones.
+    initializeNegotiationDomain();
 
     startBackgroundWork();
 

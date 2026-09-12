@@ -223,7 +223,7 @@ const BOOLEAN_LITERALS = new Set(['true', 'false', '1', '0']);
 /** Variables restricted to a closed set of values. */
 const ENUM_VARS: Readonly<Record<string, readonly string[]>> = Object.freeze({
     NODE_ENV: ['development', 'test', 'production'],
-    STORAGE_PROVIDER: ['local', 'firebase', 'cloudinary'],
+    STORAGE_PROVIDER: ['local', 'firebase', 'cloudinary', 'r2'],
     GEO_PROVIDER: ['chain', 'nominatim', 'geoapify', 'locationiq', 'google', 'mapbox', 'here'],
     MAIL_PROVIDER: ['console', 'smtp'],
     LOG_LEVEL: ['trace', 'debug', 'info', 'warn', 'error', 'fatal'],
@@ -304,6 +304,9 @@ const PRODUCTION_SECRETS: readonly string[] = Object.freeze([
     'GOOGLE_TOKEN_ENCRYPTION_KEY',
     'METRICS_SCRAPE_TOKEN',
     'STRIPE_WEBHOOK_SECRET',
+    // The R2 API token's secret half. It can write and delete every object in both buckets, and
+    // Cloudflare shows it exactly once — rotation is create-new → deploy → delete-old.
+    'STORAGE_R2_SECRET_ACCESS_KEY',
 ]);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -415,6 +418,45 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
     } else if (storageProvider === 'cloudinary') {
         for (const name of ['STORAGE_CLOUDINARY_CLOUD_NAME', 'STORAGE_CLOUDINARY_API_KEY', 'STORAGE_CLOUDINARY_API_SECRET']) {
             if (!has(name)) err(name, 'is required when STORAGE_PROVIDER=cloudinary.');
+        }
+    } else if (storageProvider === 'r2') {
+        for (const name of [
+            'STORAGE_R2_ACCOUNT_ID', 'STORAGE_R2_ACCESS_KEY_ID', 'STORAGE_R2_SECRET_ACCESS_KEY',
+            'STORAGE_R2_BUCKET', 'STORAGE_R2_PRIVATE_BUCKET', 'STORAGE_R2_PUBLIC_URL',
+        ]) {
+            if (!has(name)) err(name, 'is required when STORAGE_PROVIDER=r2.');
+        }
+        // ⚠ The ADR-A01 D-2 guard, at BOOT rather than at the first digital upload.
+        //
+        // R2 has no per-object ACL, so "private" is a property of the BUCKET. One bucket serving
+        // both trees means every digital product and every delivery-proof photograph is
+        // fetchable from the CDN by anyone who ever saw its key — the defect the whole
+        // private-tree classification exists to close, reintroduced by a copy-paste in a `.env`.
+        // The provider constructor refuses too; this refuses earlier and names the variable.
+        if (has('STORAGE_R2_BUCKET') && get('STORAGE_R2_BUCKET') === get('STORAGE_R2_PRIVATE_BUCKET')) {
+            err('STORAGE_R2_PRIVATE_BUCKET',
+                `is the same bucket as STORAGE_R2_BUCKET ("${get('STORAGE_R2_BUCKET')}"). R2 has no `
+                + 'per-object ACL, so one bucket cannot be both publicly bound and not: every '
+                + 'digital/ and shipments/ object would be served by the CDN (ADR-A01 D-2).');
+        }
+        // Concatenated as `${base}/${key}` on BOTH sides. A trailing slash yields `//key`, which
+        // an R2 custom domain treats as a different key — a guaranteed 404 on every public file,
+        // and identically wrong in wi-admin, so nothing diverges to reveal it.
+        const r2PublicUrl = get('STORAGE_R2_PUBLIC_URL');
+        if (r2PublicUrl && r2PublicUrl.endsWith('/')) {
+            err('STORAGE_R2_PUBLIC_URL',
+                'ends with "/". It is concatenated as `${base}/${key}`, so every public file URL '
+                + 'would carry a double slash and 404. Drop the trailing slash.');
+        }
+        if (r2PublicUrl && !/^https?:\/\/[^/\s]+(\/[^\s?#]*)?$/.test(r2PublicUrl)) {
+            err('STORAGE_R2_PUBLIC_URL',
+                `is "${r2PublicUrl}", which is not a scheme://host[/path] base. This is the `
+                + 'Cloudflare CUSTOM DOMAIN bound to the public bucket, not the S3 API endpoint — '
+                + 'the endpoint is derived from STORAGE_R2_ACCOUNT_ID and needs no variable.');
+        }
+        if (isProduction && r2PublicUrl?.startsWith('http://')) {
+            warn('STORAGE_R2_PUBLIC_URL', 'is a plain-http base in production. Every product image '
+                + 'on the storefront would be mixed content and blocked by the browser.');
         }
     } else if (storageProvider === 'local' && isProduction) {
         warn('STORAGE_PROVIDER', 'is "local" in production. Uploads are written to the container filesystem and are lost on every restart or redeploy.');

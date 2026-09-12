@@ -1078,6 +1078,56 @@ async function main(): Promise<void> {
     !cookieMagicController.includes('tokenEnvelope')
     && !/tokens\s*:/.test(cookieMagicController));
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log('\n▶ SOURCE SCAN: the two credential-delivery counters are spent at DIFFERENT points');
+
+  /**
+   * BR-021 (2026-09-12). Both counters used to be spent in one `assertWithinLimits`, called
+   * AFTER `resolveDestination` — which throws `409 USER_CHANNEL_UNAVAILABLE` for a channel
+   * the party does not have. So a caller could enumerate which of email/whatsapp/telegram a
+   * party has on file at no cost to any allowance, while `users.md` and the method's own
+   * docblock both said the count was on the attempt precisely so that could not happen.
+   *
+   * The fix is not to move the one call: the two counters bound different things and want
+   * opposite orderings.
+   *
+   *   administrator — bounds a careless or compromised operator. A refused request is still a
+   *                   request they made, so it is spent BEFORE the resolve, which is what
+   *                   bounds the sweep.
+   *   party         — a harassment and SMS-bill bound. A refused channel sends them nothing,
+   *                   so it is spent AFTER the resolve; charging it would let an operator's
+   *                   mis-click lock the party out of the channel that does work.
+   *
+   * Asserted on the source because the failure is an ORDERING, and an ordering that is wrong
+   * still returns the right status codes on every single-request test.
+   */
+  const credentialService = stripComments(
+    read('modules/messaging-login/services/admin-credential-delivery.service.ts'));
+
+  const atAdminLimit = credentialService.indexOf('this.assertAdminWithinLimits(');
+  const atResolve = credentialService.indexOf('this.resolveDestination(');
+  const atPartyLimit = credentialService.indexOf('this.assertPartyWithinLimits(');
+
+  assert('all three call sites exist in `send`', () =>
+    atAdminLimit > 0 && atResolve > 0 && atPartyLimit > 0);
+
+  assert('⚠ the ADMIN allowance is spent BEFORE the channel resolves — else the probe is free', () =>
+    atAdminLimit < atResolve);
+
+  assert('⚠ the PARTY allowance is spent AFTER it resolves — else a mis-click locks them out', () =>
+    atResolve < atPartyLimit);
+
+  /**
+   * The half of the original claim that was always true: `deliver` runs after both counters,
+   * so a delivery that fails downstream still costs the allowance.
+   */
+  assert('both counters are still spent before anything is minted or delivered', () =>
+    atPartyLimit < credentialService.indexOf('this.issueReset(')
+    && atPartyLimit < credentialService.indexOf('this.deliver('));
+
+  assert('the merged `assertWithinLimits` is gone — it cannot express two orderings', () =>
+    !/assertWithinLimits\s*\(/.test(credentialService.replace(/assert(Admin|Party)WithinLimits/g, '')));
+
   console.log('\n▶ SOURCE SCAN: identity comes from the CONTEXT, never the payload');
 
   assert('no command reads an identity out of the payload', () => {

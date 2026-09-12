@@ -109,7 +109,17 @@ export class UploadIntakeService {
         // Create File record in database
         const file = await this.fileRepository.create({
           key: storageResult.key,
-          provider: this.getProviderType(),
+          /**
+           * The ACTIVE provider, asked at write time.
+           *
+           * ⚠ This was hardcoded `'local'` behind a private helper with a `TODO`, which under
+           * any object-storage provider stamps every row `local` — a field whose entire purpose
+           * is recording where the bytes went. It misled nothing at READ time (`toFileDetail`
+           * resolves through the configured provider, never `row.provider`), which is exactly
+           * why it could stay wrong indefinitely: the only readers are a human doing forensics
+           * and a future migration, and both would have been told the wrong thing.
+           */
+          provider: this.storageProvider.getProviderType(),
           mimeType: fileContext.mimeType,  // Detected MIME type
           size: fileContext.size,
           checksum: fileContext.hash || storageResult.checksum,  // Use fingerprint hash if available
@@ -137,12 +147,4 @@ export class UploadIntakeService {
     }
   }
 
-  /**
-   * Get storage provider type
-   * TODO: Make this configurable or detect from storage provider
-   */
-  private getProviderType(): 'local' | 's3' | 'gcs' | 'r2' {
-    // For now, return 'local' - should be configurable
-    return 'local';
-  }
 }

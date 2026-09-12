@@ -48,6 +48,18 @@ const ASSET_DIRS: readonly string[] = [
     // sub-agent as its system prefix. Markdown, and therefore the one asset extension
     // `test:system` used to skip wholesale - see NON_RUNTIME_EXTENSIONS there.
     'modules/negotiation/playbook',
+    /**
+     * The bot's product-card assets: the stand-in picture for a product with no image, and
+     * the Telegram Mini App page.
+     *
+     * ⚠ **Neither may live under `storage/`, which is where a static file instinctively
+     * belongs here.** That tree is in `.dockerignore` — it is 112 MB of real uploads bound to
+     * a named volume (D-6) — so a file committed there is present in development and absent
+     * from every container image, which is exactly the split that made every Handlebars email
+     * template throw under `npm start` and is the reason this script exists.
+     */
+    'modules/bot-surface/assets',
+    'modules/bot-surface/miniapp/public',
 ];
 
 let copied = 0;

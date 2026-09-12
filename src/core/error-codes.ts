@@ -469,6 +469,47 @@ export const ERROR_CODES = Object.freeze({
      */
     BOT_INBOUND_FILE_EXPIRED: 'BOT_INBOUND_FILE_EXPIRED',
 
+    /**
+     * A product-list handle is unknown, stale or belongs to another conversation.
+     *
+     * Raised by `catalog_display_action` on a `more:` token whose set has gone. The
+     * third handle on this surface with the same shape and the same one-bucket
+     * refusal as `BOT_GEO_CANDIDATE_EXPIRED` — unknown, lapsed and wrong-owner are
+     * one answer, because all three have the same remedy and distinguishing them
+     * would confirm that a handle the caller does not own is real.
+     *
+     * ⚠ The remedy is a NEW SEARCH, not a re-send. A list half an hour old quotes
+     * prices and stock that have since moved, which is exactly why it expires.
+     */
+    BOT_PRODUCT_LIST_EXPIRED: 'BOT_PRODUCT_LIST_EXPIRED',
+    /**
+     * A callback token this service did not mint, or minted under a vocabulary it
+     * no longer has.
+     *
+     * ⚠ **An ordinary event, not a fault.** A button sits in a chat history forever
+     * and a deploy can retire the verb it carries, so an unrecognised token is a
+     * customer tapping something old — answered with a sentence rather than a 500.
+     * Telegram reports nothing at all for an unhandled callback, so without this the
+     * tap is simply silent.
+     */
+    BOT_ACTION_TOKEN_UNKNOWN: 'BOT_ACTION_TOKEN_UNKNOWN',
+    /**
+     * The Mini App asked to add something the list it was opened for never
+     * offered.
+     *
+     * ⚠ **A DIFFERENT fault from `BOT_PRODUCT_LIST_EXPIRED`, and it needs its own
+     * code rather than borrowing that one.** There the list is gone; here it is
+     * present and the request names products outside it — which is what a caller
+     * that is not the page looks like. Reusing the expiry code would also raise
+     * one code at two statuses whose categories disagree (404 `not_found` and
+     * 422 `business_rule`), which `test:errors`' census refuses on the stated
+     * ground that the category is DERIVED and cannot be right at both.
+     *
+     * The check behind it is what stops a handle naming one list from becoming a
+     * bearer credential for the whole basket.
+     */
+    BOT_PRODUCT_NOT_IN_LIST: 'BOT_PRODUCT_NOT_IN_LIST',
+
     // ── Registration and onboarding (GAP-002) ─────────────────────────────────
     // The account is created on the sender's FIRST message, with nobody asked
     // first, so these four describe the only ways that can go wrong. None of them

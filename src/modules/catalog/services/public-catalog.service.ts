@@ -124,12 +124,45 @@ export class PublicCatalogService {
      * a count, and a second shape is how that becomes two answers.
      */
     async listByIds(productIds: string[]): Promise<Map<string, PublicProductListItemDto>> {
+        const withVariant = await this.listByIdsWithVariant(productIds);
+        return new Map([...withVariant].map(([id, entry]) => [id, entry.item]));
+    }
+
+    /**
+     * The same rows, plus the id of the variant a card's buttons would act on.
+     *
+     * ── WHY THIS IS A SECOND METHOD AND NOT A FIELD ON THE DTO ──────────────
+     * The bot's product cards need something `PublicProductListItemDto` deliberately does not
+     * carry: **which variant "Add to cart" adds**. `PublicProductListRow.defaultVariantId` has
+     * always been there — it is what `decorateRows` resolves the thumbnail and the price
+     * against — it simply never reached the list projection, because a browse grid links to a
+     * page and lets the customer choose.
+     *
+     * Adding it to the DTO would have been the smaller diff and the wrong one. That shape is
+     * the storefront's public contract (`api-doc/public/catalog.md`), consumed by an app in
+     * another repository, and widening it for one internal caller is how a projection stops
+     * being a decision and becomes an accumulation. `defaultVariantId` is not sensitive —
+     * `PublicProductDetailDto` already publishes it — so this is about blast radius, not
+     * secrecy.
+     *
+     * ⚠ **`decorateRows` maps 1:1 and in order**, which is what makes the zip below correct.
+     * It is a `rows.map(...)` with no filter; if it ever grows one, this pairing silently
+     * attaches the wrong variant to the wrong product, so change them together.
+     */
+    async listByIdsWithVariant(
+        productIds: string[],
+    ): Promise<Map<string, { item: PublicProductListItemDto; defaultVariantId: string | null }>> {
         const unique = [...new Set(productIds)];
         if (unique.length === 0) return new Map();
 
         const rows = await this.repo.findPublishableByIds(unique);
         const decorated = await this.decorateRows(rows);
-        return new Map(decorated.map((item) => [item.id, item]));
+        return new Map(
+            decorated.map((item, index) => [
+                item.id,
+                { item, defaultVariantId: rows[index].defaultVariantId },
+            ]),
+        );
     }
 
     /**

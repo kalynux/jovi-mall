@@ -40,6 +40,16 @@ import { ERROR_CODES } from '../error-codes';
  *      `GET /api/{agent,agency}/shipments/:id/delivery-proof/file`), streaming through
  *      `getDownloadStream`, or through a **short-lived signed URL minted inside those routes**
  *      — never one minted in `getPublicUrl`, which has no idea who is asking.
+ *
+ * ── `r2` is the first provider that actually satisfies both points ────────────
+ * It meets (1) with **TWO BUCKETS** rather than a per-object flag, because **R2 has no
+ * per-object ACL at all** — `ACL: 'public-read'` is accepted and silently discarded, so an
+ * object is reachable iff its BUCKET carries a public binding. `bucketForKey` routes on
+ * `isPrivateStorageKey`, and the private bucket has no custom domain and no r2.dev binding, so
+ * its objects are unreachable without a signed request. It meets (2) by implementing
+ * `getDownloadStream` for real — the first non-local provider to do so — and by making
+ * `getPublicUrl` **throw** on a private key rather than return a string, so the leak this header
+ * warns about cannot be reintroduced silently by a caller that forgets to guard.
  */
 export function createStorageProvider(config: StorageConfig): IStorageProvider {
   const { provider } = config;
@@ -81,11 +91,24 @@ export function createStorageProvider(config: StorageConfig): IStorageProvider {
       const { CloudinaryStorageProvider } = require('./providers/cloudinary-storage.provider');
       return new CloudinaryStorageProvider(config.cloudinary);
 
+    case 'r2':
+      if (!config.r2) {
+        throw createAppError(
+          ERROR_CODES.CONFIG_MISSING_STORAGE_PROVIDER,
+          500,
+          'R2 storage configuration is required when provider is "r2"'
+        );
+      }
+      // Lazy-load R2 provider to avoid importing the AWS SDK unless needed
+      // eslint-disable-next-line @typescript-eslint/no-require-imports, no-case-declarations
+      const { R2StorageProvider } = require('./providers/r2-storage.provider');
+      return new R2StorageProvider(config.r2);
+
     default:
       throw createAppError(
         ERROR_CODES.CONFIG_INVALID_STORAGE_PROVIDER,
         500,
-        `Unknown storage provider: ${provider}. Supported providers: local, firebase, cloudinary`
+        `Unknown storage provider: ${provider}. Supported providers: local, firebase, cloudinary, r2`
       );
   }
 }

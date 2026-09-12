@@ -1,5 +1,7 @@
 import { MessagingChannel } from '../../channel-connections';
+import { escapeTelegramHtml } from '../../../core/richtext';
 import { WA_LIMITS, truncate } from '../../whatsapp/constants/whatsapp-limits';
+import type { BotProductCard } from './product-card';
 
 /**
  * The messaging-platform request body this service wants sent to the customer.
@@ -149,7 +151,92 @@ export type BotReplyIntent =
           sectionTitle: string;
       }
     /** A sentence with one button that opens a URL. */
-    | { kind: 'link'; text: string; label: string; url: string };
+    | { kind: 'link'; text: string; label: string; url: string }
+    /**
+     * ⭐ **A LIST OF PRODUCTS, drawn rather than narrated** — and the one intent that renders
+     * to SEVERAL messages.
+     *
+     * ── WHY THIS EXISTS, AND WHAT IT REVERSES ───────────────────────────────
+     * `bot-surface.md` § 14.3 used to end *"a product … is data for your model to narrate,
+     * and deliberately carries no `reply`"*, and that was right about a product and wrong
+     * about a **list** of them. Narrating five products produces the thing this feature was
+     * reported for: a numbered markdown list, no pictures, no prices anybody can tap, and no
+     * way to buy — a catalogue read aloud. The sentence still stands for one product, for a
+     * cart and for an order; it does not stand for a set the customer is meant to choose
+     * from.
+     *
+     * ── IT IS THE FIRST INTENT WHOSE RENDERING IS NOT ONE MESSAGE ────────────
+     * Which is why `renderBotReplies` exists beside `renderBotReply`. The three shapes it can
+     * take are decided HERE, from the data, and never by the caller:
+     *
+     *   - **Telegram with a Mini App configured** — one `sendMessage` carrying a `web_app`
+     *     button. The cards are drawn by the page, not by the chat.
+     *   - **Telegram without one** — one `sendPhoto` per card, each with its own keyboard.
+     *   - **WhatsApp** — a 5-card carousel template when one is configured and there are
+     *     exactly five cards; otherwise one interactive image message per card.
+     *
+     * Every one of those degrades to the next when its prerequisite is absent, so an
+     * unconfigured deployment renders cards rather than failing.
+     */
+    | {
+          kind: 'product_list';
+          /**
+           * The line that introduces this page — **may be empty, and usually is.**
+           *
+           * On the first page the model has just written its own sentence in the
+           * conversation it is having, and a second generic one over the top of it is the
+           * talking-over `setOnboardingReply` refuses to do. A "See more" page has no such
+           * sentence (nobody asked the model anything — a button was pressed), so the caller
+           * supplies `moreProductsPrompt` there.
+           */
+          text: string;
+          /**
+           * The body of the Mini App button message. Never empty.
+           *
+           * ⚠ **A separate field from `text` because only the RENDERER knows which path it
+           * is taking**, and Telegram refuses a `sendMessage` with an empty `text`. The
+           * caller cannot pick between them without knowing the channel and whether a Mini
+           * App is configured, which is exactly the platform knowledge it must not have.
+           */
+          browsePrompt: string;
+          /** Already windowed by the caller. 1–10; a carousel needs exactly `WA_CAROUSEL_CARDS`. */
+          cards: readonly BotProductCard[];
+          /** The Telegram `web_app` target. Absent → photo cards. Must be HTTPS. */
+          miniAppUrl?: string | null;
+          /** Is there another page behind this one? */
+          hasMore: boolean;
+          /** `more:<setId>`. Meaningless unless `hasMore`. */
+          moreToken?: string | null;
+          /** Button labels, already in the customer's language — see `bot-chrome-copy.ts`. */
+          labels: {
+              browse: string;
+              buyNow: string;
+              addToCart: string;
+              seeMore: string;
+              details: string;
+          };
+          /**
+           * The approved WhatsApp carousel template, when the deployment has one.
+           *
+           * ⚠ **Absent is the ordinary case and must stay cheap.** A carousel on WhatsApp is
+           * a *marketing-category template* that Meta pre-approves, and — the constraint that
+           * shapes this whole intent — **an approved template can only ever be sent with the
+           * exact number of cards it was created with.** That is why five is a hard number
+           * rather than a maximum, and why a four-product answer takes the card path even on
+           * a deployment that has the template.
+           */
+          carousel?: { templateName: string; languageCode: string } | null;
+          /**
+           * Where a carousel card's URL button points, as the **variable suffix** Meta
+           * appends to the prefix declared in the template.
+           *
+           * ⚠ **Not a whole URL.** A template URL button is `https://…/shop/p/{{1}}` with one
+           * variable, so what travels is the product id and nothing else. Passing an absolute
+           * URL here produces `https://…/shop/p/https://…`, which Meta accepts and which
+           * opens nothing.
+           */
+          carouselUrlSuffix?: ((card: BotProductCard) => string) | null;
+      };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Platform limits this renderer is responsible for
@@ -328,6 +415,16 @@ function renderTelegram(intent: BotReplyIntent, chatId: string): BotChannelReply
                     },
                 },
             };
+
+        /**
+         * ⚠ **Renders to SEVERAL messages, so this returns the first and callers that can
+         * send more than one must use `renderBotReplies`.** Taking the first is the honest
+         * degradation rather than a silent one: on the Mini App path there is only ever one
+         * message, so nothing is lost at all; on the card path the customer sees the first
+         * product instead of five, which is visibly incomplete rather than wrong.
+         */
+        case 'product_list':
+            return telegramProductList(intent, chatId)[0];
     }
 }
 
@@ -509,7 +606,393 @@ function renderWhatsApp(intent: BotReplyIntent, to: string): BotChannelReply {
                     },
                 },
             });
+
+        /** See the Telegram side: the first of several. `renderBotReplies` gets them all. */
+        case 'product_list':
+            return whatsappProductList(intent, to)[0];
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Product cards — the one intent that renders to more than one message
+// ─────────────────────────────────────────────────────────────────────────────
+
+type ProductListIntent = Extract<BotReplyIntent, { kind: 'product_list' }>;
+
+/**
+ * ⚠ **A HARD number, not a maximum**, and it is Meta's constraint rather than a taste.
+ *
+ * A WhatsApp carousel is a template, and *"an approved template can only be used to send the
+ * same number of cards as defined during its creation"*. So a template approved with five
+ * cards can send five cards and nothing else — four is not a shorter carousel, it is a
+ * rejected send. That is the whole reason the card path exists beside this one and why the
+ * renderer switches between them on an exact equality rather than a `<=`.
+ */
+export const WA_CAROUSEL_CARDS = 5;
+
+/** `sendPhoto.caption`. Shorter than `sendMessage.text`, which is 4096. */
+const TG_CAPTION = 1024;
+
+/** One product's caption on Telegram, as escaped HTML. */
+function telegramCardCaption(card: BotProductCard): string {
+    const lines = [
+        `<b>${escapeTelegramHtml(card.title)}</b>`,
+        escapeTelegramHtml(`${card.priceText} · ${card.storeName}`),
+    ];
+    return truncate(lines.join('\n'), TG_CAPTION) as string;
+}
+
+/**
+ * The keyboard under one Telegram card.
+ *
+ * The buy row is dropped whole when the product has no default variant — see
+ * `BotProductCard.variantId`. A Details row survives that, because a product page is
+ * reachable whether or not anything is sellable from a button.
+ */
+function telegramCardKeyboard(
+    card: BotProductCard,
+    intent: ProductListIntent,
+    withMore: boolean,
+): Record<string, unknown> | null {
+    const rows: Record<string, unknown>[][] = [];
+
+    if (card.buyToken && card.addToken) {
+        rows.push([
+            { text: truncate(intent.labels.buyNow, TG_LIMITS.BUTTON_TEXT), callback_data: card.buyToken },
+            { text: truncate(intent.labels.addToCart, TG_LIMITS.BUTTON_TEXT), callback_data: card.addToken },
+        ]);
+    }
+    if (card.detailUrl) {
+        rows.push([
+            { text: truncate(intent.labels.details, TG_LIMITS.BUTTON_TEXT), url: card.detailUrl },
+        ]);
+    }
+    if (withMore && intent.moreToken) {
+        rows.push([
+            { text: truncate(intent.labels.seeMore, TG_LIMITS.BUTTON_TEXT), callback_data: intent.moreToken },
+        ]);
+    }
+
+    return rows.length > 0 ? { inline_keyboard: rows } : null;
+}
+
+/**
+ * Telegram: a Mini App button, or a photo per product.
+ *
+ * ⚠ **The Mini App path is ONE message and that is the requested design**, not a shortcut. A
+ * chat is a bad place to compare five products — they arrive as a vertical stack you scroll
+ * past — and a Mini App is a real page that can lay them out side by side and let somebody
+ * pick several at once. The chat's job on that path is to say what happened and offer the
+ * door.
+ *
+ * ⚠ **A `web_app` button requires an HTTPS URL and Telegram refuses the whole message
+ * without one.** The caller is responsible for passing null when it has no HTTPS origin —
+ * see `BOT_MINIAPP_BASE_URL` — and this falls back to cards rather than sending a keyboard
+ * Telegram will reject.
+ */
+function telegramProductList(intent: ProductListIntent, chatId: string): BotChannelReply[] {
+    const message = (text: string, markup: Record<string, unknown> | null): BotChannelReply => ({
+        channel: 'telegram',
+        method: 'sendMessage',
+        body: {
+            chat_id: chatId,
+            text: truncate(text, TG_LIMITS.TEXT) as string,
+            ...(markup ? { reply_markup: markup } : {}),
+        },
+    });
+
+    if (intent.miniAppUrl) {
+        return [
+            message(intent.text || intent.browsePrompt, {
+                inline_keyboard: [
+                    [
+                        {
+                            text: truncate(intent.labels.browse, TG_LIMITS.BUTTON_TEXT),
+                            web_app: { url: intent.miniAppUrl },
+                        },
+                    ],
+                ],
+            }),
+        ];
+    }
+
+    const replies: BotChannelReply[] = [];
+    if (intent.text) replies.push(message(intent.text, null));
+
+    intent.cards.forEach((card, index) => {
+        const last = index === intent.cards.length - 1;
+        const markup = telegramCardKeyboard(card, intent, last && intent.hasMore);
+        const caption = telegramCardCaption(card);
+
+        if (card.imageUrl) {
+            replies.push({
+                channel: 'telegram',
+                method: 'sendPhoto',
+                body: {
+                    chat_id: chatId,
+                    photo: card.imageUrl,
+                    caption,
+                    parse_mode: 'HTML',
+                    ...(markup ? { reply_markup: markup } : {}),
+                },
+            });
+            return;
+        }
+
+        /**
+         * No picture we can serve. A `sendPhoto` with a null photo is a 400 that loses the
+         * caption AND the keyboard, so the card degrades to a formatted text message with the
+         * same buttons — the customer loses the photograph and nothing else.
+         */
+        replies.push({
+            channel: 'telegram',
+            method: 'sendMessage',
+            body: {
+                chat_id: chatId,
+                text: caption,
+                parse_mode: 'HTML',
+                ...(markup ? { reply_markup: markup } : {}),
+            },
+        });
+    });
+
+    // Nothing to show and nothing said. Never emit an empty array — `renderBotReply` reads
+    // `[0]`, and a caller that sends `undefined` produces a 400 nobody can trace back here.
+    if (replies.length === 0) replies.push(message(intent.browsePrompt, null));
+    return replies;
+}
+
+/** One product's body text on WhatsApp. `*bold*` is WhatsApp's own markup, not Markdown. */
+function whatsappCardBody(card: BotProductCard): string {
+    return truncate(
+        `*${card.title}*\n${card.priceText}\n${card.storeName}`,
+        WA_LIMITS.INTERACTIVE_BODY,
+    ) as string;
+}
+
+/**
+ * WhatsApp: a 5-card carousel template, or an interactive image message per product.
+ *
+ * ── THE CAROUSEL IS A TEMPLATE, AND THAT IS NOT AN IMPLEMENTATION DETAIL ────
+ * There is no free-form carousel in the Cloud API — `interactive.type: 'carousel'` is not a
+ * message type Meta accepts, whatever a handler elsewhere in this repository may build. A
+ * carousel is a **marketing-category template**, pre-approved in Business Manager, with a
+ * fixed card count and **at most two buttons per card**. Three consequences are visible in
+ * the code below and none of them can be designed away:
+ *
+ *   - five cards exactly, or the card path (`WA_CAROUSEL_CARDS`);
+ *   - "See more" cannot live on a card, so it follows as its own message;
+ *   - the URL button carries a **suffix**, not a URL (`carouselUrlSuffix`).
+ *
+ * The card path has none of those constraints — it is free-form, needs no approval, and works
+ * inside the 24-hour service window today — which is why it is the default and the carousel
+ * is the upgrade.
+ */
+function whatsappProductList(intent: ProductListIntent, to: string): BotChannelReply[] {
+    const replies: BotChannelReply[] = [];
+
+    const seeMoreMessage = (): BotChannelReply =>
+        waEnvelope(to, 'interactive', {
+            interactive: {
+                type: 'button',
+                body: { text: truncate(intent.browsePrompt, WA_LIMITS.INTERACTIVE_BODY) as string },
+                action: {
+                    buttons: [
+                        {
+                            type: 'reply',
+                            reply: {
+                                id: intent.moreToken,
+                                title: truncate(intent.labels.seeMore, WA_LIMITS.BUTTON_REPLY_TITLE),
+                            },
+                        },
+                    ],
+                },
+            },
+        });
+
+    if (
+        intent.carousel
+        && intent.carouselUrlSuffix
+        && intent.cards.length === WA_CAROUSEL_CARDS
+        && intent.cards.every((card) => card.imageUrl)
+    ) {
+        const suffixOf = intent.carouselUrlSuffix;
+        replies.push({
+            channel: 'whatsapp',
+            method: 'messages',
+            body: {
+                messaging_product: 'whatsapp',
+                recipient_type: 'individual',
+                to,
+                type: 'template',
+                template: {
+                    name: intent.carousel.templateName,
+                    language: { code: intent.carousel.languageCode },
+                    components: [
+                        {
+                            type: 'body',
+                            parameters: [
+                                {
+                                    type: 'text',
+                                    text: truncate(
+                                        intent.text || intent.browsePrompt,
+                                        WA_LIMITS.INTERACTIVE_BODY,
+                                    ),
+                                },
+                            ],
+                        },
+                        {
+                            type: 'carousel',
+                            cards: intent.cards.map((card, index) => ({
+                                card_index: index,
+                                components: [
+                                    {
+                                        type: 'header',
+                                        parameters: [
+                                            { type: 'image', image: { link: card.imageUrl } },
+                                        ],
+                                    },
+                                    {
+                                        type: 'body',
+                                        parameters: [
+                                            { type: 'text', text: truncate(card.title, 60) },
+                                            { type: 'text', text: card.priceText },
+                                            { type: 'text', text: truncate(card.storeName, 60) },
+                                        ],
+                                    },
+                                    {
+                                        type: 'button',
+                                        sub_type: 'quick_reply',
+                                        index: 0,
+                                        // ⚠ A card with no variant still needs a payload — the
+                                        // template declares two buttons on every card and Meta
+                                        // rejects a card that omits one. `more:` is the honest
+                                        // stand-in: it does something, and it does not pretend
+                                        // to add an unsellable product to a basket.
+                                        parameters: [
+                                            {
+                                                type: 'payload',
+                                                payload: card.addToken ?? intent.moreToken ?? 'more:none',
+                                            },
+                                        ],
+                                    },
+                                    {
+                                        type: 'button',
+                                        sub_type: 'url',
+                                        index: 1,
+                                        parameters: [{ type: 'text', text: suffixOf(card) }],
+                                    },
+                                ],
+                            })),
+                        },
+                    ],
+                },
+            },
+        });
+
+        if (intent.hasMore && intent.moreToken) replies.push(seeMoreMessage());
+        return replies;
+    }
+
+    if (intent.text) replies.push(whatsappText(to, intent.text));
+
+    intent.cards.forEach((card, index) => {
+        const last = index === intent.cards.length - 1;
+        const buttons: Record<string, unknown>[] = [];
+
+        if (card.buyToken && card.addToken) {
+            buttons.push({
+                type: 'reply',
+                reply: {
+                    id: card.buyToken,
+                    title: truncate(intent.labels.buyNow, WA_LIMITS.BUTTON_REPLY_TITLE),
+                },
+            });
+            buttons.push({
+                type: 'reply',
+                reply: {
+                    id: card.addToken,
+                    title: truncate(intent.labels.addToCart, WA_LIMITS.BUTTON_REPLY_TITLE),
+                },
+            });
+        }
+        if (last && intent.hasMore && intent.moreToken && buttons.length < WA_MAX_BUTTONS) {
+            buttons.push({
+                type: 'reply',
+                reply: {
+                    id: intent.moreToken,
+                    title: truncate(intent.labels.seeMore, WA_LIMITS.BUTTON_REPLY_TITLE),
+                },
+            });
+        }
+
+        const header = card.imageUrl
+            ? { header: { type: 'image', image: { link: card.imageUrl } } }
+            : {};
+
+        /**
+         * ⚠ **Meta rejects an interactive `button` message with zero buttons**, so a card
+         * that can offer none takes one of two other shapes. It happens on a **service** —
+         * a class is booked, not carted, so `product-card.ts` gives it no buy tokens — and
+         * on a product whose variants have all been withdrawn.
+         *
+         * ⚠ **`cta_url` rather than a bare image, whenever there is a link**, and that was a
+         * live finding: a yoga class first rendered as a caption with no way to reach it at
+         * all. A URL cannot ride a reply button on WhatsApp — that is a different interactive
+         * type — so the card becomes one, keeping its picture in the header and offering
+         * Details, which is where the booking flow actually lives.
+         */
+        if (buttons.length === 0) {
+            if (card.detailUrl) {
+                replies.push(
+                    waEnvelope(to, 'interactive', {
+                        interactive: {
+                            type: 'cta_url',
+                            ...header,
+                            body: { text: whatsappCardBody(card) },
+                            action: {
+                                name: 'cta_url',
+                                parameters: {
+                                    display_text: truncate(
+                                        intent.labels.details,
+                                        WA_LIMITS.CTA_DISPLAY_TEXT,
+                                    ),
+                                    url: card.detailUrl,
+                                },
+                            },
+                        },
+                    }),
+                );
+                return;
+            }
+
+            replies.push(
+                card.imageUrl
+                    ? waEnvelope(to, 'image', {
+                          image: {
+                              link: card.imageUrl,
+                              caption: truncate(whatsappCardBody(card), WA_LIMITS.MEDIA_CAPTION),
+                          },
+                      })
+                    : whatsappText(to, whatsappCardBody(card)),
+            );
+            return;
+        }
+
+        replies.push(
+            waEnvelope(to, 'interactive', {
+                interactive: {
+                    type: 'button',
+                    ...header,
+                    body: { text: whatsappCardBody(card) },
+                    action: { buttons },
+                },
+            }),
+        );
+    });
+
+    if (replies.length === 0) replies.push(whatsappText(to, intent.browsePrompt));
+    return replies;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -536,6 +1019,38 @@ export function renderBotReply(
     return channel === 'telegram'
         ? renderTelegram(intent, recipient)
         : renderWhatsApp(intent, recipient);
+}
+
+/**
+ * The same thing, for the turns that are more than one message.
+ *
+ * ── WHY A SECOND ENTRY POINT AND NOT A CHANGED SIGNATURE ────────────────────
+ * `renderBotReply` returns one body and 81 routes plus the error path are built on that. A
+ * `BotChannelReply[]` return would have been a change at every one of those call sites for a
+ * feature none of them uses, and — the part that matters — `reply` is a **single object on
+ * the wire**, consumed by an n8n expression (`$json.reply.channel`) this repository does not
+ * own. Widening the field would break the automation layer for every existing turn.
+ *
+ * So the wire gained a sibling instead: `reply` stays the first body and `replies` carries
+ * the whole ordered list when there is more than one. A caller that only knows about `reply`
+ * keeps working and sends the first message; one that knows about `replies` sends them all.
+ * See `bot-reply.middleware.ts`.
+ *
+ * ⚠ **Order is the rendering.** The intro precedes its cards and "See more" follows them,
+ * and n8n's HTTP node iterates its input items in order — so the array must be sent as it
+ * comes, never reordered or parallelised.
+ */
+export function renderBotReplies(
+    intent: BotReplyIntent,
+    channel: MessagingChannel,
+    recipient: string,
+): BotChannelReply[] {
+    if (intent.kind === 'product_list') {
+        return channel === 'telegram'
+            ? telegramProductList(intent, recipient)
+            : whatsappProductList(intent, recipient);
+    }
+    return [renderBotReply(intent, channel, recipient)];
 }
 
 /** ⚠ Exported for `test:bot-surface`, which asserts the guard above is unreachable in practice. */

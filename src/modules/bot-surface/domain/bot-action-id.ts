@@ -46,7 +46,7 @@ import { BotOnboardingStep } from './bot-onboarding';
  */
 
 /** The closed verb set. A token's first segment is always one of these. */
-export const BOT_ACTION_VERBS = Object.freeze(['skip'] as const);
+export const BOT_ACTION_VERBS = Object.freeze(['skip', 'add', 'buy', 'more'] as const);
 export type BotActionVerb = (typeof BOT_ACTION_VERBS)[number];
 
 /**
@@ -87,6 +87,69 @@ function token(verb: BotActionVerb, argument: string): string {
  */
 export function skipActionId(step: BotOnboardingStep): string {
     return token('skip', step);
+}
+
+/**
+ * `add:<productId>:<variantId>` and `buy:<productId>:<variantId>` — the two buy buttons on a
+ * product card.
+ *
+ * ⚠ **The token carries IDS, not a position in the list somebody was shown**, and that is the
+ * decision worth defending. A `add:<setId>:<index>` token would be shorter and the handler
+ * would have to load the display set anyway for `more:` — but it would also **expire with the
+ * set**, so a customer scrolling back to a card from an hour ago would tap Add to cart and be
+ * told the list had gone. A card in a chat history is a card the customer can still see; a
+ * button on it that has quietly stopped working is the worst of the three outcomes.
+ *
+ * Ids make the token self-describing, which is this file's whole doctrine — *"a tap arrives
+ * with no memory of the turn that produced it"* — and it fits: `add:` plus two 24-character
+ * ObjectIds and a separator is **53 bytes against Telegram's 64**. That margin is the reason
+ * a slug pair was never an option; two slugs would silently truncate.
+ *
+ * Both map to `POST /catalog/action` with `{ token }`. `add` puts one in the basket and says
+ * so; `buy` does the same and answers with the pay link, so the customer's next tap is
+ * payment rather than another sentence.
+ */
+export function addToCartActionId(productId: string, variantId: string): string {
+    return token('add', `${productId}:${variantId}`);
+}
+
+export function buyNowActionId(productId: string, variantId: string): string {
+    return token('buy', `${productId}:${variantId}`);
+}
+
+/**
+ * `more:<setId>` — the next page of a product list the customer is already looking at.
+ *
+ * The set id is an opaque handle minted with the list (`product-display.store.ts`), so this
+ * IS a token that dies with its set — deliberately, and unlike the two above. "Show me more of
+ * that list" has no meaning once the list is gone, and the handler answers a lapsed handle by
+ * inviting a fresh search rather than by pretending.
+ */
+export function showMoreActionId(setId: string): string {
+    return token('more', setId);
+}
+
+/**
+ * Split a token back into its parts, or null when it is not one of ours.
+ *
+ * ⚠ **Returns null rather than throwing on an unknown verb**, because the input is whatever a
+ * messaging platform sent back and a stale button from a previous deploy is an ordinary event,
+ * not a fault. The caller turns a null into "I did not understand that" — which is a turn the
+ * customer can act on, unlike a 500.
+ */
+export function parseBotActionId(
+    raw: string | null | undefined,
+): { verb: BotActionVerb; argument: string } | null {
+    if (typeof raw !== 'string') return null;
+    const separator = raw.indexOf(':');
+    if (separator <= 0) return null;
+
+    const verb = raw.slice(0, separator);
+    const argument = raw.slice(separator + 1);
+    if (!argument) return null;
+    if (!(BOT_ACTION_VERBS as readonly string[]).includes(verb)) return null;
+
+    return { verb: verb as BotActionVerb, argument };
 }
 
 /** ⚠ Exported for `test:bot-surface`, which re-checks the cap against the renderer's own. */

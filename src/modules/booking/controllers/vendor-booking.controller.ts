@@ -376,17 +376,22 @@ export class VendorBookingController {
      *
      * Returns bookings grouped by date (YYYY-MM-DD) for calendar display.
      * startDate and endDate are required. Max range: 90 days.
+     *
+     * `data` keeps its array shape. The zone the day keys were computed in goes in
+     * `meta.timezone` (added 2026-09-09 with the grouping fix) — without it a client
+     * cannot re-derive a key from `startAt` and agree with the server, which is what
+     * the api-doc used to have to warn them about.
      */
     static getCalendarView = asyncHandler(async (req: Request, res: Response): Promise<void> => {
         const vendorId = req.auth!.role_entity._id.toString();
         const { startDate, endDate } = CalendarViewSchema.parse(req.query);
 
-        const groups = await bookingService.getCalendarView(
+        const { timezone, days } = await bookingService.getCalendarView(
             vendorId,
             new Date(startDate),
             new Date(endDate),
         );
 
-        res.json({ success: true, data: groups });
+        res.json({ success: true, data: days, meta: { timezone } });
     });
 }

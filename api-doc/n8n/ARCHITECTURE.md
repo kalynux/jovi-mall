@@ -36,7 +36,7 @@ n8n · IDENTITY                   resolve the sender ONCE per conversation
 n8n · ROUTER                     five ways in, one way out
    │   ├── live flow expects this input?   → FLOW STEP
    │   ├── interactive payload?            → INTENT (carries its own args)
-   │   ├── starts with "/"?                → COMMAND PARSER (deterministic)
+   │   ├── starts with "/"?                → COMMAND PARSER (deterministic — SEE ⭐ BELOW)
    │   ├── opt-out keyword?                → INTENT (compliance path)
    │   └── otherwise                       → AI AGENT (tool-calling model)
    ▼
@@ -60,6 +60,30 @@ PLATFORM RENDERER                ⚠ MOVED SERVER-SIDE 2026-08-26 — see the no
    ▼
 Customer
 ```
+
+⭐ **THE COMMAND PARSER IS SERVER-SIDE — 2026-09-09.** The `COMMAND PARSER` box above sits in
+the `n8n ·` column, and five further places in this file and in `COMMAND-SPECIFICATION.md` say
+the same. **It is built in jovi-mall instead** (`src/modules/bot-commands/`), reached by
+`POST /api/internal/bot/command`, which takes the **raw message text** and nothing else.
+n8n's `detect command` node now asks one question — *does this start with `/`* — and holds no
+command name, no alias and no argument grammar.
+
+**The reason is this document's own, twice over.** The `PLATFORM RENDERER` correction directly
+below records that *"the automation layer will handle the presentation"* had by then been wrong
+**three times about three different parts of one message**, each reported as a defect rather
+than foreseen. `bot-surface.md` § 14.6 makes the identical argument about **parsing**:
+*"A typed answer is language-dependent and whatever reads it is not… That table would have
+lived in the automation layer, which is the one layer with no copy table."*
+
+The alias table **is** a five-language table — `/chercher /buscar /procurar`, `/annuler
+/cancelar`. It is exactly the kind of table that argument is about. This is the fifth move
+across that boundary and the first made deliberately rather than after a defect report.
+
+What did **not** change: the parser is still deterministic, still runs before the model, and an
+unknown command still never reaches it. What did: `tools/commands.json` is now the doc **mirror**
+of `domain/command-registry.ts`, pinned row-for-row by `npm run test:bot-commands` — it was
+previously the one machine-readable file in `tools/` that nothing read and nothing validated, so
+its 34 rows could have said anything at all.
 
 ⚠ **The PLATFORM RENDERER box no longer describes n8n, and this line used to call it *"the
 ONLY place platform-specific code lives"*.** Since 2026-08-26 jovi-mall composes the outbound

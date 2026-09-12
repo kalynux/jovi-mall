@@ -1,6 +1,49 @@
 # Customer command specification — WhatsApp and Telegram
 
-**Status:** design only, 2026-08-24. Machine-readable twin: [`tools/commands.json`](./tools/commands.json).
+**Status:** ⭐ **PART BUILT, 2026-09-09** — see the two corrections immediately below. Was "design
+only, 2026-08-24". Machine-readable twin: [`tools/commands.json`](./tools/commands.json), which is
+now a **mirror** of `src/modules/bot-commands/domain/command-registry.ts` rather than the source.
+
+> ### ⭐ 1 · Commands are ONE WORD. Every hyphenated form is GONE.
+>
+> Canonical names now match `^[a-z][a-z0-9]{0,31}$` — no hyphen and **no underscore**. Two
+> names changed and nothing else did:
+>
+> | was | is |
+> |---|---|
+> | `reset_password`, published as `/reset-password` | **`/password`** |
+> | `add_to_cart`, published as `/add-to-cart` | **`/add`** |
+>
+> Every hyphenated alias is **removed outright**, not kept hidden: `/reset-password`,
+> `/add-to-cart`, `/buy-now`, `/view-cart`, `/my-orders`, `/mes-commandes`, `/delivery-code`,
+> `/code-livraison`, `/confirm-delivery`, `/my-downloads`, `/avis-donner`, `/mot-de-passe`, plus
+> the underscored `/sign_in` and `/help_me`. Typing one now answers *"I don't know that
+> command"* with a suggestion.
+>
+> **That clean break is safe because no typed command had ever worked.** The n8n branch that
+> would have routed them was staged and never published, so `/reset-password` reached the model
+> like any other sentence and nobody has a working command to lose. Multilingual one-word
+> aliases (`/chercher`, `/buscar`, `/panier`, `/annuler`) are untouched.
+>
+> ⛔ **`POST /api/auth/reset-password` is an HTTP endpoint and is NOT renamed.** Most repository
+> hits for that string are the URL, not the command; a rename following the command into the URL
+> would break every emailed reset link in flight.
+>
+> The short name is safe because Telegram prints the description beside it in the command menu —
+> `/password` reads as *"Get a link to set a new password"* wherever it appears. That menu is
+> published by `npm run telegram:commands`, which is new: **nothing had ever called
+> `setMyCommands`**, and the live bot's menu held three commands from an unrelated project.
+>
+> ### ⭐ 2 · The parser is in the BACKEND, not in the automation layer.
+>
+> § "the automation layer reads the raw message text" and the four other places this document
+> places the parser in n8n are superseded. It is `src/modules/bot-commands/`, behind
+> `POST /api/internal/bot/command`, which takes the raw text and nothing else. The reasoning is
+> recorded in [ARCHITECTURE.md](./ARCHITECTURE.md) under ⭐ THE COMMAND PARSER IS SERVER-SIDE.
+>
+> **Still true, and still the point:** the parser reads the RAW MESSAGE TEXT and never Telegram's
+> `bot_command` entity — the entity stops at a hyphen, which is half of why the vocabulary is now
+> one word.
 **Read first:** [ARCHITECTURE.md](./ARCHITECTURE.md) — this page assumes its pipeline, its identity model and its four surfaces.
 
 Thirty-four commands. Three are already live and must not change. The rest are new, and every one of them exists because typing it is faster or less ambiguous than saying it in words — where that is not true, the AI agent handles the intent and no command was created.

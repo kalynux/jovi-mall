@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>wi-mall</title>
+<!--
+  The wi-mall Telegram Mini App — the product rail.
+
+  ⚠ ONE EXTERNAL SCRIPT, AND IT IS THE ONLY ONE PERMITTED. `telegram-web-app.js` is served
+  by Telegram and is how a Mini App learns its theme, its viewport and how to close itself.
+  Everything else is inline on purpose: this page is served by the API, it is opened inside
+  a WebView on a phone that may be on a bad connection, and a CDN round trip is one more
+  thing between a customer and the products they asked for.
+
+  ⚠ IT MUST WORK WITH NO TELEGRAM RUNTIME AT ALL. The same URL is openable in an ordinary
+  browser — by whoever is testing it, and by a customer whose client hands the link to the
+  system browser — so every `Telegram.WebApp` touch is guarded and the page falls back to its
+  own colours. A page that throws on `themeParams` renders white-on-white, which a customer
+  reports as "the shop is broken".
+
+  ⚠ THE HANDLE IS THE ONLY CREDENTIAL. It is in the path, it names one conversation, and it
+  dies in thirty minutes. Nothing is stored, no cookie is set, and nothing here asks who the
+  customer is — the backend already knows, because it minted the handle.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #111418;
+    --muted: #707a86;
+    --card: #f6f7f9;
+    --line: #e4e7eb;
+    --accent: #2f8f4e;
+    --accent-fg: #ffffff;
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181c;
+      --fg: #f2f4f7;
+      --muted: #9aa3af;
+      --card: #212329;
+      --line: #2f323a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+  }
+  header { padding: 14px 16px 8px; }
+  h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+  /* The rail. Horizontal, snapping, one card mostly visible with the next peeking — which
+     is what tells a customer there is more to the right without an arrow or a hint. */
+  .rail {
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    padding: 12px 16px 18px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .rail::-webkit-scrollbar { display: none; }
+
+  .card {
+    flex: 0 0 78%;
+    max-width: 300px;
+    scroll-snap-align: center;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    cursor: pointer;
+    transition: border-color .12s ease, transform .12s ease;
+  }
+  .card[aria-pressed="true"] { border-color: var(--accent); transform: translateY(-2px); }
+  .card.disabled { opacity: .55; cursor: default; }
+
+  .shot { position: relative; aspect-ratio: 1 / 1; background: var(--line); }
+  .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tick {
+    position: absolute; inset-inline-end: 8px; inset-block-start: 8px;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: var(--accent); color: var(--accent-fg);
+    display: none; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 700;
+  }
+  .card[aria-pressed="true"] .tick { display: flex; }
+  .oos {
+    position: absolute; inset-inline-start: 8px; inset-block-start: 8px;
+    background: rgba(0,0,0,.66); color: #fff; font-size: 11px;
+    padding: 3px 7px; border-radius: 6px;
+  }
+
+  .body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .title {
+    font-weight: 600; font-size: 14px; line-height: 1.3;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .price { font-weight: 700; font-size: 15px; }
+  .store { color: var(--muted); font-size: 12px; }
+  .more { font-size: 12px; color: var(--accent); text-decoration: none; margin-top: 2px; }
+
+  footer {
+    margin-top: auto;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    background: var(--bg);
+  }
+  button.primary {
+    width: 100%; padding: 13px 16px; border: 0; border-radius: 10px;
+    background: var(--accent); color: var(--accent-fg);
+    font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+  button.primary[disabled] { opacity: .45; cursor: default; }
+  .note { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .state { padding: 40px 20px; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+  <header>
+    <h1 id="heading"></h1>
+    <div class="sub" id="subheading"></div>
+  </header>
+
+  <div class="rail" id="rail" role="list"></div>
+
+  <footer hidden id="foot">
+    <button class="primary" id="add" disabled></button>
+    <div class="note" id="note"></div>
+  </footer>
+
+<script>
+(function () {
+  "use strict";
+
+  // Every Telegram touch is optional — see the comment at the top of this file.
+  var tg = (window.Telegram && window.Telegram.WebApp) || null;
+  if (tg) {
+    try {
+      tg.ready();
+      tg.expand();
+      var p = tg.themeParams || {};
+      var root = document.documentElement.style;
+      if (p.bg_color) root.setProperty("--bg", p.bg_color);
+      if (p.text_color) root.setProperty("--fg", p.text_color);
+      if (p.hint_color) root.setProperty("--muted", p.hint_color);
+      if (p.secondary_bg_color) root.setProperty("--card", p.secondary_bg_color);
+      if (p.button_color) root.setProperty("--accent", p.button_color);
+      if (p.button_text_color) root.setProperty("--accent-fg", p.button_text_color);
+    } catch (e) { /* an old client, or one that reports no theme. Keep our own colours. */ }
+  }
+
+  /**
+   * The handle is the LAST path segment.
+   *
+   * Read from the URL rather than templated into the HTML, so this file stays a static
+   * asset the build copies verbatim. Nothing here is rendered per request, so nothing here
+   * can leak between two of them.
+   */
+  var parts = window.location.pathname.split("/").filter(Boolean);
+  var handle = parts[parts.length - 1] || "";
+  var api = "/api/bot/miniapp/api/" + encodeURIComponent(handle);
+
+  var rail = document.getElementById("rail");
+  var foot = document.getElementById("foot");
+  var addBtn = document.getElementById("add");
+  var note = document.getElementById("note");
+  var heading = document.getElementById("heading");
+  var sub = document.getElementById("subheading");
+
+  var copy = null;
+  var chosen = Object.create(null);
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function say(where, text) { where.textContent = text; }
+
+  function fail(text) {
+    rail.innerHTML = "";
+    var box = document.createElement("div");
+    box.className = "state";
+    box.textContent = text;
+    rail.appendChild(box);
+    foot.hidden = true;
+  }
+
+  function refresh() {
+    var n = Object.keys(chosen).length;
+    addBtn.disabled = n === 0;
+    addBtn.textContent = n === 0 ? copy.addNone : copy.addSome.replace("{n}", String(n));
+  }
+
+  function draw(products) {
+    rail.innerHTML = "";
+    products.forEach(function (item) {
+      var card = document.createElement("div");
+      card.className = "card" + (item.variantId ? "" : " disabled");
+      card.setAttribute("role", "listitem");
+      card.setAttribute("aria-pressed", "false");
+
+      card.innerHTML =
+        '<div class="shot">'
+        + (item.imageUrl ? '<img loading="lazy" alt="" src="' + esc(item.imageUrl) + '">' : "")
+        + '<div class="tick">&#10003;</div>'
+        + (item.inStock ? "" : '<div class="oos">' + esc(copy.outOfStock) + "</div>")
+        + "</div>"
+        + '<div class="body">'
+        + '<div class="title">' + esc(item.title) + "</div>"
+        + '<div class="price">' + esc(item.priceText) + "</div>"
+        + '<div class="store">' + esc(item.storeName) + "</div>"
+        + (item.detailUrl
+            ? '<a class="more" target="_blank" rel="noopener noreferrer" href="' + esc(item.detailUrl) + '">' + esc(copy.details) + "</a>"
+            : "")
+        + "</div>";
+
+      /**
+       * A product with no sellable variant is drawn and cannot be chosen. Showing it is the
+       * better half of the trade: a gap in the rail is something the customer cannot explain,
+       * and they may still want to open its page.
+       */
+      if (item.variantId) {
+        card.addEventListener("click", function (event) {
+          if (event.target && event.target.tagName === "A") return;  // the Details link
+          var on = card.getAttribute("aria-pressed") === "true";
+          card.setAttribute("aria-pressed", on ? "false" : "true");
+          if (on) { delete chosen[item.variantId]; }
+          else { chosen[item.variantId] = { productId: item.productId, variantId: item.variantId }; }
+          if (tg && tg.HapticFeedback) { try { tg.HapticFeedback.selectionChanged(); } catch (e) {} }
+          refresh();
+        });
+      }
+
+      rail.appendChild(card);
+    });
+  }
+
+  addBtn.addEventListener("click", function () {
+    var items = Object.keys(chosen).map(function (k) { return chosen[k]; });
+    if (items.length === 0) return;
+
+    addBtn.disabled = true;
+    say(note, copy.adding);
+
+    fetch(api + "/cart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: items })
+    })
+      .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.body || res.body.success === false) {
+          var msg = (res.body && res.body.error && (res.body.error.customerMessage || res.body.error.message)) || copy.failed;
+          say(note, msg);
+          addBtn.disabled = false;
+          return;
+        }
+        say(note, copy.added);
+        if (tg && tg.HapticFeedback) { try { tg.HapticFeedback.notificationOccurred("success"); } catch (e) {} }
+        /**
+         * Closing IS the confirmation, and this page deliberately writes nothing to the chat.
+         * Sending a message would need the Telegram bot token, which the adapter holds and
+         * the backend does not — see `tg-adapter`'s media note. The customer's next message
+         * sees the basket.
+         */
+        window.setTimeout(function () { if (tg && tg.close) { try { tg.close(); } catch (e) {} } }, 900);
+      })
+      .catch(function () {
+        say(note, copy.failed);
+        addBtn.disabled = false;
+      });
+  });
+
+  fetch(api, { headers: { Accept: "application/json" } })
+    .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+    .then(function (res) {
+      if (!res.ok || !res.body || res.body.success === false || !res.body.data) {
+        var m = (res.body && res.body.error && (res.body.error.customerMessage || res.body.error.message))
+          || "This list is no longer available.";
+        fail(m);
+        return;
+      }
+
+      var data = res.body.data;
+      copy = data.copy;
+      document.documentElement.lang = data.language || "en";
+      document.documentElement.dir = data.direction || "ltr";
+      say(heading, copy.heading);
+      say(sub, copy.subheading);
+
+      if (!data.products || data.products.length === 0) { fail(copy.empty); return; }
+
+      draw(data.products);
+      foot.hidden = false;
+      refresh();
+    })
+    .catch(function () {
+      fail("Could not load. Please try again.");
+    });
+})();
+</script>
+</body>
+</html>

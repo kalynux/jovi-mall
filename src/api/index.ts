@@ -1,4 +1,5 @@
 import express from 'express';
+import { commandBus } from '../modules/command-bus/instance';
 import { authRouter } from '../modules/auth/auth.routes';
 import { browserAuthRoutes } from '../modules/auth/routes/browser-auth.routes';
 import { mobileAuthRoutes } from '../modules/auth/routes/mobile-auth.routes';
@@ -6,8 +7,6 @@ import { messagingLoginRoutes } from '../modules/messaging-login/messaging-login
 import { mobileMessagingLoginRoutes } from '../modules/messaging-login/mobile-messaging-login.routes';
 import { createWhatsappRouter } from '../modules/whatsapp/whatsapp.routes';
 import { createTelegramRouter } from '../modules/telegram/telegram.routes';
-import { CommandBus } from '../modules/command-bus/command-bus';
-import { register_all_commands } from '../modules/commands';
 import { googleRoutes } from '../modules/integrations/calendar/google/google.routes';
 import { productBookingRouter } from '../modules/catalog/routes/product-booking.routes';
 import { paymentRouter, paymentWebhookRouter } from '../modules/payments';
@@ -65,9 +64,15 @@ const router = express.Router();
 // export * from './middlewares';
 // export * from './utils';
 
-// Initialize Command System
-export const commandBus = new CommandBus();
-register_all_commands(commandBus);
+/**
+ * Initialize Command System.
+ *
+ * ⚠ The bus itself moved to `modules/command-bus/instance.ts` and is re-exported here, so
+ * nothing that imported it from this file had to change. It had to move because the typed
+ * slash-command router is mounted on the bot surface, and importing the bus from here would
+ * close the cycle `api/index` → `bot.routes` → `bot-commands` → `api/index`.
+ */
+export { commandBus } from '../modules/command-bus/instance';
 
 /**
  * One rate-limit mount in front of ALL FIVE auth routers, choosing between two buckets.
@@ -237,6 +242,14 @@ router.use('/public', publicBlogRoutes);
 // on /api/vendor/products behind requireRole(['vendor']).
 import publicCatalogRoutes from '../modules/catalog/routes/public-catalog.routes';
 router.use('/public', publicCatalogRoutes);
+
+// The platform's OWN images — one file, the stand-in for a product with no photograph. The
+// FIFTH router on this prefix; it declares only `/assets/no-product-image.png`, which none of
+// the four above has a route for. Declared by name rather than mounted as a directory, and
+// deliberately not a second `express.static` in this file — see the router's own header, and
+// the `test:uploads` note beside the storage mount at the bottom.
+import botPublicAssetRoutes from '../modules/bot-surface/public-assets.routes';
+router.use('/public', botPublicAssetRoutes);
 
 // Published product reviews, for the product page's review tab and its rating
 // histogram. The FOURTH router on this prefix; it declares only
@@ -445,6 +458,25 @@ router.use('/internal/shipments', internalShipmentRoutes);
  */
 import botRoutes from '../modules/bot-surface/bot.routes';
 router.use('/internal/bot', botRoutes);
+
+/**
+ * The Telegram Mini App — the bot surface's ONE browser-facing door, and deliberately not
+ * part of it.
+ *
+ * ⚠ **It carries NEITHER of the two credentials above, and it must never be moved under
+ * `/internal/bot` to gain them.** The whole point of the pair is that they are held by the
+ * automation layer and by nothing else; a page served to a customer's phone cannot hold one
+ * without handing every viewer the entire bot surface. What authorises a request here is an
+ * opaque handle in the URL that names one conversation's product list for thirty minutes and
+ * resolves to a customer the backend already knows — the posture `pay-link.ts` established
+ * for the unauthenticated payment page.
+ *
+ * Its own IP bucket (`publicRateLimiter`, inside the router), and NOT on the maintenance
+ * exemption list — a `readonly` window leaves the page readable and refuses its cart write,
+ * which is the same verdict the storefront gets.
+ */
+import miniAppRoutes from '../modules/bot-surface/miniapp/miniapp.routes';
+router.use('/bot/miniapp', miniAppRoutes);
 
 /**
  * The VECTORISER door — the fourth member of the `/internal` family (README

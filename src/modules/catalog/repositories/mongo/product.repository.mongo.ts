@@ -6,6 +6,7 @@ import { COLLECTIONS } from '../../../../core/database/collections';
 import { Product, ProductMapper } from '../mappers/product.mapper';
 import { ProductListProjection } from '../../read-models/product-detail.read-model';
 import { ProductStatus, ProductSuspensionReason, ProductType } from '../../models/product.model';
+import { buildSearchRegex } from '../../../../core/utils/regex.util';
 
 export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> implements IProductRepository {
   constructor() {
@@ -213,12 +214,24 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
       query.status = filters.status as any;
     }
 
-    // Text search on title and description
+    /**
+     * Text search on title and description.
+     *
+     * ⚠ Fixed 2026-09-09 (DOC-PROGRAM close-out § 6, item 1). Both fields read
+     * `{ $regex: filters.searchQuery, $options: 'i' }` — the caller's raw string
+     * compiled as a pattern. Two problems, not one: a term containing regex
+     * metacharacters silently matches the wrong products, and a crafted one
+     * (`(a+)+$` and friends) is a ReDoS against a vendor-authenticated endpoint.
+     *
+     * ESLint does not catch this. The repository-wide ban is on `new RegExp()`,
+     * and a STRING handed to `$regex` is compiled by the driver instead — same
+     * pattern, no lint rule in its path. `core/utils/regex.util.ts` says every
+     * query string must pass through `escapeRegex` for exactly this reason, and
+     * `orders/vendor-order.repository.ts:80-92` is the precedent already fixed.
+     */
     if (filters.searchQuery) {
-      query.$or = [
-        { title: { $regex: filters.searchQuery, $options: 'i' } },
-        { description: { $regex: filters.searchQuery, $options: 'i' } },
-      ];
+      const term = buildSearchRegex(filters.searchQuery);
+      query.$or = [{ title: term }, { description: term }];
     }
 
     // Build sort object
@@ -264,11 +277,10 @@ export class ProductRepositoryMongo extends BaseRepository<IProduct, Product> im
 
     if (filters.type) query.type = filters.type as any;
     if (filters.status) query.status = filters.status as any;
+    // Escaped for the same reason as `searchAndFilter` above — see that comment.
     if (filters.searchQuery) {
-      query.$or = [
-        { title: { $regex: filters.searchQuery, $options: 'i' } },
-        { description: { $regex: filters.searchQuery, $options: 'i' } },
-      ];
+      const term = buildSearchRegex(filters.searchQuery);
+      query.$or = [{ title: term }, { description: term }];
     }
 
     const sortObj: Record<string, 1 | -1> = sort

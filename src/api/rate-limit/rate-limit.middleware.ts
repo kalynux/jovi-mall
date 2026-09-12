@@ -11,7 +11,7 @@ import { isAuthSessionPathname } from './auth-paths';
 import { resolveCallerClass, rateLimitKey } from './caller-class';
 import { isExemptPath } from './exempt-paths';
 import { FailOpenStore } from './fail-open-store';
-import { AUTH_POLICY, AUTH_SESSION_POLICY, ceilingFor, CONNECTION_CODE_POLICY, GLOBAL_POLICY, IDENTITY_POLICY, PUBLIC_POLICY, RateLimitPolicy } from './policy';
+import { AUTH_POLICY, AUTH_SESSION_POLICY, ceilingFor, CONNECTION_CODE_POLICY, GLOBAL_POLICY, IDENTITY_POLICY, POLICIES, PUBLIC_POLICY, RateLimitPolicy } from './policy';
 
 /**
  * The rate limiters (Phase 16). jovi-mall had none of any kind before this.
@@ -88,15 +88,36 @@ export async function initRateLimiters(): Promise<void> {
                     sendCommand: (...args: string[]) => client.sendCommand(args),
                 }),
             );
-        stores = [];
-        built.clear();
+        buildAll();
         logger().info('rate limiters using the shared Redis connection');
     } catch (error) {
         logger().error(
             { err: error instanceof Error ? error.message : String(error) },
             'rate limiters falling back to the in-memory store — per-process limits only',
         );
+        // Build them anyway, on express-rate-limit's own MemoryStore. The point is the same
+        // on both paths: every `rateLimit()` call happens HERE, at boot, and never inside a
+        // request — which is what the docstring above `built` has always claimed.
+        buildAll();
     }
+}
+
+/**
+ * Construct every policy's handler now, discarding any earlier ones.
+ *
+ * Called from `initRateLimiters` on BOTH its paths, so the ordinary lifecycle never reaches
+ * `delegate`'s lazy branch. That branch stays for a process that mounts the app without
+ * booting it — `resetRateLimiters` in a test, for instance.
+ *
+ * Each policy still gets a virgin store. express-rate-limit keeps a WeakSet of every store
+ * handed to a limiter and throws `ERR_ERL_STORE_REUSE` on a second use, so the discarded
+ * handlers' stores must not be re-offered; `build()` mints fresh ones, which is why this
+ * clears `stores` rather than accumulating onto it.
+ */
+function buildAll(): void {
+    built.clear();
+    stores = [];
+    for (const policy of POLICIES) built.set(policy.key, build(policy));
 }
 
 /** Test-only: drop the built handlers so a new ceiling or a fresh counter takes effect. */
@@ -128,6 +149,16 @@ function build(policy: RateLimitPolicy): RequestHandler {
 
     return rateLimit({
         windowMs: policy.windowSeconds * 1000,
+
+        // ⚠ `creationStack` OFF, and ONLY that one — every other validation stays on. It greps
+        // the constructor's own stack for `Layer.handle [as handle_request]` and refuses when it
+        // finds it, because a limiter built per request counts nothing. That is the right check,
+        // and it is a FALSE POSITIVE here: `delegate` memoises into `built`, so the instance a
+        // request may construct is constructed ONCE and shared by every request after it — the
+        // exact property the validation exists to guarantee. Since `initRateLimiters` now builds
+        // all six at boot, this branch is reached only by a process that skipped the boot; it
+        // stays reachable, and the console.error it emitted was pure noise on a healthy service.
+        validate: { creationStack: false },
 
         // Per-caller ceiling, resolved per request. This is the whole per-user-type feature:
         // one limiter instance, a ceiling that depends on who is asking.

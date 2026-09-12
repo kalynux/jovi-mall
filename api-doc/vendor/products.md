@@ -225,11 +225,24 @@ GET /api/vendor/products
 |-----------|------|----------|---------|-------------|
 | `type` | string | No | — | Filter: `physical`, `digital`, `service` |
 | `status` | string | No | — | Filter: `draft`, `active`, `archived` |
-| `q` | string | No | — | Full-text search on title and description |
+| `q` | string | No | — | Case-insensitive **substring** match on title or description — see the note below |
 | `sortBy` | string | No | `createdAt` | `createdAt`, `updatedAt`, `title` |
 | `sortOrder` | string | No | `desc` | `asc`, `desc` |
 | `page` | number | No | `1` | Page number (1-indexed) |
 | `limit` | number | No | `20` | Items per page (max: 100) |
+
+> [!NOTE]
+> **`q` is not a full-text search and not a pattern language.** It is an unanchored,
+> case-insensitive `$regex` substring match against `title` **or** `description` — there is no
+> `$text` index on this collection — and the term is **escaped and trimmed** before it reaches
+> Mongo (`buildSearchRegex`, `core/utils/regex.util.ts`). So a term containing `.`, `*`, `(` or
+> `+` matches those characters literally, and there is nothing a caller can type that changes how
+> the search behaves.
+>
+> ⚠ **This table said "Full-text search" and the escaping did not exist until 2026-09-09**
+> (DOC-PROGRAM close-out § 6, item 1). Both query paths interpolated `q` straight into `$regex`,
+> which made `(a+)+$` a live ReDoS against a vendor-authenticated endpoint. Being an unindexed
+> substring scan, it is still worth debouncing — for cost, no longer for safety.
 
 > [!IMPORTANT]
 > **The list endpoint returns a trimmed payload tailored to the products grid/list UI.**

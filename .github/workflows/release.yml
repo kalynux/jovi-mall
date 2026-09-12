@@ -1,0 +1,107 @@
+# Builds the runtime and toolbox images and pushes them to GHCR.
+#
+# ── Why this exists ──────────────────────────────────────────────────────────────────
+# The production host is a 2 vCPU / 8 GB VPS running the whole stack. Dokploy builds on
+# the host by default, and this tree's `tsc` needs a 4 GB heap (docs/RUNBOOK.md § "Found
+# 3", now pinned as ENV in the Dockerfile's builder stage). A 4 GB build alongside a
+# 1.5 GB mongod on an 8 GB box ends with the OOM killer choosing the largest RSS — mongod,
+# mid-deploy, taking the replica set primary with it. So the build happens here and the
+# host only pulls. See ../../docs/DEPLOY-VPS.md.
+#
+# ⚠ THIS DOES NOT GATE ON THE TESTS. `ci.yml` runs on the same push, in parallel. Broken
+# TypeScript cannot produce an image — the builder stage runs `npm run build` — but a
+# FAILING TEST still produces a perfectly good image. Check CI is green before you move a
+# deployment onto a new tag. Gating properly means `workflow_run`, which costs a second
+# full checkout and a confusing "skipped" state on every PR; the honest note is cheaper.
+
+name: Release image
+
+on:
+  push:
+    # ─── TWO BRANCHES, TWO MEANINGS ───────────────────────────────────────────
+    #   main        the TEST line. Builds an image tagged `test` + `sha-xxxxxxx`.
+    #               Nothing is deployed from it today (there is no test stack
+    #               yet); the image is built anyway so that adding one later is a
+    #               deploy rather than a build-and-hope.
+    #   production  the LIVE line. Builds `production` + `latest` + `sha-xxxxxxx`.
+    #
+    # ⚠ `latest` MOVES ONLY ON `production`. That is the whole safety property of
+    #   this file. If `latest` were tagged on every branch — as it was before —
+    #   a push to `main` would silently become the image a `latest`-pinned VPS
+    #   pulls on its next restart, and a test change would reach customers
+    #   without anyone deploying anything.
+    #
+    # ⚠ A STALE BRANCH PIN IS THE FAILURE TO WATCH FOR. The workflow still runs,
+    #   reports nothing, and the ABSENCE of a build reads as "nothing changed".
+    #   This file carried `phase-6-unbuilt-scope` for exactly that reason.
+    branches: [main, production]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    strategy:
+      # Both stages, in parallel. The toolbox is NOT optional — it is the only artefact
+      # that can run a migration (`scripts/` is never compiled and ts-node is a
+      # devDependency, so the runtime image has no way to execute one).
+      fail-fast: false
+      matrix:
+        include:
+          - target: runtime
+            image: jovi-mall
+          - target: toolbox
+            image: jovi-mall-toolbox
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # ⚠ Lowercased — GHCR rejects uppercase in an image path, and a GitHub username
+          # with a capital in it fails here rather than at push time if left raw.
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: |
+            # ⚠ `latest` and `production` ONLY from the production branch. See the
+            #   trigger comment above — this is what stops a test push going live.
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/production' }}
+            type=raw,value=production,enable=${{ github.ref == 'refs/heads/production' }}
+            type=raw,value=test,enable=${{ github.ref == 'refs/heads/main' }}
+            # Always. This is the immutable tag you pin in the Dokploy environment
+            # and the one you roll back TO — `latest` gives you nothing to return to.
+            type=sha,format=short
+            type=ref,event=tag
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          # amd64 only. The VPS is x86; adding arm64 means QEMU emulation for the whole
+          # `npm ci` + `tsc`, which turns a 3-minute build into a 25-minute one for an
+          # architecture nothing deploys on.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      - name: Deployable tag
+        run: |
+          echo "Built from branch $GITHUB_REF_NAME. Pin this as JOVI_TAG in the Dokploy environment:" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "JOVI_TAG=sha-$(git rev-parse --short HEAD)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

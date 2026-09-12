@@ -239,6 +239,35 @@ import {
     botStorefrontLink,
     windowForChat,
 } from '../../src/modules/bot-surface/domain/bot-list-window';
+import {
+    BotProductCard,
+    botPlaceholderImageUrl,
+    formatBotPrice,
+    formatBotPriceRange,
+    isReachableByPlatformServers,
+    toBotProductCard,
+    toPublicMediaUrl,
+} from '../../src/modules/bot-surface/domain/product-card';
+import {
+    WA_CAROUSEL_CARDS,
+    renderBotReplies,
+} from '../../src/modules/bot-surface/domain/channel-reply';
+import {
+    addToCartActionId,
+    buyNowActionId,
+    parseBotActionId,
+    showMoreActionId,
+} from '../../src/modules/bot-surface/domain/bot-action-id';
+import {
+    ProductDisplayStore,
+    PRODUCT_DISPLAY_TTL_SECONDS,
+} from '../../src/modules/bot-surface/services/product-display.store';
+import {
+    assertMiniAppCopyComplete,
+    miniAppCopy,
+    miniAppDirection,
+    __MINIAPP_COPY,
+} from '../../src/modules/bot-surface/miniapp/miniapp-copy';
 import { CUSTOMER_AGGREGATE_TYPES } from '../../src/modules/notifications/models/customer-notification.model';
 import { aggregatePaymentStatus } from '../../src/modules/bot-surface/controllers/bot-order.controller';
 import { BOT_NOTIFY_SITUATIONS } from '../../src/modules/bot-surface/validators/bot.validators';
@@ -2340,9 +2369,55 @@ async function main(): Promise<void> {
     });
 
     assert('⚠ no GET is mounted — the identity envelope is a body, never a query string', () => {
-        const bad = offenders(/router\.get\(/);
+        /**
+         * ⚠ **TWO files are excluded by name, and the exemption is narrow on purpose.**
+         *
+         * What this rule protects is the identity envelope: every route under
+         * `/api/internal/bot` carries a real person's WhatsApp number or Telegram chat id in
+         * its body, and a `GET` would write that into every access log on the path.
+         *
+         * Neither exempt router is on that mount and neither carries an envelope. The Mini
+         * App's URLs hold an opaque random handle naming one product list for thirty minutes;
+         * the assets router serves one static PNG that Telegram's and Meta's servers fetch.
+         * A page and an image cannot be retrieved by a `POST`, so the rule does not reach
+         * them — and the assertion below is what stops the exemption becoming a loophole:
+         * both must be mounted somewhere OTHER than `/internal/bot` and hold neither
+         * credential. An author who moved one under the bot mount to tidy up would fail it.
+         *
+         * ⚠ A NAMED list, not a directory prefix. A third browser-facing router added later
+         * fails this assertion and has to be argued for here, which is the point.
+         */
+        const BROWSER_FACING = ['miniapp/miniapp.routes.ts', 'public-assets.routes.ts'];
+        const bad = offenders(/router\.get\(/)
+            .filter((name) => !BROWSER_FACING.includes(name.replace(/\\/g, '/')));
         if (bad.length) console.error('     ↳', bad.join(', '));
         return bad.length === 0 && !BOT_ROUTES.some((r) => (r.method as string) === 'GET');
+    });
+
+    assert('⛔ the browser-facing routers sit OUTSIDE /internal/bot and hold neither credential', () => {
+        const index = read('api/index.ts');
+        const routes = stripComments(read('modules/bot-surface/miniapp/miniapp.routes.ts'))
+            + stripComments(read('modules/bot-surface/public-assets.routes.ts'));
+        const controller = stripComments(read('modules/bot-surface/miniapp/miniapp.controller.ts'));
+
+        /**
+         * ⛔ **The single most important assertion about this feature.** A browser cannot hold
+         * `INTERNAL_SERVICE_TOKEN` or `BOT_WEBHOOK_SECRET` — either one in a page served to a
+         * customer's phone hands every viewer the whole bot surface, which is the exact thing
+         * the two-credential split exists to prevent. Mounting the Mini App under
+         * `/internal/bot` would give it both by inheritance, silently, and the page would
+         * still work: nothing else in this suite would notice.
+         */
+        const mountedSeparately = index.includes("router.use('/bot/miniapp', miniAppRoutes)")
+            && index.includes("router.use('/public', botPublicAssetRoutes)");
+        const noCredential = !/requireServiceToken|requireBotWebhookSecret/.test(routes + controller);
+        // Its authority is the handle and nothing else — no caller-supplied customer.
+        const noIdentityParam = !/customerId\s*:\s*z\.|userId\s*:\s*z\./.test(controller);
+
+        if (!mountedSeparately) console.error('     ↳ not mounted at /bot/miniapp');
+        if (!noCredential) console.error('     ↳ the mini-app router names a bot-surface credential');
+        if (!noIdentityParam) console.error('     ↳ the mini-app schema accepts an identity');
+        return mountedSeparately && noCredential && noIdentityParam;
     });
 
     assert('the surface is mounted once, at /internal/bot, in api/index.ts', () => {
@@ -2794,9 +2869,9 @@ async function main(): Promise<void> {
      * above is a one-way guard — they all pass on an EMPTY emission, which is exactly the
      * failure mode of a filter that has become too broad. Only a count catches that.
      */
-    assert('the generator emits 50 tools — update this when one lands', () => {
-        if (emitted.length !== 49) console.error(`     ↳ emitted ${emitted.length}`);
-        return emitted.length === 50;
+    assert('the generator emits 51 tools — update this when one lands', () => {
+        if (emitted.length !== 51) console.error(`     ↳ emitted ${emitted.length}`);
+        return emitted.length === 51;
     });
 
     /**
@@ -2858,6 +2933,29 @@ async function main(): Promise<void> {
             .map((n) => n.name);
         if (missing.length) console.error('     ↳', missing.join(', '));
         return nodes.length > 0 && missing.length === 0;
+    });
+
+    /**
+     * ⛔ **…and that key must be unique PER CALL, not per execution.**
+     *
+     * `$execution.id` alone is unique per turn inside `wi-mall-core` — which is where the
+     * pattern came from — and is NOT unique per tool call on the MCP server, where the tool
+     * runs as a sub-node of the MCP trigger. Measured on 2026-09-08: four
+     * `auth_send_login_link` calls produced **one** minted session; the rest were answered
+     * from the idempotency store with the first call's stored body.
+     *
+     * ⚠ **This has to be asserted rather than noticed, because it is INVISIBLE.** A replay
+     * announces itself in an `Idempotency-Replayed` response *header*, and the n8n HTTP node
+     * passes on only the body. The model reads `sent: true`, tells the customer the link is
+     * on its way, and nothing was sent — with no signal at any layer the model can see.
+     */
+    assert('⛔ the Idempotency-Key is unique per CALL, not per execution', () => {
+        const nodes = buildNodes(emitted).filter((n) => n.tool.mutating);
+        const stale = nodes
+            .filter((n) => !JSON.stringify(n.parameters).includes('$now.toMillis()'))
+            .map((n) => n.name);
+        if (stale.length) console.error('     ↳ execution-scoped only:', stale.join(', '));
+        return nodes.length > 0 && stale.length === 0;
     });
 
     /**
@@ -3263,6 +3361,691 @@ async function main(): Promise<void> {
         const controller = stripComments(read('modules/bot-surface/controllers/bot-file.controller.ts'));
         return controller.includes("ownerType: 'customer'")
             && controller.includes('ownerId: caller.customerId');
+    });
+
+    // ═════════════════════════════════════════════════════════════════════════
+    section('18 · Product cards, the carousel gate and the Mini App');
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * A card, built by hand. `toBotProductCard` is exercised separately below; everything
+     * here is about what the RENDERERS do with one, which is where the platform rules live.
+     */
+    const card = (over: Partial<BotProductCard> = {}): BotProductCard => ({
+        productId: 'aaaaaaaaaaaaaaaaaaaaaaa1',
+        variantId: 'bbbbbbbbbbbbbbbbbbbbbbb1',
+        title: 'Wireless Noise-Cancelling Headphones',
+        priceText: '20 000 XAF',
+        storeName: 'TechHub Electronic',
+        inStock: true,
+        imageUrl: 'https://cdn.example.com/a.jpg',
+        detailUrl: 'https://shop.example.com/fr/shop/stores/techhub/products/anc',
+        addToken: addToCartActionId('aaaaaaaaaaaaaaaaaaaaaaa1', 'bbbbbbbbbbbbbbbbbbbbbbb1'),
+        buyToken: buyNowActionId('aaaaaaaaaaaaaaaaaaaaaaa1', 'bbbbbbbbbbbbbbbbbbbbbbb1'),
+        ...over,
+    });
+
+    const listIntent = (over: Record<string, unknown> = {}) =>
+        ({
+            kind: 'product_list' as const,
+            text: '',
+            browsePrompt: 'Tap below to see them with pictures and prices.',
+            cards: [card()],
+            miniAppUrl: null,
+            hasMore: false,
+            moreToken: null,
+            labels: {
+                browse: 'Browse the products',
+                buyNow: 'Buy now',
+                addToCart: 'Add to cart',
+                seeMore: 'See more',
+                details: 'Details',
+            },
+            carousel: null,
+            carouselUrlSuffix: (c: BotProductCard) => c.productId,
+            ...over,
+        }) as Parameters<typeof renderBotReplies>[0];
+
+    assert('⚠ money is formatted WITHOUT Intl — one grouping character, on every machine', () => {
+        // ICU renders XAF with a narrow no-break space whose code point differs between Node
+        // builds, so a snapshot here would pass on one machine and fail on another.
+        return formatBotPrice(20000, 'XAF') === '20 000 XAF'
+            && formatBotPrice(9000, 'XAF') === '9 000 XAF'
+            && formatBotPrice(500, 'XAF') === '500 XAF'
+            && formatBotPrice(1234567, 'XAF') === '1 234 567 XAF'
+            // XAF has no minor unit: a fraction is somebody's arithmetic, not a price.
+            && formatBotPrice(15000.4, 'XAF') === '15 000 XAF'
+            && formatBotPriceRange(9000, 22000, 'XAF') === '9 000 – 22 000 XAF'
+            && formatBotPriceRange(9000, 9000, 'XAF') === '9 000 XAF';
+    });
+
+    /**
+     * ⚠ **The measured case is `100.124.149.1`** — this platform's own `STORAGE_LOCAL_URL`
+     * today, a Tailscale address in `100.64/10`. Telegram answers `400 failed to get HTTP URL
+     * content` and loses the caption AND the keyboard with the photo; Meta delivers a card
+     * with a grey box. Neither reports anything this service can see, which is why the check
+     * is here rather than left to fail in production.
+     */
+    assert('⛔ an unroutable media host is refused, and a public one is not', () => {
+        const unreachable = [
+            'http://100.124.149.1:8022/api/files/images/a.jpg',
+            'http://localhost:8022/api/files/images/a.jpg',
+            'http://127.0.0.1/a.png',
+            'http://10.0.0.4/a.png',
+            'http://192.168.1.9/a.png',
+            'http://172.16.0.3/a.png',
+            'http://169.254.1.1/a.png',
+            'http://jovi.local/a.png',
+            'not a url at all',
+        ];
+        const reachable = [
+            'https://cdn.example.com/a.jpg',
+            'https://api.wi-mall.com/api/files/images/a.jpg',
+            'http://203.0.113.9/a.png',
+        ];
+        return unreachable.every((u) => !isReachableByPlatformServers(u))
+            && reachable.every((u) => isReachableByPlatformServers(u));
+    });
+
+    assert('⚠ a media URL on OUR origin is rewritten; a CDN one is passed through', () => {
+        const prevMedia = process.env.BOT_MEDIA_PUBLIC_BASE_URL;
+        const prevStorage = process.env.STORAGE_LOCAL_URL;
+        process.env.BOT_MEDIA_PUBLIC_BASE_URL = 'https://api.wi-mall.com';
+        process.env.STORAGE_LOCAL_URL = 'http://100.124.149.1:8022/api/files';
+        try {
+            const ours = toPublicMediaUrl('http://100.124.149.1:8022/api/files/images/a.jpg');
+            const theirs = toPublicMediaUrl('https://cdn.example.com/a.jpg');
+            // Only the ORIGIN moves — the path is the storage key and must survive intact.
+            return ours === 'https://api.wi-mall.com/api/files/images/a.jpg'
+                && theirs === 'https://cdn.example.com/a.jpg'
+                && toPublicMediaUrl(null) === null;
+        } finally {
+            process.env.BOT_MEDIA_PUBLIC_BASE_URL = prevMedia;
+            process.env.STORAGE_LOCAL_URL = prevStorage;
+        }
+    });
+
+    assert('⚠ with NO reachable origin there is no placeholder — and no broken URL either', () => {
+        const prevMedia = process.env.BOT_MEDIA_PUBLIC_BASE_URL;
+        const prevApi = process.env.API_PUBLIC_URL;
+        process.env.BOT_MEDIA_PUBLIC_BASE_URL = 'http://100.124.149.1:8022';
+        delete process.env.API_PUBLIC_URL;
+        try {
+            // Null, so the renderer degrades to a text card. A URL nobody can fetch would
+            // cost the whole sendPhoto — caption, buttons and all.
+            return botPlaceholderImageUrl() === null;
+        } finally {
+            process.env.BOT_MEDIA_PUBLIC_BASE_URL = prevMedia;
+            if (prevApi === undefined) delete process.env.API_PUBLIC_URL;
+            else process.env.API_PUBLIC_URL = prevApi;
+        }
+    });
+
+    assert('⚠ a product with no image falls back to the placeholder, not to nothing', () => {
+        const prev = process.env.BOT_MEDIA_PUBLIC_BASE_URL;
+        process.env.BOT_MEDIA_PUBLIC_BASE_URL = 'https://api.wi-mall.com';
+        try {
+            const built = toBotProductCard(
+                {
+                    id: 'aaaaaaaaaaaaaaaaaaaaaaa1',
+                    slug: 'anc',
+                    title: 'Headphones',
+                    type: 'physical',
+                    category: 'Electronics',
+                    tags: [],
+                    price: 20000,
+                    compareAtPrice: null,
+                    currency: 'XAF',
+                    inStock: true,
+                    image: null,
+                    rating: null,
+                    store: { slug: 'techhub', name: 'TechHub', isOpen: true },
+                    freeDelivery: false,
+                    updatedAt: new Date().toISOString(),
+                } as never,
+                'bbbbbbbbbbbbbbbbbbbbbbb1',
+                'fr',
+            );
+            return built.imageUrl === 'https://api.wi-mall.com/api/public/assets/no-product-image.png'
+                && built.addToken === 'add:aaaaaaaaaaaaaaaaaaaaaaa1:bbbbbbbbbbbbbbbbbbbbbbb1'
+                && built.priceText === '20 000 XAF';
+        } finally {
+            process.env.BOT_MEDIA_PUBLIC_BASE_URL = prev;
+        }
+    });
+
+    /**
+     * ⛔ **Found LIVE, not reasoned.** A seeded yoga class rendered with a working-looking
+     * "Add to cart" button, and every tap came back `400 CART_SERVICE_PRODUCT_NOT_ALLOWED` —
+     * *"Service products cannot be added to cart. Please use the booking system instead."*
+     * `CartService.addToCart` refuses a service by design, so the card must not offer the
+     * action at all. The Details link survives: the product page is where booking happens.
+     */
+    assert('⛔ a SERVICE is drawn without buy buttons — a booking is not a basket line', () => {
+        const service = toBotProductCard(
+            {
+                id: '9c00000000000000000000a1',
+                slug: 'sunrise-yoga',
+                title: 'Sunrise Yoga (Group Class)',
+                type: 'service',
+                category: 'Wellness',
+                tags: [],
+                price: 3000,
+                compareAtPrice: null,
+                currency: 'XAF',
+                inStock: true,
+                image: null,
+                rating: null,
+                store: { slug: 'sawa', name: 'Sawa Home', isOpen: true },
+                freeDelivery: false,
+                updatedAt: new Date().toISOString(),
+            } as never,
+            // A service DOES have a default variant — that is precisely why the type has to
+            // be the test rather than the variant's presence.
+            '9c00000000000000000000a2',
+            'en',
+        );
+        return service.variantId === null && service.addToken === null && service.buyToken === null;
+    });
+
+    assert('⚠ a product with NO default variant loses its buy tokens, not its card', () => {
+        const built = toBotProductCard(
+            {
+                id: 'aaaaaaaaaaaaaaaaaaaaaaa1',
+                slug: 'anc',
+                title: 'Headphones',
+                type: 'physical',
+                category: 'Electronics',
+                tags: [],
+                price: 20000,
+                compareAtPrice: null,
+                currency: 'XAF',
+                inStock: true,
+                image: null,
+                rating: null,
+                store: { slug: 'techhub', name: 'TechHub', isOpen: true },
+                freeDelivery: false,
+                updatedAt: new Date().toISOString(),
+            } as never,
+            null,
+            'en',
+        );
+        return built.variantId === null && built.addToken === null && built.buyToken === null;
+    });
+
+    assert('⛔ every product token fits Telegram\'s 64-BYTE callback cap', () => {
+        const id = 'a'.repeat(24);
+        const add = addToCartActionId(id, id);
+        const buy = buyNowActionId(id, id);
+        const more = showMoreActionId(`ds_${'x'.repeat(22)}`);
+        // 53 bytes for the pair form. The margin is why ids were chosen over slugs, which
+        // Telegram truncates SILENTLY — the keyboard renders and does nothing when tapped.
+        return Buffer.byteLength(add, 'utf8') === 53
+            && [add, buy, more].every((t) => Buffer.byteLength(t, 'utf8') <= __TG_LIMITS.CALLBACK_DATA_BYTES);
+    });
+
+    assert('⚠ a token round-trips, and an unknown verb is null rather than a throw', () => {
+        const parsed = parseBotActionId(addToCartActionId('a'.repeat(24), 'b'.repeat(24)));
+        return parsed?.verb === 'add'
+            && parsed.argument === `${'a'.repeat(24)}:${'b'.repeat(24)}`
+            // A button from a retired vocabulary is an ordinary event, not a fault: it sits
+            // in a chat history forever and Telegram reports nothing for an unhandled tap.
+            && parseBotActionId('retired:thing') === null
+            && parseBotActionId('nocolon') === null
+            && parseBotActionId('add:') === null
+            && parseBotActionId(null) === null;
+    });
+
+    // ── Telegram ─────────────────────────────────────────────────────────────
+
+    assert('⭐ Telegram with a Mini App is ONE message carrying a web_app button', () => {
+        const replies = renderBotReplies(
+            listIntent({ miniAppUrl: 'https://api.wi-mall.com/api/bot/miniapp/p/ma_x', cards: [card(), card()] }),
+            'telegram',
+            '12345',
+        );
+        const body = replies[0]?.body as Record<string, any>;
+        return replies.length === 1
+            && replies[0].method === 'sendMessage'
+            && body.chat_id === '12345'
+            && body.reply_markup.inline_keyboard[0][0].web_app.url.startsWith('https://')
+            && body.text.length > 0;
+    });
+
+    assert('⚠ with NO Mini App, Telegram falls back to one sendPhoto per product', () => {
+        const replies = renderBotReplies(listIntent({ cards: [card(), card()] }), 'telegram', '12345');
+        const first = replies[0].body as Record<string, any>;
+        return replies.length === 2
+            && replies.every((r) => r.method === 'sendPhoto')
+            && first.photo === 'https://cdn.example.com/a.jpg'
+            && first.parse_mode === 'HTML'
+            && first.reply_markup.inline_keyboard[0].length === 2
+            && first.reply_markup.inline_keyboard[1][0].url.includes('/shop/stores/');
+    });
+
+    assert('⚠ a card with no picture degrades to sendMessage, keeping its keyboard', () => {
+        const replies = renderBotReplies(listIntent({ cards: [card({ imageUrl: null })] }), 'telegram', '1');
+        const body = replies[0].body as Record<string, any>;
+        return replies[0].method === 'sendMessage' && !!body.reply_markup?.inline_keyboard?.length;
+    });
+
+    assert('⚠ the caption ESCAPES HTML — a vendor title is not markup', () => {
+        const replies = renderBotReplies(
+            listIntent({ cards: [card({ title: 'Cable <b>2m</b> & more' })] }),
+            'telegram',
+            '1',
+        );
+        const caption = (replies[0].body as Record<string, any>).caption as string;
+        return caption.includes('&lt;b&gt;') && caption.includes('&amp;') && !caption.includes('<b>2m');
+    });
+
+    assert('⚠ "See more" rides the LAST card only, and only when there is more', () => {
+        const withMore = renderBotReplies(
+            listIntent({ cards: [card(), card()], hasMore: true, moreToken: 'more:ds_abc' }),
+            'telegram',
+            '1',
+        );
+        const rows = (k: number) =>
+            ((withMore[k].body as Record<string, any>).reply_markup.inline_keyboard as unknown[][]);
+        const without = renderBotReplies(listIntent({ cards: [card(), card()] }), 'telegram', '1');
+        return rows(0).length === 2 && rows(1).length === 3
+            && ((without[1].body as Record<string, any>).reply_markup.inline_keyboard as unknown[][]).length === 2;
+    });
+
+    // ── WhatsApp ─────────────────────────────────────────────────────────────
+
+    assert('⚠ WhatsApp with no template is one interactive IMAGE message per product', () => {
+        const replies = renderBotReplies(listIntent({ cards: [card(), card()] }), 'whatsapp', '237600000000');
+        const body = replies[0].body as Record<string, any>;
+        return replies.length === 2
+            && replies.every((r) => r.method === 'messages')
+            && body.type === 'interactive'
+            && body.interactive.type === 'button'
+            && body.interactive.header.type === 'image'
+            && body.interactive.action.buttons.length === 2;
+    });
+
+    assert('⛔ a WhatsApp card never carries more than three buttons', () => {
+        const replies = renderBotReplies(
+            listIntent({ cards: [card(), card()], hasMore: true, moreToken: 'more:ds_abc' }),
+            'whatsapp',
+            '237600000000',
+        );
+        return replies.every(
+            (r) => ((r.body as Record<string, any>).interactive?.action?.buttons?.length ?? 0) <= 3,
+        );
+    });
+
+    /**
+     * ⛔ Meta rejects an interactive `button` message with zero buttons, so an unbuyable card
+     * — a service, or a product whose variants were all withdrawn — takes another shape.
+     *
+     * ⚠ **`cta_url` whenever there is a link, and that is a live finding.** The yoga class
+     * first rendered as a caption with no way to reach it at all; a URL cannot ride a reply
+     * button on WhatsApp, so the card becomes a `cta_url` one and keeps its Details action —
+     * which for a service is the only route to the thing it is advertising.
+     */
+    assert('⚠ an unbuyable WhatsApp card keeps its link as cta_url, or degrades to an image', () => {
+        const unbuyable = { variantId: null, addToken: null, buyToken: null } as const;
+
+        const withLink = renderBotReplies(
+            listIntent({ cards: [card(unbuyable)] }),
+            'whatsapp',
+            '237600000000',
+        )[0].body as Record<string, any>;
+
+        const noLink = renderBotReplies(
+            listIntent({ cards: [card({ ...unbuyable, detailUrl: null })] }),
+            'whatsapp',
+            '237600000000',
+        )[0].body as Record<string, any>;
+
+        const noLinkNoPicture = renderBotReplies(
+            listIntent({ cards: [card({ ...unbuyable, detailUrl: null, imageUrl: null })] }),
+            'whatsapp',
+            '237600000000',
+        )[0].body as Record<string, any>;
+
+        return withLink.interactive.type === 'cta_url'
+            && withLink.interactive.header.type === 'image'
+            && withLink.interactive.action.parameters.url.includes('/shop/stores/')
+            && noLink.type === 'image'
+            && typeof noLink.image.caption === 'string'
+            && noLinkNoPicture.type === 'text';
+    });
+
+    /**
+     * ⛔ **The carousel gate, and it is an EQUALITY rather than a ceiling.**
+     *
+     * Meta: *"an approved template can only be used to send the same number of cards as
+     * defined during its creation."* So a four-card carousel is not a shorter carousel, it is
+     * a rejected send — which is exactly why the card path exists beside this one.
+     */
+    assert('⛔ the carousel needs EXACTLY five cards, a template, and five pictures', () => {
+        const five = Array.from({ length: WA_CAROUSEL_CARDS }, () => card());
+        const four = Array.from({ length: 4 }, () => card());
+        const template = { templateName: 'wi_mall_products', languageCode: 'fr' };
+
+        const yes = renderBotReplies(listIntent({ cards: five, carousel: template }), 'whatsapp', '1');
+        const tooFew = renderBotReplies(listIntent({ cards: four, carousel: template }), 'whatsapp', '1');
+        const noTemplate = renderBotReplies(listIntent({ cards: five }), 'whatsapp', '1');
+        const oneBlind = renderBotReplies(
+            listIntent({ cards: [...five.slice(1), card({ imageUrl: null })], carousel: template }),
+            'whatsapp',
+            '1',
+        );
+
+        const body = yes[0].body as Record<string, any>;
+        const cards = body.template.components[1].cards as Record<string, any>[];
+        return yes.length === 1
+            && body.type === 'template'
+            && body.template.name === 'wi_mall_products'
+            && cards.length === WA_CAROUSEL_CARDS
+            && cards[0].card_index === 0
+            // ⚠ The URL button carries the SUFFIX, never a URL: the template declares
+            // `…/shop/p/{{1}}` and Meta appends what we send.
+            && cards[0].components[3].parameters[0].text === 'aaaaaaaaaaaaaaaaaaaaaaa1'
+            && tooFew.length === 4
+            && noTemplate.length === WA_CAROUSEL_CARDS
+            && oneBlind.length === WA_CAROUSEL_CARDS;
+    });
+
+    assert('⚠ "See more" after a carousel is its OWN message — a card takes two buttons', () => {
+        const five = Array.from({ length: WA_CAROUSEL_CARDS }, () => card());
+        const replies = renderBotReplies(
+            listIntent({
+                cards: five,
+                carousel: { templateName: 't', languageCode: 'en' },
+                hasMore: true,
+                moreToken: 'more:ds_abc',
+            }),
+            'whatsapp',
+            '1',
+        );
+        const second = replies[1]?.body as Record<string, any>;
+        return replies.length === 2
+            && second.interactive.type === 'button'
+            && second.interactive.action.buttons[0].reply.id === 'more:ds_abc';
+    });
+
+    assert('⚠ the five existing intents still render to exactly ONE message', () => {
+        const one = renderBotReplies({ kind: 'text', text: 'hello' }, 'telegram', '1');
+        const two = renderBotReplies(
+            { kind: 'link', text: 'pay', label: 'Pay now', url: 'https://x.test/p' },
+            'whatsapp',
+            '1',
+        );
+        return one.length === 1 && two.length === 1;
+    });
+
+    // ── The display store ────────────────────────────────────────────────────
+
+    const displayStore = new ProductDisplayStore();
+
+    await assertAsync('⚠ a set is readable by its OWNER and by nobody else', async () => {
+        const setId = await displayStore.mint({
+            owner: 'user-1',
+            customerId: 'cust-1',
+            channel: 'telegram',
+            externalId: '999',
+            language: 'fr',
+            productIds: ['p1', 'p2', 'p3'],
+            offset: 0,
+        });
+        const mine = await displayStore.read('user-1', setId);
+        const theirs = await displayStore.read('user-2', setId);
+        return setId.startsWith('ds_')
+            && mine?.productIds.length === 3
+            && theirs === null
+            && (await displayStore.read('user-1', 'ds_nope')) === null
+            // Unknown, lapsed and wrong-owner are ONE answer — see the store's header.
+            && (await displayStore.read('user-1', 'notahandle')) === null;
+    });
+
+    await assertAsync('⚠ advancing moves the cursor and does NOT slide the recorded expiry', async () => {
+        const setId = await displayStore.mint({
+            owner: 'user-1',
+            customerId: 'cust-1',
+            channel: 'whatsapp',
+            externalId: '237600000000',
+            language: null,
+            productIds: ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'],
+            offset: 0,
+        });
+        const before = await displayStore.read('user-1', setId);
+        await displayStore.advance('user-1', setId, 5);
+        const after = await displayStore.read('user-1', setId);
+        return after?.offset === 5 && after.expiresAt === before?.expiresAt;
+    });
+
+    await assertAsync('⛔ a Mini App handle is a DIFFERENT string from the set id', async () => {
+        const setId = await displayStore.mint({
+            owner: 'user-9',
+            customerId: 'cust-9',
+            channel: 'telegram',
+            externalId: '42',
+            language: 'en',
+            productIds: ['p1'],
+            offset: 0,
+        });
+        const handle = await displayStore.mintMiniAppHandle('user-9', setId);
+        const viaHandle = await displayStore.readByMiniAppHandle(handle);
+        return handle.startsWith('ma_')
+            && handle !== setId
+            // The set id travels in a callback payload; the handle travels in a URL, in a
+            // browser. One string doing both jobs makes a payload token a bearer credential.
+            && (await displayStore.readByMiniAppHandle(setId)) === null
+            && viaHandle?.customerId === 'cust-9'
+            && PRODUCT_DISPLAY_TTL_SECONDS === 30 * 60;
+    });
+
+    await assertAsync('⚠ a set whose recorded expiry has passed reads as absent', async () => {
+        const setId = await displayStore.mint({
+            owner: 'user-x',
+            customerId: 'cust-x',
+            channel: 'telegram',
+            externalId: '7',
+            language: 'en',
+            productIds: ['p1'],
+            offset: 0,
+        });
+        /**
+         * Rewrite the value past its own `expiresAt` while leaving the Redis key alive — a
+         * restored dump, a replica with a skewed clock, or an `EX` that did not take.
+         *
+         * ⚠ The key is DERIVED from this set's own id rather than found by prefix: earlier
+         * assertions in this section have already written `bot:display:` keys, and the first
+         * match would be one of theirs — which would make this pass while proving nothing.
+         */
+        const key = `bot:display:${digestForKey(setId)}`;
+        const record = JSON.parse(fakeRedis.store.get(key)!.value);
+        fakeRedis.store.set(key, {
+            value: JSON.stringify({ ...record, expiresAt: new Date(Date.now() - 1000).toISOString() }),
+            expiresAtMs: null,
+        });
+        return (await displayStore.read('user-x', setId)) === null;
+    });
+
+    // ── The Mini App page ────────────────────────────────────────────────────
+
+    assert('⚠ every Mini App string exists in all five languages', () => {
+        assertMiniAppCopyComplete();
+        const keys = Object.keys(__MINIAPP_COPY) as (keyof typeof __MINIAPP_COPY)[];
+        return keys.length > 0
+            && keys.every((k) => BOT_COPY_LANGUAGES.every((l) => __MINIAPP_COPY[k][l].trim().length > 0))
+            // The count placeholder is the one interpolation in any copy table here.
+            && miniAppCopy('en').addSome.includes('{n}')
+            && miniAppCopy('ar').addSome.includes('{n}');
+    });
+
+    assert('⚠ Arabic is served right-to-left — the page is told, never left to guess', () =>
+        miniAppDirection('ar') === 'rtl'
+        && miniAppDirection('fr') === 'ltr'
+        && miniAppDirection(null) === 'ltr');
+
+    assert('⛔ the Mini App page is STATIC — nothing is templated into it', () => {
+        const page = fs.readFileSync(
+            path.join(__dirname, '..', '..', 'src', 'modules', 'bot-surface', 'miniapp', 'public', 'page.html'),
+            'utf8',
+        );
+        /**
+         * ⚠ Interpolating a handle, a customer name or a product title into this file would
+         * make it a rendered document — one escaping mistake away from putting a vendor's
+         * product title into a script context, on a page anybody holding a URL can open. It
+         * reads its handle from the URL and fetches everything else as JSON.
+         */
+        const noServerTemplate = !/\{\{|<%|\$\{/.test(page);
+        // The ONE permitted external origin. Anything else would have to be argued for.
+        const scripts = page.match(/<script[^>]+src="([^"]+)"/g) ?? [];
+        const onlyTelegram = scripts.length === 1 && scripts[0].includes('https://telegram.org/js/telegram-web-app.js');
+        return noServerTemplate && onlyTelegram;
+    });
+
+    assert('⛔ the page carries its own CSP, because helmet\'s would blank it', () => {
+        const controller = stripComments(
+            read('modules/bot-surface/miniapp/miniapp.controller.ts'),
+        );
+        /**
+         * `app.use(helmet())` sets `default-src 'self'` with no `unsafe-inline` — a
+         * deliberate tightening when the old `/test-auth` page was deleted. Under it the
+         * inline style, the inline script and Telegram's own script are all refused and the
+         * customer sees an empty white screen, with no error anywhere on this side.
+         */
+        return controller.includes("'Content-Security-Policy'")
+            && controller.includes('https://telegram.org')
+            && controller.includes("frame-ancestors https://web.telegram.org")
+            && controller.includes("res.removeHeader('X-Frame-Options')");
+    });
+
+    assert('⛔ a Mini App cart write is bounded to variants THIS set offered', () => {
+        const controller = stripComments(read('modules/bot-surface/miniapp/miniapp.controller.ts'));
+        // Without it the handle stops naming one list and becomes a bearer credential for
+        // the whole basket: a caller could post any variant id in the catalogue.
+        return controller.includes('new Set(set.productIds)')
+            && controller.includes('allowed.has(item.productId)');
+    });
+
+    // ── Wiring ───────────────────────────────────────────────────────────────
+
+    assert('⛔ the interceptor renders ALL replies, and `reply` stays a single object', () => {
+        const middleware = stripComments(read('modules/bot-surface/middlewares/bot-reply.middleware.ts'));
+        /**
+         * ⚠ `reply` is read by an n8n expression this repository does not own
+         * (`$json.reply.channel`). Turning it into an array would break every existing turn
+         * on both channels at once, for a feature none of them uses — so a multi-message turn
+         * gains a `replies` SIBLING and leaves `reply` as the first body.
+         */
+        return middleware.includes('renderBotReplies(')
+            && middleware.includes('rendered.length === 1')
+            && middleware.includes('replies: rendered');
+    });
+
+    assert('⚠ the display controller SETS a reply — a renderer nothing calls is the defect', () => {
+        const controller = stripComments(
+            read('modules/bot-surface/controllers/bot-product-display.controller.ts'),
+        );
+        // The exact shape § 14 closed once already: `channel-reply.ts` was written, correct,
+        // and wired to nothing.
+        return controller.includes('setBotReply(req, page.intent)')
+            && controller.includes('productDisplayService.create')
+            && controller.includes('productDisplayService.next');
+    });
+
+    assert('⚠ the card renderer builds NO action ids — it places the ones it is given', () => {
+        const renderer = stripComments(read('modules/bot-surface/domain/channel-reply.ts'));
+        // Same rule `BotReplyOption.id` already establishes. A renderer that composed
+        // `add:<product>:<variant>` would have to know the vocabulary and its byte cap.
+        return !/addToCartActionId|buyNowActionId|showMoreActionId/.test(renderer)
+            && renderer.includes('card.addToken')
+            && renderer.includes('card.buyToken');
+    });
+
+    // ═════════════════════════════════════════════════════════════════════════
+    section('19 · Account access — the credential the caller may not read');
+
+    /**
+     * ⛔ **The whole point of the route.** `auth_send_login_link` is reachable by a language
+     * model, and the credential it mints must never enter that model's context or its Redis
+     * chat memory. The controller therefore answers `{ sent, expiresInSeconds, expiresAt }`
+     * and the delivery service puts the link and the code in the customer's chat itself.
+     *
+     * A `token`, `code`, `link` or `magicLink` appearing in either file's response shape is
+     * the regression this exists to catch, and it would be invisible in behaviour: the tool
+     * would keep working and the model would start reciting sign-in credentials.
+     */
+    assert('⛔ the login-link route answers with NO token, code or link', () => {
+        const controller = stripComments(
+            read('modules/bot-surface/controllers/bot-auth.controller.ts'),
+        );
+        // `sendSuccess(res, result, …)` where `result` is the service's typed shape.
+        const forbidden = /\b(token|magicLink|loginCode|\bcode\b)\s*:/.test(controller);
+        return !forbidden
+            && controller.includes('senderLoginDeliveryService.send')
+            && controller.includes('sendSuccess');
+    });
+
+    assert('⛔ the delivery result type carries no credential field', () => {
+        const service = read('modules/messaging-login/services/sender-login-delivery.service.ts');
+        const shape = service.slice(
+            service.indexOf('interface SenderLoginDeliveryResult'),
+            service.indexOf('export class SenderLoginDeliveryService'),
+        );
+        return shape.length > 0
+            && !/token|code|link/i.test(stripComments(shape))
+            && /sent\s*:\s*boolean/.test(shape);
+    });
+
+    /**
+     * ⚠ The one route on this surface that must NOT leave a `reply` behind. The message is
+     * already in the customer's chat — this route sent it — so a second body would deliver
+     * the same credential twice.
+     */
+    assert('⚠ the login-link route clears its channel reply', () => {
+        const controller = stripComments(
+            read('modules/bot-surface/controllers/bot-auth.controller.ts'),
+        );
+        return /setBotReply\(\s*req\s*,\s*null\s*\)/.test(controller);
+    });
+
+    /**
+     * ⚠ **It SENDS rather than returns, and it is the only thing here that does.** The two
+     * bot commands hand their `message` back for the automation layer to relay; this cannot,
+     * because its caller is a model. If the send ever became a return, the credential would
+     * flow straight into the tool response the assertions above are protecting.
+     */
+    assert('⚠ the delivery service actually sends on both channels', () => {
+        const service = read('modules/messaging-login/services/sender-login-delivery.service.ts');
+        return service.includes('WhatsAppServiceMessenger')
+            && service.includes('sendText')
+            && service.includes('this.telegram.send')
+            // The magic link's page is built around never being fetched by a crawler.
+            && service.includes('previewUrl: false');
+    });
+
+    /**
+     * ⚠ **`/reset-password` is deliberately NOT on this surface.** A reset token stamps
+     * `password_changed_at`, which evicts every live session on the account, and it serves
+     * every role rather than customers alone. Mounting it is a decision, not a follow-up —
+     * this assertion is what makes adding it deliberate.
+     */
+    assert('⛔ no password-reset tool is mounted on the bot surface', () => {
+        return !BOT_ROUTES.some((route) => route.tool === 'auth_send_password_reset_link');
+    });
+
+    /**
+     * The catalogue row has to agree that this is a `bot_internal` tool, because the
+     * generator excludes the whole `webhook_command` surface — which is where this row lived,
+     * unemitted and unreachable, from the day it was written until 2026-09-08.
+     */
+    assert('⚠ the login-link tool is bot_internal, not webhook_command', () => {
+        // The generator's own reader, so `isModelFacing` is asked about the very object it
+        // filters on — the local CatalogTool here is a narrower shape.
+        const tool = readCatalog().tools.find((t) => t.name === 'auth_send_login_link');
+        return !!tool
+            && tool.surface === 'bot_internal'
+            && tool.status === 'available'
+            && tool.tier !== 'flow_only'
+            && isModelFacing(tool);
     });
 
     // ═════════════════════════════════════════════════════════════════════════

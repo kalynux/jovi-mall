@@ -153,7 +153,15 @@ export class VendorNotificationService {
      *
      * A secondary channel can only be enabled if it is currently verified
      * (checked live). Auto-disables other secondary channels when one is enabled.
-     * Priority: email > telegram > whatsapp
+     * Priority: telegram > email > whatsapp
+     *
+     * ⚠ Corrected 2026-09-09 (DOC-PROGRAM close-out § 6, item 4). This line read
+     * "email > telegram > whatsapp" and was the only place on the platform that
+     * said so. The order is applied one layer down, in
+     * `vendor-notification-preference.repository.ts:90-111`, which tests
+     * `telegramEnabled` first; the agency, agent and customer stacks and both
+     * event handlers all document telegram first too. The api-doc pages were right
+     * and this docstring was the outlier.
      *
      * @param vendorId - Vendor ID from auth context
      * @param updates - Preference updates

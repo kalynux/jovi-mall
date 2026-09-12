@@ -252,6 +252,31 @@ assert(hasError(validateEnv({ ...clean, FILE_CLEANUP_ENABLED: 'yes' }), 'FILE_CL
     '"yes" is not a boolean this codebase agrees on — the helpers disagree about what it means');
 assert(hasError(validateEnv({ ...clean, STORAGE_PROVIDER: 's3' }), 'STORAGE_PROVIDER'),
     'an unsupported provider must be caught at boot, not at the first upload');
+
+// ── STORAGE_PROVIDER=r2 ──────────────────────────────────────────────────────
+// The bucket-equality case is the one that matters: R2 has no per-object ACL, so one bucket for
+// both trees puts every digital product and delivery-proof photo on a public CDN. Nothing at
+// runtime would report it — the upload succeeds, the URL is withheld by `toFileDetail`, and the
+// object is served to anyone holding the key anyway (ADR-A01 D-2).
+const R2_OK: NodeJS.ProcessEnv = Object.freeze({
+    STORAGE_R2_ACCOUNT_ID: 'acct',
+    STORAGE_R2_ACCESS_KEY_ID: 'akid',
+    STORAGE_R2_SECRET_ACCESS_KEY: 'x'.repeat(40),
+    STORAGE_R2_BUCKET: 'wi-mall-public',
+    STORAGE_R2_PRIVATE_BUCKET: 'wi-mall-private',
+    STORAGE_R2_PUBLIC_URL: 'https://cdn.example.com',
+});
+
+assert(hasError(validateEnv({ ...clean, STORAGE_PROVIDER: 'r2' }), 'STORAGE_R2_ACCOUNT_ID'),
+    'r2 named without credentials must fail — loadStorageConfig attaches no block and the factory has nothing to build from');
+assert(hasError(validateEnv({ ...clean, STORAGE_PROVIDER: 'r2', ...R2_OK, STORAGE_R2_PRIVATE_BUCKET: R2_OK.STORAGE_R2_BUCKET }), 'STORAGE_R2_PRIVATE_BUCKET'),
+    'one bucket for both trees must refuse the boot — every digital/ object would be on the CDN (ADR-A01 D-2)');
+assert(hasError(validateEnv({ ...clean, STORAGE_PROVIDER: 'r2', ...R2_OK, STORAGE_R2_PUBLIC_URL: 'https://cdn.example.com/' }), 'STORAGE_R2_PUBLIC_URL'),
+    'a trailing slash must be caught — it emits `//key`, and it is identically wrong on wi-admin so nothing diverges to reveal it');
+assert(hasError(validateEnv({ ...clean, STORAGE_PROVIDER: 'r2', ...R2_OK, STORAGE_R2_PUBLIC_URL: 'cdn.example.com' }), 'STORAGE_R2_PUBLIC_URL'),
+    'a bare hostname must be caught — this is the custom domain, not the derived S3 endpoint');
+assertEqual(validateEnv({ ...clean, STORAGE_PROVIDER: 'r2', ...R2_OK }).filter((p) => p.level === 'error').length, 0,
+    'a fully configured r2 environment must produce no errors');
 assert(validateEnv({ ...clean, COD_DEPOSIT_DEADLINE_DAYS: '3' }).every((p) => p.variable !== 'COD_DEPOSIT_DEADLINE_DAYS'),
     'a valid integer must not be flagged');
 

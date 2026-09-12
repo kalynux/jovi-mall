@@ -20,15 +20,10 @@ Four workflows, two of them new:
 ```
 customer: "c'est trop cher, 35000?"
    │
-   ├─ wi-mall-core · main agent · calls open_negotiation(productId, quantity, 35000)
-   │     └─ wi-mall-bargain [open]  resolve variant → open session → set flag
-   │        returns { handedOver: true, negotiable: true }   ← NO PRICES
-   │  main agent: "Laisse-moi voir ce que je peux faire sur le prix."
-   │
-customer: "alors?"
-   │
-   └─ wi-mall-core · check bargain → flag is live → hand to bargainer
-         └─ wi-mall-bargain [turn]
+   └─ wi-mall-core · main agent · calls open_negotiation(productId, quantity, 35000)
+         └─ wi-mall-bargain [open]  resolve variant → open session → set flag
+                                    …and falls straight through into ↓
+         └─ wi-mall-bargain [turn]  (same execution, inside the tool call)
               fetch playbook → SYSTEM position, byte-identical
               user turn: subject + language + the customer's words
               Bargain Agent (claude-sonnet-5, 5m prompt caching, shared chat memory)
@@ -36,6 +31,14 @@ customer: "alors?"
                  …reads…
                  negotiation_record   ← the gate. Echoes its verdict to Redis
               decide send → sends THE SENTENCE THE GATE APPROVED
+              echo answered → Redis, stamped with this messageId
+   │        returns { handedOver, negotiable, alreadyAnswered: true }  ← NO PRICES
+   │  main agent: "#ANSWERED#" → wi-mall-core reads the echo and sends NOTHING
+   │
+customer: "40000 et je prends"
+   │
+   └─ wi-mall-core · check bargain → flag is live → hand to bargainer
+         └─ wi-mall-bargain [turn]  → the same loop, and this time it owns the send
    │
    … they agree. The gate mints a lock; `store price lock` leaves the ref in Redis,
    the flag is cleared, and the conversation goes back to wi-mall-core.
@@ -46,11 +49,19 @@ customer: "ok, mets-le dans mon panier"
         main agent · cart_add_item(… , negotiationLockRef) → charged what they agreed
 ```
 
-**A hand-off costs one conversational turn**, deliberately. The main agent says a bridging
-line ("let me see what I can do") and the sub-agent takes the next message. The alternative —
-running the sub-agent inside the main agent's turn — makes both agents write to one shared
-chat memory in the same turn, which duplicates the customer's message in the transcript both
-of them read. The bridging beat is natural in a market conversation; the duplicate is not.
+⚠ **This used to read "a hand-off costs one conversational turn, deliberately", and that beat
+is gone — reversed 2026-09-08, see § 12.** It cost more than the sentence admitted: the
+customer's *own price message* was consumed by a turn that answered with a bridging line, so a
+customer who had already named their figure was asked to name it again, and a line like *"let
+me see what I can do"* promises a follow-up that the design never intended to send. The open
+branch now chains into a full bargaining turn, so the first priced answer arrives in the same
+turn the customer asked for it.
+
+The shared-memory objection the old paragraph rested on is real and was accepted rather than
+solved: the Bargain Agent writes to the shared key from inside the main agent's tool call, so
+its turn lands in the transcript *before* the main agent's. What the main agent then writes is
+`#ANSWERED#` rather than a sentence nobody saw — the same convention as `#HANDBACK#`, and a
+marker is a much better artifact than a phantom.
 
 ---
 
@@ -155,6 +166,8 @@ what stops a leftover key being read as this turn's verdict.
 ---
 
 ## 5 · Handing back
+
+⚠ **A hand-back is also exactly what a BROKEN hand-off looks like from the outside, and that cost a day of live bargaining — § 11.**
 
 `wi-mall-bargain` returns `{ handled, handBack, verdict, lockIssued }`. **`handled: false`
 means nothing was sent**, and wi-mall-core falls straight through to the ordinary agent path
@@ -290,15 +303,15 @@ today.
 
 ## 9 · Publishing
 
-All four are **published and live**, 2026-09-07. Every failure path on the new branch falls back
+All four are **published and live** — 2026-09-07, and re-published 2026-09-08 for § 11 and § 12. Every failure path on the new branch falls back
 to the ordinary agent (§ 5), so a rollback is a convenience rather than the safety net — but the
 version history holds each step:
 
 | Workflow | Versions, in order |
 |---|---|
 | `wi-mall-bargain-tools` | *Skeleton* → *Seven tools behind one door + gate echo* → *Redis echo fails soft* |
-| `wi-mall-bargain` | *Skeleton* → *Open + turn branches…* → *Error routing…* → *The seven tools* → *Design notes on canvas* → *An agent error is not a handback* → *Hand the agreed price back for the basket* |
-| `wi-mall-core` | *Hand price haggling to wi-mall-bargain* → *Bargaining hand-off: error routing + agent brief* → *The assistant can spend the agreed price* |
+| `wi-mall-bargain` | *Skeleton* → *Open + turn branches…* → *Error routing…* → *The seven tools* → *Design notes on canvas* → *An agent error is not a handback* → *Hand the agreed price back for the basket* → *open chains into a full turn instead of stopping* (§ 12) |
+| `wi-mall-core` | *Hand price haggling to wi-mall-bargain* → *Bargaining hand-off: error routing + agent brief* → *The assistant can spend the agreed price* → *Fix hand-off to bargainer + no-human bridging line* → *Main agent: never imply a human is consulted on price* (§ 11) → *Harden the last bare typed mapping* → *Suppress the main agent when the bargainer has spoken* → *#ANSWERED# handling + alreadyAnswered prompt bullets* (§ 12) |
 | `wi-mall-mcp` | *cart_add_item carries the agreed price* |
 
 ---
@@ -308,7 +321,7 @@ version history holds each step:
 Everything above was designed; this section is what running it actually showed. Harness:
 **`wi-mall-bargain-smoke`** (`3XOEqsGzV51uNOjK`) — type the customer's line into its chat and a
 whole turn runs for real, with no WhatsApp conversation needed. The interesting data is always in
-the **sub-execution**, not in the harness.
+the **sub-execution**, not in the harness. ⚠ **It calls `wi-mall-bargain` directly**, so nothing measured below exercised the route from wi-mall-core — which is why § 11 went unseen.
 
 ### ✅ The `$fromAI`-in-one-field pattern builds a real schema
 
@@ -421,3 +434,185 @@ runs (`sendChatAction` on Telegram; the Cloud API's typing indicator on WhatsApp
 it feels far more than the playbook cache would change how long it takes. Not built — it is a
 channel feature rather than a bargaining one, and it belongs on `wi-mall-core`'s send path where
 every slow turn would benefit, not just this one.
+
+---
+
+## 11 · ⛔ The turn path had never run once — and nothing said so
+
+**Found and closed 2026-09-08, from a live Telegram conversation.** Everything in § 1–§ 10
+describes the design correctly. It also describes a path that, between go-live and this fix,
+**executed zero times in a real conversation.**
+
+### What the customer saw
+
+A customer asked whether the headphones were negotiable, got the bridging line, offered
+10 000 XAF — and got the bridging line **again**, phrased as *"Got it — I've passed along your
+offer of 10,000 XAF. Let's see what the seller says!"* Then nothing. Two separate defects, one
+in the wiring and one in the prompt.
+
+### Defect 1 — `hand to bargainer` could never start the sub-workflow
+
+`wi-mall-core`'s hand-off node mapped its `customerOffer` input to the **empty-string literal**
+`""`, while `wi-mall-bargain`'s `Inbound` declares that field `type: number` — with
+`attemptToConvertTypes: false`. n8n validates a typed workflow input *before* the sub-workflow
+starts, so every hand-off died at the door:
+
+```
+ExpressionError: Invalid input for 'customerOffer' [item 0]
+'customerOffer' expects a number but we got ''
+```
+
+`read bargain flag` was innocent: it correctly produced `mode: 'turn'` and `bargaining: true`,
+and `bargaining?` correctly routed. The call was rejected one node later.
+
+**Why it stayed invisible for a day of live traffic, and this is the part worth keeping.** Three
+mechanisms, each individually correct, compounded:
+
+1. `hand to bargainer` is `continueErrorOutput` wired to the ordinary agent path — § 5's designed
+   degradation. The customer was answered, at the asking price, exactly as intended for a
+   *hand-back*. The error was indistinguishable from one.
+2. Because the customer was served, **the n8n execution was recorded `success`** — the ADR-022
+   trap, in the workflow ADR-022 was written about.
+3. The main agent then saw a price push with no live flag, called `open_negotiation` again, and
+   re-sent the bridging line. To a reader the bot looks like it is working and merely repeating
+   itself.
+
+⚠ **And the smoke harness could not have caught it.** `wi-mall-bargain-smoke`
+(`3XOEqsGzV51uNOjK`) calls `wi-mall-bargain` **directly** with a real number in the envelope, so
+it exercises everything downstream of the broken mapping and nothing at the mapping itself. Every
+measurement in § 10 was taken through it. *"The turn works end to end"* there means the
+sub-workflow works end to end — it was never evidence about the route from `wi-mall-core`.
+
+**The fix**, `wi-mall-core` version *Fix hand-off to bargainer + no-human bridging line*:
+
+| | |
+|---|---|
+| `hand to bargainer` · `customerOffer` | `""` → `={{ Number($json.customerOffer) || 0 }}` — total by construction: missing, empty, `null` and a string all coerce, and `NaN \|\| 0` is `0` |
+| **new** `report bargain down` | on the node's **error** output, beside the fall-through to `is media?`. Same shape as `report agent down` / `report outage`: `kind: degraded_turn` to wi-admin's `/api/internal/automation/failures`, 3 s timeout, `neverError`, `continueRegularOutput`, highest `y` on the canvas so the customer's reply is composed and sent first |
+
+Zero is the right value on the turn path rather than a real figure: the bargaining model reads the
+customer's offer out of their own words and passes it to `negotiation_context` /
+`negotiation_record` itself. The envelope's `customerOffer` is consumed **only in `open` mode**,
+where it comes from the main agent's tool call.
+
+`report bargain down` is the durable half. The mapping bug is closed; what stops the *next* one
+being invisible for a day is that a failed hand-off now reaches the failure board within a turn.
+It fires on a genuine node error only — a `handled: false` hand-back is the designed degradation
+and is deliberately **not** reported, or the board would fill with healthy turns.
+
+### Defect 2 — the prompt supplied the vocabulary it then forbade
+
+The main agent's brief said *"the **seller** decides — not you"* and *"do not guess what the
+**seller** will say"*, then two lines later *"never mention that another seller, agent or system
+is involved"*. The model did what the nearer, more concrete words told it to and announced that
+the offer had been passed to a seller who would answer — inventing a human where there is none,
+and implying a wait that would never end.
+
+The playbook was never the problem: `negotiation.core.md` opens with *"You are the seller"* and
+its ⛔ list already forbids inventing *"a 'manager' you'll check with"*. The bargaining model
+would never have said it. Only wi-mall-core's brief treated the far side as a third party.
+
+Rewritten in version *Main agent: never imply a human is consulted on price*: the authority is
+impersonal (*"settled elsewhere"*), the bridging line carries two first-person worked examples
+(*"Let me see what I can do on the price." / "Je regarde ce que je peux faire sur le prix."*), and
+an explicit block bans passing / forwarding / relaying wording and any promise that someone will
+get back to the customer. One further line stops it repeating the bridging line or re-calling
+`open_negotiation` after a hand-back — the visible symptom of defect 1, which should never recur
+but costs nothing to guard.
+
+Everything outside the `## HAGGLING OVER PRICE` section is byte-identical, per § 2.
+
+### What was already right
+
+`bargain handled?`'s **true** output has no connection at all — the turn ends there. Once the
+sub-agent has sent, the main agent cannot answer the same message. That was correctly wired from
+the start; it had simply never been reachable.
+
+---
+
+## 12 · ✅ The hand-off no longer costs a turn — and the main agent goes quiet
+
+**Changed 2026-09-08, from the same live conversation that produced § 11.** With the wiring
+fixed, the *designed* behaviour turned out to be the remaining defect.
+
+### What was wrong with the design, not the code
+
+The customer asked about the price, was told *"let me see what I can do on the price"*, and then
+**waited** — because that sentence promises a follow-up. None was coming: the design answers the
+*next* message, not that one. They had to prod with *"Okay"* before the bargainer said anything.
+
+Two separate costs, and § 1's old paragraph only admitted the first:
+
+1. a wasted conversational beat; and
+2. **the customer's own price message was consumed by it.** They had already said 10K. The
+   bridging line spent that turn asking, in effect, for something they had just given.
+
+No wording fixes (2). A bridging line that *invites* (*"tell me what you had in mind"*) is honest
+but redundant when the figure is already on the table.
+
+### What it does now
+
+`set bargain flag` feeds `fetch playbook` instead of `shape handover`, so an `open` run resolves
+the variant, opens the session, sets the routing flag **and then runs a whole bargaining turn**,
+all inside the `open_negotiation` tool call. The customer gets a real counter-offer in the turn
+they asked. Only the **success** branch chains; `variant found? false` and `session opened? false`
+still stop at `shape handover`, which is why `return to core` can assert `handedOver: true` when
+it is reached in open mode.
+
+### The part that took the design work: one message, not two
+
+An agent node always produces a final answer. So chaining alone means the customer receives the
+negotiated price **and** a bridging line about looking at the price. The turn needs exactly one
+sender.
+
+⛔ **The rejected alternative was to let the bargainer stay silent on the open turn and have the
+main agent relay its sentence.** It is the simpler wiring — the tool's return value is a natural
+channel and needs no Redis at all — and it was declined for two reasons. It puts a second LLM
+between `negotiation_record` and the customer, which is the exact failure § 4's gate echo exists
+to make impossible (*"told to is not cannot otherwise"*); the first priced sentence of every
+negotiation is the one that anchors the haggle, and a paraphrase can round it, re-language it or
+re-attach the "seller" the main agent was just taught not to mention. And it is the pattern the
+owner has ruled against three times — *"the automation layer does not process, transform or
+compose anything"* (`bot-relays-never-renders`); when the platform's wording is fixed, it is
+composed end to end and relayed, never narrated.
+
+So the bargainer keeps the pen and **wi-mall-core drops its own reply** instead, on two
+independent signals:
+
+| Signal | Where | Nature |
+|---|---|---|
+| `wi-mall:bargain:answered:{channel}:{externalId}` | `echo answered` writes it, `read bargain echo` → `clear bargain echo` → `drop duplicate reply` consume it | **authoritative.** Mechanical, same discipline as the gate echo: stamped with the `messageId`, carrying its own expiry (the Redis node's `set` has no TTL), deleted on read |
+| `#ANSWERED#` | the prompt asks for it on `alreadyAnswered: true`; `compose agent reply` acts on it | belt-and-braces, and it puts a marker in the shared transcript instead of a sentence nobody saw. Mirrors `#HANDBACK#` |
+
+⚠ **`echo answered` sits AFTER the send, not before.** Its presence has to mean the customer
+really has the message. Before the send, a Telegram or Meta 4xx would buy silence — the
+bargainer's reply lost *and* the main agent's suppressed — instead of a duplicate. With it after,
+a failed send never writes the echo, the tool errors, and the main agent's own line goes out.
+
+Everything else fails the same direction: both Redis nodes are `continueRegularOutput`, and
+`drop duplicate reply` suppresses **only** on a live echo whose `messageId` matches this turn. A
+malformed, stale or mismatched echo is not an answer. With Redis unreachable the customer keeps
+the counter-offer and also gets a bridging line — an extra message, never silence.
+
+### Deploy order, and why it was safe either way
+
+**wi-mall-core first, then wi-mall-bargain.** Core's half is inert until something writes the
+echo, and its prompt change alone lands in the *good* interim state: the bridging line stops
+promising a follow-up and invites the figure instead. The reverse order would have shipped a
+window where every negotiation opened with two messages.
+
+### Known artifacts
+
+- **The Bargain Agent writes to the shared memory before the main agent does**, because it runs
+  inside the main agent's tool call. The transcript for that turn reads bargain-input,
+  bargain-reply, customer-message, `#ANSWERED#`. Accepted, and the § 1 paragraph explains why
+  the marker is the better half of the trade.
+- **`agent fallback` does not consult the echo.** If the model errors *after* a successful
+  `open_negotiation`, the customer gets the counter-offer plus the backend's
+  `assistantUnavailable` sentence. Narrow, harmless, and it costs nothing about price.
+- **A `#HANDBACK#` on an open-mode turn** clears the routing flag that the same execution just
+  set. The main agent is told `handedOver: true, alreadyAnswered: false`, says the invitation
+  line, and handles the next message itself. Consistent with what `#HANDBACK#` means.
+- **Latency moved rather than grew.** The whole 15–25 s bargaining turn now happens inside the
+  main agent's tool call, so the customer waits once instead of twice — but that single wait is
+  long and unacknowledged, which is § 10's typing-indicator note becoming more pressing, not less.

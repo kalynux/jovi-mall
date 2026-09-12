@@ -95,7 +95,7 @@
 
         "tier": {
           "enum": ["core", "extended", "flow_only"],
-          "description": "core: always in the model's tool list. extended: loaded on demand, once the conversation is already in that domain. flow_only: NEVER exposed to the model, callable only by a deterministic flow step. Money, destructive and credential-adjacent operations live here."
+          "description": "core: always in the model's tool list. extended: loaded on demand, once the conversation is already in that domain. flow_only: NEVER emitted to the MCP server. Money, destructive and credential-adjacent operations live here, and so does one other kind — a tool the model DOES call but whose result is a channel-ready RENDERING the flow must relay rather than data the model reads. An MCP tool result lands in the model's context, where a sendPhoto body can do nothing at all, so such a tool is wired as a tool sub-workflow in the flow instead. catalog_show_products is the only row of that kind today and says so in its own when_not_to_use."
         },
         "status": {
           "enum": ["available", "gap"],

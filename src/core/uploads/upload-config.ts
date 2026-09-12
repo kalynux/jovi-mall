@@ -246,8 +246,14 @@ export function getDigitalAssetUploadConfig(): UploadPolicyConfig {
   // Single knob for the per-request size cap. The vendor digital-asset
   // controller derives its pre-upload size check from this same value, so the
   // controller gate and the pipeline's TotalSizeValidator can never disagree.
+  //
+  // ⚠ The 150 MB fallback is the CONTAINER's ceiling, not a storage limit. multer buffers the
+  // whole file in memory (`api/middlewares/upload.middleware.ts`), Node Buffers live outside the
+  // V8 heap, and the prod container is `mem_limit: 768m` — so the previous 500 MB default
+  // OOM-killed it on a large asset regardless of provider. That middleware carries the same
+  // fallback and the two must not drift. Raise both only with the container limit.
   const parsedMax = parseInt(process.env.MAX_DIGITAL_ASSET_SIZE || '', 10);
-  const maxTotalSizeBytes = Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : 500 * MB;
+  const maxTotalSizeBytes = Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : 150 * MB;
 
   return {
     maxFilesPerRequest: 1,

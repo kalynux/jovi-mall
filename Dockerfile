@@ -55,6 +55,18 @@ COPY tsconfig.json tsconfig.scripts.json ./
 COPY src ./src
 COPY scripts ./scripts
 
+# ⚠ NOT A TUNING KNOB — this build does not complete without it on a small machine.
+# `ci.yml` died at `Type-check src` with exit 134 on EVERY run from 2026-08-18 until the
+# deploy drill: `FATAL ERROR: Ineffective mark-compacts near heap limit`. The exit carries
+# no TypeScript diagnostic, so it reads as a broken type-check rather than as a memory
+# ceiling — see docs/RUNBOOK.md § "Found 3". `npm run build` below is that same `tsc`.
+#
+# V8 sizes its default old-space from the memory it can see, so this passes on a large CI
+# runner and fails on an 8 GB VPS, which is the worst of both: green in CI, red only where
+# it matters. Pinned here so the number travels with the build instead of living in one
+# workflow file.
+ENV NODE_OPTIONS=--max-old-space-size=4096
+
 # `tsc` + `copy-build-assets.ts`. The second half is not optional: tsc emits `.js`
 # and imported `.json` and nothing else, so the six Handlebars mail templates that
 # `mail.service.ts` reads from `__dirname/templates` would be absent from dist/ and

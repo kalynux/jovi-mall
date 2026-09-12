@@ -1,8 +1,7 @@
 {
-  "registry_version": "1.0.0",
-  "generated_at": "2026-08-24",
+  "registry_version": "2.0.0",
+  "generated_at": "2026-09-09",
   "purpose": "The deterministic half of the customer command system: what a typed command means, before any model sees it. The parser reads this file, produces a Normalized Intent, and only falls through to the AI agent when nothing here matches. Prose reference: ../COMMAND-SPECIFICATION.md",
-
   "grammar": {
     "form": "/<command>[@botname] [<arg1> [<arg2> ...]]",
     "colon_form": "/<command>:<arg1> — accepted, and equivalent to a space before the FIRST argument only. `/support:vendor` is `/support vendor`.",
@@ -16,12 +15,11 @@
       "A message that does not begin with `/` is never a command. It goes to the AI agent."
     ],
     "canonical_name_rule": {
-      "pattern": "^[a-z][a-z0-9_]{0,31}$",
-      "why": "Telegram's bot_command entity accepts only letters, digits and underscore. `/reset-password` is parsed by Telegram as the command `/reset` with the text `-password` after it, and it cannot be registered with BotFather for autocomplete. Canonical names are therefore underscore-safe; every hyphenated form the platform has ever published is kept as an alias, and the parser reads the RAW MESSAGE TEXT rather than Telegram's entity so both keep working."
+      "pattern": "^[a-z][a-z0-9]{0,31}$",
+      "why": "Telegram's bot_command entity accepts only letters, digits and underscore, so a hyphenated command cannot be registered with BotFather and is parsed as a different command. Underscores would be legal and are excluded anyway: the owner's decision (2026-09-09) is that a command is ONE WORD. Every hyphenated form the platform ever published is REMOVED rather than kept as an alias — nothing typed had ever worked, so there was nobody to break. The parser reads the RAW MESSAGE TEXT rather than Telegram's entity, which is what makes multilingual aliases such as /chercher and /buscar keep working."
     },
     "unknown_command": "Do not guess and do not execute. Reply with the closest match by edit distance if one is within 2 edits, otherwise offer /help. An unknown command must never be forwarded to the AI agent as if it were prose — a typo'd /cancel must not become a cancellation."
   },
-
   "resolution_order": [
     "1. Exact match on a canonical name.",
     "2. Exact match on an alias.",
@@ -30,7 +28,6 @@
     "5. AI agent intent classification over free text.",
     "6. Fallback: /help."
   ],
-
   "argument_types": {
     "product_ref": "A product id (24 hex), a SKU, a storefront URL, or an ordinal referring to a list the bot just sent ('2', 'the second one').",
     "order_ref": "An order number (ORD-YYYY-NNNNNN), an order id, or an ordinal from a list the bot just sent.",
@@ -39,7 +36,6 @@
     "language_code": "One of en, fr, pt, es, ar. Also accepted: the language's own name in any of the five.",
     "free_text": "Everything after the command, joined."
   },
-
   "commands": [
     {
       "name": "start",
@@ -50,7 +46,9 @@
       "requires_identity": false,
       "requires_customer_role": false,
       "intent": "session.begin",
-      "tools": ["identity_resolve_sender"],
+      "tools": [
+        "identity_resolve_sender"
+      ],
       "flow": "registration",
       "confirmation": "flow",
       "platform": {
@@ -60,14 +58,29 @@
     },
     {
       "name": "help",
-      "aliases": ["aide", "menu", "ayuda", "ajuda", "commands", "?"],
+      "aliases": [
+        "aide",
+        "menu",
+        "ayuda",
+        "ajuda",
+        "commands",
+        "?"
+      ],
       "syntax": "/help [<topic>]",
       "purpose": "What the bot can do — narrowed to what this sender can actually do right now.",
-      "args": [{ "name": "topic", "type": "free_text", "required": false }],
+      "args": [
+        {
+          "name": "topic",
+          "type": "free_text",
+          "required": false
+        }
+      ],
       "requires_identity": false,
       "requires_customer_role": false,
       "intent": "help.show",
-      "tools": ["identity_resolve_sender"],
+      "tools": [
+        "identity_resolve_sender"
+      ],
       "flow": null,
       "confirmation": false,
       "platform": {
@@ -75,17 +88,21 @@
         "telegram": "Inline keyboard, and keep the BotFather command list in step with this registry."
       }
     },
-
     {
       "name": "login",
-      "aliases": ["signin", "sign_in", "connexion"],
+      "aliases": [
+        "signin",
+        "connexion"
+      ],
       "syntax": "/login",
       "purpose": "Sign in on the website without a password.",
       "args": [],
       "requires_identity": false,
       "requires_customer_role": true,
       "intent": "auth.login_link",
-      "tools": ["auth_send_login_link"],
+      "tools": [
+        "auth_send_login_link"
+      ],
       "flow": "telegram_contact_share",
       "confirmation": false,
       "back_compat": "LIVE. Already mapped in n8n and documented in auth/N8N-HANDOFF.md item 1. Its behaviour must not change.",
@@ -95,15 +112,21 @@
       }
     },
     {
-      "name": "reset_password",
-      "aliases": ["reset-password", "resetpassword", "password", "motdepasse", "mot-de-passe", "forgot"],
-      "syntax": "/reset-password",
+      "name": "password",
+      "aliases": [
+        "resetpassword",
+        "motdepasse",
+        "forgot"
+      ],
+      "syntax": "/password",
       "purpose": "Get a link to choose a new password. The only command that serves vendors, agencies and agents as well as customers.",
       "args": [],
       "requires_identity": false,
       "requires_customer_role": false,
       "intent": "auth.reset_link",
-      "tools": ["auth_send_password_reset_link"],
+      "tools": [
+        "auth_send_password_reset_link"
+      ],
       "flow": "telegram_contact_share",
       "confirmation": "out_of_band",
       "back_compat": "LIVE. n8n maps it to command `reset_password` with an UNDERSCORE while the user types a hyphen — handoff item 2.",
@@ -113,242 +136,477 @@
     },
     {
       "name": "connect",
-      "aliases": ["link"],
+      "aliases": [
+        "link"
+      ],
       "syntax": "/connect",
       "purpose": "Get a 6-character code to connect this chat to an existing account on the website.",
       "args": [],
       "requires_identity": false,
       "requires_customer_role": false,
       "intent": "auth.connect_code",
-      "tools": ["connections_send_connect_code"],
+      "tools": [
+        "connections_send_connect_code"
+      ],
       "flow": null,
       "confirmation": false,
       "back_compat": "LIVE. Do not change. If /connect stops working after a change, something shared broke — fix that before looking anywhere else."
     },
-
     {
       "name": "search",
-      "aliases": ["find", "chercher", "rechercher", "buscar", "procurar"],
+      "aliases": [
+        "find",
+        "chercher",
+        "rechercher",
+        "buscar",
+        "procurar"
+      ],
       "syntax": "/search <words>",
       "purpose": "Find something to buy.",
-      "args": [{ "name": "query", "type": "free_text", "required": true, "on_missing": "reprompt: what are you looking for?" }],
+      "args": [
+        {
+          "name": "query",
+          "type": "free_text",
+          "required": false,
+          "on_missing": "reprompt: what are you looking for?"
+        }
+      ],
       "requires_identity": false,
       "requires_customer_role": false,
       "intent": "catalog.search",
-      "tools": ["catalog_search_products"],
+      "tools": [
+        "catalog_search_products"
+      ],
       "flow": "browse",
       "confirmation": false,
-      "platform": { "whatsapp": "Results as an interactive list, 5 rows, with a 'Show more' row when meta.pages > 1." }
+      "platform": {
+        "whatsapp": "Results as an interactive list, 5 rows, with a 'Show more' row when meta.pages > 1."
+      }
     },
     {
       "name": "categories",
-      "aliases": ["cats"],
+      "aliases": [
+        "cats"
+      ],
       "syntax": "/categories",
       "purpose": "What kinds of thing are sold here.",
       "args": [],
       "requires_identity": false,
       "requires_customer_role": false,
       "intent": "catalog.categories",
-      "tools": ["catalog_list_categories"],
+      "tools": [
+        "catalog_list_categories"
+      ],
       "flow": "browse",
       "confirmation": false
     },
     {
       "name": "category",
-      "aliases": ["categorie", "categoria"],
+      "aliases": [
+        "categorie",
+        "categoria"
+      ],
       "syntax": "/category[:<name>]",
       "purpose": "Browse one category. With no argument, lists the categories to choose from.",
-      "args": [{ "name": "name", "type": "free_text", "required": false, "on_missing": "list the categories and let them pick — do not guess" }],
+      "args": [
+        {
+          "name": "name",
+          "type": "free_text",
+          "required": false,
+          "on_missing": "list the categories and let them pick — do not guess"
+        }
+      ],
       "requires_identity": false,
       "requires_customer_role": false,
       "intent": "catalog.browse_category",
-      "tools": ["catalog_list_categories", "catalog_search_products"],
+      "tools": [
+        "catalog_list_categories",
+        "catalog_search_products"
+      ],
       "flow": "browse",
       "confirmation": false,
       "notes": "Category is free text with no taxonomy behind it, so an unrecognised name must be matched against the live list rather than passed through — an unknown value returns an empty page, which reads as 'we sell nothing like that'."
     },
     {
       "name": "product",
-      "aliases": ["p", "item", "produit", "produto", "producto"],
+      "aliases": [
+        "p",
+        "item",
+        "produit",
+        "produto",
+        "producto"
+      ],
       "syntax": "/product:<sku|id|url>",
       "purpose": "Open one product.",
-      "args": [{ "name": "ref", "type": "product_ref", "required": false, "on_missing": "resolve from the product in focus; if none or several, ask" }],
+      "args": [
+        {
+          "name": "ref",
+          "type": "product_ref",
+          "required": false,
+          "on_missing": "resolve from the product in focus; if none or several, ask"
+        }
+      ],
       "requires_identity": false,
       "requires_customer_role": false,
       "intent": "catalog.get_product",
-      "tools": ["catalog_get_product", "catalog_get_product_by_slug", "catalog_resolve_sku", "recently_viewed_record"],
+      "tools": [
+        "catalog_get_product",
+        "catalog_get_product_by_slug",
+        "catalog_resolve_sku",
+        "recently_viewed_record"
+      ],
       "flow": "product_card",
       "confirmation": false,
       "notes": "SKU resolution is BUILT (GAP-003, 2026-08-26): catalog_resolve_sku. Send the code exactly as typed — as-typed, uppercase and lowercase are all tried and the as-typed spelling wins. It answers the VARIANT's price and stock, not the product card's. On a 404 fall back to a text search and say it was searched for rather than looked up."
     },
     {
       "name": "store",
-      "aliases": ["shop", "boutique", "seller", "vendeur"],
+      "aliases": [
+        "shop",
+        "boutique",
+        "seller",
+        "vendeur"
+      ],
       "syntax": "/store[:<slug>]",
       "purpose": "See a seller and what they sell.",
-      "args": [{ "name": "slug", "type": "free_text", "required": false, "on_missing": "resolve from the product or order in focus" }],
+      "args": [
+        {
+          "name": "slug",
+          "type": "free_text",
+          "required": false,
+          "on_missing": "resolve from the product or order in focus"
+        }
+      ],
       "requires_identity": false,
       "requires_customer_role": false,
       "intent": "catalog.get_store",
-      "tools": ["catalog_get_store", "catalog_list_store_products"],
+      "tools": [
+        "catalog_get_store",
+        "catalog_list_store_products"
+      ],
       "flow": "browse",
       "confirmation": false
     },
     {
       "name": "similar",
-      "aliases": ["related", "similaire"],
+      "aliases": [
+        "related",
+        "similaire"
+      ],
       "syntax": "/similar[:<product ref>]",
       "purpose": "Other products related to this one.",
-      "args": [{ "name": "ref", "type": "product_ref", "required": false }],
+      "args": [
+        {
+          "name": "ref",
+          "type": "product_ref",
+          "required": false
+        }
+      ],
       "requires_identity": false,
       "requires_customer_role": false,
       "intent": "catalog.related",
-      "tools": ["catalog_list_related_products"],
+      "tools": [
+        "catalog_list_related_products"
+      ],
       "flow": "browse",
       "confirmation": false,
       "notes": "The heading must follow meta.source. Never say 'customers also bought' when the source is same_category."
     },
     {
       "name": "reviews",
-      "aliases": ["avis", "ratings", "opinions"],
+      "aliases": [
+        "avis",
+        "ratings",
+        "opinions"
+      ],
       "syntax": "/reviews[:<product ref>]",
       "purpose": "What buyers said about a product.",
-      "args": [{ "name": "ref", "type": "product_ref", "required": false }],
+      "args": [
+        {
+          "name": "ref",
+          "type": "product_ref",
+          "required": false
+        }
+      ],
       "requires_identity": false,
       "requires_customer_role": false,
       "intent": "catalog.reviews",
-      "tools": ["catalog_list_product_reviews"],
+      "tools": [
+        "catalog_list_product_reviews"
+      ],
       "flow": null,
       "confirmation": false
     },
-
     {
       "name": "cart",
-      "aliases": ["panier", "view-cart", "viewcart", "basket", "carrito", "carrinho"],
+      "aliases": [
+        "panier",
+        "viewcart",
+        "basket",
+        "carrito",
+        "carrinho"
+      ],
       "syntax": "/cart [add|remove|qty|clear] [<args>]",
       "purpose": "See and change the basket.",
       "args": [
-        { "name": "action", "type": "enum", "values": ["", "add", "remove", "qty", "clear"], "required": false },
-        { "name": "ref", "type": "product_ref", "required": false },
-        { "name": "quantity", "type": "quantity", "required": false }
+        {
+          "name": "action",
+          "type": "enum",
+          "values": [
+            "",
+            "add",
+            "remove",
+            "qty",
+            "clear"
+          ],
+          "required": false
+        },
+        {
+          "name": "ref",
+          "type": "product_ref",
+          "required": false
+        },
+        {
+          "name": "quantity",
+          "type": "quantity",
+          "required": false
+        }
       ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "cart.view | cart.add | cart.remove | cart.set_quantity | cart.clear",
-      "tools": ["cart_get", "cart_add_item", "cart_remove_item", "cart_set_item_quantity", "cart_clear"],
+      "tools": [
+        "cart_get",
+        "cart_add_item",
+        "cart_remove_item",
+        "cart_set_item_quantity",
+        "cart_clear"
+      ],
       "flow": "cart",
       "confirmation": "only for clear",
-      "platform": { "whatsapp": "The cart view carries at most 3 buttons — Checkout, Modify, Clear. Line-level edits go through a list, not buttons." }
+      "platform": {
+        "whatsapp": "The cart view carries at most 3 buttons — Checkout, Modify, Clear. Line-level edits go through a list, not buttons."
+      }
     },
     {
-      "name": "add_to_cart",
-      "aliases": ["add-to-cart", "addtocart", "add", "ajouter"],
-      "syntax": "/add-to-cart[:<sku|id>] [<qty>]",
+      "name": "add",
+      "aliases": [
+        "addtocart",
+        "ajouter"
+      ],
+      "syntax": "/add[:<sku|id>] [<qty>]",
       "purpose": "Put something in the basket. A shorthand for /cart add.",
       "args": [
-        { "name": "ref", "type": "product_ref", "required": false, "on_missing": "resolve from the product in focus, and NAME it in the reply" },
-        { "name": "quantity", "type": "quantity", "required": false, "default": 1 }
+        {
+          "name": "ref",
+          "type": "product_ref",
+          "required": false,
+          "on_missing": "resolve from the product in focus, and NAME it in the reply"
+        },
+        {
+          "name": "quantity",
+          "type": "quantity",
+          "required": false,
+          "default": 1
+        }
       ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "cart.add",
-      "tools": ["catalog_get_product", "cart_add_item"],
+      "tools": [
+        "catalog_get_product",
+        "cart_add_item"
+      ],
       "flow": "cart",
       "confirmation": false,
       "notes": "A product with more than one variant ALWAYS asks which one, even when only one product is in focus. Context resolves the product; it never resolves the variant."
     },
     {
       "name": "checkout",
-      "aliases": ["commander"],
+      "aliases": [
+        "commander"
+      ],
       "syntax": "/checkout",
       "purpose": "Buy what is in the basket.",
       "args": [],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "checkout.begin",
-      "tools": ["cart_get", "addresses_list", "cart_quote", "checkout_create_orders", "payment_initiate"],
+      "tools": [
+        "cart_get",
+        "addresses_list",
+        "cart_quote",
+        "checkout_create_orders",
+        "payment_initiate"
+      ],
       "flow": "checkout",
       "confirmation": true
     },
     {
       "name": "buy",
-      "aliases": ["buy-now", "buynow", "acheter", "comprar"],
+      "aliases": [
+        "buynow",
+        "acheter",
+        "comprar"
+      ],
       "syntax": "/buy[:<sku|id>]",
       "purpose": "Buy one thing straight away.",
-      "args": [{ "name": "ref", "type": "product_ref", "required": false }],
+      "args": [
+        {
+          "name": "ref",
+          "type": "product_ref",
+          "required": false
+        }
+      ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "checkout.express",
-      "tools": ["catalog_get_product", "cart_add_item", "cart_quote", "checkout_create_orders", "payment_initiate"],
+      "tools": [
+        "catalog_get_product",
+        "cart_add_item",
+        "cart_quote",
+        "checkout_create_orders",
+        "payment_initiate"
+      ],
       "flow": "checkout",
       "confirmation": true,
       "notes": "Express checkout adds to the SAME cart — there is no separate buy-now basket. When the cart already holds something, say so and offer to check out everything or to empty it first. Silently discarding an existing basket is not acceptable."
     },
     {
       "name": "pay",
-      "aliases": ["payer", "payment", "paiement", "pagar"],
+      "aliases": [
+        "payer",
+        "payment",
+        "paiement",
+        "pagar"
+      ],
       "syntax": "/pay[:<order ref>]",
       "purpose": "Pay for an order that is still waiting for payment.",
-      "args": [{ "name": "ref", "type": "order_ref", "required": false, "on_missing": "list unpaid orders and let them choose" }],
+      "args": [
+        {
+          "name": "ref",
+          "type": "order_ref",
+          "required": false,
+          "on_missing": "list unpaid orders and let them choose"
+        }
+      ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "payment.resume",
-      "tools": ["orders_list_groups", "orders_get_order", "payment_initiate", "payment_authorize_otp", "payment_verify"],
+      "tools": [
+        "orders_list_groups",
+        "orders_get_order",
+        "payment_initiate",
+        "payment_authorize_otp",
+        "payment_verify"
+      ],
       "flow": "payment",
       "confirmation": true,
       "notes": "Payment is against the checkout GROUP (cartId), not the single order. A cash-on-delivery order has no online payment and the command must say so rather than failing."
     },
-
     {
       "name": "orders",
-      "aliases": ["commandes", "my-orders", "myorders", "pedidos", "mes-commandes"],
+      "aliases": [
+        "commandes",
+        "myorders",
+        "pedidos"
+      ],
       "syntax": "/orders [<status>]",
       "purpose": "The customer's orders.",
-      "args": [{ "name": "status", "type": "enum", "required": false }],
+      "args": [
+        {
+          "name": "status",
+          "type": "enum",
+          "required": false
+        }
+      ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "orders.list",
-      "tools": ["orders_list_groups"],
+      "tools": [
+        "orders_list_groups"
+      ],
       "flow": "orders",
       "confirmation": false
     },
     {
       "name": "order",
-      "aliases": ["commande"],
+      "aliases": [
+        "commande"
+      ],
       "syntax": "/order:<order ref>",
       "purpose": "One order in detail.",
-      "args": [{ "name": "ref", "type": "order_ref", "required": false, "on_missing": "the order in focus, named back; otherwise list" }],
+      "args": [
+        {
+          "name": "ref",
+          "type": "order_ref",
+          "required": false,
+          "on_missing": "the order in focus, named back; otherwise list"
+        }
+      ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "orders.get",
-      "tools": ["orders_get_order", "orders_get_group"],
+      "tools": [
+        "orders_get_order",
+        "orders_get_group"
+      ],
       "flow": "orders",
       "confirmation": false
     },
     {
       "name": "track",
-      "aliases": ["tracking", "suivi", "suivre", "rastrear", "seguimiento"],
+      "aliases": [
+        "tracking",
+        "suivi",
+        "suivre",
+        "rastrear",
+        "seguimiento"
+      ],
       "syntax": "/track[:<order ref>]",
       "purpose": "Where a parcel is.",
-      "args": [{ "name": "ref", "type": "order_ref", "required": false, "on_missing": "the single order in flight, named back; if several, list them" }],
+      "args": [
+        {
+          "name": "ref",
+          "type": "order_ref",
+          "required": false,
+          "on_missing": "the single order in flight, named back; if several, list them"
+        }
+      ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "delivery.track",
-      "tools": ["orders_list_groups", "orders_list_shipments"],
+      "tools": [
+        "orders_list_groups",
+        "orders_list_shipments"
+      ],
       "flow": "tracking",
       "confirmation": false,
       "notes": "There is no live map in chat. Report the stage, the history and the delivery company's contacts. estimatedDelivery is always null — never invent a date."
     },
     {
       "name": "code",
-      "aliases": ["delivery-code", "deliverycode", "cod", "code-livraison"],
+      "aliases": [
+        "cod",
+        "deliverycode"
+      ],
       "syntax": "/code[:<order ref>]",
       "purpose": "The secret code to give the delivery agent for a cash-on-delivery parcel.",
-      "args": [{ "name": "ref", "type": "order_ref", "required": false, "on_missing": "list cash orders awaiting collection — never guess" }],
+      "args": [
+        {
+          "name": "ref",
+          "type": "order_ref",
+          "required": false,
+          "on_missing": "list cash orders awaiting collection — never guess"
+        }
+      ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "delivery.cod_code",
-      "tools": ["orders_get_cod_code", "orders_resend_cod_code"],
+      "tools": [
+        "orders_get_cod_code",
+        "orders_resend_cod_code"
+      ],
       "flow": "cod_code",
       "confirmation": "only for resend",
       "sensitivity": "high",
@@ -356,46 +614,97 @@
     },
     {
       "name": "confirm",
-      "aliases": ["received", "confirm-delivery", "recu", "reçu"],
+      "aliases": [
+        "received",
+        "recu"
+      ],
       "syntax": "/confirm[:<order ref>]",
       "purpose": "Tell the platform a parcel arrived.",
-      "args": [{ "name": "ref", "type": "order_ref", "required": true, "on_missing": "list parcels awaiting confirmation" }],
+      "args": [
+        {
+          "name": "ref",
+          "type": "order_ref",
+          "required": false,
+          "on_missing": "list parcels awaiting confirmation"
+        }
+      ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "delivery.confirm",
-      "tools": ["orders_list_shipments", "orders_confirm_shipment_delivery"],
+      "tools": [
+        "orders_list_shipments",
+        "orders_confirm_shipment_delivery"
+      ],
       "flow": "confirm_delivery",
       "confirmation": true,
       "notes": "Refused on cash orders — those are confirmed by handing over the code. Do not offer the action for a cash parcel; offer the code instead."
     },
     {
       "name": "cancel",
-      "aliases": ["annuler", "cancelar"],
+      "aliases": [
+        "annuler",
+        "cancelar"
+      ],
       "syntax": "/cancel:<order ref> [<reason>]",
       "purpose": "Call off an order or an appointment.",
       "args": [
-        { "name": "ref", "type": "order_ref", "required": true, "on_missing": "list what is cancellable — never assume" },
-        { "name": "reason", "type": "free_text", "required": false }
+        {
+          "name": "ref",
+          "type": "order_ref",
+          "required": false,
+          "on_missing": "list what is cancellable — never assume"
+        },
+        {
+          "name": "reason",
+          "type": "free_text",
+          "required": false
+        }
       ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "orders.cancel | bookings.cancel",
-      "tools": ["orders_get_order", "orders_cancel", "bookings_get", "bookings_cancel"],
+      "tools": [
+        "orders_get_order",
+        "orders_cancel",
+        "bookings_get",
+        "bookings_cancel"
+      ],
       "flow": "cancel",
       "confirmation": true,
       "notes": "Never resolved from context. A paid order cannot be cancelled here and needs a refund conversation — say so rather than failing silently."
     },
-
     {
       "name": "address",
-      "aliases": ["adresse", "addresses", "adresses", "direccion", "endereco"],
+      "aliases": [
+        "adresse",
+        "addresses",
+        "direccion",
+        "endereco"
+      ],
       "syntax": "/address [add|default] [<args>]",
       "purpose": "See and manage where orders are delivered.",
-      "args": [{ "name": "action", "type": "enum", "values": ["", "add", "default"], "required": false }],
+      "args": [
+        {
+          "name": "action",
+          "type": "enum",
+          "values": [
+            "",
+            "add",
+            "default"
+          ],
+          "required": false
+        }
+      ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "profile.addresses",
-      "tools": ["addresses_list", "geo_search_address", "geo_reverse_address", "addresses_add", "addresses_set_default"],
+      "tools": [
+        "addresses_list",
+        "geo_search_address",
+        "geo_reverse_address",
+        "addresses_add",
+        "addresses_set_default"
+      ],
       "flow": "address",
       "confirmation": "for add and default",
       "platform": {
@@ -406,149 +715,279 @@
     },
     {
       "name": "language",
-      "aliases": ["langue", "lang", "idioma", "lingua"],
+      "aliases": [
+        "langue",
+        "lang",
+        "idioma",
+        "lingua"
+      ],
       "syntax": "/language[:<code>]",
       "purpose": "Change the language the platform writes in.",
-      "args": [{ "name": "code", "type": "language_code", "required": false, "on_missing": "offer the five" }],
+      "args": [
+        {
+          "name": "code",
+          "type": "language_code",
+          "required": false,
+          "on_missing": "offer the five"
+        }
+      ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "profile.set_language",
-      "tools": ["profile_set_language"],
+      "tools": [
+        "profile_set_language"
+      ],
       "flow": null,
       "confirmation": false,
       "notes": "Five languages: en, fr, pt, es, ar. The change reaches email and notifications too, so it is durable rather than per-conversation. Product text is never translated."
     },
     {
       "name": "profile",
-      "aliases": ["profil", "account", "compte", "me", "cuenta"],
+      "aliases": [
+        "profil",
+        "account",
+        "compte",
+        "me",
+        "cuenta"
+      ],
       "syntax": "/profile",
       "purpose": "What the platform holds about the customer.",
       "args": [],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "profile.get",
-      "tools": ["profile_get_summary"],
+      "tools": [
+        "profile_get_summary"
+      ],
       "flow": null,
       "confirmation": false,
       "notes": "Contact details come back masked. Changing an email or a phone number is a verification flow and hands off to the website; closing an account always does."
     },
     {
       "name": "notifications",
-      "aliases": ["notif", "alerts", "alertes"],
+      "aliases": [
+        "notif",
+        "alerts",
+        "alertes"
+      ],
       "syntax": "/notifications",
       "purpose": "Which messages the customer gets, and where.",
       "args": [],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "profile.notifications",
-      "tools": ["notifications_get_preferences", "notifications_update_preferences"],
+      "tools": [
+        "notifications_get_preferences",
+        "notifications_update_preferences"
+      ],
       "flow": "notification_settings",
       "confirmation": "for changes"
     },
     {
       "name": "stop",
-      "aliases": ["unsubscribe", "desabonner", "arret"],
+      "aliases": [
+        "unsubscribe",
+        "desabonner",
+        "arret"
+      ],
       "syntax": "/stop",
       "purpose": "Stop receiving messages on this channel.",
       "args": [],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "profile.notifications.off",
-      "tools": ["notifications_get_preferences", "notifications_update_preferences"],
+      "tools": [
+        "notifications_get_preferences",
+        "notifications_update_preferences"
+      ],
       "flow": "notification_settings",
       "confirmation": true,
       "notes": "Must be honest: it moves the secondary channel off this one, and payment, refund and cancellation messages are NOT silenceable by any setting. Say both. Promising silence the platform will break is worse than saying no.",
-      "platform": { "whatsapp": "Meta expects an opt-out keyword to be honoured. This is it, and it must work from a bare 'STOP' with no slash." }
+      "platform": {
+        "whatsapp": "Meta expects an opt-out keyword to be honoured. This is it, and it must work from a bare 'STOP' with no slash."
+      }
     },
-
     {
       "name": "support",
-      "aliases": ["contact", "help_me", "assistance"],
+      "aliases": [
+        "contact",
+        "assistance"
+      ],
       "syntax": "/support[:vendor|agency|platform]",
       "purpose": "Reach whoever can actually help — the seller, the delivery company, or the platform.",
-      "args": [{ "name": "scope", "type": "enum", "values": ["", "vendor", "agency", "platform"], "required": false, "default": "auto" }],
+      "args": [
+        {
+          "name": "scope",
+          "type": "enum",
+          "values": [
+            "",
+            "vendor",
+            "agency",
+            "platform"
+          ],
+          "required": false,
+          "default": "auto"
+        }
+      ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "support.route",
-      "tools": ["support_resolve_contacts", "catalog_get_store", "orders_list_shipments", "tickets_create"],
+      "tools": [
+        "support_resolve_contacts",
+        "catalog_get_store",
+        "orders_list_shipments",
+        "tickets_create"
+      ],
       "flow": "support",
       "confirmation": "only to open a ticket",
       "notes": "The bare form walks a relevance ladder and NAMES what it routed from. `agency` has nothing to answer with until an order has shipped — that is a legitimate empty answer, not an error."
     },
     {
       "name": "ticket",
-      "aliases": ["tickets", "billet"],
+      "aliases": [
+        "tickets",
+        "billet"
+      ],
       "syntax": "/ticket[:<ticket ref>]",
       "purpose": "Open support requests, or one of them in detail.",
-      "args": [{ "name": "ref", "type": "ticket_ref", "required": false, "on_missing": "list open tickets" }],
+      "args": [
+        {
+          "name": "ref",
+          "type": "ticket_ref",
+          "required": false,
+          "on_missing": "list open tickets"
+        }
+      ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "support.tickets",
-      "tools": ["tickets_list", "tickets_get", "tickets_add_note", "tickets_close"],
+      "tools": [
+        "tickets_list",
+        "tickets_get",
+        "tickets_add_note",
+        "tickets_close"
+      ],
       "flow": "tickets",
       "confirmation": "for close"
     },
-
     {
       "name": "saved",
-      "aliases": ["wishlist", "favorites", "favoris", "favoritos", "liste"],
+      "aliases": [
+        "wishlist",
+        "favorites",
+        "favoris",
+        "favoritos",
+        "liste"
+      ],
       "syntax": "/saved [add|remove] [<product ref>]",
       "purpose": "Products kept for later.",
       "args": [
-        { "name": "action", "type": "enum", "values": ["", "add", "remove"], "required": false },
-        { "name": "ref", "type": "product_ref", "required": false }
+        {
+          "name": "action",
+          "type": "enum",
+          "values": [
+            "",
+            "add",
+            "remove"
+          ],
+          "required": false
+        },
+        {
+          "name": "ref",
+          "type": "product_ref",
+          "required": false
+        }
       ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "wishlist.view | wishlist.add | wishlist.remove",
-      "tools": ["wishlist_list", "wishlist_add", "wishlist_remove"],
+      "tools": [
+        "wishlist_list",
+        "wishlist_add",
+        "wishlist_remove"
+      ],
       "flow": "browse",
       "confirmation": false
     },
     {
       "name": "downloads",
-      "aliases": ["telechargements", "my-downloads", "files", "fichiers"],
+      "aliases": [
+        "telechargements",
+        "files",
+        "fichiers"
+      ],
       "syntax": "/downloads",
       "purpose": "Files the customer bought.",
       "args": [],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "digital.library",
-      "tools": ["digital_list_entitlements", "digital_create_download_link"],
+      "tools": [
+        "digital_list_entitlements",
+        "digital_create_download_link"
+      ],
       "flow": "downloads",
       "confirmation": false,
       "notes": "A link is single-use and lasts 15 minutes. Mint one at a time, on request, and never for several files at once."
     },
     {
       "name": "bookings",
-      "aliases": ["booking", "rendezvous", "rdv", "appointments", "reservations", "citas"],
+      "aliases": [
+        "booking",
+        "rendezvous",
+        "rdv",
+        "appointments",
+        "reservations",
+        "citas"
+      ],
       "syntax": "/bookings[:<booking ref>]",
       "purpose": "Appointments the customer has booked.",
-      "args": [{ "name": "ref", "type": "free_text", "required": false }],
+      "args": [
+        {
+          "name": "ref",
+          "type": "free_text",
+          "required": false
+        }
+      ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "bookings.list | bookings.get",
-      "tools": ["bookings_list", "bookings_get", "bookings_cancel"],
+      "tools": [
+        "bookings_list",
+        "bookings_get",
+        "bookings_cancel"
+      ],
       "flow": "bookings",
       "confirmation": "for cancel",
       "notes": "Read and cancel only. MAKING a booking needs a slot locked against a live calendar within 15 minutes and hands off to the website — see COMMAND-SPECIFICATION.md for why."
     },
     {
       "name": "review",
-      "aliases": ["rate", "noter", "avis-donner"],
+      "aliases": [
+        "rate",
+        "noter"
+      ],
       "syntax": "/review[:<order ref>]",
       "purpose": "Rate something the customer bought or a delivery they received.",
-      "args": [{ "name": "ref", "type": "order_ref", "required": false }],
+      "args": [
+        {
+          "name": "ref",
+          "type": "order_ref",
+          "required": false
+        }
+      ],
       "requires_identity": true,
       "requires_customer_role": true,
       "intent": "review.create",
-      "tools": ["reviews_check_eligibility", "reviews_create"],
+      "tools": [
+        "reviews_check_eligibility",
+        "reviews_create"
+      ],
       "flow": "review",
       "confirmation": true,
       "notes": "A star rating alone publishes immediately; a review with words waits for a moderator. Say which will happen before submitting. Never write the customer's words for them."
     }
   ],
-
   "removed_from_proposal": [
     {
       "command": "/region",
@@ -561,6 +1000,10 @@
     {
       "command": "/buy-now and /add-to-cart as separate top-level commands",
       "reason": "Kept as aliases of /buy and /cart add. The published hyphenated forms keep working; the canonical names are Telegram-registrable."
+    },
+    {
+      "command": "/reset-password, /add-to-cart and every other hyphenated form",
+      "reason": "Removed entirely 2026-09-09, not kept as hidden aliases. Telegram's bot_command entity stops at a hyphen, so `/reset-password` is parsed as `/reset` plus trailing text and cannot be registered with BotFather at all. Canonical names are now ONE WORD with no hyphen and no underscore: reset_password became /password and add_to_cart became /add. Safe as a clean break because no typed command had ever worked — the n8n branch that would have routed them was staged and never published. NOTE: `POST /api/auth/reset-password` is an HTTP endpoint and is untouched."
     }
   ]
 }

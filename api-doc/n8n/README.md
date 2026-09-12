@@ -4,6 +4,19 @@ The WhatsApp and Telegram customer bot: what it can do, how a customer asks for 
 
 **Status: design, 2026-08-24. GAP-001 and GAP-005 are BUILT (2026-08-25)** — the bot surface is live at `/api/internal/bot/*` and the 42 tools it carries are now `status: "available"` in the catalogue. Everything else here is still design: no n8n workflow was built, and no endpoint was invented — every `status: "available"` tool was verified against the route table and the api-doc page it cites. What remains is marked `gap` and specified.
 
+
+## ⚠ Naming on the instance: every workflow carries a `UP-` prefix
+
+Since **2026-09-07** every n8n workflow belonging to this backend is named `UP-wi-mall-…` on
+the instance — `UP-wi-mall-core`, `UP-wi-mall-tg-adapter`, `UP-wi-mall-mcp`, and so on. The
+prefix groups them apart from unrelated automations sharing the instance, and it travels on
+every automation failure report (ADR-022), so a failure row names its owner without a lookup.
+
+**These pages deliberately keep the bare names** — `wi-mall-core` is the component, `UP-` is
+only how the instance displays it. Nothing resolves a workflow by name (n8n uses ids), so the
+two can differ safely. What must NOT differ is an id: those are unchanged and are the thing to
+match on.
+
 ---
 
 ## The documents
