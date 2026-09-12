@@ -426,9 +426,9 @@ async function main(): Promise<void> {
         // crashed this service with "AuthService is not a constructor". A cycle
         // shows up here as an undefined import, not as a boot that quietly leaves
         // the refusing default in place.
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { initializeNegotiationDomain } = require('../../src/modules/negotiation/negotiation.bootstrap');
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const port = require('../../src/modules/catalog/domain/ports/negotiated-price.port');
 
         eq(port.getNegotiatedPriceResolver().name, 'unregistered', 'default before boot');

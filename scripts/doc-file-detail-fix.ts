@@ -57,6 +57,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { isPrivateStorageKey, treeOfKey, STORAGE_TREE_VISIBILITY } from '../src/core/storage/storage-trees';
+import { escapeRegex } from '../src/core/utils/regex.util';
 
 const APPLY = process.argv.includes('--apply');
 const BE = path.resolve(__dirname, '../..');
@@ -81,7 +82,13 @@ function walk(dir: string, out: string[] = []): string[] {
     return out;
 }
 
-const hasKey = (s: string, k: string) => new RegExp(`"${k}"\\s*:`).test(s);
+// The `new RegExp` ban exists because every SEARCH path in this tree is $regex-based, so
+// an unescaped term is injection + ReDoS. This is not a search: it asks whether a JSON key
+// is present, and every caller passes a literal from RAW_RECORD_MARKERS or a string
+// constant below. escapeRegex() is applied regardless, so the exemption survives a caller
+// who someday passes something less predictable.
+// eslint-disable-next-line no-restricted-syntax -- static key constants, escaped anyway
+const hasKey = (s: string, k: string) => new RegExp(`"${escapeRegex(k)}"\\s*:`).test(s);
 
 /** The innermost `{…}` enclosing `i`, as [start, end]. Null when unbalanced. */
 function enclosingObject(text: string, i: number): [number, number] | null {

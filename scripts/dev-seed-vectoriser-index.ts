@@ -142,7 +142,6 @@ async function main(): Promise<void> {
   });
 
   const deadline = Date.now() + WAIT_SECONDS * 1000;
-  let settled = 0;
   while (Date.now() < deadline) {
     const counts = await ProductModel.aggregate([
       { $match: { _id: { $in: ids.map((i) => new mongoose.Types.ObjectId(i)) } } },
@@ -152,7 +151,7 @@ async function main(): Promise<void> {
     counts.forEach((c: { _id: string; n: number }) => {
       byStatus[c._id] = c.n;
     });
-    settled = (byStatus.completed ?? 0) + (byStatus.failed ?? 0);
+    const settled = (byStatus.completed ?? 0) + (byStatus.failed ?? 0);
 
     log('INFO', 'Poll', byStatus);
     if (settled >= result.accepted) break;
