@@ -204,7 +204,7 @@ app.use('/api', apiRouter);
 
 // ─── 404 Handler (unmatched routes) ──────────────────────────────────────────
 app.use((_req: Request, _res: Response, next: NextFunction) => {
-  next(createAppError(ERROR_CODES.NOT_FOUND, 404, 'Route not found'));
+  next(createAppError(ERROR_CODES.NOT_FOUND, 404, 'No route matches this method and path'));
 });
 
 // ─── Global Error Handler (must be last) ─────────────────────────────────────
