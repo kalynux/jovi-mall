@@ -135,6 +135,28 @@ export const MODELS = Object.freeze({
   REFUND_TRANSACTION: 'RefundTransaction',
   USER_PAYMENT_METHOD: 'UserPaymentMethod',
 
+  /**
+   * Gateway webhook deliveries, kept for deduplication.
+   *
+   * ⚠ Registered here on 2026-09-13, having been absent since the model was written. The
+   * model compiled its names as literals — `mongoose.model('PaymentWebhookEvent', …,
+   * 'payment_webhook_events')` — so it worked, and nothing complained. The cost was
+   * invisible and specific: `inspectDatabase()` walks `Object.values(COLLECTIONS)`, so
+   * `GET /system/database` and the boot-time `reportIndexDrift()` never looked at this
+   * collection at all, and its five declared indexes were reported by neither.
+   *
+   * One of them is `{gateway, eventId}` UNIQUE, which is the whole of webhook dedup —
+   * `migrate:payment-indexes`'s own ledger note says in capitals that without it every
+   * gateway redelivery is reprocessed. So the single most consequential unique index in the
+   * service sat in the one collection the drift report could not see, and a clean
+   * "index drift: none" at boot was never evidence about it either way.
+   *
+   * Found while verifying `migrate:declared-indexes`, which iterates REGISTERED MODELS
+   * rather than this registry and therefore covered the collection all along: the two counts
+   * disagreed by exactly these five.
+   */
+  PAYMENT_WEBHOOK_EVENT: 'PaymentWebhookEvent',
+
   // Booking
   BOOKING: 'Booking',
   AVAILABILITY_RULE: 'AvailabilityRule',
@@ -315,6 +337,10 @@ export const COLLECTIONS = Object.freeze({
   PAYMENT_TRANSACTION: 'payment_transactions',
   REFUND_TRANSACTION: 'refund_transactions',
   USER_PAYMENT_METHOD: 'user_payment_methods',
+  /** See the MODELS entry above — absent from this registry until 2026-09-13, and invisible
+   *  to the index-drift report for as long as it was. The VALUE is unchanged: it is the same
+   *  literal the model has always passed, so nothing moves on disk. */
+  PAYMENT_WEBHOOK_EVENT: 'payment_webhook_events',
 
   // Booking
   BOOKING: 'bookings',

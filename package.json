@@ -37,6 +37,7 @@
     "migrate:booking-number-index": "ts-node scripts/migrate-booking-number-index.ts",
     "migrate:inventory-indexes": "ts-node scripts/migrate-inventory-indexes.ts",
     "migrate:plan-quota-indexes": "ts-node scripts/migrate-plan-quota-indexes.ts",
+    "migrate:declared-indexes": "ts-node scripts/migrate-declared-indexes.ts",
     "audit:infinite-agency-stock": "ts-node scripts/audit-infinite-agency-stock.ts",
     "audit:stuck-payments": "ts-node scripts/audit-stuck-payments.ts",
     "audit:trust-shadow": "ts-node scripts/audit-trust-shadow.ts",

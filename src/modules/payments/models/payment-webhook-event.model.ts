@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { PaymentGatewayType } from './payment-transaction.model';
 
 /**
@@ -108,8 +109,12 @@ PaymentWebhookEventSchema.index({ gateway: 1, eventId: 1 }, { unique: true });
  */
 PaymentWebhookEventSchema.index({ receivedAt: 1 }, { expireAfterSeconds: 45 * 24 * 60 * 60 });
 
+// Both names come from the registry rather than being repeated as literals here. They were
+// literals until 2026-09-13, which is why this collection was absent from COLLECTIONS and
+// therefore invisible to `inspectDatabase()` — including its `{gateway, eventId}` unique, the
+// index webhook dedup depends on entirely. The values are byte-identical; nothing moves.
 export const PaymentWebhookEventModel = mongoose.model<IPaymentWebhookEvent>(
-  'PaymentWebhookEvent',
+  MODELS.PAYMENT_WEBHOOK_EVENT,
   PaymentWebhookEventSchema,
-  'payment_webhook_events'
+  COLLECTIONS.PAYMENT_WEBHOOK_EVENT
 );

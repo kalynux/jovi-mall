@@ -1067,12 +1067,41 @@ assert('a unique mismatch is reported — a "unique" index that is not unique in
         && !drift.mismatched[0].live.unique;
 });
 
-assert('a partialFilterExpression mismatch is reported', () => {
+/**
+ * A partial-filter difference reports as MISSING + EXTRA, not as `mismatched`.
+ *
+ * ⚠ This assertion used to expect `mismatched.length === 1`, and it changed when the partial
+ * filter became part of `indexIdentity` (see that function, and the subscriber_plans pair
+ * asserted below). The new bucket is not merely a different colour on the same finding — it
+ * is better advice:
+ *
+ *   `mismatched` means "one index, wrong options", whose only remedy is DROP and recreate.
+ *   But a partial index and a full index on the same key COEXIST perfectly well in MongoDB —
+ *   that is the entire reason it permits several indexes on one key and demands distinct
+ *   names for them. So the declared partial index here can simply be CREATED, and the
+ *   undeclared full one is ordinary residue. Reporting it as `mismatched` told an operator to
+ *   drop something they did not need to drop.
+ *
+ * The line the two buckets now fall on is a principled one, and worth keeping in mind before
+ * widening either: IDENTITY is what MongoDB uses to decide whether two indexes may coexist;
+ * OPTIONS are what must agree on the single index that does exist. `unique` and
+ * `expireAfterSeconds` stay options — MongoDB refuses a second index on one key differing
+ * only in those — which is why the two assertions either side of this one are unchanged.
+ *
+ * (Collation belongs on the identity side by that rule and is deliberately not there:
+ * `NormalisedIndex` does not carry it, MongoDB reports a default collation on every index,
+ * and no two indexes in this codebase share a key while differing only by it. This file's
+ * header argues the narrow case; widen it when a real drift is proven to hide behind it.)
+ */
+assert('a partialFilterExpression difference is missing + extra, not a mismatch', () => {
     const drift = diffIndexes(
         [idx({ a: 1 }, { partialFilterExpression: { deletedAt: null } })],
         [idx({ a: 1 })],
     );
-    return drift.mismatched.length === 1;
+    return drift.missing.length === 1
+        && drift.missing[0].partialFilterExpression === JSON.stringify({ deletedAt: null })
+        && drift.extra.length === 1
+        && drift.mismatched.length === 0;
 });
 
 assert('a TTL mismatch is reported', () => {
@@ -1143,6 +1172,45 @@ assert('a $text index over DIFFERENT fields still reports as drift', () => {
 // expanded, and must be left alone rather than guessed at.
 assert('a live text sentinel with no weights is passed through untouched', () =>
     JSON.stringify(normaliseIndex({ _fts: 'text', _ftsx: 1 }, {}).key) === '{"_fts":"text","_ftsx":1}');
+
+/**
+ * TWO PARTIAL INDEXES ON ONE KEY ARE TWO INDEXES, and the diff used to see one.
+ *
+ * MongoDB allows several indexes on the same key when their `partialFilterExpression`s
+ * differ, and requires distinct names when they do. `subscriber_plans` is the case in this
+ * codebase — `uniq_active_per_owner` and `uniq_pending_per_owner`, together the "at most one
+ * active and one pending plan per owner" invariant, and the schema says as much where they
+ * are declared.
+ *
+ * While `indexIdentity` was the key alone, both collapsed into one map entry: the live
+ * pending index satisfied the lookup for the declared active one, and a missing
+ * `uniq_active_per_owner` reported as NO DRIFT. Found while rehearsing
+ * `migrate:declared-indexes`, which plans from this verdict and would have built one of the
+ * two, skipped the other and exited 0 — the half-creating-and-reporting-success failure, one
+ * layer below where it was being guarded against.
+ */
+assert('two partial indexes on ONE key are two indexes, not one', () => {
+    const active = idx({ owner_type: 1, owner_id: 1 },
+        { unique: true, name: 'uniq_active_per_owner', partialFilterExpression: { status: 'active' } });
+    const pending = idx({ owner_type: 1, owner_id: 1 },
+        { unique: true, name: 'uniq_pending_per_owner', partialFilterExpression: { status: 'pending_activation' } });
+
+    // Only the pending one exists: the active one is missing, and must say so.
+    const drift = diffIndexes([active, pending], [pending]);
+    return drift.missing.length === 1
+        && drift.missing[0].partialFilterExpression === JSON.stringify({ status: 'active' })
+        && drift.extra.length === 0
+        && drift.mismatched.length === 0;
+});
+
+// The other direction: an index with NO partial filter keeps a byte-identical identity, so
+// nothing that worked before this changed behaviour — `_id_` above is filtered by that exact
+// string, and a plain unique-vs-non-unique pair must still read as `mismatched`, not as a
+// missing/extra pair.
+assert('…and an index without a partial filter is unaffected', () => {
+    const drift = diffIndexes([idx({ sku: 1 }, { unique: true })], [idx({ sku: 1 })]);
+    return drift.mismatched.length === 1 && drift.missing.length === 0 && drift.extra.length === 0;
+});
 
 assert('a name-only difference is NOT drift — MongoDB generates names', () => {
     const drift = diffIndexes(
@@ -1769,8 +1837,37 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
 // migration here to claim uniqueness, and for the same class of reason: without it two
 // sweeps can each believe they enforced the current plan while disagreeing about which one
 // it is.
-assert('all twenty-two are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 22);
+// ⚠ THE RUNNING COMMENTARY ABOVE IS ONE AHEAD OF THE ARRAY, and was before this row was
+// added: the chain ends "22 -> 23: migrate:plan-quota-indexes" while `MIGRATIONS` held 22
+// and this assert said 22. One of the increments between 17 and 22 double-counts; which one
+// is not recoverable from the text, and chasing it would be guessing. Left as history, with
+// the drift named — the ASSERT is what is checked, and the runner's own header already says
+// why: "a number in a comment proves nothing and is one more thing to forget."
+//
+// Measured, not counted by eye: 22 -> 23 with `migrate:declared-indexes`.
+//
+// It is a different KIND of row from the five uniqueness arguments above — the catch-all
+// rather than another named handful. The first production deploy (2026-09-13) measured what
+// the twenty-two between them do NOT cover, from `reportIndexDrift()`'s own boot log: 389
+// declared indexes missing before `migrate:up`, 350 still missing after it. So every
+// migration written to date accounts for 39, and the other 350 existed only because
+// `autoIndex` builds them in development and nothing builds them in production.
+//
+// 83 of the 396 declared indexes are UNIQUE — measured by the migration's own `--dry-run`
+// against an empty database, not counted by eye, and four times the "about twenty" the work
+// started from. That makes the sixth uniqueness argument in this list also much the largest:
+// one wallet per owner, one COD collection per shipment, SKU uniqueness, one channel identity
+// per account.
+assert('all twenty-three are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 23);
+
+// The catch-all is LAST, and unlike the general index-after-data rule below this is a
+// dependency on the OTHER INDEX MIGRATIONS: it builds only what the declared-vs-live diff
+// reports missing, so the named indexes the rows above create have to exist by the time it
+// diffs. Running it earlier would create those keys under Mongoose's default names and
+// leave the named builds to collide with them (IndexOptionsConflict, 85).
+assert('migrate:declared-indexes is the last migration of all', () =>
+    MIGRATIONS[MIGRATIONS.length - 1].name === 'migrate:declared-indexes');
 
 // ONE ordering rule now, from the runner's own header, and it is correctness rather than
 // taste: a unique index build fails outright against data a later migration has not yet

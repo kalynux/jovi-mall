@@ -132,11 +132,34 @@ export function normaliseIndex(key: Record<string, unknown>, options: RawSpec): 
  * **Key ORDER is significant** — `{a:1,b:1}` and `{b:1,a:1}` are different indexes with
  * different prefix behaviour, and treating them as one would report "no drift" for a genuinely
  * missing index. So this serialises in declaration order rather than sorting.
+ *
+ * ── The PARTIAL FILTER is part of the identity, and leaving it out lost an index ───
+ * MongoDB permits several indexes on ONE key provided their `partialFilterExpression`s
+ * differ — which is why it also demands they be given distinct names. `subscriber_plans`
+ * does exactly that, and says so at the declaration:
+ *
+ *     { owner_type, owner_id } unique, partial on status: 'active'            uniq_active_per_owner
+ *     { owner_type, owner_id } unique, partial on status: 'pending_activation'  uniq_pending_per_owner
+ *
+ * Together they are the "at most one active plan and one pending plan per owner" invariant.
+ * While the identity was the key alone, those two collapsed into ONE entry in both maps
+ * below, so the diff could only ever see one of them: with `uniq_pending_per_owner` live and
+ * `uniq_active_per_owner` absent, this reported no drift at all — and
+ * `migrate:declared-indexes`, which builds from this same verdict, would have built one,
+ * skipped the other and exited 0, leaving a billing constraint enforced by nothing.
+ *
+ * The suffix is appended ONLY when a partial filter is present, so every index without one
+ * keeps a byte-identical identity — including `_id_`, which `diffIndexes` filters by this
+ * exact string.
  */
 export function indexIdentity(index: NormalisedIndex): string {
-    return Object.entries(index.key)
+    const key = Object.entries(index.key)
         .map(([field, direction]) => `${field}:${direction}`)
         .join(',');
+
+    return index.partialFilterExpression === null
+        ? key
+        : `${key}|partial=${index.partialFilterExpression}`;
 }
 
 function sameOptions(a: NormalisedIndex, b: NormalisedIndex): boolean {

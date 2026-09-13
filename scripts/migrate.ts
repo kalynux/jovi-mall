@@ -243,6 +243,29 @@ export const MIGRATIONS: Migration[] = [
         dryRun: true,
         note: 'the plan-quota sweep collection-scans every owner it visits, and TWO ENFORCEMENT STAMPS PER OWNER become possible — the unique index is what stops two passes each believing they enforced the current plan',
     },
+    // ── The catch-all, and it must stay LAST of all ──────────────────────────
+    // Every row above builds a named handful somebody reasoned about. This one builds
+    // everything the SCHEMAS declare that the database does not have — ~350 indexes on a
+    // fresh production database, about twenty of them unique.
+    //
+    // Last for two independent reasons, and either alone would be enough:
+    //
+    //   1. It is an index build, so the ordering rule in this file's header applies: after
+    //      every data migration, because a unique build fails outright on data a backfill
+    //      has not yet reached its final shape on. It claims MORE uniqueness than the five
+    //      above it put together.
+    //   2. ⚠ It builds only what the declared-vs-live diff reports MISSING, so the named
+    //      indexes the rows above create must already exist when it runs. Where a schema
+    //      declares the same KEY one of them built under a chosen NAME, MongoDB refuses a
+    //      second index on that key (IndexOptionsConflict, 85). Running this first would
+    //      create those keys under Mongoose's default names and leave the named builds above
+    //      to collide with them.
+    {
+        name: 'migrate:declared-indexes',
+        file: 'scripts/migrate-declared-indexes.ts',
+        dryRun: true,
+        note: 'EVERY INDEX THE SCHEMAS DECLARE AND NO MIGRATION BUILDS IS ABSENT IN PRODUCTION — the first deploy measured 350 still missing after the other 22 ran. 83 of the 396 declared are UNIQUE, so one wallet per owner, one COD collection per shipment, SKU uniqueness and one channel identity per account are each enforced by nothing. Invisible in development, where autoIndex builds them all',
+    },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
