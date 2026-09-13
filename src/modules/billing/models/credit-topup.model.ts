@@ -37,6 +37,20 @@ export interface ICreditTopup extends Document {
    * that stayed on the page and polled `/verify` ever completed one.
    */
   merchant_ref: string | null;
+  /**
+   * Wrong OTP submissions on this top-up.
+   *
+   * My-CoolPay Orange Money answers `REQUIRE_OTP` at initiation and charges
+   * nothing until the SMS code is relayed back. A 4-8 digit code with unlimited
+   * attempts is not a secret, so the counter lives here, on the row being
+   * attacked, exactly as `PaymentTransaction.otpAttempts` does for an order
+   * payment. The owner-scoped route in front of this is the stronger bound; this
+   * is the one that still holds once the caller IS the owner.
+   *
+   * Exhausting it FAILS the top-up rather than throttling it -- waiting does not
+   * make a wrong code right.
+   */
+  otp_attempts: number;
   payment_transaction_id: mongoose.Types.ObjectId | null;
   created_at: Date;
   updated_at: Date;
@@ -56,6 +70,7 @@ const CreditTopupSchema = new Schema<ICreditTopup>(
     // Sparse: every row written before this field existed has none, and a plain
     // unique index refuses the second null.
     merchant_ref: { type: String, default: null, unique: true, sparse: true, index: true },
+    otp_attempts: { type: Number, default: 0, min: 0 },
     payment_transaction_id: { type: Schema.Types.ObjectId, ref: MODELS.PAYMENT_TRANSACTION, default: null },
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }

@@ -18,12 +18,17 @@ router.get('/plan', AgentBillingController.getMyPlan);
 
 // Self-serve plan purchase (auto-activates / queues on gateway confirmation)
 router.post('/plans/:planId/purchase', AgentBillingController.purchasePlan);
+// Mobile-money OTP relay (My-CoolPay Orange Money answers `requiresOtp` at purchase).
+// Owner-scoped, unlike the payments module's open /payments/:id/authorize — see
+// billing/domain/gateway-otp.ts for why that asymmetry is deliberate.
+router.post('/plan-purchases/:id/authorize', AgentBillingController.authorizePlanPurchase);
 router.post('/plan-purchases/:id/verify', AgentBillingController.verifyPlanPurchase);
 
 // Credits
 router.get('/credits', AgentBillingController.getBalance);
 router.get('/credits/packs', AgentBillingController.listTopupPacks);
 router.post('/credits/topups', AgentBillingController.initiateTopup);
+router.post('/credits/topups/:id/authorize', AgentBillingController.authorizeTopup);
 router.post('/credits/topups/:id/verify', AgentBillingController.verifyTopup);
 
 // Settings (plan-expiry notification preference)

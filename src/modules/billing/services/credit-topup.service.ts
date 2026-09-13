@@ -11,6 +11,7 @@ import { BillingOwnerType } from '../billing.types';
 import { PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
 import { getPaymentGateway } from '../../payments/gateways/registry';
 import { mintMerchantRef } from '../../payments/domain/merchant-reference';
+import { submitGatewayOtp, GatewayOtpResult } from '../domain/gateway-otp';
 
 /**
  * CreditTopupService - an owner's (vendor/agency/agent) purchase of credit packs.
@@ -90,6 +91,35 @@ export class CreditTopupService {
       await this.completeTopup(topup._id.toString());
     }
     return { topup: updated ?? topup, instructions: result.instructions ?? null };
+  }
+
+  /**
+   * Relay the SMS confirmation code for a top-up whose `initiateTopup` answered
+   * `instructions.requiresOtp` (My-CoolPay Orange Money).
+   *
+   * Owner-scoped like `verifyAndComplete` beside it, and for a stronger reason:
+   * the payments module's equivalent endpoint is unauthenticated because a
+   * payment link is shareable, and nothing about a billing purchase is. The
+   * rule itself — the attempt cap, the state guard, the gateway call — is
+   * `domain/gateway-otp.ts`, shared with `PlanPurchaseService`.
+   *
+   * The top-up stays `pending` on success: the code merely releases the
+   * operator's prompt, and the wallet is credited by the webhook or by a
+   * `/verify` poll exactly as before.
+   */
+  async authorizeTopup(
+    ownerType: BillingOwnerType,
+    ownerId: string,
+    topupId: string,
+    code: string
+  ): Promise<GatewayOtpResult & { topup: ICreditTopup }> {
+    const topup = await this.repo.findById(topupId);
+    if (!topup || topup.owner_type !== ownerType || topup.owner_id.toString() !== ownerId) {
+      throw createAppError(ERROR_CODES.BILLING_TOPUP_NOT_FOUND, 404, 'Top-up not found');
+    }
+
+    const result = await submitGatewayOtp(topup, code, ERROR_CODES.BILLING_TOPUP_INVALID_STATE);
+    return { ...result, topup };
   }
 
   /** Poll the gateway and complete/fail the top-up accordingly. */

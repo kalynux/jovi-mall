@@ -49,10 +49,12 @@ Every endpoint is automatically scoped to the authenticated agent (`role_entity.
 | GET | `/api/agent/plans` | List purchasable plans (catalog, active only) |
 | GET | `/api/agent/plan` | The agent's current plan + entitlements |
 | POST | `/api/agent/plans/:planId/purchase` | Buy a plan (self-serve; auto-activates/queues on payment) |
+| POST | `/api/agent/plan-purchases/:id/authorize` | Relay the Orange Money SMS code for a plan purchase |
 | POST | `/api/agent/plan-purchases/:id/verify` | Verify & apply a plan purchase after payment |
 | GET | `/api/agent/credits` | Current credit balance |
 | GET | `/api/agent/credits/packs` | List buyable credit top-up packs |
 | POST | `/api/agent/credits/topups` | Start a credit top-up purchase |
+| POST | `/api/agent/credits/topups/:id/authorize` | Relay the Orange Money SMS code for a top-up |
 | POST | `/api/agent/credits/topups/:id/verify` | Verify/complete a top-up after payment |
 | GET | `/api/agent/settings` | Read billing settings (expiry-notice window) |
 | PATCH | `/api/agent/settings` | Update billing settings |
@@ -164,7 +166,7 @@ Dashboard: show `heldDeliveries / maxUnterminatedShipments` and, when full, an "
 
 ---
 
-### POST /api/agent/plans/:planId/purchase · POST /api/agent/plan-purchases/:id/verify
+### POST /api/agent/plans/:planId/purchase · POST /api/agent/plan-purchases/:id/authorize · POST /api/agent/plan-purchases/:id/verify
 
 Self-serve purchase + verification. **Flow, request body, gateway `instructions`, Stripe/mobile-money handling, polling and the two-plan rule are identical to vendor** — see [vendor/billing.md → purchase](../vendor/billing.md#post-apivendorplansplanidpurchase) / [→ verify](../vendor/billing.md#post-apivendorplan-purchasesidverify). Differences:
 
@@ -173,6 +175,14 @@ Self-serve purchase + verification. **Flow, request body, gateway `instructions`
 - When a paid plan activates, the agent's concurrent-delivery ceiling rises immediately (the capacity is synced from the plan). No agent action needed beyond paying.
 
 Error codes: same set as [agency](../agency/billing.md) (`BILLING_PLAN_*`, `BILLING_PENDING_PLAN_EXISTS`, `PAYMENT_*`), `401`, `403`.
+
+> **Orange Money needs one extra call, and it is easy to miss.** When `purchase`/`topups`
+> answers `instructions.requiresOtp: true` (My-CoolPay + Orange Money), **nothing has been
+> charged yet**: relay the SMS code to `POST /api/agent/plan-purchases/:id/authorize` or
+> `POST /api/agent/credits/topups/:id/authorize` before you start polling. Shape, response and
+> error codes are the vendor ones —
+> [plan purchase](../vendor/billing.md#post-apivendorplan-purchasesidauthorize) ·
+> [top-up](../vendor/billing.md#post-apivendorcreditstopupsidauthorize).
 
 ---
 

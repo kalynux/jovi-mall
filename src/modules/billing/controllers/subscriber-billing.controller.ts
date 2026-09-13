@@ -11,6 +11,7 @@ import { BillingSettingsRepository } from '../repositories/billing-settings.repo
 import {
   InitiateTopupSchema,
   InitiatePlanPurchaseSchema,
+  AuthorizeBillingOtpSchema,
   ExpiryNoticeSchema,
 } from '../validators/billing.validators';
 import { BillingOwnerType } from '../billing.types';
@@ -22,10 +23,12 @@ export interface SubscriberBillingController {
   listPlans: ReturnType<typeof asyncHandler>;
   getMyPlan: ReturnType<typeof asyncHandler>;
   purchasePlan: ReturnType<typeof asyncHandler>;
+  authorizePlanPurchase: ReturnType<typeof asyncHandler>;
   verifyPlanPurchase: ReturnType<typeof asyncHandler>;
   getBalance: ReturnType<typeof asyncHandler>;
   listTopupPacks: ReturnType<typeof asyncHandler>;
   initiateTopup: ReturnType<typeof asyncHandler>;
+  authorizeTopup: ReturnType<typeof asyncHandler>;
   verifyTopup: ReturnType<typeof asyncHandler>;
   getSettings: ReturnType<typeof asyncHandler>;
   updateSettings: ReturnType<typeof asyncHandler>;
@@ -66,6 +69,18 @@ export function createSubscriberBillingController(
       res.status(201).json({ success: true, data: result, message: 'Plan purchase initiated' });
     }),
 
+    authorizePlanPurchase: asyncHandler(async (req: Request, res: Response) => {
+      const ownerId = req.auth!.role_entity._id.toString();
+      const { code } = AuthorizeBillingOtpSchema.parse(req.body);
+      const { purchase, instructions, message } = await planPurchaseService.authorizePurchase(
+        ownerType,
+        ownerId,
+        req.params.id,
+        code
+      );
+      res.json({ success: true, data: { purchase, instructions }, message });
+    }),
+
     verifyPlanPurchase: asyncHandler(async (req: Request, res: Response) => {
       const ownerId = req.auth!.role_entity._id.toString();
       const result = await planPurchaseService.verifyAndComplete(ownerType, ownerId, req.params.id);
@@ -87,6 +102,18 @@ export function createSubscriberBillingController(
       const { packCode, gateway, channel } = InitiateTopupSchema.parse(req.body);
       const result = await creditTopupService.initiateTopup(ownerType, ownerId, packCode, gateway, channel);
       res.status(201).json({ success: true, data: result, message: 'Top-up initiated' });
+    }),
+
+    authorizeTopup: asyncHandler(async (req: Request, res: Response) => {
+      const ownerId = req.auth!.role_entity._id.toString();
+      const { code } = AuthorizeBillingOtpSchema.parse(req.body);
+      const { topup, instructions, message } = await creditTopupService.authorizeTopup(
+        ownerType,
+        ownerId,
+        req.params.id,
+        code
+      );
+      res.json({ success: true, data: { topup, instructions }, message });
     }),
 
     verifyTopup: asyncHandler(async (req: Request, res: Response) => {

@@ -43,10 +43,12 @@ Every endpoint is automatically scoped to the authenticated vendor.
 | GET | `/api/vendor/plans` | List purchasable plans (catalog) |
 | GET | `/api/vendor/plan` | The vendor's current active + pending plan |
 | POST | `/api/vendor/plans/:planId/purchase` | Buy a plan (self-serve; auto-activates/queues on payment) |
+| POST | `/api/vendor/plan-purchases/:id/authorize` | Relay the Orange Money SMS code for a plan purchase |
 | POST | `/api/vendor/plan-purchases/:id/verify` | Verify & apply a plan purchase after payment |
 | GET | `/api/vendor/credits` | Current credit balance |
 | GET | `/api/vendor/credits/packs` | List buyable credit top-up packs |
 | POST | `/api/vendor/credits/topups` | Start a credit top-up purchase |
+| POST | `/api/vendor/credits/topups/:id/authorize` | Relay the Orange Money SMS code for a top-up |
 | POST | `/api/vendor/credits/topups/:id/verify` | Verify/complete a top-up after payment |
 | GET | `/api/vendor/settings` | Read billing settings (expiry-notice window) |
 | PATCH | `/api/vendor/settings` | Update billing settings |
@@ -202,7 +204,9 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
 ```
 `instructions` is gateway-specific and may be `null` (mobile money: `{ ussdCode?, requiresOtp?, message?, expiresAt? }`; **Stripe**: `{ clientSecret?, chargedAmount?, chargedCurrency?, message? }` — note Stripe charges in **USD** while `price`/`currency` stay XAF; see [stripe-payments.md](./stripe-payments.md)).
 
-> **My-CoolPay Orange Money answers `requiresOtp: true` and no `ussdCode`.** The customer receives an SMS code that must be relayed before anything is charged. A plan purchase and a credit top-up both reach this branch, and they settle through the shared payments surface — see [../payments/README.md](../payments/README.md#post-paymentstransactionidauthorize).
+> **My-CoolPay Orange Money answers `requiresOtp: true` and no `ussdCode`.** The buyer receives an SMS code, and **nothing is charged until it is relayed back**. Send it to [`POST /plan-purchases/:id/authorize`](#post-apivendorplan-purchasesidauthorize) — or, for a top-up, [`POST /credits/topups/:id/authorize`](#post-apivendorcreditstopupsidauthorize).
+>
+> ⚠ **Corrected 2026-09-13.** This paragraph used to send you to `POST /payments/:transactionId/authorize`. That endpoint resolves its argument with `PaymentTransactionModel.findById`, and **a billing purchase deliberately creates no `PaymentTransaction`** — so the only id you hold is a purchase id and the call answered `404 PAYMENT_TRANSACTION_NOT_FOUND`. Every Orange Money plan purchase and top-up, for all three owner roles, was reachable and could not complete. The routes above are the fix: owner-scoped, beside the `/verify` you already poll.
 
 > **A mobile-money purchase now settles from the gateway callback**, not only from your `/verify` poll. It used to be poll-only: these rows create no `PaymentTransaction`, so a NotchPay or My-CoolPay callback found nothing and answered success, and a vendor who closed the tab after paying never got their plan. Keep polling while the customer is watching; you no longer have to. If the gateway confirms at initiation, the plan is applied immediately and `purchase.status` is `paid`.
 
@@ -214,6 +218,62 @@ Free plans (`price = 0`) cannot be purchased — they are the default tier.
 - `409 BILLING_PLAN_NOT_PURCHASABLE` — plan is free (price 0).
 - `409 BILLING_PENDING_PLAN_EXISTS` — a plan is already queued (can't buy a second in advance).
 - `400 PAYMENT_GATEWAY_NOT_SUPPORTED` / `502 PAYMENT_INITIATION_FAILED` — gateway issues.
+- `401`, `403`.
+
+---
+
+### POST /api/vendor/plan-purchases/:id/authorize
+
+**Description**: Relay the one-time SMS code for a plan purchase, so the gateway will open the payment prompt.
+
+**Only reached when the initiating call answered `instructions.requiresOtp: true`** — today that
+means **My-CoolPay + Orange Money**, the one gateway/operator pair with an OTP step. On that
+branch there is no `ussdCode` and **no money has moved**: My-CoolPay SMSes a code and does
+nothing at all until it comes back here.
+
+> **This is not `POST /payments/:transactionId/authorize`.** That endpoint is for order, cart and
+> booking payments, it is unauthenticated because a payment link is shareable, and it only knows
+> `PaymentTransaction` rows — which billing purchases deliberately never create. Billing has no
+> third party to accommodate (you started the purchase while signed in, and the SMS went to the
+> number you just typed), so its OTP step is owner-scoped like the rest of this surface.
+
+**Request Headers**: `Authorization: Bearer <token>`
+
+**Path Parameters**:
+- `id` (string, **required**) — the plan-purchase `_id` returned by `POST /plans/:planId/purchase`.
+
+**Request Body**:
+```json
+{ "code": "123456" }
+```
+- `code` (string, **required**) — the 4–8 digit code from the SMS.
+
+**Success Response** — `200 OK`:
+```json
+{
+  "success": true,
+  "data": {
+    "purchase": {
+      "_id": "66cc01", "plan_code": "growth", "price": 5000, "currency": "XAF",
+      "status": "pending", "gateway": "MYCOOLPAY", "gateway_ref": "mcp_tx_p1",
+      "subscriber_plan_id": null,
+      "created_at": "2026-06-19T14:00:00.000Z", "updated_at": "2026-06-19T14:01:00.000Z"
+    },
+    "instructions": { "ussdCode": "#150*50#", "message": "Confirm the payment prompt on your phone to complete this payment." }
+  },
+  "message": "Code accepted. Confirm the payment prompt on your phone."
+}
+```
+
+⚠ **`status` is still `pending`, and that is correct.** The code only authorises the charge — the buyer still confirms it on the handset, and the purchase is applied by the gateway callback or by your `/verify` poll, exactly as for a NotchPay purchase. **Do not** treat a 200 here as "paid": carry straight on to the polling loop below.
+
+**Error Responses**:
+- `400 VALIDATION_ERROR` — `code` is not 4–8 digits.
+- `404 BILLING_PLAN_PURCHASE_NOT_FOUND` — id unknown or not owned by this vendor.
+- `409 BILLING_PURCHASE_INVALID_STATE` — already `paid`/`failed`/`reversed`, or no gateway reference yet. A settled row refuses a second code: accepting one would be a second charge.
+- `422 PAYMENT_OTP_INVALID` — wrong code. `details.attemptsRemaining` says how many are left.
+- `422 PAYMENT_OTP_ATTEMPTS_EXCEEDED` — too many wrong codes. **The row is now `failed`** — start a new purchase rather than retrying.
+- `422 PAYMENT_OTP_NOT_REQUIRED` — this gateway has no OTP step (NotchPay, Stripe).
 - `401`, `403`.
 
 ---
@@ -363,6 +423,61 @@ Field rules:
 - `404 BILLING_TOPUP_PACK_NOT_FOUND` — unknown `packCode`.
 - `400 PAYMENT_GATEWAY_NOT_SUPPORTED` — unsupported `gateway`.
 - `502 PAYMENT_INITIATION_FAILED` — gateway rejected the initiation.
+- `401`, `403`.
+
+---
+
+### POST /api/vendor/credits/topups/:id/authorize
+
+**Description**: Relay the one-time SMS code for a credit top-up. Identical in every respect to the plan-purchase authorize above, on the top-up row.
+
+**Only reached when the initiating call answered `instructions.requiresOtp: true`** — today that
+means **My-CoolPay + Orange Money**, the one gateway/operator pair with an OTP step. On that
+branch there is no `ussdCode` and **no money has moved**: My-CoolPay SMSes a code and does
+nothing at all until it comes back here.
+
+> **This is not `POST /payments/:transactionId/authorize`.** That endpoint is for order, cart and
+> booking payments, it is unauthenticated because a payment link is shareable, and it only knows
+> `PaymentTransaction` rows — which billing purchases deliberately never create. Billing has no
+> third party to accommodate (you started the purchase while signed in, and the SMS went to the
+> number you just typed), so its OTP step is owner-scoped like the rest of this surface.
+
+**Request Headers**: `Authorization: Bearer <token>`
+
+**Path Parameters**:
+- `id` (string, **required**) — the top-up `_id` returned by `POST /credits/topups`.
+
+**Request Body**:
+```json
+{ "code": "123456" }
+```
+
+**Success Response** — `200 OK`:
+```json
+{
+  "success": true,
+  "data": {
+    "topup": {
+      "_id": "66bb02", "pack_code": "pack_100", "credits": 100, "price": 600,
+      "currency": "XAF", "status": "pending", "gateway": "MYCOOLPAY",
+      "gateway_ref": "mcp_tx_def456",
+      "created_at": "2026-06-19T12:00:00.000Z", "updated_at": "2026-06-19T12:01:00.000Z"
+    },
+    "instructions": { "ussdCode": "#150*50#", "message": "Confirm the payment prompt on your phone to complete this payment." }
+  },
+  "message": "Code accepted. Confirm the payment prompt on your phone."
+}
+```
+
+⚠ **`status` is still `pending`.** The wallet is credited by the callback or by `/verify`, never by this call.
+
+**Error Responses**:
+- `400 VALIDATION_ERROR` — `code` is not 4–8 digits.
+- `404 BILLING_TOPUP_NOT_FOUND` — id unknown or not owned by this vendor.
+- `409 BILLING_TOPUP_INVALID_STATE` — already `paid`/`failed`/`reversed`, or no gateway reference yet. A settled row refuses a second code: accepting one would be a second charge.
+- `422 PAYMENT_OTP_INVALID` — wrong code. `details.attemptsRemaining` says how many are left.
+- `422 PAYMENT_OTP_ATTEMPTS_EXCEEDED` — too many wrong codes. **The row is now `failed`** — start a new purchase rather than retrying.
+- `422 PAYMENT_OTP_NOT_REQUIRED` — this gateway has no OTP step (NotchPay, Stripe).
 - `401`, `403`.
 
 ---

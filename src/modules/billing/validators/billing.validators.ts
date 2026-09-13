@@ -84,6 +84,16 @@ export const InitiatePlanPurchaseSchema = z.object({
   channel: BillingPaymentChannelSchema,
 });
 
+/**
+ * Relay the mobile-money one-time code for a top-up or a plan purchase.
+ *
+ * The same shape as `AuthorizePaymentSchema` in the payments module, and
+ * deliberately re-exported from it rather than retyped: the code being relayed
+ * is the same gateway's code, and two copies of the accepted format would let
+ * one path start refusing a digit length the other accepts.
+ */
+export { AuthorizePaymentSchema as AuthorizeBillingOtpSchema } from '../../payments/validators/payment.validators';
+
 /** Pagination query for ledger / top-up history. */
 export const PaginationQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),

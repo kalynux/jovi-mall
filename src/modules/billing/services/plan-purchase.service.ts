@@ -11,6 +11,7 @@ import { BillingOwnerType } from '../billing.types';
 import { PaymentChannelInfo } from '../../payments/gateways/gateway.interface';
 import { getPaymentGateway } from '../../payments/gateways/registry';
 import { mintMerchantRef } from '../../payments/domain/merchant-reference';
+import { submitGatewayOtp, GatewayOtpResult } from '../domain/gateway-otp';
 
 /**
  * PlanPurchaseService - owner SELF-SERVE plan purchase (vendor/agency/agent).
@@ -121,6 +122,34 @@ export class PlanPurchaseService {
       return { purchase: applied, instructions: result.instructions ?? null };
     }
     return { purchase: updated ?? purchase, instructions: result.instructions ?? null };
+  }
+
+  /**
+   * Relay the SMS confirmation code for a purchase whose `initiatePurchase`
+   * answered `instructions.requiresOtp` (My-CoolPay Orange Money).
+   *
+   * Owner-scoped like `verifyAndComplete` beside it. The rule — attempt cap,
+   * state guard, gateway call — is `domain/gateway-otp.ts`, shared with
+   * `CreditTopupService`; see its header for why this is not the payments
+   * module's unauthenticated `/payments/:id/authorize`.
+   *
+   * The purchase stays `pending` on success: the code releases the operator's
+   * prompt, and the plan is assigned by the webhook or by a `/verify` poll
+   * exactly as before.
+   */
+  async authorizePurchase(
+    ownerType: BillingOwnerType,
+    ownerId: string,
+    purchaseId: string,
+    code: string
+  ): Promise<GatewayOtpResult & { purchase: IPlanPurchase }> {
+    const purchase = await this.repo.findById(purchaseId);
+    if (!purchase || purchase.owner_type !== ownerType || purchase.owner_id.toString() !== ownerId) {
+      throw createAppError(ERROR_CODES.BILLING_PLAN_PURCHASE_NOT_FOUND, 404, 'Plan purchase not found');
+    }
+
+    const result = await submitGatewayOtp(purchase, code, ERROR_CODES.BILLING_PURCHASE_INVALID_STATE);
+    return { ...result, purchase };
   }
 
   /** Poll the gateway and apply/fail the purchase accordingly. */

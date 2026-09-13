@@ -62,6 +62,7 @@
     "test:tracking-board": "ts-node scripts/test/test-tracking-board.ts",
     "test:tracking-outbox": "ts-node scripts/test/test-tracking-outbox.ts",
     "test:payments": "ts-node scripts/test/test-payments.ts",
+    "test:billing-otp": "ts-node scripts/test/test-billing-otp.ts",
     "test:plan-quota": "ts-node scripts/test/test-plan-quota.ts",
     "test:system": "ts-node scripts/test/test-system.ts",
     "//verify": [

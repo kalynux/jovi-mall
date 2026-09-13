@@ -44,10 +44,12 @@ Every endpoint is automatically scoped to the authenticated agency (`role_entity
 | GET | `/api/agency/plans` | List purchasable plans (catalog, active only) |
 | GET | `/api/agency/plan` | The agency's current plan + entitlements + shipment usage |
 | POST | `/api/agency/plans/:planId/purchase` | Buy a plan (self-serve; auto-activates/queues on payment) |
+| POST | `/api/agency/plan-purchases/:id/authorize` | Relay the Orange Money SMS code for a plan purchase |
 | POST | `/api/agency/plan-purchases/:id/verify` | Verify & apply a plan purchase after payment |
 | GET | `/api/agency/credits` | Current credit balance |
 | GET | `/api/agency/credits/packs` | List buyable credit top-up packs |
 | POST | `/api/agency/credits/topups` | Start a credit top-up purchase |
+| POST | `/api/agency/credits/topups/:id/authorize` | Relay the Orange Money SMS code for a top-up |
 | POST | `/api/agency/credits/topups/:id/verify` | Verify/complete a top-up after payment |
 | GET | `/api/agency/settings` | Read billing settings (expiry-notice window) |
 | PATCH | `/api/agency/settings` | Update billing settings |
@@ -159,6 +161,14 @@ Self-serve plan purchase and verification. **Flow, request body, gateway `instru
 - Paths are `/api/agency/plans/:planId/purchase` and `/api/agency/plan-purchases/:id/verify`.
 - The verify response's applied-plan key is **`subscriberPlan`** (not `vendorPlan`), and the purchase row carries `owner_type: "agency"`, `owner_id`, and `subscriber_plan_id` (not `vendor_id`/`vendor_plan_id`).
 - `planId` must be an **active** agency plan. Today the paid tiers are inactive, so these endpoints return `409 BILLING_PLAN_INACTIVE` until they launch.
+> **Orange Money needs one extra call, and it is easy to miss.** When `purchase`/`topups`
+> answers `instructions.requiresOtp: true` (My-CoolPay + Orange Money), **nothing has been
+> charged yet**: relay the SMS code to `POST /api/agency/plan-purchases/:id/authorize` or
+> `POST /api/agency/credits/topups/:id/authorize` before you start polling. Shape, response and
+> error codes are the vendor ones —
+> [plan purchase](../vendor/billing.md#post-apivendorplan-purchasesidauthorize) ·
+> [top-up](../vendor/billing.md#post-apivendorcreditstopupsidauthorize).
+
 
 Error codes: `400 VALIDATION_ERROR`, `404 BILLING_PLAN_NOT_FOUND`, `409 BILLING_PLAN_INACTIVE`, `409 BILLING_PLAN_ROLE_MISMATCH` (not an agency plan), `409 BILLING_PLAN_NOT_PURCHASABLE` (free tier), `409 BILLING_PENDING_PLAN_EXISTS`, `400 PAYMENT_GATEWAY_NOT_SUPPORTED`, `502 PAYMENT_INITIATION_FAILED`, `404 BILLING_PLAN_PURCHASE_NOT_FOUND`, `409 BILLING_PURCHASE_INVALID_STATE`, `401`, `403`.
 

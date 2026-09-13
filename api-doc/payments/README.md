@@ -326,6 +326,16 @@ confirms it on the handset, and the webhook settles it.
 Unauthenticated, like `initiate` and `verify`. What bounds it is the IP rate limit plus the
 per-transaction attempt counter, not a session.
 
+> ⚠ **This is for order, cart and booking payments only.** A credit top-up or a plan purchase
+> creates **no `PaymentTransaction`** (that is why `merchantRef` carries a `jm_ct_` / `jm_pp_`
+> routing prefix), so passing a top-up or purchase id here answers
+> `404 PAYMENT_TRANSACTION_NOT_FOUND`. Billing has its own owner-scoped OTP routes beside the
+> `/verify` it already polls —
+> [`/plan-purchases/:id/authorize`](../vendor/billing.md#post-apivendorplan-purchasesidauthorize)
+> and [`/credits/topups/:id/authorize`](../vendor/billing.md#post-apivendorcreditstopupsidauthorize),
+> under `/api/vendor`, `/api/agency` and `/api/agent`. They are authenticated, because the
+> shareable-link reasoning above does not reach a purchase the owner started while signed in.
+
 ---
 
 ## The hosted card page (GAP-008)

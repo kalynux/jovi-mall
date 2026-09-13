@@ -9,6 +9,7 @@ import { CREDIT_TOPUP_PACKS } from '../config/credit.config';
 import {
   InitiateTopupSchema,
   InitiatePlanPurchaseSchema,
+  AuthorizeBillingOtpSchema,
   ExpiryNoticeSchema,
 } from '../validators/billing.validators';
 import { VendorSettingsRepository } from '../../vendors/repositories/vendor-settings.repository';
@@ -50,6 +51,19 @@ export class VendorBillingController {
     res.status(201).json({ success: true, data: result, message: 'Plan purchase initiated' });
   });
 
+  /** Relay the mobile-money one-time code. See `CreditTopupService.authorizeTopup`. */
+  static authorizePlanPurchase = asyncHandler(async (req: Request, res: Response) => {
+    const vendorId = req.auth!.role_entity._id.toString();
+    const { code } = AuthorizeBillingOtpSchema.parse(req.body);
+    const { purchase, instructions, message } = await planPurchaseService.authorizePurchase(
+      'vendor',
+      vendorId,
+      req.params.id,
+      code
+    );
+    res.json({ success: true, data: { purchase, instructions }, message });
+  });
+
   static verifyPlanPurchase = asyncHandler(async (req: Request, res: Response) => {
     const vendorId = req.auth!.role_entity._id.toString();
     const result = await planPurchaseService.verifyAndComplete('vendor', vendorId, req.params.id);
@@ -71,6 +85,19 @@ export class VendorBillingController {
     const { packCode, gateway, channel } = InitiateTopupSchema.parse(req.body);
     const result = await creditTopupService.initiateTopup('vendor', vendorId, packCode, gateway, channel);
     res.status(201).json({ success: true, data: result, message: 'Top-up initiated' });
+  });
+
+  /** Relay the mobile-money one-time code. See `CreditTopupService.authorizeTopup`. */
+  static authorizeTopup = asyncHandler(async (req: Request, res: Response) => {
+    const vendorId = req.auth!.role_entity._id.toString();
+    const { code } = AuthorizeBillingOtpSchema.parse(req.body);
+    const { topup, instructions, message } = await creditTopupService.authorizeTopup(
+      'vendor',
+      vendorId,
+      req.params.id,
+      code
+    );
+    res.json({ success: true, data: { topup, instructions }, message });
   });
 
   static verifyTopup = asyncHandler(async (req: Request, res: Response) => {
