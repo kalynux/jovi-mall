@@ -4,6 +4,7 @@ import { ActorSource, actorStampFields } from '../../core/types/actor-source.typ
 import { AgencyOnboardingStep } from '../../core/constants/onboarding-steps';
 import { SUPPORTED_LANGUAGES, Language } from '../../core/constants/languages';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
+import { IKycDocumentFields, kycDocumentFields } from '../../core/types/kyc-documents.types';
 
 // ─── Policies Sub-Schemas ─────────────────────────────────────────────────────
 
@@ -130,6 +131,17 @@ const AgencyKycDetailsSchema = new Schema(
     registration_number: { type: String, default: null, trim: true },
     transport_license_id: { type: String, default: null, trim: true },
     /**
+     * The identity number of the PERSON behind the agency, beside the two BUSINESS numbers
+     * above — and the field this block was missing entirely.
+     *
+     * The two that were here describe a company; an administrator refusing an agency is
+     * refusing a human being who will collect cash from customers, and a company registration
+     * number identifies nobody. The vendor block has carried `national_id_number` since it was
+     * written and the agent carries it on `legal_identity`; this is the third role catching up,
+     * and it is what the `id_card_front` / `id_card_back` / `selfie_with_id` scans corroborate.
+     */
+    national_id_number: { type: String, default: null, trim: true },
+    /**
      * Verification flag. Only Admin can set this to true.
      * Agencies submit kyc data; admin controls legit_verified.
      */
@@ -180,6 +192,16 @@ const AgencyKycDetailsSchema = new Schema(
     verified_at: { type: Date, default: null },
     verified_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, default: null },
     ...actorStampFields('verified_by'),
+
+    /**
+     * The EVIDENCE behind the verdict above. Same slots as the vendor, for the same reason:
+     * the agency's public face is a business, but the party being verified is the person who
+     * owns it. `store_address_sketch_file_ids` here describes the magazin's
+     * `headquarters_addresses` rather than a vendor's `business_addresses` — one slot name,
+     * two things it can point at, and the backend deliberately does not record which (see
+     * `core/types/kyc-documents.types.ts`).
+     */
+    ...kycDocumentFields({ storeSketches: true }),
   },
   { _id: false }
 );
@@ -257,9 +279,16 @@ export interface IAgencyPolicies {
 
 export type AgencyKycStatus = 'pending' | 'verified' | 'rejected';
 
-export interface IAgencyKycDetails {
+/** The VERDICT half — the declared numbers, and who decided what on them. */
+export interface IAgencyKycVerdict {
   registration_number: string | null;
   transport_license_id: string | null;
+  /**
+   * The identity number of the PERSON behind the agency, beside the two business numbers.
+   * A company registration number identifies a company; an administrator is deciding about
+   * somebody who will collect cash from customers.
+   */
+  national_id_number: string | null;
   /** The boolean projection of `status === 'verified'`. Written together, never apart. */
   legit_verified: boolean;
   status: AgencyKycStatus;
@@ -270,6 +299,19 @@ export interface IAgencyKycDetails {
   verified_by_user_id?: Types.ObjectId | string | null;
   verified_by_source?: ActorSource;
   verified_by_name?: string | null;
+}
+
+/**
+ * The agency's KYC block: the verdict, and the evidence it was reached on.
+ *
+ * Shaped exactly like the vendor's. `store_address_sketch_file_ids` describes the magazin's
+ * `headquarters_addresses` rather than a vendor's `business_addresses`; there is no vehicle
+ * slot. See `core/types/kyc-documents.types.ts`.
+ */
+export interface IAgencyKycDetails
+  extends IAgencyKycVerdict,
+    Omit<IKycDocumentFields, 'vehicle_with_agent_file_id' | 'store_address_sketch_file_ids'> {
+  store_address_sketch_file_ids: mongoose.Types.ObjectId[];
 }
 
 /**

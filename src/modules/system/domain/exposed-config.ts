@@ -107,6 +107,17 @@ export const EXPOSED_CONFIG_KEYS = Object.freeze([
     'STORAGE_PROVIDER',
     'GEO_PROVIDER',
     'MAIL_PROVIDER',
+    /**
+     * The chain's ORDER and its latch policy, never its keys — `BREVO_API_KEY` and
+     * `RESEND_API_KEY` are caught by `FORBIDDEN_CONFIG_TOKEN` and could not be added here even
+     * deliberately. These three are the answer to "why is mail going out through Resend", which
+     * is otherwise a code read; `/system/integrations` reports which members actually BUILT and
+     * which are latched right now, and the two are complementary the same way the worker
+     * cadences above are.
+     */
+    'MAIL_PROVIDER_CHAIN',
+    'MAIL_QUOTA_RESET_PERIOD',
+    'MAIL_QUOTA_RESET_TIMEZONE',
     'FCM_ENABLED',
 
     /**

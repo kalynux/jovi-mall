@@ -55,7 +55,7 @@ import {
 import { ProductUpdateService } from '../../src/modules/catalog/domain/services/ProductUpdateService';
 import { IProductRepository } from '../../src/modules/catalog/repositories/interfaces/product.repository.interface';
 import { Product, ProductMapper } from '../../src/modules/catalog/repositories/mappers/product.mapper';
-import { toTelegramNotificationBody } from '../../src/modules/notifications/catalog/message-renderer';
+import { toTelegramNotificationBody, toWhatsAppNotificationBody } from '../../src/modules/notifications/catalog/message-renderer';
 
 let passed = 0;
 let failed = 0;
@@ -745,7 +745,48 @@ function testTelegramTransport(): void {
       /parseMode:\s*'HTML'/.test(src),
       `scan: ${path.basename(rel)} opts into parse_mode HTML explicitly`,
     );
+    assert(
+      src.includes('toWhatsAppNotificationBody(content.subject, content.body)'),
+      `scan: ${path.basename(rel)} composes its WhatsApp body through the shared styler`,
+    );
   }
+
+  /**
+   * ── WhatsApp styling, and the trade it makes ─────────────────────────────
+   *
+   * ⚠ WhatsApp fails QUIETLY where Telegram fails loudly. There is no `parse_mode`, no escape
+   * sequence and no parse error: an unbalanced `*` just swallows the bold run, so the heading
+   * silently stops being bold and some later phrase starts. Nothing errors and nothing logs.
+   *
+   * With no escape available the only two honest options are *mangle the text* or *drop the
+   * styling*. The first implementation stripped the markers and turned "Chez L_Artisan" into
+   * "Chez LArtisan" — silently editing a business's own name to protect a formatting run,
+   * which is the same defect this file's Telegram half exists to prevent, one layer along.
+   * These cases pin the corrected behaviour.
+   */
+  assertEqual(
+    toWhatsAppNotificationBody('Your order is on its way', 'It left the depot.'),
+    '*Your order is on its way*\n\nIt left the depot.',
+    'whatsapp: a marker-free subject is bolded',
+  );
+  assertEqual(
+    toWhatsAppNotificationBody('Chez L_Artisan has a new order', 'Three items.'),
+    'Chez L_Artisan has a new order\n\nThree items.',
+    'whatsapp: a subject containing a marker is sent UNBOLDED, never with the name edited',
+  );
+  assertEqual(
+    toWhatsAppNotificationBody('', 'body only'),
+    'body only',
+    'whatsapp: an empty subject yields the body alone, not a stray "**"',
+  );
+  assert(
+    new Set([
+      toWhatsAppNotificationBody('Plain', 'b'),
+      toWhatsAppNotificationBody('Plain', 'b'),
+      toWhatsAppNotificationBody('Plain', 'b'),
+    ]).size === 1,
+    'whatsapp: repeated calls agree — the shared /g regex must not carry lastIndex between them',
+  );
 }
 
 /* ─── 7. Wiring, by source scan ───────────────────────────────────────────── */

@@ -328,6 +328,69 @@ export class ContactChangeService {
 
   // ── Internals ───────────────────────────────────────────────────────────────
 
+  /**
+   * Apply a phone number that has ALREADY been proved, by whatever means.
+   *
+   * ── Why this is public, and why the OTP flow does not do it itself ──────────
+   *
+   * There are two proofs of a phone now — the WhatsApp CONNECTION (customers, stronger: a
+   * message actually arrived from that number) and the WhatsApp OTP (dashboard roles and
+   * administrators, who never message the platform and so have no connection to check). What
+   * follows a successful proof is identical either way: swap the identifier if a change was
+   * pending, stamp `phone_verified` on every role entity, write the audit row.
+   *
+   * `modules/phone-verification` calls this rather than reimplementing it. A second copy of
+   * the change mechanics is how `applyPhoneChange`'s compare-and-set, the uniqueness check and
+   * the role-entity sync end up applied on one path and forgotten on the other — and the one
+   * that forgets is the newer one, which is also the one nobody has watched in production yet.
+   *
+   * ⚠ **`assertPhoneFree` runs again here, after the proof.** The number was free when the
+   * code was requested; ten minutes is ample for somebody else to have registered it, and the
+   * unique index would then reject the write with an E11000 the caller cannot explain.
+   */
+  async applyProvenPhone(
+    actor: ContactChangeActor,
+    phone: string,
+    opts: { completePendingChange: boolean },
+  ): Promise<{ phone: string; changed: boolean }> {
+    const user = await this.requireUser(actor.userId);
+
+    if (!opts.completePendingChange) {
+      // Verifying the number already on the account: nothing moves, the role entities are
+      // simply told it is proved.
+      await this.syncRoleEntities(user, { phone });
+      await this.audit(actor.userId, actor.role, 'PHONE_VERIFIED', { phone });
+      return { phone, changed: false };
+    }
+
+    const pending = user.pending_phone;
+    if (!pending) throw createAppError(ERROR_CODES.CONTACT_CHANGE_NOT_PENDING, 409);
+    if (pending.expires_at.getTime() <= Date.now()) {
+      throw createAppError(ERROR_CODES.CONTACT_CHANGE_EXPIRED, 422);
+    }
+
+    await this.assertPhoneFree(pending.number, actor.userId);
+
+    const updated = await this.userRepo.applyPhoneChange(actor.userId, pending.number);
+    if (!updated) throw createAppError(ERROR_CODES.CONTACT_CHANGE_NOT_PENDING, 409);
+
+    await this.syncRoleEntities(updated, { phone: pending.number });
+    await this.audit(actor.userId, actor.role, 'PHONE_CHANGED', { phone: pending.number });
+
+    return { phone: pending.number, changed: true };
+  }
+
+  /** The number a proof should be aimed at: the pending change if there is one, else current. */
+  async resolveVerificationTarget(
+    userId: string,
+  ): Promise<{ phone: string | null; completePendingChange: boolean }> {
+    const user = await this.requireUser(userId);
+    if (user.pending_phone?.number) {
+      return { phone: user.pending_phone.number, completePendingChange: true };
+    }
+    return { phone: user.login_phone ?? null, completePendingChange: false };
+  }
+
   private async requireUser(userId: string): Promise<IUser> {
     const user = await this.userRepo.findById(userId);
     if (!user) throw createAppError(ERROR_CODES.USER_NOT_FOUND, 404);
@@ -432,7 +495,13 @@ export class ContactChangeService {
   private async audit(
     userId: string,
     role: string,
-    action: 'EMAIL_CHANGED' | 'PHONE_CHANGED',
+    /**
+     * ⚠ `PHONE_VERIFIED` is a DIFFERENT act from `PHONE_CHANGED` and must stay distinct in the
+     * audit trail: one says the identifier moved, the other says the identifier already on the
+     * account was proved. Collapsing them would make "when did this vendor's number change"
+     * unanswerable, because every verification would look like a change.
+     */
+    action: 'EMAIL_CHANGED' | 'PHONE_CHANGED' | 'PHONE_VERIFIED',
     metadata: Record<string, unknown>,
   ): Promise<void> {
     await auditLogger.log({

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { buildAdminPhoneVerificationRouter } from '../../modules/phone-verification/admin-phone-verification.routes';
 import { requireAdminCaller } from '../middlewares/admin-caller.middleware';
 import { buildAdminCodRouter } from '../../modules/cod/admin-cod.routes';
 import { buildAdminUserRouter } from '../../modules/users/admin-user.routes';
@@ -17,6 +18,9 @@ import { buildAdminTicketRouter } from '../../modules/tickets';
 import { buildAdminFileRouter } from '../../modules/catalog/routes/admin-file.routes';
 import { buildAdminMessagingRouter } from '../../modules/telegram/admin-messaging.routes';
 import { buildAdminReviewRouter } from '../../modules/reviews/routes/admin-review.routes';
+import { buildAdminKycRouter } from '../../modules/identity-verification/routes/admin-kyc.routes';
+import { buildAdminStaffIdentityRouter } from '../../modules/staff-identity/routes/admin-staff-identity.routes';
+import { buildAdminGeoRouter } from '../../modules/geo/admin-geo.routes';
 
 /**
  * `/api/internal/admin/*` — the service-to-service surface the **wi-admin** backend calls.
@@ -92,6 +96,13 @@ router.use('/system', buildAdminSystemRouter([requireAdminCaller]));
  * checks in `requireAuth`, `login` and the refresh rotation, which live here.
  */
 router.use('/users', buildAdminUserRouter([requireAdminCaller]));
+
+/**
+ * Phone verification for ADMINISTRATORS — jovi-mall sends and judges the code, wi-admin owns
+ * the record. This service holds no administrator row to stamp, so the confirm answers 'this
+ * number was proved' and stops there. See the router's header.
+ */
+router.use('/phone-verification', buildAdminPhoneVerificationRouter([requireAdminCaller]));
 
 /**
  * The delivery network (Phase 9) — every write, plus the three reads whose answer is a
@@ -275,5 +286,44 @@ router.use('/messaging', buildAdminMessagingRouter([requireAdminCaller]));
  * in to decide one. Same read-a-record / delegate-a-verdict split as ADR-009 D-1.
  */
 router.use('/reviews', buildAdminReviewRouter([requireAdminCaller]));
+
+/**
+ * Identity verification — the evidence behind a KYC verdict, for all three roles.
+ *
+ * ⚠ **A DELEGATED READ, which is the exception to ADR-004 D-2 rather than the rule.** wi-admin
+ * reads the vendor, agency and agent records directly everywhere else. Here it does not,
+ * because every document is in the private `kyc/` storage tree and the rule turning a private
+ * key into `url: null, access: 'authorized'` lives in this service — a second copy of it is
+ * what publishes a URL to a national ID scan. The router's own header carries the argument.
+ *
+ * Read-only. The verdict is still written through `/vendors/:id/kyc/*`, `/agencies/:id/verify`
+ * and `/agents/:agentId/kyc`, where it always was.
+ */
+router.use('/kyc', buildAdminKycRouter([requireAdminCaller]));
+
+/**
+ * Staff identity evidence — an ADMINISTRATOR'S OWN documents (ADR-023).
+ *
+ * ⚠ The one mount here whose subject is a member of platform staff rather than a platform
+ * actor, and the one that stores something this service deliberately cannot read. It takes
+ * bytes into the private `admin-identity/` tree and writes a `file_references` row so the
+ * orphan sweep never offers a national identity card for deletion. The slot each file fills,
+ * the identity number, the home address, the parents, the salary — all of that is in
+ * wi-admin's PRIVATE database, behind a tier-1 permission, and none of it is here.
+ *
+ * No id in any path: the administrator comes from `X-Actor-Id`. See the router's header.
+ */
+router.use('/identity-documents', buildAdminStaffIdentityRouter([requireAdminCaller]));
+
+/**
+ * Geocoding for the administration dashboard (ADR-023).
+ *
+ * The public `/api/geo` mount is guarded by `requireAuth`, which resolves a `users` row — and
+ * an administrator has none. So the platform's geocoder was reachable by every role except
+ * the one staffing it. These are the SAME two handlers behind the service-token guard, which
+ * keeps one provider chain and one shared free-tier quota rather than giving wi-admin a
+ * second key that nothing counts against the first.
+ */
+router.use('/geo', buildAdminGeoRouter([requireAdminCaller]));
 
 export default router;

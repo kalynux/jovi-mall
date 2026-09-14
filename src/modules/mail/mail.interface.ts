@@ -1,3 +1,5 @@
+import { MailProviderName } from './mail.config';
+
 export type EmailType = 'AUTH' | 'ORDER' | 'SYSTEM' | 'OTHER';
 
 // Public API for Service
@@ -20,6 +22,27 @@ export interface ProviderSendOptions {
 }
 
 export interface IMailProvider {
+  /**
+   * Which provider this instance is.
+   *
+   * Every log line, metric label and `/system/integrations` row reports it, and
+   * {@link ChainedMailProvider} keys its latch on it — so this is the one thing a provider may
+   * not get wrong. It is `readonly` and a literal on each adapter rather than a constructor
+   * argument for that reason: a chain whose two members can be handed the same name latches one
+   * provider out on the other's refusal, silently.
+   */
+  readonly name: MailProviderName;
+
+  /**
+   * Send one message, or throw.
+   *
+   * ⚠ **The throw is a CLASSIFICATION, not just a failure.** Every adapter must map its
+   * provider's vendor-specific refusal onto one of the `MAIL_PROVIDER_*` / `MAIL_SEND_REJECTED`
+   * codes via `createAppError`, because that code is the entire input to
+   * {@link ChainedMailProvider}'s decision about whether to fail over and whether to latch. An
+   * adapter that throws a bare error is not merely less informative — it is unclassifiable, and
+   * the chain has to treat it as the most conservative case.
+   */
   sendEmail(options: ProviderSendOptions): Promise<void>;
 
   /**

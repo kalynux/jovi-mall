@@ -374,6 +374,185 @@ export function getVideoUploadConfig(): UploadPolicyConfig {
 }
 
 /**
+ * Upload configuration for an identity-verification document (served by the three
+ * `POST /api/{vendor,agency,agent}/kyc/documents/:slot` routes).
+ *
+ * ── PDF sits beside the image types, and that is the point ───────────────────
+ * Every other purpose-config on this platform is either images-only (delivery proof) or
+ * PDF-only (policy documents). This one is both, because the thing being collected is "a
+ * scan", and a scan arrives from a phone camera as a JPEG and from a scanner app or a
+ * printer as a PDF. Refusing either half would push applicants into converting files, which
+ * is the step at which a legible document becomes an illegible one.
+ *
+ * ⚠ **PDF carries NO transforms and that is deliberate, not an oversight.** `transforms` is
+ * absent from the PDF policy so the bytes are stored as received. The image types keep
+ * resize + compress, capped at 3000px rather than the delivery proof's 2048 — an identity
+ * card's number and an address sketch's street names are small features, and a reviewer who
+ * cannot read the digits has been handed a file that satisfies the checklist and proves
+ * nothing. ⚠ **`convertTo: 'webp'` is deliberately NOT set on PNG either**, unlike the proof
+ * config: this is evidence somebody may have to produce later, and re-encoding evidence
+ * through a lossy format to save a few kilobytes is a bad trade at this size.
+ *
+ * `userQuotas.enabled` is true — the documents count against the APPLICANT's own plan media
+ * cap (vendor, agency or agent; the route injects that owner's limit and usage). Duplicate
+ * collapsing is OFF for the reason the two configs above give: two applicants must never
+ * share one File record, or deleting one person's identity document deletes another's.
+ *
+ * ⚠ The virus scan matters more here than anywhere else on the platform. These files are
+ * opened, by a human, inside the administration dashboard — the one audience whose browser
+ * session is the most valuable on the system.
+ */
+export function getKycDocumentUploadConfig(): UploadPolicyConfig {
+  const MB = 1024 * 1024;
+
+  const image = (): MimeTypePolicy => ({
+    allowed: true,
+    maxSizeBytes: 10 * MB,
+    transforms: { resize: { maxWidth: 3000, maxHeight: 3000 }, compress: true },
+  });
+
+  return {
+    /**
+     * Ten, matching `KYC_MULTI_SLOT_MAX_FILES` — a sketch slot's whole allowance can arrive
+     * in one request. The single-value slots are held to one file by the service, not here:
+     * this config is shared by all six slots, so the narrower limit belongs where the slot's
+     * cardinality is known.
+     */
+    maxFilesPerRequest: 10,
+    maxTotalSizeBytes: 100 * MB,
+
+    perMimeType: {
+      'image/jpeg': image(),
+      'image/png': image(),
+      'image/webp': image(),
+      'application/pdf': {
+        allowed: true,
+        maxSizeBytes: 10 * MB,
+      },
+    },
+
+    virusScan: resolveVirusScanConfig(),
+
+    userQuotas: {
+      enabled: true,
+      maxFilesTotal: 1000,
+      maxStorageBytes: 5 * 1024 * 1024 * 1024, // fallback only; real cap injected per-owner
+    },
+
+    fingerprinting: {
+      algorithm: 'sha256',
+      enabled: true,
+    },
+
+    duplicateDetection: {
+      enabled: false,
+      blockDuplicates: false,
+    },
+
+    observability: {
+      enabled: true,
+      logLevel: 'info',
+    },
+  };
+}
+
+/**
+ * Upload configuration for a STAFF identity document — an administrator's own evidence,
+ * served by `POST /api/internal/admin/identity-documents` and stored in the private
+ * `admin-identity/` tree.
+ *
+ * ── Why this is not `getKycDocumentUploadConfig()` ───────────────────────────
+ * The two collect the same KIND of thing and differ in exactly one respect that matters, so
+ * sharing the function would have meant threading a boolean through it: **there is no
+ * storage quota to charge.** An administrator holds no plan, no entitlement and no
+ * `media_storage` usage row — the three things `userQuotas` is computed from — because an
+ * administrator is not a platform account. Passing a fabricated limit through the KYC config
+ * would put a number nobody chose in front of a staff member's employment record, and the
+ * first time somebody hit it the failure would read as a broken upload rather than a policy.
+ * So quotas are OFF and the ceilings below are the whole policy.
+ *
+ * Everything else is deliberately identical to the KYC config, for the reasons its own header
+ * gives: PDF sits beside the image types because "a scan" arrives from a phone as a JPEG and
+ * from a scanner app as a PDF; PDF carries no transforms; PNG is not converted to WebP,
+ * because this is evidence somebody may have to produce later and re-encoding it through a
+ * lossy format to save a few kilobytes is a bad trade at this size. Change one of those and
+ * change it in both, or write down why not.
+ *
+ * ⚠ The virus scan matters here for the reason it matters most on the KYC path, and slightly
+ * more: these files are opened, by a human, inside the administration dashboard — and on this
+ * path the person opening them and the person who uploaded them are BOTH staff.
+ */
+export function getAdminIdentityDocumentUploadConfig(): UploadPolicyConfig {
+  const MB = 1024 * 1024;
+
+  const image = (): MimeTypePolicy => ({
+    allowed: true,
+    maxSizeBytes: 10 * MB,
+    transforms: { resize: { maxWidth: 3000, maxHeight: 3000 }, compress: true },
+  });
+
+  return {
+    /**
+     * ONE, deliberately — the one number here that differs from the KYC config.
+     *
+     * wi-admin owns the slot and CANNOT count the parts in a multipart body: it pipes the body
+     * across unread and holds no multer, by ADR-021 D-2. So its pre-flight "does this slot have
+     * room" check has to assume a count, and capping at one is what makes that assumption exact
+     * rather than a guess that is wrong precisely when the slot is nearly full — three sketches
+     * posted into a slot holding eight would pass a check written for one.
+     *
+     * A multi-value slot is therefore filled one file at a time, which is what a picker does
+     * anyway. See the ⚠ on `modules/staff-identity/routes/admin-staff-identity.routes.ts`.
+     */
+    maxFilesPerRequest: 1,
+    maxTotalSizeBytes: 10 * MB,
+
+    perMimeType: {
+      'image/jpeg': image(),
+      'image/png': image(),
+      'image/webp': image(),
+      'application/pdf': {
+        allowed: true,
+        maxSizeBytes: 10 * MB,
+      },
+    },
+
+    virusScan: resolveVirusScanConfig(),
+
+    /**
+     * OFF — the only config on this platform where it is, and see the header for why: there
+     * is no owner to charge, because `ownerType: 'admin'` names a row in a database this
+     * service cannot read.
+     */
+    userQuotas: {
+      enabled: false,
+      maxFilesTotal: 0,
+      maxStorageBytes: 0,
+    },
+
+    fingerprinting: {
+      algorithm: 'sha256',
+      enabled: true,
+    },
+
+    /**
+     * OFF, for the reason the KYC config gives and which applies with more force here: two
+     * people must never share one File record, or removing one staff member's identity
+     * document removes another's.
+     */
+    duplicateDetection: {
+      enabled: false,
+      blockDuplicates: false,
+    },
+
+    observability: {
+      enabled: true,
+      logLevel: 'info',
+    },
+  };
+}
+
+/**
  * Upload configuration for an agent's delivery-proof image (served by the
  * dedicated `POST /api/agent/shipments/:id/delivery-proof` route).
  *

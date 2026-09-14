@@ -6,6 +6,7 @@ import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { PayoutMethodSchema, IPayoutMethod } from '../../../core/types/payout.types';
 import { AGENT_CONFIG } from '../config/agent.config';
 import { ActorSource, actorStampFields } from '../../../core/types/actor-source.types';
+import { IKycDocumentFields, kycDocumentFields } from '../../../core/types/kyc-documents.types';
 
 /**
  * DeliveryAgent — the person who physically moves packages.
@@ -321,15 +322,36 @@ export interface IAgentTrustOverride {
 /** KYC / identity verification — a platform-wide gate, not an agency's call. */
 export type AgentKycStatus = 'unverified' | 'pending' | 'verified' | 'rejected';
 
-export interface IAgentKyc {
+/** The VERDICT half — who decided, when, and what they decided. */
+export interface IAgentKycVerdict {
   status: AgentKycStatus;
   verified_at: Date | null;
   verified_by_user_id: mongoose.Types.ObjectId | null;
   verified_by_source?: ActorSource;
   verified_by_name?: string | null;
   rejection_reason: string | null;
-  /** Free-form reference to whatever document set was checked, off-platform. */
+  /**
+   * Free-form reference to whatever document set was checked, off-platform.
+   *
+   * ⚠ Written by the ADMINISTRATOR, never the agent. It predates the document slots below
+   * and is now a note *beside* evidence rather than a substitute for it. Kept: an
+   * administrator may still have checked something this platform does not hold.
+   */
   reference: string | null;
+}
+
+/**
+ * The agent's KYC block: the verdict, and the evidence it was reached on.
+ *
+ * `vehicle_with_agent_file_id` is present and `store_address_sketch_file_ids` is not — an
+ * agent drives and has no premises. The ID NUMBER is not here: it stays on
+ * `legal_identity.national_id_number`, beside the driving-licence number, where it has always
+ * lived. See `core/types/kyc-documents.types.ts`.
+ */
+export interface IAgentKyc
+  extends IAgentKycVerdict,
+    Omit<IKycDocumentFields, 'vehicle_with_agent_file_id' | 'store_address_sketch_file_ids'> {
+  vehicle_with_agent_file_id: mongoose.Types.ObjectId | null;
 }
 
 /**
@@ -557,6 +579,26 @@ const KycSchema = new Schema(
     ...actorStampFields('verified_by'),
     rejection_reason: { type: String, default: null, trim: true },
     reference: { type: String, default: null, trim: true },
+
+    /**
+     * The EVIDENCE behind the verdict above — and the field that gives `reference` something
+     * to refer to.
+     *
+     * ⚠ `reference` is written by the ADMINISTRATOR, not the agent: it is a free-text note
+     * about "whatever document set was checked, off-platform", which is to say the platform
+     * held no documents at all. An agent's whole verifiable footprint was that note plus a
+     * `legal_identity.national_id_number` they typed in themselves. These are the documents.
+     *
+     * `vehicle: true` — the agent is the one role that drives, and the slot is a photograph
+     * of the RIDER BESIDE THE VEHICLE. ⚠ It is deliberately NOT `vehicle_info.photo_file_id`,
+     * which is a plain vehicle photo the agent sets during onboarding, lives in a public tree
+     * and is shown to agencies browsing the directory. Two different pictures answering two
+     * different questions: "what will arrive at the door" and "is this the person who owns
+     * it". Pointing one field at both would publish the second to the directory.
+     *
+     * No `store_address_sketch` — an agent has no premises on this platform.
+     */
+    ...kycDocumentFields({ vehicle: true }),
   },
   { _id: false }
 );
@@ -743,6 +785,16 @@ export const agentDefaults = {
     verified_by_user_id: null,
     rejection_reason: null,
     reference: null,
+    // The document slots. Spelled out rather than spread from a helper because this factory
+    // IS the default — a slot added to `kycDocumentFields` and forgotten here is a `undefined`
+    // where every reader expects `null` or `[]`.
+    id_card_front_file_id: null,
+    id_card_back_file_id: null,
+    selfie_with_id_file_id: null,
+    vehicle_with_agent_file_id: null,
+    home_address_sketch_file_ids: [],
+    home_address: null,
+    submitted_at: null,
   }),
   platformBan: (): IAgentPlatformBan => ({
     banned: false,

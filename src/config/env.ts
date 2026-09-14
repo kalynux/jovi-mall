@@ -109,6 +109,7 @@ function isSet(source: NodeJS.ProcessEnv, name: string): boolean {
 const INTEGER_VARS: readonly string[] = Object.freeze([
     'PORT',
     'SMTP_PORT',
+    'MAIL_REQUEST_TIMEOUT_MS', 'MAIL_QUOTA_COOLDOWN_MS',
     'AUTH_ACCESS_TOKEN_TTL', 'AUTH_REFRESH_TOKEN_TTL',
     'MAX_DIGITAL_ASSET_SIZE',
     'VENDOR_PASSWORD_MIN_LENGTH',
@@ -225,7 +226,8 @@ const ENUM_VARS: Readonly<Record<string, readonly string[]>> = Object.freeze({
     NODE_ENV: ['development', 'test', 'production'],
     STORAGE_PROVIDER: ['local', 'firebase', 'cloudinary', 'r2'],
     GEO_PROVIDER: ['chain', 'nominatim', 'geoapify', 'locationiq', 'google', 'mapbox', 'here'],
-    MAIL_PROVIDER: ['console', 'smtp'],
+    MAIL_PROVIDER: ['console', 'smtp', 'brevo', 'resend', 'chain'],
+    MAIL_QUOTA_RESET_PERIOD: ['daily', 'monthly'],
     LOG_LEVEL: ['trace', 'debug', 'info', 'warn', 'error', 'fatal'],
     LOG_PERSIST_LEVEL: ['trace', 'debug', 'info', 'warn', 'error', 'fatal'],
     UPLOAD_LOG_LEVEL: ['debug', 'info', 'warn', 'error'],
@@ -522,14 +524,74 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
     }
 
     // ── Mail ─────────────────────────────────────────────────────────────────
+    // Four adapters ship — console, smtp, brevo, resend — plus `chain`, which fails over
+    // between them and is the intended production setting. The shape below deliberately
+    // mirrors the geocoding block above, including its single-vs-chain asymmetry: a SINGLE
+    // provider with no credential is FATAL (the factory builds it with `required: true` and
+    // every send throws), while the same absence inside a chain is a WARNING (the member is
+    // skipped and the chain carries on).
+    const MAIL_ADAPTER_KEYS: Readonly<Record<string, string>> = Object.freeze({
+        brevo: 'BREVO_API_KEY',
+        resend: 'RESEND_API_KEY',
+        smtp: 'SMTP_HOST',
+    });
+    const MAIL_PROVIDER_NAMES = ['console', 'smtp', 'brevo', 'resend'];
     const mailProvider = (get('MAIL_PROVIDER') ?? 'console').toLowerCase();
+
     if (mailProvider === 'smtp') {
         if (!has('SMTP_HOST')) err('SMTP_HOST', 'is required when MAIL_PROVIDER=smtp. Nodemailer builds a transport with an undefined host and every send fails at delivery time, not at boot.');
         if (!has('SMTP_USER') || !has('SMTP_PASS')) {
             warn('SMTP_USER/SMTP_PASS', 'are not both set while MAIL_PROVIDER=smtp. Unauthenticated relays exist, but most providers reject on AUTH.');
         }
+    } else if (mailProvider === 'brevo' && !has('BREVO_API_KEY')) {
+        err('BREVO_API_KEY', 'is required when MAIL_PROVIDER=brevo. The adapter is built only when its key is present, so without it every send throws MAIL_PROVIDER_NOT_CONFIGURED.');
+    } else if (mailProvider === 'resend' && !has('RESEND_API_KEY')) {
+        err('RESEND_API_KEY', 'is required when MAIL_PROVIDER=resend. The adapter is built only when its key is present, so without it every send throws MAIL_PROVIDER_NOT_CONFIGURED.');
+    } else if (mailProvider === 'chain') {
+        const chainNames = (get('MAIL_PROVIDER_CHAIN') ?? 'brevo,resend,smtp')
+            .split(',')
+            .map((name) => name.trim().toLowerCase())
+            .filter((name) => name.length > 0);
+
+        const usable: string[] = [];
+        for (const name of chainNames) {
+            if (!MAIL_PROVIDER_NAMES.includes(name)) {
+                // buildOne()'s default branch throws on an unknown name even inside a chain,
+                // deliberately — a misspelt provider must not be silently skipped.
+                err('MAIL_PROVIDER_CHAIN', `names "${name}", which is not a known mail provider. The factory refuses it on first use rather than skipping it.`);
+            } else if (name === 'console') {
+                // Not a warning about a missing key — a warning about a member that would
+                // ABSORB every message the providers before it refused and report success.
+                warn('MAIL_PROVIDER_CHAIN', 'names "console", which cannot be a chain member — it never fails, so everything after it is unreachable and every message it takes is silently undelivered. The factory drops it.');
+            } else if (!has(MAIL_ADAPTER_KEYS[name])) {
+                warn('MAIL_PROVIDER_CHAIN', `names "${name}" but ${MAIL_ADAPTER_KEYS[name]} is not set, so that link is skipped at build time and the chain silently falls through to the next one.`);
+            } else {
+                usable.push(name);
+            }
+        }
+
+        /**
+         * The failure this catches is the loud-looking one that is actually silent: every
+         * member skipped for want of a key leaves an empty chain, and `buildChain` then falls
+         * back to the console provider — which PRINTS every message and delivers none, while
+         * reporting success to every caller. In production that is an outage nothing reports.
+         */
+        if (usable.length === 0) {
+            const level = isProduction ? err : warn;
+            level('MAIL_PROVIDER_CHAIN', 'is set to "chain" but NO member has credentials (BREVO_API_KEY, RESEND_API_KEY, SMTP_HOST are all unset). The chain collapses to the console provider: every message is printed to stdout and never delivered.');
+        }
     } else if (isProduction && mailProvider === 'console') {
         warn('MAIL_PROVIDER', 'is "console" in production. Verification links, password resets and order mail are printed to stdout and never delivered.');
+    }
+
+    // A key set for a provider nothing will use is the `CLOUDINARY_*` trap in miniature: the
+    // operator believes email is configured and it is not.
+    if (mailProvider !== 'chain') {
+        for (const [name, key] of Object.entries(MAIL_ADAPTER_KEYS)) {
+            if (name !== mailProvider && has(key)) {
+                warn(key, `is set but MAIL_PROVIDER is "${mailProvider}", so the ${name} adapter is never built and this credential is unused. Set MAIL_PROVIDER=chain to fail over between providers.`);
+            }
+        }
     }
 
     // ── Payments ─────────────────────────────────────────────────────────────

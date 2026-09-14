@@ -325,7 +325,7 @@ export class AdminCredentialDeliveryService {
                 await this.mail.send({
                     to: destination.address,
                     type: 'AUTH',
-                    subject: kind === 'password_reset' ? 'Reset your password' : 'Sign in to Jovi Mall',
+                    subject: kind === 'password_reset' ? 'Reset your password' : 'Sign in to Wi-Mall',
                     template: 'reset-password',
                     variables: {
                         link: issued.link ?? '',
@@ -386,14 +386,14 @@ interface IssuedCredential {
  * The message body, for the two channels that take plain text.
  *
  * Both name the sender as the platform rather than as an operator: the party did not ask
- * for this, and "somebody at Jovi Mall sent you a link" is the fact. Both also say what
+ * for this, and "somebody at Wi-Mall sent you a link" is the fact. Both also say what
  * to do if it was not expected, because an unsolicited credential in a chat is exactly
  * the shape of a phishing message and the copy has to distinguish itself from one.
  */
 function composeMessage(kind: CredentialKind, issued: IssuedCredential): string {
     if (kind === 'password_reset') {
         return [
-            `Jovi Mall support has sent you a link to reset your password:`,
+            `Wi-Mall support has sent you a link to reset your password:`,
             issued.link ?? '(link unavailable — contact support)',
             '',
             `It expires in ${issued.minutes} minutes and can be used once.`,
@@ -401,7 +401,7 @@ function composeMessage(kind: CredentialKind, issued: IssuedCredential): string 
         ].join('\n');
     }
 
-    const lines = [`Jovi Mall support has sent you a way to sign in.`];
+    const lines = [`Wi-Mall support has sent you a way to sign in.`];
     if (issued.link) lines.push('', 'Tap to sign in on this device:', issued.link);
     if (issued.code) lines.push('', `Or enter this code: ${issued.code}`);
     lines.push(

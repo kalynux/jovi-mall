@@ -5,6 +5,7 @@ import { PayoutMethodSchema, IPayoutDetails } from '../../core/types/payout.type
 import { VendorOnboardingStep } from '../../core/constants/onboarding-steps';
 import { SUPPORTED_LANGUAGES, Language } from '../../core/constants/languages';
 import { ActorSource, actorStampFields } from '../../core/types/actor-source.types';
+import { IKycDocumentFields, kycDocumentFields } from '../../core/types/kyc-documents.types';
 import { MODELS, COLLECTIONS } from '../../core/database/collections';
 
 // ─── Vendor Policy Sub-Schemas ────────────────────────────────────────────────
@@ -189,6 +190,19 @@ const VendorKycDetailsSchema = new Schema(
     rejection_reason: { type: String, default: null, trim: true, maxlength: 500 },
     reviewed_by_user_id: { type: Schema.Types.ObjectId, default: null },
     ...actorStampFields('reviewed_by'),
+
+    /**
+     * The EVIDENCE behind the verdict above — identity documents, the vendor's own home
+     * address, and the hand-drawn location sketches. See `core/types/kyc-documents.types.ts`
+     * for the whole design, including why none of it is required and why the backend grades
+     * nothing.
+     *
+     * ⚠ `national_id_number` above predates this block and stays where it is. It is the same
+     * claim the `id_card_front`/`id_card_back` scans corroborate, and moving it in here would
+     * have been a rename of a field three DTOs and wi-admin's vendor read already carry — for
+     * tidiness, against a live contract.
+     */
+    ...kycDocumentFields({ storeSketches: true }),
   },
   { _id: false }
 );
@@ -275,7 +289,8 @@ export interface IVendorOperatingHours {
 
 export type VendorKycStatus = 'pending' | 'verified' | 'rejected';
 
-export interface IVendorKycDetails {
+/** The VERDICT half — who decided, when, and what they decided. */
+export interface IVendorKycVerdict {
   national_id_number: string | null;
   /** The boolean projection of `status === 'verified'`. Written together, never apart. */
   legit_verified: boolean;
@@ -286,6 +301,19 @@ export interface IVendorKycDetails {
   reviewed_by_user_id: mongoose.Types.ObjectId | null;
   reviewed_by_source: ActorSource;
   reviewed_by_name: string | null;
+}
+
+/**
+ * The vendor's KYC block: the verdict, and the evidence it was reached on.
+ *
+ * `store_address_sketch_file_ids` is present — a vendor may hold several `business_addresses`
+ * and each can carry a hand-drawn sketch. `vehicle_with_agent_file_id` is not: a vendor has no
+ * vehicle on this platform.
+ */
+export interface IVendorKycDetails
+  extends IVendorKycVerdict,
+    Omit<IKycDocumentFields, 'vehicle_with_agent_file_id' | 'store_address_sketch_file_ids'> {
+  store_address_sketch_file_ids: mongoose.Types.ObjectId[];
 }
 
 /**

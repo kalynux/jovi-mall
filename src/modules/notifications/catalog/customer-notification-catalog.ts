@@ -536,7 +536,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             text: {},
             template: {
                 name: 'customer_booking_completed',
-                bodyParams: ['{{serviceName}}', '{{currency}}', '{{finalPriceFormatted}}']
+                bodyParams: ['{{serviceName}}', '{{vendorName}}', '{{currency}}', '{{finalPriceFormatted}}']
             }
         },
         button: BOOKING_BUTTON
@@ -572,7 +572,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             text: {},
             template: {
                 name: 'customer_booking_reminder',
-                bodyParams: ['{{serviceName}}', '{{vendorName}}', '{{startAt}}']
+                bodyParams: ['{{serviceName}}', '{{vendorName}}', '{{startAt}}', '{{whenPhrase}}']
             }
         },
         button: BOOKING_BUTTON
@@ -605,7 +605,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             text: {},
             template: {
                 name: 'customer_booking_payment_received',
-                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{serviceName}}']
+                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{serviceName}}', '{{startAt}}']
             }
         },
         button: BOOKING_BUTTON
@@ -640,7 +640,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             text: {},
             template: {
                 name: 'customer_booking_balance_due',
-                bodyParams: ['{{vendorName}}', '{{serviceName}}', '{{currency}}', '{{balanceFormatted}}']
+                bodyParams: ['{{vendorName}}', '{{serviceName}}', '{{currency}}', '{{balanceFormatted}}', '{{finalPriceFormatted}}']
             }
         },
         button: PAY_BALANCE_BUTTON
@@ -743,7 +743,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             text: {},
             template: {
                 name: 'customer_order_created',
-                bodyParams: ['{{orderNumber}}', '{{vendorName}}', '{{currency}}', '{{amountFormatted}}']
+                bodyParams: ['{{orderNumber}}', '{{vendorName}}', '{{itemCount}}', '{{currency}}', '{{amountFormatted}}']
             }
         },
         button: ORDER_BUTTON
@@ -776,7 +776,7 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
             text: {},
             template: {
                 name: 'customer_order_payment_received',
-                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{orderNumber}}']
+                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{orderNumber}}', '{{vendorName}}']
             }
         },
         button: ORDER_BUTTON

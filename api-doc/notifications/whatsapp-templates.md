@@ -1,5 +1,89 @@
 # WhatsApp Templates
 
+> ✅ **Submitted 2026-09-14: the WABA holds 188 usable templates** — all 94 notification names in
+> `en` and `fr`. This replaces the "holds ZERO templates" measurement that stood here earlier the
+> same day. (Two further rows exist and are `REJECTED`; see the phone-verification note below.)
+> Submit with `npm run whatsapp:templates:submit -- --submit`
+> ([submit-whatsapp-templates.ts](../../scripts/submit-whatsapp-templates.ts)): it reads the WABA
+> first and sends only the difference, so a re-run resumes rather than duplicating.
+>
+> ⛔ **PENDING is not APPROVED.** All 188 are awaiting Meta review, and an out-of-window send
+> fails until each one clears. Poll
+> `GET /{waba}/message_templates?fields=name,language,status` — this page cannot tell you.
+>
+> ⛔ **Phone verification is the one situation with NO working template, and both attempts at it
+> failed on Meta's side.** Everything below about the other 94 names is unaffected.
+>
+> | Template | Category | Outcome |
+> |---|---|---|
+> | `wi_mall_phone_verification` | AUTHENTICATION | **cannot be created.** Code 10, subcode 2388185. The category is gated behind business verification and this WABA's owning business is `business_verification_status: "rejected"`. **Not the token** — UTILITY creates fine on the same credential, which is what isolates it. |
+> | `wi_mall_phone_verification_utility` | UTILITY | **created, then REJECTED at review in minutes**, `INCORRECT_CATEGORY`, both languages. |
+>
+> ⛔ **The UTILITY workaround is closed by Meta, not by the wording.** Resubmitting with
+> `allow_category_change: true` — which lets Meta assign whatever category it judges correct
+> rather than refusing — came back `REJECTED` **synchronously**. Meta classifies OTP content as
+> AUTHENTICATION and accepts it nowhere else, and AUTHENTICATION is precisely what this WABA may
+> not create. **Do not reword the copy until the classifier stops recognising it**: that is
+> evading enforcement rather than satisfying it, and the WABA carrying the other 188 templates is
+> what would be at risk.
+>
+> ✅ **One real fix: resolve the business verification.** Out-of-window phone verification stays
+> broken until then; re-running the submitter afterwards picks up exactly those templates.
+> In-window verification is unaffected and works, because free-form text needs no template.
+>
+> ⚠ **Meta OVERRIDES `UTILITY` → `MARKETING` on review, and the price is the smaller half of
+> it.** **MARKETING is subject to marketing opt-out**, so a recipient who has opted out receives
+> *nothing* for that situation — silently, with the notification recorded as sent.
+>
+> ⛔ **DO NOT TRUST A COUNT HERE, AND DO NOT TRUST A LIST.** The set grew from 10 names to 12
+> in the twenty minutes the first batch spent under review, and review is still running. Measure
+> it instead — it is one command:
+>
+> ```bash
+> curl -s "https://graph.facebook.com/v26.0/$WABA/message_templates?limit=200&fields=name,category" \
+>   -H "Authorization: Bearer $TOKEN" | tr ',' '\n' | grep -B1 MARKETING
+> ```
+>
+> The *shape* of the set is the durable part: **anything that reads as a nudge rather than as a
+> record of something that already happened.** Plan-expiry warnings across all three roles, the
+> agency soft-cap warning, contract outcomes — and the two that matter operationally,
+> **`agent_shipment_offer_received` and `agent_shipment_offer_reminder`, which are delivery job
+> offers.** An agent who opted out of marketing stops being offered work out-of-window, and
+> neither service will say so.
+>
+> The generator submits `UTILITY` for all of them — its own comment warns that MARKETING
+> "makes the send subject to marketing opt-out" — and Meta reclassified them on review
+> anyway. Changing that means rewording the **catalog** copy to read as strictly transactional
+> and resubmitting under a NEW name: a name, once bound to a category, keeps it.
+> `agency_agent_contract_rejected [fr]` had to be submitted as MARKETING for exactly that
+> reason, after Meta reclassified its `en` twin.
+>
+> ⚠ **21 names carry a padded body, and the pad is load-bearing.** Meta refuses a body whose
+> first or last element is a variable, and **counts neither the `*` bold markers nor a trailing
+> full stop as content** — so `… for {{2}} {{3}}.` is refused, which its own error message does
+> not say. 38 of the first 190 submissions died on this. The generator now appends a static
+> closing line (or prefixes the heading), leaving the catalog-derived sentence untouched; the
+> same pad fixes the sibling refusal, "too many variables relative to its length".
+>
+> 📌 **The submittable payloads are GENERATED, not transcribed from this page.**
+> `npx ts-node scripts/generate-whatsapp-templates.ts` derives every body from the catalogs
+> themselves — real localised copy, with `{{n}}` placed by index in the array
+> `render*WhatsAppTemplateParams` actually returns. Output:
+> [`whatsapp-template-payloads.json`](./whatsapp-template-payloads.json) (94 templates ×
+> en/fr = 188 submissions).
+>
+> **Use the generator, not this page, when creating templates.** Meta substitutes
+> positionally, so a hand-typed body whose `{{2}}` sits where the code puts `{{1}}` is not
+> rejected — it silently sends the wrong value in that slot on every message. This page stays
+> as the human-readable reference for copy and approval status; the JSON is what gets
+> submitted.
+>
+> Two things the generator enforces and this page cannot: it **fails** if a body quotes a real
+> value the send does not pass (that defect existed in six situations and is now fixed in the
+> catalogs), and it strips the ten optional clauses — `codLine`, `refundLine`, `reasonSuffix`
+> and friends — which cannot be template parameters because they are frequently empty and
+> **Meta rejects an empty parameter value**.
+
 **Verified against source on 2026-09-08** — the registry census (**65** registered names), the
 five language codes, and `vendor_booking_created`'s five body params, against
 `jovi-mall/src/modules/whatsapp/handlers/template/template-registry.ts`,

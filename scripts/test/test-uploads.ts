@@ -311,11 +311,30 @@ async function main(): Promise<void> {
         if (literals.length) console.error(`     literals: ${literals.join(' | ')}`);
         return literals.length === 0;
     });
+    /**
+     * ⚠ **DERIVED, not a hardcoded count, and the change is what makes this assertion
+     * useful.**
+     *
+     * It used to read `factories === 6`. That number is a fact about the file restated in a
+     * second place, so every new upload config broke the suite and was "fixed" by bumping it —
+     * which is a step whose entire content is agreeing with whatever the file now says. Worse,
+     * bumping it is exactly what somebody does after adding a config that FORGOT the resolver:
+     * the count would then be wrong twice and pass.
+     *
+     * Counting the config factories and requiring one `resolveVirusScanConfig()` each says the
+     * real thing: **every config that exists resolves its scanner from the environment.** A
+     * factory that grows its own answer fails (the original defect), and so does a new factory
+     * that never called the resolver at all — which the hardcoded number could not see.
+     */
     assert('…they all go through the one resolver', () => {
-        const factories = (uploadConfigSource.match(/virusScan:\s*resolveVirusScanConfig\(\)/g) ?? []).length;
-        // Five configs: default, digital-asset, video, delivery-proof, policy-document — plus
-        // loadUploadConfig. A count that drops means a factory grew its own answer again.
-        return factories === 6;
+        const calls = (uploadConfigSource.match(/virusScan:\s*resolveVirusScanConfig\(\)/g) ?? []).length;
+        const factories = (uploadConfigSource.match(
+            /export function (?:get\w*UploadConfig|loadUploadConfig)\s*\(/g) ?? []).length;
+        if (calls !== factories) {
+            console.error(`     ${factories} config factories, ${calls} resolver calls`);
+        }
+        // A floor as well: a regex that stopped matching would otherwise report 0 === 0.
+        return factories >= 6 && calls === factories;
     });
 
     process.env.NODE_ENV = 'production';
@@ -585,8 +604,23 @@ async function main(): Promise<void> {
         return statics.every((call) => !PRIVATE_STORAGE_TREES.some((tree) => call.includes(tree)));
     });
 
-    assert('the three private trees are exactly digital, shipments, ticket-attachments', () =>
-        [...PRIVATE_STORAGE_TREES].sort().join(',') === 'digital,shipments,ticket-attachments');
+    /**
+     * ⚠ A LITERAL, not a count, and deliberately so: the failure this guards is a tree being
+     * RECLASSIFIED rather than added, and a count cannot see a swap.
+     *
+     * Two trees joined on 2026-09-14, from two separate pieces of work: `kyc` (an applicant's
+     * identity-card scans and the selfie holding them) and `admin-identity` (the same class of
+     * document for a member of platform staff). They are deliberately **separate trees** —
+     * see the reasoning at the source — so a retention or export policy written for one cannot
+     * be silently applied to the other.
+     *
+     * ⚠ Changing this line means changing **wi-admin's copy** of the same map in the same
+     * commit (`admin/src/infra/storage/storage-trees.ts`); its own `test:files` re-reads this
+     * repository's file from disk and fails on any difference, in both directions.
+     */
+    assert('the private trees are exactly admin-identity, digital, kyc, shipments, ticket-attachments', () =>
+        [...PRIVATE_STORAGE_TREES].sort().join(',')
+            === 'admin-identity,digital,kyc,shipments,ticket-attachments');
     assert('an unknown tree is PRIVATE — a tree added next year is not public by default', () =>
         isPrivateStorageKey('some-new-tree/2027/01/x.pdf'));
     assert('…and so is a key with no tree at all', () =>

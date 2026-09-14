@@ -147,6 +147,29 @@ export const geocodingCacheEventsTotal = new Counter({
     registers: [registry],
 });
 
+/**
+ * Every mail send attempt, by the provider that made it and how it went.
+ *
+ * ── The one number this feature cannot be operated without ───────────────────
+ * A chain makes success indistinguishable from degradation everywhere else: a message delivered
+ * by the reserve provider after the primary refused it looks, to every caller and every log
+ * consumer, exactly like an ordinary send. This counter is where "we have been running on Resend
+ * since 09:40 because Brevo's 300/day is spent" becomes visible, and where
+ * `outcome="auth_failed"` on a rising edge says a key is wrong while mail keeps flowing.
+ *
+ * Bounded by construction: 4 providers × 7 outcomes = **28 series maximum**. `outcome` is a
+ * closed set declared by `outcomeLabel` in `modules/mail/domain/mail-failure.ts` plus `sent`;
+ * `provider` is bounded by `MAIL_PROVIDERS`. Never label this by recipient, template or subject
+ * — that is the rule `domain/route-group.ts` states, and here it would additionally put personal
+ * data in a metrics scrape.
+ */
+export const mailSendsTotal = new Counter({
+    name: `${PREFIX}mail_sends_total`,
+    help: 'Mail send attempts by provider and outcome (sent, quota_exceeded, rate_limited, unavailable, auth_failed, rejected, unknown)',
+    labelNames: ['provider', 'outcome'] as const,
+    registers: [registry],
+});
+
 export const integrationDuration = new Histogram({
     name: `${PREFIX}integration_duration_seconds`,
     help: 'Outbound integration call duration in seconds',
@@ -349,6 +372,18 @@ export function recordMongoError(scope: string): void {
  */
 export function recordError(category: string, statusCode: number): void {
     errorsTotal.inc({ category, status_class: `${Math.floor(statusCode / 100)}xx` });
+}
+
+/**
+ * Count one provider's attempt at one message.
+ *
+ * Called once per PROVIDER, not once per message — a send that Brevo refuses and Resend
+ * delivers records two rows. That is the intent: the question this counter answers is "which
+ * provider is carrying the traffic, and what is each one saying", and collapsing a chain run to
+ * a single outcome would erase exactly that.
+ */
+export function recordMailSend(provider: string, outcome: string): void {
+    mailSendsTotal.inc({ provider, outcome });
 }
 
 export function recordRateLimited(callerClass: string, policy: string): void {

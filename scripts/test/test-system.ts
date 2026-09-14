@@ -1694,7 +1694,27 @@ assert('every non-emitted asset under src/ is covered by the build-assets manife
         .filter((file) => {
             const rel = relative(SRC, file).split(sep).join('/');
             const dir = rel.slice(0, rel.lastIndexOf('/'));
-            return !BUILD_ASSETS_SRC.includes(`'${dir}'`);
+
+            /**
+             * ⚠ **A manifest entry covers its SUBDIRECTORIES too**, and this used to compare
+             * the exact directory only.
+             *
+             * `copy-build-assets.ts` copies with `cpSync(from, to, { recursive: true })`, so
+             * `modules/mail/templates` already carries `modules/mail/templates/partials` into
+             * `dist/`. The old exact match reported those files as uncovered — a FALSE
+             * POSITIVE, and the expensive kind: the obvious response is to add the
+             * subdirectory to the manifest, which copies it twice, or to move the files, which
+             * is a real change made to satisfy a wrong test.
+             *
+             * Walking up the path mirrors what the copier actually does. The check keeps its
+             * teeth for the case it exists for — an asset under a directory NO entry covers,
+             * which is how six Handlebars templates were absent from every container image.
+             */
+            const covered = dir
+                .split('/')
+                .some((_, i, parts) => BUILD_ASSETS_SRC.includes(`'${parts.slice(0, i + 1).join('/')}'`));
+
+            return !covered;
         });
     if (uncovered.length > 0) {
         originalConsole.log('    not copied into dist/:', uncovered.map((f) => relative(SRC, f)));

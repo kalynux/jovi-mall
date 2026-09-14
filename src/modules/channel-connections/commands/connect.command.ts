@@ -108,7 +108,7 @@ function replyText(channel: MessagingChannel, code: string, minutes: number): st
     return [
         `Your connection code is: ${code}`,
         '',
-        `Enter this code on Jovi Mall to connect your ${channelName} account.`,
+        `Enter this code on Wi-Mall to connect your ${channelName} account.`,
         `It expires in ${minutes} minutes and can only be used once.`,
         '',
         'Nothing has been connected yet — this code does nothing until you enter it.',

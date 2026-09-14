@@ -1,0 +1,74 @@
+{{!--
+  Shared email chrome — the opening half.
+
+  ⚠ EMAIL HTML IS NOT WEB HTML, and every oddity below is deliberate:
+
+   - TABLES, not divs. Outlook 2007-2021 renders with Word's engine, which has no float,
+     no flexbox and unreliable max-width on block elements.
+   - INLINE styles on every element. Gmail strips <style> in several contexts (notably the
+     Gmail app with a non-Gmail account) and clips at 102 KB, so a <style> block is a
+     PROGRESSIVE ENHANCEMENT here and never the baseline. The <style> below carries only
+     the responsive and dark-mode rules, which have no inline equivalent.
+   - A PREHEADER: the grey line a client shows next to the subject. Left unset it shows
+     whatever text comes first, which is usually the logo alt text or "View in browser".
+   - role="presentation" on layout tables, so screen readers do not announce them as data.
+--}}<!DOCTYPE html>
+<html lang="{{#if lang}}{{lang}}{{else}}en{{/if}}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="x-apple-disable-message-reformatting">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<title>{{subject}}</title>
+<!--[if mso]>
+<noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
+<![endif]-->
+<style>
+  /* Clients that keep <style> get these; everything structural is inline above. */
+  body { margin:0 !important; padding:0 !important; width:100% !important; }
+  img { border:0; line-height:100%; outline:none; text-decoration:none; -ms-interpolation-mode:bicubic; }
+  table { border-collapse:collapse !important; }
+  a { color:{{brandColor}}; }
+  @media only screen and (max-width:620px) {
+    .wrap { width:100% !important; }
+    .px { padding-left:24px !important; padding-right:24px !important; }
+    .btn a { display:block !important; width:auto !important; }
+    .h1 { font-size:22px !important; line-height:30px !important; }
+  }
+  @media (prefers-color-scheme: dark) {
+    .bg { background:#0d1117 !important; }
+    .card { background:#161b22 !important; border-color:#30363d !important; }
+    .tx { color:#e6edf3 !important; }
+    .tx-muted { color:#9198a1 !important; }
+    .rule { border-color:#30363d !important; }
+  }
+</style>
+</head>
+<body class="bg" style="margin:0;padding:0;background:#f5f6f8;">
+<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#f5f6f8;opacity:0;">{{preheader}}&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="bg" style="background:#f5f6f8;">
+<tr><td align="center" style="padding:32px 12px;">
+
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" class="wrap" style="width:600px;max-width:600px;">
+
+  {{!-- Wordmark. Typographic by default: it renders identically everywhere, cannot fail
+        to load, and needs no hosting. BRAND_LOGO_URL swaps in an image with no code change,
+        and must be a PUBLICLY reachable https URL — a mail client fetches it from the
+        recipient's network, so a LAN or Tailscale address renders as a broken image. --}}
+  <tr><td align="center" style="padding:0 0 24px;">
+    {{#if logoUrl}}
+      <a href="{{storefrontUrl}}" style="text-decoration:none;">
+        <img src="{{logoUrl}}" width="140" alt="{{brandName}}" style="display:block;width:140px;max-width:140px;height:auto;">
+      </a>
+    {{else}}
+      <a href="{{storefrontUrl}}" style="text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:24px;font-weight:700;letter-spacing:-0.4px;color:{{brandColor}};">{{brandName}}</a>
+    {{/if}}
+  </td></tr>
+
+  <tr><td class="card" style="background:#ffffff;border:1px solid #e6e8eb;border-radius:14px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      {{!-- The accent rule. A 4px bar is the whole "branded" signal and costs nothing;
+            a coloured header block would invert badly in dark mode. --}}
+      <tr><td style="height:4px;line-height:4px;font-size:4px;background:{{brandColor}};border-radius:14px 14px 0 0;">&nbsp;</td></tr>
+      <tr><td class="px" style="padding:36px 40px 40px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">

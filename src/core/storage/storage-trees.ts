@@ -64,6 +64,34 @@ export const STORAGE_TREE_VISIBILITY: Readonly<Record<string, TreeVisibility>> =
     // An agent's delivery-proof photo: a place and a time, about a real address. Reachable
     // through the shipment reads, whose scoping already answers "may this viewer see it".
     shipments: 'private',
+    // Identity-verification documents — a scan of somebody's national identity card, front
+    // and back, and a photograph of their face holding it. The most disclosing thing this
+    // platform stores about any person, and the one tree where a misclassification is not a
+    // broken thumbnail but an identity-theft kit at a guessable URL.
+    //
+    // ⚠ This tree is the ENTIRE privacy mechanism for the KYC module — there is no
+    // `sensitive` column on a file and no second gate. Read by the owner through their own
+    // `GET /api/{vendor,agency,agent}/kyc/documents/:fileId/content`, and by an administrator
+    // through wi-admin's audited `GET /api/v1/files/:fileId/content`. Nothing else.
+    kyc: 'private',
+    // Identity evidence for a member of PLATFORM STAFF — an administrator's own identity
+    // card, the selfie holding it, the photograph of their front door and the sketch of how
+    // to get there. The same class of document as `kyc/` above, and deliberately NOT the
+    // same tree.
+    //
+    // ⚠ **Its own tree because the two have different SUBJECTS and will get different
+    // rules.** `kyc/` holds applicants: people the platform is deciding whether to admit,
+    // whose documents are reviewed once and whose retention follows the account. This holds
+    // employees, whose documents are an employment record — a different legal basis, a
+    // different retention clock, and a different answer to "export everything you hold about
+    // me". Sharing a tree would mean a policy written for either silently applied to both,
+    // and the person writing it would have no way to see that from the folder name.
+    //
+    // ⚠ Nothing in THIS service records what these files depict. jovi-mall stores the bytes
+    // and one `file_references` row proving the file is in use; the slot, the identity
+    // number, the salary and every other employee fact live in wi-admin's PRIVATE database.
+    // That split is the point — see `modules/staff-identity/`.
+    'admin-identity': 'private',
     // ⚠ **Legacy, and the ADR's map is wrong about it.** ADR-A01 lists
     // `storage/ticket-attachments` as one of the three private trees. NOTHING in `src/`
     // writes it — a census of every `folder:` literal finds no such value — and it holds one

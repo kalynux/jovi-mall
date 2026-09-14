@@ -1,6 +1,8 @@
 import { IMailProvider, ProviderSendOptions } from '../mail.interface';
 
 export class ConsoleMailProvider implements IMailProvider {
+  readonly name = 'console' as const;
+
   /**
    * Always reachable — there is no backend to fail.
    *
@@ -12,6 +14,13 @@ export class ConsoleMailProvider implements IMailProvider {
     // Nothing to check.
   }
 
+  /**
+   * ⚠ **Never put this in a chain with a real provider.** It cannot fail, so it would swallow
+   * every message that reached it and report success — the chain would look healthy while
+   * delivering nothing, which is the single failure mode this whole module exists to end.
+   * `mail.factory.ts` appends it only when the chain would otherwise be EMPTY, and says so
+   * loudly when it does.
+   */
   async sendEmail(options: ProviderSendOptions): Promise<void> {
     console.log('--- [Mail] Sending Email ---');
     console.log(`To:      ${options.to}`);

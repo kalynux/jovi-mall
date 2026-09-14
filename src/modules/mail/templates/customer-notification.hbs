@@ -1,0 +1,30 @@
+{{> mail-head preheader=message}}
+
+{{!-- The recipient's name is OPTIONAL on every one of these. `{{#if}}` rather than a bare
+      `{{customerName}}`, because a legacy row with no name would otherwise render "Hi ," — the same
+      empty-string-is-the-designed-rendering trap `test:booking-notification` was written
+      about, where a missing value produced copy nobody could tell from a wording choice. --}}
+{{#if customerName}}
+<p class="tx-muted" style="margin:0 0 8px;font-size:15px;line-height:24px;color:#6b7280;">Hi {{customerName}},</p>
+{{/if}}
+
+<h1 class="h1 tx" style="margin:0 0 16px;font-size:24px;line-height:32px;font-weight:700;color:#111827;letter-spacing:-0.3px;">{{title}}</h1>
+
+{{!-- `white-space:pre-line` preserves the newlines the catalogue renderer puts in the body
+      without needing <br>, and without letting a long line overflow the card. --}}
+<p class="tx" style="margin:0 0 28px;font-size:16px;line-height:26px;color:#374151;white-space:pre-line;">{{message}}</p>
+
+{{#if actionUrl}}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" style="padding:4px 0 28px;">
+  {{> mail-button url=actionUrl label=actionLabel}}
+</td></tr></table>
+{{/if}}
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td class="rule" style="border-top:1px solid #e6e8eb;font-size:0;line-height:0;height:1px;">&nbsp;</td></tr></table>
+
+<p class="tx-muted" style="margin:24px 0 0;font-size:13px;line-height:20px;color:#9ca3af;">
+  This is an automated notification from {{brandName}}. You can change which of these you
+  receive in your notification settings.
+</p>
+
+{{> mail-foot}}

@@ -32,7 +32,33 @@ export type PurposeUploadFolder =
    * in the union is what makes the compiler agree with the disk.
    */
   | 'vendor-policy-documents'
-  | 'agency-policy-documents';
+  | 'agency-policy-documents'
+  /**
+   * Identity-verification documents for a vendor, an agency or an agent — a scan of a
+   * national identity card, front and back, a photograph of the holder's face beside it, an
+   * agent's vehicle with its rider, and the hand-drawn address sketches.
+   *
+   * ⚠ **PRIVATE**, classified in `core/storage/storage-trees.ts` and in wi-admin's verbatim
+   * copy of that table. A misclassification here is not a broken thumbnail: it is an
+   * identity-theft kit served from a static mount at a URL that works forever.
+   */
+  | 'kyc'
+  /**
+   * Identity evidence for a member of PLATFORM STAFF — an administrator's own identity card,
+   * the selfie holding it, a photograph of their front door and a sketch of how to reach it.
+   *
+   * ⚠ **PRIVATE**, and deliberately a SEPARATE tree from `kyc` above rather than a reuse of
+   * it. The two hold the same kind of document about different subjects: `kyc` holds
+   * applicants the platform is deciding whether to admit, this holds employees whose
+   * documents are an employment record — a different legal basis, a different retention
+   * clock, and a different answer to "export everything you hold about me". Sharing a tree
+   * would silently apply any policy written for either to both.
+   *
+   * ⚠ Nothing in THIS service records what these files depict. The slot, the identity number,
+   * the salary and every other employee fact live in wi-admin's private database. See
+   * `modules/staff-identity/`.
+   */
+  | 'admin-identity';
 
 /**
  * Type folders — derived from the file's own (sniffed) media type rather than

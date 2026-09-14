@@ -1,0 +1,6218 @@
+{
+  "generatedAt": "2026-09-14T17:14:55.858Z",
+  "note": "GENERATED from the notification catalogs by scripts/generate-whatsapp-templates.ts. Do not hand-edit: names, placeholder counts and placeholder ORDER are derived from the same functions the send path uses, and editing them here makes the approved template disagree with what is sent.",
+  "languages": [
+    "en",
+    "fr"
+  ],
+  "templateCount": 95,
+  "submissionCount": 192,
+  "needsCopyReview": [
+    {
+      "name": "customer_booking_created",
+      "unsuppliedValues": [
+        "confirmationLine"
+      ]
+    },
+    {
+      "name": "customer_booking_cancelled",
+      "unsuppliedValues": [
+        "refundLine"
+      ]
+    },
+    {
+      "name": "customer_booking_completed",
+      "unsuppliedValues": [
+        "balanceLine"
+      ]
+    },
+    {
+      "name": "customer_booking_balance_due",
+      "unsuppliedValues": [
+        "reasonLine"
+      ]
+    },
+    {
+      "name": "customer_order_created",
+      "unsuppliedValues": [
+        "paymentLine"
+      ]
+    },
+    {
+      "name": "customer_order_out_for_delivery",
+      "unsuppliedValues": [
+        "codLine"
+      ]
+    },
+    {
+      "name": "customer_order_delivery_failed",
+      "unsuppliedValues": [
+        "reasonLine"
+      ]
+    },
+    {
+      "name": "customer_order_cancelled",
+      "unsuppliedValues": [
+        "refundLine"
+      ]
+    },
+    {
+      "name": "agency_shipment_agent_failed",
+      "unsuppliedValues": [
+        "reasonSuffix"
+      ]
+    },
+    {
+      "name": "agency_shipment_agent_returned",
+      "unsuppliedValues": [
+        "reasonSuffix"
+      ]
+    }
+  ],
+  "payloads": [
+    {
+      "name": "vendor_order_created",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*New order received*\n\nYou received a new order #*{{1}}* for *{{2}}* *{{3}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_order_created",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nouvelle commande reçue*\n\nVous avez reçu une nouvelle commande n°*{{1}}* pour *{{2}}* *{{3}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_order_cancelled",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Order cancelled*\n\nOrder #*{{1}}* has been cancelled.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_order_cancelled",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Commande annulée*\n\nLa commande n°*{{1}}* a été annulée.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_booking_created",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*New booking*\n\nNew booking #*{{1}}* — *{{2}}* for *{{3}}* on *{{4}}*. *{{5}}*\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_booking_created",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nouvelle réservation*\n\nNouvelle réservation n°*{{1}}* — *{{2}}* pour *{{3}}* le *{{4}}*. *{{5}}*\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_booking_cancelled",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Booking cancelled*\n\nBooking #*{{1}}* has been cancelled.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_booking_cancelled",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Réservation annulée*\n\nLa réservation n°*{{1}}* a été annulée.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_payment_partial",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Partial payment received*\n\nYou received a partial payment of *{{1}}* *{{2}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_payment_partial",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Paiement partiel reçu*\n\nVous avez reçu un paiement partiel de *{{1}}* *{{2}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_payment_full",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payment received*\n\nYou received a full payment of *{{1}}* *{{2}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_payment_full",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Paiement reçu*\n\nVous avez reçu un paiement complet de *{{1}}* *{{2}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_alert",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Storage almost full*\n\nYour media storage is at *{{1}}*% (*{{2}}* of *{{3}}*). Free up space or upgrade your plan.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_alert",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Stockage presque plein*\n\nVotre stockage multimédia est à *{{1}}*% (*{{2}}* sur *{{3}}*). Libérez de l'espace ou améliorez votre forfait.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_plan_expiring",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your plan is expiring soon*\n\nYour *{{1}}* plan expires in *{{2}}* day(s), on *{{3}}*. Renew or upgrade to avoid interruption.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_plan_expiring",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Votre forfait expire bientôt*\n\nVotre forfait *{{1}}* expire dans *{{2}}* jour(s), le *{{3}}*. Renouvelez ou améliorez-le pour éviter toute interruption.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_plan_expired",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your plan has expired*\n\nYour *{{1}}* plan has expired. You are now on the *{{2}}* plan. Renew or upgrade anytime from your plan settings.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_plan_expired",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Votre forfait a expiré*\n\nVotre forfait *{{1}}* a expiré. Vous êtes maintenant sur le forfait *{{2}}*. Renouvelez ou améliorez à tout moment depuis vos paramètres de forfait.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_connection_request_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*New connection request*\n\n*{{1}}* wants to connect with you as a delivery partner.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_connection_request_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nouvelle demande de connexion*\n\n*{{1}}* souhaite se connecter avec vous en tant que partenaire de livraison.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_connection_approved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Connection approved*\n\n*{{1}}* approved your connection request. You can now select them as a delivery agency.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_connection_approved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Connexion approuvée*\n\n*{{1}}* a approuvé votre demande de connexion. Vous pouvez maintenant la sélectionner comme agence de livraison.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_connection_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Connection request rejected*\n\n*{{1}}* declined your connection request.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_connection_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Demande de connexion refusée*\n\n*{{1}}* a refusé votre demande de connexion.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_connection_reapproval_needed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Reapproval needed*\n\n*{{1}}* updated their policies. Reapprove your connection to keep your products active.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_connection_reapproval_needed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Réapprobation requise*\n\n*{{1}}* a mis à jour ses politiques. Réapprouvez votre connexion pour garder vos produits actifs.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_payout_requested",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payout request created*\n\nYour request to withdraw *{{1}}* *{{2}}* was created. Track its progress under Tickets.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_payout_requested",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Demande de paiement créée*\n\nVotre demande de retrait de *{{1}}* *{{2}}* a été créée. Suivez son avancement dans Tickets.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_payout_paid",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payout paid*\n\nYour payout of *{{1}}* *{{2}}* has been paid.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_payout_paid",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Paiement effectué*\n\nVotre paiement de *{{1}}* *{{2}}* a été effectué.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_payout_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payout request rejected*\n\nYour request to withdraw *{{1}}* *{{2}}* was rejected. See Tickets for the reason.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_payout_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Demande de paiement refusée*\n\nVotre demande de retrait de *{{1}}* *{{2}}* a été refusée. Voir Tickets pour le motif.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_shipment_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery declined*\n\n*{{1}}* declined delivery of order #*{{2}}*. Open the order to assign another delivery agency.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_shipment_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Livraison refusée*\n\n*{{1}}* a refusé la livraison de la commande n°*{{2}}*. Ouvrez la commande pour choisir une autre agence de livraison.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_stock_request_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Stock change to approve*\n\n*{{1}}* counted *{{2}}* of *{{3}}* (*{{4}}*) in their warehouse, against the *{{5}}* on record. Approve or reject the change.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_stock_request_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Modification de stock à approuver*\n\n*{{1}}* a compté *{{2}}* unités de *{{3}}* (*{{4}}*) dans son entrepôt, contre *{{5}}* enregistrées. Approuvez ou refusez la modification.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_stock_request_approved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Stock change approved*\n\n*{{1}}* approved your stock change for *{{2}}* (*{{3}}*). It now reads *{{4}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_stock_request_approved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Modification de stock approuvée*\n\n*{{1}}* a approuvé votre modification de stock pour *{{2}}* (*{{3}}*). Le stock est maintenant de *{{4}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_stock_request_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Stock change rejected*\n\n*{{1}}* rejected your stock change for *{{2}}* (*{{3}}*). It stays at *{{4}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_stock_request_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Modification de stock refusée*\n\n*{{1}}* a refusé votre modification de stock pour *{{2}}* (*{{3}}*). Le stock reste à *{{4}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_depot_changed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Pickup location changed*\n\n*{{1}}* moved *{{2}}* to a different warehouse*{{3}}*. Collection now happens from there.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_depot_changed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Lieu de retrait modifié*\n\n*{{1}}* a déplacé *{{2}}* vers un autre entrepôt*{{3}}*. Le retrait s'y fait désormais.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_product_suspended",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Product suspended by your storage agency*\n\n*{{1}}* suspended *{{2}}*, so customers can no longer buy it.*{{3}}* Contact them to resolve it.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_product_suspended",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Produit suspendu par votre agence de stockage*\n\n*{{1}}* a suspendu *{{2}}*; les clients ne peuvent plus l'acheter.*{{3}}* Contactez l'agence pour régler la situation.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_product_unsuspended",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Product back on sale*\n\n*{{1}}* lifted the suspension on *{{2}}*. It is available to customers again.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_storage_product_unsuspended",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Produit de nouveau en vente*\n\n*{{1}}* a levé la suspension de *{{2}}*. Il est de nouveau disponible pour les clients.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://vendor.wi-mall.com/{{1}}",
+              "example": [
+                "https://vendor.wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_created",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Booking requested: {{1}}*\n\nYou booked *{{1}}* with *{{2}}* for *{{3}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_created",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Réservation demandée: {{1}}*\n\nVous avez réservé *{{1}}* chez *{{2}}* pour le *{{3}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_confirmed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Booking confirmed: {{2}}*\n\n*{{1}}* accepted your booking for *{{2}}* on *{{3}}*. It is now confirmed — see you then.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_confirmed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Réservation confirmée: {{2}}*\n\n*{{1}}* a accepté votre réservation pour *{{2}}* le *{{3}}*. Elle est confirmée — à bientôt.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_rescheduled",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Booking moved: {{1}}*\n\nYour *{{1}}* booking has moved from *{{2}}* to *{{3}}*. If that does not work for you, you can cancel or move it again.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_rescheduled",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Réservation déplacée: {{1}}*\n\nVotre réservation *{{1}}* est passée du *{{2}}* au *{{3}}*. Si cela ne vous convient pas, vous pouvez l'annuler ou la déplacer.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_cancelled",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Booking cancelled: {{1}}*\n\nYour *{{1}}* booking on *{{2}}* was cancelled by *{{3}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_cancelled",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Réservation annulée: {{1}}*\n\nVotre réservation *{{1}}* du *{{2}}* a été annulée par *{{3}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_completed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Thanks for visiting {{2}}*\n\nYour *{{1}}* booking is complete. Final price: *{{3}}* *{{4}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_completed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Merci de votre visite chez {{2}}*\n\nVotre réservation *{{1}}* est terminée. Prix final: *{{3}}* *{{4}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_reminder",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Reminder: {{1}} {{4}}*\n\nYour *{{1}}* booking with *{{2}}* is *{{4}}* (*{{3}}*). If you cannot make it, please cancel so the slot can go to someone else.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_reminder",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Rappel: {{1}} {{4}}*\n\nVotre réservation *{{1}}* chez *{{2}}* est *{{4}}* (*{{3}}*). Si vous ne pouvez pas venir, annulez pour libérer le créneau.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_payment_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payment received: {{1}} {{2}}*\n\nWe received your *{{1}}* *{{2}}* payment for *{{3}}* on *{{4}}*. Nothing else to do — see you then.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_payment_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Paiement reçu: {{1}} {{2}}*\n\nNous avons reçu votre paiement de *{{1}}* *{{2}}* pour *{{3}}* le *{{4}}*. Rien d'autre à faire — à bientôt.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_balance_due",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Balance due: {{3}} {{4}}*\n\n*{{1}}* settled your *{{2}}* booking at *{{3}}* *{{5}}*, which is *{{3}}* *{{4}}* more than you have paid. You can pay the balance here, or settle it directly with *{{1}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_balance_due",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Solde à payer: {{3}} {{4}}*\n\n*{{1}}* a clôturé votre réservation *{{2}}* à *{{3}}* *{{5}}*, soit *{{3}}* *{{4}}* de plus que ce que vous avez payé. Vous pouvez payer le solde ici ou directement auprès de *{{1}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_refunded",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Refunded: {{1}} {{2}}*\n\nWe have refunded *{{1}}* *{{2}}* for your cancelled *{{3}}* booking. It goes back to the way you paid, and usually appears within a few working days.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_refunded",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Remboursé: {{1}} {{2}}*\n\nNous avons remboursé *{{1}}* *{{2}}* pour votre réservation *{{3}}* annulée. Le montant retourne par votre moyen de paiement et apparaît généralement sous quelques jours ouvrés.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_refund_pending",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Refund on the way: {{1}} {{2}}*\n\nWe owe you *{{1}}* *{{2}}* for your cancelled *{{3}}* booking. This one needs to be sent by hand, so our team is processing it — you do not need to do anything, and we will confirm when it is done.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_booking_refund_pending",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Remboursement en cours: {{1}} {{2}}*\n\nNous vous devons *{{1}}* *{{2}}* pour votre réservation *{{3}}* annulée. Ce remboursement doit être envoyé manuellement: notre équipe s'en occupe. Vous n'avez rien à faire, nous confirmerons dès que c'est fait.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_created",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Order {{1}} placed*\n\nYour order *{{1}}* with *{{2}}* is placed — *{{3}}* item(s), *{{4}}* *{{5}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_created",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Commande {{1}} passée*\n\nVotre commande *{{1}}* chez *{{2}}* est enregistrée — *{{3}}* article(s), *{{4}}* *{{5}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_payment_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payment received for {{3}}*\n\nWe received your *{{1}}* *{{2}}* payment for order *{{3}}*. *{{4}}* is preparing it now.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_payment_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Paiement reçu pour {{3}}*\n\nNous avons reçu votre paiement de *{{1}}* *{{2}}* pour la commande *{{3}}*. *{{4}}* la prépare.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_payment_link",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Finish paying {{1}} {{2}}*\n\nOpen this page to pay *{{1}}* *{{2}}* for *{{3}}* by card. The link works for *{{4}}* minutes — ask me for a new one if it runs out.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_payment_link",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Terminez le paiement de {{1}} {{2}}*\n\nOuvrez cette page pour payer *{{1}}* *{{2}}* pour *{{3}}* par carte. Le lien est valable *{{4}}* minutes — demandez-m'en un nouveau s'il expire.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_shipped",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Order {{1}} is on its way*\n\nYour order *{{1}}* has left *{{2}}* and is on its way to you. Track it any time with *{{3}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_shipped",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Commande {{1}} en route*\n\nVotre commande *{{1}}* a quitté *{{2}}* et est en route. Suivez-la à tout moment avec *{{3}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_out_for_delivery",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Out for delivery: {{1}}*\n\nYour order *{{1}}* is out for delivery today. Please make sure someone can receive it.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_out_for_delivery",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*En cours de livraison: {{1}}*\n\nVotre commande *{{1}}* est en cours de livraison aujourd'hui. Assurez-vous que quelqu'un puisse la réceptionner.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivered",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivered: {{1}}*\n\nYour order *{{1}}* has been delivered. If anything is wrong with it, open the order and tell us within the vendor's return window.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivered",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Livrée: {{1}}*\n\nVotre commande *{{1}}* a été livrée. En cas de problème, ouvrez la commande et signalez-le pendant le délai de retour du vendeur.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_failed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery attempt failed: {{1}}*\n\nWe could not deliver order *{{1}}* today. We will try again — check the order for the next attempt, or contact us to arrange a better time.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_delivery_failed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Échec de livraison: {{1}}*\n\nNous n'avons pas pu livrer la commande *{{1}}* aujourd'hui. Nous réessaierons — consultez la commande pour la prochaine tentative ou contactez-nous pour convenir d'un meilleur moment.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_cancelled",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Order {{1}} cancelled*\n\nYour order *{{1}}* has been cancelled.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_cancelled",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Commande {{1}} annulée*\n\nVotre commande *{{1}}* a été annulée.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_refunded",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Refunded: {{1}} {{2}}*\n\nWe have refunded *{{1}}* *{{2}}* for order *{{3}}*. It goes back to the way you paid, and usually appears within a few working days.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_order_refunded",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Remboursé: {{1}} {{2}}*\n\nNous avons remboursé *{{1}}* *{{2}}* pour la commande *{{3}}*. Le montant retourne par votre moyen de paiement et apparaît généralement sous quelques jours ouvrés.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_ticket_replied",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*We replied about \"{{1}}\"*\n\nThere is a new reply on your support request about \"*{{1}}*\". Open it to read the answer.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_ticket_replied",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nous avons répondu à « {{1}} »*\n\nIl y a une nouvelle réponse à votre demande d'assistance concernant « *{{1}}* ». Ouvrez-la pour lire la réponse.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_ticket_awaiting_customer",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*We need something from you: \"{{1}}\"*\n\nWe cannot go further with your request about \"*{{1}}*\" until you reply. Open it and let us know.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_ticket_awaiting_customer",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nous avons besoin de vous: « {{1}} »*\n\nNous ne pouvons pas avancer sur votre demande concernant « *{{1}}* » tant que vous n'avez pas répondu. Ouvrez-la pour nous répondre.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_ticket_resolved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Sorted: \"{{1}}\"*\n\nWe have marked your request about \"*{{1}}*\" as done. *{{2}}*\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/en/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "customer_ticket_resolved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Résolu: « {{1}} »*\n\nNous avons marqué votre demande concernant « *{{1}}* » comme terminée. *{{2}}*\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://wi-mall.com/{{1}}",
+              "example": [
+                "https://wi-mall.com/fr/orders/WM-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_connection_request_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*New connection request*\n\n*{{1}}* wants to connect with you as their delivery partner.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_connection_request_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nouvelle demande de connexion*\n\n*{{1}}* souhaite se connecter avec vous en tant que partenaire de livraison.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_connection_approved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Connection approved*\n\n*{{1}}* approved your connection request. You can now deliver for them.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_connection_approved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Connexion approuvée*\n\n*{{1}}* a approuvé votre demande de connexion. Vous pouvez maintenant livrer pour eux.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_connection_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Connection request declined*\n\n*{{1}}* declined your connection request.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_connection_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Demande de connexion refusée*\n\n*{{1}}* a refusé votre demande de connexion.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_connection_reapproval_needed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Reapproval needed*\n\n*{{1}}* updated their policies. Reapprove your connection to keep delivering for them.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_connection_reapproval_needed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Réapprobation requise*\n\n*{{1}}* a mis à jour ses politiques. Réapprouvez votre connexion pour continuer à livrer pour eux.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_request_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*New agent application*\n\n*{{1}}* applied to deliver for you. Review the application to approve or decline it.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_request_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nouvelle candidature d'agent*\n\n*{{1}}* a postulé pour livrer pour vous. Consultez la candidature pour l'approuver ou la refuser.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_approved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Agent accepted*\n\n*{{1}}* accepted your request. They can now receive delivery offers from you.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_approved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Agent accepté*\n\n*{{1}}* a accepté votre demande. Vous pouvez désormais lui envoyer des offres de livraison.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Agent declined*\n\n*{{1}}* declined your request.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Agent a refusé*\n\n*{{1}}* a refusé votre demande.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_status_request_raised",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Contract change needs your answer*\n\n*{{1}}* wants to *{{2}}*. It does not take effect until you answer — open the request to approve or decline it.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_status_request_raised",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Un changement de contrat attend votre réponse*\n\n*{{1}}* souhaite *{{2}}*. Cela ne prend pas effet tant que vous n'avez pas répondu — ouvrez la demande pour l'approuver ou la refuser.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_status_request_resolved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Contract request {{3}}*\n\nThe request for *{{1}}* to *{{2}}* was *{{3}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_status_request_resolved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Demande de contrat {{3}}*\n\nLa demande pour que *{{1}}* puisse *{{2}}* a été *{{3}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_terms_countered",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Update: {{1}} proposed different terms*\n\n*{{1}}* has countered the terms of your pending contract. Review what they are asking, then accept it, decline it, or counter again.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_terms_countered",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Mise à jour : {{1}} a proposé d'autres conditions*\n\n*{{1}}* a fait une contre-proposition sur les conditions de votre contrat en attente. Examinez sa demande, puis acceptez-la, refusez-la ou faites une nouvelle contre-proposition.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_terms_proposed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Update: {{1}} wants to change the contract terms*\n\n*{{1}}* has proposed a change to their contract. **The current terms stay in force until you answer** — nothing changes unless you accept. Open it to review, accept, decline or counter.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_terms_proposed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Mise à jour : {{1}} souhaite modifier les conditions du contrat*\n\n*{{1}}* a proposé une modification de son contrat. **Les conditions actuelles restent en vigueur jusqu'à votre réponse** — rien ne change sans votre accord. Ouvrez la proposition pour l'examiner, l'accepter, la refuser ou faire une contre-proposition.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_terms_resolved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Contract terms proposal {{2}}*\n\nThe proposed change to the contract with *{{1}}* was *{{2}}*. Open the contract to see the terms now in force.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_agent_contract_terms_resolved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Proposition de conditions {{2}}*\n\nLa modification proposée au contrat avec *{{1}}* a été *{{2}}*. Ouvrez le contrat pour voir les conditions actuellement en vigueur.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_assigned",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*New shipment assigned*\n\nOrder #*{{1}}* was dispatched to you — *{{2}}* item(s) to fulfill.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_assigned",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nouvelle expédition assignée*\n\nLa commande n°*{{1}}* vous a été confiée — *{{2}}* article(s) à traiter.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_offer_accepted",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Agent accepted the delivery*\n\n*{{1}}* accepted the delivery for order #*{{2}}*. They are on the way.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_offer_accepted",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Le livreur a accepté la livraison*\n\n*{{1}}* a accepté la livraison de la commande n°*{{2}}*. Il est en route.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_assignment_unfilled",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*No agent accepted — assign manually*\n\nNo agent took the delivery for order #*{{1}}*. Assign an agent manually to keep it moving.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_assignment_unfilled",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Aucun livreur — à assigner manuellement*\n\nAucun livreur n'a pris la livraison de la commande n°*{{1}}*. Assignez un livreur manuellement pour la faire avancer.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_agent_picked_up",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Parcel picked up*\n\n*{{1}}* picked up order #*{{2}}*. It is on its way.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_agent_picked_up",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Colis récupéré*\n\n*{{1}}* a récupéré la commande n°*{{2}}*. Elle est en route.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_agent_delivered",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Agent marked the delivery complete*\n\n*{{1}}* delivered order #*{{2}}*. Waiting on the customer's confirmation.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_agent_delivered",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Le livreur a marqué la livraison comme faite*\n\n*{{1}}* a livré la commande n°*{{2}}*. En attente de la confirmation du client.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_agent_failed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery attempt failed*\n\n*{{1}}* could not deliver order #*{{2}}*. The parcel is still with them — they can retry or return it.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_agent_failed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Échec de la tentative de livraison*\n\n*{{1}}* n'a pas pu livrer la commande n°*{{2}}*. Le colis est toujours avec lui — il peut réessayer ou le retourner.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_agent_returned",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Parcel returned*\n\n*{{1}}* returned order #*{{2}}*. The delivery run is over.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_agent_returned",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Colis retourné*\n\n*{{1}}* a retourné la commande n°*{{2}}*. La tournée est terminée.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_payout_requested",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payout request created*\n\nYour request to withdraw *{{1}}* *{{2}}* was created. Track its progress under Tickets.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_payout_requested",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Demande de paiement créée*\n\nVotre demande de retrait de *{{1}}* *{{2}}* a été créée. Suivez son avancement dans Tickets.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_payout_paid",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payout paid*\n\nYour payout of *{{1}}* *{{2}}* has been paid.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_payout_paid",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Paiement effectué*\n\nVotre paiement de *{{1}}* *{{2}}* a été effectué.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_payout_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Payout request rejected*\n\nYour request to withdraw *{{1}}* *{{2}}* was rejected. See Tickets for the reason.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_payout_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Demande de paiement refusée*\n\nVotre demande de retrait de *{{1}}* *{{2}}* a été refusée. Voir Tickets pour le motif.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_cod_deposit_declared",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Deposit awaiting your confirmation*\n\n*{{1}}* declared a cash deposit of *{{2}}* *{{3}}*. Confirm or reject it within *{{4}}* days — unanswered declarations freeze your reserve releases.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_cod_deposit_declared",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Dépôt en attente de votre confirmation*\n\n*{{1}}* a déclaré un dépôt en espèces de *{{2}}* *{{3}}*. Confirmez-le ou refusez-le sous *{{4}}* jours — les déclarations sans réponse gèlent vos libérations de réserve.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_cod_deposit_direct_to_platform",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Agent paid the platform directly*\n\n*{{1}}* paid *{{2}}* *{{3}}* of collected cash straight to the platform. Your liability has been reduced by the same amount and the collections it covers are settled — nothing is owed to you for it.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_cod_deposit_direct_to_platform",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Un agent a payé directement la plateforme*\n\n*{{1}}* a versé *{{2}}* *{{3}}* d'espèces collectées directement à la plateforme. Votre passif a été réduit d'autant et les collectes couvertes sont réglées — rien ne vous est dû à ce titre.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_plan_expiring",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your plan is expiring soon*\n\nYour *{{1}}* plan expires in *{{2}}* day(s), on *{{3}}*. Renew or upgrade to avoid interruption.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_plan_expiring",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Votre forfait expire bientôt*\n\nVotre forfait *{{1}}* expire dans *{{2}}* jour(s), le *{{3}}*. Renouvelez ou améliorez-le pour éviter toute interruption.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_plan_expired",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your plan has expired*\n\nYour *{{1}}* plan has expired. You are now on the *{{2}}* plan. Renew or upgrade anytime from your plan settings.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_plan_expired",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Votre forfait a expiré*\n\nVotre forfait *{{1}}* a expiré. Vous êtes maintenant sur le forfait *{{2}}*. Renouvelez ou améliorez à tout moment depuis vos paramètres de forfait.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_cap_exceeded",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Shipment limit reached*\n\nYou have *{{1}}* active shipments, at or above your *{{2}}* plan limit of *{{3}}*. Deliveries keep flowing — upgrade for more headroom.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_shipment_cap_exceeded",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Limite d'expéditions atteinte*\n\nVous avez *{{1}}* expéditions actives, au niveau ou au-dessus de la limite de *{{3}}* de votre forfait *{{2}}*. Les livraisons continuent — améliorez votre forfait pour plus de marge.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_storage_alert",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Storage almost full*\n\nYour media storage is at *{{1}}*% (*{{2}}* of *{{3}}*). Free up space or upgrade your plan.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_storage_alert",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Stockage presque plein*\n\nVotre stockage multimédia est à *{{1}}*% (*{{2}}* sur *{{3}}*). Libérez de l'espace ou améliorez votre forfait.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_storage_stock_request_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Stock change to approve*\n\n*{{1}}* wants to change the stock you hold for *{{2}}* (*{{3}}*) from *{{4}}* to *{{5}}*. It only takes effect once you approve it.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_storage_stock_request_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Modification de stock à approuver*\n\n*{{1}}* souhaite modifier le stock que vous détenez pour *{{2}}* (*{{3}}*) de *{{4}}* à *{{5}}*. La modification ne prend effet qu'après votre approbation.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4",
+                "example 5"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_storage_stock_request_approved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Stock change approved*\n\n*{{1}}* approved your stock change for *{{2}}* (*{{3}}*). It now reads *{{4}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_storage_stock_request_approved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Modification de stock approuvée*\n\n*{{1}}* a approuvé votre modification de stock pour *{{2}}* (*{{3}}*). Le stock est maintenant de *{{4}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_storage_stock_request_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Stock change rejected*\n\n*{{1}}* rejected your stock change for *{{2}}* (*{{3}}*). It stays at *{{4}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agency_storage_stock_request_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Modification de stock refusée*\n\n*{{1}}* a refusé votre modification de stock pour *{{2}}* (*{{3}}*). Le stock reste à *{{4}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agency.wi-mall.com/{{1}}",
+              "example": [
+                "https://agency.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_cod_deposit_recorded",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Deposit recorded by {{1}}*\n\n*{{1}}* recorded a cash deposit of *{{2}}* *{{3}}* from you. Your balance has been reduced by that amount. If this is not what you handed over, report it now.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_cod_deposit_recorded",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Dépôt enregistré par {{1}}*\n\n*{{1}}* a enregistré un dépôt en espèces de *{{2}}* *{{3}}* de votre part. Votre solde a été réduit d'autant. Si ce n'est pas ce que vous avez remis, signalez-le maintenant.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_cod_deposit_confirmed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Deposit confirmed*\n\nYour deposit of *{{1}}* *{{2}}* was confirmed by *{{3}}*. Your balance has been reduced and your COD limit freed up.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_cod_deposit_confirmed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Dépôt confirmé*\n\nVotre dépôt de *{{1}}* *{{2}}* a été confirmé par *{{3}}*. Votre solde a été réduit et votre limite COD libérée.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_cod_deposit_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Deposit rejected*\n\n*{{1}}* rejected your declared deposit of *{{2}}* *{{3}}*. Reason: *{{4}}*. The cash is still on your balance and your deposit deadline is running again — sort this out with them, or report it.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_cod_deposit_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Dépôt refusé*\n\n*{{1}}* a refusé votre dépôt déclaré de *{{2}}* *{{3}}*. Motif: *{{4}}*. Les espèces restent sur votre solde et votre délai de dépôt court à nouveau — réglez cela avec eux ou signalez-le.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3",
+                "example 4"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_shipment_offer_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*New delivery offer*\n\n*{{1}}* is offering you a delivery for order *{{2}}*. Review and accept it before it expires.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_shipment_offer_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nouvelle offre de livraison*\n\n*{{1}}* vous propose une livraison pour la commande *{{2}}*. Consultez-la et acceptez-la avant qu'elle n'expire.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_shipment_offer_reminder",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery offer still waiting*\n\nYour delivery offer from *{{1}}* for order *{{2}}* is still open. Accept it now before another agent takes it.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_shipment_offer_reminder",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Offre de livraison en attente*\n\nVotre offre de livraison de *{{1}}* pour la commande *{{2}}* est toujours ouverte. Acceptez-la avant qu'un autre agent ne la prenne.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_shipment_offer_expired",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery offer expired*\n\nThe delivery offer from *{{1}}* for order *{{2}}* expired because it wasn't accepted in time.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_shipment_offer_expired",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Offre de livraison expirée*\n\nL'offre de livraison de *{{1}}* pour la commande *{{2}}* a expiré faute d'acceptation à temps.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_shipment_reassigned_away",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Delivery reassigned*\n\nThe delivery for order *{{1}}* has been reassigned to another agent by *{{2}}*. You are no longer responsible for it, and its customer and tracking details are no longer available to you. It stays in your activity history.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "agent_shipment_reassigned_away",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Livraison réattribuée*\n\nLa livraison de la commande *{{1}}* a été réattribuée à un autre agent par *{{2}}*. Vous n'en êtes plus responsable, et ses informations client et de suivi ne vous sont plus accessibles. Elle reste dans votre historique d'activité.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_request_received",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*New agency request*\n\n*{{1}}* would like you to deliver for them. Review the request to accept or decline it.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_request_received",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Nouvelle demande d'agence*\n\n*{{1}}* souhaite que vous livriez pour eux. Consultez la demande pour l'accepter ou la refuser.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_approved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Application approved*\n\n*{{1}}* approved your application. You can now receive delivery offers from them.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_approved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Candidature approuvée*\n\n*{{1}}* a approuvé votre candidature. Vous pouvez désormais recevoir leurs offres de livraison.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_rejected",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Application declined*\n\n*{{1}}* declined your application. You can apply again later, or browse other agencies.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_rejected",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Candidature refusée*\n\n*{{1}}* a refusé votre candidature. Vous pouvez postuler à nouveau plus tard ou explorer d'autres agences.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_status_request_raised",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Contract change needs your answer*\n\n*{{1}}* wants to *{{2}}*. It does not take effect until you answer — open the request to approve or decline it.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_status_request_raised",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Un changement de contrat attend votre réponse*\n\n*{{1}}* souhaite *{{2}}*. Cela ne prend pas effet tant que vous n'avez pas répondu — ouvrez la demande pour l'approuver ou la refuser.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_status_request_resolved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Contract request {{3}}*\n\nThe request to *{{1}}* with *{{2}}* was *{{3}}*.\n\nTap Open below for the full details.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_status_request_resolved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Demande de contrat {{3}}*\n\nLa demande de *{{1}}* avec *{{2}}* a été *{{3}}*.\n\nAppuyez sur Ouvrir ci-dessous pour tous les détails.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_terms_countered",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Update: {{1}} proposed different terms*\n\n*{{1}}* has changed the terms of your pending contract. Review what they are offering, then accept it, decline it, or counter again.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_terms_countered",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Mise à jour : {{1}} a proposé d'autres conditions*\n\n*{{1}}* a modifié les conditions de votre contrat en attente. Examinez leur offre, puis acceptez-la, refusez-la ou faites une nouvelle contre-proposition.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_terms_proposed",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Update: {{1}} wants to change your contract terms*\n\n*{{1}}* has proposed a change to your contract. **Your current terms stay in force until you answer** — nothing changes unless you accept. Open it to review, accept, decline or counter.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_terms_proposed",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Mise à jour : {{1}} souhaite modifier vos conditions*\n\n*{{1}}* a proposé une modification de votre contrat. **Vos conditions actuelles restent en vigueur jusqu'à votre réponse** — rien ne change sans votre accord. Ouvrez la proposition pour l'examiner, l'accepter, la refuser ou faire une contre-proposition.",
+          "example": {
+            "body_text": [
+              [
+                "example 1"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_terms_resolved",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Contract terms proposal {{2}}*\n\nThe proposed change to your contract with *{{1}}* was *{{2}}*. Open the contract to see the terms now in force.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_contract_terms_resolved",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Proposition de conditions {{2}}*\n\nLa modification proposée à votre contrat avec *{{1}}* a été *{{2}}*. Ouvrez le contrat pour voir les conditions actuellement en vigueur.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_plan_expiring",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your plan is expiring soon*\n\nYour *{{1}}* plan expires in *{{2}}* day(s), on *{{3}}*. Renew or upgrade to keep your higher delivery limit.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_plan_expiring",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Votre forfait expire bientôt*\n\nVotre forfait *{{1}}* expire dans *{{2}}* jour(s), le *{{3}}*. Renouvelez ou améliorez-le pour conserver votre limite de livraisons plus élevée.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_plan_expired",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Your plan has expired*\n\nYour *{{1}}* plan has expired. You are now on the *{{2}}* plan, which may lower how many deliveries you can hold at once. Upgrade anytime from your plan settings.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_plan_expired",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Votre forfait a expiré*\n\nVotre forfait *{{1}}* a expiré. Vous êtes maintenant sur le forfait *{{2}}*, ce qui peut réduire le nombre de livraisons simultanées. Améliorez à tout moment depuis vos paramètres de forfait.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_storage_alert",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Storage almost full*\n\nYour media storage is at *{{1}}*% (*{{2}}* of *{{3}}*). Free up space or upgrade your plan.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Open",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/en/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent_storage_alert",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Stockage presque plein*\n\nVotre stockage multimédia est à *{{1}}*% (*{{2}}* sur *{{3}}*). Libérez de l'espace ou améliorez votre forfait.",
+          "example": {
+            "body_text": [
+              [
+                "example 1",
+                "example 2",
+                "example 3"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "URL",
+              "text": "Ouvrir",
+              "url": "https://agent.wi-mall.com/{{1}}",
+              "example": [
+                "https://agent.wi-mall.com/fr/shipments/SHP-2026-000123"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "wi_mall_phone_verification",
+      "language": "en",
+      "category": "AUTHENTICATION",
+      "components": [
+        {
+          "type": "BODY",
+          "add_security_recommendation": true
+        },
+        {
+          "type": "FOOTER",
+          "code_expiration_minutes": 10
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "OTP",
+              "otp_type": "COPY_CODE",
+              "text": "Copy code"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "wi_mall_phone_verification",
+      "language": "fr",
+      "category": "AUTHENTICATION",
+      "components": [
+        {
+          "type": "BODY",
+          "add_security_recommendation": true
+        },
+        {
+          "type": "FOOTER",
+          "code_expiration_minutes": 10
+        },
+        {
+          "type": "BUTTONS",
+          "buttons": [
+            {
+              "type": "OTP",
+              "otp_type": "COPY_CODE",
+              "text": "Copier le code"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "wi_mall_phone_verification_utility",
+      "language": "en",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Wi-Mall verification*\n\nYour verification code is {{1}} and it expires in {{2}} minutes. Do not share it with anyone.\n\nIf you did not ask to verify a number, ignore this message and nothing will change.",
+          "example": {
+            "body_text": [
+              [
+                "123456",
+                "10"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "wi_mall_phone_verification_utility",
+      "language": "fr",
+      "category": "UTILITY",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "*Vérification Wi-Mall*\n\nVotre code de vérification est {{1}} et il expire dans {{2}} minutes. Ne le partagez avec personne.\n\nSi vous n'avez pas demandé à vérifier un numéro, ignorez ce message et rien ne changera.",
+          "example": {
+            "body_text": [
+              [
+                "123456",
+                "10"
+              ]
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

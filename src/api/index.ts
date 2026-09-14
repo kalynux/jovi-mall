@@ -409,8 +409,25 @@ import agencyRosterRoutes from '../modules/agents/routes/agency-roster.routes';
 import internalAgentRoutes from '../modules/agents/routes/internal-agent.routes';
 import internalShipmentRoutes from '../modules/shipments/internal-shipment.routes';
 import internalAdminRoutes from './routes/internal-admin.routes';
+import { buildKycRouter } from '../modules/identity-verification/routes/kyc.routes';
 router.use('/agent', agentSelfRoutes);
 router.use('/agency/agents', agencyRosterRoutes);
+
+/**
+ * Identity verification — the same surface for all three roles, from one factory.
+ *
+ * ⚠ **Three SEPARATE Router instances, never one mounted three times.** `buildKycRouter`
+ * attaches `requireRole([role])` with `router.use`, and a shared instance would re-run every
+ * one of those guards on every mount — so an agent would be required to be a vendor as well.
+ * Same reason `buildAdminCodRouter(guards)` is a factory.
+ *
+ * Mounted here rather than inside each role's own router because the surface is genuinely one
+ * thing: a slot vocabulary, a lock rule and an upload policy that must not differ by role. See
+ * `modules/identity-verification/domain/kyc-subject.ts`.
+ */
+router.use('/vendor/kyc', buildKycRouter('vendor'));
+router.use('/agency/kyc', buildKycRouter('agency'));
+router.use('/agent/kyc', buildKycRouter('agent'));
 // `/admin/agents` was here. Deleted at the cutover (Phase 5 Part E); the same factory is
 // instantiated with `[requireAdminCaller]` on `/api/internal/admin/agents`.
 

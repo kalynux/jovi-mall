@@ -693,6 +693,16 @@ export const ERROR_CODES = Object.freeze({
     CONFIG_INVALID_STORAGE_PROVIDER: 'CONFIG_INVALID_STORAGE_PROVIDER',
     CONFIG_INVALID_GEO_PROVIDER: 'CONFIG_INVALID_GEO_PROVIDER',
     /**
+     * `MAIL_PROVIDER` or a name inside `MAIL_PROVIDER_CHAIN` is not a provider.
+     *
+     * Fatal even inside the chain, and for the reason `buildChain` gives in the geocoding
+     * factory: silently skipping a misspelt name is how a deployment runs on its fallback
+     * believing it runs on its primary. For mail that reading is worse than for geocoding,
+     * because the fallback is frequently `console` — which delivers nothing and says so only
+     * to stdout.
+     */
+    CONFIG_INVALID_MAIL_PROVIDER: 'CONFIG_INVALID_MAIL_PROVIDER',
+    /**
      * `UPLOAD_VIRUS_SCAN_PROVIDER` names something that cannot scan — `cloud` (declared,
      * never implemented), `mock` in production (a test double), or a typo.
      *
@@ -756,8 +766,65 @@ export const ERROR_CODES = Object.freeze({
     // chosen during onboarding and immutable afterwards (tax/shipping policy).
     PROFILE_COUNTRY_IMMUTABLE: 'PROFILE_COUNTRY_IMMUTABLE',
 
+    // ── PHONE VERIFICATION (WhatsApp OTP) ─────────────────────────────────────
+    // The dashboard roles — vendor, agency, agent — and administrators never
+    // register through the bot, so they hold no WhatsApp CONNECTION and the
+    // stronger connection-proof in ContactChangeService cannot reach them. These
+    // are the OTP path's refusals. Each is raised at exactly ONE status, so the
+    // test:errors census cannot see two categories for one code.
+    //
+    // No usable number on the account to send a code to.
+    PHONE_VERIFICATION_NO_TARGET: 'PHONE_VERIFICATION_NO_TARGET',
+    // Wrong code. Carries `attemptsLeft` — deliberately: it tells the holder of
+    // the real code they mistyped, and tells an attacker only what they could
+    // already count themselves.
+    PHONE_VERIFICATION_CODE_INVALID: 'PHONE_VERIFICATION_CODE_INVALID',
+    // Past its TTL, or no verification in progress at all. Distinct from INVALID
+    // because the remedy differs — request a new code rather than retype this one
+    // — which is the same argument CONNECTION_CODE_EXPIRED makes.
+    PHONE_VERIFICATION_CODE_EXPIRED: 'PHONE_VERIFICATION_CODE_EXPIRED',
+    // The attempt limit is spent. THIS is the security of a six-digit code, not
+    // its length, so the refusal is explicit rather than folded into INVALID.
+    PHONE_VERIFICATION_TOO_MANY_ATTEMPTS: 'PHONE_VERIFICATION_TOO_MANY_ATTEMPTS',
+    // Resend cooldown. Account-scoped, because a number-scoped one bounds nothing
+    // when the attacker chooses the number.
+    PHONE_VERIFICATION_RESEND_TOO_SOON: 'PHONE_VERIFICATION_RESEND_TOO_SOON',
+    // WhatsApp refused the send. Outside the 24-hour window that usually means the
+    // AUTHENTICATION template is not approved on the WABA — which is the current
+    // state of this deployment, measured 2026-09-14.
+    PHONE_VERIFICATION_DELIVERY_FAILED: 'PHONE_VERIFICATION_DELIVERY_FAILED',
+
     // ── MAIL ──────────────────────────────────────────────────────────────────
     MAIL_TEMPLATE_NOT_FOUND: 'MAIL_TEMPLATE_NOT_FOUND',
+    // The five below are the CLASSIFICATION `ChainedMailProvider` fails over on,
+    // and the whole point of them is that the chain reads `error.code` rather
+    // than re-parsing a provider's body — the mechanism ChainedGeocodingProvider
+    // already uses. Every adapter maps its own vendor vocabulary onto exactly
+    // these, so the chain contains no provider names.
+    //
+    // Selected provider has no adapter or no credentials in this build.
+    MAIL_PROVIDER_NOT_CONFIGURED: 'MAIL_PROVIDER_NOT_CONFIGURED',
+    // The provider's sending ALLOWANCE is spent — Brevo `402/not_enough_credits`,
+    // Resend `429/{daily,monthly}_quota_exceeded`, `403/email_above_quota`. This
+    // is the one that LATCHES to the provider's own reset boundary: nothing
+    // changes until the window rolls over, so re-asking only spends round trips.
+    MAIL_PROVIDER_QUOTA_EXCEEDED: 'MAIL_PROVIDER_QUOTA_EXCEEDED',
+    // Too fast right now — Brevo `429`, Resend `429/rate_limit_exceeded`.
+    // Deliberately NOT the same code as the one above even though both arrive as
+    // 429 at Resend: the remedy is seconds, not a day, and latching a per-second
+    // limit until midnight throws away the primary's whole remaining allowance.
+    MAIL_PROVIDER_RATE_LIMITED: 'MAIL_PROVIDER_RATE_LIMITED',
+    // 5xx, DNS, timeout, connection refused.
+    MAIL_PROVIDER_UNAVAILABLE: 'MAIL_PROVIDER_UNAVAILABLE',
+    // The credential was refused (401, and Resend's suspended/restricted keys).
+    // NEVER latched — see `mail.chain.ts`: a latch here would make a wrong key
+    // quiet, and quiet is exactly what this failure must not be.
+    MAIL_PROVIDER_AUTH_FAILED: 'MAIL_PROVIDER_AUTH_FAILED',
+    // The provider read the request and refused IT — an unverified sender domain,
+    // a malformed address, a body over the size cap.
+    MAIL_SEND_REJECTED: 'MAIL_SEND_REJECTED',
+    // Every provider in the chain failed. Carries the last provider's verdict.
+    MAIL_ALL_PROVIDERS_FAILED: 'MAIL_ALL_PROVIDERS_FAILED',
 
     // ── VENDORS ─────────────────────────────────────────────────────────────
     VENDOR_UNSUPPORTED_FISCAL_CALENDAR: 'VENDOR_UNSUPPORTED_FISCAL_CALENDAR',
@@ -1250,6 +1317,51 @@ export const ERROR_CODES = Object.freeze({
      * which is an account-recovery hole rather than a contact edit.
      */
     CONTACT_CHANGE_PHONE_UNPROVEN: 'CONTACT_CHANGE_PHONE_UNPROVEN',
+
+    // ── IDENTITY VERIFICATION (`/api/{vendor,agency,agent}/kyc`) ─────────────
+    //
+    // ⚠ Five codes, and NONE of them is "your submission is incomplete". That is not an
+    // omission: the backend grades nothing here, by decision — the required/optional split
+    // lives in the administration dashboard, which computes the estimated verdict and
+    // pre-populates a rejection reason from it. See `core/types/kyc-documents.types.ts`.
+
+    /** The role has no verification record. An account in a state that cannot submit one. */
+    KYC_SUBJECT_NOT_FOUND: 'KYC_SUBJECT_NOT_FOUND',
+
+    /**
+     * The named slot does not exist for this role.
+     *
+     * `details.allowed` carries the role's own slot list. Deliberately a refusal rather than
+     * a silent no-op: a write that reports success having stored nothing is the hardest
+     * failure there is to diagnose from a client, because every observable signal agrees it
+     * worked.
+     */
+    KYC_SLOT_UNKNOWN: 'KYC_SLOT_UNKNOWN',
+
+    /**
+     * The record is under review, or already verified, and is therefore frozen.
+     *
+     * Two situations with one code, because the remedy is the same — wait for, or ask about,
+     * a decision — and `details.status` / `details.submittedAt` distinguish them. Freezing a
+     * VERIFIED record is the load-bearing half: without it an approved applicant could swap
+     * the identity card an administrator approved for somebody else's, keeping the verdict.
+     */
+    KYC_LOCKED: 'KYC_LOCKED',
+
+    /** A multi-value slot is full. `details.max` and `details.current` carry the numbers. */
+    KYC_SLOT_FULL: 'KYC_SLOT_FULL',
+
+    /** The file named for removal is not in that slot. */
+    KYC_DOCUMENT_NOT_FOUND: 'KYC_DOCUMENT_NOT_FOUND',
+
+    /**
+     * The upload request carried no file.
+     *
+     * A dedicated code rather than an `UPLOAD_POLICY_VIOLATION`, matching
+     * `SHIPMENT_PROOF_FILE_REQUIRED`: the overwhelmingly likely cause is the wrong multipart
+     * field name, and a violation envelope buries that behind a generic policy failure.
+     */
+    KYC_FILE_REQUIRED: 'KYC_FILE_REQUIRED',
 
     // ── VENDOR ADMINISTRATION (wi-admin's `/api/internal/admin/vendors`) ──────
     VENDOR_NOT_FOUND: 'VENDOR_NOT_FOUND',

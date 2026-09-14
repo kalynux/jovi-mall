@@ -97,7 +97,7 @@ function loadGeocodingConfig(): GeocodingConfig {
         baseUrl: process.env.GEO_NOMINATIM_BASE_URL || 'https://nominatim.openstreetmap.org',
         userAgent:
             process.env.GEO_NOMINATIM_USER_AGENT ||
-            'jovi-mall/1.0 (+https://jovimall.com; geocoding)',
+            'wi-mall/1.0 (+https://wi-mall.com; geocoding)',
         email: process.env.GEO_NOMINATIM_EMAIL || undefined,
     };
 

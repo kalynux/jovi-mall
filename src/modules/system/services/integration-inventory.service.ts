@@ -6,6 +6,7 @@ import { getStorageProviderType, storageConfig } from '../../../core/storage';
 import { isFcmConfigured } from '../../../config/fcm.config';
 import { vectoriserConfig } from '../../../config/vectoriser.config';
 import { internalAdminApiEnabled } from '../../../config/internal-admin.config';
+import { getMailChain, getMailProviderType, mailConfig } from '../../mail/mail.instance';
 import {
     TRACKING_INTEGRATION_CONFIG,
     trackingIntegrationEnabled,
@@ -183,14 +184,71 @@ function configurationOf(key: IntegrationKey): {
                 detail: { provider: getStorageProviderType() },
             };
 
+        /**
+         * Email. The key is still `smtp` for wire compatibility — see the catalog row.
+         *
+         * ⚠ `configured` used to be `provider !== 'console' && Boolean(SMTP_HOST)`, which became
+         * WRONG the moment a provider that is not SMTP existed: a deployment sending everything
+         * through Brevo with no relay configured would have been reported as unconfigured, in
+         * red, while working perfectly. It now asks the question it always meant to ask — is
+         * there anything here that actually delivers — which is false for `console` and for a
+         * chain that collapsed to it, and true otherwise.
+         */
         case 'smtp': {
-            const provider = process.env.MAIL_PROVIDER || 'console';
+            const provider = getMailProviderType();
+            /**
+             * ⚠ `getMailChain()` builds the singleton on first call, and a single-provider
+             * setting with no credential makes the factory THROW
+             * (`MAIL_PROVIDER_NOT_CONFIGURED`). Letting that escape would take down the
+             * operations page over exactly the misconfiguration the page exists to report —
+             * the same failure direction ADR-014 D-4 refuses for maintenance mode. Construction
+             * is local and does no I/O, so this catch costs nothing when the config is sound.
+             */
+            let chain: ReturnType<typeof getMailChain> = null;
+            let buildError: string | null = null;
+            try {
+                chain = getMailChain();
+            } catch (error) {
+                buildError = error instanceof Error ? error.message : String(error);
+            }
+            const latches = chain?.describeLatches() ?? [];
+
+            const deliverable = buildError
+                ? []
+                : chain
+                    ? chain.chain.filter((name) => name !== 'console')
+                    : provider === 'console' ? [] : [provider];
+
             return {
-                configured: provider !== 'console' && Boolean(process.env.SMTP_HOST),
+                configured: deliverable.length > 0,
                 detail: {
                     provider,
-                    host: process.env.SMTP_HOST || null,
-                    port: process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : null,
+                    buildError,
+                    // The order in force, after unkeyed members were skipped at build time —
+                    // NOT what MAIL_PROVIDER_CHAIN says. Those differ exactly when a key is
+                    // missing, which is the case an operator is looking at this row to find.
+                    chain: chain ? chain.chain.join(' → ') : null,
+                    /**
+                     * ⚠ Read off `mailConfig`, never `process.env`. The config is loaded ONCE at
+                     * module evaluation and is what the factory actually built from; re-reading
+                     * the environment here would let this row and the `chain` line above
+                     * disagree — reporting a credential as present while the adapter that needed
+                     * it was skipped for want of exactly that credential. Which is the single
+                     * most confusing thing this row could say.
+                     */
+                    brevoKeySet: Boolean(mailConfig.brevo),
+                    resendKeySet: Boolean(mailConfig.resend),
+                    smtpHost: mailConfig.smtp?.host ?? null,
+                    /**
+                     * The half of this feature that is otherwise invisible: a message delivered
+                     * by the reserve after the primary refused it looks identical to an ordinary
+                     * send from every other angle. `null` means no provider is latched.
+                     */
+                    latched: latches.length > 0
+                        ? latches
+                            .map((l) => `${l.provider} (${l.kind}, ${l.reason}) until ${l.until.toISOString()}`)
+                            .join('; ')
+                        : null,
                 },
             };
         }

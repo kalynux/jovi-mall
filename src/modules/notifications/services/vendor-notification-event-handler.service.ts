@@ -30,7 +30,7 @@ import {
     ChannelText
 } from '../catalog/notification-catalog';
 import { Language, DEFAULT_LANGUAGE, resolveLanguage, META_LANGUAGE_CODE } from '../catalog/notification-i18n';
-import { RenderContext, toTelegramNotificationBody } from '../catalog/message-renderer';
+import { RenderContext, toTelegramNotificationBody, toWhatsAppNotificationBody } from '../catalog/message-renderer';
 import { DomainEvent } from '../../../core/events/event-bus';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
@@ -1182,7 +1182,7 @@ export class VendorNotificationEventHandler {
                 );
             } else {
                 result = await getWhatsAppMessagingService().send(
-                    WaServiceMessage.text({ to, body: `${content.subject}\n\n${content.body}` })
+                    WaServiceMessage.text({ to, body: toWhatsAppNotificationBody(content.subject, content.body) })
                 );
             }
         } else {

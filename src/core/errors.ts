@@ -69,6 +69,13 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.NOT_FOUND]: 'Resource not found',
     [ERROR_CODES.VALIDATION_ERROR]: 'Validation failed',
 
+    [ERROR_CODES.KYC_SUBJECT_NOT_FOUND]: 'No verification record for this account',
+    [ERROR_CODES.KYC_SLOT_UNKNOWN]: 'That is not a document this account can provide',
+    [ERROR_CODES.KYC_LOCKED]: 'Your verification documents cannot be changed right now',
+    [ERROR_CODES.KYC_SLOT_FULL]: 'No room left for another file in this slot',
+    [ERROR_CODES.KYC_DOCUMENT_NOT_FOUND]: 'That document is not attached to this slot',
+    [ERROR_CODES.KYC_FILE_REQUIRED]: 'Attach at least one file',
+
     [ERROR_CODES.AUTH_INVALID_CREDENTIALS]: 'Invalid credentials',
     [ERROR_CODES.AUTH_TOKEN_EXPIRED]: 'Access token expired',
     [ERROR_CODES.AUTH_TOKEN_INVALID]: 'Invalid token',
@@ -456,6 +463,36 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.CONFIG_MISSING_WA_PHONE_ID]: 'WHATSAPP_PHONE_NUMBER_ID environment variable is required',
 
     [ERROR_CODES.MAIL_TEMPLATE_NOT_FOUND]: 'Mail template not found',
+
+    /**
+     * Only the last of these six is `external_service` and therefore actually substituted at
+     * the boundary; the other five are `validation`/`rate_limit` and keep their thrown message.
+     * They are registered anyway so `test:errors` § 8 stays green and so a future site that
+     * raises one at a 5xx does not suddenly render "An unexpected error occurred".
+     */
+    [ERROR_CODES.PHONE_VERIFICATION_NO_TARGET]: 'No phone number on this account to verify',
+    [ERROR_CODES.PHONE_VERIFICATION_CODE_INVALID]: 'That verification code is not correct',
+    [ERROR_CODES.PHONE_VERIFICATION_CODE_EXPIRED]: 'That verification code has expired',
+    [ERROR_CODES.PHONE_VERIFICATION_TOO_MANY_ATTEMPTS]: 'Too many incorrect codes. Request a new one.',
+    [ERROR_CODES.PHONE_VERIFICATION_RESEND_TOO_SOON]: 'A code was sent recently. Please wait before requesting another.',
+    [ERROR_CODES.PHONE_VERIFICATION_DELIVERY_FAILED]: 'The verification code could not be delivered',
+
+    /**
+     * These seven matter more than most registry entries, because every one of them is
+     * `external_service` or `internal` — the two categories whose thrown message the boundary
+     * REPLACES with what is written here. Without an entry each renders as the generic
+     * "An unexpected error occurred", which is the exact failure `test:errors` § 8 exists to
+     * catch. The thrown messages name the provider and the status and are journaled; these are
+     * what a client is allowed to read.
+     */
+    [ERROR_CODES.MAIL_PROVIDER_NOT_CONFIGURED]: 'No email provider is configured',
+    [ERROR_CODES.MAIL_PROVIDER_QUOTA_EXCEEDED]: 'The email provider has no sending allowance left',
+    [ERROR_CODES.MAIL_PROVIDER_RATE_LIMITED]: 'The email provider is rate limiting this platform',
+    [ERROR_CODES.MAIL_PROVIDER_UNAVAILABLE]: 'The email provider is unreachable',
+    [ERROR_CODES.MAIL_PROVIDER_AUTH_FAILED]: 'The email provider refused this platform\'s credentials',
+    [ERROR_CODES.MAIL_SEND_REJECTED]: 'The email provider refused this message',
+    [ERROR_CODES.MAIL_ALL_PROVIDERS_FAILED]: 'The message could not be sent by any configured email provider',
+    [ERROR_CODES.CONFIG_INVALID_MAIL_PROVIDER]: 'Invalid mail provider configuration',
 
     [ERROR_CODES.VENDOR_FISCAL_CALENDAR_INVALID]: 'Invalid fiscal calendar configuration',
     [ERROR_CODES.VENDOR_ONBOARDING_CONCURRENT_MODIFICATION]: 'Vendor profile was modified by another request. Please refresh and try again.',

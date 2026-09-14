@@ -54,7 +54,7 @@ export function buildMagicLinkUrl(token: string): string | null {
 /** How to name the site in chat copy. The configured host beats a hardcoded brand. */
 function storefrontLabel(): string {
   const base = process.env.STOREFRONT_URL;
-  if (!base) return 'the Jovi Mall website';
+  if (!base) return 'the Wi-Mall website';
 
   return base.replace(/^https?:\/\//, '').replace(/\/+$/, '');
 }

@@ -96,15 +96,24 @@ export const INTEGRATION_CATALOG: readonly IntegrationSpec[] = Object.freeze([
             'Local provider only: a read-only writability check on the root, which creates nothing. '
             + 'Cloudinary and Firebase are configuration-only',
     },
+    /**
+     * ⚠ **The key is still `smtp` and the subject is no longer SMTP.** This row now covers the
+     * whole mail provider chain — Brevo, Resend and SMTP — and the key was deliberately left
+     * alone: it is a wire value that wi-admin proxies and `?probe=smtp` selects, so renaming it
+     * to `email` would break a dashboard and a query parameter to make a label read better. The
+     * label carries the truth instead.
+     */
     {
         key: 'smtp',
-        label: 'Email (SMTP)',
+        label: 'Email (provider chain)',
         impact: 'Verification links, receipts and alerts are not delivered',
         reachability: 'on_demand',
         reachabilityNote:
-            'transporter.verify() opens a connection and does EHLO/AUTH without sending anything — '
-            + 'the one genuinely safe probe here. Off the default read because it costs a TCP+TLS '
-            + 'handshake and some providers rate-limit auth attempts',
+            'Probing asks each chain member to prove it can reach its backend without sending: '
+            + "Brevo GET /v3/account, Resend GET /domains, SMTP transporter.verify() (EHLO/AUTH). "
+            + 'None consumes a sending allowance. Off the default read because it costs a round '
+            + 'trip per member and some providers rate-limit auth attempts. Between probes this '
+            + 'row reports what REAL sends last learned — every adapter records its own outcome',
     },
     {
         key: 'telegram',

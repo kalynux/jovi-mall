@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../../api/middlewares/auth.middleware';
 import { UserController } from './user.controller';
 import { ContactChangeController } from './contact-change.controller';
+import { PhoneVerificationController } from '../phone-verification/phone-verification.controller';
 import connectionRoutes from '../channel-connections/channel-connection.routes';
 
 const router = Router();
@@ -44,6 +45,24 @@ router.delete('/email/pending', ContactChangeController.cancelEmail);
 router.patch('/phone', ContactChangeController.requestPhone);
 router.post('/phone/confirm', ContactChangeController.confirmPhone);
 router.delete('/phone/pending', ContactChangeController.cancelPhone);
+
+/**
+ * WhatsApp OTP — the SECOND proof of a phone number.
+ *
+ * `/phone/confirm` above proves a number by requiring an existing WhatsApp CONNECTION on it: a
+ * message actually arrived from that number, which is stronger than any code we send
+ * ourselves. That works for customers, who reach the platform through the bot.
+ *
+ * It cannot work for vendors, agencies, agents or administrators — they sign up on a dashboard
+ * and may never message the platform, so there is no connection to check and `phone_verified`
+ * could never become true for them. These three routes are that path.
+ *
+ * ⚠ Every segment here is a LITERAL and no `:param` is declared under `/phone`, so nothing
+ * shadows anything. Check that again before adding `/phone/:id`.
+ */
+router.get('/phone/verify', PhoneVerificationController.state);
+router.post('/phone/verify/request', PhoneVerificationController.request);
+router.post('/phone/verify/confirm', PhoneVerificationController.confirm);
 
 /**
  * POST /api/me/close

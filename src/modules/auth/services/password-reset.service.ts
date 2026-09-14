@@ -199,7 +199,7 @@ export class PasswordResetService {
                 const { WhatsAppServiceMessenger } = await import('../../whatsapp/services/whatsapp-service-messenger');
                 await new WhatsAppServiceMessenger().sendText({
                     to: user.login_phone,
-                    body: `Reset your Jovi Mall password: ${link}\n\nThis link expires in ${minutes} minutes. If you did not ask for it, ignore this message — your password has not changed.`,
+                    body: `Reset your Wi-Mall password: ${link}\n\nThis link expires in ${minutes} minutes. If you did not ask for it, ignore this message — your password has not changed.`,
                     previewUrl: false,
                 });
             } catch (error) {

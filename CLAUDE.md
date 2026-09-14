@@ -308,6 +308,55 @@ npm run test:connections                       # the unified messaging-connectio
                                                # explain what was deleted are the most useful thing in
                                                # that diff, and a scan that forces their removal has made
                                                # the codebase worse
+npm run test:mail-chain                        # the mail provider failover chain (110, no DB, no
+                                               # network) — the whole classification table, both
+                                               # HTTP adapters against a fake `fetch`, and the
+                                               # latch. It exists because the subject is what a
+                                               # provider does when it says "your allowance is
+                                               # spent", and that cannot be produced on demand
+                                               # against a live account without burning a day's
+                                               # quota — which, on a free tier of 300, means
+                                               # destroying the platform's ability to send mail
+                                               # for a day in order to test that it can. Its
+                                               # highest-value cases are the ones a naive
+                                               # mapping gets BACKWARDS: Brevo's
+                                               # `not_enough_credits` at **400** as well as 402
+                                               # (a status-only rule reads it as a malformed
+                                               # request, does not latch, and re-asks an
+                                               # exhausted provider all day), Resend's **three**
+                                               # different conditions sharing one 429, and its
+                                               # 403 unverified-sender-domain being a rejected
+                                               # MESSAGE rather than a bad credential — calling
+                                               # it auth sends an operator to rotate a key that
+                                               # was never wrong. Plus the rule that outranks
+                                               # everything (a latch may never DROP a message,
+                                               # so a fully-latched chain still tries) and
+                                               # SOURCE SCANS for the three structural
+                                               # invariants: MailService reaches the provider
+                                               # through the singleton and builds none of its
+                                               # own, the chain names no provider at all, and no
+                                               # adapter throws a bare Error
+npm run verify:mail-providers                  # the same chain against the REAL provider APIs —
+                                               # NEEDS keys. Read-only by default: credentials,
+                                               # Brevo's remaining allowance, Resend's domain
+                                               # verification state. `-- --send=you@example.com`
+                                               # additionally sends one real message per provider
+                                               # and one through the chain. Sending is OPT-IN with
+                                               # no default recipient, because ADR-014 D-2's rule
+                                               # applies — on a 300/day free tier a suite that
+                                               # sent on every run would spend 1% of the
+                                               # platform's daily capacity to report that it
+                                               # works. It SKIPS GREEN and says so per provider
+                                               # with no credential. Its § 5 is the claim
+                                               # test:mail-chain structurally cannot make: a
+                                               # deliberately-invalid key produces a REAL 401 and
+                                               # the next member is proven to carry the message —
+                                               # chosen over forcing a quota refusal because it
+                                               # costs no allowance and because `auth` is the
+                                               # verdict that must not latch, so it leaves no
+                                               # state behind. First live run found the Gmail
+                                               # App Password revoked (`535-5.7.8`), which no
+                                               # offline suite could see
 npm run test:email-verification                # the two emailed-token links (30, no DB) — that
                                                # registration verification points at the STOREFRONT
                                                # page rather than at this API, that POST and the
@@ -1229,9 +1278,13 @@ Generic `BaseRepository<TDoc, TDomain>` provides: `findOne`, `findById`, `pagina
 ### Storage (`src/core/storage/`)
 Factory + Strategy pattern. Active provider is selected via `STORAGE_PROVIDER` env var (`local` | `firebase` | `cloudinary`). Use `getStorageProvider()` singleton — never instantiate providers directly. Interface: `IStorageProvider` in `storage-provider.interface.ts`.
 
-**Three storage trees are PRIVATE, and the classification is `core/storage/storage-trees.ts`** (ADR-A01 D-2). `digital/`, `shipments/` and `ticket-attachments/` are off `express.static`; every other tree is mounted, and the mount list is **derived** from that table so the two cannot drift. An **unknown tree is private** — `isPrivateStorageKey` fails closed, so a tree added next year is private until somebody classifies it, and `test:uploads` fails if any `folder:` literal is unclassified rather than letting its files 404 silently.
+**Several storage trees are PRIVATE, and the classification is `core/storage/storage-trees.ts`** (ADR-A01 D-2) — `digital/`, `shipments/`, `kyc/`, `admin-identity/` and `ticket-attachments/` today. They are off `express.static`; every other tree is mounted, and the mount list is **derived** from that table so the two cannot drift. An **unknown tree is private** — `isPrivateStorageKey` fails closed, so a tree added next year is private until somebody classifies it, and `test:uploads` fails if any `folder:` literal is unclassified rather than letting its files 404 silently.
 
-The enforcement is `toFileDetail`: a private key gets **`url: null`** and `access: 'authorized'`, and the bytes come from the owning entity's own route (`GET /api/digital/download/:token`, `GET /api/{agent,agency}/shipments/:id/delivery-proof/file`). `url` is `string | null` rather than an authorized path **because a path is a string indistinguishable from a public URL** — clients would keep rendering it into nothing; the type change makes the compiler produce the migration list instead.
+⚠ **This sentence said "Three storage trees" until 2026-09-14 and named three.** Two landed that day from separate pieces of work — `kyc/` (a vendor's, agency's or agent's identity documents) and `admin-identity/` (a staff member's) — so **re-read the table rather than this paragraph**; `test:uploads` pins the exact list and is what is authoritative. The two new ones are deliberately **separate trees** despite holding the same kind of document: one holds applicants, the other employees, and a retention or export policy written for either must not silently apply to both.
+
+⚠ **Adding a private tree is a TWO-REPO change in the same commit.** wi-admin holds a verbatim copy of this map (`admin/src/infra/storage/storage-trees.ts`, BR-015 L-3) because it builds `FileDetail.url` itself, and its `test:files` diffs the two **in both directions**. A tree added here and not mirrored there fails that suite; the safe direction is the one it fails in, but only until somebody classifies a tree as public.
+
+The enforcement is `toFileDetail`: a private key gets **`url: null`** and `access: 'authorized'`, and the bytes come from the owning entity's own route (`GET /api/digital/download/:token`, `GET /api/{agent,agency}/shipments/:id/delivery-proof/file`, `GET /api/{vendor,agency,agent}/kyc/documents/:fileId/content`, and — for an administrator, audited — wi-admin's `GET /api/v1/files/:fileId/content`). `url` is `string | null` rather than an authorized path **because a path is a string indistinguishable from a public URL** — clients would keep rendering it into nothing; the type change makes the compiler produce the migration list instead.
 
 ⚠ **A new storage provider can undo all of that without touching either file.** The rule lives in `toFileDetail` and the mount list, *not* in any provider, so an object-storage provider returning a public CDN URL silently republishes the private trees and no test fails. The reasoning is written at the provider switch in `storage.factory.ts`, where the next author will be standing.
 
@@ -1261,6 +1314,206 @@ Three rules hold it together, and each exists because the obvious version failed
 **`ClamAVScanner` speaks `clamd` INSTREAM over a raw socket** (no dependency; `clamscan` shells out to binaries the runtime image lacks). One **whole-operation** deadline, deliberately not `socket.setTimeout` — an idle timeout restarts on every byte, so `blockOnFailure` never gets a verdict. ⚠ Its reply is **NUL-terminated with no newline**, so an anchored `/…FOUND$/m` matches nothing; that was a live bug every source scan passed, and `test:uploads` now pins the wire protocol against a fake daemon.
 
 ⚠ **The two policy-document endpoints used to bypass all of this** (`POST /api/{vendor,agency}/profile/policy-documents`), calling `storageProvider.put` directly with only a **client-claimed** MIME check. They go through `PolicyDocumentUploadService` now. **The trap that makes it non-trivial**: a `File` with no reference is *permanently deleted* by `LonelyFileDeletionService` (its clock falls back to `createdAt` for never-attached uploads), so the service writes a `file_reference` **at upload** — otherwise routing them through the pipeline would trade an unscanned upload for the loss of every vendor's policy PDFs. Accepted cost: an uploaded-but-never-submitted document is retained, a leak rather than a loss.
+
+### Phone verification (`src/modules/phone-verification/`)
+
+**There are TWO proofs of a phone number now, and the older one is the stronger.**
+
+| Proof | Who it serves | What it is |
+|---|---|---|
+| WhatsApp **connection** (`POST /api/me/phone/confirm`) | customers | a message actually *arrived* from that number — beats any code we send ourselves |
+| WhatsApp **OTP** (`POST /api/me/phone/verify/{request,confirm}`) | vendor · agency · agent · admin | a six-digit code we send and they type back |
+
+The OTP exists because the dashboard roles **never register through the bot**. They have no
+connection to check, so `phone_verified` could never become true for them — which is why it
+sits `false` on role entities that have been trading for months. The customer path is
+unchanged; this is additive.
+
+Six things are load-bearing:
+
+- ⚠ **The attempt limit IS the security, not the code length.** Five tries against 10⁶ is
+  1-in-200,000 per issued code. Raising `PHONE_VERIFY_MAX_ATTEMPTS` to 50 makes it 1-in-20,000
+  and looks like a usability tweak. Lengthening the code to compensate for a weak limit is the
+  wrong trade — it degrades every honest retype and barely moves the attack.
+- **The whole policy is PURE** (`domain/otp.ts`): expiry, exhaustion, the cooldown and the
+  comparison all take `now` and their limits as arguments. That is why the *refusals* are
+  asserted — a refusal needing Redis and a ten-minute wait to reproduce is one nobody tests.
+  `crypto.randomInt` never `Math.random()`; `timingSafeEqual` never `===`. Both source-scanned.
+- ⚠ **The resend cooldown is ACCOUNT-scoped, not number-scoped.** A number-scoped gate bounds
+  nothing when the attacker chooses the number: one account could walk a list of strangers'
+  phones at full speed, each a paid WhatsApp message the recipient reads as spam from us.
+- ⚠ **The intent is stored WITH the code, never re-derived at confirm.** A pending phone change
+  can be cancelled in the ten minutes between send and type; re-deriving would stamp the *old*
+  number verified using a code that proved the *new* one.
+- ⚠ **One owner for the write.** The coordinator calls `ContactChangeService.applyProvenPhone`
+  — it does not touch `UserModel`. A second copy of the change mechanics is how the
+  compare-and-set, the uniqueness re-check and the role-entity sync end up applied on one path
+  and forgotten on the other, and the forgetful one is always the newer one. Source-scanned.
+- **The confirm body is `.strict()` and takes only `code`.** The number is decided server-side
+  when the code is minted. Accepting one here would let a caller prove control of number A and
+  have number B marked verified.
+
+⛔ **The out-of-window path does not work on this deployment yet.** Inside Meta's 24-hour window
+the code goes as styled text; outside it, only an approved template may be sent — and this WABA
+holds **zero** templates (measured 2026-09-14). The AUTHENTICATION-category template
+(`wi_mall_phone_verification`) is generated with the rest by
+`scripts/generate-whatsapp-templates.ts` and must be approved before that half works. The
+failure is loud (`PHONE_VERIFICATION_DELIVERY_FAILED`, naming the template), never silent.
+
+⚠ **Administrators cannot be served from here alone.** They hold no `users` row in this service
+— they live in wi-admin's own database — so the admin case needs wi-admin to call an internal
+endpoint on this side. That endpoint is **not built**; the module is shaped for it.
+
+⚠ It shares `LOGIN_CODE_DB` (14) behind a `phoneverify:` prefix. A concession, not the rule —
+the 5–15 index budget is full. Both halves hold short-lived credentials with the same blast
+radius, so a flush is equally (in)convenient for each.
+
+Covered by `npm run test:phone-verification` (73, no DB, no Redis, no network).
+
+### The mail provider chain (`src/modules/mail/`)
+
+Same factory + strategy + singleton shape as storage and geocoding. `MAIL_PROVIDER` selects
+`console` (the default — prints and delivers nothing) · `smtp` · `brevo` · `resend` · or —
+**the intended production setting** — `chain`.
+
+**`chain` exists because the ceiling is measured in HUNDREDS PER DAY, not thousands.** Brevo's
+free tier is **300/day**; Resend's is **100/day and 3 000/month**. Four notification stacks send
+on every order, shipment transition, booking and password reset, so picking one provider just
+moves the ceiling. The chain adds the allowances together — `MAIL_PROVIDER_CHAIN`, default
+`brevo,resend,smtp` — and each position is a decision: Brevo first because its daily bucket is
+the largest, Resend second because it reports *which* window it exhausted, **SMTP last** because
+the relay behind it is typically a personal mailbox whose limits are enforced by *silently
+dropping mail* rather than by an error a chain can read. A provider whose ceiling cannot be
+observed is the wrong one to spend first.
+
+**The adapters own the vendor vocabulary; the chain owns none of it.** Every refusal is mapped
+onto one of six verdicts (`domain/mail-failure.ts`) and the chain switches on `error.code`, the
+mechanism `ChainedGeocodingProvider` already uses. That indirection is not ceremony — **the two
+providers disagree about statuses for the same condition, in both directions**:
+
+| Condition | Brevo | Resend |
+|---|---|---|
+| allowance spent | `402`, **or `not_enough_credits` at 400** | `429 daily_quota_exceeded` / `429 monthly_quota_exceeded` / `403 email_above_quota` |
+| too fast right now | `429` (its cap is 1 000 **rps** — nothing this platform reaches) | `429 rate_limit_exceeded` |
+| bad credential | `401`, `permission_denied`, `account_under_validation` | `401 missing_api_key`, `403 suspended_api_key` |
+| unverified sender domain | a DMARC/DNS error | **`403 validation_error`** |
+
+Read that table before touching either adapter. A chain switching on HTTP status would latch
+Brevo's rate limit until midnight *and* treat Resend's exhausted month as a five-minute blip —
+wrong in both directions, in the expensive direction each time. `test:mail-chain` pins every row.
+
+Six things are load-bearing:
+
+- ⭐ **A latch may NEVER be the reason a message is not sent.** A provider that reports
+  exhaustion is latched (`domain/mail-latch.ts`) so the chain stops spending round trips to be
+  told the same thing — thousands a day against a 300 cap. But a latch is a *guess* about a
+  counter on somebody else's server, so once the unlatched providers are exhausted the chain
+  **tries the latched ones anyway**, in order. Dropping a password reset to save one API call is
+  not a trade this platform makes. `mail.chain.ts` builds one ordered list rather than two passes
+  precisely so that rule cannot be deleted by somebody tidying a nested retry away.
+- **The latch releases at a CALENDAR boundary, not `now + 24h`** (`domain/quota-window.ts`, pure).
+  An allowance exhausted at 23:50 comes back ten minutes later; a fixed duration would hold the
+  primary out for almost a second full day. `MAIL_QUOTA_RESET_PERIOD` (default `daily`, because
+  Brevo's free tier is daily and Brevo is the one that does not say) and
+  `MAIL_QUOTA_RESET_TIMEZONE` (default **UTC, not `Africa/Douala`** — the day being modelled is
+  the *provider's* accounting day). ⚠ Resend's own verdict **overrides** the configured period,
+  which is why it needs none.
+- **A rate limit and an outage get a short cooldown instead** (`MAIL_QUOTA_COOLDOWN_MS`, 5 min).
+  Two different things get called "we hit the limit" and treating them alike is wrong both ways.
+- ⚠ **An auth failure fails over and is deliberately NEVER latched.** This is the one place this
+  chain diverges from the geocoding one, which refuses to fail over on a 401 so a rejected key
+  surfaces. That argument does not survive the change of subject: a failed lookup costs an
+  address, a failed send costs somebody their password reset and they cannot tell a broken
+  platform from one ignoring them. So the chain moves on — **and refuses to go quiet**: no latch
+  means every subsequent send re-tries the misconfigured provider, logs at `error`, and
+  increments `jovimall_mail_sends_total{outcome="auth_failed"}`. Loud costs one round trip per
+  send; silent costs a deployment running on half its capacity for months.
+- ⚠ **`console` can never be a chain member**, and the factory drops it with a warning. It cannot
+  fail, so it would absorb every message the real providers refused and report success — the
+  exact silent non-delivery this module was built to end. It is appended **only** when the chain
+  would otherwise be empty (no keys at all), which keeps a laptop working and says so loudly.
+  This is where the module deliberately departs from `buildChain` in the geocoding factory, where
+  keyless Nominatim *is* always appended: Nominatim genuinely resolves addresses.
+- ⚠ **`MailService` reaches the provider through `getMailProvider()` on every call, never a
+  field.** The latch is per-process in-memory state, so it is only shared if the chain holding it
+  is. `new MailService()` appears at **eight** call sites — four notification handlers, auth,
+  password reset, contact change, admin credential delivery — and before this each built its own
+  provider, which would have meant Brevo's exhaustion being re-discovered eight times over, once
+  per subsystem, on every send. No behavioural test can see that; `test:mail-chain`'s source scan
+  can.
+
+**Why the latch is in-process rather than Redis or Mongo, stated because both look better than
+they are.** Redis would converge across instances — but the logical-database budget is full (5–15,
+eleven slots, two already doubled up behind key prefixes). Mongo would survive a restart and show
+on the ops surface — at the cost of a read on the send path and, decisively, **a latch an operator
+who has just upgraded their Brevo plan cannot clear**. What losing the state actually costs is
+*one wasted API call per provider per restart*. That is the whole downside, and it is the argument.
+
+**The operations surface reports it, and that is half the feature.** A message delivered by the
+reserve after the primary refused it looks identical to an ordinary send from every other angle.
+`/system/integrations` (key still **`smtp`** — a wire value wi-admin proxies and `?probe=smtp`
+selects, so it was left alone; the label carries the truth) reports the chain **as built**, which
+member keys are set, and any live latch with its reason and release time.
+`jovimall_mail_sends_total{provider,outcome}` is the metric — 4 × 7 = 28 series, bounded.
+⚠ `configured` used to be `MAIL_PROVIDER !== 'console' && SMTP_HOST`, which became **wrong** the
+moment a non-SMTP provider existed: a deployment sending everything through Brevo with no relay
+would have shown red while working perfectly.
+
+Covered by `npm run test:mail-chain` (110, no DB, no network),
+`npm run test:mail-templates` (92, no DB) and `npm run verify:mail-providers` (NEEDS keys;
+sending is opt-in via `-- --send=<address>`). Contract for operators is `.env.example` § 10.
+
+**The BODIES are a design system now, not seven hand-rolled pages** (`templates/partials/`).
+Three partials — `mail-head`, `mail-foot`, `mail-button` — carry the chrome, registered once on
+the global `handlebars` module by `ensurePartialsRegistered()`. Four rules, each because the
+web-HTML instinct is wrong here: **tables, not divs** (Outlook renders with Word's engine — no
+float, no flexbox); **inline styles are the baseline and `<style>` is progressive enhancement**
+(Gmail strips it in several contexts); **the button is a table cell with a background**, since
+Outlook ignores padding and border-radius on an inline `<a>` and the common styled-anchor form
+renders there as bare coloured text; and every template sets a **preheader**, or the client
+previews whatever text comes first.
+
+**Brand is INJECTED, never passed** (`domain/mail-brand.ts`, merged *under* the caller's
+variables). There are eight `send()` call sites and Handlebars renders an unknown variable as
+the empty string — so a forgotten `brandName` produces "Welcome to ." and a forgotten
+`brandColor` produces `background:;`, a button with no colour. `test:mail-templates` asserts
+both by rendering and scanning the output. `BRAND_NAME` · `BRAND_COLOR` · `BRAND_LOGO_URL`
+(unset ⇒ a typographic wordmark, which cannot fail to load) · `MAIL_SUPPORT_EMAIL`.
+
+⛔ **`customer-notification.hbs` DID NOT EXIST**, and nothing could see it. The handler has
+asked for it by name since the customer stack shipped, so every customer email notification
+threw `MAIL_TEMPLATE_NOT_FOUND` on a best-effort path — logged, dropped, customer never
+emailed. A template name is a **string**: no compiler, linter or type-checker relates it to a
+file, and the four stacks are near-identical so a reviewer's eye slides over the missing one.
+`test:mail-templates` § 1 now diffs every `template: '<name>'` literal in `src/` against the
+directory **in both directions** — a missing template is a dead channel, an orphan is dead
+weight nobody dares delete. `welcome.hbs` is the one documented orphan (`KNOWN_UNWIRED`): it is
+written and styled but sent by nothing, deliberately, because registration already sends the
+verification email and a welcome beside it is a second message in the same minute saying less.
+
+✅ **Live-verified 2026-09-14** on `wi-mall.com`: Brevo (free, 300/day) and Resend
+(`eu-west-1`, domain verified) both authenticate and both accepted a real message — Brevo from
+`support@wi-mall.com`, Resend from `info@wi-mall.com` — and the chain delivered a templated
+message end to end. Failover was proven with a real 401 rather than a fake.
+
+⚠ **Two findings from that first live run, and neither was visible offline.** The Gmail relay
+in `SMTP_*` answers `535-5.7.8 Username and Password not accepted` — the App Password is revoked
+— so **`MAIL_PROVIDER=smtp` had been delivering nothing at all**, which is what "we can't send
+email notifications" turned out to mean. And `MAIL_PROVIDER_CHAIN` had been set to `chain`, a
+value that is the *mode* and not a provider name; `config/env.ts` refuses the boot on it by
+design, which is the "a misspelt name is fatal" rule doing its job rather than a bug.
+
+✅ **Live-verified 2026-09-14** on `wi-mall.com`: Brevo (free, 300/day) and Resend
+(`eu-west-1`, domain verified) both authenticate and both accepted a real message — Brevo from
+`support@wi-mall.com`, Resend from `info@wi-mall.com` — and the chain delivered a templated
+message end to end. Failover was proven with a real 401 rather than a fake.
+
+⚠ **Two findings from that first live run, and neither was visible offline.** The Gmail relay
+in `SMTP_*` answers `535-5.7.8 Username and Password not accepted` — the App Password is revoked
+— so **`MAIL_PROVIDER=smtp` had been delivering nothing at all**, which is what "we can't send
+email notifications" turned out to mean. And `MAIL_PROVIDER_CHAIN` had been set to `chain`, a
+value that is the *mode* and not a provider name; `config/env.ts` refuses the boot on it by
+design, which is the "a misspelt name is fatal" rule doing its job rather than a bug.
 
 ### Geocoding & geospatial addresses (`src/core/geocoding/` + `src/core/types/geo-address.types.ts`)
 Same factory + strategy + singleton shape as storage. Active provider is `GEO_PROVIDER`: `nominatim` (the keyless default), `geoapify`, `locationiq`, or — **the intended production setting** — `chain`. `google | mapbox | here` are named seams with no adapter and the factory throws `GEO_PROVIDER_NOT_CONFIGURED` for them, so what is missing stays visible.
@@ -2831,7 +3084,9 @@ published.
 - **Google Calendar** — OAuth 2.0 with encrypted token vault (`src/modules/integrations/calendar/`)
 - **WhatsApp** — Meta Cloud API v18.0 (`src/modules/whatsapp/`) — outbound messaging + the bot webhook. Account connection is **not** here (see above)
 - **Telegram** — Bot API sends + the bot webhook (`src/modules/telegram/`). Account connection is **not** here (see above)
-- **Email** — SMTP (Nodemailer + Handlebars templates) or console provider (`src/modules/mail/`)
+- **Email** — a provider CHAIN: Brevo, Resend, SMTP (Nodemailer) and console, selected by
+  `MAIL_PROVIDER` (`src/modules/mail/`). See "The mail provider chain" below; `chain` is the
+  intended production setting
 
 ## Critical Files
 
