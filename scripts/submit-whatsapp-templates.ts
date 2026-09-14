@@ -72,8 +72,7 @@ async function graph(path: string, init?: RequestInit): Promise<{ ok: boolean; s
         ...init,
         headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     });
-    let body: any = null;
-    try { body = await response.json(); } catch { body = null; }
+    const body: any = await response.json().catch(() => null);
     return { ok: response.ok, status: response.status, body };
 }
 

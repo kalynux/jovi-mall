@@ -300,7 +300,8 @@ const HEADING_LEAD: Record<string, string> = {
 
 /** Meta strips WhatsApp formatting before judging the first and last element. */
 const unformatted = (body: string): string => body.replace(/\*/g, '');
-const startsOnParam = (body: string): boolean => /^[\s"'\u00ab(\[]*\{\{\d+\}\}/.test(unformatted(body));
+// `[` needs no escape inside a class; `]` on the next line does, which is why they differ.
+const startsOnParam = (body: string): boolean => /^[\s"'\u00ab([]*\{\{\d+\}\}/.test(unformatted(body));
 const endsOnParam = (body: string): boolean => /\{\{\d+\}\}[\s"'\u00bb.,;:!?)\]]*$/.test(unformatted(body));
 
 interface Padding { name: string; start: boolean; end: boolean }
