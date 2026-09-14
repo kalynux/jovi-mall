@@ -146,8 +146,36 @@ async function main(): Promise<void> {
     originalConsole.log(`  quota reset         ${mailConfig.latch.quotaResetPeriod} in ${mailConfig.latch.quotaResetTimezone}`);
     originalConsole.log(`  senders             AUTH=${SENDER_FOR.brevo}  SYSTEM=${SENDER_FOR.resend}`);
 
-    assert('at least one deliverable provider is configured',
-        Boolean(mailConfig.brevo || mailConfig.resend || mailConfig.smtp));
+    /**
+     * ⚠ **A run with NO credentials SKIPS rather than fails, and the distinction matters.**
+     *
+     * This is a diagnostic aimed at a real environment, not a unit test: it asks whether the
+     * mail this deployment sends can actually leave the building. CI deliberately holds no
+     * provider credentials — putting a live Brevo key in a workflow secret to satisfy a
+     * read-only check would be a worse trade than not running the check — so an unconditional
+     * assert here fails every CI run forever and teaches people to ignore a red live-suites
+     * job. That is the failure mode this suite was written to prevent, arriving by the back
+     * door.
+     *
+     * Same posture as `verify-geocoding-providers.ts`, which skips both adapters and says so
+     * loudly. A skipped run announces that it proved nothing; it does not claim health.
+     *
+     * ⚠ It does NOT weaken the check where it counts. Run against an environment that HAS
+     * credentials, the assert still fires — and `MAIL_PROVIDER=console` with real keys present
+     * is still caught by section 1's printout, which is the configuration this exists to catch
+     * silently swallowing mail.
+     */
+    const deliverable = Boolean(mailConfig.brevo || mailConfig.resend || mailConfig.smtp);
+    if (deliverable) {
+        assert('at least one deliverable provider is configured', true);
+    } else {
+        skip('deliverability', 'no provider credentials in this environment');
+        originalConsole.log('\n⚠ NO provider is configured, so this run proved NOTHING about');
+        originalConsole.log('  deliverability. Every send here would go to the console provider,');
+        originalConsole.log('  which reports success and delivers nothing. Set BREVO_API_KEY,');
+        originalConsole.log('  RESEND_API_KEY or SMTP_HOST and run this against a deployment');
+        originalConsole.log('  before trusting `MAIL_PROVIDER=chain` there.\n');
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     section('2. Credentials — each provider proves it can be reached, sending nothing');
