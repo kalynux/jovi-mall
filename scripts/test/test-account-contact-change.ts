@@ -211,12 +211,30 @@ class FakeRoleRepo {
   }
 }
 
+/**
+ * Records that activation was evaluated, and for which user.
+ *
+ * ⚠ **A fake here is not optional.** The real `AccountActivationService` is the constructor
+ * default, so a harness that stops one argument short reaches Mongo with the fixture's `'u1'`
+ * and logs a CastError on every run — swallowed, because activation is best-effort, so the
+ * suite still passes while printing a stack trace. That is precisely the noise a real failure
+ * later hides inside.
+ */
+class FakeActivation {
+  public calls: string[] = [];
+  async activateEligibleRoles(user: { _id: { toString(): string } }) {
+    this.calls.push(user._id.toString());
+    return [];
+  }
+}
+
 interface Harness {
   service: ContactChangeService;
   users: FakeUserRepo;
   mail: FakeMail;
   customers: FakeRoleRepo;
   vendors: FakeRoleRepo;
+  activation: FakeActivation;
 }
 
 function harness(rows: FakeUser[], connections: FakeConnections = new FakeConnections()): Harness {
@@ -224,6 +242,7 @@ function harness(rows: FakeUser[], connections: FakeConnections = new FakeConnec
   const mail = new FakeMail();
   const customers = new FakeRoleRepo();
   const vendors = new FakeRoleRepo();
+  const activation = new FakeActivation();
   const service = new ContactChangeService(
     users as never,
     mail as never,
@@ -232,8 +251,9 @@ function harness(rows: FakeUser[], connections: FakeConnections = new FakeConnec
     vendors as never,
     new FakeRoleRepo() as never,
     new FakeRoleRepo() as never,
+    activation as never,
   );
-  return { service, users, mail, customers, vendors };
+  return { service, users, mail, customers, vendors, activation };
 }
 
 const ACTOR = { userId: 'u1', role: 'customer', roleEntityId: 'c1' };
@@ -321,6 +341,47 @@ assert('a confirmed change lands on every role profile the account holds', async
   return h.customers.calls.length === 1
     && h.vendors.calls.length === 1
     && h.customers.calls[0].contact.email === 'new@example.com';
+});
+
+/**
+ * ⚠ **The wiring, not the rule.** Whether a given account *deserves* promotion is
+ * `core/accounts/activation.ts`' business and is pinned where that rule lives. What this
+ * asserts is the thing that would rot silently: that a proved contact reaches the activation
+ * service at all. Delete the call at the bottom of `syncRoleEntities` and nothing else in
+ * this suite — or any other — notices; accounts simply stop activating, which looks like a
+ * product decision rather than a bug.
+ */
+assert('a proved contact evaluates activation, once, for the right user', async () => {
+  const h = harness([makeUser('u1', { login_email: 'old@example.com', roles: ['customer', 'vendor'] })]);
+  await h.service.requestEmailChange(ACTOR, 'new@example.com');
+  await h.service.confirmEmailChange(h.mail.lastToken()!);
+  return h.activation.calls.length === 1 && h.activation.calls[0] === 'u1';
+});
+
+/**
+ * Ordering, and it is the half that is easy to get wrong. The rule reads `phone_verified`,
+ * which the role-profile writes above are what set. Evaluating activation first would test
+ * the previous state and promote nobody on the very call that earned it.
+ */
+assert('activation is evaluated AFTER the role profiles are written', async () => {
+  const order: string[] = [];
+  const h = harness([makeUser('u1', { login_email: 'old@example.com', roles: ['vendor'] })]);
+  const vendorRepo = h.vendors as unknown as { setVerifiedContact: (...a: never[]) => Promise<unknown> };
+  const originalSync = vendorRepo.setVerifiedContact.bind(h.vendors);
+  vendorRepo.setVerifiedContact = async (...args: never[]) => {
+    order.push('sync');
+    return originalSync(...args);
+  };
+  const activation = h.activation as unknown as { activateEligibleRoles: (...a: never[]) => Promise<unknown> };
+  const originalActivate = activation.activateEligibleRoles.bind(h.activation);
+  activation.activateEligibleRoles = async (...args: never[]) => {
+    order.push('activate');
+    return originalActivate(...args);
+  };
+
+  await h.service.requestEmailChange(ACTOR, 'new@example.com');
+  await h.service.confirmEmailChange(h.mail.lastToken()!);
+  return order.join(',') === 'sync,activate';
 });
 
 section('Email — the refusals');

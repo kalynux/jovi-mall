@@ -52,22 +52,27 @@ export interface SendResult {
  *
  * ── The out-of-window path has TWO templates, and the second is a policy trade ───
  *
- * Measured 2026-09-14: the WABA holds 188 UTILITY templates and **no AUTHENTICATION one**, and
- * that is not an oversight. Meta gates the AUTHENTICATION category behind business
- * verification; this WABA's owning business is `business_verification_status: "rejected"`, so
- * `wi_mall_phone_verification` cannot be created at all — Meta answers code 10 — while UTILITY
- * templates create normally on the same credential.
+ * `deliver()` tries the AUTHENTICATION template **first, always**, and falls back to a UTILITY
+ * template carrying the same code.
  *
- * So `deliver()` tries the AUTHENTICATION template **first, always**, and falls back to a
- * UTILITY template carrying the same code.
+ * ✅ **THE PRIMARY PATH IS LIVE. Measured 2026-09-15: `wi_mall_phone_verification` is APPROVED
+ * on the WABA in `en` and `fr`** (`4426347317613316` / `1393590468966788`), so an out-of-window
+ * send takes the first branch and the fallback is never reached.
  *
- * ⛔ **BOTH ARE UNSENDABLE TODAY, so the out-of-window path is closed — this is machinery
- * waiting on an account, not a working second route.** Meta rejected the UTILITY fallback at
- * review with `INCORRECT_CATEGORY` in both languages, minutes after creating it, and rejected it
- * again — synchronously — when resubmitted with `allow_category_change: true`. It classifies
- * OTP content as AUTHENTICATION and accepts it nowhere else. Resolve the business verification
- * and the first path starts working on its own: no code change and no redeploy, because the
- * order never changed. See `otp-copy.ts` for why rewording the fallback is not the answer.
+ * ⚠ **Most of the surrounding documentation was written one day earlier, when it was not.** On
+ * 2026-09-14 the owning business was `business_verification_status: "rejected"`, Meta gates the
+ * AUTHENTICATION category behind that verification, and the template could not be created at
+ * all (code 10 / subcode 2388185) while UTILITY templates created fine on the same credential.
+ * The business reached `verified` on 2026-09-15 and Meta approved both languages within seconds
+ * of submission. **No code changed for that to happen** — the order never changed — which is
+ * exactly what the old comments promised would be true, and is worth recording because it is
+ * the rare case where the documented recovery actually behaved as documented.
+ *
+ * ⛔ **The UTILITY fallback is still unsendable, and that did NOT change with the
+ * verification.** Meta rejected it at review (`INCORRECT_CATEGORY`, both languages) and again
+ * synchronously under `allow_category_change: true`; that verdict is about OTP **content**, not
+ * about the business. It is now dead weight rather than a second route — see `otp-copy.ts` for
+ * why it is kept as a lever and why rewording it is not the answer.
  *
  * ⚠ **In-window delivery is unaffected and works**, because free-form text needs no template.
  *
@@ -216,6 +221,14 @@ export class PhoneVerificationService {
          * An AUTHENTICATION template takes the code in the BODY and again in the copy-code
          * BUTTON. Meta requires both; sending only the body renders a button that copies
          * nothing.
+         *
+         * ⚠ **`sub_type: 'url'` on a COPY_CODE button is CORRECT and looks like a bug.** It was
+         * read back off the approved template on 2026-09-15 rather than guessed: Meta compiles
+         * `{ type: 'OTP', otp_type: 'COPY_CODE' }` down to a plain **URL** button whose href is
+         * `https://www.whatsapp.com/otp/code/?otp_type=COPY_CODE&code_expiration_minutes=10&code=otp{{1}}`.
+         * So the button really does carry one positional URL parameter at index 0, and the
+         * tempting "fix" to `sub_type: 'copy_code'` — which is the coupon-code button on
+         * MARKETING/UTILITY templates — would break a working send.
          */
         const primary = PHONE_VERIFICATION_CONFIG.OTP_TEMPLATE_NAME.trim();
         if (primary && await this.trySendTemplate(phone, lang, primary, [
@@ -228,10 +241,15 @@ export class PhoneVerificationService {
         /**
          * ── The UTILITY fallback ─────────────────────────────────────────────
          *
-         * Reached only when the AUTHENTICATION send above failed, which on this deployment it
-         * always does: Meta gates that category behind business verification and this WABA's
-         * owning business is `rejected`, so the template does not exist to send. See
-         * `otp-copy.ts` for why leaning on UTILITY is a policy trade rather than a tidy-up.
+         * Reached only when the AUTHENTICATION send above failed — which, since 2026-09-15, it
+         * no longer does in the ordinary case: that template is APPROVED and this branch is
+         * dead on the happy path.
+         *
+         * ⛔ **And when it IS reached it will also fail**, because the template it names was
+         * rejected by Meta and no longer exists on the WABA. That is accepted: the branch costs
+         * one failing call on a path that has already failed, and the 502 below reports both
+         * names. See `otp-copy.ts` for why it is kept as a lever rather than deleted, and why
+         * rewording it is not the answer.
          *
          * ⚠ **This carries NO copy-code button and NO Meta-rendered security or expiry line** —
          * a UTILITY template gets none of the three — so its body says all of it itself, and
@@ -250,8 +268,9 @@ export class PhoneVerificationService {
             if (await this.trySendTemplate(phone, lang, fallback, [{ type: 'body', parameters }])) {
                 console.warn(
                     `[PhoneVerification] '${primary}' could not be sent; delivered through the `
-                    + `UTILITY fallback '${fallback}'. This is the business-verification path — `
-                    + 'resolve it and the AUTHENTICATION template resumes with no code change.',
+                    + `UTILITY fallback '${fallback}'. The AUTHENTICATION template is APPROVED on `
+                    + 'this WABA, so reaching this line means a SEND failure (rate limit, quality '
+                    + 'block, token) rather than a missing template — investigate the primary.',
                 );
                 return 'template';
             }

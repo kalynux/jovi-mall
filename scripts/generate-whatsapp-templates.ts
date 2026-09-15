@@ -3,8 +3,12 @@
  *
  * ── Why it GENERATES rather than transcribes ─────────────────────────────────
  *
- * The catalogs declare **94** template names and the WABA has **ZERO** — measured against the
- * Graph API on 2026-09-14 — so every out-of-window notification fails on send today.
+ * The catalogs declare **94** template names and the WABA had **ZERO** when this was written —
+ * measured against the Graph API on 2026-09-14 — so every out-of-window notification failed on
+ * send. It now holds **190**: the 188 catalog submissions (still PENDING review) plus the
+ * AUTHENTICATION OTP pair, APPROVED 2026-09-15. ⚠ **PENDING is not APPROVED** — an
+ * out-of-window catalog notification still fails until Meta clears it. Re-measure rather than
+ * trusting this paragraph; the counts move.
  *
  * `api-doc/notifications/whatsapp-templates.md` already says as much (it counts the same 94 and
  * notes 30 are never registered), and it carries hand-written approval copy for a subset. The
@@ -67,7 +71,8 @@ import {
     renderAgentChannelText,
 } from '../src/modules/notifications/catalog/agent-notification-catalog';
 import { META_LANGUAGE_CODE } from '../src/modules/notifications/catalog/notification-i18n';
-import { otpFallbackTemplateBody } from '../src/modules/phone-verification/domain/otp-copy';
+import { otpFallbackTemplateBody, otpExpiryMinutes } from '../src/modules/phone-verification/domain/otp-copy';
+import { OTP_LIMITS } from '../src/modules/phone-verification/config/phone-verification.config';
 import { Language } from '../src/core/constants/languages';
 
 type Lang = keyof typeof META_LANGUAGE_CODE;
@@ -464,11 +469,48 @@ function payloadFor(row: Row, lang: Lang) {
  *
  * The verification code still travels as `{{1}}` at SEND time — Meta's fixed body has exactly
  * one placeholder — and, separately, as the copy-code button's parameter. Both are required.
+ *
+ * ✅ **CREATED AND APPROVED 2026-09-15**, `en` + `fr`, once the owning business reached
+ * `business_verification_status: "verified"`. What Meta compiled this into is worth reading
+ * once, because it explains the send payload:
+ *
+ *     BODY    "*{{1}}* is your verification code. For your security, do not share this code."
+ *     FOOTER  "Expires in 10 minutes."
+ *     BUTTONS URL → https://www.whatsapp.com/otp/code/?otp_type=COPY_CODE
+ *                   &code_expiration_minutes=10&code=otp{{1}}
+ *
+ * ⚠ **The OTP button becomes a URL button**, which is why the send site uses
+ * `sub_type: 'url'`, `index: 0` — correct, and the thing most likely to be "fixed" into
+ * `copy_code` (the coupon button, a different feature) by someone reading only the payload here.
  */
 
 const OTP_BUTTON_LABEL: Record<string, string> = {
     en: 'Copy code', fr: 'Copier le code', pt: 'Copiar código', es: 'Copiar código', ar: 'نسخ الرمز',
 };
+
+/**
+ * ⚠ **DERIVED from the runtime TTL, never a literal — and the literal is what was here.**
+ *
+ * Meta bakes this number into the approved template twice over: the FOOTER it renders
+ * ("Expires in 10 minutes.") and the copy-code button's `code_expiration_minutes=10` query
+ * parameter. The send passes only the code, so neither can be corrected at send time. A
+ * hardcoded `10` beside a configurable `PHONE_VERIFY_TTL_SECONDS` therefore means that lowering
+ * the TTL leaves every out-of-window message promising an expiry the code does not have — no
+ * error, no log, and unfixable without resubmitting under a new name. The two agreed only
+ * because both defaults happened to be ten minutes.
+ *
+ * Meta's accepted range is 1–90. Outside it the create fails, so this refuses first, with a
+ * message naming the variable rather than leaving Meta to answer about a field nobody set.
+ */
+const OTP_EXPIRY_MINUTES = otpExpiryMinutes(OTP_LIMITS.ttlSeconds);
+
+if (OTP_EXPIRY_MINUTES < 1 || OTP_EXPIRY_MINUTES > 90) {
+    console.error(
+        `\n❌ PHONE_VERIFY_TTL_SECONDS=${OTP_LIMITS.ttlSeconds} is ${OTP_EXPIRY_MINUTES} minutes, and Meta`
+        + '\n   accepts code_expiration_minutes only in 1–90. Set a TTL inside that range.\n',
+    );
+    process.exit(1);
+}
 
 const authPayloads = LANGS.map(lang => ({
     name: process.env.PHONE_VERIFY_TEMPLATE_NAME || 'wi_mall_phone_verification',
@@ -477,7 +519,7 @@ const authPayloads = LANGS.map(lang => ({
     components: [
         // No `text`: Meta owns and localises an authentication body. See above.
         { type: 'BODY', add_security_recommendation: true },
-        { type: 'FOOTER', code_expiration_minutes: 10 },
+        { type: 'FOOTER', code_expiration_minutes: OTP_EXPIRY_MINUTES },
         {
             type: 'BUTTONS',
             buttons: [{ type: 'OTP', otp_type: 'COPY_CODE', text: OTP_BUTTON_LABEL[lang] ?? OTP_BUTTON_LABEL.en }],
@@ -505,13 +547,19 @@ try {
  *
  * ⚠ **It is NOT a replacement for the AUTHENTICATION template above, and both are emitted.**
  * `PhoneVerificationService.deliver()` tries AUTHENTICATION first every time and only reaches
- * this one when that send fails. On this WABA it always does: Meta gates the AUTHENTICATION
- * category behind business verification, the owning business is `rejected`, and so the
- * template cannot be created at all. Resolve the verification and this stops being reached
- * without anything being edited.
+ * this one when that send fails.
  *
- * ⚠ **Submitting OTP copy as UTILITY is a documented Meta rejection reason.** This template may
- * be refused at review, and that is a known cost of the trade rather than a bug to fix here.
+ * ⛔ **DO NOT SUBMIT THIS ONE. Meta rejected it — `INCORRECT_CATEGORY`, both languages, minutes
+ * after creation on 2026-09-14 — and rejected it again synchronously under
+ * `allow_category_change: true`.** It stays in the output because the payload is what a
+ * reviewer needs to see to understand the decision, and because `--only=` is how a submission
+ * is scoped; the AUTHENTICATION template was submitted with
+ * `--only=wi_mall_phone_verification`, which excludes this name by exact match.
+ *
+ * ⚠ **Resolving the business verification did not revive it and never will.** The rejection is
+ * about OTP **content**: Meta classifies it as AUTHENTICATION and accepts it nowhere else.
+ * Since 2026-09-15 the AUTHENTICATION template is APPROVED, so this is a lever for a future
+ * deployment rather than a route — see `otp-copy.ts`.
  *
  * ⚠ **The body is imported, not written here.** `otp-copy.ts` owns it because the SEND site
  * reads its parameter order from the same file — Meta substitutes positionally, so a body

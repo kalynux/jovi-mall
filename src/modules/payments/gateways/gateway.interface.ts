@@ -185,6 +185,60 @@ export type PaymentGatewayStatus =
  * `REFUND_GATEWAY_NOT_SUPPORTED`. Defining a method that always fails would
  * make that guard dead and turn a knowable "no" into a runtime error.
  */
+/**
+ * What a gateway needs in order to SEND money.
+ *
+ * Deliberately not a mirror of `PaymentInitPayload`: a collection is pulled from a customer
+ * we are talking to, a payout is pushed to a beneficiary who is not present. There is no
+ * order, no session and no OTP — only a destination and an amount.
+ */
+export interface PayoutPayload {
+  /**
+   * Our merchant reference, and the idempotency key for the whole operation.
+   *
+   * ⛔ **On a retry this MUST be the reference the previous attempt used.** It is what lets
+   * the provider recognise a resend of a transfer that actually succeeded and refuse to send
+   * it twice. The caller reads it off the payout row; a gateway must never mint its own.
+   */
+  reference: string;
+  amount: number;
+  currency: string;
+  /** The beneficiary mobile number, as stored on the payout destination snapshot. */
+  phone: string;
+  /** The beneficiary name, for the provider record and their statement. */
+  name: string;
+  description?: string;
+}
+
+/**
+ * The outcome of asking a gateway to send money.
+ *
+ * ⚠ `success: true` means ACCEPTED, not settled. Every mobile-money transfer is asynchronous;
+ * the terminal answer arrives on a callback. A caller that treats acceptance as payment has
+ * recorded money as delivered that may still fail.
+ */
+export interface PayoutResult {
+  success: boolean;
+  /** The provider transfer id, when one was issued. Null when the call never got that far. */
+  gatewayRef: string | null;
+  status: PaymentGatewayStatus;
+  /** Provider-supplied explanation, on a refusal. */
+  message?: string;
+  /**
+   * The provider or our account cannot do this at all — a knowable no rather than a fault.
+   * Same distinction `refundAvailable` draws, reported per call because the commonest cause
+   * (an unregistered egress IP) is invisible until a transfer is actually attempted.
+   */
+  unsupported?: boolean;
+  raw?: unknown;
+}
+
+/** What a gateway reports about the float it can pay out of. */
+export interface PayoutBalance {
+  available: number;
+  currency: string;
+}
+
 export interface PaymentGateway {
   /** Stable identifier, used for logging and for the registry's own assertions. */
   readonly name: PaymentGatewayName;
@@ -250,6 +304,27 @@ export interface PaymentGateway {
    * gateways whose flow has no OTP step.
    */
   authorizePayment?(payload: PaymentAuthorizePayload): Promise<PaymentAuthorizeResult>;
+
+  /**
+   * Send money to a beneficiary. **Absent when the provider has no disbursement API, or when
+   * we have deliberately not wired the one it has** — see the header above; do not add a
+   * stub that always fails, because the absence is what `gatewaySupportsPayout` reads.
+   */
+  createPayout?(payload: PayoutPayload): Promise<PayoutResult>;
+
+  /**
+   * Is sending available **on our account**, as opposed to implemented here?
+   *
+   * The same split `refundAvailable` draws, and it matters more on this side: a disbursement
+   * API typically also requires the caller IP to be registered with the provider, which is
+   * configuration living nowhere in this repository and changing without a deploy.
+   *
+   * Absent means "yes" for any gateway that implements `createPayout`.
+   */
+  payoutAvailable?(): boolean;
+
+  /** The float this gateway can pay out of, when it can report one. */
+  payoutBalance?(currency: string): Promise<PayoutBalance | null>;
 }
 
 /** Input to `verifyWebhook`: the untouched bytes plus the request headers. */

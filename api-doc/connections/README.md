@@ -70,8 +70,8 @@ Every channel, connected or not, in one call — enough to render the whole scre
         "connectedAt": null,
         "howToConnect": {
           "command": "/connect",
-          "botHandle": "@JoviMallBot",
-          "deepLink": "https://t.me/JoviMallBot"
+          "botHandle": "@WiMallBot",
+          "deepLink": "https://t.me/WiMallBot"
         }
       }
     ]

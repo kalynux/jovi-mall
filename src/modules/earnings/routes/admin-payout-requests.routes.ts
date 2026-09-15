@@ -42,6 +42,20 @@ function attachRoutes(router: Router): Router {
     router.post('/:id/mark-paid', AdminPayoutRequestsController.markPaid);
 
     /**
+     * POST /payout-requests/:id/triage
+     * Records a reviewer endorsement. Moves no money, changes no status, gates nothing —
+     * an un-endorsed payout is exactly as payable as an endorsed one. Body: { note? }
+     */
+    router.post('/:id/triage', AdminPayoutRequestsController.triage);
+
+    /**
+     * POST /payout-requests/:id/send
+     * Sends the money through the payment gateway. Claims the row into `processing` first,
+     * so a double submit cannot produce two transfers. No body.
+     */
+    router.post('/:id/send', AdminPayoutRequestsController.send);
+
+    /**
      * POST /payout-requests/:id/reject
      * Returns the money to `available_balance` in the same transaction. Body: { reason }
      */

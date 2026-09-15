@@ -1,5 +1,6 @@
 import { IPayoutRequest } from '../models/payout-request.model';
 import { PayoutMethodMasked, maskPayoutMethod } from '../../../core/types/payout.types';
+import { OwnerVerification, UNKNOWN_VERIFICATION } from '../../../core/accounts/verification';
 
 /**
  * The admin queue's view of a payout request.
@@ -40,6 +41,47 @@ export interface AdminPayoutRequestDto {
     origin: string;
     /** Last-4 only. The full destination is not reachable from this endpoint. */
     destination: PayoutMethodMasked | null;
+    /**
+     * Where the owner's KYC review stands, at read time.
+     *
+     * ⚠ **Not a snapshot, unlike `destination`.** The destination is frozen so money already
+     * in flight cannot be redirected; this is the opposite case — a reviewer needs the
+     * verification state *as it is now*, including an approval that landed after the request
+     * was opened. Freezing it would show a stale "unverified" on a business that has since
+     * been vetted, and send the reviewer to chase documents that are already on file.
+     *
+     * ⚠ `verdict` is the role's own word and its vocabulary differs between roles — see
+     * `core/accounts/verification.ts`. Render it; never branch on it. `verified` is the only
+     * field that carries a decision.
+     */
+    verification: { verified: boolean; verdict: string };
+    /**
+     * The tier-3 endorsement, or null when nobody has reviewed it.
+     *
+     * ⚠ **Advisory, never a precondition.** A payout with no endorsement is exactly as
+     * payable as one with it — the pre-screen exists to save the approving administrator
+     * work, not to gate them. A dashboard must not disable its approve control on a null
+     * here.
+     *
+     * There is no rejected verdict: a triage rejection is terminal and shows up as
+     * `status: 'rejected'` with a `rejectionReason`, like any other.
+     */
+    triage: {
+        verdict: string;
+        note: string | null;
+        by: { id: string | null; name: string | null };
+        at: string | null;
+    } | null;
+    /**
+     * The gateway transfer, when one has been attempted.
+     *
+     * ⛔ `transfer_reference` — the merchant reference we send — is deliberately NOT here.
+     * It is the idempotency key for money leaving the platform, and the fewer places it is
+     * readable the better. What a reviewer needs to reconcile against the gateway dashboard
+     * is the gateway's own id, which is what this carries.
+     */
+    transferGatewayRef: string | null;
+    transferFailureReason: string | null;
     ticketId: string | null;
     requestedByUserId: string | null;
     resolvedAt: string | null;
@@ -61,7 +103,8 @@ function toIso(value: Date | null | undefined): string | null {
 
 export function toAdminPayoutRequestDto(
     row: IPayoutRequest,
-    ownerName: string | null
+    ownerName: string | null,
+    verification: OwnerVerification = UNKNOWN_VERIFICATION
 ): AdminPayoutRequestDto {
     return {
         id: row.id,
@@ -79,6 +122,17 @@ export function toAdminPayoutRequestDto(
         destination: row.payout_method_snapshot
             ? maskPayoutMethod(row.payout_method_snapshot, true)
             : null,
+        verification: { verified: verification.verified, verdict: verification.verdict },
+        triage: row.triage
+            ? {
+                  verdict: row.triage.verdict,
+                  note: row.triage.note ?? null,
+                  by: { id: row.triage.by_admin_id ?? null, name: row.triage.by_name ?? null },
+                  at: toIso(row.triage.at),
+              }
+            : null,
+        transferGatewayRef: row.transfer_gateway_ref ?? null,
+        transferFailureReason: row.transfer_failure_reason ?? null,
         ticketId: row.ticket_id ? row.ticket_id.toString() : null,
         requestedByUserId: row.requested_by_user_id ? row.requested_by_user_id.toString() : null,
         resolvedAt: toIso(row.resolved_at),

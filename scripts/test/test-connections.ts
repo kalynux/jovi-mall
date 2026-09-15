@@ -671,6 +671,81 @@ async function main(): Promise<void> {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
+  console.log('\n▶ SOURCE SCAN: inbound activity is actually STAMPED');
+
+  /**
+   * ⚠ THIS GROUP EXISTS BECAUSE THE SAME FIELD HAS ROTTED TWICE.
+   *
+   * `wa.last_seen_at` was declared on all four role models and written by absolutely
+   * nothing for the whole life of the feature — the scan above pins its removal. Its
+   * replacement, `channel_connections.last_seen_at`, was then given a `touch()` repository
+   * method AND a best-effort service wrapper, and acquired no caller at all: it recorded
+   * when a connection was bound, never when it was used.
+   *
+   * The second stamp here is the one with teeth. `open_chat_window:<digits>` decides
+   * whether Meta will accept a free-form message, and with nothing writing it the answer
+   * was permanently NO — so WhatsApp phone verification took the template path on every
+   * attempt, and every OTP failed to deliver while both templates were unsendable. The
+   * webhook that DOES call `recordInbound` is reached only on the automation layer's
+   * command branch, so an ordinary chat message never opened the window.
+   *
+   * Behaviour cannot catch either regression: deleting these two calls breaks no request,
+   * logs nothing, and fails no other suite. Only a scan can.
+   */
+  const registration = read('modules/bot-surface/services/bot-registration.service.ts');
+  const registrationCode = stripComments(registration);
+
+  assert('sync() stamps inbound activity', () =>
+    /await this\.recordInboundActivity\(envelope\)/.test(registrationCode));
+
+  assert('the stamp runs BEFORE the resolver, so no early return can skip it', () => {
+    const stamp = registrationCode.indexOf('this.recordInboundActivity(');
+    const resolve = registrationCode.indexOf('resolveForRegistration(');
+    return stamp !== -1 && resolve !== -1 && stamp < resolve;
+  });
+
+  assert('last_seen_at is touched on every inbound', () =>
+    /this\.connections\.touch\(\s*envelope\.channel,\s*envelope\.externalId\s*\)/.test(registrationCode));
+
+  assert('the WhatsApp service window is opened on every inbound', () =>
+    /this\.whatsappWindow\.recordInbound\(\s*envelope\.externalId\s*\)/.test(registrationCode));
+
+  /**
+   * The key is written here and read by `PhoneVerificationService.deliver`, which derives
+   * it from the other direction as `phone.replace(/^\+/, '')`. A `+` prepended on either
+   * side writes the window under one id and reads it under another — silently, because a
+   * missing key is indistinguishable from a closed window.
+   */
+  assert('the window key is written from BARE digits, untransformed', () =>
+    !/recordInbound\(\s*['"`]\+|recordInbound\(\s*`\+/.test(registrationCode));
+
+  assert('the window stamp stays WhatsApp-only', () =>
+    /envelope\.channel !== 'whatsapp'/.test(registrationCode));
+
+  assert('neither stamp can fail the message that triggered it', () => {
+    const body = registrationCode.slice(registrationCode.indexOf('private async recordInboundActivity'));
+    return /try\s*\{/.test(body.slice(0, 900)) && /catch\s*\(/.test(body.slice(0, 900));
+  });
+
+  assert('ConnectionService.touch has a caller outside its own module', () => {
+    const callers = files
+      .filter((f) => !path.relative(SRC, f).replace(/\\/g, '/').startsWith('modules/channel-connections/'))
+      .filter((f) => /\.touch\(\s*\w+\.channel/.test(stripComments(fs.readFileSync(f, 'utf8'))))
+      .map((f) => path.relative(SRC, f));
+    if (!callers.length) console.error('     ↳ last_seen_at is dead again — see this group’s header');
+    return callers.length > 0;
+  });
+
+  assert('WhatsappService.recordInbound is called off the command webhook too', () => {
+    const callers = files
+      .filter((f) => /\.recordInbound\(/.test(stripComments(fs.readFileSync(f, 'utf8'))))
+      .map((f) => path.relative(SRC, f).replace(/\\/g, '/'))
+      .filter((rel) => rel !== 'modules/whatsapp/whatsapp.service.ts');
+    if (callers.length < 2) console.error('     ↳ only:', callers.join(', ') || '(none)');
+    return callers.length >= 2;
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
   console.log('\n▶ Redis catalogue registration');
 
   const factory = read('infra/redis/redis.factory.ts');

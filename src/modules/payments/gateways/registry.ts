@@ -108,6 +108,38 @@ export function gatewayImplementsRefund(name: string): boolean {
   return typeof findPaymentGateway(name)?.refundPayment === 'function';
 }
 
+/**
+ * Can this gateway send money right now?
+ *
+ * Both halves matter and they answer different questions — exactly as
+ * `gatewaySupportsRefund` above. The METHOD is a capability of the integration;
+ * `payoutAvailable()` is a fact about the account. A gateway that implements transfers on an
+ * account where they are off must report false, or an administrator is offered a send button
+ * that fails the instant it is pressed.
+ *
+ * ⚠ On this side the account-level half has a cause the refund one does not: NotchPay
+ * IP-allowlists transfers, so a correctly-configured integration on an unregistered host
+ * refuses every call. That is why the switch is deployment configuration rather than
+ * something derived from the credentials being present.
+ */
+export function gatewaySupportsPayout(name: string): boolean {
+  const gateway = findPaymentGateway(name);
+  if (typeof gateway?.createPayout !== 'function') return false;
+  return gateway.payoutAvailable?.() ?? true;
+}
+
+/**
+ * Does this gateway have a disbursement integration at all, regardless of whether our
+ * account or our host may use it?
+ *
+ * Kept separate for the reason `gatewayImplementsRefund` is: "this provider cannot send"
+ * and "ours is switched off" are different conversations, and only one is fixable by an
+ * email.
+ */
+export function gatewayImplementsPayout(name: string): boolean {
+  return typeof findPaymentGateway(name)?.createPayout === 'function';
+}
+
 /** Whether this gateway has an OTP step (`POST /payments/:id/authorize`). */
 export function gatewaySupportsOtp(name: string): boolean {
   const gateway = findPaymentGateway(name);

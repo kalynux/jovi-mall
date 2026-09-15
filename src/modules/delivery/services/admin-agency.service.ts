@@ -105,15 +105,17 @@ export class AdminAgencyService {
      * and restores nothing. The whole write is one compare-and-set, which is atomic on its
      * own, so a transaction would buy a session and no additional guarantee.
      *
-     * A miss is 409, never 404: the agency exists (we would not know its status otherwise),
-     * it is simply no longer pending — already approved by a colleague, or deactivated in
-     * between. Those are different remedies and the caller needs to be able to tell.
+     * A miss is 409, never 404: the agency exists, it is simply **already approved** — by a
+     * colleague, or by this administrator double-clicking. That is the only state the
+     * predicate refuses (BR-026 § 2); a refused agency IS approvable, which is what makes
+     * re-review work at all. 404 and 409 are different remedies and the caller must be able
+     * to tell them apart.
      */
     async verify(agencyId: string, actor: ActorRef): Promise<AdminAgencyListItemDto> {
-        const verified = await this.agencyRepo.markVerifiedIfPending(agencyId, actor);
+        const verified = await this.agencyRepo.markVerifiedIfNotVerified(agencyId, actor);
         if (verified) return this.toDto(verified);
 
-        // The CAS returned nothing. Distinguish "no such agency" from "not pending" —
+        // The CAS returned nothing. Distinguish "no such agency" from "already approved" —
         // collapsing them would send an administrator looking for a typo in the id when
         // the real answer is that somebody else already approved it.
         const existing = await this.agencyRepo.findById(agencyId);
@@ -121,10 +123,26 @@ export class AdminAgencyService {
             throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, 'Delivery agency not found');
         }
         throw createAppError(
-            ERROR_CODES.DELIVERY_AGENCY_STATUS_CONFLICT,
+            ERROR_CODES.DELIVERY_AGENCY_VERIFICATION_CONFLICT,
             409,
-            `This agency is ${existing.status}, not pending verification — re-read it before deciding`,
-            { currentStatus: existing.status },
+            /**
+             * ⚠ Reports the VERIFICATION verdict, not the account status — those became two
+             * different things on 2026-09-15, and the CODE was renamed to say so in the same
+             * week (BR-026 § 3). `currentStatus` is kept beside it because it is still true
+             * and clients already read it, but it is no longer what decided this refusal, and
+             * an administrator told "this agency is active" when the real answer is "a
+             * colleague already decided" goes looking in the wrong place.
+             *
+             * The message names the ONE verdict this endpoint refuses rather than reporting
+             * whichever verdict is on the row: every other value is now accepted, so
+             * "already ${verdict}, not pending" would have described a refusal that did not
+             * happen for a reason that was not the reason.
+             */
+            'This agency is already verified — re-read it before deciding',
+            {
+                currentVerification: existing.kyc_details?.status ?? null,
+                currentStatus: existing.status,
+            },
         );
     }
 
@@ -138,16 +156,28 @@ export class AdminAgencyService {
      * way and its model docstring is the argument.
      *
      * ── Why it is not a transaction, and why it changes no status ────────────────
-     * Same as `verify`: one compare-and-set, no cascade. Rejection leaves the agency at
-     * `pending_verification`, where every existing gate already refuses them, so this
-     * adds a *record* rather than new enforcement. Re-review therefore needs no
-     * "un-reject" verb — fixing the problem and calling `verify` is the whole loop.
+     * Same as `verify`: one compare-and-set, no cascade. Rejection does not touch the
+     * agency's top-level `status`, so it records a *verdict* rather than adding enforcement.
+     *
+     * ⚠ **What that record COSTS changed on 2026-09-15, and it SHRANK.** This paragraph used
+     * to say a refused agency "stays `pending_verification`, where every existing gate
+     * already refuses them" — true while administrative approval was the only thing that
+     * set an agency `active`. Agencies now activate themselves on a proved phone, so a
+     * refused agency is routinely `active`, and product activation, pickup resolution and
+     * vendor default-agency selection all accept it. What a refusal still costs is **cash**:
+     * COD eligibility tests `kyc_details.legit_verified` explicitly and the payout allowance
+     * reads the verdict. Anything else that ought to turn on a refusal must say so itself.
+     *
+     * Re-review still needs no "un-reject" verb — fixing the problem and calling `verify`
+     * is the whole loop — and since 2026-09-15 the approval predicate actually admits a
+     * refused agency, which between the activation split landing and BR-026 § 2 being
+     * answered — the same day, undeployed — it did not.
      *
      * A miss is 409, never 404, for the reason `verify` gives: the caller needs to tell
-     * "no such agency" from "a colleague already decided".
+     * "no such agency" from "already refused".
      */
     async reject(agencyId: string, actor: ActorRef, reason: string): Promise<AdminAgencyListItemDto> {
-        const rejected = await this.agencyRepo.rejectIfPending(agencyId, actor, reason);
+        const rejected = await this.agencyRepo.rejectIfNotRejected(agencyId, actor, reason);
         if (rejected) return this.toDto(rejected);
 
         const existing = await this.agencyRepo.findById(agencyId);
@@ -155,10 +185,26 @@ export class AdminAgencyService {
             throw createAppError(ERROR_CODES.DELIVERY_AGENCY_NOT_FOUND, 404, 'Delivery agency not found');
         }
         throw createAppError(
-            ERROR_CODES.DELIVERY_AGENCY_STATUS_CONFLICT,
+            ERROR_CODES.DELIVERY_AGENCY_VERIFICATION_CONFLICT,
             409,
-            `This agency is ${existing.status}, not pending verification — re-read it before deciding`,
-            { currentStatus: existing.status },
+            /**
+             * ⚠ Reports the VERIFICATION verdict, not the account status — those became two
+             * different things on 2026-09-15, and the CODE was renamed to say so in the same
+             * week (BR-026 § 3). `currentStatus` is kept beside it because it is still true
+             * and clients already read it, but it is no longer what decided this refusal, and
+             * an administrator told "this agency is active" when the real answer is "a
+             * colleague already decided" goes looking in the wrong place.
+             *
+             * The message names the ONE verdict this endpoint refuses rather than reporting
+             * whichever verdict is on the row: every other value is now accepted, so
+             * "already ${verdict}, not pending" would have described a refusal that did not
+             * happen for a reason that was not the reason.
+             */
+            'This agency’s verification has already been rejected — re-read it before deciding',
+            {
+                currentVerification: existing.kyc_details?.status ?? null,
+                currentStatus: existing.status,
+            },
         );
     }
 

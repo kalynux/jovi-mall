@@ -114,8 +114,18 @@ export const DEFAULT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = Object
     [ERROR_CODES.EARNINGS_PAYOUT_METHOD_MISSING]: 'No payout method is configured on this profile',
     [ERROR_CODES.EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE]: 'There is no available balance to request a payout for',
     [ERROR_CODES.EARNINGS_PAYOUT_BELOW_MINIMUM]: 'Available balance is below the minimum payout amount',
+    [ERROR_CODES.EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED]:
+        'This account has reached the payout allowance for unverified accounts — verification lifts it',
     [ERROR_CODES.EARNINGS_PAYOUT_REQUEST_NOT_FOUND]: 'Payout request not found',
     [ERROR_CODES.EARNINGS_PAYOUT_REQUEST_NOT_PENDING]: 'This payout request has already been resolved',
+    [ERROR_CODES.EARNINGS_PAYOUT_NOT_SENDABLE]:
+        'This payout cannot be sent in its current state',
+    [ERROR_CODES.EARNINGS_PAYOUT_TRANSFER_IN_FLIGHT]:
+        'A transfer for this payout is still in flight and must settle before it can be resolved',
+    [ERROR_CODES.EARNINGS_PAYOUT_ALREADY_TRIAGED]: 'This payout request has already been reviewed',
+    [ERROR_CODES.EARNINGS_PAYOUT_GATEWAY_UNSUPPORTED]:
+        'No configured payment gateway can send to this payout destination',
+    [ERROR_CODES.EARNINGS_PAYOUT_TRANSFER_FAILED]: 'The payment gateway refused the transfer',
 
     /**
      * ── COD ──────────────────────────────────────────────────────────────────

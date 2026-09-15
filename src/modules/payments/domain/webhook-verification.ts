@@ -47,9 +47,48 @@ export type WebhookVerification =
  * ones — a hash of the whole body satisfies neither, which is exactly why
  * `PaymentTransaction.gatewayPayloadHash` never worked as replay protection.
  */
+/**
+ * Which way the money in a callback was going.
+ *
+ * ⛔ **This exists to stop a transfer callback settling an order, and vice versa.** Every
+ * shape in this module was written when the only callbacks were collections, so the
+ * processor resolves an event by looking its reference up and, failing that, falling
+ * through to the next subsystem. Once the platform also SENDS money, that fall-through is a
+ * hazard rather than a convenience: a payout callback whose reference did not resolve would
+ * be handed to the order orchestrator, which would look for a payment with that gateway
+ * reference and — on a collision or a replayed body — could mark an order paid off the back
+ * of money the platform paid OUT.
+ *
+ * So direction is decided once, by the gateway that parsed the event, and the processor
+ * refuses to cross it.
+ */
+export type WebhookDirection =
+  /** Money IN: an order, a booking, a plan purchase, a credit top-up. */
+  | 'collection'
+  /** Money OUT: a payout transfer to a vendor, agency or agent. */
+  | 'payout';
+
+/**
+ * Read the direction off a provider event type.
+ *
+ * ⚠ **Anything unrecognised is a COLLECTION**, deliberately. Every event this platform has
+ * ever received is a collection, many carry no type at all, and the ones that do are not
+ * consistent between providers. Defaulting the other way would silently reroute the entire
+ * existing callback surface at the moment this shipped. A payout has to say so.
+ */
+export function directionOfEventType(eventType: string | null | undefined): WebhookDirection {
+  return /^transfer[._-]/i.test(String(eventType ?? '').trim()) ? 'payout' : 'collection';
+}
+
 export interface NormalizedWebhookEvent {
   eventId: string;
   eventType: string;
+  /**
+   * Which way the money was going. Required rather than optional: a gateway that forgets to
+   * say would otherwise default to whatever the processor assumed, and the whole point is
+   * that the assumption is made once, visibly, by the adapter that read the payload.
+   */
+  direction: WebhookDirection;
   /** The gateway's own transaction id. */
   gatewayRef: string;
   /** Our reference, echoed back. Null when the provider did not return it. */

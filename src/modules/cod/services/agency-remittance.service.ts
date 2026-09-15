@@ -163,6 +163,48 @@ export class AgencyRemittanceService {
     return this.toDto(rejected);
   }
 
+
+  /**
+   * Record a reviewer's endorsement that this declared remittance looks genuine.
+   *
+   * ⚠ **Moves nothing and gates nothing.** A declaration holds no money — only a CONFIRMED
+   * remittance moves cash — so unlike a payout endorsement there is not even a hold involved
+   * here. Confirming never requires an endorsement, and an un-endorsed remittance is exactly as
+   * confirmable as an endorsed one.
+   *
+   * Guarded on `status: 'declared'` AND `triage: null`: a remittance already reviewed or
+   * already resolved is not re-reviewable, and a second endorsement would overwrite the
+   * first reviewer's name on a record whose whole purpose is to say who vouched for it.
+   *
+   * ⚠ A triage REJECTION is not here — it is the ordinary `reject()` above. Rejection is
+   * terminal on this record, and terminal outcomes are statuses.
+   */
+  async triage(remittanceId: string, actor: ActorRef, note: string | null) {
+    const endorsed = await AgencyRemittanceModel.findOneAndUpdate(
+      { _id: remittanceId, status: 'declared', triage: null },
+      {
+        $set: {
+          triage: {
+            verdict: 'endorsed',
+            note,
+            by_admin_id: actor.userId,
+            by_name: actor.name ?? null,
+            at: new Date(),
+          },
+        },
+      },
+      { new: true }
+    );
+    if (!endorsed) {
+      const exists = await AgencyRemittanceModel.exists({ _id: remittanceId });
+      throw createAppError(
+        exists ? ERROR_CODES.COD_REMITTANCE_ALREADY_RESOLVED : ERROR_CODES.COD_REMITTANCE_NOT_FOUND,
+        exists ? 409 : 404
+      );
+    }
+    return this.toAdminDto(endorsed);
+  }
+
   async listForAgency(agencyId: string, page: number, limit: number, status?: AgencyRemittanceStatus) {
     const filter: Record<string, unknown> = { agency_id: agencyId };
     if (status) filter.status = status;
@@ -173,7 +215,8 @@ export class AgencyRemittanceService {
     const filter: Record<string, unknown> = {};
     if (status) filter.status = status;
     if (agencyId) filter.agency_id = agencyId;
-    return this.paginate(filter, page, limit);
+    // `forAdmin` — the endorsement is admin-to-admin commentary. See `toAdminDto`.
+    return this.paginate(filter, page, limit, true);
   }
 
   /** Sum of this agency's still-open ('declared') remittance declarations. */
@@ -185,7 +228,12 @@ export class AgencyRemittanceService {
     return result?.total ?? 0;
   }
 
-  private async paginate(filter: Record<string, unknown>, page: number, limit: number) {
+  private async paginate(
+    filter: Record<string, unknown>,
+    page: number,
+    limit: number,
+    forAdmin = false
+  ) {
     const [total, docs] = await Promise.all([
       AgencyRemittanceModel.countDocuments(filter).exec(),
       AgencyRemittanceModel.find(filter)
@@ -195,8 +243,34 @@ export class AgencyRemittanceService {
         .exec(),
     ]);
     return {
-      data: docs.map((r) => this.toDto(r)),
+      data: docs.map((r) => (forAdmin ? this.toAdminDto(r) : this.toDto(r))),
       meta: { total, page, limit, pages: Math.ceil(total / limit) },
+    };
+  }
+
+/**
+   * The admin view of a remittance — everything in `toDto` plus the reviewer's endorsement.
+   *
+   * ⛔ **`triage` is deliberately NOT in `toDto`, and must not be moved there.** That shape is
+   * served to the AGENCY and the AGENT as well, and the endorsement carries an internal review
+   * note ("checked against the deposit slip", "agent has three open discrepancies") written by
+   * one administrator for the next. It is commentary about the counterparty, and the
+   * counterparty is not its audience.
+   *
+   * The payout surface draws the same line in the same place: `toAdminPayoutRequestDto` carries
+   * triage and the owner-facing read does not.
+   */
+  private toAdminDto(remittance: IAgencyRemittance) {
+    return {
+      ...this.toDto(remittance),
+      triage: remittance.triage
+        ? {
+            verdict: remittance.triage.verdict,
+            note: remittance.triage.note ?? null,
+            by: { id: remittance.triage.by_admin_id ?? null, name: remittance.triage.by_name ?? null },
+            at: remittance.triage.at,
+          }
+        : null,
     };
   }
 

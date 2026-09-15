@@ -615,7 +615,18 @@ export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvProblem
         err('NOTCHPAY_WEBHOOK_SECRET', 'is required whenever NOTCHPAY_PUBLIC_KEY is set. It is the dashboard\'s Hash Key (hsk_…), NOT the private key. Without it every NotchPay callback is refused, so customers are charged and their orders stay unpaid.');
     }
     if (has('NOTCHPAY_PUBLIC_KEY') && !has('NOTCHPAY_PRIVATE_KEY')) {
-        warn('NOTCHPAY_PRIVATE_KEY', 'is not set while NOTCHPAY_PUBLIC_KEY is. Collection works; the X-Grant header it supplies is only needed for refunds, which will refuse until it is set.');
+        warn('NOTCHPAY_PRIVATE_KEY', 'is not set while NOTCHPAY_PUBLIC_KEY is. Collection works; the X-Grant header it supplies is only needed for refunds and payouts, which will refuse until it is set.');
+    }
+    // A warning above becomes an ERROR once payouts are switched on. The X-Grant credential
+    // is optional for collection and mandatory for a transfer, and its absence surfaces as a
+    // 403 — the same status an unregistered egress IP produces, so an operator debugging it
+    // checks the allowlist rather than the variable. Refusing at boot names the real cause
+    // once, instead of leaving it to be guessed at per failed payout.
+    if (get('NOTCHPAY_PAYOUTS_ENABLED') === 'true' && !has('NOTCHPAY_PRIVATE_KEY')) {
+        err('NOTCHPAY_PRIVATE_KEY', 'is required when NOTCHPAY_PAYOUTS_ENABLED=true. It is the X-Grant credential every transfer needs; without it NotchPay answers 403, which is indistinguishable from this server IP not being on their transfer allowlist.');
+    }
+    if (get('NOTCHPAY_PAYOUTS_ENABLED') === 'true' && !has('NOTCHPAY_PUBLIC_KEY')) {
+        err('NOTCHPAY_PAYOUTS_ENABLED', 'is true but NOTCHPAY_PUBLIC_KEY is not set, so no transfer can be authenticated at all.');
     }
     // My-CoolPay signs its callbacks with the PRIVATE key — there is no separate webhook
     // secret, which is why MYCOOLPAY_WEBHOOK_SECRET was documented for a while and read by

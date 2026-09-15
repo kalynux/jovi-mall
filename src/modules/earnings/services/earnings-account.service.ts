@@ -325,26 +325,57 @@ export class EarningsAccountService {
    * PayoutRequest's own status/timestamps are the audit trail for this money
    * movement instead.
    */
+  /**
+   * Move an owner's available balance into `requested_balance`.
+   *
+   * ⚠ **`maxAmount` makes this a PARTIAL move, and it is the only way it can be one.**
+   * Without it the whole available balance always moves, which is why an unverified owner's
+   * cap had to reach into here rather than being a refusal at the caller: capping by
+   * refusing would mean an unverified owner who earns more than the cap can withdraw
+   * *nothing*, and the more they sell the more of their own money they cannot touch.
+   *
+   * Pass `null`/omit for the ordinary whole-balance move. A caller passing a cap gets
+   * `min(available, cap)`; the remainder stays available and can be requested again once
+   * the reason for the cap is gone.
+   */
   async moveAvailableToRequestedInSession(
     ownerType: EarningsOwnerType,
     ownerId: string | null,
-    session: ClientSession
+    session: ClientSession,
+    maxAmount: number | null = null
   ): Promise<{ amount: number; currency: string }> {
     const account = await this.accountRepo.getOrCreate(ownerType, ownerId, session);
-    const amount = account.available_balance;
-    if (amount <= 0) {
+    const available = account.available_balance;
+    if (available <= 0) {
       throw createAppError(
         ERROR_CODES.EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE,
         409,
         'There is no available balance to request a payout for'
       );
     }
+
+    const capped = maxAmount !== null && maxAmount > 0 && available > maxAmount;
+    const amount = capped ? maxAmount : available;
+
     if (amount < EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT) {
+      /**
+       * ⚠ Two different faults reach this line and the owner can act on only one of them.
+       * "You have not earned enough yet" is theirs to fix by selling more; "the cap on
+       * unverified accounts is set below the platform's own minimum" is a misconfiguration
+       * they can do nothing about, and reporting it as the first would have them waiting for
+       * a balance that is already there. The details say which.
+       */
       throw createAppError(
         ERROR_CODES.EARNINGS_PAYOUT_BELOW_MINIMUM,
         409,
-        `Available balance must be at least ${EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT} ${account.currency} to request a payout`,
-        { minAmount: EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT, available: amount }
+        capped
+          ? `Payouts on unverified accounts are capped at ${maxAmount} ${account.currency}, which is below the platform minimum of ${EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT} — verification is required before any payout can be made`
+          : `Available balance must be at least ${EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT} ${account.currency} to request a payout`,
+        {
+          minAmount: EARNINGS_CONFIG.MIN_PAYOUT_AMOUNT,
+          available,
+          ...(capped ? { cappedAt: maxAmount, capReason: 'unverified' } : {}),
+        }
       );
     }
     const updated = await this.accountRepo.moveAvailableToRequested(account._id, amount, session);

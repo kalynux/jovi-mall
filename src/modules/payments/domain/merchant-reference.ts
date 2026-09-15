@@ -41,10 +41,18 @@ export type MerchantRefKind =
   /** `plan_purchases` — a billing plan bought by a vendor/agency/agent. */
   | 'pp'
   /** `credit_topups` — a credit wallet top-up. */
-  | 'ct';
+  | 'ct'
+  /**
+   * `payout_requests` — a payout the platform SENDS.
+   *
+   * The only kind naming money that LEAVES rather than arrives, which is why the webhook
+   * processor refuses to settle a collection from a `po` reference or a payout from any of
+   * the three above. See `direction` on `NormalizedWebhookEvent`.
+   */
+  | 'po';
 
 const PREFIX = 'jm';
-const KINDS: readonly MerchantRefKind[] = ['pt', 'pp', 'ct'];
+const KINDS: readonly MerchantRefKind[] = ['pt', 'pp', 'ct', 'po'];
 
 /**
  * Mint a fresh reference: `jm_<kind>_<32 hex characters>`.

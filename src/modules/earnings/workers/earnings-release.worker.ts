@@ -414,8 +414,11 @@ export class EarningsReleaseWorker implements ObservableWorker {
       const ownerType = account.owner_type as 'vendor' | 'agency' | 'agent';
       const ownerId = account.owner_id.toString();
       try {
-        const pending = await this.payoutRepo.findPendingForOwner(ownerType, ownerId);
-        if (pending) continue; // already being processed — wait for it to resolve
+        const held = await this.payoutRepo.findHeldForOwner(ownerType, ownerId);
+        // Already open — pending, mid-transfer or failed. All three are still holding this
+        // owner money, so opening a second request would both double-count the debt and
+        // collide with the partial unique index.
+        if (held) continue;
 
         await payoutRequestService.requestPayout(
           ownerType,

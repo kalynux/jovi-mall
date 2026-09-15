@@ -7,6 +7,7 @@ import { TransactionManager } from '../../../core/database/transaction.manager';
 import { connectionService, ConnectionService, maskIdentity } from '../../channel-connections';
 import { CustomerModel, ICustomer } from '../../customers/customer.model';
 import { UserModel } from '../../users/user.model';
+import { WhatsappService } from '../../whatsapp/whatsapp.service';
 import {
     loginIdentityResolver,
     LoginIdentityResolver,
@@ -107,6 +108,7 @@ export class BotRegistrationService {
         private readonly resolver: LoginIdentityResolver = loginIdentityResolver,
         private readonly connections: ConnectionService = connectionService,
         private readonly transactions: TransactionManager = new TransactionManager(),
+        private readonly whatsappWindow: WhatsappService = new WhatsappService(),
     ) {}
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -133,6 +135,15 @@ export class BotRegistrationService {
      * belonged to an account.
      */
     async sync(envelope: BotIdentityEnvelope): Promise<BotRegistrationOutcome | null> {
+        /**
+         * ⚠ FIRST, AND BEFORE EVERY EARLY RETURN. An inbound message is a fact about the
+         * channel, not about whether we could resolve an account from it — a Telegram
+         * first-contact (`needs_contact`), a suspended account (`assertNotRefused` throws)
+         * and an established customer all messaged us just the same. Placing this after the
+         * resolution would record only the cases that happen to succeed.
+         */
+        await this.recordInboundActivity(envelope);
+
         const resolution = await this.resolver.resolveForRegistration(
             envelope.channel,
             envelope.externalId,
@@ -161,6 +172,65 @@ export class BotRegistrationService {
         if (envelope.channel !== 'whatsapp' || !phone) return null;
 
         return this.createAccount(envelope, phone);
+    }
+
+    /**
+     * Record that a message arrived on this channel — the two stamps that nothing wrote.
+     *
+     * ── Why this is here and not in the adapter ──────────────────────────────────
+     *
+     * `POST /api/webhooks/whatsapp` already calls `WhatsappService.recordInbound`, and for
+     * a while that looked like the answer. It is not: the automation layer only reaches
+     * that path on the COMMAND branch (`run command` in `wi-mall-core`), so an ordinary
+     * chat message never touched it. `sync` is the one entry point n8n calls on EVERY
+     * inbound — `Inbound → sync identity` is the first edge in the workflow — which is
+     * what makes it the only honest place for this.
+     *
+     * ── The two stamps answer different questions and both were dead ─────────────
+     *
+     *   `channel_connections.last_seen_at` — "when did this account last message us?"
+     *       Declared with that exact docstring, given a `touch()` repository method AND a
+     *       best-effort service wrapper, and then called by nothing. It was written only by
+     *       `bind()`, so it recorded when the connection was made, never its use. ⚠ Read
+     *       that field's own docstring before touching this: its predecessor, `wa.last_seen_at`,
+     *       was declared on all four role models and written by absolutely nothing. This is
+     *       the second time the same field has rotted; `test:connections` now pins it.
+     *
+     *   `open_chat_window:<digits>` — "may we send free-form text right now?"
+     *       Meta allows a free-form reply for 24 hours after an inbound message; outside it
+     *       only an approved template may be sent. With nothing writing this key the answer
+     *       was permanently NO, which sent WhatsApp phone verification down the template
+     *       path on every single attempt — and both OTP templates are currently unsendable,
+     *       so every code failed to deliver. See `phone-verification.service.ts`.
+     *
+     * ── Best-effort, and deliberately so ─────────────────────────────────────────
+     *
+     * Neither stamp may fail the message that triggered it. `ConnectionService.touch`
+     * already swallows its own errors; `recordInbound` is a raw Redis write and does not,
+     * so it is wrapped here. A customer losing their reply because a bookkeeping write
+     * missed would be a far worse failure than a window we under-report — and
+     * under-reporting merely restores the behaviour that existed before this method.
+     *
+     * ⚠ **WhatsApp only for the window.** The 24-hour rule is Meta's; Telegram has no such
+     * concept and stamping it there would put a WhatsApp-shaped key under a Telegram id.
+     * `last_seen_at` is channel-agnostic and is stamped for both.
+     */
+    private async recordInboundActivity(envelope: BotIdentityEnvelope): Promise<void> {
+        await this.connections.touch(envelope.channel, envelope.externalId);
+
+        if (envelope.channel !== 'whatsapp') return;
+
+        try {
+            /**
+             * BARE DIGITS, which is what the adapter delivers and what Meta addresses by.
+             * `PhoneVerificationService.deliver` derives the same key from the other side
+             * with `phone.replace(/^\+/, '')` — the two must agree or the window is written
+             * under one id and read under another.
+             */
+            await this.whatsappWindow.recordInbound(envelope.externalId);
+        } catch (error) {
+            console.error('[BotRegistration] Failed to open the WhatsApp service window:', error);
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────

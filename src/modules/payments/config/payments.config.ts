@@ -49,6 +49,20 @@ export const NOTCHPAY_CONFIG = Object.freeze({
    * `true` once NotchPay enables refunds; no code changes with it.
    */
   REFUNDS_ENABLED: (process.env.NOTCHPAY_REFUNDS_ENABLED || 'false') === 'true',
+  /**
+   * Whether TRANSFERS (money out) are enabled for this deployment.
+   *
+   * ⚠ Default FALSE, and the default is doing two jobs. The first is ordinary: transfers
+   * move real money, so a deployment opts in deliberately. The second is less obvious —
+   * NotchPay IP-ALLOWLISTS transfer calls, so enabling this on a host whose egress address
+   * has not been registered in the NotchPay dashboard produces a 403 on every attempt, which
+   * reads like revoked credentials rather than a missing allowlist entry. Turning it on is a
+   * deploy-time decision paired with an ops step, not a code change. See docs/RUNBOOK.md.
+   *
+   * It also makes NOTCHPAY_PRIVATE_KEY load-bearing — the X-Grant credential, which until
+   * now was needed only for refunds and was correspondingly only a boot warning.
+   */
+  PAYOUTS_ENABLED: (process.env.NOTCHPAY_PAYOUTS_ENABLED || 'false') === 'true',
 });
 
 /**

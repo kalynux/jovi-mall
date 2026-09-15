@@ -14,6 +14,7 @@ import { RoleActorRef, actorStamp } from '../../../core/types/actor-source.types
 import { AgentOnboardingStep } from '../../../core/constants/onboarding-steps';
 import { normalizeEmailAddress } from '../../../core/validation/email';
 import { buildSearchRegex } from '../../../core/utils/regex.util';
+import { activationFilter, ACTIVATION_TARGET } from '../../../core/accounts/activation';
 
 /** Mean Earth radius in km — converts a radius to radians for $centerSphere. */
 const EARTH_RADIUS_KM = 6378.1;
@@ -544,6 +545,32 @@ export class AgentRepository {
 
   async markEmailVerified(userId: string): Promise<IDeliveryAgent | null> {
     return await DeliveryAgentModel.findOneAndUpdate({ user_id: userId }, { email_verified: true }, { new: true });
+  }
+
+  /**
+   * Promote out of `pending_verification` when the fundamentals are proved.
+   *
+   * ⚠ **Until 2026-09-15 NOTHING promoted an agent**, and the dead `updateStatusByUserId`
+   * below is the fossil of a self-service path that was written and never wired: every agent
+   * sat at `pending_verification` for ever unless an administrator moved them by hand. That
+   * blocked going online (`AgentAvailabilityService`), dispatch (rule 3 of
+   * `AgentEligibilityService`) and appearing in an agency's browse directory.
+   *
+   * ⚠ **Activating an agent does NOT make them dispatchable, and must not be read that way.**
+   * The eligibility rules are ordered and `status` is only the third: a platform ban and an
+   * unverified KYC still refuse the agent before it is even consulted, and an active contract
+   * and Tracking Allow are still required after it. Holding COD cash likewise remains gated
+   * on KYC via `AgentGateService.assertCanHoldContract`, which reads the verdict and never
+   * this field — which is why the cash rule survived this change untouched.
+   */
+  async activateIfFundamentalsMet(userId: string, session?: ClientSession): Promise<IDeliveryAgent | null> {
+    const query = DeliveryAgentModel.findOneAndUpdate(
+      { user_id: userId, ...activationFilter('name') },
+      { $set: { status: ACTIVATION_TARGET } },
+      { new: true },
+    );
+    if (session) query.session(session);
+    return query.exec();
   }
 
   /**

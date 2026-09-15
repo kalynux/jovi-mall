@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { asyncHandler } from '../../../api/middlewares/async-handler';
-import { earningsAccountService } from '../services/earnings-account.service';
+import { ownerEarningsView } from '../services/payout-request.service';
 
 /**
  * Agent-facing earnings view: held (pending) vs withdrawable (available) balance
@@ -17,7 +17,7 @@ import { earningsAccountService } from '../services/earnings-account.service';
 export class AgentEarningsController {
   static getEarnings = asyncHandler(async (req: Request, res: Response) => {
     const agentId = req.auth!.role_entity._id.toString();
-    const balances = await earningsAccountService.getBalances('agent', agentId);
-    res.status(200).json({ success: true, data: balances });
+    const view = await ownerEarningsView('agent', agentId);
+    res.status(200).json({ success: true, data: view });
   });
 }

@@ -123,39 +123,112 @@ Only an approved template may be sent outside Meta's service window, and the bac
 2. **`wi_mall_phone_verification_utility`** — category `UTILITY`, tried only if the first send
    fails.
 
-⛔ **Measured 2026-09-14: NEITHER template can be used, and out-of-window verification does not
-work.** The fallback machinery below is built, tested and inert. Both halves failed on Meta's
-side, for the same underlying reason:
+✅ **The out-of-window TEMPLATE problem is solved as of 2026-09-15.** The first template is
+approved and the second is never reached.
 
-| | What Meta said |
+⛔ **BUT NO WHATSAPP MESSAGE CAN BE SENT AT ALL RIGHT NOW, FOR A THIRD REASON ON THE ACCOUNT.**
+A live send of the approved template returned `(#131037) WhatsApp provided number needs display
+name approval before message can be sent.` The sending number has **`name_status:
+"NON_EXISTS"`** — a display name has never been submitted. ⚠ **This gate sits above BOTH paths**:
+a free-form in-window text fails with the identical error, before the window is even checked. So
+**both** the in-window and out-of-window claims on this page are blocked by one account-level
+fault that no code change can address — someone must submit a display name for approval in
+WhatsApp Manager. Everything below describes what happens once that clears.
+
+| | Status |
 |---|---|
-| `wi_mall_phone_verification` (AUTHENTICATION) | **cannot be created.** Code 10, subcode 2388185, *"This WhatsApp Business Account doesn't have permission to create a message template"*. The category is gated behind business verification and this WABA's owning business is `business_verification_status: "rejected"`. UTILITY templates create normally on the same credential, which is what isolates it to the category. |
-| `wi_mall_phone_verification_utility` (UTILITY) | **created, then REJECTED at review within minutes**, `rejected_reason: INCORRECT_CATEGORY` — in both languages. |
+| `wi_mall_phone_verification` (AUTHENTICATION) | ✅ **APPROVED**, `en` + `fr` (`4426347317613316`, `1393590468966788`). Meta approved it within seconds of submission. |
+| `wi_mall_phone_verification_utility` (UTILITY) | ⛔ **REJECTED and unusable** — `rejected_reason: INCORRECT_CATEGORY`, both languages. Now dead weight rather than a fallback. |
 
-⛔ **The UTILITY route is closed by Meta, not by an implementation detail.** Resubmitting with
-`allow_category_change: true` — which lets Meta assign the category it thinks correct rather
-than refusing — came back `REJECTED` **synchronously**. Meta classifies one-time-password
-content as AUTHENTICATION and will not accept it anywhere else; the category it wants is the one
-this WABA cannot use. Rewording the copy to read as something other than a verification code
-would be evading that classifier rather than satisfying it, and the WABA carrying all 188 other
-templates is what would be at risk.
+⚠ **This page said the opposite one day earlier, and knowing why prevents the wrong conclusion
+being drawn from the fallback's existence.** On 2026-09-14 the AUTHENTICATION template could not
+be created at all — code 10, subcode 2388185, *"This WhatsApp Business Account doesn't have
+permission to create a message template"* — because Meta gates that category behind business
+verification and this WABA's owning business was `business_verification_status: "rejected"`.
+UTILITY templates created normally on the same credential, which is what isolated it to the
+category rather than the token. The business reached **`verified`** on 2026-09-15 and the
+template created on the first attempt. **No code changed**, because the send path had always
+tried AUTHENTICATION first.
 
-✅ **There is one real fix: resolve the business verification.** The AUTHENTICATION template then
-creates, the first path starts succeeding, and the fallback is never reached — no code change
-and no redeploy, because the order never changed. Set `PHONE_VERIFY_FALLBACK_TEMPLATE_NAME=`
-(empty) to close the fallback explicitly in the meantime; it changes no behaviour today beyond
-skipping one send that is going to fail.
+⛔ **The UTILITY fallback did NOT come back with it, and must never be resubmitted.** Its
+rejection is about OTP **content**, not about the business — resubmitting with
+`allow_category_change: true`, which lets Meta assign the category it thinks correct rather than
+refusing, came back `REJECTED` **synchronously**. Meta classifies one-time-password content as
+AUTHENTICATION and will not accept it anywhere else. Rewording it to read as something other than
+a verification code would be evading that classifier rather than satisfying it, and the WABA
+carrying all 189 other templates is what would be at risk.
 
-⚠ **In-window verification is unaffected and works.** A user who has messaged the platform in
-the last 24 hours gets the code as free-form text, which needs no template and no approval. It
-is only the out-of-window path — a dashboard user who has never messaged the bot — that is
-closed.
+Set `PHONE_VERIFY_FALLBACK_TEMPLATE_NAME=` (empty) if you want the doomed second call gone; it
+changes no behaviour that works today. The knob is kept wired because a business verification can
+lapse, and this WABA has already been on both sides of that line inside two days.
+
+⚠ **In-window verification needs no template** — a user who has messaged the platform in the last
+24 hours gets the code as free-form text. ⛔ **That does NOT mean it works today**: the display-name
+gate above refuses a free-form send with the same 131037, so "needs no template approval" and
+"delivers" are two different claims and only the first is currently true.
+
+⛔ **That sentence was FALSE until 2026-09-15, and the correction is the whole reason the
+section below exists.** The window is a Redis key, and it was written by exactly one thing:
+`POST /api/webhooks/whatsapp`. The automation layer reaches that path only on its *command*
+branch, so an ordinary chat message never opened it — **for anybody, ever**. Every request
+therefore took the template path above, and with both templates unsendable, **every single
+out-of-window and in-window attempt alike failed with `PHONE_VERIFICATION_DELIVERY_FAILED`**.
+Messaging the bot first — the obvious remedy, and the one a user would try — changed nothing.
+
+`POST /api/internal/bot/identity/sync` now stamps the window on every inbound message, on the
+one path n8n calls for every message rather than only for commands. `test:connections`
+§ "inbound activity is actually STAMPED" pins it, because deleting that call breaks no request
+and fails no other suite.
 
 If **both** fail — or the fallback is closed and the first fails — the request answers
 `PHONE_VERIFICATION_DELIVERY_FAILED` and names both templates. That loudness is deliberate: a
 verification code that silently never arrives is indistinguishable, to the person waiting, from
 a platform ignoring them. Which template actually carried a given code is a server log line,
 not a field.
+
+## What a client must DO on `PHONE_VERIFICATION_DELIVERY_FAILED`
+
+⚠ **This is the one error on this endpoint the user can actually clear themselves, and they
+will never guess how.** Treat it as an instruction, not as a failure.
+
+**Tell the user to send any message to the WhatsApp bot, then press resend.** One message —
+"hi" is enough — opens Meta's service window for the next 23 hours, and inside it the code goes
+as free-form text, which needs no template and is unaffected by the blocker above.
+
+Required of the client:
+
+- **Do not render this as a retry-the-same-thing error.** Retrying without messaging the bot
+  reproduces it exactly, because nothing about the account changed. A bare "try again" button
+  here is a loop.
+- **Give the bot's number, or a `wa.me` deep link.** The user cannot act on this advice without
+  knowing where to send the message. `WA_BOT_NUMBER` is the configured number.
+- **Respect the 60-second resend cooldown** (`PHONE_VERIFICATION_RESEND_TOO_SOON`, 429). A user
+  who messages the bot and immediately taps resend can land on it; say "wait a moment", not
+  "failed".
+- **Do not tell the user the platform is down.** ⛔ The agent app currently maps *every* 502 to
+  "We can't reach our systems right now" before it reads `error.code`, which turns this
+  actionable refusal into an outage report and sends the user away. Branch on the code first.
+
+```
+POST /api/me/phone/verify/request
+→ 502  PHONE_VERIFICATION_DELIVERY_FAILED
+   ├─ show: "We couldn't send your code on WhatsApp. Send any message to
+   │         +237 XXX XXX XXX, then tap Resend."
+   ├─ primary action: open wa.me link
+   └─ secondary action: Resend (respects the 60s cooldown)
+```
+
+**Why not just check the window first and warn ahead of time?** There is no client-facing
+window read on `/api/me/*` — `GET /api/me/phone/verify` reports whether a *code* is in flight,
+not whether the WhatsApp window is open. The bot surface has one (`messaging_get_window`), but
+it authenticates a messaging identity rather than a dashboard session, so a dashboard cannot
+call it. Recovery is therefore reactive by design: attempt, and act on this code if it comes
+back.
+
+⚠ **This advice is only true on a deployment carrying the 2026-09-15 window fix.** Before it,
+messaging the bot did nothing at all — see the ⛔ above. If a deployment predates it, the
+advice is worse than useless: it sends the user to do something that cannot help and makes the
+platform look broken twice.
 
 ## Administrators — a different door, same mechanism
 

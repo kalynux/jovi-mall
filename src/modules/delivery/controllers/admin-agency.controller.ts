@@ -40,7 +40,18 @@ export class AdminAgencyController {
      */
     static verify = asyncHandler(async (req: Request, res: Response) => {
         const agency = await adminAgencyService.verify(req.params.id, actorFromRequest(req));
-        res.json({ success: true, data: agency, message: 'Agency verified and activated.' });
+        /**
+         * ⚠ **"and activated" was removed on 2026-09-15, because this route stopped
+         * activating anything.** An agency reaches `active` by proving a phone; approval
+         * records that a human vetted the business. An operator told the account was
+         * activated by their click will believe an agency stuck at `pending_verification`
+         * is their problem to solve, when the missing step is the agency's own.
+         *
+         * The replacement claims nothing about `status` in either direction, so it is true
+         * before and after this change ships — the same rule admin-dash applied to its own
+         * two operator-facing strings (BR-026 § 3).
+         */
+        res.json({ success: true, data: agency, message: 'Agency verification approved.' });
     });
 
     /**
@@ -50,8 +61,11 @@ export class AdminAgencyController {
      * for the same reason as its sibling: this write stamps the reviewer, and under
      * `requireAdminCaller` that id resolves in the wi-admin database and nowhere here.
      *
-     * It changes no status — see `AdminAgencyService.reject`. The agency stays pending,
-     * which is what every existing gate already refuses.
+     * It changes no status — see `AdminAgencyService.reject`. ⚠ That docstring used to add
+     * "the agency stays pending, which is what every existing gate already refuses", and
+     * since 2026-09-15 neither half holds: a refused agency keeps whatever `status` its own
+     * phone verification earned it, and the gates that refused it were gating on `active`.
+     * What a refusal costs is cash — COD and the payout allowance read the verdict.
      */
     static reject = asyncHandler(async (req: Request, res: Response) => {
         const input = AdminRejectAgencyKycSchema.parse(req.body);

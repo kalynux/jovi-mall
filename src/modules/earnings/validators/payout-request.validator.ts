@@ -1,8 +1,14 @@
 import { z } from 'zod';
-import { PAYOUT_OWNER_TYPES } from '../models/payout-request.model';
+import { PAYOUT_OWNER_TYPES, PAYOUT_REQUEST_STATUSES } from '../models/payout-request.model';
 
 export const ListPayoutRequestsQuerySchema = z.object({
-  status: z.enum(['pending', 'paid', 'rejected']).optional(),
+  /**
+   * Derived from the model, for the same reason `ownerType` below is: this list grew by
+   * two when gateway transfers landed (`processing`, `failed`), and a hand-typed copy would
+   * have made a payout stuck mid-transfer the one thing an administrator could not filter
+   * for — precisely the row they most need to find.
+   */
+  status: z.enum(PAYOUT_REQUEST_STATUSES).optional(),
   /**
    * `agent` belongs here and was missing.
    *
@@ -30,3 +36,17 @@ export const RejectPayoutSchema = z.object({
 });
 
 export type RejectPayoutDto = z.infer<typeof RejectPayoutSchema>;
+
+/**
+ * A tier-3 endorsement.
+ *
+ * ⚠ There is no `reject` verdict here. A triage rejection is an ordinary
+ * `POST .../reject` with `RejectPayoutSchema` — terminal, releasing the hold, recorded as a
+ * status. Offering "reject" as a verdict on this route would have produced a second way to
+ * close a payout that wrote a different set of fields.
+ */
+export const TriagePayoutSchema = z.object({
+  note: z.string().trim().min(1).max(500).optional(),
+});
+
+export type TriagePayoutDto = z.infer<typeof TriagePayoutSchema>;

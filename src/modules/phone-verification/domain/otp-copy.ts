@@ -46,10 +46,24 @@ const COPY: Record<Language, (code: string, minutes: number) => string> = {
         + `تنتهي صلاحيته خلال ${minutes} دقيقة. إذا لم تطلب التحقق من رقم، فتجاهل هذه الرسالة — لن يتغير شيء.`,
 };
 
+/**
+ * The TTL expressed the way every piece of copy quotes it: whole minutes, never zero.
+ *
+ * ⚠ **Extracted because a THIRD caller appeared that is not a message at all.** The in-window
+ * text and the UTILITY fallback params both render this number, and so does the AUTHENTICATION
+ * template's `code_expiration_minutes` — which is submitted to Meta once and then frozen inside
+ * an approved template. That third one cannot be re-derived at send time, so if the formula
+ * lived in three places a change to `PHONE_VERIFY_TTL_SECONDS` would move two of them and leave
+ * Meta's footer and the copy-code button's `code_expiration_minutes` quoting the old number
+ * forever, with nothing to compare and no error. One function, three readers.
+ */
+export function otpExpiryMinutes(ttlSeconds: number): number {
+    return Math.max(1, Math.round(ttlSeconds / 60));
+}
+
 export function otpMessage(code: string, lang: Language, ttlSeconds: number): string {
-    const minutes = Math.max(1, Math.round(ttlSeconds / 60));
     const render = COPY[lang] ?? COPY.en;
-    return render(code, minutes);
+    return render(code, otpExpiryMinutes(ttlSeconds));
 }
 
 /** Exposed for the completeness assertion in `test:phone-verification`. */
@@ -59,29 +73,37 @@ export const OTP_COPY_LANGUAGES = Object.keys(COPY) as Language[];
  * The body of the UTILITY **fallback** template, used only when the AUTHENTICATION template
  * cannot be sent.
  *
- * ── Why a second template exists at all ──────────────────────────────────────
+ * ── Why a second template exists, and why it is now DEAD CODE ────────────────
  *
- * Meta gates the AUTHENTICATION category behind business verification. Measured 2026-09-14:
- * this WABA is owned by a business whose verification is `rejected`, so
- * `wi_mall_phone_verification` cannot even be CREATED — Meta answers code 10 — while UTILITY
- * templates create normally on the same credential. Without a fallback the out-of-window path
- * is closed on this deployment for a reason no amount of code can fix.
+ * ✅ **The situation this answered is OVER.** It was written on 2026-09-14, when Meta gated the
+ * AUTHENTICATION category behind business verification and this WABA's owning business was
+ * `business_verification_status: "rejected"`, so `wi_mall_phone_verification` could not be
+ * created at all (code 10 / subcode 2388185). **Measured again 2026-09-15: the business is
+ * `verified`, the WABA is `APPROVED`, and the AUTHENTICATION template was created and APPROVED
+ * by Meta in both languages within seconds** (`4426347317613316` en, `1393590468966788` fr). The
+ * primary path works, so nothing here is reached on an ordinary send.
  *
- * ⛔ **META REJECTED IT — `INCORRECT_CATEGORY`, both languages, minutes after creation
- * (2026-09-14). This copy is currently unsendable, and the file is kept because the
- * machinery around it is correct and the answer may change.**
+ * ⛔ **This copy remains UNSENDABLE and must not be resubmitted.** Meta rejected it at review —
+ * `INCORRECT_CATEGORY`, both languages, minutes after creation — and rejected it again
+ * *synchronously* when resubmitted with `allow_category_change: true`, which lets Meta assign
+ * whatever category it judges correct rather than refusing. Meta classifies one-time-password
+ * content as AUTHENTICATION and accepts it nowhere else. **That verdict is about the CONTENT
+ * and is unaffected by the business now being verified** — resolving the verification opened
+ * the category, it did not make OTP copy acceptable as UTILITY. Both rejected rows have since
+ * disappeared from the WABA, so the name is free and a resubmission would silently recreate the
+ * same rejection.
  *
- * Do not "fix" it by rewording. The route is closed by Meta rather than by this text:
- * resubmitting with `allow_category_change: true` — which lets Meta assign whatever category it
- * judges correct instead of refusing — came back `REJECTED` **synchronously**. Meta classifies
- * one-time-password content as AUTHENTICATION and accepts it nowhere else, and AUTHENTICATION
- * is exactly what this WABA may not create. Rewording to read as something other than a
- * verification code would be evading that classifier, not satisfying it, and what is at risk is
- * the WABA carrying all 188 working templates.
+ * Do not "fix" it by rewording, either: rewording until the classifier stops recognising a
+ * verification code is evading enforcement rather than satisfying it, and the stake is the WABA
+ * carrying all 190 templates.
  *
- * ✅ **The one real fix is resolving the business verification.** The AUTHENTICATION template
- * then creates, `deliver()` succeeds on its first attempt, and none of this is reached — with
- * no code change, because the order never changed.
+ * ── So why is it still here? ─────────────────────────────────────────────────
+ *
+ * Because the *machinery* is correct and the category can become unreachable again — a business
+ * verification can lapse, and this WABA has already been on both sides of that line inside two
+ * days. The knob (`PHONE_VERIFY_FALLBACK_TEMPLATE_NAME`) stays wired so a deployment that later
+ * obtains an approvable second template needs configuration rather than a release. What is
+ * *not* true any more is that this is load-bearing: it is a lever, not a route.
  *
  * ── What the copy has to carry that the other one does not ───────────────────
  *
@@ -133,7 +155,7 @@ export function otpFallbackTemplateBody(lang: Language): string {
  * has to agree with. A caller cannot get it wrong without editing this function.
  */
 export function otpFallbackTemplateParams(code: string, ttlSeconds: number): string[] {
-    return [code, String(Math.max(1, Math.round(ttlSeconds / 60)))];
+    return [code, String(otpExpiryMinutes(ttlSeconds))];
 }
 
 /** Exposed for the completeness and ordering assertions in `test:phone-verification`. */

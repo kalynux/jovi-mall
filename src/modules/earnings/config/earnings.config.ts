@@ -87,6 +87,54 @@ export const EARNINGS_CONFIG = {
   AUTO_PAYOUT_THRESHOLD: intEnv('EARNINGS_AUTO_PAYOUT_THRESHOLD', 2_000_000),
 
   /**
+   * The most an owner whose KYC is NOT verified may take out in one manual payout.
+   * Anything above it stays in `available_balance` and waits for verification.
+   *
+   * ⚠ **`0` MEANS NO CAP, AND IT IS THE DEFAULT — the feature is inert until you set a
+   * number.** That is deliberate for a money path: shipping a live default would start
+   * refusing part of every unverified owner's payout on the deploy that carried it, with no
+   * operator having chosen the number. An inert default makes turning it on a decision
+   * somebody makes, on a date, with a figure they picked.
+   *
+   * ⚠ **It caps, it does not refuse.** The owner is still paid up to this amount; only the
+   * excess waits. The alternative — refusing the whole request — punishes earning: the more
+   * an unverified owner sells, the less of their own money they could touch.
+   *
+   * ⚠ **Setting it BELOW `MIN_PAYOUT_AMOUNT` silently blocks unverified payouts entirely**,
+   * because the capped amount then fails the floor check. That is a real configuration
+   * foot-gun, so the refusal names the cap as the cause rather than reporting a bare
+   * "below minimum" the owner cannot act on. Keep it comfortably above the floor.
+   *
+   * ⚠ **The auto-threshold sweep is EXEMPT.** `AUTO_PAYOUT_THRESHOLD` exists so the platform
+   * never owes an unbounded amount; applying the cap there would leave it owing *more* to
+   * precisely the least-vetted accounts, and the nightly request would fail forever with
+   * nothing opened to track the exposure. Those requests still reach a human, and the ticket
+   * now states the KYC verdict.
+   */
+  UNVERIFIED_PAYOUT_CAP: intEnv('EARNINGS_UNVERIFIED_PAYOUT_CAP', 0),
+
+  /**
+   * The length of the rolling window the cap above is measured over, in days.
+   *
+   * ⚠ **The cap is an ALLOWANCE PER WINDOW, not a per-request ceiling, and the difference is
+   * the whole point.** A per-request ceiling bounds one approval and nothing else: only one
+   * payout may be *pending* at a time, but the moment an administrator marks it paid the
+   * owner may open another. At a 20,000 cap an unverified owner with 200,000 available simply
+   * requests ten times and takes the lot.
+   *
+   * ⚠ **ROLLING, not calendar.** A calendar month resets on the 1st, so the 31st plus the 1st
+   * lets twice the cap leave inside 48 hours — precisely the burst a risk cap exists to stop.
+   * A trailing window bounds any N-day stretch and has no boundary to wait for.
+   *
+   * ⚠ **Only `paid` requests count, windowed on `resolved_at`.** A *rejected* request returned
+   * the money to `available_balance`, so counting it would charge the owner for an
+   * administrator's decision. `resolved_at` rather than `created_at` because the question is
+   * when money actually left — a request opened 31 days ago and paid yesterday is recent
+   * spending, and a `created_at` window would miss it.
+   */
+  UNVERIFIED_PAYOUT_WINDOW_DAYS: intEnv('EARNINGS_UNVERIFIED_PAYOUT_WINDOW_DAYS', 30),
+
+  /**
    * The platform's share of the UPLIFT on a negotiated line, as a percentage
    * (BARGAINING-AGENT-PLAN D-5). It funds the model spend that produced the
    * uplift.

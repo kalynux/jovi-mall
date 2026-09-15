@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { ActorSource, actorStampFields } from '../../../core/types/actor-source.types';
+import { IReviewTriage, ReviewTriageSchema } from '../../../core/types/review-triage.types';
 
 /**
  * AgentDeposit - an agent handing collected COD cash back, under exactly one
@@ -57,6 +58,19 @@ export interface IAgentDeposit extends Document {
   status: AgentDepositStatus;
 
   /**
+   * A reviewer's endorsement that this declared handover looks genuine. Null until reviewed.
+   *
+   * ⚠ **Only reachable on `recipient: 'platform'` deposits**, because those are the ones an
+   * ADMINISTRATOR confirms. An agency-recipient deposit is confirmed by the agency itself
+   * (`assertConfirmer`), and a platform reviewer has no standing in that handover — the
+   * counter-signature there is already between two parties rather than two admin tiers.
+   *
+   * Gates nothing either way: confirming never requires it. See
+   * `core/types/review-triage.types.ts`.
+   */
+  triage: IReviewTriage | null;
+
+  /**
    * External money-movement reference (bank/transfer/receipt id). Required for
    * `recipient: 'platform'` — the platform is not physically present at the
    * handover, so the reference is the only thing tying the claim to real money.
@@ -107,6 +121,7 @@ const AgentDepositSchema = new Schema<IAgentDeposit>(
       required: true,
       default: 'confirmed',
     },
+    triage: { type: ReviewTriageSchema, default: null },
 
     reference: { type: String, default: null, trim: true, maxlength: 200 },
 

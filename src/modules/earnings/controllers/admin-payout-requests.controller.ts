@@ -10,6 +10,7 @@ import {
   ListPayoutRequestsQuerySchema,
   MarkPaidSchema,
   RejectPayoutSchema,
+  TriagePayoutSchema,
 } from '../validators/payout-request.validator';
 
 /**
@@ -60,6 +61,50 @@ export class AdminPayoutRequestsController {
     // per resolution for a field the list already gave them.
     sendSuccess(res, toAdminPayoutRequestDto(payoutRequest, null), {
       message: 'Payout marked paid.',
+    });
+  });
+
+  /**
+   * Record a reviewer's endorsement. Moves no money and changes no status.
+   *
+   * ⛔ **This route grants nothing, and jovi-mall must never decide WHO may call it.** The
+   * rule that a reviewing tier may endorse but not send lives in wi-admin, which is where
+   * the tier actually is. The service token authenticating this call is a full-privilege
+   * credential and `X-Actor-Tier` is advisory, so branching on it here would be a check the
+   * caller sets for itself. What this side owns is the state machine, and that machine is
+   * the same for every caller.
+   */
+  static triage = asyncHandler(async (req: Request, res: Response) => {
+    const validated = TriagePayoutSchema.parse(req.body);
+
+    const payoutRequest = await payoutRequestService.triage(
+      req.params.id,
+      actorFromRequest(req),
+      validated.note ?? null
+    );
+
+    sendSuccess(res, toAdminPayoutRequestDto(payoutRequest, null), {
+      message: 'Payout request endorsed. Final approval is still required before money moves.',
+    });
+  });
+
+  /**
+   * Send the payout through the payment gateway.
+   *
+   * Answers with the row in its POST-SUBMIT state, which is normally `processing` and not
+   * `paid` — the gateway confirms asynchronously. A client that renders `processing` as
+   * success has told somebody their money arrived when it has only been accepted.
+   */
+  static send = asyncHandler(async (req: Request, res: Response) => {
+    const payoutRequest = await payoutRequestService.sendPayout(req.params.id);
+
+    sendSuccess(res, toAdminPayoutRequestDto(payoutRequest, null), {
+      message:
+        payoutRequest.status === 'paid'
+          ? 'Payout sent and confirmed.'
+          : payoutRequest.status === 'failed'
+            ? 'The gateway refused the transfer. The funds remain held.'
+            : 'Payout submitted to the gateway. It is not settled until the gateway confirms it.',
     });
   });
 

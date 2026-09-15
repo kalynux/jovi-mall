@@ -39,6 +39,52 @@ process them identically. The auto sweep silently retries daily (logging, not fa
 account that's over threshold but has no payout method configured yet — nothing for admins to do
 there beyond following up with the vendor/agency if it persists.
 
+**A payout takes the owner's WHOLE available balance** — the requester names no amount. There is
+one exception, added 2026-09-15: an owner whose KYC is not verified draws on an **allowance**,
+`EARNINGS_CONFIG.UNVERIFIED_PAYOUT_CAP` per rolling
+`EARNINGS_CONFIG.UNVERIFIED_PAYOUT_WINDOW_DAYS` (default 30). The request takes
+`min(available, remaining allowance)` and the excess stays in `available_balance`.
+
+⚠ **It is an allowance per window, NOT a per-request ceiling — the first version was the latter
+and it bounded nothing.** Only one payout may be *pending* per owner, but the moment you mark one
+paid the owner may open another. At a 20,000 cap an unverified owner holding 200,000 simply
+requested ten times. The allowance sums what has actually been **paid** inside the window.
+
+⚠ **Rolling, not calendar.** A calendar reset would let the 31st plus the 1st move twice the cap
+in 48 hours.
+
+⚠ **Only `paid` requests count, windowed on `resolved_at`.** A request **you reject** returns the
+money to `available_balance` and is **not** charged against the owner's allowance — rejecting is
+never a penalty, and an owner is never billed for your decision. A request opened 31 days ago but
+paid yesterday *does* count, which is why the window is on `resolved_at` and not `created_at`.
+
+⚠ **`UNVERIFIED_PAYOUT_CAP` defaults to `0`, which means NO CAP — the feature is inert until a
+deployment sets a number.** That is deliberate on a money path: a live default would have begun
+capping part of every unverified owner's payout on the deploy that shipped it, with nobody having
+chosen the figure. So on a default deployment nothing here changes, and the KYC verdict on each
+row is information rather than enforcement.
+
+⚠ **It caps; it does not refuse.** The owner is still paid up to the remaining allowance.
+Refusing the whole request instead would mean an unverified owner who earns *more* than the cap
+can withdraw *nothing* — the more they sell, the less of their own money they can reach. The only
+outright refusal is when the allowance is **spent**, or when what is left of it falls under
+`MIN_PAYOUT_AMOUNT`; both answer `409 EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED` with a
+`details.reason` of `allowance_spent` or `remainder_below_minimum`.
+
+⚠ **`auto_threshold` requests are EXEMPT from the cap**, and that exemption is load-bearing. The
+sweep exists so the platform never owes an unbounded amount; capping it would leave the platform
+owing *more* to precisely the least-vetted accounts, and the nightly run would fail against them
+for ever with nothing opened to track the exposure. Those requests still reach this queue, and
+their ticket states the verdict.
+
+⚠ **Setting the cap below `MIN_PAYOUT_AMOUNT` blocks unverified payouts entirely** — the capped
+amount then fails the floor. The refusal names the cap as the cause (`details.capReason:
+"unverified"`, `details.cappedAt`) rather than reporting a bare "below minimum" the owner cannot
+act on, but the configuration is still wrong. Keep the cap comfortably above the floor.
+
+The `PAYOUT_REQUEST` ticket body states the verdict too — `KYC: verified.` or `⚠ KYC: NOT
+verified (<verdict>)` — and says so explicitly when a payout was capped.
+
 ## Base Path
 ```
 /api/internal/admin/payout-requests
@@ -71,8 +117,39 @@ Unset secret ⇒ `503`; bad token ⇒ `401`; missing or malformed actor ⇒ `400
 |---|---|---|
 | GET | `/api/internal/admin/payout-requests` | List payout requests (filterable, paginated) |
 | GET | `/api/internal/admin/payout-requests/:id` | Get one payout request |
-| POST | `/api/internal/admin/payout-requests/:id/mark-paid` | Confirm the payout was sent; permanently deducts the earmarked funds |
+| POST | `/api/internal/admin/payout-requests/:id/triage` | Endorse the request as genuine. Moves no money and gates nothing |
+| POST | `/api/internal/admin/payout-requests/:id/send` | Send the money through the payment gateway |
+| POST | `/api/internal/admin/payout-requests/:id/mark-paid` | Record a payout sent OUT OF BAND; permanently deducts the earmarked funds |
 | POST | `/api/internal/admin/payout-requests/:id/reject` | Reject the request; returns the earmarked funds to `available` |
+
+---
+
+## The lifecycle
+
+```
+(none)     → pending      the owner asks (or the threshold sweep asks for them)
+pending    → rejected     reject               the hold is released
+pending    → processing   send                 transfer submitted, hold retained
+pending    → paid         mark-paid            settled by hand, hold consumed
+processing → paid         gateway callback     hold consumed
+processing → failed       gateway callback     hold retained
+failed     → processing   send (retry)         reuses the same gateway reference
+failed     → rejected     reject               the hold is released
+failed     → paid         mark-paid            reconcile an out-of-band settlement
+```
+
+⚠ **`processing` and `failed` are BOTH still holding the owner's money.** A failed transfer
+has not returned anything — the funds stay in `requested` until somebody retries or rejects.
+Treating `failed` as finished is how a balance gets offered to an owner twice.
+
+⛔ **`processing → rejected` is refused** (`409 EARNINGS_PAYOUT_TRANSFER_IN_FLIGHT`). Releasing
+a hold while a transfer may still be moving is how a payout gets sent twice: once by the
+transfer that was never actually dead, and once out of the balance that came back. Wait for
+the gateway to reach a verdict.
+
+⚠ **A payout is endorsed by a FIELD, not a status.** An endorsed request is still `pending`.
+That is deliberate — the status machine above is what the one-request-per-owner index and the
+four-eyes guard key on, and adding a state to it would break both.
 
 ---
 
@@ -81,8 +158,8 @@ Unset secret ⇒ `503`; bad token ⇒ `401`; missing or malformed actor ⇒ `400
 **Description**: Newest-first, paginated list of payout requests across vendors and agencies.
 
 **Query Parameters**:
-- `status` (optional) — `pending` \| `paid` \| `rejected`
-- `ownerType` (optional) — `vendor` \| `agency`
+- `status` (optional) — `pending` \| `processing` \| `paid` \| `rejected` \| `failed`
+- `ownerType` (optional) — `vendor` \| `agency` \| `agent`
 - `page` (integer, optional, default `1`)
 - `limit` (integer, optional, default `20`, max `100`)
 
@@ -92,45 +169,88 @@ Unset secret ⇒ `503`; bad token ⇒ `401`; missing or malformed actor ⇒ `400
   "success": true,
   "data": [
     {
-      "_id": "66f0a1...",
-      "owner_type": "vendor",
-      "owner_id": "6601...",
+      "id": "66f0a1...",
+      "ownerType": "vendor",
+      "ownerId": "6601...",
       "ownerName": "Jovi Electronics",
       "amount": 118500,
       "currency": "XAF",
       "status": "pending",
       "origin": "manual",
-      "payout_method_snapshot": {
-        "method": "mobile_money",
-        "mobile_money": { "provider": "MTN", "phone_number": "+237...", "account_name": "..." },
-        "bank": null,
-        "card": null
-      },
-      "ticket_id": "66f0a2...",
-      "requested_by_user_id": "6601...",
-      "resolved_at": null,
-      "resolved_by": null,
-      "paid_reference": null,
-      "rejection_reason": null,
-      "created_at": "2026-07-14T10:00:00.000Z",
-      "updated_at": "2026-07-14T10:00:00.000Z"
+      "destination": { "method": "mobile_money", "provider": "MTN", "last4": "4831" },
+      "verification": { "verified": false, "verdict": "pending" },
+      "ticketId": "66f0a2...",
+      "requestedByUserId": "6601...",
+      "resolvedAt": null,
+      "resolvedBy": { "id": null, "source": "platform", "name": null },
+      "paidReference": null,
+      "rejectionReason": null,
+      "createdAt": "2026-07-14T10:00:00.000Z",
+      "updatedAt": "2026-07-14T10:00:00.000Z"
     }
   ],
   "meta": { "total": 1, "page": 1, "limit": 20, "totalPages": 1 }
 }
 ```
 
-`ownerName` is resolved from the vendor/agency profile for display; everything else is the raw
-`PayoutRequest` record. `payout_method_snapshot` is frozen at request time — it reflects where the
-money should go even if the profile's payout details changed since.
+⚠ **This example was WRONG until 2026-09-15 and in the dangerous direction.** It showed the raw
+`PayoutRequest` document — snake_case keys, and a `payout_method_snapshot` carrying the
+beneficiary's **plaintext** mobile-money number. The endpoint stopped returning that some time
+ago: it maps named camelCase fields and puts the destination through `maskPayoutMethod`. A
+frontend built against the old example would have looked for fields that are not there, and — far
+worse — the document advertised a plaintext account number as available on a listing every
+operator can read. The shape above is the one the mapper actually emits.
+
+`ownerName` is resolved from the vendor/agency profile for display. `destination` is **last-4
+only**; the full value is served by wi-admin's `GET /api/v1/money/payouts/:id/destination`, gated
+on its own permission and audited on every read. The underlying snapshot is still frozen at request
+time — money already in flight cannot be redirected by a later profile edit — masking changes the
+reading, not the record.
+
+### `verification` — has anybody vetted this owner?
+
+```json
+"verification": { "verified": false, "verdict": "pending" }
+```
+
+⚠ **Read this on every row before releasing funds.** Since 2026-09-15 accounts activate
+themselves once the holder proves a phone number and has a name, so **`status: "active"` is no
+longer evidence that an administrator vetted the business.** Payout review is the platform's one
+human checkpoint on money leaving it, and without this field an active vendor with a plausible
+destination is indistinguishable from a stranger who registered this morning.
+
+- **`verified`** — the only field to branch on. `true` only when the KYC verdict is `verified`.
+  "Never reviewed" is **not** approval, so do not derive this as `verdict !== "rejected"`.
+- **`verdict`** — the role's own word, for display. ⚠ **The vocabulary differs between roles and
+  that is deliberate.** Vendor and agency default to `pending`; an agent defaults to `unverified`
+  and reaches `pending` only once documents are actually submitted. So on an agent the two words
+  separate "nothing submitted" from "submitted, awaiting review" — which is exactly what tells you
+  whether to chase someone for documents. Render it; never branch on it. Treat an unrecognised
+  value as unverified.
+
+⚠ **Not snapshotted, unlike `destination`.** It is read fresh, so an approval that lands after the
+request was opened shows immediately. Freezing it would display a stale "unverified" against a
+business already on file and send the reviewer chasing documents that have been submitted.
+
+⚠ **It is shown, not enforced.** Whether to pay an unverified owner is the reviewer's judgement —
+the platform does not refuse the payout. What it may do is cap it; see below.
 
 `payout_method_snapshot.method` is `mobile_money`, `bank` or **`card`**, and exactly one of the
 three sub-objects is non-null. **Owners can only configure `mobile_money` right now** — `bank` and
 `card` are switched off at the write path — but a snapshot of either still reaches this queue if it
 was configured before the switch, and it is still yours to pay. Switching a kind off closes the door
-on new configuration, never on money already addressed. Unlike the owner-facing reads, **this snapshot is unmasked** — you
-are the one sending the money, so `phone_number` and `account_number` come through in full. A
-**card** is the exception, and not for redaction reasons: no card number was ever collected. You get
+on new configuration, never on money already addressed. ⚠ **This paragraph used to say the snapshot is "unmasked" and that
+`phone_number` and `account_number` "come through in full". That was false** — and it had been
+false since the Phase 11 step-0 fix, which introduced `toAdminPayoutRequestDto` and made every
+response on this surface **masked to the last four digits**. The correction two sections above
+was made and this paragraph was not, so the document contradicted itself. If your client reads
+a full account number from this endpoint, it is reading a field that is not there.
+
+Nothing here can reveal the full destination. wi-admin's audited
+`GET /money/payouts/:id/destination` is the only reader of the routing values on the whole
+platform. A
+**card** is the exception in the other direction, and not for redaction reasons: no card number
+was ever collected. You get
 `brand`, `last4`, `card_holder_name`, `expiry_month`/`expiry_year`, `issuing_bank`, `country`, and a
 `gateway_token` **only if** the owner's client tokenized the card through a payment gateway.
 
@@ -154,9 +274,70 @@ per role.
 
 ### POST /api/internal/admin/payout-requests/:id/mark-paid
 
-**Description**: Confirm the payout was sent out-of-band (bank transfer / mobile money). This
-**permanently deducts** the earmarked `requested` amount — there is no undo. Also auto-resolves
-the linked ticket with a system note and notifies the requester.
+**Description**: Record a payout that was sent **out of band** — you moved the money yourself
+and are entering the external reference. This **permanently deducts** the earmarked `requested`
+amount — there is no undo. Also auto-resolves the linked ticket with a system note and notifies
+the requester.
+
+Accepted from `pending` and from `failed` (reconciling a transfer that succeeded at the
+provider after we recorded it failed). ⛔ **Refused while a payout is `processing`** — the
+gateway is about to report on that transfer itself, and recording a manual payment beside it
+claims a settlement twice.
+
+⚠ This is NOT the automated path. To have the platform send the money, use `/send` below. This
+route remains the only way to settle a **bank** or **card** destination, which no gateway here
+can reach, and the fallback when the gateway is unavailable.
+
+---
+
+### POST /api/internal/admin/payout-requests/:id/triage
+
+**Description**: Record that a reviewer has checked this request and believes it genuine.
+
+**Body**: `{ "note": "optional, 1..500 chars" }`
+
+⚠ **Moves no money, changes no status, and gates nothing.** A payout nobody has endorsed is
+exactly as payable as one that has been — the endorsement is a note from one administrator to
+the next. **A dashboard must not disable its approve control on a missing endorsement.**
+
+There is no rejection verdict here. A reviewer who rejects calls `/reject` — the same terminal
+write anyone else would make, because rejection is terminal and terminal outcomes are statuses.
+
+**Errors**: `404` `EARNINGS_PAYOUT_REQUEST_NOT_FOUND` · `409`
+`EARNINGS_PAYOUT_REQUEST_NOT_PENDING` (already resolved) · `409`
+`EARNINGS_PAYOUT_ALREADY_TRIAGED` (somebody has already endorsed it — `details` names who and
+when).
+
+⛔ **Who may call this is decided by wi-admin, not here.** jovi-mall serves `/triage` and
+`/send` as two routes behind one service token and does not read `X-Actor-Tier` for any
+decision — that header is advisory, and the token authenticating the call is a full-privilege
+credential, so branching on it would be a check the caller sets for itself.
+
+---
+
+### POST /api/internal/admin/payout-requests/:id/send
+
+**Description**: Send the money through the payment gateway.
+
+**Body**: none.
+
+⚠ **A 200 does NOT mean the money arrived.** The usual answer is the payout in **`processing`**
+— the transfer has been accepted and the gateway confirms it later by callback. Only `paid`
+means settled; `failed` means the transfer was refused and **the funds are still held**.
+
+**How a double-send is prevented**: the row is claimed into `processing` and its gateway
+reference minted in one atomic update, *before* any call leaves this service. A second request
+loses that race and sends nothing. A retry after a failure reuses the same reference, so a
+transfer that actually succeeded and merely failed to report is deduplicated by the provider
+rather than paid twice.
+
+**Errors**: `404` `EARNINGS_PAYOUT_REQUEST_NOT_FOUND` · `409`
+`EARNINGS_PAYOUT_TRANSFER_IN_FLIGHT` (already `processing`) · `409`
+`EARNINGS_PAYOUT_NOT_SENDABLE` (already resolved) · `422`
+`EARNINGS_PAYOUT_GATEWAY_UNSUPPORTED` (a bank or card destination — settle it by hand) ·
+`503` `EARNINGS_PAYOUT_GATEWAY_UNSUPPORTED` (automatic payouts are off on this deployment) ·
+`409` `EARNINGS_PAYOUT_TRANSFER_FAILED` with `details.reason: "insufficient_gateway_balance"`
+(the float is short — nothing was claimed, so retry once it is topped up).
 
 **Request Body**:
 ```json

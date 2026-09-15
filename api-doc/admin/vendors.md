@@ -99,13 +99,29 @@ The rejection reason is stored **here**, on the vendor row, not only in wi-admin
 trail — this service cannot read that database, so a reason held only there could never be
 shown to the vendor it is about.
 
-> **Verification gates nothing today.** It is surfaced to agencies through
-> `agency-vendor-browse.dto.ts` as `kycVerified`, and it is now settable and explicable,
-> but no vendor behaviour depends on it. `requireLegitBusiness` was the guard that would have
-> read it; it had zero call sites and was deleted on 2026-08-19, so nothing reads the flag on
-> the request path at all.
+> ⚠ **"Verification gates nothing today" was true until 2026-09-15 and is now FALSE.** This
+> paragraph used to end there, on the grounds that `requireLegitBusiness` had zero call sites
+> and was deleted on 2026-08-19. Two things read the verdict now, and both are about money:
+>
+> - **the payout allowance** — an unverified owner's withdrawals can be capped within a
+>   rolling window (`EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED`), inert until a deployment sets
+>   a number, but no longer nothing;
+> - **the admin payout queue** — every row carries `verification: { verified, verdict }`, read
+>   fresh, because `status: "active"` stopped being evidence that anybody vetted the business.
+>
+> It is still surfaced to agencies as `kycVerified` through `agency-vendor-browse.dto.ts`, and
+> it still refuses nothing on the request path: an unverified vendor trades normally. Working
+> with an unverified counterparty is the other party's judgement, not a platform refusal.
 
-`409 VENDOR_KYC_STATUS_CONFLICT` on a second approval or a second rejection.
+`409 VENDOR_KYC_STATUS_CONFLICT` on a second approval or a second rejection — and **only**
+on that. A rejected vendor is re-verifiable and a verified one is re-rejectable; the guard
+refuses a repeat of the verdict being written, nothing else.
+
+> ⚠ **The guard moved into the write on 2026-09-15** and the rule did not change. It was a
+> read, a comparison and then an unpredicated update, which refuses a second administrator
+> only if they are far enough apart in time — two opposite verdicts in the same instant both
+> read the old value, both passed, and both wrote. It is now a compare-and-set, matching the
+> agency endpoints, which gained the same shape in the same release (BR-026 § 2).
 
 ## `POST /:vendorId/products/:productId/suspend` · `.../restore`
 

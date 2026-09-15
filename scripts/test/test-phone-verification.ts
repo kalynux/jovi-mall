@@ -40,7 +40,9 @@ import {
     OTP_FALLBACK_COPY_LANGUAGES,
     otpFallbackTemplateBody,
     otpFallbackTemplateParams,
+    otpExpiryMinutes,
 } from '../../src/modules/phone-verification/domain/otp-copy';
+import { OTP_LIMITS } from '../../src/modules/phone-verification/config/phone-verification.config';
 import { SUPPORTED_LANGUAGES } from '../../src/core/constants/languages';
 
 const originalConsole = { log: console.log.bind(console), error: console.error.bind(console) };
@@ -244,6 +246,91 @@ section('6b. The UTILITY fallback template copy');
         assert(`[${lang}] fallback body carries its own expiry, since Meta adds none`,
             body.includes('{{2}}'));
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+section('6c. The AUTHENTICATION template — what Meta froze at approval');
+// ─────────────────────────────────────────────────────────────────────────────
+{
+    /**
+     * ⭐ **These assert agreement between a LOCAL constant and a value Meta has already frozen.**
+     *
+     * `wi_mall_phone_verification` was approved on 2026-09-15 (`en` 4426347317613316,
+     * `fr` 1393590468966788). Meta compiled it into a body with one placeholder, a footer
+     * reading "Expires in 10 minutes." and a copy-code button whose URL embeds
+     * `code_expiration_minutes=10`. **None of those three can be overridden at send time** — the
+     * send passes only the code — so anything here that drifts away from the submitted payload
+     * produces a correct-looking message that lies to the recipient, with no error on any hop.
+     *
+     * The generated payload file is the artefact that was submitted, so it is what is read.
+     */
+    const payloadFile = JSON.parse(readFileSync(
+        join(__dirname, '..', '..', 'api-doc', 'notifications', 'whatsapp-template-payloads.json'), 'utf8',
+    ));
+    const authPayloads = payloadFile.payloads.filter(
+        (p: any) => p.name === 'wi_mall_phone_verification' && p.category === 'AUTHENTICATION',
+    );
+
+    assert('the AUTHENTICATION payload is generated for every submitted language',
+        authPayloads.length === payloadFile.languages.length,
+        `${authPayloads.length} payload(s) for ${payloadFile.languages.length} language(s)`);
+
+    for (const payload of authPayloads) {
+        const label = `[${payload.language}]`;
+        const body = payload.components.find((c: any) => c.type === 'BODY');
+        const footer = payload.components.find((c: any) => c.type === 'FOOTER');
+        const buttons = payload.components.find((c: any) => c.type === 'BUTTONS');
+
+        /**
+         * ⚠ A `text` on an AUTHENTICATION body is refused at CREATE time. The script carried one
+         * until 2026-09-14 — beneath a comment correctly stating that Meta owns this copy — so
+         * the template was never created and the whole out-of-window path stayed dark for the
+         * one reason nobody looks for: the fix that was supposed to land never landed.
+         */
+        assert(`⭐ ${label} the AUTHENTICATION body carries NO text — Meta owns and localises it`,
+            body !== undefined && body.text === undefined && body.example === undefined);
+        assert(`${label} …and asks Meta for its own "do not share" line`,
+            body?.add_security_recommendation === true);
+
+        /**
+         * ⭐ **The drift this section exists for.** `code_expiration_minutes` is submitted once
+         * and frozen; the TTL is an env-tunable. They agreed only because both defaults were ten
+         * minutes, and a lowered TTL would leave the approved footer and the button URL both
+         * promising an expiry the code no longer has.
+         */
+        assert(`⭐ ${label} code_expiration_minutes is DERIVED from the runtime TTL, not a literal`,
+            footer?.code_expiration_minutes === otpExpiryMinutes(OTP_LIMITS.ttlSeconds),
+            `template says ${footer?.code_expiration_minutes}, TTL is ${otpExpiryMinutes(OTP_LIMITS.ttlSeconds)} minute(s)`);
+        assert(`${label} …and stays inside Meta's accepted 1–90 range`,
+            footer?.code_expiration_minutes >= 1 && footer?.code_expiration_minutes <= 90);
+
+        /**
+         * ⚠ Meta compiles this OTP button down to a plain URL button carrying `code=otp{{1}}`,
+         * which is why the send site uses `sub_type: 'url'` rather than `copy_code`. Read off
+         * the approved template, not guessed.
+         */
+        assert(`${label} the button is a COPY_CODE OTP button with a label`,
+            buttons?.buttons?.length === 1
+            && buttons.buttons[0].type === 'OTP'
+            && buttons.buttons[0].otp_type === 'COPY_CODE'
+            && typeof buttons.buttons[0].text === 'string'
+            && buttons.buttons[0].text.length > 0);
+    }
+
+    /**
+     * ⭐ The send site must pass the code TWICE — body and button — and must address the button
+     * as a URL button at index 0. Sending only the body renders a button that copies nothing.
+     */
+    const service = readFileSync(
+        join(__dirname, '..', '..', 'src', 'modules/phone-verification/services/phone-verification.service.ts'),
+        'utf8',
+    ).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+    assert('⭐ the primary send passes the code as the BODY parameter',
+        /type:\s*'body',\s*parameters:\s*\[\{\s*type:\s*'text',\s*text:\s*code\s*\}\]/.test(service));
+    assert('⭐ …and AGAIN as the copy-code button, addressed as sub_type url at index 0',
+        /type:\s*'button',\s*sub_type:\s*'url',\s*index:\s*0,\s*parameters:\s*\[\{\s*type:\s*'text',\s*text:\s*code\s*\}\]/
+            .test(service));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

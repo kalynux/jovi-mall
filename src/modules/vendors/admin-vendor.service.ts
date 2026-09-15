@@ -221,6 +221,20 @@ export class AdminVendorService {
    * The guard is the same compare-and-set reasoning as the suspension's: two reviewers
    * can have the same vendor open, and the second must be told the decision was already
    * made rather than quietly overwrite it with the opposite one.
+   *
+   * ⚠ **The guard MOVED INTO THE WRITE on 2026-09-15, and the rule it enforces did not
+   * change.** It used to read the vendor, compare, throw, and then write without a
+   * predicate — which refuses a second administrator only if they are far enough apart in
+   * time. Two opposite verdicts in the same instant both read the old value, both passed
+   * this check and both wrote, the loser landing on top of the winner with no 409 raised
+   * anywhere. The repository now carries the predicate, so the refusal is a property of
+   * the write rather than of the gap before it.
+   *
+   * A null from the repository is therefore ambiguous between "no such vendor" and
+   * "already holds this verdict", and the read that disambiguates happens ONLY on that
+   * path — the happy path is one round trip now rather than two. The two answers are
+   * different remedies (a typo in the id versus a colleague who already decided), so
+   * collapsing them would send an administrator looking in the wrong place.
    */
   private async setKycVerdict(
     vendorId: string,
@@ -228,23 +242,19 @@ export class AdminVendorService {
     actor: ActorRef,
     rejectionReason: string | null,
   ): Promise<IVendor> {
-    const vendor = await this.getById(vendorId);
-    const current = vendor.kyc_details?.status ?? 'pending';
-
-    if (current === verdict) {
-      throw createAppError(
-        ERROR_CODES.VENDOR_KYC_STATUS_CONFLICT,
-        409,
-        verdict === 'verified'
-          ? 'This vendor is already verified'
-          : 'This vendor’s verification has already been rejected',
-        { actual: current }
-      );
-    }
-
     const updated = await this.vendorRepo.setKycVerdict(vendorId, verdict, actor, rejectionReason);
-    if (!updated) throw createAppError(ERROR_CODES.VENDOR_NOT_FOUND, 404, 'Vendor not found');
-    return updated;
+    if (updated) return updated;
+
+    // `getById` throws VENDOR_NOT_FOUND, which is the right answer when there is no row.
+    const vendor = await this.getById(vendorId);
+    throw createAppError(
+      ERROR_CODES.VENDOR_KYC_STATUS_CONFLICT,
+      409,
+      verdict === 'verified'
+        ? 'This vendor is already verified'
+        : 'This vendor’s verification has already been rejected',
+      { actual: vendor.kyc_details?.status ?? 'pending' }
+    );
   }
 
   /**

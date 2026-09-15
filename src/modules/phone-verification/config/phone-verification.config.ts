@@ -19,6 +19,17 @@ export const PHONE_VERIFICATION_CONFIG = Object.freeze({
     /**
      * Ten minutes. Long enough to switch apps, read a WhatsApp message and type six digits;
      * short enough that a phone left unlocked on a desk is not a standing credential.
+     *
+     * ⚠ **Changing this does NOT change what the out-of-window WhatsApp message says.** The
+     * approved AUTHENTICATION template carries Meta's own footer ("Expires in 10 minutes.") and
+     * a copy-code button whose URL embeds `code_expiration_minutes=10`, both **frozen inside the
+     * approved template** — the send passes only the code. So lowering this to, say, 300 gives a
+     * message that promises ten minutes over a code that dies in five, with no error anywhere.
+     * The generator derives the submitted value from this constant and
+     * `test:phone-verification` § 6c pins the two together, so the drift is caught at
+     * generation — but **an already-approved template can only be corrected by resubmitting it
+     * under a new name**, exactly like the button host. Treat this as a Meta-side value that
+     * happens to live here, not a free local knob.
      */
     OTP_TTL_SECONDS: intEnv('PHONE_VERIFY_TTL_SECONDS', 600),
 
@@ -51,6 +62,11 @@ export const PHONE_VERIFICATION_CONFIG = Object.freeze({
      * A free-form send outside the window is refused by Meta, so pretending otherwise would
      * turn a configuration gap into a silent non-delivery — the failure this whole session has
      * been finding. `describeConfiguration()` reports it.
+     *
+     * ✅ **APPROVED on the live WABA since 2026-09-15**, in `en` and `fr`
+     * (`4426347317613316` / `1393590468966788`), once the owning business reached
+     * `business_verification_status: "verified"`. It had been uncreatable for a day — code 10 /
+     * subcode 2388185 — which is the state most of the surrounding documentation was written in.
      */
     OTP_TEMPLATE_NAME: process.env.PHONE_VERIFY_TEMPLATE_NAME || 'wi_mall_phone_verification',
 
@@ -60,20 +76,26 @@ export const PHONE_VERIFICATION_CONFIG = Object.freeze({
      * ⚠ **Its existence does not soften the rule in the entry above — it answers a different
      * problem.** The rule is that OTP content *belongs* in an AUTHENTICATION template, and that
      * is still true and still the first thing attempted. This exists because the category can be
-     * **unreachable**: Meta gates it behind business verification, and measured 2026-09-14 this
-     * WABA's owning business is `business_verification_status: "rejected"`, so the
-     * AUTHENTICATION template cannot be created at all (code 10) while UTILITY ones create fine
-     * on the same credential. The choice was a closed out-of-window path or this.
+     * **unreachable**: Meta gates it behind business verification, and on 2026-09-14 this WABA's
+     * owning business was `business_verification_status: "rejected"`, so the AUTHENTICATION
+     * template could not be created at all (code 10) while UTILITY ones created fine on the same
+     * credential. The choice then was a closed out-of-window path or this.
      *
-     * ⛔ **AND META REFUSED IT — `INCORRECT_CATEGORY`, both languages, 2026-09-14.** So this
-     * setting currently names a REJECTED template and the fallback send fails too; the
-     * out-of-window path is closed either way. It is left wired up because it costs one failing
-     * API call, it is correct the moment an approvable template exists, and the alternative —
-     * rewording OTP copy until Meta's classifier stops recognising it — is evasion rather than
-     * engineering. `allow_category_change: true` was tried and rejected synchronously.
+     * ✅ **That is over. Measured 2026-09-15: the business is `verified` and
+     * `wi_mall_phone_verification` is APPROVED in both languages**, so the primary path above
+     * works and this is never reached on an ordinary send.
      *
-     * ✅ Resolve the business verification and the AUTHENTICATION path resumes on its own, with
-     * this never reached — no code change, no redeploy.
+     * ⛔ **BUT THE DEFAULT NAMED HERE IS UNSENDABLE AND ALWAYS WILL BE.** Meta rejected that
+     * template at review (`INCORRECT_CATEGORY`, both languages) and again *synchronously* under
+     * `allow_category_change: true`. That verdict is about OTP **content**, not about the
+     * business, so the verification being resolved does not revive it — and the rejected rows
+     * have since vanished from the WABA, so the name now resolves to nothing at all.
+     *
+     * The default is kept rather than emptied because it costs exactly one failing API call on a
+     * path that is itself already failing, and because emptying it would delete the only record
+     * of which name was tried. **An operator who wants the second call gone sets
+     * `PHONE_VERIFY_FALLBACK_TEMPLATE_NAME=` (empty) — that is supported and changes no
+     * behaviour that works today.**
      *
      * ⚠ **Empty CLOSES the fallback rather than disabling the feature.** An unset value means
      * "this deployment does not want the UTILITY swap", and the out-of-window failure is then

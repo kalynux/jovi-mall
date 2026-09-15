@@ -7,6 +7,7 @@ import { PaymentGatewayType } from '../models/payment-transaction.model';
 import { PaymentOrchestratorService } from './payment-orchestrator.service';
 import { planPurchaseService } from '../../billing/services/plan-purchase.service';
 import { creditTopupService } from '../../billing/services/credit-topup.service';
+import { payoutRequestService } from '../../earnings/services/payout-request.service';
 
 /**
  * What happens to a callback after its signature passes.
@@ -29,6 +30,15 @@ import { creditTopupService } from '../../billing/services/credit-topup.service'
  * The prefix on a merchant reference is a routing HINT and never an
  * authorisation: each branch still resolves the row, and a forged `jm_pp_…`
  * finds no purchase and settles nothing.
+ *
+ * ⛔ **DIRECTION IS CHECKED BEFORE ANY OF THAT, and it is not a hint.** Since the platform
+ * also sends money, a callback is either about money arriving or money leaving, and the two
+ * must never be routed into each other. The hazard is specifically the fall-through in
+ * `route()`: it exists so an unprefixed legacy reference still finds its way home, and
+ * without a direction check it would equally hand a `transfer.*` event to the order
+ * orchestrator — which could then settle an order off the back of money the platform paid
+ * OUT. So a payout event may only ever reach the payout branch, a collection event may never
+ * reach it, and neither falls through to the other.
  */
 export class PaymentWebhookProcessor {
   constructor(private readonly orchestrator = new PaymentOrchestratorService()) {}
@@ -136,6 +146,30 @@ export class PaymentWebhookProcessor {
   ): Promise<WebhookOutcome> {
     const kind = merchantRefKind(event.merchantRef);
 
+    /**
+     * Money OUT. Terminates here in every case — there is deliberately no fall-through to
+     * the collection branches below, even when the payout cannot be found. An unresolvable
+     * payout callback is `unknown_transaction`, which the gateway is told about with a 200
+     * and which shows up on the webhook-event record; it is never an invitation to go
+     * looking for an order with the same reference.
+     */
+    if (event.direction === 'payout') {
+      return this.settlePayout(event);
+    }
+
+    /**
+     * Money IN, and a `po` reference on this path is a contradiction: our own payout
+     * reference echoed back by an event that does not describe a transfer. Most likely a
+     * provider quirk or a replayed body; possibly someone probing. Either way the safe read
+     * is that we do not know what it is, and nothing below should try to guess.
+     */
+    if (kind === 'po') {
+      return {
+        kind: 'ignored',
+        detail: 'a payout reference arrived on a collection event — refusing to route it',
+      };
+    }
+
     if (kind === 'pp') {
       const settled = await this.settlePlanPurchase(event);
       if (settled) return settled;
@@ -156,6 +190,48 @@ export class PaymentWebhookProcessor {
       (await this.settlePlanPurchase(event)) ??
       (await this.settleCreditTopup(event)) ?? { kind: 'unknown_transaction' }
     );
+  }
+
+  /**
+   * Apply a transfer verdict to the payout it names.
+   *
+   * ⚠ **Resolved by OUR reference only — never by the gateway's.** For a collection the
+   * orchestrator falls back to `gatewayRef` because older rows predate `merchant_ref`. No
+   * payout predates it: the reference is minted in the same atomic claim that moves the row
+   * to `processing`, so a payout that has been sent always has one. Accepting a gateway id
+   * as an alternative key would add a second way to address a money-out record for no
+   * benefit.
+   *
+   * `PENDING` is explicitly not terminal — NotchPay reports `sent` and `processing` on the
+   * way to a verdict, and acting on either would settle a payout that is still moving.
+   */
+  private async settlePayout(event: NormalizedWebhookEvent): Promise<WebhookOutcome> {
+    if (!event.merchantRef) {
+      return { kind: 'unknown_transaction' };
+    }
+
+    const payout = await payoutRequestService.getByTransferReference(event.merchantRef);
+    if (!payout) {
+      return { kind: 'unknown_transaction' };
+    }
+
+    if (event.status === 'PENDING') {
+      return { kind: 'ignored', detail: `payout ${payout.id} transfer still ${event.eventType}` };
+    }
+
+    const applied = await payoutRequestService.applyTransferOutcome(payout.id, {
+      settled: event.status === 'SUCCEEDED',
+      gatewayRef: event.gatewayRef || null,
+      reason: event.status === 'SUCCEEDED' ? null : `gateway reported ${event.eventType}`,
+    });
+
+    // Null means the payout was not `processing` when the write landed — already settled by
+    // a previous delivery or by the reconciliation poll. Idempotent by construction.
+    if (!applied) {
+      return { kind: 'ignored', detail: `payout ${payout.id} was already resolved` };
+    }
+
+    return { kind: 'processed', detail: `payout ${applied.id} ${applied.status}` };
   }
 
   private async settlePlanPurchase(event: NormalizedWebhookEvent): Promise<WebhookOutcome | null> {

@@ -275,6 +275,9 @@ export class MyCoolPayGateway implements PaymentGateway {
       // a redelivery, distinct across PENDING -> SUCCESS. A hash of the whole
       // body would be neither.
       eventId: deriveEventId([gatewayRef, body.transaction_type, status]),
+      // Collection-only integration: `payout` exists in their API and is deliberately
+      // not wired (see the header), so no callback here can be money leaving.
+      direction: 'collection' as const,
       eventType: `${String(body.transaction_type ?? 'PAYIN')}.${status || 'unknown'}`,
       gatewayRef,
       merchantRef: body.app_transaction_ref ? String(body.app_transaction_ref) : null,

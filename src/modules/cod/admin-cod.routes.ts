@@ -39,6 +39,12 @@ function attachRoutes(router: Router): Router {
     router.post('/remittances/:id/confirm', AdminCodController.confirmRemittance);
 
     /**
+     * POST /remittances/:id/triage
+     * Endorse a declared remittance as genuine. Moves nothing, gates nothing. Body: { note? }
+     */
+    router.post('/remittances/:id/triage', AdminCodController.triageRemittance);
+
+    /**
      * POST /remittances/:id/reject
      * Reject a declared remittance (nothing arrived / mismatch). Body: { reason }
      */
@@ -61,6 +67,13 @@ function attachRoutes(router: Router): Router {
 
     /** POST /deposits/:id/confirm — confirm an agent's declared direct payment. */
     router.post('/deposits/:id/confirm', AdminCodController.confirmDeposit);
+
+    /**
+     * POST /deposits/:id/triage
+     * Endorse a declared direct-to-platform deposit. Moves nothing, gates nothing.
+     * Refused on an agency-recipient deposit. Body: { note? }
+     */
+    router.post('/deposits/:id/triage', AdminCodController.triageDeposit);
 
     /** POST /deposits/:id/reject — reject one. Body: { reason } */
     router.post('/deposits/:id/reject', AdminCodController.rejectDeposit);

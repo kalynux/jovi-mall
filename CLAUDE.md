@@ -1353,22 +1353,53 @@ Six things are load-bearing:
   when the code is minted. Accepting one here would let a caller prove control of number A and
   have number B marked verified.
 
-⛔ **The out-of-window path does not work on this deployment yet.** Inside Meta's 24-hour window
-the code goes as styled text; outside it, only an approved template may be sent — and this WABA
-holds **zero** templates (measured 2026-09-14). The AUTHENTICATION-category template
-(`wi_mall_phone_verification`) is generated with the rest by
-`scripts/generate-whatsapp-templates.ts` and must be approved before that half works. The
-failure is loud (`PHONE_VERIFICATION_DELIVERY_FAILED`, naming the template), never silent.
+✅ **The out-of-window TEMPLATE blocker is gone as of 2026-09-15.** Inside Meta's 24-hour window
+the code goes as styled text; outside it, only an approved template may be sent, and the
+AUTHENTICATION-category `wi_mall_phone_verification` is **APPROVED** on the WABA in `en` and `fr`.
+It is generated with the rest by `scripts/generate-whatsapp-templates.ts`. The failure is still
+loud (`PHONE_VERIFICATION_DELIVERY_FAILED`, naming both templates), never silent.
+
+⛔ **THE PLATFORM STILL CANNOT SEND A SINGLE WHATSAPP MESSAGE, and this gate is ABOVE everything
+else in this section.** A live send returned `(#131037) WhatsApp provided number needs display
+name approval`; the sending number has `name_status: "NON_EXISTS"` — **no display name has ever
+been submitted**. A free-form in-window text fails identically, *before* the window is checked.
+So all three of business verification, template approval and the service window are necessary and
+**none is sufficient**. It is an account action; no code in these repositories can affect it —
+and it is **blocked until next month**, because `new_display_name` answers 403 / subcode 2593011,
+*"you have exceeded the 10 display name changes allowed per month"*, with `name_status` still
+`NON_EXISTS` and nothing pending. ⚠ **Check `GET /{phone_number_id}?fields=verified_name,name_status` before
+diagnosing any delivery failure** — it presents as a template or window problem and is neither.
+
+⚠ **This paragraph said the opposite until 2026-09-15, and that state lasted one day.** The WABA
+held zero templates on 2026-09-13, 188 on 2026-09-14, and the OTP template was *uncreatable* in
+between because Meta gates the AUTHENTICATION category behind business verification and the
+owning business was `rejected`. It reached `verified` and the template was approved within
+seconds, with **no code change** — the send path had always tried AUTHENTICATION first.
+⛔ **The UTILITY fallback (`wi_mall_phone_verification_utility`) did not come back with it and
+must never be resubmitted**: Meta rejected it for `INCORRECT_CATEGORY` on the *content*, which
+the business verification does not affect. See `api-doc/notifications/whatsapp-templates.md`.
+
+⚠ **`PHONE_VERIFY_TTL_SECONDS` is half a Meta-side value.** The approved template's footer and
+its copy-code button both embed `code_expiration_minutes`, frozen at approval and not
+overridable at send time, so lowering the TTL makes the message promise an expiry the code does
+not have. The generator derives the submitted value from that variable and
+`test:phone-verification` § 6c fails on a mismatch — but correcting an approved template means
+resubmitting under a new name, exactly like the button host.
 
 ⚠ **Administrators cannot be served from here alone.** They hold no `users` row in this service
 — they live in wi-admin's own database — so the admin case needs wi-admin to call an internal
-endpoint on this side. That endpoint is **not built**; the module is shaped for it.
+endpoint on this side. ✅ **That endpoint IS built** (this line said "not built" until
+2026-09-15): `POST /api/internal/admin/phone-verification/{request,confirm}`, behind
+`requireAdminCaller`, mounted from `internal-admin.routes.ts`. This service **sends and judges
+the OTP and writes nothing** — it holds no administrator row; wi-admin stamps its own
+`admin_accounts`. The subject is namespaced `admin:<id>` so it cannot collide with a `users._id`.
 
 ⚠ It shares `LOGIN_CODE_DB` (14) behind a `phoneverify:` prefix. A concession, not the rule —
 the 5–15 index budget is full. Both halves hold short-lived credentials with the same blast
 radius, so a flush is equally (in)convenient for each.
 
-Covered by `npm run test:phone-verification` (73, no DB, no Redis, no network).
+Covered by `npm run test:phone-verification` (**119** on 2026-09-15, no DB, no Redis, no network
+— it said 73 for as long as that was wrong by 46). ⚠ Re-measure rather than trusting the number.
 
 ### The mail provider chain (`src/modules/mail/`)
 

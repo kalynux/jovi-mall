@@ -71,30 +71,60 @@ Unset secret ⇒ `503`; bad token ⇒ `401`; missing or malformed actor ⇒ `400
 
 ## POST `/api/internal/admin/agencies/:id/verify`
 
-The **only** exit from `pending_verification`. Approving moves `status` and both
+Record that a human has vetted this business. Approving writes the KYC verdict and both
 `legit_verified` mirrors together in **one compare-and-set**, and stamps the approving actor
 onto the agency.
 
+> ⚠ **This is NOT the exit from `pending_verification`, and it stopped being one on
+> 2026-09-15.** This page used to open "the **only** exit from `pending_verification`" and
+> the response message used to say *"Agency verified and activated."* Both were true while
+> administrative approval was the only thing that ever set an agency `active`. An agency now
+> promotes itself by proving a phone number and having a name — see
+> [Account activation](../auth/README.md#account-activation) — so **an agency awaiting your
+> review is routinely already `active`**, and approving one changes its `status` not at all.
+>
+> `status` answers *may this account operate*; `kyc_details.status` answers *has a human
+> vetted this business*. They are different questions with different owners and must not be
+> re-fused.
+
 **This is not `reactivate`.** `reactivate` was being used for first approvals and also runs the
-product-restore cascade — which a never-verified agency has nothing for. Use `verify` for the
-first approval and `reactivate` only to undo a `deactivate`.
+product-restore cascade — which a never-verified agency has nothing for. Use `verify` to record
+the verdict and `reactivate` only to undo a `deactivate`.
+
+### Re-review after a rejection
+
+**A refused agency can be approved later — just call this again.** There is deliberately no
+un-reject verb: the compare-and-set admits any verdict but `verified`, so an agency that fixes
+what the rejection reason named is approved by the ordinary route.
+
+> ⚠ **This briefly did not work, and it never reached a deployment.** The predicate that
+> arrived with the activation split was an equality on `pending`, which made the first verdict
+> of either kind final and answered `409` to every re-review. admin-dash read the two
+> predicates side by side and reported it the same day (BR-026 § 2); it was corrected in the
+> same release, before any of this shipped. Recorded because the code was right and the
+> docstring beside it went on promising the loop — not because a client needs to work around it.
 
 ### Responses
 
 ```json
-{ "success": true, "data": { "...": "the agency" }, "message": "Agency verified and activated." }
+{ "success": true, "data": { "...": "the agency" }, "message": "Agency verification approved." }
 ```
 
 | `error.code` | Status | When |
 |---|---|---|
 | `DELIVERY_AGENCY_NOT_FOUND` | 404 | No agency with that id |
-| `DELIVERY_AGENCY_STATUS_CONFLICT` | 409 | The agency is not `pending_verification` — usually because another administrator approved it first. `details.currentStatus` carries the actual status. **Re-read before deciding**; do not resend |
+| `DELIVERY_AGENCY_VERIFICATION_CONFLICT` | 409 | The agency is **already verified** — another administrator approved it first, or this is a double submit. `details.currentVerification` carries the verdict that refused it; `details.currentStatus` is the account status, carried because it is still true and **not** because it decided anything. **Re-read before deciding**; do not resend |
+
+> ⚠ **Renamed from `DELIVERY_AGENCY_STATUS_CONFLICT` on 2026-09-15.** The old name described a
+> compare-and-set on the agency's `status`, which this has not been since the activation split —
+> it sent readers to the wrong field. Branch on the new constant.
 
 ---
 
 ## POST `/api/internal/admin/agencies/:id/reject`
 
-The other verdict. Same compare-and-set on `pending_verification`, same 409 on a miss.
+The other verdict. The same compare-and-set, mirrored: it is refused only when the agency
+is **already rejected** (`DELIVERY_AGENCY_VERIFICATION_CONFLICT`, 409).
 
 ```jsonc
 { "reason": "Transport licence has expired" }   // required, 3–500 chars, trimmed
@@ -105,17 +135,26 @@ wi-admin's audit trail, and that is the point of the endpoint: the agency is sho
 cannot read the admin database. A refusal whose cause they cannot see is one they cannot act
 on — they re-submit the same unchanged application, and it costs a second review.
 
-### ⚠ It changes no status, and that is deliberate
+### ⚠ It changes no status — and what that COSTS has shrunk
 
-The agency stays `pending_verification`. It is **not** moved to `inactive` — that is
-`deactivate`, which runs the whole product-suspension cascade a never-verified agency has
-nothing for.
+The agency's `status` is untouched. It is **not** moved to `inactive` — that is `deactivate`,
+which runs the whole product-suspension cascade a verdict has nothing for.
 
-Staying pending is what makes rejection safe to apply without new enforcement: a
-non-`active` agency is already refused by product activation, pickup resolution, COD
-eligibility and vendor default-agency selection. And it is why **there is no un-reject** —
-the agency is still pending, so `POST /verify` accepts them once they fix what the reason
-names.
+> ⚠ **This section used to say the agency "stays `pending_verification`", and that a
+> non-`active` agency "is already refused by product activation, pickup resolution, COD
+> eligibility and vendor default-agency selection". Since 2026-09-15 neither half holds.** An
+> agency reaches `active` by proving its own phone, so a refused agency is routinely `active`,
+> and three of those four gates now accept it.
+>
+> **What a refusal still costs is cash.** `CodEligibilityService` tests
+> `kyc_details.legit_verified` explicitly — it was changed in the same release, precisely
+> because it had been using `active` as a stand-in for "an administrator approved this" — and
+> an unverified owner's payouts can be capped. Anything else that ought to turn on a refusal
+> has to say so itself; `status` will not say it for you.
+
+**There is still no un-reject, and now for the right reason.** The approval compare-and-set
+admits any verdict but `verified`, so `POST /verify` accepts a rejected agency once they fix
+what the reason named. (Briefly it did not — see the note under `/verify` above.)
 
 ### What moves
 
@@ -126,7 +165,7 @@ names.
 | `kyc_details.legit_verified` · `legit_verified` | `false` (both, together) |
 | `kyc_details.verified_at` | `null` — cleared, so an approval that was withdrawn does not read as still standing |
 | `kyc_details.verified_by_*` | the reviewing actor |
-| `status` | **unchanged** — still `pending_verification` |
+| `status` | **unchanged** — whatever the agency's own phone verification earned it |
 
 ### Why the verdict exists at all
 
@@ -146,7 +185,7 @@ lifecycle, for the same reason.
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | Missing, blank, under 3 or over 500 characters, or an unknown field (the schema is strict) |
 | `DELIVERY_AGENCY_NOT_FOUND` | 404 | No agency with that id |
-| `DELIVERY_AGENCY_STATUS_CONFLICT` | 409 | Not `pending_verification` — another administrator reached a verdict first. `details.currentStatus` carries it |
+| `DELIVERY_AGENCY_VERIFICATION_CONFLICT` | 409 | The agency is **already rejected** — the mirror of `verify`'s guard, and the only state this refuses. A **verified** agency can be rejected; that records the verdict and does not stop it trading (`deactivate` does that). `details.currentVerification` carries the verdict; `details.currentStatus` rides along and decided nothing |
 
 ---
 

@@ -7,6 +7,9 @@ import {
   PaymentVerifyResult,
   RefundPayload,
   RefundResult,
+  PayoutPayload,
+  PayoutResult,
+  PayoutBalance,
   PaymentGatewayStatus,
   WebhookVerifyInput,
 } from './gateway.interface';
@@ -19,6 +22,7 @@ import {
   headerValue,
   parseRawJson,
   deriveEventId,
+  directionOfEventType,
 } from '../domain/webhook-verification';
 import { NOTCHPAY_CONFIG } from '../config/payments.config';
 import { isZeroDecimalCurrency } from '../domain/money';
@@ -337,19 +341,55 @@ export class NotchPayGateway implements PaymentGateway {
     const data = ((payload as any).data ?? payload) as Record<string, any>;
     const trx = (data.transaction ?? data) as Record<string, any>;
 
-    const gatewayRef: string = String(trx.reference ?? trx.id ?? '');
+const direction = directionOfEventType(type);
+
+    /**
+     * ⛔ **The two reference fields swap meaning between a payment and a transfer, and
+     * getting this backwards means a transfer callback never finds its payout.**
+     *
+     * Verified against NotchPay's own OpenAPI document (notchpay-php/openapi.yaml), which is
+     * the only source that agrees with itself — the prose docs contradict each other on this
+     * in three places:
+     *
+     *   Payment object   `reference` = THEIRS   `merchant_reference` = ours
+     *   Transfer object  `id` = THEIRS (trf_…)  `reference`          = OURS
+     *
+     * So a transfer carries our reference in the field a payment uses for the gateway's own,
+     * and carries no `merchant_reference` at all. Reading it the payment way yields
+     * `merchantRef: null` and a `gatewayRef` holding our own value — the settler then looks
+     * up a payout by nothing and answers `unknown_transaction` for every single callback,
+     * silently, while the money has actually moved.
+     */
+    const gatewayRef: string =
+      direction === 'payout'
+        ? String(trx.id ?? trx.reference ?? '')
+        : String(trx.reference ?? trx.id ?? '');
     if (!gatewayRef) return null;
 
     // `merchant_reference` is what NotchPay echoes our `reference` back as on
-    // some event shapes; on others it comes back as `reference` while their own
+    // some payment event shapes; on others it comes back as `reference` while their own
     // id lives in `id`. Read both, and never treat OUR reference as THEIR ref.
-    const merchantRefRaw = trx.merchant_reference ?? data.merchant_reference ?? null;
+    const merchantRefRaw =
+      direction === 'payout'
+        ? (trx.reference ?? trx.merchant_reference ?? null)
+        : (trx.merchant_reference ?? data.merchant_reference ?? null);
     const merchantRef = merchantRefRaw ? String(merchantRefRaw) : null;
 
     const rawStatus = String(trx.status ?? (payload as any).status ?? '');
     return {
       eventId: String((payload as any).id ?? deriveEventId([gatewayRef, type, rawStatus])),
       eventType: type || `payment.${rawStatus || 'unknown'}`,
+      /**
+       * ⚠ Derived from the event TYPE, which until transfers landed this adapter read only
+       * for the audit row — every decision was driven by the status alone. It is load-bearing
+       * now: it is the single thing standing between a `transfer.*` callback and the order
+       * orchestrator.
+       *
+       * Note the fallback above: an event with no type at all becomes
+       * `payment.<status>`, so it classifies as a collection, which is what every existing
+       * NotchPay callback should do.
+       */
+      direction,
       gatewayRef,
       merchantRef,
       status: this.normalizeStatus(rawStatus),
@@ -357,6 +397,205 @@ export class NotchPayGateway implements PaymentGateway {
       currency: trx.currency ? String(trx.currency) : null,
       raw: payload,
     };
+  }
+
+  // ── Disbursement ──────────────────────────────────────────────────────────
+
+  /**
+   * Is sending switched on for this deployment? See `PAYOUTS_ENABLED` in the config for why
+   * this is a flag rather than something derived from the credentials being present.
+   */
+  payoutAvailable(): boolean {
+    return NOTCHPAY_CONFIG.PAYOUTS_ENABLED;
+  }
+
+  /**
+   * The float NotchPay will pay out of, for one currency.
+   *
+   * `available` and `pending` are reported separately by the provider and only the first can
+   * fund a transfer, so only the first is returned — a caller adding them would approve a
+   * payout against money that has not cleared.
+   *
+   * Returns null rather than throwing when the currency is absent from the response: an
+   * account that has never held XAF reports no XAF key, and that is not an error, it is a
+   * zero the caller should treat as unknown rather than as a refusal.
+   */
+  async payoutBalance(currency: string): Promise<PayoutBalance | null> {
+    const response = await this.call('/balance', 'GET', undefined, { grant: true });
+    const available = (response?.balance?.available ?? response?.data?.balance?.available) as
+      | Record<string, unknown>
+      | undefined;
+    if (!available) return null;
+
+    const key = Object.keys(available).find((k) => k.toUpperCase() === currency.toUpperCase());
+    if (!key) return null;
+
+    const amount = Number(available[key]);
+    if (!Number.isFinite(amount)) return null;
+    return { available: amount, currency: currency.toUpperCase() };
+  }
+
+  /**
+   * Send money to a beneficiary — `POST /transfers`.
+   *
+   * ── Three things about this call are worth knowing before changing it ────────
+   *
+   * **`reference` is the caller's, and is never minted here.** It is the idempotency key for
+   * money leaving the platform: a retry carries the reference of the attempt it is retrying,
+   * so a transfer that actually succeeded and merely failed to report is deduplicated by
+   * NotchPay instead of being sent twice. A gateway that minted its own reference per call
+   * would defeat that silently.
+   *
+   * **`X-Grant` is required**, which means `NOTCHPAY_PRIVATE_KEY`. Without it the call
+   * answers 403, and a 403 here is ambiguous in a way it is not for refunds — it is equally
+   * the signature of an egress IP that was never registered in the NotchPay dashboard. Both
+   * are reported as `unsupported` with a message naming both causes, because neither is a
+   * transient fault worth retrying.
+   *
+   * ⚠ **A TRANSFER IS TWO CALLS, NOT ONE** — the same shape as the charge above, and for
+   * the same reason it is worth a heading. `POST /transfers` will not accept a destination
+   * inline: its body requires EITHER an existing `beneficiary` id or a `recipient` +
+   * `channel` pair. So the beneficiary is created first and the transfer names it.
+   *
+   * ⚠ **This contradicts NotchPay's own prose documentation, and the prose is wrong.** The
+   * API-reference page describes a `beneficiary_data` object accepted inline; the send-money
+   * guide describes `type: "cm.mtn"` on a recipient; the PHP SDK README passes `recipient`
+   * as an object. None of those three agree with each other. The shape used here is from
+   * `openapi.yaml` in NotchPay's own PHP SDK repository, which is machine-readable, is what
+   * their client is generated against, and is the only source that is self-consistent:
+   *
+   *     POST /beneficiaries  required: channel, name, account_number + (email | phone)
+   *     POST /transfers      required: amount, currency, description
+   *                          oneOf:    [beneficiary] | [recipient, channel]
+   *
+   * If the sandbox disagrees, believe the sandbox and update this comment with what it said.
+   */
+  async createPayout(payload: PayoutPayload): Promise<PayoutResult> {
+    this.assertChargeable(payload.currency);
+
+    const operator = resolveCameroonOperator(payload.phone);
+    const channel = operator ? notchPayChannelFor(operator) : null;
+    if (!channel) {
+      // Not a refusal by NotchPay — we cannot tell which network to send on, and guessing
+      // sends somebody else's money to the wrong rail.
+      return {
+        success: false,
+        gatewayRef: null,
+        status: 'FAILED',
+        unsupported: true,
+        message:
+          'This destination number is not recognised as MTN or Orange Cameroon, so no NotchPay transfer channel applies.',
+      };
+    }
+
+    try {
+      /**
+       * Step 1 — the beneficiary.
+       *
+       * A fresh one per transfer. Reusing them would mean storing a NotchPay id against each
+       * owner's destination and keeping the two in step when the owner edits their number —
+       * a second source of truth for where somebody's money goes, which is exactly the thing
+       * `payout_method_snapshot` exists to avoid. The cost is one extra call on an
+       * administrator-initiated action.
+       *
+       * `reference` carries OUR payout reference so the two records can be tied together in
+       * the NotchPay dashboard during a reconciliation.
+       */
+      const beneficiaryResponse = await this.call(
+        '/beneficiaries',
+        'POST',
+        {
+          channel,
+          name: payload.name,
+          account_number: payload.phone,
+          phone: payload.phone,
+          country: 'CM',
+          description: payload.description ?? 'Payout beneficiary',
+          reference: payload.reference,
+        },
+        { grant: true }
+      );
+
+      const beneficiary = (beneficiaryResponse?.beneficiary ??
+        beneficiaryResponse?.data ??
+        beneficiaryResponse ??
+        {}) as Record<string, any>;
+      const beneficiaryId = beneficiary.id ? String(beneficiary.id) : null;
+
+      if (!beneficiaryId) {
+        // Nothing has moved: the transfer was never attempted. Reported as a refusal rather
+        // than thrown so the payout lands in `failed` with a readable cause.
+        return {
+          success: false,
+          gatewayRef: null,
+          status: 'FAILED',
+          message: 'NotchPay accepted the beneficiary but returned no id, so no transfer could be created.',
+          raw: beneficiaryResponse,
+        };
+      }
+
+      // Step 2 — the transfer.
+      const response = await this.call(
+        '/transfers',
+        'POST',
+        {
+          amount: payload.amount,
+          currency: payload.currency.toUpperCase(),
+          beneficiary: beneficiaryId,
+          channel,
+          reference: payload.reference,
+          description: payload.description ?? 'Payout',
+        },
+        { grant: true }
+      );
+
+      const transfer = (response?.transfer ?? response?.data ?? response ?? {}) as Record<string, any>;
+      const rawStatus = String(transfer.status ?? 'pending');
+      const status = this.normalizeStatus(rawStatus);
+
+      return {
+        success: status !== 'FAILED' && status !== 'CANCELLED',
+        gatewayRef: transfer.id ? String(transfer.id) : null,
+        status,
+        message: status === 'FAILED' ? String(transfer.message ?? rawStatus) : undefined,
+        raw: response,
+      };
+    } catch (error) {
+      const blocked = this.payoutBlockedReason(error);
+      if (blocked) {
+        return { success: false, gatewayRef: null, status: 'FAILED', unsupported: true, message: blocked };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Is this failure a knowable "cannot send" rather than a fault?
+   *
+   * Mirrors `isRefundForbidden` and differs in one respect that matters: a 403 on
+   * `/transfers` has two plausible causes — transfers disabled on the account, or an egress
+   * IP that is not on the allowlist — and from here they are indistinguishable. Both are
+   * configuration, neither is transient, and an operator told only "forbidden" will check
+   * the credentials, which are the one thing that is fine. So the message names both.
+   */
+  private payoutBlockedReason(error: unknown): string | null {
+    if (!(error instanceof AppError)) return null;
+    if (error.code !== ERROR_CODES.NOTCHPAY_REQUEST_FAILED) return null;
+
+    const status = (error.details as { status?: number } | undefined)?.status;
+    if (status === 403) {
+      return (
+        'NotchPay refused the transfer with 403. Two causes look identical here: transfers may '
+        + 'not be enabled on this merchant account, or this server IP may not be registered on '
+        + 'the NotchPay transfer allowlist (dashboard → Settings → Developer → IPs). The API '
+        + 'credentials are NOT the likely problem — a bad key answers 401.'
+      );
+    }
+    if (status === 422) {
+      const body = (error.details as { body?: { message?: string } } | undefined)?.body;
+      return `NotchPay rejected the transfer: ${body?.message ?? 'insufficient balance, or an invalid beneficiary or channel'}.`;
+    }
+    return null;
   }
 
   // ── Internals ─────────────────────────────────────────────────────────────
@@ -375,6 +614,13 @@ export class NotchPayGateway implements PaymentGateway {
     const map: Record<string, PaymentGatewayStatus> = {
       pending: 'PENDING',
       processing: 'PENDING',
+      /**
+       * Transfer-only, and PENDING rather than SUCCEEDED: NotchPay reports `sent` when a
+       * transfer has reached the mobile-money network and not yet been accepted by it.
+       * Treating it as settled would mark a payout paid — and release its hold — on money
+       * that can still bounce.
+       */
+      sent: 'PENDING',
       complete: 'SUCCEEDED',
       completed: 'SUCCEEDED',
       success: 'SUCCEEDED',
@@ -385,6 +631,16 @@ export class NotchPayGateway implements PaymentGateway {
       rejected: 'FAILED',
       cancelled: 'CANCELLED',
       canceled: 'CANCELLED',
+      /**
+       * Transfer-only. The money went and came back.
+       *
+       * ⚠ Mapped to FAILED because for a payout still `processing` that is exactly what it
+       * means — nothing was delivered, and the hold stays. A `reversed` arriving on a payout
+       * ALREADY marked paid is a different and much worse situation, and it is deliberately
+       * not handled here: see `applyTransferOutcome` in the payout service, which records it
+       * for a human rather than attempting an automatic accounting rollback it cannot do.
+       */
+      reversed: 'FAILED',
     };
     const key = String(raw ?? '').toLowerCase();
     // Unknown maps to PENDING, not FAILED. An unrecognised word is ignorance,

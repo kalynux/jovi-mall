@@ -1042,11 +1042,24 @@ export const ERROR_CODES = Object.freeze({
     DELIVERY_AGENT_NOT_FOUND: 'DELIVERY_AGENT_NOT_FOUND',
     DELIVERY_AGENCY_ALREADY_EXISTS: 'DELIVERY_AGENCY_ALREADY_EXISTS',
     /**
-     * A compare-and-set on `delivery_agencies.status` missed — the agency was not in the
-     * status the operation required. Two administrators holding one agency's screen open
-     * is the case: the loser is told the state moved rather than overwriting the winner.
+     * A business-verification verdict was submitted for an agency that already holds it —
+     * approving an approved agency, or refusing a refused one. Two administrators holding
+     * one agency's screen open is the case: the second is told the decision was already
+     * made rather than re-stamping it with their own name and moment.
+     *
+     * ⚠ **Renamed from `DELIVERY_AGENCY_STATUS_CONFLICT` on 2026-09-15 (BR-026 § 3), and
+     * the old name was actively misleading.** It described a compare-and-set on
+     * `delivery_agencies.status`, which is what this was until the activation split gave
+     * `status` and the KYC verdict two different owners. The predicate has not touched
+     * `status` since, so an administrator sent to that field by the code's name was looking
+     * at the wrong column. `details.currentVerification` is the value that decided it;
+     * `details.currentStatus` is carried beside it because it is still true, not because it
+     * is relevant.
+     *
+     * Not raised by `deactivate`/`reactivate`, which are a different axis and have never
+     * used this code.
      */
-    DELIVERY_AGENCY_STATUS_CONFLICT: 'DELIVERY_AGENCY_STATUS_CONFLICT',
+    DELIVERY_AGENCY_VERIFICATION_CONFLICT: 'DELIVERY_AGENCY_VERIFICATION_CONFLICT',
     DELIVERY_ONBOARDING_STEP_INVALID: 'DELIVERY_ONBOARDING_STEP_INVALID',
     DELIVERY_ONBOARDING_STEP_INCOMPLETE: 'DELIVERY_ONBOARDING_STEP_INCOMPLETE',
     DELIVERY_ONBOARDING_ALREADY_COMPLETED: 'DELIVERY_ONBOARDING_ALREADY_COMPLETED',
@@ -1637,8 +1650,16 @@ export const ERROR_CODES = Object.freeze({
     EARNINGS_PAYOUT_METHOD_MISSING: 'EARNINGS_PAYOUT_METHOD_MISSING',
     EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE: 'EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE',
     EARNINGS_PAYOUT_BELOW_MINIMUM: 'EARNINGS_PAYOUT_BELOW_MINIMUM',
+    EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED: 'EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED',
     EARNINGS_PAYOUT_REQUEST_NOT_FOUND: 'EARNINGS_PAYOUT_REQUEST_NOT_FOUND',
     EARNINGS_PAYOUT_REQUEST_NOT_PENDING: 'EARNINGS_PAYOUT_REQUEST_NOT_PENDING',
+
+    // Payout EXECUTION — NotchPay transfers + tier-3 triage.
+    EARNINGS_PAYOUT_NOT_SENDABLE: 'EARNINGS_PAYOUT_NOT_SENDABLE',
+    EARNINGS_PAYOUT_TRANSFER_IN_FLIGHT: 'EARNINGS_PAYOUT_TRANSFER_IN_FLIGHT',
+    EARNINGS_PAYOUT_ALREADY_TRIAGED: 'EARNINGS_PAYOUT_ALREADY_TRIAGED',
+    EARNINGS_PAYOUT_GATEWAY_UNSUPPORTED: 'EARNINGS_PAYOUT_GATEWAY_UNSUPPORTED',
+    EARNINGS_PAYOUT_TRANSFER_FAILED: 'EARNINGS_PAYOUT_TRANSFER_FAILED',
 
     // ── COD (cash on delivery: collection, cash liabilities, reconciliation) ──
     COD_NOT_AVAILABLE_FOR_DIGITAL: 'COD_NOT_AVAILABLE_FOR_DIGITAL',

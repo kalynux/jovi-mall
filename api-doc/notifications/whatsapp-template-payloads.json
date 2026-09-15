@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-14T17:14:55.858Z",
+  "generatedAt": "2026-09-15T17:03:02.810Z",
   "note": "GENERATED from the notification catalogs by scripts/generate-whatsapp-templates.ts. Do not hand-edit: names, placeholder counts and placeholder ORDER are derived from the same functions the send path uses, and editing them here makes the approved template disagree with what is sent.",
   "languages": [
     "en",

@@ -978,6 +978,13 @@ real thing, so a near-miss should be told the token is *invalid*, not that it is
 The token is valid for **24 hours** and is single-use. It marks `email_verified` on the role
 entity the verification was requested for, and **signs nobody in**.
 
+⚠ **It no longer ACTIVATES a vendor, and that changed on 2026-09-15.** Verifying an email used to
+promote a vendor from `pending_verification` to `active` — for the vendor role only, which is how
+the three business roles ended up with three different answers to "when is an account active?".
+Activation is now one rule for all three; see [Account activation](#account-activation) below.
+Clicking the link still verifies the address and nothing else. **No vendor was demoted** — those
+already `active` from an email verification stay active.
+
 ### Errors
 
 | `error.code` | Status | Cause |
@@ -1021,6 +1028,51 @@ Connecting a messaging account is no longer an auth concern at all. The directio
 **the bot mints the code and the user redeems it** — and the surface is
 `POST /api/me/connections`, which is role-agnostic, covers Telegram as well as WhatsApp, and
 does not bind to a single role. See [../connections/README.md](../connections/README.md).
+
+---
+
+## Account activation
+
+**Owner decision, 2026-09-15.** Two questions used to be answered by one field, and they are now
+answered by two:
+
+| | Question | Who answers it | Where it lives |
+|---|---|---|---|
+| **`status`** | May this account operate? | the account holder | `role_entity.status` |
+| **KYC** | Has a human vetted this business? | an administrator | `kyc_details.status` / `kyc.status` |
+
+**An account activates itself.** A vendor, agency or agent moves from `pending_verification` to
+`active` as soon as it has **a verified phone number and a name** — nothing else, and nobody else.
+Registration creates every role entity at `pending_verification`; the promotion happens on the call
+that proves the phone (`POST /api/me/phone/verify/confirm`, or a confirmed contact change).
+
+⚠ **`status: "active"` therefore no longer means "an administrator approved this business".**
+Anything you were deriving from that — a trust badge, a warning banner, a gate — must read the KYC
+verdict instead. Vendor and agency expose `kyc_details.status`; an agent exposes `kyc.status`.
+
+⚠ **This is a real behaviour change for each role, in a different direction:**
+
+- **Vendor** — *lost* a path. Email verification used to activate; it no longer does. A vendor who
+  verifies their email and stops stays `pending_verification`.
+- **Agency** — *gained* one. Administrative approval used to be the only way to become `active`;
+  now the agency activates itself, and approval writes only the verdict.
+- **Agent** — *gained* one. Nothing promoted an agent at all: every agent sat at
+  `pending_verification` until an administrator moved them by hand.
+
+⚠ **Only `pending_verification` is ever promoted.** An `inactive` or `suspended` account that
+proves a phone stays exactly where an administrator put it — proving a number cannot lift a
+suspension.
+
+⚠ **Activating an agent does not make them dispatchable.** `status` is only the third of five
+ordered eligibility rules: a platform ban and unverified KYC refuse them before it is consulted,
+and an active contract plus Tracking Allow are required after it. Holding COD cash is likewise
+gated on KYC, never on `status`.
+
+**What being unverified actually costs**, as of this change: **cash**. An agency that no
+administrator has verified cannot carry cash-on-delivery orders, and an unverified owner's payout
+can be capped (see [admin/payout-requests.md](../admin/payout-requests.md)). Everything else is
+open by design — the platform's position is that working with an unverified counterparty is a
+business judgement for the vendor or agency to make, not a refusal for the platform to issue.
 
 ---
 
@@ -1321,7 +1373,7 @@ STOREFRONT_URL=https://shop.example.com  # Builds the password-reset link, the m
                                          #   back to the code alone
 
 WA_BOT_NUMBER=237600000000               # Bot deep links. Unset ⇒ the deep link is null;
-TELEGRAM_BOT_NAME=JoviMallBot            #   the flow still works for anyone who knows the bot
+TELEGRAM_BOT_NAME=WiMallBot              #   the flow still works for anyone who knows the bot
 ```
 
 ---

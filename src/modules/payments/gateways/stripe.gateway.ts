@@ -248,6 +248,8 @@ export class StripeGateway implements PaymentGateway {
       // Stripe mints a real event id, stable across redeliveries — the ideal
       // dedup key, and the reason its own docs tell integrators to key on it.
       eventId: event.id,
+      // Collection-only integration: Stripe payouts/transfers are not wired here.
+      direction: 'collection' as const,
       eventType: event.type,
       gatewayRef,
       merchantRef: object?.metadata?.merchantRef ?? null,

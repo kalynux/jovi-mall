@@ -1,55 +1,117 @@
 # WhatsApp Templates
 
-> ✅ **Submitted 2026-09-14: the WABA holds 188 usable templates** — all 94 notification names in
-> `en` and `fr`. This replaces the "holds ZERO templates" measurement that stood here earlier the
-> same day. (Two further rows exist and are `REJECTED`; see the phone-verification note below.)
+> ✅ **The WABA holds 190 templates** — the 94 notification names in `en` and `fr` (submitted
+> 2026-09-14) plus the phone-verification pair (submitted and **approved** 2026-09-15). This
+> replaces the "holds ZERO templates" measurement that stood here on 2026-09-14.
 > Submit with `npm run whatsapp:templates:submit -- --submit`
 > ([submit-whatsapp-templates.ts](../../scripts/submit-whatsapp-templates.ts)): it reads the WABA
 > first and sends only the difference, so a re-run resumes rather than duplicating.
 >
-> ⛔ **PENDING is not APPROVED.** All 188 are awaiting Meta review, and an out-of-window send
-> fails until each one clears. Poll
-> `GET /{waba}/message_templates?fields=name,language,status` — this page cannot tell you.
+> ✅ **ALL 190 ARE APPROVED** — measured 2026-09-15. The 188 catalog templates cleared review
+> roughly a day after submission.
 >
-> ⛔ **Phone verification is the one situation with NO working template, and both attempts at it
-> failed on Meta's side.** Everything below about the other 94 names is unaffected.
+> ⛔ **APPROVED IS NOT SENDABLE, AND NOTHING ON THIS WABA CAN SEND TODAY.** A live send of the
+> approved OTP template on 2026-09-15 returned:
+>
+> ```
+> (#131037) WhatsApp provided number needs display name approval before message can be sent.
+> ```
+>
+> The sending number `614443908428263` (+1 555-784-5447) has **`name_status: "NON_EXISTS"`** and
+> `new_name_status: "NONE"` — **a display name has never been submitted for approval**, and its
+> `verified_name` is a leftover, `"Mrzenn"`. ⚠ **This gate sits ABOVE both delivery paths**: a
+> free-form text to the same number fails with the identical 131037, *before* the 24-hour window
+> is even evaluated. So template approval, business verification and the service window are all
+> necessary and none of them is sufficient — **every outbound WhatsApp message on this
+> deployment fails until a display name is approved.** That is an account action, not a code
+> change; nothing in these three repositories can affect it.
+>
+> ⛔ **And it cannot be set right now — the monthly quota is spent.** `POST /{phone_number_id}`
+> with `new_display_name` answers **403, code 4, subcode 2593011**: *"You have exceeded the 10
+> display name changes allowed per month."* Ten were spent and `name_status` is still
+> `NON_EXISTS` with nothing pending, so none of them produced an approved name. The options are
+> to wait for the monthly rollover or to onboard a different phone number — a new number takes
+> its display name at registration rather than out of this quota, and an approved name is bound
+> to the number it was approved for.
+>
+> ⚠ **Check this BEFORE diagnosing a delivery failure as a template problem.** It is one call:
+> `GET /{phone_number_id}?fields=verified_name,name_status,new_name_status`. `APPROVED` is the
+> only value that sends.
+>
+> ⛔ **PENDING is not APPROVED, and that distinction still matters for anything NEW.** A freshly
+> submitted template is unsendable until Meta clears it, and this page cannot tell you the
+> current state — poll `GET /{waba}/message_templates?fields=name,language,status`. ⚠ **A
+> template's `category` while PENDING is not its final category either**; see the MARKETING note
+> below, which this page got wrong by reading a mid-review value as a verdict.
+>
+> ## Phone verification — RESOLVED 2026-09-15, and the reason matters
+>
+> ✅ **`wi_mall_phone_verification` (AUTHENTICATION) is APPROVED in `en` and `fr`**
+> (`4426347317613316`, `1393590468966788`). Out-of-window phone verification works. Meta
+> approved both within seconds of submission, so there was no PENDING window to wait out.
+>
+> ⚠ **This page said the opposite one day earlier, and the earlier text was correct when
+> written.** On 2026-09-14 the template could not be created at all — code 10, subcode 2388185 —
+> because Meta gates the AUTHENTICATION category behind business verification and this WABA's
+> owning business was `business_verification_status: "rejected"`. It reached **`verified`** on
+> 2026-09-15, and the template created on the first attempt with **no code change**: the send
+> path had always tried AUTHENTICATION first. The old diagnosis is kept below because it is what
+> made the recovery a one-command operation.
 >
 > | Template | Category | Outcome |
 > |---|---|---|
-> | `wi_mall_phone_verification` | AUTHENTICATION | **cannot be created.** Code 10, subcode 2388185. The category is gated behind business verification and this WABA's owning business is `business_verification_status: "rejected"`. **Not the token** — UTILITY creates fine on the same credential, which is what isolates it. |
-> | `wi_mall_phone_verification_utility` | UTILITY | **created, then REJECTED at review in minutes**, `INCORRECT_CATEGORY`, both languages. |
+> | `wi_mall_phone_verification` | AUTHENTICATION | ✅ **APPROVED 2026-09-15**, `en` + `fr`. Uncreatable the previous day (code 10 / 2388185) purely because the owning business was unverified — **not the token**, since UTILITY created fine on the same credential, which is what isolated it. |
+> | `wi_mall_phone_verification_utility` | UTILITY | ⛔ **REJECTED, permanently.** Created 2026-09-14 and refused at review within minutes, `INCORRECT_CATEGORY`, both languages. Both rows have since vanished from the WABA. |
 >
-> ⛔ **The UTILITY workaround is closed by Meta, not by the wording.** Resubmitting with
+> ⛔ **DO NOT RESUBMIT THE UTILITY ONE, and note that the verification did NOT revive it.** Its
+> rejection is about OTP **content**, not about the business: resubmitting with
 > `allow_category_change: true` — which lets Meta assign whatever category it judges correct
 > rather than refusing — came back `REJECTED` **synchronously**. Meta classifies OTP content as
-> AUTHENTICATION and accepts it nowhere else, and AUTHENTICATION is precisely what this WABA may
-> not create. **Do not reword the copy until the classifier stops recognising it**: that is
-> evading enforcement rather than satisfying it, and the WABA carrying the other 188 templates is
-> what would be at risk.
+> AUTHENTICATION and accepts it nowhere else. Now that AUTHENTICATION is open, that is no longer
+> a problem to solve; it is simply a name that must stay unsubmitted. **Do not reword the copy
+> until the classifier stops recognising it** — that is evading enforcement rather than
+> satisfying it, and the WABA carrying the other 189 templates is what would be at risk.
 >
-> ✅ **One real fix: resolve the business verification.** Out-of-window phone verification stays
-> broken until then; re-running the submitter afterwards picks up exactly those templates.
-> In-window verification is unaffected and works, because free-form text needs no template.
+> Scope a submission with `--only=`, which matches the name exactly:
+> `npm run whatsapp:templates:submit -- --only=wi_mall_phone_verification --submit` excludes the
+> `_utility` name.
+>
+> ⚠ **What Meta froze into the approved template, and cannot be changed at send time:** the body
+> (Meta writes and localises it), the footer *"Expires in 10 minutes."*, and a copy-code button
+> compiled down to a **URL** button carrying
+> `…/otp/code/?otp_type=COPY_CODE&code_expiration_minutes=10&code=otp{{1}}`. The send passes only
+> the code, twice — body parameter and button parameter at `sub_type: 'url'`, `index: 0`. So
+> **lowering `PHONE_VERIFY_TTL_SECONDS` does not change what the message promises**; the
+> generator derives `code_expiration_minutes` from that variable and `test:phone-verification`
+> § 6c fails if the two disagree, but an already-approved template can only be corrected by
+> resubmitting under a new name — exactly like the button host.
 >
 > ⚠ **Meta OVERRIDES `UTILITY` → `MARKETING` on review, and the price is the smaller half of
 > it.** **MARKETING is subject to marketing opt-out**, so a recipient who has opted out receives
 > *nothing* for that situation — silently, with the notification recorded as sent.
 >
-> ⛔ **DO NOT TRUST A COUNT HERE, AND DO NOT TRUST A LIST.** The set grew from 10 names to 12
-> in the twenty minutes the first batch spent under review, and review is still running. Measure
-> it instead — it is one command:
+> ⛔ **DO NOT TRUST A COUNT HERE, AND DO NOT TRUST A LIST — this page has now been wrong about
+> this set twice.** It grew from 10 names to 12 during the first review window. **On 2026-09-15,
+> with review COMPLETE, it settled at TWO — and not the same two.** The final set is
+> `agency_agent_contract_rejected [fr]` and `vendor_storage_product_unsuspended [fr]`. Measure it
+> instead — it is one command:
 >
 > ```bash
 > curl -s "https://graph.facebook.com/v26.0/$WABA/message_templates?limit=200&fields=name,category" \
 >   -H "Authorization: Bearer $TOKEN" | tr ',' '\n' | grep -B1 MARKETING
 > ```
 >
-> The *shape* of the set is the durable part: **anything that reads as a nudge rather than as a
-> record of something that already happened.** Plan-expiry warnings across all three roles, the
-> agency soft-cap warning, contract outcomes — and the two that matter operationally,
-> **`agent_shipment_offer_received` and `agent_shipment_offer_reminder`, which are delivery job
-> offers.** An agent who opted out of marketing stops being offered work out-of-window, and
-> neither service will say so.
+> ✅ **The operationally alarming case did NOT survive review.**
+> `agent_shipment_offer_received` and `agent_shipment_offer_reminder` — delivery **job offers**,
+> where a marketing opt-out would have silently stopped an agent being offered work — came out
+> **UTILITY**. This page asserted the opposite until 2026-09-15, having recorded a *mid-review*
+> classification as the outcome. ⚠ **A category seen while `status` is `PENDING` is not a
+> verdict**; Meta moves it during review. Re-read it once the template is `APPROVED`.
+>
+> The *shape* of the risk is the durable part: **anything that reads as a nudge rather than as a
+> record of something that already happened** is a candidate for reclassification — plan-expiry
+> warnings, the agency soft-cap warning, contract outcomes. Check any newly submitted name of
+> that kind after it clears.
 >
 > The generator submits `UTILITY` for all of them — its own comment warns that MARKETING
 > "makes the send subject to marketing opt-out" — and Meta reclassified them on review

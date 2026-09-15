@@ -157,22 +157,32 @@ const AgencyKycDetailsSchema = new Schema(
      * colleague already decided, and the agency is never told what to fix.
      *
      * The two are written **together and never apart**, by
-     * `DeliveryAgencyRepository.markVerifiedIfPending` and `.rejectIfPending` — the
-     * same rule the vendor block states, and the reason both live behind repository
+     * `DeliveryAgencyRepository.markVerifiedIfNotVerified` and `.rejectIfNotRejected` —
+     * the same rule the vendor block states, and the reason both live behind repository
      * methods rather than being `$set` by callers.
      *
-     * ── What `rejected` does NOT do ───────────────────────────────────────────
-     * It does not touch the agency's top-level `status`, which stays
-     * `pending_verification`. That is deliberate and is what makes rejection safe to
-     * add: every existing gate already refuses a non-`active` agency — product
-     * activation (`ProductStatusValidationService`), pickup resolution
-     * (`PickupLocationResolver`), COD eligibility (`CodEligibilityService`) and a
-     * vendor's target agency (`vendor-product.controller`). A rejected agency is
-     * therefore already blocked from everything that matters, by machinery that
-     * predates this field, and it can be re-reviewed without an un-reject verb.
+     * ── What `rejected` does NOT do, and what it COSTS ────────────────────────
+     * It does not touch the agency's top-level `status`. That was always deliberate, but
+     * ⚠ **this paragraph used to add "which stays `pending_verification`", and since
+     * 2026-09-15 that is false** — an agency promotes itself to `active` on a proved
+     * phone and a name (`core/accounts/activation.ts`), so a refused agency is routinely
+     * `active`.
      *
-     * Revoking an agency that is already `verified` is `deactivate`, not this — that
-     * one runs the product-suspension cascade, which a first refusal has no need of.
+     * The consequence is the part worth re-reading before changing either side, because
+     * it INVERTED: a refusal used to be backed by every gate that gated on `active` —
+     * product activation, pickup resolution, vendor default-agency selection — and now
+     * none of them refuse a rejected agency. What a refusal still costs is **cash**:
+     * `CodEligibilityService` tests `kyc_details.legit_verified` explicitly, and the
+     * payout allowance reads the verdict. Anything else that ought to turn on a refusal
+     * has to say so itself; `status` will not say it.
+     *
+     * Re-review needs no un-reject verb: approval's predicate admits a rejected agency,
+     * which is the whole of the loop. See `markVerifiedIfNotVerified`'s filter.
+     *
+     * Revoking an agency that is already `verified` is `deactivate` where the point is
+     * to stop it trading — that one runs the product-suspension cascade, which a verdict
+     * has no need of. Rejecting a verified agency is permitted and records the verdict;
+     * it is not a substitute for deactivating one.
      */
     status: {
       type: String,

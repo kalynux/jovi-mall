@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MODELS, COLLECTIONS } from '../../../core/database/collections';
 import { ActorSource, actorStampFields } from '../../../core/types/actor-source.types';
+import { IReviewTriage, ReviewTriageSchema } from '../../../core/types/review-triage.types';
 
 /**
  * AgencyRemittance - the agency handing collected COD cash up to the platform
@@ -23,6 +24,14 @@ export interface IAgencyRemittance extends Document {
   reference: string;
   note: string | null;
   status: AgencyRemittanceStatus;
+  /**
+   * A reviewer's endorsement that this declared remittance looks genuine. Null until reviewed.
+   *
+   * Applies to every remittance, unlike a deposit: an administrator confirms all of them,
+   * there being no agency-confirmed variant here. Gates nothing — confirming never requires
+   * an endorsement. See `core/types/review-triage.types.ts`.
+   */
+  triage: IReviewTriage | null;
   declared_by_user_id: mongoose.Types.ObjectId;
   declared_at: Date;
   resolved_at: Date | null;
@@ -56,6 +65,7 @@ const AgencyRemittanceSchema = new Schema<IAgencyRemittance>(
       required: true,
       default: 'declared',
     },
+    triage: { type: ReviewTriageSchema, default: null },
     declared_by_user_id: { type: Schema.Types.ObjectId, ref: MODELS.USER, required: true },
     declared_at: { type: Date, required: true, default: () => new Date() },
     resolved_at: { type: Date, default: null },

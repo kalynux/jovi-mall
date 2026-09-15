@@ -14,6 +14,7 @@ import { CustomerRepository } from '../../customers/customer.repository';
 import { VendorRepository } from '../../vendors/vendor.repository';
 import { DeliveryAgencyRepository } from '../../delivery/delivery-agency.repository';
 import { AgentRepository } from '../../agents/repositories/agent.repository';
+import { AccountActivationService, accountActivationService } from './account-activation.service';
 
 /**
  * Changing the email or phone an account signs in with — the self-service half
@@ -150,6 +151,7 @@ export class ContactChangeService {
     private readonly vendorRepo: VendorRepository = new VendorRepository(),
     private readonly agencyRepo: DeliveryAgencyRepository = new DeliveryAgencyRepository(),
     private readonly agentRepo: AgentRepository = new AgentRepository(),
+    private readonly activation: AccountActivationService = accountActivationService,
   ) {}
 
   // ── Read ────────────────────────────────────────────────────────────────────
@@ -480,6 +482,29 @@ export class ContactChangeService {
         console.error(`[ContactChangeService] failed to sync ${role} profile contact`, error);
       }
     }
+
+    /**
+     * A proved contact may have just completed an account's fundamentals — so evaluate
+     * activation here, and here only.
+     *
+     * ⚠ **This is the funnel, which is why the call sits at the bottom of it.** All four
+     * paths that land a proved identifier — the email confirm, the phone confirm, the OTP
+     * verifying the number already on file, and the OTP completing a pending change — pass
+     * through this method. Hanging the promotion off each of them instead would be four
+     * call sites, and the fifth proof somebody adds next year would quietly not activate
+     * anything.
+     *
+     * ⚠ **AFTER the loop above, never before.** The rule reads `phone_verified`, which is
+     * written by the `setVerifiedContact` calls that just ran. Evaluating first would test
+     * the previous state and promote nobody on the call that actually earned it — a
+     * one-proof-behind bug that looks like a caching problem.
+     *
+     * An email proof reaches this too and is almost always a no-op, since the rule requires
+     * a verified phone. It is left unguarded deliberately: it costs one filtered update that
+     * matches nothing, and it means an account whose promotion was missed for any reason
+     * heals on its next contact event rather than staying wrong for ever.
+     */
+    await this.activation.activateEligibleRoles(user);
   }
 
   /**

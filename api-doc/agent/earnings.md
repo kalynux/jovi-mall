@@ -97,7 +97,8 @@ still holding. Prepaid earnings have no such gate — that money is already with
     "available": 12000,
     "reserve": 0,
     "requested": 0,
-    "currency": "XAF"
+    "currency": "XAF",
+    "payoutAllowance": null
   }
 }
 ```
@@ -108,8 +109,49 @@ still holding. Prepaid earnings have no such gate — that money is already with
 | `available` | Withdrawable now |
 | `reserve` | Always `0` for agents. The rolling reserve applies only to agencies, against COD cash-handling risk; the field is present for shape-parity with the other roles |
 | `requested` | Earmarked for an in-flight payout request |
+| `payoutAllowance` | `null` unless a payout limit applies — see below |
 
 Amounts are integers in minor currency units.
+
+### `payoutAllowance` — the limit on unverified accounts
+
+⚠ **`null` means NO LIMIT, never a limit of zero.** It is `null` for a verified account and on
+any deployment with the feature switched off, which is the default — so this is the normal case.
+A client that renders `remaining: 0` out of a missing object tells every verified agent they
+cannot withdraw.
+
+When a limit does apply:
+
+```json
+"payoutAllowance": {
+  "cap": 20000,
+  "used": 15000,
+  "remaining": 5000,
+  "windowDays": 30,
+  "resetsAt": "2026-10-01T12:00:00.000Z"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `cap` | The most that may be withdrawn per window while KYC is unverified |
+| `used` | Already **paid** inside the window |
+| `remaining` | What is left. **The next payout is capped at this**, not at `available` |
+| `windowDays` | Length of the rolling window (default 30) |
+| `resetsAt` | When the **first** tranche frees up. ⚠ **Not** when the whole cap returns — do not promise the full allowance on this date. `null` when nothing is counted |
+
+⚠ **The window is ROLLING, not calendar.** There is no 1st-of-the-month reset to wait for; the
+oldest payout simply ages out. A calendar reset would let twice the cap leave in 48 hours across
+a month boundary, which is the burst the limit exists to prevent.
+
+⚠ **Only PAID payouts count.** A rejected request returned the money to `available` and is not
+charged against the allowance — an agent is never billed for an administrator's decision.
+
+⚠ **Show `remaining` next to `available` whenever it is present.** Otherwise an agent requests a
+payout, receives a fraction of their balance, and nothing on the screen explains why.
+
+✅ **Verification removes the limit entirely.** Surface that as the remedy — it is the only one
+besides waiting.
 
 ---
 
@@ -140,9 +182,10 @@ ticket for an admin to process; track it under Tickets.
 
 Rules — the same for every role:
 
-- **All or nothing.** You cannot request a partial amount.
+- **All or nothing.** You cannot request a partial amount. ⚠ **One exception since 2026-09-15:** when `payoutAllowance` is present the request takes `min(available, payoutAllowance.remaining)` instead, and the rest stays available. The requester still names no amount — the allowance does.
 - **Minimum 10 000** (`EARNINGS_MIN_PAYOUT_AMOUNT`) → `EARNINGS_PAYOUT_BELOW_MINIMUM`.
-- **One at a time.** A pending request must be resolved first.
+- **One at a time.** An open request must be resolved first — and "open" means `pending`,
+  `processing` **or** `failed`, because all three are still holding your balance. See below.
 - **A payout method is required** → `EARNINGS_PAYOUT_METHOD_MISSING` if you have none set. Set one
   first, below.
 - The method is **snapshotted** onto the request, so editing it afterwards does not redirect a
@@ -155,6 +198,28 @@ Rules — the same for every role:
 
 Your latest payout request, or `data: null` if you have never made one. Includes
 `rejectionReason` and `resolvedAt` once an admin has acted.
+
+#### ⚠ `status` gained two values, and neither is terminal
+
+`processing` and `failed` arrived when payouts became automatable. **An app whose status map was
+exhaustive over the old three will mis-render both** — most likely showing a live payout as
+"Rejected", which tells the agent their money is not coming when it is on its way.
+
+| `status` | What it means | What to tell the agent |
+|---|---|---|
+| `pending` | Waiting for an administrator | "Being reviewed" |
+| `processing` | **Sent to the payment provider, not yet confirmed** | "On its way" — never "Paid" |
+| `paid` | Settled. The only status that means the money arrived | "Paid" |
+| `rejected` | Closed. `rejectionReason` says why, and the balance is back in `available` | "Declined — <reason>" |
+| `failed` | **The transfer was refused. The money is still held, NOT back in `available`** | "Payment failed — we are looking into it" |
+
+⛔ **`failed` does NOT mean the request is over, and it does NOT return the balance.** The funds
+stay reserved while an administrator retries or closes it. An app that treats `failed` as terminal
+will tell the agent to request again — and the request will be refused, because one is already
+open. Only `rejected` returns money to `available`.
+
+⛔ **Treat any unrecognised status as in-progress, not as failure.** The safe default for a money
+record you do not understand is "still happening".
 
 ---
 
@@ -274,5 +339,6 @@ cannot GET the list, edit one entry and PUT it straight back. See
 | `VALIDATION_ERROR` | 400 | A payout destination failed validation — see [Payout methods → Errors](./payout-methods.md#errors) |
 | `EARNINGS_PAYOUT_NO_AVAILABLE_BALANCE` | 409 | `available` is `0` — nothing to request |
 | `EARNINGS_PAYOUT_BELOW_MINIMUM` | 409 | Available balance is under the minimum |
+| `EARNINGS_PAYOUT_UNVERIFIED_CAP_REACHED` | 409 | The unverified-account payout allowance is spent, or its remainder is under the minimum. `details.reason` is `allowance_spent` or `remainder_below_minimum`, alongside `cap`/`used`/`remaining`/`windowDays`/`resetsAt`. ⚠ Retrying does not help — verify, or wait until `resetsAt` |
 | `EARNINGS_PAYOUT_METHOD_MISSING` | 409 | No payout method configured |
 | `EARNINGS_PAYOUT_ALREADY_PENDING` | 409 | A payout request is already in flight |

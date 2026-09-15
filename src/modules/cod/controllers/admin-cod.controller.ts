@@ -21,6 +21,17 @@ const ListRemittancesQuerySchema = CodPaginationQuerySchema.extend({
   agencyId: z.string().regex(/^[0-9a-fA-F]{24}$/).optional(),
 });
 
+/**
+ * A reviewer's endorsement of a declared remittance or deposit.
+ *
+ * Shared by both, because the stamp is the same on both records. There is no verdict
+ * field: the only verdict this route records is "endorsed", and a rejection is the
+ * reject route, because rejection is terminal and terminal outcomes are statuses.
+ */
+const TriageCodSchema = z.object({
+  note: z.string().trim().min(1).max(500).optional(),
+});
+
 const RejectRemittanceSchema = z.object({
   reason: z.string().trim().min(1, 'A rejection reason is required').max(500),
 });
@@ -113,6 +124,27 @@ export class AdminCodController {
   });
 
   /**
+   * POST /api/admin/cod/remittances/:id/triage
+   * Endorse a declared remittance as genuine. No money moves and nothing is gated — an
+   * un-endorsed remittance is exactly as confirmable as an endorsed one.
+   */
+  static triageRemittance = asyncHandler(async (req: Request, res: Response) => {
+    const { note } = TriageCodSchema.parse(req.body);
+
+    const remittance = await agencyRemittanceService.triage(
+      req.params.id,
+      actorFromRequest(req),
+      note ?? null
+    );
+
+    res.json({
+      success: true,
+      data: remittance,
+      message: 'Remittance endorsed — confirmation is still required before the liability moves.',
+    });
+  });
+
+  /**
    * POST /api/admin/cod/remittances/:id/reject
    * Reject a declared remittance (nothing arrived / amount mismatch). No money moves.
    * Body: { reason }
@@ -188,6 +220,33 @@ export class AdminCodController {
       },
       message:
         'Direct deposit recorded — the agent and the agency were both cleared, and the agency\'s collections settled.',
+    });
+  });
+
+  /**
+   * POST /api/admin/cod/deposits/:id/triage
+   * Endorse a declared direct-to-platform deposit as genuine.
+   *
+   * ⚠ Refused on an AGENCY-recipient deposit (`assertConfirmer`), and deliberately: that
+   * handover is already counter-signed by two organisations, and the platform has no way to
+   * verify cash it never received.
+   */
+  static triageDeposit = asyncHandler(async (req: Request, res: Response) => {
+    const { note } = TriageCodSchema.parse(req.body);
+    const actor = actorFromRequest(req);
+
+    const deposit = await agentDepositService.triage({
+      depositId: req.params.id,
+      by: 'admin',
+      note: note ?? null,
+      reviewedByUserId: actor.userId,
+      reviewerName: actor.name,
+    });
+
+    res.json({
+      success: true,
+      data: { id: deposit._id.toString(), status: deposit.status, triage: deposit.triage },
+      message: 'Deposit endorsed — confirmation is still required before the cash chain settles.',
     });
   });
 

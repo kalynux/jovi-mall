@@ -5,6 +5,7 @@ import { AgencyOnboardingStepValue } from '../../core/constants/onboarding-steps
 import { COLLECTIONS } from '../../core/database/collections';
 import { ActorRef, actorStamp } from '../../core/types/actor-source.types';
 import { buildSearchRegex } from '../../core/utils/regex.util';
+import { activationFilter, ACTIVATION_TARGET } from '../../core/accounts/activation';
 
 /**
  * An agency row joined to its Magazin's business surface (name, logo, coverage
@@ -160,6 +161,33 @@ export class DeliveryAgencyRepository {
   }
 
   /**
+   * Promote out of `pending_verification` when the fundamentals are proved.
+   *
+   * ⚠ **This is now the ONLY thing that activates an agency, and `markVerifiedIfNotVerified`
+   * is no longer one of them.** Until 2026-09-15 an administrator's approval wrote the top-level
+   * `status` and the KYC verdict together, so an agency could not operate until a human had
+   * vetted it. Those are two different questions and they now have two different writers —
+   * see `core/accounts/activation.ts`.
+   *
+   * ⚠ **The gates that read `status === 'active'` therefore changed meaning**, and one of
+   * them had to be corrected in the same change: `CodEligibilityService` was using `active`
+   * as a stand-in for "an administrator approved this business", which stopped being true
+   * here. It now tests the KYC verdict explicitly.
+   */
+  async activateIfFundamentalsMet(
+    userId: string,
+    session?: ClientSession,
+  ): Promise<IDeliveryAgency | null> {
+    const query = DeliveryAgencyModel.findOneAndUpdate(
+      { user_id: userId, ...activationFilter('display_name') },
+      { $set: { status: ACTIVATION_TARGET } },
+      { new: true },
+    );
+    if (session) query.session(session);
+    return query.exec();
+  }
+
+  /**
    * Land a confirmed contact change on the profile — the value AND its verified flag,
    * together (Phase 6 · 6.D.1). See `CustomerRepository.setVerifiedContact`; the same
    * method exists on all four role repositories, and none of them touches `status`.
@@ -219,15 +247,14 @@ export class DeliveryAgencyRepository {
   }
 
   /**
-   * Admin action: approve a pending agency's business verification — status and both
+   * Admin action: approve an agency's business verification — the verdict and both
    * `legit_verified` mirrors, as ONE compare-and-set.
    *
    * ── Why a CAS and not `updateStatusById` + `setLegitVerified` ─────────────────
-   * Two administrators can hold this screen open. Without the `status` predicate the loser
-   * would silently re-approve an agency somebody had already deactivated in between,
-   * dragging it back to `active` with a verification stamp naming the wrong person and the
-   * wrong moment. Returning null on a miss lets the service answer 409 — the state moved,
-   * re-read it — which is the same shape as `ShipmentRepository.applyStatusChangeIfCurrent`.
+   * Two administrators can hold this screen open, and the loser must be told the decision
+   * was already made rather than re-stamping it with their own name and moment. Returning
+   * null on a miss lets the service answer 409 — the state moved, re-read it — which is the
+   * same shape as `ShipmentRepository.applyStatusChangeIfCurrent`.
    *
    * ── Why the three fields move together ───────────────────────────────────────
    * `status` is what actually gates anything today (`findAvailableForVendors` filters on
@@ -240,16 +267,55 @@ export class DeliveryAgencyRepository {
    * reason `actorStamp` writes its three fields together: a timestamp that can disagree
    * with the flag beside it is worse than no timestamp.
    */
-  async markVerifiedIfPending(
+  async markVerifiedIfNotVerified(
     agencyId: string,
     actor: ActorRef,
     session?: ClientSession,
   ): Promise<IDeliveryAgency | null> {
     const query = DeliveryAgencyModel.findOneAndUpdate(
-      { _id: agencyId, status: 'pending_verification' },
+      /**
+       * ⚠ **THE COMPARE-AND-SET HAS MOVED AXES TWICE, and the second move is the one to
+       * read.** It first filtered on the top-level `status: 'pending_verification'`, which
+       * worked only while that field doubled as the review queue. Agencies now activate
+       * themselves on a proved phone (`activateIfFundamentalsMet`), so an agency awaiting
+       * review is routinely `active` — the old filter would have matched none of them,
+       * refusing every approval with a 409 naming a status the administrator could do
+       * nothing about.
+       *
+       * On 2026-09-15 it moved to `kyc_details.status`, the review axis — and was written
+       * as an equality on `'pending'`, which reintroduced the same class of fault one field
+       * over: **an agency could receive one verdict, ever.** A refused agency fixes what the
+       * reason named, and the approval that is supposed to follow found `'rejected'`,
+       * missed, and 409'd for ever. `rejectIfNotRejected`'s docstring promised exactly that
+       * loop would work; the predicate had quietly falsified it (BR-026 § 2, 2026-09-15).
+       *
+       * ⚠ **The predicate is therefore an IDEMPOTENCY guard, not a queue guard.** It refuses
+       * a REPEAT of the verdict this method writes and admits every other state. Three
+       * properties follow, and all three are wanted:
+       *   - a rejected agency can be approved on re-review — the documented loop;
+       *   - approving an already-approved agency still 409s, which is the useful message
+       *     ("a colleague already did this") the equality form was really buying;
+       *   - `$ne` matches a document with NO `kyc_details` at all, so an agency predating
+       *     the sub-document is reviewable. The equality form missed those on their FIRST
+       *     review, which is the secondary half of the same report.
+       *
+       * What it gives up is narrow and deliberate: two administrators submitting OPPOSITE
+       * verdicts in the same instant now both succeed, last write winning, where the
+       * equality form let one through and refused the other. Both are recorded in wi-admin's
+       * audit and the losing stamp is overwritten rather than lost — and the alternative is
+       * the bug above. Vendors answer this the same way, and since the same change with the
+       * same mechanism: see `VendorRepository.setKycVerdict`.
+       */
+      { _id: agencyId, 'kyc_details.status': { $ne: 'verified' } },
       {
         $set: {
-          status: 'active',
+          /**
+           * ⚠ **`status` IS DELIBERATELY NOT WRITTEN HERE ANY MORE.** Approving a business
+           * says a human vetted it; it does not say the account may operate, which is the
+           * account holder's own business and is answered by proving a phone. Fusing the two
+           * meant an agency that had proved everything about itself still could not trade
+           * until an administrator got to the queue. See `core/accounts/activation.ts`.
+           */
           legit_verified: true,
           'kyc_details.legit_verified': true,
           // The verdict beside its boolean projection — one decision, one write, the
@@ -273,12 +339,13 @@ export class DeliveryAgencyRepository {
   }
 
   /**
-   * Refuse an agency's business verification — the other exit from a pending review.
+   * Refuse an agency's business verification — the other verdict a review can reach.
    *
    * ── The same compare-and-set, for the same reason ────────────────────────────
-   * Filtered on `status: 'pending_verification'` exactly as `markVerifiedIfPending`
-   * is, so two administrators reaching a verdict at once produce one winner and one
-   * 409 rather than a rejection silently overwriting a colleague's approval.
+   * Filtered as `markVerifiedIfNotVerified` is, mirrored onto this method's own verdict:
+   * refusing an agency that is ALREADY refused is the no-op that earns a 409, and every
+   * other state is admissible. Read that method's filter comment — it carries the whole
+   * argument, including what the guard deliberately stops guarding.
    *
    * ── What it deliberately does NOT write ──────────────────────────────────────
    * The agency's top-level `status`. It stays `pending_verification`, which is what
@@ -287,20 +354,30 @@ export class DeliveryAgencyRepository {
    * resolution, COD eligibility, and a vendor's target agency. A rejected agency is
    * blocked by machinery that predates this field.
    *
-   * It also means re-review needs no "un-reject": the agency is still pending, so
-   * `markVerifiedIfPending` accepts it once they fix what the reason names.
+   * ⚠ **Re-review needs no "un-reject", and as of 2026-09-15 that is true again.** It was
+   * true originally because a refusal left `status` at `pending_verification` and the
+   * approval CAS matched on that. The axis move to `kyc_details.status` broke it without
+   * this sentence being revisited — a refused agency read `'rejected'`, the approval's
+   * equality on `'pending'` missed, and the loop this paragraph promises 409'd for ever
+   * (BR-026 § 2). The predicate is now `{ $ne: 'rejected' }` here and `{ $ne: 'verified' }`
+   * there, so approval accepts a refused agency once they fix what the reason names — which
+   * is what makes `unreject` a verb that still must not exist.
    *
    * Revoking an agency that is already **verified** is `deactivate`, not this — that
    * path runs the product-suspension cascade, which a first refusal has nothing to do.
    */
-  async rejectIfPending(
+  async rejectIfNotRejected(
     agencyId: string,
     actor: ActorRef,
     rejectionReason: string,
     session?: ClientSession,
   ): Promise<IDeliveryAgency | null> {
     const query = DeliveryAgencyModel.findOneAndUpdate(
-      { _id: agencyId, status: 'pending_verification' },
+      /**
+       * The same predicate as `markVerifiedIfNotVerified`, mirrored onto this verdict — see
+       * its filter for why it is a `$ne` rather than an equality on `'pending'`.
+       */
+      { _id: agencyId, 'kyc_details.status': { $ne: 'rejected' } },
       {
         $set: {
           // Both flags stay false — they already were; writing them keeps this method

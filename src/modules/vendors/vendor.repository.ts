@@ -5,6 +5,7 @@ import { VendorOnboardingStep } from '../../core/constants/onboarding-steps';
 import { ActorRef, actorStamp } from '../../core/types/actor-source.types';
 import { COLLECTIONS } from '../../core/database/collections';
 import { buildSearchRegex } from '../../core/utils/regex.util';
+import { activationFilter, ACTIVATION_TARGET } from '../../core/accounts/activation';
 
 /**
  * A vendor row joined to its Store's business name + logo. The public business
@@ -50,31 +51,41 @@ export class VendorRepository {
   }
 
   /**
-   * Verify the email address, and promote out of `pending_verification` — but ONLY
-   * out of `pending_verification`.
+   * Verify the email address. Nothing else.
    *
-   * This used to `$set: { status: 'active' }` unconditionally, which was harmless while
-   * nothing could put a vendor anywhere else. Now that an administrator can suspend one,
-   * an unconditional write means a suspended vendor lifts their own suspension by
-   * re-clicking the verification link in an old email — the suspension would appear to
-   * work and then quietly undo itself.
+   * ⚠ **THIS USED TO ACTIVATE THE VENDOR, AND DELIBERATELY NO LONGER DOES** (owner decision,
+   * 2026-09-15). Email was this role's route out of `pending_verification` — and it was the
+   * only role that had one, which is how vendor, agency and agent ended up with three
+   * different answers to the same question. Activation is now one rule for all three, a
+   * **proved phone and a name**, and it lives in `core/accounts/activation.ts`.
    *
-   * A pipeline update rather than a read-then-write: the conditional and the write are
-   * one atomic operation, so there is no window between them.
+   * What that costs, stated plainly: a new vendor who verifies their email and stops is
+   * `pending_verification` until they also verify their phone. Clicking the link no longer
+   * finishes onboarding on its own.
+   *
+   * ⚠ **No vendor is DEMOTED by this.** Promotion is the only direction anything here moves,
+   * so vendors already `active` from an email verification stay active. There is no sweep
+   * and no backfill — see the activation module's header for why none is needed.
    */
   async markEmailVerified(userId: string): Promise<IVendor | null> {
     return await VendorModel.findOneAndUpdate(
       { user_id: userId },
-      [
-        {
-          $set: {
-            email_verified: true,
-            status: {
-              $cond: [{ $eq: ['$status', 'pending_verification'] }, 'active', '$status'],
-            },
-          },
-        },
-      ],
+      { $set: { email_verified: true } },
+      { new: true }
+    );
+  }
+
+  /**
+   * Promote out of `pending_verification` when the fundamentals are proved.
+   *
+   * The whole rule lives in the filter — see `activationFilter`. A miss returns `null` and
+   * is the ordinary case, not an error: most calls land on an account that is already
+   * active, or has not proved a phone yet.
+   */
+  async activateIfFundamentalsMet(userId: string): Promise<IVendor | null> {
+    return await VendorModel.findOneAndUpdate(
+      { user_id: userId, ...activationFilter('display_name') },
+      { $set: { status: ACTIVATION_TARGET } },
       { new: true }
     );
   }
@@ -84,12 +95,15 @@ export class VendorRepository {
    * together (Phase 6 · 6.D.1). See `CustomerRepository.setVerifiedContact` for the full
    * reasoning; the same method exists on all four role repositories.
    *
-   * ⚠ Deliberately **not** a `$cond` pipeline like `markEmailVerified` above, and the
-   * difference matters here more than on the other three: that method promotes a vendor
-   * out of `pending_verification`, which is correct when the address on file is finally
-   * proved at registration. Changing an email later is a different event, and a
+   * ⚠ **Does not touch `status`, and neither does `markEmailVerified` above any more.**
+   * This paragraph used to contrast the two — that one was a `$cond` pipeline promoting a
+   * vendor out of `pending_verification`, this one deliberately was not — and the contrast
+   * is gone: the activation split of 2026-09-15 moved every promotion to
+   * `activateIfFundamentalsMet`, so both methods now write their own field and nothing else.
+   *
+   * The rule the contrast existed to protect is unchanged and now holds structurally: a
    * `suspended` vendor must not walk their own suspension back by editing their contact
-   * details — the same trap the conditional was added to close.
+   * details. With one writer of `status` on this path there is no second route to close.
    */
   async setVerifiedContact(
     userId: string,
@@ -208,7 +222,7 @@ export class VendorRepository {
   }
 
   /**
-   * Admin-only: record a business-verification verdict.
+   * Admin-only: record a business-verification verdict, as ONE compare-and-set.
    *
    * Replaces `setLegitVerified`, which wrote a bare boolean to two places — one of them
    * a top-level `legit_verified` whose schema path was commented out, so Mongoose's
@@ -218,6 +232,24 @@ export class VendorRepository {
    *
    * `legit_verified` stays as the boolean projection of `status === 'verified'` because
    * `agency-vendor-browse.dto.ts` renders `kycVerified` from it.
+   *
+   * ── Why the predicate, added 2026-09-15 ──────────────────────────────────────
+   * ⚠ **The "already holds this verdict" rule is not new — its ATOMICITY is.** The rule
+   * lived in `AdminVendorService.setKycVerdict` as a read, a comparison and then an
+   * unguarded write, which refuses the second administrator only when the two are far
+   * enough apart in time. Two reviewers submitting opposite verdicts in the same instant
+   * both read the old value, both passed the check, and both wrote — the loser's stamp
+   * landing on top of the winner's with no 409 anywhere and an audit row in wi-admin
+   * claiming a transition that was immediately overwritten.
+   *
+   * The predicate is a `$ne` on the verdict being written, so it refuses a REPEAT and
+   * admits everything else — a rejected vendor re-verifies, which is the documented
+   * re-review loop and the behaviour agencies were given in the same change (BR-026 § 2).
+   * `$ne` also matches a vendor with no `kyc_details` at all, so a document predating the
+   * sub-document is reviewable.
+   *
+   * Returning null on a miss lets the service answer 409 — the same shape as
+   * `DeliveryAgencyRepository.markVerifiedIfNotVerified`, which is now this method's twin.
    */
   async setKycVerdict(
     vendorId: string,
@@ -228,8 +260,8 @@ export class VendorRepository {
   ): Promise<IVendor | null> {
     const verified = verdict === 'verified';
 
-    return await VendorModel.findByIdAndUpdate(
-      vendorId,
+    return await VendorModel.findOneAndUpdate(
+      { _id: vendorId, 'kyc_details.status': { $ne: verdict } },
       {
         $set: {
           'kyc_details.status': verdict,

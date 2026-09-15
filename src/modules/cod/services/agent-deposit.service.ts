@@ -231,6 +231,58 @@ export class AgentDepositService {
     return rejected;
   }
 
+  /**
+   * Record a reviewer's endorsement that this declared handover looks genuine.
+   *
+   * ⚠ **Moves nothing and gates nothing.** A declaration holds no money — only a CONFIRMED
+   * deposit moves cash — so unlike a payout endorsement there is not even a hold involved.
+   * Confirming never requires an endorsement.
+   *
+   * ⛔ **`assertConfirmer` applies here, and that is the interesting constraint.** Only the
+   * party the cash was handed to may answer for a deposit: an administrator can endorse a
+   * `recipient: 'platform'` deposit and is refused on an agency-recipient one. That is not a
+   * limitation to route around — an agency-recipient handover is already counter-signed by
+   * two different ORGANISATIONS, which is a stronger control than two admin tiers, and a
+   * platform reviewer has no standing in it and no way to verify it.
+   *
+   * A triage REJECTION is the ordinary `reject()` above: terminal, and therefore a status.
+   */
+  async triage(params: {
+    depositId: string;
+    by: 'agency' | 'admin';
+    agencyId?: string;
+    note: string | null;
+    reviewedByUserId: string;
+    reviewerName?: string | null;
+  }): Promise<IAgentDeposit> {
+    const { depositId, by, agencyId, note } = params;
+
+    const deposit = await this.loadDeclared(depositId, agencyId);
+    this.assertConfirmer(deposit, by);
+
+    const endorsed = await AgentDepositModel.findOneAndUpdate(
+      { _id: depositId, status: 'declared', triage: null },
+      {
+        $set: {
+          triage: {
+            verdict: 'endorsed',
+            note,
+            by_admin_id: params.reviewedByUserId,
+            by_name: params.reviewerName ?? null,
+            at: new Date(),
+          },
+        },
+      },
+      { new: true }
+    );
+    // Null means the CAS lost: endorsed or resolved between the load above and this write.
+    if (!endorsed) {
+      throw createAppError(ERROR_CODES.COD_DEPOSIT_ALREADY_RESOLVED, 409);
+    }
+
+    return endorsed;
+  }
+
   // ─── Direct recording (the receiving party was there) ───────────────────────
 
   /**
@@ -550,10 +602,16 @@ export class AgentDepositService {
     if (filter.status) query.status = filter.status;
     if (filter.recipient) query.recipient = filter.recipient;
     if (filter.agencyId) query.agency_id = filter.agencyId;
-    return this.paginate(query, page, limit);
+    // `forAdmin` — the endorsement is admin-to-admin commentary. See `toAdminDto`.
+    return this.paginate(query, page, limit, true);
   }
 
-  private async paginate(filter: Record<string, unknown>, page: number, limit: number) {
+  private async paginate(
+    filter: Record<string, unknown>,
+    page: number,
+    limit: number,
+    forAdmin = false
+  ) {
     const [total, docs] = await Promise.all([
       AgentDepositModel.countDocuments(filter).exec(),
       AgentDepositModel.find(filter)
@@ -563,7 +621,7 @@ export class AgentDepositService {
         .exec(),
     ]);
     return {
-      data: docs.map((d) => this.toDto(d)),
+      data: docs.map((d) => (forAdmin ? this.toAdminDto(d) : this.toDto(d))),
       meta: { total, page, limit, pages: Math.ceil(total / limit) },
     };
   }
@@ -603,6 +661,32 @@ export class AgentDepositService {
     } catch (error) {
       console.error(`[AgentDepositService] Failed to emit ${eventType}:`, error);
     }
+  }
+
+/**
+   * The admin view of a deposit — everything in `toDto` plus the reviewer's endorsement.
+   *
+   * ⛔ **`triage` is deliberately NOT in `toDto`, and must not be moved there.** That shape is
+   * served to the AGENCY and the AGENT as well, and the endorsement carries an internal review
+   * note ("checked against the deposit slip", "agent has three open discrepancies") written by
+   * one administrator for the next. It is commentary about the counterparty, and the
+   * counterparty is not its audience.
+   *
+   * The payout surface draws the same line in the same place: `toAdminPayoutRequestDto` carries
+   * triage and the owner-facing read does not.
+   */
+  private toAdminDto(deposit: IAgentDeposit) {
+    return {
+      ...this.toDto(deposit),
+      triage: deposit.triage
+        ? {
+            verdict: deposit.triage.verdict,
+            note: deposit.triage.note ?? null,
+            by: { id: deposit.triage.by_admin_id ?? null, name: deposit.triage.by_name ?? null },
+            at: deposit.triage.at,
+          }
+        : null,
+    };
   }
 
   private toDto(deposit: IAgentDeposit) {
