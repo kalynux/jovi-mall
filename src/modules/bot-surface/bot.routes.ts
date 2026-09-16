@@ -6,6 +6,7 @@ import { botIdempotency } from './middlewares/bot-idempotency.middleware';
 import { attachBotReply } from './middlewares/bot-reply.middleware';
 import { BOT_ROUTES } from './domain/bot-route-table';
 import { BotIdentityController } from './controllers/bot-identity.controller';
+import { BotInAppController } from './controllers/bot-inapp.controller';
 import { BotCartController } from './controllers/bot-cart.controller';
 import { BotOrderController } from './controllers/bot-order.controller';
 import { BotProfileController } from './controllers/bot-profile.controller';
@@ -14,6 +15,8 @@ import { BotTicketController } from './controllers/bot-ticket.controller';
 import { BotFileController } from './controllers/bot-file.controller';
 import { BotCatalogController } from './controllers/bot-catalog.controller';
 import { BotProductDisplayController } from './controllers/bot-product-display.controller';
+import { BotPurchaseController } from './controllers/bot-purchase.controller';
+import { BotCheckoutController } from './controllers/bot-checkout.controller';
 import { BotBookingController } from './controllers/bot-booking.controller';
 import { BotPaymentMethodController } from './controllers/bot-payment-method.controller';
 import { BotReviewController } from './controllers/bot-review.controller';
@@ -109,6 +112,9 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
     cart_clear: BotCartController.clear,
 
     // ── Checkout and money ───────────────────────────────────────────────────
+    checkout_open_screen: BotCheckoutController.screen,
+    checkout_payment_status: BotCheckoutController.paymentStatus,
+    checkout_retry_payment: BotCheckoutController.retryPayment,
     checkout_create_orders: BotCartController.checkout,
     payment_get_transaction: BotCartController.getTransaction,
     payment_create_pay_link: BotCartController.createPayLink,
@@ -153,7 +159,31 @@ const HANDLERS: Readonly<Record<string, RequestHandler>> = Object.freeze({
 
     // ── Product cards ────────────────────────────────────────────────────────
     catalog_show_products: BotProductDisplayController.show,
-    catalog_display_action: BotProductDisplayController.action,
+    /**
+     * ⚠ **The tap-code door, re-pointed from `BotProductDisplayController` on 2026-09-16.**
+     *
+     * Every button this surface draws posts its token here, and the token vocabulary grew from
+     * four verbs to twenty across several workstreams. One controller answering all of them had
+     * to be either the product-display controller — which would couple it to orders, checkout
+     * and the basket — or the one that owns the purchase ladder, which is where most of the
+     * verbs already live.
+     *
+     * The deciding property is the STALE TOKEN. An unmapped or lapsed tap must be answered in
+     * exactly ONE place, because Telegram reports nothing for a callback nobody handles: the
+     * customer taps and the world is silent. Two doors would be two answers to that, and one of
+     * them would eventually be "nothing".
+     *
+     * ⚠ `more:` still pages the product display — this controller calls
+     * `productDisplayService`, it does not reimplement it. Reading another stream's service is
+     * expected; editing it is not.
+     */
+    catalog_display_action: BotPurchaseController.action,
+
+    // ── The in-app screens ───────────────────────────────────────────────────
+    inapp_open_listing: BotInAppController.listing,
+    inapp_open_stores: BotInAppController.stores,
+    inapp_open_orders: BotInAppController.orders,
+    inapp_open_product: BotInAppController.product,
 
     // ── Wishlist, recently viewed, digital ───────────────────────────────────
     wishlist_list: BotCatalogController.listWishlist,

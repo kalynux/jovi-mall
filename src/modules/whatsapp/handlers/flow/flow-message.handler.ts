@@ -47,6 +47,19 @@ export class FlowMessageHandler implements WhatsAppMessageHandler<FlowMessage> {
                 action: {
                     name: 'flow',
                     parameters: {
+                        /**
+                         * ⚠ **Both of these were MISSING and Meta requires both**, so every
+                         * payload this handler built was unsendable. It survived because
+                         * nothing in this service has ever sent a `flow` message — the
+                         * handler is registered, validated and unreachable, which is the
+                         * shape of defect no test of the happy path can find.
+                         *
+                         * `flow_message_version` is a constant on Meta's side; `flow_token`
+                         * is the session, echoed back on every encrypted request the data
+                         * endpoint receives.
+                         */
+                        flow_message_version: '3',
+                        flow_token: message.flowToken,
                         flow_id: message.flowId,
                         flow_action: message.flowAction,
                         flow_action_payload: message.flowParameters || {},

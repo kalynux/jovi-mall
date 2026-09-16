@@ -60,6 +60,16 @@ export type AgencyNotificationType =
     | 'payout.requested'
     | 'payout.paid'
     | 'payout.rejected'
+    /**
+     * The gateway did not complete the transfer.
+     *
+     * ⚠ **Not terminal, and not a rejection.** A rejected payout returns the amount to the
+     * available balance; this one leaves it held in `requested_balance`, so the agency cannot
+     * request again (one open request per owner) until an administrator retries the send or
+     * rejects it. Published since the payout-execution work and consumed by nothing until
+     * now — the only payout outcome where silence freezes money.
+     */
+    | 'payout.transfer_failed'
     /** An agent declared a cash hand-over this agency must confirm or reject. */
     | 'cod.deposit.declared'
     /** An agent paid the platform directly; this agency's liability fell with it. */
@@ -167,6 +177,11 @@ const AgencyNotificationSchema = new Schema<IAgencyNotification>(
                 'payout.requested',
                 'payout.paid',
                 'payout.rejected',
+                // ⚠ Added here as well as to the union above — this list is hand-kept, as the
+                // comment on it says, and the eight `agent_contract.*` values were once
+                // missing from exactly this array. A situation in the union and absent here
+                // throws a ValidationError on `.save()`, which the upsert path hides.
+                'payout.transfer_failed',
                 'cod.deposit.declared',
                 'cod.deposit.direct_to_platform',
                 'plan.expiring',

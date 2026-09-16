@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>wi-mall</title>
+<!--
+  inAppOrderListing — the customer's whole order history.  Screen kind `ol`.
+
+  ⚠ **THE FILENAME IS THE ROUTE.** `inapp-page.controller.ts` sends `public/<kind>.html`, so
+  this file is `ol.html` and cannot be renamed without renaming the screen kind in
+  `inapp-surface.store.ts`, `bot-action-id.ts` and `inapp-url.ts` with it.  Renaming it alone
+  turns this screen into a 503 with nothing failing anywhere else.
+
+  ── WHO OWNS WHAT ───────────────────────────────────────────────────────────
+  The frame — the theme guard, the copy call, the four states, the fetch and the escaping — is
+  `pl.html`'s, copied rather than re-invented so the five screens behave identically when
+  things go wrong.  **Stream E owns this file**; nobody else edits it, because two sessions
+  writing one file in this tree is a lost write, not a merge conflict.
+
+  Served by:  `GET /api/bot/miniapp/s/ol/:handle/data`
+              → `miniapp/surfaces/order-listing.controller.ts`
+
+  ⚠ **THERE IS NO WRITE ON THIS SCREEN, AND THAT IS THE DESIGN.**  Chat decides, the app
+  displays.  Cancelling an order, fetching a cash-on-delivery code, tracking a parcel and
+  asking for help all stay in the chat, where they can be confirmed in one tap and where the
+  model can explain what happened.  This screen exists because a chat window can carry five
+  orders and a customer may have ninety.
+
+  ── THE THREE RULES THIS PAGE IS BUILT ON ───────────────────────────────────
+    1. **It must work with no Telegram runtime at all.**  The same URL opens in an ordinary
+       browser.  Every `Telegram.WebApp` touch is guarded; a page that throws on `themeParams`
+       renders white-on-white, which is reported as "the shop is broken".
+    2. **It never renders a blank screen.**  Loading, empty, lapsed and failed are four real
+       states with words in the customer's language.
+    3. **The handle is the only credential.**  It is in the path, it names one conversation,
+       and it dies in thirty minutes.  Nothing is stored, no cookie is set, and nothing here
+       asks who the customer is: the backend already knows, because it minted the handle.
+
+  ⚠ **NO MONEY MATHS AND NO VOCABULARY MAPPING HAPPEN HERE.**  Totals arrive formatted and
+  statuses arrive as words already in the customer's language.  A second money implementation
+  in a WebView is a second set of rounding bugs in the one place nothing tests; a second status
+  vocabulary is a screen that contradicts the chat about the same order.
+
+  ⚠ **A CASH-ON-DELIVERY CODE CANNOT REACH THIS PAGE.**  The controller never loads one — see
+  its header.  "Cash on delivery" may appear as a payment *method*; the code itself is a
+  credential disclosed once, on request, in the chat.  If you are adding a field here and it is
+  called anything like a code, stop.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/api/bot/miniapp/shell.css">
+<style>
+  /* Screen-specific only. Anything another screen would also want belongs in shell.css. */
+  .groups { display: flex; flex-direction: column; gap: var(--gap); margin-block-start: 8px; }
+
+  .group {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+  }
+
+  .group__head { display: flex; align-items: baseline; gap: var(--gap); }
+  .group__date { color: var(--muted); font-size: 13px; flex: 1 1 auto; min-inline-size: 0; }
+  .group__total { font-weight: 700; font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+
+  .group__summary {
+    margin-block-start: 6px;
+    font-size: 14px;
+    /* Two lines at most: a nine-line checkout must not push the next order off the screen. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /*
+   * ⚠ **Not `shell.css`'s `.badge`, and the difference is not cosmetic.** That class is
+   * `position: absolute` and is meant to sit inside `.card__shot`, which is the only positioned
+   * ancestor on the product screens. Dropped into an unpositioned block like this one it
+   * anchors to the page instead and lands on top of the heading — a layout fault that looks
+   * like a rendering bug rather than a wrong class.
+   */
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+  }
+
+  .group__pay { margin-block-start: 8px; }
+  .group .rows { margin-block-start: 6px; }
+  .group .row { padding-block: 9px; }
+
+  /* The order number: recognisable, and never competing with the thing that was bought. */
+  .row__ref { font-variant-numeric: tabular-nums; }
+
+  .more { margin-block-start: 18px; }
+</style>
+</head>
+<body>
+  <header class="screen__head">
+    <h1 class="screen__title" id="title"></h1>
+  </header>
+
+  <main class="screen__body" id="body">
+    <div class="state" id="state"><p class="state__text" id="stateText"></p></div>
+    <div class="groups" id="groups" hidden></div>
+    <div class="more" hidden id="moreWrap">
+      <button class="btn btn--block" id="more"></button>
+    </div>
+  </main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ── Telegram, entirely optional ──────────────────────────────────────── */
+  var tg = (window.Telegram && window.Telegram.WebApp) || null;
+  if (tg) {
+    try {
+      tg.ready();
+      tg.expand();
+      var p = tg.themeParams || {};
+      var root = document.documentElement.style;
+      if (p.bg_color) root.setProperty("--bg", p.bg_color);
+      if (p.text_color) root.setProperty("--fg", p.text_color);
+      if (p.hint_color) root.setProperty("--muted", p.hint_color);
+      if (p.secondary_bg_color) root.setProperty("--card", p.secondary_bg_color);
+      if (p.button_color) root.setProperty("--accent", p.button_color);
+      if (p.button_text_color) root.setProperty("--accent-fg", p.button_text_color);
+    } catch (e) { /* an old client, or one reporting no theme. Keep our own colours. */ }
+  }
+
+  /*
+   * Everything is derived from the URL, so this file stays a static asset the build copies
+   * verbatim.  Nothing is rendered per request, so nothing here can leak between two of them.
+   */
+  var base = window.location.pathname.replace(/\/+$/, "");
+  var lang = new URLSearchParams(window.location.search).get("lang") || "";
+
+  var el = {
+    title: document.getElementById("title"),
+    state: document.getElementById("state"),
+    stateText: document.getElementById("stateText"),
+    groups: document.getElementById("groups"),
+    moreWrap: document.getElementById("moreWrap"),
+    more: document.getElementById("more")
+  };
+
+  var copy = null;
+  var cursor = null;
+  var busy = false;
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  /** One of the four states, with an optional retry. Never leaves the page empty. */
+  function state(text, retry) {
+    el.groups.hidden = true;
+    el.moreWrap.hidden = true;
+    el.state.hidden = false;
+    el.stateText.textContent = text;
+
+    var old = el.state.querySelector("button");
+    if (old) old.remove();
+    if (retry && copy) {
+      var b = document.createElement("button");
+      b.className = "btn";
+      b.textContent = copy.retry;
+      b.addEventListener("click", function () { load(null); });
+      el.state.appendChild(b);
+    }
+  }
+
+  function json(url, init) {
+    return fetch(url, init).then(function (r) {
+      return r.json()
+        .catch(function () { return null; })
+        .then(function (b) { return { status: r.status, ok: r.ok, body: b }; });
+    });
+  }
+
+  /**
+   * ⚠ A failed read is reported as LAPSED or as FAILED, never as empty.
+   * "You have no orders" and "we could not ask" look identical to a customer and have opposite
+   * remedies — one is to go shopping, the other is to tap again.
+   */
+  function explain(res) {
+    if (res.status === 404 || res.status === 410) return copy.expired;
+    var e = res.body && res.body.error;
+    return (e && (e.customerMessage || e.message)) || copy.failed;
+  }
+
+  /* ── The contract `order-listing.controller.ts` satisfies ──────────────────
+   *
+   *   { success: true, data: {
+   *       groups: [{
+   *         cartId:      string,
+   *         dateText:    string,        // FORMATTED and localised server-side
+   *         totalText:   string,        // FORMATTED server-side — no money maths here
+   *         paymentText: string | null, // already a word in the customer's language
+   *         summaryText: string | null, // "Blue sneakers · Leather belt +2"
+   *         orders: [{
+   *           orderNumber: string,
+   *           storeName:   string | null,
+   *           statusText:  string | null   // null = a status we do not publish; say nothing
+   *         }]
+   *       }],
+   *       emptyText: string,            // this screen's own empty sentence, localised
+   *       cursor:    string | null      // null = no further page
+   *   }}
+   *
+   * ⚠ **`emptyText` arrives with the DATA rather than through `/copy`.**  `/copy` is the shared
+   * table every screen reads and it belongs to another stream; a key added to it mid-flight
+   * with one translation missing stops the server's boot for every session in this tree.  The
+   * words that are specific to orders therefore travel with the orders.
+   *
+   * ⚠ **A null `statusText` renders NOTHING rather than a guess.**  The controller publishes six
+   * customer-facing words for nine internal fulfilment states; anything it does not recognise is
+   * deliberately silent, because the default a person reaches for — "Preparing" — would tell a
+   * customer with a cancelled order that their parcel is being packed.
+   */
+  function draw(groups, append) {
+    if (!append) el.groups.innerHTML = "";
+
+    groups.forEach(function (group) {
+      var section = document.createElement("section");
+      section.className = "group";
+
+      var html =
+        '<div class="group__head">'
+        + '<div class="group__date">' + esc(group.dateText) + "</div>"
+        + '<div class="group__total">' + esc(group.totalText) + "</div>"
+        + "</div>";
+
+      if (group.summaryText) {
+        html += '<div class="group__summary">' + esc(group.summaryText) + "</div>";
+      }
+      if (group.paymentText) {
+        html += '<div class="group__pay"><span class="tag">' + esc(group.paymentText) + "</span></div>";
+      }
+
+      var orders = group.orders || [];
+      if (orders.length > 0) {
+        html += '<div class="rows">';
+        orders.forEach(function (order) {
+          /*
+           * A shop that has not named itself yet falls back to the order number as the title —
+           * and then the reference line is dropped, because printing the same string twice
+           * reads as a rendering fault rather than as a missing name.
+           */
+          var named = Boolean(order.storeName);
+          html +=
+            '<div class="row">'
+            + '<div class="row__main">'
+            + '<div class="row__title">' + esc(named ? order.storeName : order.orderNumber) + "</div>"
+            + (named ? '<div class="row__sub row__ref">' + esc(order.orderNumber) + "</div>" : "")
+            + "</div>"
+            + '<div class="row__end row__sub">' + esc(order.statusText || "") + "</div>"
+            + "</div>";
+        });
+        html += "</div>";
+      }
+
+      section.innerHTML = html;
+      el.groups.appendChild(section);
+    });
+
+    el.state.hidden = true;
+    el.groups.hidden = false;
+  }
+
+  function load(after) {
+    if (busy) return;
+    busy = true;
+    if (!after) state(copy ? copy.loading : "…", false);
+    else { el.more.disabled = true; el.more.textContent = copy.loading; }
+
+    var url = base + "/data" + (after ? "?cursor=" + encodeURIComponent(after) : "");
+
+    json(url, { headers: { Accept: "application/json" } }).then(function (res) {
+      busy = false;
+      el.more.disabled = false;
+      el.more.textContent = copy.loadMore;
+
+      if (!res.ok || !res.body || res.body.success === false || !res.body.data) {
+        state(explain(res), true);
+        return;
+      }
+
+      var data = res.body.data;
+      var groups = data.groups || [];
+      if (groups.length === 0 && !after) {
+        state(data.emptyText || FALLBACK.ordersEmpty, false);
+        return;
+      }
+
+      draw(groups, Boolean(after));
+      cursor = data.cursor || null;
+      el.moreWrap.hidden = !cursor;
+    }).catch(function () {
+      busy = false;
+      state(copy ? copy.failed : "Could not load. Please try again.", true);
+    });
+  }
+
+  el.more.addEventListener("click", function () { if (cursor) load(cursor); });
+
+  /*
+   * ⚠ **`copy` is never null once boot has run, and that is a correctness property, not a
+   * nicety.** Every state and every button label reads it. The one request that could leave
+   * this page wordless is the copy call itself, so a failure there falls back to English
+   * rather than to nothing — the alternative is a page that throws while rendering the
+   * message explaining why it could not load.
+   *
+   * `ordersEmpty` is in this table and NOT in `/copy`: it is the one string the page may need
+   * before the data call it normally arrives with has succeeded.
+   */
+  var FALLBACK = {
+    loading: "Loading…",
+    failed: "Something went wrong. Close this and ask me again in the chat.",
+    expired: "This page is no longer available. Ask me again in the chat.",
+    retry: "Try again",
+    ordersHeading: "Your orders",
+    ordersEmpty: "You have no orders yet.",
+    loadMore: "Load more"
+  };
+
+  function boot(d) {
+    copy = (d && d.copy) || FALLBACK;
+    document.documentElement.lang = (d && d.language) || "en";
+    document.documentElement.dir = (d && d.direction) || "ltr";
+    el.title.textContent = copy.ordersHeading || FALLBACK.ordersHeading;
+    el.more.textContent = copy.loadMore || FALLBACK.loadMore;
+    load(null);
+  }
+
+  /*
+   * ⚠ **Copy first, data second, and the order is load-bearing.**  A page whose handle has
+   * lapsed still has to say so in the customer's own language, and it cannot learn the
+   * language from the request that just failed.  `/copy` resolves no handle and never fails;
+   * the language comes from `?lang=`, which `inAppScreenUrl` puts on every screen URL.
+   */
+  json(base + "/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
+    .then(function (res) { boot((res.body && res.body.data) || null); })
+    .catch(function () { boot(null); });
+})();
+</script>
+</body>
+</html>

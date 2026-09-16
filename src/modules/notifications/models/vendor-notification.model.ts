@@ -21,6 +21,16 @@ export type NotificationType =
     | 'payout.requested'
     | 'payout.paid'
     | 'payout.rejected'
+    /**
+     * The gateway did not complete the transfer.
+     *
+     * ⚠ **Not terminal, and not a rejection.** A rejected payout returns the amount to the
+     * available balance; this one leaves it held in `requested_balance`, so the vendor cannot
+     * request again (one open request per owner) until an administrator retries the send or
+     * rejects it. Published since the payout-execution work and consumed by nothing until
+     * now — the only payout outcome where silence freezes money.
+     */
+    | 'payout.transfer_failed'
     // A delivery agency declined a shipment; the vendor must reassign it.
     | 'shipment.rejected'
     // Subscription plan lifecycle (billing).
@@ -139,6 +149,10 @@ const VendorNotificationSchema = new Schema<IVendorNotification>(
                 'payout.requested',
                 'payout.paid',
                 'payout.rejected',
+                // ⚠ Added here as well as to the union above — this list is hand-kept, so a
+                // situation present in one and absent from the other throws a Mongoose
+                // ValidationError at write time that no typecheck catches.
+                'payout.transfer_failed',
                 'shipment.rejected',
                 'plan.expiring',
                 'plan.expired',

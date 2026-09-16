@@ -126,14 +126,29 @@ Only an approved template may be sent outside Meta's service window, and the bac
 ✅ **The out-of-window TEMPLATE problem is solved as of 2026-09-15.** The first template is
 approved and the second is never reached.
 
-⛔ **BUT NO WHATSAPP MESSAGE CAN BE SENT AT ALL RIGHT NOW, FOR A THIRD REASON ON THE ACCOUNT.**
-A live send of the approved template returned `(#131037) WhatsApp provided number needs display
-name approval before message can be sent.` The sending number has **`name_status:
-"NON_EXISTS"`** — a display name has never been submitted. ⚠ **This gate sits above BOTH paths**:
-a free-form in-window text fails with the identical error, before the window is even checked. So
-**both** the in-window and out-of-window claims on this page are blocked by one account-level
-fault that no code change can address — someone must submit a display name for approval in
-WhatsApp Manager. Everything below describes what happens once that clears.
+✅ **THE THIRD REASON — the 131037 display-name gate — CLOSED ON 2026-09-16, by CHANGING THE
+NUMBER.** The platform now sends from **+237 652 705 926** (`1263609603508344`), display name
+**Wi-Mall**, `name_status: "APPROVED"`. The previous number had never had a display name
+submitted and Meta's ten-changes-per-month quota for it was already spent, so it was replaced
+rather than repaired — a new number takes its display name at registration instead of out of
+that quota.
+
+⚠ **An approved display name is bound to the NUMBER, while the 190 approved templates are bound
+to the WABA.** The WABA did not change, so nothing needed resubmitting; the display name did not
+carry over, which is exactly why replacing the number was a fix rather than a reset. Expect that
+asymmetry again if the number ever moves.
+
+✅ **A SECOND phone-scoped gate was found and closed the same day: Cloud API registration.** For
+a few hours the new number read `status: "PENDING"` — verified and named, but not registered, so
+**both** the in-window free-form send and the out-of-window template send would still have failed.
+`POST /1263609603508344/register` closed it; it now reads `status: "CONNECTED"`,
+`platform_type: "CLOUD_API"`, `quality_rating: "GREEN"`.
+
+⚠ **Both gates are phone-scoped, and that is the durable lesson for this page.** Neither a
+display name nor a Cloud API registration travels with the WABA, so **any future number change
+re-opens both** while leaving the 190 approved templates untouched — the reverse of the intuition
+that templates are the fragile part. Neither is visible from inside this codebase: the API answers
+`PHONE_VERIFICATION_DELIVERY_FAILED` identically whichever one is short.
 
 | | Status |
 |---|---|
@@ -163,9 +178,14 @@ changes no behaviour that works today. The knob is kept wired because a business
 lapse, and this WABA has already been on both sides of that line inside two days.
 
 ⚠ **In-window verification needs no template** — a user who has messaged the platform in the last
-24 hours gets the code as free-form text. ⛔ **That does NOT mean it works today**: the display-name
-gate above refuses a free-form send with the same 131037, so "needs no template approval" and
-"delivers" are two different claims and only the first is currently true.
+24 hours gets the code as free-form text. ✅ **As of 2026-09-16 every known gate in front of that
+is clear** — display name approved, number registered, quality GREEN.
+
+⚠ **"Needs no template approval" and "delivers" remain two different claims, and this page has
+been wrong about that three times.** Every phone-scoped precondition on this account has blocked
+the free-form path and the template path *together*, and each was found only after the previous
+was cleared — so a closed gate has never once been evidence of delivery here. The only evidence
+is a code arriving on a handset.
 
 ⛔ **That sentence was FALSE until 2026-09-15, and the correction is the whole reason the
 section below exists.** The window is a Redis key, and it was written by exactly one thing:

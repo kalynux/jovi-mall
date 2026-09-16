@@ -3,7 +3,9 @@ import { botChrome } from '../domain/bot-chrome-copy';
 import { showMoreActionId } from '../domain/bot-action-id';
 import { BOT_CHAT_LIST_MAX } from '../domain/bot-list-window';
 import { BotReplyIntent, WA_CAROUSEL_CARDS } from '../domain/channel-reply';
-import { BotProductCard, isReachableByPlatformServers, toBotProductCard } from '../domain/product-card';
+import { BotProductCard, toBotProductCard } from '../domain/product-card';
+import { inAppBaseUrl, inAppScreenUrl } from '../domain/inapp-url';
+import { inAppSurfaceStore } from './inapp-surface.store';
 import { ProductDisplaySet, productDisplayStore } from './product-display.store';
 
 /**
@@ -46,22 +48,18 @@ const trimmed = (value: string | undefined): string | null => {
 };
 
 /**
- * The Mini App origin, **only when Telegram would actually accept it.**
+ * ⚠ **The in-app origin is read through `domain/inapp-url.ts` and nowhere else.**
  *
- * ⚠ **Telegram refuses a `web_app` button whose URL is not HTTPS, and it refuses the WHOLE
- * `sendMessage`** — so a plain-HTTP origin here does not produce a broken button, it produces
- * a turn where the customer is told nothing at all. Checking the scheme is therefore not
- * fastidiousness; it is the difference between degrading to photo cards and going silent.
+ * There was a local `miniAppBaseUrl` alias here, kept so this file's call sites read unchanged
+ * while the old rail was retired. The repoint removed the last of those call sites, so the
+ * alias went with them rather than sitting here looking alive.
  *
- * The reachability test is the same one the pictures go through: a Mini App on a Tailscale or
- * loopback address opens for nobody except the developer who set it.
+ * The reason it is one implementation and not two is worth keeping: five screens need the same
+ * answer with the same two checks — HTTPS, because Telegram refuses the whole `sendMessage`
+ * otherwise, and public reachability, because a screen on a loopback address opens for nobody.
+ * Two readers of one environment variable is a drift whose symptom is a turn in which the
+ * customer is told nothing at all.
  */
-function miniAppBaseUrl(): string | null {
-    const base = trimmed(process.env.BOT_MINIAPP_BASE_URL);
-    if (!base) return null;
-    if (!base.toLowerCase().startsWith('https://')) return null;
-    return isReachableByPlatformServers(base) ? base : null;
-}
 
 /**
  * The approved WhatsApp carousel template, if this deployment has one.
@@ -163,6 +161,58 @@ export class ProductDisplayService {
         });
     }
 
+    /**
+     * The URL behind the chat card's **Browse** button.
+     *
+     * ── ⚠ REPOINTED FROM THE OLD RAIL TO THE IN-APP LISTING SCREEN (R10) ────
+     * This used to mint an `ma_` handle and open `/api/bot/miniapp/p/<handle>` — the original
+     * Mini App product rail. That rail is being **replaced**, not left beside the new screen:
+     * the platform must never ship two product-browsing experiences at once. So this button
+     * now opens `/s/pl/<handle>`, and `miniapp.controller.ts` + `public/page.html` are deleted
+     * once the new screen is confirmed working on a real handset.
+     *
+     * ⚠ **The old rail stays reachable by its own URL during the overlap, deliberately**, which
+     * is exactly why the deletion is a named task rather than a someday — dead code that looks
+     * alive is how somebody later fixes a bug in the wrong file. `test:inapp-catalog` § 2
+     * refuses a half-deleted rail and prints the ordering while it is still standing.
+     *
+     * ── ⚠ THE IDS ARE PINNED, NOT RE-QUERIED, AND THAT IS THE WHOLE POINT ───
+     * `InAppListingQuery` can hold either a query or a set of ids, and the two page very
+     * differently. Handing this button a *query* would let the screen re-run a search and show
+     * a customer different products, at different prices, from the ones the model just wrote a
+     * sentence about. Pinning the set keeps the screen showing **exactly what the chat offered**
+     * — the same guarantee `ProductDisplaySet` exists to make.
+     *
+     * The grid still re-reads each product live, so the prices are current; what is fixed is
+     * *which* products, not what they cost.
+     *
+     * ⚠ **The whole set, not the current page.** `set.productIds` is every id the model chose;
+     * the chat shows five at a time and the screen shows all of them. That is the button's
+     * entire purpose — "see these properly" — and windowing it here would make the screen a
+     * second copy of the chat's paging.
+     *
+     * Null whenever this deployment has no in-app origin, which is **the path that runs today**
+     * — `BOT_MINIAPP_BASE_URL` is unset in production. `channel-reply.ts` drops the button
+     * rather than rendering one with an empty target.
+     */
+    private async browseScreenUrl(set: Omit<ProductDisplaySet, 'expiresAt'>): Promise<string | null> {
+        // Asked BEFORE minting: a session written for a screen this deployment cannot open is
+        // a Redis key nothing will ever read.
+        if (!inAppBaseUrl()) return null;
+
+        const handle = await inAppSurfaceStore.mint({
+            kind: 'pl',
+            owner: set.owner,
+            customerId: set.customerId,
+            channel: set.channel,
+            externalId: set.externalId,
+            language: set.language,
+            query: { q: null, category: null, storeSlug: null, productIds: set.productIds },
+        });
+
+        return inAppScreenUrl('pl', handle, set.language);
+    }
+
     /** Everything in a set, for the Mini App page — no windowing, no intent. */
     async cardsForSet(set: ProductDisplaySet): Promise<BotProductCard[]> {
         const hydrated = await publicCatalogService.listByIdsWithVariant(set.productIds);
@@ -201,10 +251,8 @@ export class ProductDisplayService {
          * A `cta_url` would open the page in the phone's browser, outside the chat, with no
          * way back — which is worse than the cards it would replace.
          */
-        const base = set.channel === 'telegram' ? miniAppBaseUrl() : null;
-        const miniAppUrl = base
-            ? `${base}/api/bot/miniapp/p/${await productDisplayStore.mintMiniAppHandle(set.owner, setId)}`
-            : null;
+        const miniAppUrl =
+            set.channel === 'telegram' ? await this.browseScreenUrl(set) : null;
 
         if (cards.length === 0) return { setId, cards, total: set.productIds.length, hasMore, miniAppUrl: null, intent: null };
 

@@ -551,6 +551,48 @@ export class VendorNotificationEventHandler {
         }
     }
 
+    /**
+     * ⭐ **The gateway did not complete the transfer** — published since the payout-execution
+     * work and consumed by nothing on any of the three stacks until now.
+     *
+     * The only one of the four payout outcomes where silence freezes money. A *rejected*
+     * payout returns the amount to the available balance; this leaves it held in
+     * `requested_balance`, so the vendor cannot request again (one open request per owner) and
+     * an administrator has to retry the send or reject it. `payout-request.service.ts` says so
+     * in its own ticket note: *"The funds remain held — retry the transfer or reject the
+     * request to return them."*
+     *
+     * ⚠ **`reason` is on the payload and deliberately NOT relayed.** It is the gateway's own
+     * text and can name the payment provider and its internal codes. It is already noted on
+     * the ticket for whoever retries, and `ticketId` is what sends the vendor there.
+     */
+    async handlePayoutTransferFailed(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, amount, currency, payoutRequestId, ticketId } = event.payload;
+            if (ownerType !== 'vendor') return;
+
+            const prefs = await this.preferenceRepo.getByVendor(ownerId);
+            if (!prefs.preferences.payoutUpdates) return;
+
+            await this.dispatch({
+                situation: 'payout.transfer_failed',
+                prefs,
+                vendorId: ownerId,
+                aggregateType: 'payout',
+                aggregateId: payoutRequestId,
+                /**
+                 * ⚠ Keyed on the PAYOUT, not the attempt. A retried transfer that fails again
+                 * republishes this event, and a second identical "we hit a problem" message
+                 * reads as a second, separate failure.
+                 */
+                idempotencyKey: `payout.transfer_failed:${payoutRequestId}`,
+                context: { currency, amountFormatted: Number(amount).toLocaleString(), ticketId }
+            });
+        } catch (error) {
+            console.error('[NotificationHandler] Failed to handle payout.transfer_failed:', error);
+        }
+    }
+
     /** Handle payout.paid event (fires for both vendor and agency payouts). */
     async handlePayoutPaid(event: DomainEvent): Promise<void> {
         try {

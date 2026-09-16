@@ -14,14 +14,18 @@
 
 /**
  * Cost (in credits) of vectorising a single product. Metered from the vendor's
- * wallet (the free plan grants credits that cover it). Kept cheap (1 credit)
- * since the platform cost is near zero. Setting it to 0 makes it free and skips
- * the debit/refund entirely (see VectorisationService).
+ * wallet (the free plan grants credits that cover it). Setting it to 0 makes it
+ * free and skips the debit/refund entirely (see VectorisationService).
+ *
+ * The two costs below are no longer equal. Anything that prints them — the
+ * public `/api/public/credit-packs` payload, the marketing copy that quotes
+ * them — must read each one rather than describing "a metered action" as a
+ * single price.
  */
-export const VECTORISATION_COST = parseInt(process.env.CREDIT_COST_VECTORISATION || '1', 10);
+export const VECTORISATION_COST = parseInt(process.env.CREDIT_COST_VECTORISATION || '5', 10);
 
 /** Cost (in credits) of sending one billable WhatsApp template (vendor → customer). */
-export const WHATSAPP_TEMPLATE_COST = parseInt(process.env.CREDIT_COST_WHATSAPP_TEMPLATE || '1', 10);
+export const WHATSAPP_TEMPLATE_COST = parseInt(process.env.CREDIT_COST_WHATSAPP_TEMPLATE || '2', 10);
 
 /**
  * Purchasable credit packs. `code` is the stable identifier the client sends to

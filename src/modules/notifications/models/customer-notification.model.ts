@@ -77,6 +77,21 @@ export type CustomerNotificationType =
      * that carries it. Mobile money needs none of this and never raises it.
      */
     | 'order.payment_link'
+    /**
+     * The money did not go through — the charge was declined, timed out, or the customer
+     * never approved the push on their handset.
+     *
+     * ⚠ **Added because its ABSENCE was the defect.** Every other outcome of a checkout told
+     * the customer something; this one told them nothing at all, so a failed payment looked
+     * exactly like a successful one that had gone quiet. The customer waits for an order that
+     * is not coming, and the vendor loses a sale nobody knows was lost.
+     *
+     * ⚠ **It must never imply the order is gone.** A failed payment leaves the order
+     * recoverable — the basket is intact and the charge can be retried — so the copy says what
+     * happened and offers the retry, rather than apologising for a cancellation that has not
+     * occurred.
+     */
+    | 'order.payment_failed'
     /** Left the vendor/depot and is on its way. */
     | 'order.shipped'
     /** An agent is carrying it now — the last useful "be around" signal. */
@@ -143,6 +158,7 @@ export const CUSTOMER_NOTIFICATION_TYPES: readonly CustomerNotificationType[] = 
     'order.created',
     'order.payment.received',
     'order.payment_link',
+    'order.payment_failed',
     'order.shipped',
     'order.out_for_delivery',
     'order.delivered',

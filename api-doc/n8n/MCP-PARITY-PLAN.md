@@ -1429,3 +1429,79 @@ authenticated check above is repeatable rather than an owner action forever. The
 conservative move — it is one credential object in n8n (`wi-mall MCP door`), referenced by both
 the MCP Server Trigger and `wi-mall-core`'s MCP Client Tool, so a rotation is one edit and the
 two sides cannot drift.
+
+⛔ **BOTH VALUES ARE NOW STALE, measured 2026-09-16.** `MCP_DOOR_URL` still names
+`https://the8n.fante.cloud/mcp/wi-mall-customer`, which answers **404 page not found** — the
+instance moved to `the8n.wi-mall.com` (editor at `the8n-editor.wi-mall.com`). The same path on
+the new host answers **403 Forbidden** to the recorded token, which is what this door returns
+both when unauthenticated and on a wrong value — consistent with the rotation above having
+happened. So the sentence "repeatable rather than an owner action forever" is **not true today**:
+the authenticated check cannot be run from this repository until both values are refreshed.
+
+⚠ **Do not close the gap by trying candidate tokens or paths.** That is credential fishing
+against a live door, and a 403 tells you nothing about which of the two is wrong.
+
+---
+
+## 12 · The in-app screen tools ✅ **PUBLISHED 2026-09-16**
+
+The bot rich-UI work (Stream 0) added three MCP-exposed reads, so the live server fell behind
+the catalogue. Applied by the § 11 recipe, unchanged.
+
+**`wi-mall-mcp` (`3X8oYCQZkCi7Wg4r`) now serves 54 tools, published and live** —
+`versionId === activeVersionId === 669bceb9`, 56 nodes (54 tools + trigger + sticky).
+
+| | |
+|---|---|
+| snapshot | 53 nodes — **51** tools, `versionId === activeVersionId === 03ee1eb9` |
+| rendered | **33 operations** with `--existing`, under the 100 cap |
+| applied | all 33, atomically |
+| diff | 4 nodes added, 1 removed, **`nodesModified: []`**, 3 connections added, **`connectionsRemoved: []`** |
+| published | `669bceb9`, confirmed equal to `activeVersionId` |
+
+### ⭐ The live set had moved from 50 to 51 without us, and `--existing` is why that was a non-event
+
+§ 11 recorded the server at **50** tools. The snapshot showed **51** — a concurrent session had
+added one. Under the old hardcoded `HAND_WRITTEN_NODES` that would have emitted `addNode` for a
+node that already existed and `update_workflow`, being atomic, would have refused the whole
+batch. Rendered against the server it cost nothing: the extra tool produced no operation at all.
+
+⚠ **Read the count in § 11 as a measurement, not a fact.** Re-snapshot every time.
+
+### The three operations that were NOT in the batch, and why that is the check
+
+`nodesModified: []` is the property that made this safe to publish while other sessions are
+working: **no existing tool node's parameters were touched and none was removed.** The 23
+`setNodePosition` operations and the `setNodeParameter` on the trigger's `/instructions` both
+appear in the batch and in neither half of the diff — the instructions text was byte-identical
+to the live value, which is the minimal-diff behaviour doing its job.
+
+⚠ **The apply's warning is the same false alarm § 11 records** — *"HTTP Request nodes
+(inapp_open_listing, inapp_open_stores, inapp_open_product) were skipped during credential
+auto-assignment."* It means n8n did not have to guess, because the operations carried
+`credentials` explicitly. Verified in the diff: all three carry
+`httpBearerAuth: jovi-mall-Bearer Auth account` (`lz5ivIop9DF8mPHa`).
+
+### ⛔ The three tools 404 until the backend is deployed, and this was published anyway
+
+**`/api/internal/bot/inapp/{listing,stores,products/:id}` are not committed**, let alone
+deployed — `git show HEAD:…/bot-route-table.ts` holds zero occurrences of `inapp_open_listing`
+while the working tree holds one. Probing production cannot show this: **every** path under
+`/api/internal/bot/*` answers `401` unauthenticated because `requireServiceToken` is a
+`router.use` that fires before route matching, so an absent route and a present one are
+indistinguishable from outside. The git check is the one that answers it.
+
+The ordering rule this breaks is § 11's own — *deploy the backend first, then publish the tool*.
+**The owner was told and chose to publish anyway.** The blast radius is bounded by
+`neverError: true`: a 404 reaches the agent as relayable content rather than a thrown turn, so a
+customer gets a degraded answer rather than silence. It is still a wasted turn on a live bot
+until the deploy lands.
+
+### ⚠ The authenticated check could NOT be run
+
+For the reason recorded at the end of § 11: the door URL in `.env` is the old host and the token
+is refused by the new one. So `tools/list` was **not** confirmed against the live door — the
+54-tool figure above is from the server's own node set and the version diff, which is strong
+evidence and not the same evidence. **Whoever refreshes those two values should re-run the § 11
+check**, which is the only thing that proves the closed door still answers and that the three
+new tools are actually advertised.

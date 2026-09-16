@@ -602,6 +602,41 @@ export const AGENCY_NOTIFICATION_CATALOG: Record<AgencyNotificationType, Situati
         button: TICKET_BUTTON
     },
 
+    /**
+     * ⭐ **The payout outcome nobody was told about — on ANY of the three stacks.**
+     *
+     * `payout.transfer_failed` is published by `payout-request.service.ts:580` and had no
+     * subscriber at all. It is the worst of the four outcomes to miss, because it is the only
+     * one where silence freezes money: a *rejected* payout returns the amount to the
+     * available balance, while a *failed transfer* leaves it in `requested_balance`. The
+     * agency cannot request again (`409`, one open request per owner), the payout is not
+     * coming, and nothing tells them.
+     *
+     * Three rules the copy obeys, each load-bearing:
+     *
+     *   - ⚠ **Not terminal — must not read as "rejected".** An administrator retries the same
+     *     send or rejects it to release the funds. The service's own ticket note says
+     *     "retry the transfer or reject the request to return them".
+     *   - ⚠ **Do not invite a second request.** It answers 409, which the owner reads as the
+     *     app breaking on top of their money being stuck.
+     *   - ⚠ **The gateway's `reason` is not relayed.** Provider-sourced text that can name the
+     *     provider and its codes; it is on the ticket for whoever retries.
+     */
+    'payout.transfer_failed': {
+        base: {
+            en: { subject: 'Problem paying out {{currency}} {{amountFormatted}}', body: 'We hit a problem sending your {{currency}} {{amountFormatted}}. The money is safe and still reserved for this payout — our team is on it and will retry. Nothing is needed from you; see Tickets for progress.' },
+            fr: { subject: 'Problème de versement de {{currency}} {{amountFormatted}}', body: 'Nous avons rencontré un problème en envoyant vos {{currency}} {{amountFormatted}}. L\'argent est en sécurité et toujours réservé pour ce paiement — notre équipe s\'en occupe et fera une nouvelle tentative. Rien n\'est requis de votre part ; suivez l\'avancement dans Tickets.' },
+            pt: { subject: 'Problema ao pagar {{currency}} {{amountFormatted}}', body: 'Tivemos um problema ao enviar os seus {{currency}} {{amountFormatted}}. O dinheiro está seguro e continua reservado para este pagamento — a nossa equipa está a tratar disso e vai tentar de novo. Não precisa de fazer nada; acompanhe em Chamados.' },
+            es: { subject: 'Problema al pagar {{currency}} {{amountFormatted}}', body: 'Tuvimos un problema al enviar tus {{currency}} {{amountFormatted}}. El dinero está seguro y sigue reservado para este pago — nuestro equipo se está ocupando y lo reintentará. No necesitas hacer nada; consulta el progreso en Tickets.' },
+            ar: { subject: 'مشكلة في تحويل {{currency}} {{amountFormatted}}', body: 'واجهنا مشكلة في إرسال مبلغ {{currency}} {{amountFormatted}}. المال آمن ولا يزال محفوظًا لهذا التحويل — فريقنا يعمل على ذلك وسيعيد المحاولة. لا حاجة لأي إجراء منك؛ تابع التقدم ضمن التذاكر.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agency_payout_transfer_failed', bodyParams: ['{{currency}}', '{{amountFormatted}}'] }
+        },
+        button: TICKET_BUTTON
+    },
+
     // An agent claims they handed cash over. The deadline is in the copy on
     // purpose: ignoring this freezes the agency's reserve releases, and an
     // agency that does not know that will not act.

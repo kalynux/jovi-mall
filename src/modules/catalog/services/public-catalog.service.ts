@@ -212,6 +212,10 @@ export class PublicCatalogService {
                     ? { priceRange: { min: row.priceMin, max: row.priceMax } }
                     : {}),
                 inStock: row.inStock,
+                // Read straight through from the pipeline — never recomputed here, because
+                // the window this reports on was never projected out of Mongo. See the
+                // field's docstring on `PublicProductListItemDto`.
+                negotiable: row.negotiable ?? false,
                 image,
                 // `null` when nothing is published — see the field's docstring for why
                 // that null is what keeps invented review counts out of the JSON-LD.

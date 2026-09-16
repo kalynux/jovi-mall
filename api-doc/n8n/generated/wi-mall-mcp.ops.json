@@ -26,472 +26,353 @@
     "description": "GENERATED from api-doc/n8n/tools/catalog.json by jovi-mall/scripts/gen-mcp-workflow.ts — edit the catalogue, not the nodes. Identity is a sealed botToken tool argument, never a URL. flow_only rows (money, destructive) are never emitted."
   },
   {
-    "type": "updateNodeParameters",
-    "nodeName": "auth_send_login_link",
-    "parameters": {
-      "toolDescription": "Send the customer a magic link to tap and an 8-character code to type, delivered straight to this chat. Both sign them in on the website, both last 10 minutes, and using one kills the other. USE IT WHEN: When the customer asks to sign in on the website, or for their login code or link, in their own words. The slash command /login does the same thing without you. NOT THIS TOOL: Not to authorise anything in chat — the bot surface never uses this credential, and a customer does not need it to shop through the bot. Not for a vendor, agency or agent: they must use /reset-password, which is a slash command only. ⚠ The credential is delivered by the backend, not by you. The result carries NO code, NO link and NO token — say that it has been sent and stop there.",
-      "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/auth/login-link",
-      "authentication": "genericCredentialType",
-      "genericAuthType": "httpBearerAuth",
-      "sendHeaders": true,
-      "headerParameters": {
-        "parameters": [
-          {
-            "name": "X-Webhook-Secret",
-            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-          },
-          {
-            "name": "Idempotency-Key",
-            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-auth_send_login_link"
-          }
-        ]
-      },
-      "sendBody": true,
-      "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") } }) }}",
-      "options": {
-        "response": {
-          "response": {
-            "neverError": true
-          }
+    "type": "addNode",
+    "node": {
+      "name": "inapp_open_listing",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.5,
+      "position": [
+        840,
+        928
+      ],
+      "parameters": {
+        "toolDescription": "Open a scrollable product grid the customer can browse properly, with a picture, a price and a buy button on every card. Use it for a whole shelf; use catalog_show_products for a short, specific answer of five or fewer. USE IT WHEN: When the customer wants to BROWSE rather than be answered: a category, a whole store, their saved items, or \"what else do you have\". Also after a page of cards, when they ask to see everything. NOT THIS TOOL: Not for a specific question with a short answer (\"do you have red shoes in 42?\") — five cards answer that better than a grid. Not for one product: use inapp_open_product. ⚠ Renders as a cta_url button to the storefront until a WhatsApp Flow is published for this screen. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+        "method": "POST",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/listing",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-inapp_open_listing"
+            }
+          ]
         },
-        "timeout": 20000
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, q: $fromAI(\"q\", \"Free-text search. Omit to show everything. At most 120 characters.\", \"string\") || undefined, category: $fromAI(\"category\", \"Category slug or name, as the catalogue publishes it. At most 120 characters.\", \"string\") || undefined, storeSlug: $fromAI(\"storeSlug\", \"Narrow to one store. At most 160 characters.\", \"string\") || undefined, productIds: $fromAI(\"productIds\", \"Pin an exact set instead of filtering — for saved items, or a selection you chose yourself. Up to 50, far more than a chat can show.\", \"string\") || undefined }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "lz5ivIop9DF8mPHa",
+          "name": "jovi-mall-Bearer Auth account"
+        }
       }
-    },
-    "replace": true
+    }
   },
   {
-    "type": "updateNodeParameters",
-    "nodeName": "cart_add_item",
-    "parameters": {
-      "toolDescription": "Put a product variant in the customer's basket. If that exact variant is already there, its quantity goes up. USE IT WHEN: When the customer asks to add something, and you already hold the variant id from catalog_get_product. NOT THIS TOOL: Never guess a variant id, and never add a product that has more than one variant without asking which one. Never for a service product — services are booked, not carted, and the call is refused. ⚠ A cart may hold items from several vendors but only ONE product type, and never a service.",
-      "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/cart/items",
-      "authentication": "genericCredentialType",
-      "genericAuthType": "httpBearerAuth",
-      "sendHeaders": true,
-      "headerParameters": {
-        "parameters": [
-          {
-            "name": "X-Webhook-Secret",
-            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-          },
-          {
-            "name": "Idempotency-Key",
-            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-cart_add_item"
-          }
-        ]
-      },
-      "sendBody": true,
-      "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, productId: $fromAI(\"productId\", \"The 24-character product id, from catalog_get_product or a product search result.\", \"string\"), variantId: $fromAI(\"variantId\", \"The sellable unit. Must belong to productId. A 24-character hexadecimal id.\", \"string\"), quantity: $fromAI(\"quantity\", \"This ADDS to any quantity already on the line. To set an exact number use cart_set_item_quantity. Between 1 and 999.\", \"number\") || undefined, negotiationLockRef: $fromAI(\"negotiationLockRef\", \"The agreed-price reference from a price negotiation, when the system prompt has given you one AND this is the exact item and quantity that was negotiated. Pass it so the customer is charged the price they agreed instead of the shelf price. Never show it or mention it to the customer, and never pass it for any other product. If the call is refused because of it, add the item again without it. At most 200 characters.\", \"string\") || undefined }) }}",
-      "options": {
-        "response": {
-          "response": {
-            "neverError": true
-          }
-        },
-        "timeout": 20000
-      }
-    },
-    "replace": true
+    "type": "addConnection",
+    "source": "inapp_open_listing",
+    "target": "MCP Server Trigger",
+    "connectionType": "ai_tool"
   },
   {
-    "type": "updateNodeParameters",
-    "nodeName": "cart_set_item_quantity",
-    "parameters": {
-      "toolDescription": "Change a basket line to exactly this many. USE IT WHEN: When the customer names a number they want — 'make it three'. NOT THIS TOOL: Not to remove a line: zero is refused. Use cart_remove_item.",
-      "method": "PATCH",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/cart/items/{{ $fromAI(\"variantId\", \"The variant id of the basket line to change, from cart_get items[].variantId. A 24-character hexadecimal id.\", \"string\") }}",
-      "authentication": "genericCredentialType",
-      "genericAuthType": "httpBearerAuth",
-      "sendHeaders": true,
-      "headerParameters": {
-        "parameters": [
-          {
-            "name": "X-Webhook-Secret",
-            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-          },
-          {
-            "name": "Idempotency-Key",
-            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-cart_set_item_quantity"
-          }
-        ]
-      },
-      "sendBody": true,
-      "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, quantity: $fromAI(\"quantity\", \"Absolute, not a change. Between 1 and 999.\", \"number\") }) }}",
-      "options": {
-        "response": {
-          "response": {
-            "neverError": true
-          }
+    "type": "addNode",
+    "node": {
+      "name": "inapp_open_stores",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.5,
+      "position": [
+        1040,
+        928
+      ],
+      "parameters": {
+        "toolDescription": "Open a browsable directory of the shops on the platform, each with its logo, name, description and city. USE IT WHEN: When the customer asks which shops exist, or wants to find a shop rather than a product. There are far more stores than a chat list can hold, which is why this is a screen and not a list of choices. NOT THIS TOOL: Not when they have already named a shop and want its products — use inapp_open_listing with storeSlug. ⚠ A cta_url button to the storefront directory until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+        "method": "POST",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/stores",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-inapp_open_stores"
+            }
+          ]
         },
-        "timeout": 20000
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, q: $fromAI(\"q\", \"Search shop names. At most 120 characters.\", \"string\") || undefined, city: $fromAI(\"city\", \"Narrow to one city. City is the only location a shop publishes. At most 120 characters.\", \"string\") || undefined }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "lz5ivIop9DF8mPHa",
+          "name": "jovi-mall-Bearer Auth account"
+        }
       }
-    },
-    "replace": true
+    }
   },
   {
-    "type": "updateNodeParameters",
-    "nodeName": "cart_remove_item",
-    "parameters": {
-      "toolDescription": "Take one variant out of the basket. USE IT WHEN: When the customer asks to remove a specific item. NOT THIS TOOL: Not to empty the whole basket — that is cart_clear and it needs confirmation.",
-      "method": "DELETE",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/cart/items/{{ $fromAI(\"variantId\", \"The variant id of the basket line to remove, from cart_get items[].variantId. A 24-character hexadecimal id.\", \"string\") }}",
-      "authentication": "genericCredentialType",
-      "genericAuthType": "httpBearerAuth",
-      "sendHeaders": true,
-      "headerParameters": {
-        "parameters": [
-          {
-            "name": "X-Webhook-Secret",
-            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-          },
-          {
-            "name": "Idempotency-Key",
-            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-cart_remove_item"
-          }
-        ]
-      },
-      "sendBody": true,
-      "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") } }) }}",
-      "options": {
-        "response": {
-          "response": {
-            "neverError": true
-          }
-        },
-        "timeout": 20000
-      }
-    },
-    "replace": true
+    "type": "addConnection",
+    "source": "inapp_open_stores",
+    "target": "MCP Server Trigger",
+    "connectionType": "ai_tool"
   },
   {
-    "type": "updateNodeParameters",
-    "nodeName": "profile_update",
-    "parameters": {
-      "toolDescription": "Change the name the customer is called. USE IT WHEN: When they ask to be called something else, or correct the name the bot greets them by. NOT THIS TOOL: Not for language — profile_set_language owns that. Not for a phone, an email or an address; each has its own tool, and this route accepts nothing but the name. ⚠ This is the ONLY profile field this surface can change. The answer is the whole profile summary, with the email and phone masked — read it back as confirmation rather than reading the number aloud.",
-      "method": "PATCH",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/profile",
-      "authentication": "genericCredentialType",
-      "genericAuthType": "httpBearerAuth",
-      "sendHeaders": true,
-      "headerParameters": {
-        "parameters": [
-          {
-            "name": "X-Webhook-Secret",
-            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-          },
-          {
-            "name": "Idempotency-Key",
-            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-profile_update"
-          }
-        ]
-      },
-      "sendBody": true,
-      "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, name: $fromAI(\"name\", \"The name the customer wants to be called, exactly as they gave it. Do not translate it or capitalise it differently. At most 100 characters.\", \"string\") }) }}",
-      "options": {
-        "response": {
-          "response": {
-            "neverError": true
-          }
+    "type": "addNode",
+    "node": {
+      "name": "inapp_open_product",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.5,
+      "position": [
+        1240,
+        928
+      ],
+      "parameters": {
+        "toolDescription": "Open one product on its own screen, where the customer can pick a size, a colour or any other option, read the full description, and buy the exact variant they chose. USE IT WHEN: Whenever the customer needs to CHOOSE something about a product before buying — a size, a colour, a variant. A chat card can only ever offer the default variant, so a product with options is unbuyable from chat alone. NOT THIS TOOL: Not for answering a passing question about a product — say the answer. Not for several products: use inapp_open_listing. ⚠ A cta_url button to the product page until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+        "method": "POST",
+        "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/inapp/products/{{ $fromAI(\"productId\", \"The product id, as the catalogue returned it. At most 64 characters.\", \"string\") }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $execution.id }}-{{ $now.toMillis() }}-inapp_open_product"
+            }
+          ]
         },
-        "timeout": 20000
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") } }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "lz5ivIop9DF8mPHa",
+          "name": "jovi-mall-Bearer Auth account"
+        }
       }
-    },
-    "replace": true
+    }
   },
   {
-    "type": "updateNodeParameters",
-    "nodeName": "profile_set_language",
-    "parameters": {
-      "toolDescription": "Set the language the platform writes to this customer in — in chat, in notifications and in email. USE IT WHEN: When the customer asks to change language, or writes consistently in a language other than the one on their profile and confirms the switch. NOT THIS TOOL: Do not switch on a single message in another language. People code-switch; a preference change is durable and reaches their email too. ⚠ Product text is NOT translated — it is vendor-authored in one language and the product carries contentLanguage saying which. Say so rather than appearing to have translated it.",
-      "method": "PATCH",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/profile/language",
-      "authentication": "genericCredentialType",
-      "genericAuthType": "httpBearerAuth",
-      "sendHeaders": true,
-      "headerParameters": {
-        "parameters": [
-          {
-            "name": "X-Webhook-Secret",
-            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-          },
-          {
-            "name": "Idempotency-Key",
-            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-profile_set_language"
-          }
-        ]
-      },
-      "sendBody": true,
-      "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, language: $fromAI(\"language\", \"The five languages the platform's copy is written in. One of: en, fr, pt, es, ar.\", \"string\") }) }}",
-      "options": {
-        "response": {
-          "response": {
-            "neverError": true
-          }
-        },
-        "timeout": 20000
-      }
-    },
-    "replace": true
+    "type": "addConnection",
+    "source": "inapp_open_product",
+    "target": "MCP Server Trigger",
+    "connectionType": "ai_tool"
   },
   {
-    "type": "updateNodeParameters",
-    "nodeName": "tickets_add_note",
-    "parameters": {
-      "toolDescription": "Add the customer's message to an existing ticket. USE IT WHEN: When the customer says something more about a ticket that is already open. NOT THIS TOOL: Not to record your own summary. A note is attributed to the customer and read by staff as their words.",
-      "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/tickets/{{ $fromAI(\"ticketId\", \"The ticket id, from tickets_list.\", \"string\") }}/notes",
-      "authentication": "genericCredentialType",
-      "genericAuthType": "httpBearerAuth",
-      "sendHeaders": true,
-      "headerParameters": {
-        "parameters": [
-          {
-            "name": "X-Webhook-Secret",
-            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-          },
-          {
-            "name": "Idempotency-Key",
-            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-tickets_add_note"
-          }
-        ]
-      },
-      "sendBody": true,
-      "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, body: $fromAI(\"body\", \"What the customer wants added to the ticket, in their own words. Do not summarise it. At most 5000 characters.\", \"string\") }) }}",
-      "options": {
-        "response": {
-          "response": {
-            "neverError": true
-          }
-        },
-        "timeout": 20000
-      }
-    },
-    "replace": true
+    "type": "setNodePosition",
+    "nodeName": "wishlist_list",
+    "position": [
+      1440,
+      928
+    ]
   },
   {
-    "type": "updateNodeParameters",
-    "nodeName": "tickets_add_attachment",
-    "parameters": {
-      "toolDescription": "Put a photo or PDF the customer just sent in this chat onto one of their support tickets. You do not upload anything — the file is already stored and you name it by the reference you were given when it arrived. USE IT WHEN: When the customer has sent a file in this conversation and it is evidence for a support request — a damaged item, a wrong delivery, a receipt. Open the ticket first if there is not one yet, then attach. NOT THIS TOOL: Never invent a reference. If you were not given one for a file in this conversation, the file is not available and the customer must send it again. Not for a file the customer sent in an earlier conversation — references expire after 30 minutes. ⚠ The reference is single-use — one call per file. `attachmentCount` and `attachmentLimit` come back on success; when they are equal, say so, because the next photo will be refused. You cannot see what is in the file: describe it as what the customer called it, never as what you assume it shows.",
-      "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/tickets/{{ $fromAI(\"ticketId\", \"The ticket id or the TKT- number the customer quoted.\", \"string\") }}/attachments",
-      "authentication": "genericCredentialType",
-      "genericAuthType": "httpBearerAuth",
-      "sendHeaders": true,
-      "headerParameters": {
-        "parameters": [
-          {
-            "name": "X-Webhook-Secret",
-            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-          },
-          {
-            "name": "Idempotency-Key",
-            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-tickets_add_attachment"
-          }
-        ]
-      },
-      "sendBody": true,
-      "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, ref: $fromAI(\"ref\", \"The file reference you were given when the customer sent the file, e.g. att_… . Copy it exactly; never construct one.\", \"string\") }) }}",
-      "options": {
-        "response": {
-          "response": {
-            "neverError": true
-          }
-        },
-        "timeout": 20000
-      }
-    },
-    "replace": true
-  },
-  {
-    "type": "updateNodeParameters",
+    "type": "setNodePosition",
     "nodeName": "wishlist_add",
-    "parameters": {
-      "toolDescription": "Add a product to the customer's saved list. USE IT WHEN: When the customer likes something but is not buying it now. NOT THIS TOOL: Not instead of adding to the cart when they said they want to buy it.",
-      "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist",
-      "authentication": "genericCredentialType",
-      "genericAuthType": "httpBearerAuth",
-      "sendHeaders": true,
-      "headerParameters": {
-        "parameters": [
-          {
-            "name": "X-Webhook-Secret",
-            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-          },
-          {
-            "name": "Idempotency-Key",
-            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-wishlist_add"
-          }
-        ]
-      },
-      "sendBody": true,
-      "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, productId: $fromAI(\"productId\", \"The 24-character product id to save, from catalog_get_product or a product search result.\", \"string\") }) }}",
-      "options": {
-        "response": {
-          "response": {
-            "neverError": true
-          }
-        },
-        "timeout": 20000
-      }
-    },
-    "replace": true
+    "position": [
+      40,
+      1128
+    ]
   },
   {
-    "type": "updateNodeParameters",
+    "type": "setNodePosition",
     "nodeName": "wishlist_remove",
-    "parameters": {
-      "toolDescription": "Take a product off the customer's saved list. USE IT WHEN: When the customer says they are no longer interested, or clears an unavailable entry. NOT THIS TOOL: Not after adding it to the cart. Those are different lists and the customer did not ask.",
-      "method": "DELETE",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/wishlist/{{ $fromAI(\"productId\", \"The 24-character product id to drop, from wishlist_list productId.\", \"string\") }}",
-      "authentication": "genericCredentialType",
-      "genericAuthType": "httpBearerAuth",
-      "sendHeaders": true,
-      "headerParameters": {
-        "parameters": [
-          {
-            "name": "X-Webhook-Secret",
-            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-          },
-          {
-            "name": "Idempotency-Key",
-            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-wishlist_remove"
-          }
-        ]
-      },
-      "sendBody": true,
-      "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") } }) }}",
-      "options": {
-        "response": {
-          "response": {
-            "neverError": true
-          }
-        },
-        "timeout": 20000
-      }
-    },
-    "replace": true
+    "position": [
+      240,
+      1128
+    ]
   },
   {
-    "type": "updateNodeParameters",
+    "type": "setNodePosition",
+    "nodeName": "recently_viewed_list",
+    "position": [
+      440,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "digital_list_entitlements",
+    "position": [
+      640,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "bookings_get_availability",
+    "position": [
+      840,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "bookings_list",
+    "position": [
+      1040,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "bookings_get",
+    "position": [
+      1240,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "bookings_get_balance",
+    "position": [
+      1440,
+      1128
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "bookings_payment_status",
+    "position": [
+      40,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "payment_methods_list",
+    "position": [
+      240,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "contact_get_state",
+    "position": [
+      440,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "connections_list",
+    "position": [
+      640,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "account_close_preview",
+    "position": [
+      840,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "reviews_check_eligibility",
+    "position": [
+      1040,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "reviews_list_mine",
+    "position": [
+      1240,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "notifications_get_preferences",
+    "position": [
+      1440,
+      1328
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "notifications_list",
+    "position": [
+      40,
+      1528
+    ]
+  },
+  {
+    "type": "setNodePosition",
+    "nodeName": "notifications_unread_count",
+    "position": [
+      240,
+      1528
+    ]
+  },
+  {
+    "type": "setNodePosition",
     "nodeName": "notifications_mark_read",
-    "parameters": {
-      "toolDescription": "Mark a single notification as read. USE IT WHEN: Right after relaying that notification to the customer — reading it aloud to them IS them seeing it. NOT THIS TOOL: NEVER on a notification you did not show them. There is no way to mark one unread again, so an acknowledgement they did not make cannot be taken back. ⚠ One-way: there is no mark-unread route anywhere on this platform. That is why this tool is model-facing while notifications_mark_all_read is not — acknowledging the one you just read out is honest, and doing it to a whole inbox on your own initiative is not.",
-      "method": "PATCH",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/notifications/{{ $fromAI(\"notificationId\", \"The id of the notification you just showed the customer, from notifications_list. A 24-character hexadecimal id.\", \"string\") }}/read",
-      "authentication": "genericCredentialType",
-      "genericAuthType": "httpBearerAuth",
-      "sendHeaders": true,
-      "headerParameters": {
-        "parameters": [
-          {
-            "name": "X-Webhook-Secret",
-            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-          },
-          {
-            "name": "Idempotency-Key",
-            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-notifications_mark_read"
-          }
-        ]
-      },
-      "sendBody": true,
-      "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") } }) }}",
-      "options": {
-        "response": {
-          "response": {
-            "neverError": true
-          }
-        },
-        "timeout": 20000
-      }
-    },
-    "replace": true
+    "position": [
+      440,
+      1528
+    ]
   },
   {
-    "type": "updateNodeParameters",
+    "type": "setNodePosition",
     "nodeName": "payment_create_pay_link",
-    "parameters": {
-      "toolDescription": "A short-lived link to a page where the customer completes a CARD payment. Mobile money never needs this — it finishes on the customer's handset. USE IT WHEN: After payment_initiate with gateway STRIPE, when the customer chose to pay by card. Send them the url. NOT THIS TOOL: Never for mobile money — that completes in the chat and this refuses it. Never for a payment that is already done. If url comes back null the deployment has no payment page: offer mobile money instead.",
-      "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/payments/{{ $fromAI(\"transactionId\", \"The CARD payment’s transaction id, from the payment that was just initiated. Mobile money never needs a link.\", \"string\") }}/pay-link",
-      "authentication": "genericCredentialType",
-      "genericAuthType": "httpBearerAuth",
-      "sendHeaders": true,
-      "headerParameters": {
-        "parameters": [
-          {
-            "name": "X-Webhook-Secret",
-            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-          },
-          {
-            "name": "Idempotency-Key",
-            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-payment_create_pay_link"
-          }
-        ]
-      },
-      "sendBody": true,
-      "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") } }) }}",
-      "options": {
-        "response": {
-          "response": {
-            "neverError": true
-          }
-        },
-        "timeout": 20000
-      }
-    },
-    "replace": true
+    "position": [
+      640,
+      1528
+    ]
   },
   {
-    "type": "updateNodeParameters",
+    "type": "setNodePosition",
+    "nodeName": "messaging_get_window",
+    "position": [
+      840,
+      1528
+    ]
+  },
+  {
+    "type": "setNodePosition",
     "nodeName": "messaging_notify_customer",
-    "parameters": {
-      "toolDescription": "Hands one situation to the platform to deliver, in the customer's language, through whichever channel reaches them — free-form inside the WhatsApp window, an approved template outside it. USE IT WHEN: When you have something to tell the customer and cannot send it yourself: the service window has closed, or the flow is ending and the answer comes later. Today the only situation is order.payment_link — a card payment page. NOT THIS TOOL: Never as a general send. It takes a named situation, never a message you wrote. There is no marketing situation and there will not be one.",
-      "method": "POST",
-      "url": "={{ $env.JOVI_MALL_BASE_URL }}/api/internal/bot/messaging/notify",
-      "authentication": "genericCredentialType",
-      "genericAuthType": "httpBearerAuth",
-      "sendHeaders": true,
-      "headerParameters": {
-        "parameters": [
-          {
-            "name": "X-Webhook-Secret",
-            "value": "={{ $env.BOT_WEBHOOK_SECRET }}"
-          },
-          {
-            "name": "Idempotency-Key",
-            "value": "={{ $execution.id }}-{{ $now.toMillis() }}-messaging_notify_customer"
-          }
-        ]
-      },
-      "sendBody": true,
-      "specifyBody": "json",
-      "jsonBody": "={{ JSON.stringify({ identity: { token: $fromAI(\"botToken\", \"The sealed identity token, copied verbatim from the botToken line in your system prompt\", \"string\") }, situation: $fromAI(\"situation\", \"The closed set of situations the automation layer may raise. One member today. One of: order.payment_link.\", \"string\"), transactionId: $fromAI(\"transactionId\", \"The card payment to send a page for. Must be the customer's own.\", \"string\") }) }}",
-      "options": {
-        "response": {
-          "response": {
-            "neverError": true
-          }
-        },
-        "timeout": 20000
-      }
-    },
-    "replace": true
+    "position": [
+      1040,
+      1528
+    ]
   },
   {
     "type": "setNodeParameter",

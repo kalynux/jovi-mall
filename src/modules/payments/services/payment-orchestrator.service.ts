@@ -1202,6 +1202,26 @@ export class PaymentOrchestratorService {
         await this.handlePaymentSuccess(transaction);
       }
 
+      /**
+       * ⚠ **The TRANSITION is the guard, exactly as it is for success above.** Nothing
+       * de-duplicates a notification once it has been dispatched — `createIfNotExists` upserts
+       * the in-app row but still re-delivers the push and the WhatsApp message — so the only
+       * thing standing between a customer and three identical "payment did not go through"
+       * messages is that this fires on the *change* into a dead status, not on the status.
+       * `verifyPayment` also returns early on an already-terminal transaction, which is the
+       * belt to that brace.
+       *
+       * ⚠ **This path carries the reconciliation sweep as well as a client poll.**
+       * `PaymentReconciliationWorker` closes a payment whose callback never arrived by calling
+       * this very method — deliberately, rather than the gateway directly — so a customer whose
+       * failure is discovered ten minutes later by the cron is told here. That customer is
+       * precisely the one who has been sitting in silence longest, and they were the reason
+       * this had to cover more than the webhook.
+       */
+      if (this.isDeadStatus(transaction.status) && !this.isDeadStatus(previousStatus)) {
+        await this.handlePaymentFailure(transaction);
+      }
+
       return {
         transactionId: transaction._id.toString(),
         status: transaction.status,
@@ -1311,6 +1331,22 @@ export class PaymentOrchestratorService {
     //    twice.
     if (newStatus === 'SUCCEEDED' && previousStatus !== 'SUCCEEDED') {
       await this.handlePaymentSuccess(transaction);
+    }
+
+    /**
+     * 6. TELL THE CUSTOMER IT DID NOT WORK.
+     *
+     *    ⚠ **This is the path that matters most, because it is the one that is silent.** A
+     *    refused mobile-money push produces no error anywhere a customer can see: the screen
+     *    they paid from has closed, the chat says nothing, and the order sits unpaid. Until
+     *    this line existed, a failed payment was indistinguishable from a successful one that
+     *    had gone quiet, and the customer waited for an order that was never coming.
+     *
+     *    Step 3 above has already returned `ignored` when the status did not change, so
+     *    reaching here IS the transition — the same de-duplication the success branch relies on.
+     */
+    if (this.isDeadStatus(newStatus) && !this.isDeadStatus(previousStatus)) {
+      await this.handlePaymentFailure(transaction);
     }
 
     console.log(
@@ -1461,6 +1497,113 @@ export class PaymentOrchestratorService {
     } catch (error: any) {
       console.error('[PaymentOrchestrator] Failed to handle payment success:', error);
       // Don't throw - webhook should still return 200 to prevent retries
+    }
+  }
+
+  /**
+   * Is this a status the gateway has told us the money will not arrive under?
+   *
+   * ⚠ **Both, and they are one thing to the person holding the phone.** To the platform a
+   * refusal and an abandonment are different; to the customer both mean *the money did not
+   * move and my items are still waiting*, and both are fixed by the same action. Splitting
+   * them here would give the notification a distinction it could only narrate as blame.
+   *
+   * ⚠ **`REFUNDED` is deliberately NOT here.** The payment went through; what happened
+   * afterwards belongs to the order's own story and already has its own situation.
+   */
+  private isDeadStatus(status: PaymentStatus): boolean {
+    return status === 'FAILED' || status === 'CANCELLED';
+  }
+
+  /**
+   * Tell the customer a charge did not go through.
+   *
+   * ── ⚠ THE SILENCE THIS CLOSES WAS THE DEFECT ────────────────────────────────
+   * Every other checkout outcome said something. A failed payment said nothing — this class
+   * published `payment.received.full` on success and published NOTHING on FAILED or CANCELLED,
+   * on any path — so from the customer's side a refused push was indistinguishable from a
+   * successful payment that had gone quiet. They waited for an order that was not coming, and
+   * the copy that would have told them (`order.payment_failed`) sat in the catalogue with no
+   * trigger.
+   *
+   * ── WHERE IT IS *NOT* CALLED FROM, AND WHY EACH OMISSION IS DELIBERATE ──────
+   * Three other places write `FAILED`, and notifying from any of them would be wrong:
+   *
+   *   - **`recordFailedAttempt`** — written from the CATCH of the gateway call, which
+   *     `releaseDeadAttempt` spends thirty lines explaining cannot tell a refusal from a
+   *     timeout. A timeout means the charge may be live and the money may be moving. Telling
+   *     somebody their payment failed while their handset is still prompting them is worse
+   *     than telling them nothing, and the caller already gets a 502 to render.
+   *   - **`releaseDeadAttempt`** — reached only from inside a NEW attempt, i.e. the customer
+   *     is already paying again. "Your payment failed" arriving as they press pay is noise
+   *     about a decision they have already made.
+   *   - **`authorizePayment`'s exhausted OTP** — the customer is in the request, typing codes,
+   *     and is told by its 422. A push about it lands seconds later saying the same thing.
+   *
+   * What the two call sites have in common is that **the gateway told us**, and that is the
+   * only evidence worth waking somebody up for.
+   *
+   * ── ONE EVENT PER ORDER, AS SUCCESS ALREADY DOES ────────────────────────────
+   * A multi-vendor basket is several orders settled by one charge, and `order.created` and
+   * `order.payment.received` both already speak per order — so a customer who received three
+   * "order created" messages receives three about the failure. Consistency was chosen over a
+   * single group message because the alternative means naming one order number out of three
+   * and quoting a total larger than the order it names.
+   *
+   * ⚠ **Secondary, and it never throws.** A webhook must still answer 200 or the gateway
+   * retries, and a notification that failed to send must not turn a recorded payment outcome
+   * into a re-delivered callback.
+   */
+  private async handlePaymentFailure(transaction: IPaymentTransaction): Promise<void> {
+    try {
+      const orderIds =
+        transaction.orderIds && transaction.orderIds.length > 0
+          ? transaction.orderIds
+          : transaction.orderId
+            ? [transaction.orderId]
+            : [];
+
+      /**
+       * ⚠ **No orders means this was not a customer order**, and the silence is correct: the
+       * same charge pipeline carries bookings, plan purchases and credit top-ups, each of which
+       * has its own story and its own audience. `handleOrderPaymentReceived` drops a payload
+       * with no `orderId` for exactly this reason; dropping it here rather than there keeps a
+       * booking failure from ever reaching a subscriber written about orders.
+       */
+      if (orderIds.length === 0) return;
+
+      const orders = await OrderModel.find({ _id: { $in: orderIds } });
+      for (const order of orders) {
+        await eventBus.publish('payment.failed', {
+          eventType: 'payment.failed',
+          aggregateId: order._id.toString(),
+          occurredAt: new Date(),
+          payload: {
+            vendorId: order.vendor_id.toString(),
+            paymentId: transaction._id.toString(),
+            orderId: order._id.toString(),
+            customerId: order.customer_id?.toString(),
+            cartId: transaction.cartId?.toString(),
+            orderNumber: order.order_number,
+            /**
+             * ⚠ **The ORDER's amount, not the charge's.** A group charge covers several orders
+             * and the copy names one order — quoting the group total beside a single order
+             * number would tell a customer they were charged for more than that order is worth.
+             */
+            amount: order.total_amount,
+            currency: transaction.currencySnapshot,
+            status: transaction.status,
+            aggregateType: 'order'
+          }
+        });
+      }
+
+      console.log(
+        `[PaymentOrchestrator] Emitted payment.failed for ${orders.length} order(s) on transaction ${transaction._id}`
+      );
+    } catch (error: any) {
+      console.error('[PaymentOrchestrator] Failed to emit payment failure event:', error);
+      // Don't throw - this is a secondary operation
     }
   }
 

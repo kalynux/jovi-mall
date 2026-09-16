@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>wi-mall</title>
+<!--
+  inAppProductListing — the browse grid.  Screen kind `pl`.
+
+  ⚠ **THE FILENAME IS THE ROUTE.** `inapp-page.controller.ts` sends
+  `public/<kind>.html`, so this file is `pl.html` and cannot be renamed without renaming the
+  screen kind in `inapp-surface.store.ts`, `bot-action-id.ts` and `inapp-url.ts` with it.
+
+  ── WHO OWNS WHAT ───────────────────────────────────────────────────────────
+  Stream 0 wrote the frame: the theme guard, the copy call, the four states, the fetch and
+  the escaping.  **Stream B owns this file from here on** — nobody else edits it, because two
+  sessions writing one file in this tree is a lost write, not a merge conflict.
+
+  What Stream B must build to match:  `GET  /api/bot/miniapp/s/pl/:handle/data`
+                                      `POST /api/bot/miniapp/s/pl/:handle/open`
+  Both mounted in `miniapp.routes.ts` — the ONE line each stream adds to a shared file, and
+  the reason Stream 0 added every other route in advance.
+
+  ⚠ **WHY A POST TO OPEN A PRODUCT, RATHER THAN A LINK PER CARD.** The detail screen needs a
+  `pd` handle and only the backend can mint one, so a grid of 24 cards would mean 24 Redis
+  writes per page — for a customer who taps at most one.  Instead the page posts the product
+  it wants and gets one URL back.  That also inherits the old rail's membership check: the
+  stored session is the authority on what this page was allowed to offer, so a tampered
+  productId cannot mint a session for something the customer was never shown.
+
+  ── THE THREE RULES THIS PAGE IS BUILT ON ───────────────────────────────────
+    1. **It must work with no Telegram runtime at all.**  The same URL opens in an ordinary
+       browser — for whoever is testing, and for a customer whose client hands the link to
+       the system browser.  Every `Telegram.WebApp` touch is guarded.  A page that throws on
+       `themeParams` renders white-on-white, which is reported as "the shop is broken".
+    2. **It never renders a blank screen.**  Loading, empty, lapsed and failed are four real
+       states with words in the customer's language — see `.state` in shell.css.
+    3. **The handle is the only credential.**  It is in the path, it names one conversation,
+       and it dies in thirty minutes.  Nothing is stored, no cookie is set, and nothing here
+       asks who the customer is: the backend already knows, because it minted the handle.
+
+  ⚠ ONE EXTERNAL SCRIPT, AND IT IS THE ONLY ONE PERMITTED — `telegram-web-app.js`, named in
+  the route's `script-src`.  `shell.css` is the only external style, and it loads only
+  because that CSP carries `style-src 'self'`.  Everything else is inline: this page opens
+  inside a WebView on a phone that may be on a bad connection, and a CDN round trip is one
+  more thing between a customer and the products they asked for.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/api/bot/miniapp/shell.css">
+<style>
+  /* Screen-specific only. Anything another screen would also want belongs in shell.css. */
+  .grid { margin-block-start: 8px; }
+  .more { margin-block-start: 18px; }
+</style>
+</head>
+<body>
+  <header class="screen__head">
+    <h1 class="screen__title" id="title"></h1>
+    <div class="screen__sub" id="sub"></div>
+  </header>
+
+  <main class="screen__body" id="body">
+    <div class="state" id="state"><p class="state__text" id="stateText"></p></div>
+    <div class="grid" id="grid" hidden></div>
+    <div class="more" hidden id="moreWrap">
+      <button class="btn btn--block" id="more"></button>
+    </div>
+  </main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ── Telegram, entirely optional ──────────────────────────────────────── */
+  var tg = (window.Telegram && window.Telegram.WebApp) || null;
+  if (tg) {
+    try {
+      tg.ready();
+      tg.expand();
+      var p = tg.themeParams || {};
+      var root = document.documentElement.style;
+      if (p.bg_color) root.setProperty("--bg", p.bg_color);
+      if (p.text_color) root.setProperty("--fg", p.text_color);
+      if (p.hint_color) root.setProperty("--muted", p.hint_color);
+      if (p.secondary_bg_color) root.setProperty("--card", p.secondary_bg_color);
+      if (p.button_color) root.setProperty("--accent", p.button_color);
+      if (p.button_text_color) root.setProperty("--accent-fg", p.button_text_color);
+    } catch (e) { /* an old client, or one reporting no theme. Keep our own colours. */ }
+  }
+
+  /*
+   * Everything is derived from the URL, so this file stays a static asset the build copies
+   * verbatim.  Nothing is rendered per request, so nothing here can leak between two of them.
+   */
+  var base = window.location.pathname.replace(/\/+$/, "");
+  var lang = new URLSearchParams(window.location.search).get("lang") || "";
+
+  var el = {
+    title: document.getElementById("title"),
+    sub: document.getElementById("sub"),
+    state: document.getElementById("state"),
+    stateText: document.getElementById("stateText"),
+    grid: document.getElementById("grid"),
+    moreWrap: document.getElementById("moreWrap"),
+    more: document.getElementById("more")
+  };
+
+  var copy = null;
+  var cursor = null;
+  var busy = false;
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  /** One of the four states, with an optional retry. Never leaves the page empty. */
+  function state(text, retry) {
+    el.grid.hidden = true;
+    el.moreWrap.hidden = true;
+    el.state.hidden = false;
+    el.stateText.textContent = text;
+
+    var old = el.state.querySelector("button");
+    if (old) old.remove();
+    if (retry && copy) {
+      var b = document.createElement("button");
+      b.className = "btn";
+      b.textContent = copy.retry;
+      b.addEventListener("click", function () { load(null); });
+      el.state.appendChild(b);
+    }
+  }
+
+  function json(url, init) {
+    return fetch(url, init).then(function (r) {
+      return r.json()
+        .catch(function () { return null; })
+        .then(function (b) { return { status: r.status, ok: r.ok, body: b }; });
+    });
+  }
+
+  /**
+   * ⚠ A failed read is reported as LAPSED or as FAILED, never as empty.
+   * "Nothing matched" and "we could not ask" look identical to a customer and have opposite
+   * remedies — one is a different search, the other is tapping again.
+   */
+  function explain(res) {
+    if (res.status === 404 || res.status === 410) return copy.expired;
+    var e = res.body && res.body.error;
+    return (e && (e.customerMessage || e.message)) || copy.failed;
+  }
+
+  /* ── The contract Stream B's data endpoint must satisfy ────────────────────
+   *
+   *   { success: true, data: {
+   *       heading?:  string | null,     // the search term or category, when there is one
+   *       products: [{
+   *         productId:  string,
+   *         variantId:  string | null,  // null = nothing sellable; the card is drawn, muted
+   *         title:      string,
+   *         priceText:  string,         // FORMATTED server-side — the page does no money maths
+   *         imageUrl:   string | null,
+   *         storeName:  string,
+   *         inStock:    boolean
+   *       }],
+   *       cursor: string | null         // null = no further page
+   *   }}
+   *
+   * ⚠ **`priceText` is formatted by the server and the page never computes money.**  The
+   * currency, the negotiable ask and the discount rules all live in
+   * `public-display-price.ts`; a second implementation in a WebView is a second set of
+   * rounding bugs, in a place nothing tests.
+   *
+   * ⚠ **The listing pages the QUERY, not a held list of ids** — that is the deliberate
+   * opposite of `ProductDisplaySet`, and `inapp-surface.store.ts` says why for both. Do not
+   * unify them.
+   */
+  function draw(products, append) {
+    if (!append) el.grid.innerHTML = "";
+
+    products.forEach(function (item) {
+      var card = document.createElement("div");
+      card.className = "card" + (item.variantId ? " card--tappable" : " card--muted");
+
+      card.innerHTML =
+        '<div class="card__shot">'
+        + (item.imageUrl ? '<img loading="lazy" alt="" src="' + esc(item.imageUrl) + '">' : "")
+        + (item.inStock ? "" : '<div class="badge">' + esc(copy.outOfStock) + "</div>")
+        + "</div>"
+        + '<div class="card__body">'
+        + '<div class="card__title">' + esc(item.title) + "</div>"
+        + '<div class="card__price">' + esc(item.priceText) + "</div>"
+        + '<div class="card__store">' + esc(item.storeName) + "</div>"
+        + "</div>";
+
+      /*
+       * A product with no sellable variant is drawn and cannot be opened — the same trade the
+       * old rail makes.  A gap in the grid is something a customer cannot explain.
+       */
+      if (item.variantId) {
+        card.addEventListener("click", function () { open(item.productId, card); });
+      }
+
+      el.grid.appendChild(card);
+    });
+
+    el.state.hidden = true;
+    el.grid.hidden = false;
+  }
+
+  /** Mint a detail session for one product and go there. See the POST note at the top. */
+  function open(productId, card) {
+    if (busy) return;
+    busy = true;
+    card.classList.add("card--muted");
+
+    if (tg && tg.HapticFeedback) { try { tg.HapticFeedback.selectionChanged(); } catch (e) {} }
+
+    json(base + "/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productId: productId })
+    }).then(function (res) {
+      busy = false;
+      card.classList.remove("card--muted");
+      if (res.ok && res.body && res.body.data && res.body.data.url) {
+        window.location.assign(res.body.data.url);
+        return;
+      }
+      state(explain(res), true);
+    }).catch(function () {
+      busy = false;
+      card.classList.remove("card--muted");
+      state(copy.failed, true);
+    });
+  }
+
+  function load(after) {
+    if (busy) return;
+    busy = true;
+    if (!after) state(copy ? copy.loading : "…", false);
+    else { el.more.disabled = true; el.more.textContent = copy.loading; }
+
+    var url = base + "/data" + (after ? "?cursor=" + encodeURIComponent(after) : "");
+
+    json(url, { headers: { Accept: "application/json" } }).then(function (res) {
+      busy = false;
+      el.more.disabled = false;
+      el.more.textContent = copy.loadMore;
+
+      if (!res.ok || !res.body || res.body.success === false || !res.body.data) {
+        state(explain(res), true);
+        return;
+      }
+
+      var data = res.body.data;
+      if (data.heading) el.sub.textContent = data.heading;
+
+      var products = data.products || [];
+      if (products.length === 0 && !after) { state(copy.listingEmpty, false); return; }
+
+      draw(products, Boolean(after));
+      cursor = data.cursor || null;
+      el.moreWrap.hidden = !cursor;
+    }).catch(function () {
+      busy = false;
+      state(copy ? copy.failed : "Could not load. Please try again.", true);
+    });
+  }
+
+  el.more.addEventListener("click", function () { if (cursor) load(cursor); });
+
+  /*
+   * ⚠ **`copy` is never null once boot has run, and that is a correctness property, not a
+   * nicety.** Every state and every button label reads it. The one request that could leave
+   * this page wordless is the copy call itself, so a failure there falls back to English
+   * rather than to nothing — the alternative is a page that throws while rendering the
+   * message explaining why it could not load.
+   */
+  var FALLBACK = {
+    loading: "Loading…",
+    failed: "Something went wrong. Close this and ask me again in the chat.",
+    expired: "This page is no longer available. Ask me again in the chat.",
+    retry: "Try again",
+    listingHeading: "Browse",
+    listingEmpty: "Nothing here yet.",
+    loadMore: "Load more",
+    outOfStock: "Out of stock"
+  };
+
+  function boot(d) {
+    copy = (d && d.copy) || FALLBACK;
+    document.documentElement.lang = (d && d.language) || "en";
+    document.documentElement.dir = (d && d.direction) || "ltr";
+    el.title.textContent = copy.listingHeading;
+    el.more.textContent = copy.loadMore;
+    load(null);
+  }
+
+  /*
+   * ⚠ **Copy first, data second, and the order is load-bearing.**  A page whose handle has
+   * lapsed still has to say so in the customer's own language, and it cannot learn the
+   * language from the request that just failed.  `/copy` resolves no handle and never fails;
+   * the language comes from `?lang=`, which `inAppScreenUrl` puts on every screen URL.
+   */
+  json(base + "/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
+    .then(function (res) { boot((res.body && res.body.data) || null); })
+    .catch(function () { boot(null); });
+})();
+</script>
+</body>
+</html>

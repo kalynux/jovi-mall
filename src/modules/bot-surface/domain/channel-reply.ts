@@ -153,6 +153,59 @@ export type BotReplyIntent =
     /** A sentence with one button that opens a URL. */
     | { kind: 'link'; text: string; label: string; url: string }
     /**
+     * ⭐ **A sentence with one button that opens an IN-APP SCREEN** — the Telegram Mini App, or
+     * a WhatsApp Flow.
+     *
+     * ── WHY THIS IS NOT `link` ──────────────────────────────────────────────
+     * A `link` renders Telegram's ordinary `url` button, which leaves the chat for the system
+     * browser. `product-display.service.ts` already argues that this is *worse* than the cards
+     * it would replace: the customer loses the conversation, and on a phone they frequently do
+     * not come back. A `web_app` button opens a page **inside** Telegram, and closing it
+     * returns them to the thread they were in. Same sentence, same label, different control —
+     * and only the renderer knows which one the channel can draw.
+     *
+     * ── ⚠ IT BREAKS THIS FILE'S OWN RULE, DELIBERATELY AND TEMPORARILY ──────
+     * The header above says an intent must render for **both** channels in the same change, so
+     * a feature can never ship working on Telegram and broken on WhatsApp. This one does not,
+     * yet: Telegram gets the real screen and WhatsApp gets `cta_url`, which opens the
+     * storefront in a browser. That is the agreed sequencing — build the four screens where
+     * the page already exists and there is no encryption work, prove the design, then port it.
+     *
+     * ⚠ **The WhatsApp branch is NOT dead code and must not be deleted as such.** It is the
+     * only thing a WhatsApp customer gets until Flows land, and it is why this intent is safe
+     * to use today. `flow` below is the seam the port lands on.
+     *
+     * ── WHY `url` AND `flow` BOTH ───────────────────────────────────────────
+     * So the intent's SHAPE does not change when Flows arrive. A WhatsApp Flow is a published
+     * form named by id, not a URL; a Mini App is a URL. Carrying both means the port is a
+     * renderer change plus a populated field, not a new intent and an edit at every call site.
+     * `flow` absent — the ordinary case today — takes the `cta_url` path.
+     */
+    | {
+          kind: 'inapp';
+          text: string;
+          label: string;
+          /**
+           * The screen's address. **Must be HTTPS** — Telegram refuses a `web_app` button on
+           * any other scheme and refuses the whole message with it, so a non-HTTPS value here
+           * degrades to an ordinary `url` button rather than being sent and dropped.
+           */
+          url: string;
+          /**
+           * The published WhatsApp Flow for this screen, when the deployment has one.
+           *
+           * ⚠ **Absent is the ordinary case and must stay cheap**, exactly as `carousel` is on
+           * `product_list`. A Flow needs publishing in Business Manager, and anything it must
+           * *fetch* needs an encrypted endpoint this platform has not built — so the absence of
+           * one is a configuration state, never a fault.
+           *
+           * ⚠ **A Flow cannot be sent outside the 24-hour service window.** A caller reaching
+           * for this intent on a proactive turn must not pass `flow`; the window will usually
+           * be shut and Meta refuses the send.
+           */
+          flow?: { id: string; screen?: string | null; params?: Record<string, unknown> } | null;
+      }
+    /**
      * ⭐ **A LIST OF PRODUCTS, drawn rather than narrated** — and the one intent that renders
      * to SEVERAL messages.
      *
@@ -417,6 +470,32 @@ function renderTelegram(intent: BotReplyIntent, chatId: string): BotChannelReply
             };
 
         /**
+         * A `web_app` button — the screen opens INSIDE Telegram and closing it returns the
+         * customer to this thread.
+         *
+         * ⚠ **Telegram refuses the entire message if a `web_app` url is not HTTPS**, losing
+         * the sentence as well as the button. So a non-HTTPS url degrades to an ordinary
+         * `url` button: the customer leaves for the browser, which is worse than the Mini
+         * App and far better than a message that never arrives. The caller should still pass
+         * HTTPS — see `BOT_MINIAPP_BASE_URL` — this is the backstop, not the plan.
+         */
+        case 'inapp': {
+            const button = intent.url.startsWith('https://')
+                ? { text: truncate(intent.label, TG_LIMITS.BUTTON_TEXT), web_app: { url: intent.url } }
+                : { text: truncate(intent.label, TG_LIMITS.BUTTON_TEXT), url: intent.url };
+
+            return {
+                channel: 'telegram',
+                method: 'sendMessage',
+                body: {
+                    chat_id: chatId,
+                    text: truncate(intent.text, TG_LIMITS.TEXT) as string,
+                    reply_markup: { inline_keyboard: [[button]] },
+                },
+            };
+        }
+
+        /**
          * ⚠ **Renders to SEVERAL messages, so this returns the first and callers that can
          * send more than one must use `renderBotReplies`.** Taking the first is the honest
          * degradation rather than a silent one: on the Mini App path there is only ever one
@@ -606,6 +685,58 @@ function renderWhatsApp(intent: BotReplyIntent, to: string): BotChannelReply {
                     },
                 },
             });
+
+        /**
+         * A Flow when one is published, and `cta_url` until then.
+         *
+         * ⚠ **The `cta_url` branch is the WhatsApp half of this feature today, not a
+         * placeholder to be tidied away.** Telegram-first is the agreed sequencing (see the
+         * intent's docstring), and until a Flow exists this is what a WhatsApp customer gets:
+         * the same sentence and the same label, opening the storefront in a browser. Deleting
+         * it as "dead" would leave the channel with nothing.
+         *
+         * ⚠ **A Flow is refused outside the 24-hour service window**, so a caller must not
+         * pass `flow` on a proactive turn — there is no way to detect that here, because this
+         * renderer is pure and has no clock.
+         */
+        case 'inapp':
+            return intent.flow
+                ? waEnvelope(to, 'interactive', {
+                      interactive: {
+                          type: 'flow',
+                          body: { text: truncate(intent.text, WA_LIMITS.INTERACTIVE_BODY) as string },
+                          action: {
+                              name: 'flow',
+                              parameters: {
+                                  flow_id: intent.flow.id,
+                                  // `navigate` opens a screen with data already supplied;
+                                  // `data_exchange` would require the encrypted endpoint this
+                                  // platform has not built, so it is deliberately not offered.
+                                  flow_action: 'navigate',
+                                  flow_cta: truncate(intent.label, WA_LIMITS.CTA_DISPLAY_TEXT),
+                                  ...(intent.flow.screen
+                                      ? { flow_action_payload: {
+                                            screen: intent.flow.screen,
+                                            data: intent.flow.params ?? {},
+                                        } }
+                                      : {}),
+                              },
+                          },
+                      },
+                  })
+                : waEnvelope(to, 'interactive', {
+                      interactive: {
+                          type: 'cta_url',
+                          body: { text: truncate(intent.text, WA_LIMITS.INTERACTIVE_BODY) as string },
+                          action: {
+                              name: 'cta_url',
+                              parameters: {
+                                  display_text: truncate(intent.label, WA_LIMITS.CTA_DISPLAY_TEXT),
+                                  url: intent.url,
+                              },
+                          },
+                      },
+                  });
 
         /** See the Telegram side: the first of several. `renderBotReplies` gets them all. */
         case 'product_list':

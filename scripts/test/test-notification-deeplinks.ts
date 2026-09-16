@@ -100,6 +100,21 @@ const AGENCY_VOCABULARY = [
 
 const AGENT_VOCABULARY = [
     'cod/deposits/{{depositId}}',
+    /**
+     * ⚠ **NEW, and it is a contract change the agent app must act on.** Added with the four
+     * `payout.*` situations the agent catalogue never had — an agent used to hear nothing at
+     * all when their payout was paid, rejected or failed.
+     *
+     * It takes no placeholder on purpose: an agent has at most one open payout request (one
+     * per owner, enforced by `409 EARNINGS_PAYOUT_ALREADY_PENDING`), so the earnings summary
+     * is unambiguous and an id could only ever go stale. `FRONTEND-SYNC/BRIEF-payout-agent-app.md`
+     * § 2 already names that summary as where payout state belongs.
+     *
+     * ⚠ Deliberately NOT `tickets/{{ticketId}}`, which is what the vendor and agency stacks
+     * use for the same situations — the agent app has no tickets screen, so that token would
+     * be a button it cannot translate, which is a dead control rather than a wrong one.
+     */
+    'earnings',
     'memberships/{{contractId}}',
     'offers/{{offerId}}',
     'plans',
@@ -117,7 +132,7 @@ function main(): void {
         JSON.stringify(vocabularyOf(AGENCY_NOTIFICATION_CATALOG as unknown as Catalog))
         === JSON.stringify(AGENCY_VOCABULARY));
 
-    assert('the AGENT app is offered exactly the 5 documented paths', () =>
+    assert('the AGENT app is offered exactly the 6 documented paths', () =>
         JSON.stringify(vocabularyOf(AGENT_NOTIFICATION_CATALOG as unknown as Catalog))
         === JSON.stringify(AGENT_VOCABULARY));
 

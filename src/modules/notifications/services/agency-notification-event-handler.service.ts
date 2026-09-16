@@ -641,6 +641,48 @@ export class AgencyNotificationEventHandler {
     }
 
     /**
+     * ⭐ **The gateway did not complete the transfer — and nothing consumed this event on any
+     * of the three stacks until now.**
+     *
+     * It is the worst of the four payout outcomes to miss, because it is the only one where
+     * silence freezes money. A *rejected* payout returns the amount to the available balance;
+     * this leaves it held in `requested_balance`, so the agency cannot request again (one open
+     * request per owner) and an administrator must retry the send or reject it.
+     * `payout-request.service.ts` says so in its own ticket note: *"The funds remain held —
+     * retry the transfer or reject the request to return them."*
+     *
+     * ⚠ **`reason` is on the payload and deliberately NOT relayed.** It is the gateway's own
+     * text and can name the payment provider and its internal codes. It is already noted on
+     * the ticket for whoever retries, and `ticketId` below is what sends the agency there.
+     */
+    async handlePayoutTransferFailed(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, amount, currency, payoutRequestId, ticketId } = event.payload;
+            if (ownerType !== 'agency') return;
+
+            const prefs = await this.preferenceRepo.getByAgency(ownerId);
+            if (!prefs.preferences.payoutUpdates) return;
+
+            await this.dispatch({
+                situation: 'payout.transfer_failed',
+                prefs,
+                agencyId: ownerId,
+                aggregateType: 'payout',
+                aggregateId: payoutRequestId,
+                /**
+                 * ⚠ Keyed on the PAYOUT, not the attempt. A retried transfer that fails again
+                 * republishes this event, and a second identical "we hit a problem" message
+                 * reads as a second, separate failure.
+                 */
+                idempotencyKey: `payout.transfer_failed:${payoutRequestId}`,
+                context: { currency, amountFormatted: Number(amount).toLocaleString(), ticketId }
+            });
+        } catch (error) {
+            console.error('[AgencyNotificationHandler] Failed to handle payout.transfer_failed:', error);
+        }
+    }
+
+    /**
      * Handle cod.deposit.declared — one of this agency's agents says they handed
      * cash over, and the agency now has DEPOSIT_CONFIRM_DEADLINE_DAYS to confirm
      * or reject it before a `deposit_not_confirmed` flag freezes their reserve

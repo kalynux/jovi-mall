@@ -1,0 +1,355 @@
+import { BOT_COPY_LANGUAGES, BotCopyLanguage, toBotCopyLanguage } from '../domain/bot-error-copy';
+
+/**
+ * Every word the in-app screens render, in five languages.
+ *
+ * ── WHY A FIFTH COPY TABLE AND NOT A SIXTH SET OF KEYS ON AN EXISTING ONE ───
+ * The four that exist are each scoped to a surface with its own constraints:
+ * `bot-error-copy` words refusals, `bot-onboarding-copy` words a checklist,
+ * `bot-chrome-copy` words CHAT CONTROLS and is capped at WhatsApp's twenty characters, and
+ * `miniapp-copy` words the old product rail.
+ *
+ * ⚠ **The chrome table's caps are the reason this is separate.** A screen is a web page: it
+ * has room for a sentence, a heading and an empty-state explanation, none of which fit in
+ * twenty characters. Putting page copy in the chrome table would mean either exempting keys
+ * from the cap — which is how the cap stops meaning anything — or writing page copy to a chat
+ * button's budget.
+ *
+ * ⚠ **The PURCHASE button's label is deliberately NOT here.** It comes from
+ * `resolvePurchaseAffordance().labelKey` and is resolved through `botChrome()` server-side, so
+ * the word on the screen's button and the word on the chat card are the same word. Duplicating
+ * it here is how a customer gets "Add to cart" in the chat and "Buy" on the screen for one
+ * product.
+ *
+ * ⚠ **Declared in one pass, including keys whose screens are a later milestone**, for the
+ * reason `bot-chrome-copy.ts` gives about its own table: several streams read this file and
+ * `assertInAppCopyComplete` runs at BOOT, so a session adding a key mid-flight and missing a
+ * translation stops the server for everyone.
+ */
+
+type Copy = Record<BotCopyLanguage, string>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Shared — every screen can reach these
+// ─────────────────────────────────────────────────────────────────────────────
+
+const LOADING: Copy = {
+    en: 'Loading…',
+    fr: 'Chargement…',
+    pt: 'A carregar…',
+    es: 'Cargando…',
+    ar: 'جارٍ التحميل…',
+};
+
+/** A request that failed for a reason the page cannot explain. */
+const FAILED: Copy = {
+    en: 'Something went wrong. Close this and ask me again in the chat.',
+    fr: "Une erreur s'est produite. Fermez cette page et redemandez-moi dans la discussion.",
+    pt: 'Algo falhou. Feche esta página e pergunte-me outra vez na conversa.',
+    es: 'Algo salió mal. Cierra esta página y vuelve a pedírmelo en el chat.',
+    ar: 'حدث خطأ ما. أغلق هذه الصفحة واطلب مني مرة أخرى في المحادثة.',
+};
+
+/**
+ * The handle has lapsed.
+ *
+ * ⚠ **Worded as "ask again", never as "expired"**, and the distinction matters: the customer
+ * did nothing wrong and has nothing to fix, so naming a session timeout tells them about our
+ * plumbing. What they need is the one action that works.
+ */
+const EXPIRED: Copy = {
+    en: 'This page is no longer available. Ask me again in the chat and I will open a fresh one.',
+    fr: "Cette page n'est plus disponible. Redemandez-moi dans la discussion et j'en ouvrirai une nouvelle.",
+    pt: 'Esta página já não está disponível. Pergunte-me outra vez na conversa e abro uma nova.',
+    es: 'Esta página ya no está disponible. Pídemelo otra vez en el chat y abriré una nueva.',
+    ar: 'هذه الصفحة لم تعد متاحة. اطلب مني مرة أخرى في المحادثة وسأفتح صفحة جديدة.',
+};
+
+const RETRY: Copy = {
+    en: 'Try again',
+    fr: 'Réessayer',
+    pt: 'Tentar de novo',
+    es: 'Reintentar',
+    ar: 'حاول مجددًا',
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Product listing
+// ─────────────────────────────────────────────────────────────────────────────
+
+const LISTING_HEADING: Copy = {
+    en: 'Browse',
+    fr: 'Parcourir',
+    pt: 'Explorar',
+    es: 'Explorar',
+    ar: 'تصفّح',
+};
+
+const LISTING_EMPTY: Copy = {
+    en: 'Nothing here yet. Ask me in the chat and I will look for something else.',
+    fr: "Rien ici pour le moment. Demandez-moi dans la discussion et je chercherai autre chose.",
+    pt: 'Ainda não há nada aqui. Pergunte-me na conversa e procuro outra coisa.',
+    es: 'Aquí no hay nada todavía. Pídemelo en el chat y buscaré otra cosa.',
+    ar: 'لا يوجد شيء هنا بعد. اسألني في المحادثة وسأبحث عن شيء آخر.',
+};
+
+const LOAD_MORE: Copy = {
+    en: 'Load more',
+    fr: 'Afficher plus',
+    pt: 'Carregar mais',
+    es: 'Cargar más',
+    ar: 'تحميل المزيد',
+};
+
+const OUT_OF_STOCK: Copy = {
+    en: 'Out of stock',
+    fr: 'Épuisé',
+    pt: 'Esgotado',
+    es: 'Agotado',
+    ar: 'غير متوفر',
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Product detail
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The options picker's own heading — the reason this screen exists. */
+const DETAIL_CHOOSE: Copy = {
+    en: 'Choose',
+    fr: 'Choisissez',
+    pt: 'Escolha',
+    es: 'Elige',
+    ar: 'اختر',
+};
+
+const DETAIL_DESCRIPTION: Copy = {
+    en: 'Description',
+    fr: 'Description',
+    pt: 'Descrição',
+    es: 'Descripción',
+    ar: 'الوصف',
+};
+
+/** Shown when a variant must be picked before the purchase button does anything. */
+const DETAIL_PICK_FIRST: Copy = {
+    en: 'Pick an option first',
+    fr: "Choisissez d'abord une option",
+    pt: 'Escolha primeiro uma opção',
+    es: 'Elige primero una opción',
+    ar: 'اختر خيارًا أولاً',
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Checkout
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CHECKOUT_HEADING: Copy = {
+    en: 'Checkout',
+    fr: 'Commander',
+    pt: 'Finalizar',
+    es: 'Pagar',
+    ar: 'إتمام الطلب',
+};
+
+const CHECKOUT_TOTAL: Copy = {
+    en: 'Total',
+    fr: 'Total',
+    pt: 'Total',
+    es: 'Total',
+    ar: 'الإجمالي',
+};
+
+const CHECKOUT_ADDRESS: Copy = {
+    en: 'Deliver to',
+    fr: 'Livrer à',
+    pt: 'Entregar em',
+    es: 'Entregar en',
+    ar: 'التوصيل إلى',
+};
+
+/**
+ * ⚠ **The screen requires an EXISTING address and says so rather than collecting one.**
+ * Capturing an address here would drag the whole geocoding candidate flow into a WebView; the
+ * chat already does it well, with a map pin and a candidate picker. So this is a real state
+ * with a real instruction, not an error.
+ */
+const CHECKOUT_NO_ADDRESS: Copy = {
+    en: 'You have no saved delivery address yet. Close this and send me your address in the chat — then I will reopen checkout.',
+    fr: "Vous n'avez pas encore d'adresse de livraison enregistrée. Fermez cette page et envoyez-moi votre adresse dans la discussion — je rouvrirai ensuite la commande.",
+    pt: 'Ainda não tem uma morada de entrega guardada. Feche esta página e envie-me a sua morada na conversa — depois reabro a finalização.',
+    es: 'Todavía no tienes una dirección de entrega guardada. Cierra esta página y envíame tu dirección en el chat — después reabriré el pago.',
+    ar: 'لا يوجد لديك عنوان توصيل محفوظ بعد. أغلق هذه الصفحة وأرسل لي عنوانك في المحادثة — ثم سأعيد فتح إتمام الطلب.',
+};
+
+/** Mobile money is the only live method, so the one field is a phone number. */
+const CHECKOUT_PHONE: Copy = {
+    en: 'Mobile money number',
+    fr: 'Numéro mobile money',
+    pt: 'Número de mobile money',
+    es: 'Número de mobile money',
+    ar: 'رقم المحفظة المحمولة',
+};
+
+/**
+ * The address block's label when there is nothing to deliver.
+ *
+ * ⚠ **A LABEL, not a sentence, and that is the whole reason it exists.** A digital basket has
+ * no delivery address, so `checkoutAddress` ("Deliver to") over a masked email is simply wrong.
+ * The first attempt at this filled the address *value* with the masked identifier and left the
+ * heading alone, which read as the shop promising to carry a download somewhere.
+ *
+ * Rendered, a digital basket reads:
+ *
+ *     Sent to your account
+ *     j••••t@example.com
+ *
+ * The masked identifier underneath answers the only question a customer has there — *which
+ * account* — which is why a full sentence would be worse: it would leave the panel below it
+ * empty and looking broken.
+ *
+ * ⚠ **"Sent", never "Delivered".** Nothing is carried anywhere; for a download the account IS
+ * the destination and there is no journey to describe.
+ */
+const CHECKOUT_DIGITAL_DELIVERY: Copy = {
+    en: 'Sent to your account',
+    fr: 'Envoyé sur votre compte',
+    pt: 'Enviado para a sua conta',
+    es: 'Enviado a tu cuenta',
+    ar: 'يُرسل إلى حسابك',
+};
+
+/**
+ * The checkout screen's own submit control.
+ *
+ * ⚠ **Not a rung of the purchase ladder, which is why it may live here at all.** The four
+ * ladder labels come from `resolvePurchaseAffordance().labelKey` through `botChrome()`, so the
+ * word on a product's button is the same word in the chat and on the screen. This one is
+ * different in kind: it belongs to the checkout page, appears nowhere in chat, and has no
+ * chat control to agree with.
+ *
+ * ⚠ **It says "pay", not "confirm" or "place order".** Mobile money is the only live method,
+ * so the very next thing that happens is a prompt on the customer's handset asking them to
+ * approve a charge — and a button that did not say so would make that prompt a surprise.
+ */
+const CHECKOUT_PAY: Copy = {
+    en: 'Pay now',
+    fr: 'Payer',
+    pt: 'Pagar agora',
+    es: 'Pagar ahora',
+    ar: 'ادفع الآن',
+};
+
+/**
+ * ⚠ **Said BEFORE the charge starts, because the screen cannot wait for it.** A Mini App is a
+ * page the customer will leave and a Flow is a closed session; neither can hold the line open
+ * while somebody approves a push on their handset. So the screen promises the answer in the
+ * chat, and the chat delivers it.
+ */
+const CHECKOUT_WATCH_CHAT: Copy = {
+    en: 'Approve the payment on your phone. I will tell you in the chat as soon as it lands.',
+    fr: "Validez le paiement sur votre téléphone. Je vous le dirai dans la discussion dès qu'il est reçu.",
+    pt: 'Aprove o pagamento no seu telefone. Digo-lhe na conversa assim que entrar.',
+    es: 'Aprueba el pago en tu teléfono. Te lo diré en el chat en cuanto llegue.',
+    ar: 'وافق على الدفع من هاتفك. سأخبرك في المحادثة بمجرد وصوله.',
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Orders and stores — screens are a later milestone, contract frozen here
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ORDERS_HEADING: Copy = {
+    en: 'Your orders',
+    fr: 'Vos commandes',
+    pt: 'As suas encomendas',
+    es: 'Tus pedidos',
+    ar: 'طلباتك',
+};
+
+const STORES_HEADING: Copy = {
+    en: 'Shops',
+    fr: 'Boutiques',
+    pt: 'Lojas',
+    es: 'Tiendas',
+    ar: 'المتاجر',
+};
+
+/**
+ * Every page string.
+ *
+ * ⚠ **No caps.** A screen is a web page and wraps; the cap machinery belongs to
+ * `bot-chrome-copy.ts`, whose strings are chat controls. That asymmetry is the whole reason
+ * these are two tables.
+ */
+const PAGE = Object.freeze({
+    loading: LOADING,
+    failed: FAILED,
+    expired: EXPIRED,
+    retry: RETRY,
+
+    listingHeading: LISTING_HEADING,
+    listingEmpty: LISTING_EMPTY,
+    loadMore: LOAD_MORE,
+    outOfStock: OUT_OF_STOCK,
+
+    detailChoose: DETAIL_CHOOSE,
+    detailDescription: DETAIL_DESCRIPTION,
+    detailPickFirst: DETAIL_PICK_FIRST,
+
+    checkoutHeading: CHECKOUT_HEADING,
+    checkoutTotal: CHECKOUT_TOTAL,
+    checkoutAddress: CHECKOUT_ADDRESS,
+    checkoutDigitalDelivery: CHECKOUT_DIGITAL_DELIVERY,
+    checkoutNoAddress: CHECKOUT_NO_ADDRESS,
+    checkoutPhone: CHECKOUT_PHONE,
+    checkoutPay: CHECKOUT_PAY,
+    checkoutWatchChat: CHECKOUT_WATCH_CHAT,
+
+    ordersHeading: ORDERS_HEADING,
+    storesHeading: STORES_HEADING,
+});
+
+export type InAppCopyKey = keyof typeof PAGE;
+export type InAppCopy = Record<InAppCopyKey, string>;
+
+/**
+ * The whole table flattened to one language, for handing to a page.
+ *
+ * Per-key English fallback rather than a whole-table one: a single missing translation should
+ * cost one string, not nineteen. `assertInAppCopyComplete` makes that unreachable at boot, so
+ * this is the belt to that braces.
+ */
+export function inAppCopy(language: string | null | undefined): InAppCopy {
+    const lang = toBotCopyLanguage(language);
+    const out = {} as InAppCopy;
+    for (const key of Object.keys(PAGE) as InAppCopyKey[]) {
+        out[key] = PAGE[key][lang] ?? PAGE[key].en;
+    }
+    return out;
+}
+
+/**
+ * Refuse to boot on a missing translation.
+ *
+ * No cap check, unlike `assertBotChromeCopyFits` — there is no control here to overflow. A
+ * bare `Error`: this runs beside the other boot assertions with no request in flight.
+ */
+export function assertInAppCopyComplete(): void {
+    const gaps: string[] = [];
+
+    for (const key of Object.keys(PAGE) as InAppCopyKey[]) {
+        for (const lang of BOT_COPY_LANGUAGES) {
+            const value = PAGE[key][lang];
+            if (typeof value !== 'string' || value.trim().length === 0) {
+                gaps.push(`${key}:${lang}`);
+            }
+        }
+    }
+
+    if (gaps.length > 0) {
+        // eslint-disable-next-line no-restricted-syntax -- boot assertion, no request in flight
+        throw new Error(`[BotSurface] in-app copy is incomplete: ${gaps.join(', ')}`);
+    }
+}
+
+/** ⚠ Exported for the suites, which assert the key set against the screens that render it. */
+export const __IN_APP_COPY = PAGE;

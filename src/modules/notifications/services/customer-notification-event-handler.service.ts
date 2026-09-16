@@ -495,6 +495,72 @@ export class CustomerNotificationEventHandler {
         });
     }
 
+    /**
+     * ⭐ The charge did not go through, and until this existed nobody told the customer.
+     *
+     * ── WHAT WAS WRONG ──────────────────────────────────────────────────────
+     * Every other checkout outcome spoke. A failed payment did not: the orchestrator published
+     * `payment.received.full` on success and published nothing at all on FAILED or CANCELLED,
+     * so a refused mobile-money push was indistinguishable from a successful payment that had
+     * gone quiet. The customer waited for an order that was never coming — at the exact moment
+     * they most needed to hear from us, and with the copy for it already sitting in the
+     * catalogue.
+     *
+     * ── THREE THINGS THE COPY MUST KEEP DOING, ALL LOAD-BEARING ─────────────
+     * They belong to `order.payment_failed`'s own entry, and they constrain this handler too
+     * because they decide what may be interpolated:
+     *
+     *   - **It does not say cancelled.** The basket survives, the orders exist and the charge
+     *     is retryable (`checkout_retry_payment`). Announcing a cancellation would destroy a
+     *     recoverable sale and send the customer back to start from nothing.
+     *   - **It blames nobody.** The common causes are an unapproved prompt and a timeout,
+     *     neither of which is a judgement on the customer — which is also why the gateway's own
+     *     `reason` is NEVER relayed. It is provider-sourced text that names provider codes.
+     *   - **It names the amount**, so a customer with two orders in flight knows which this is.
+     *
+     * ── ⚠ IT IS UNGATED BY PREFERENCE, AND THAT IS THE MONEY RULE ───────────
+     * `SITUATION_PREFERENCE` deliberately has no key for it. Money and cancellations carry
+     * none, so no setting can silence them — and this is the strongest case for that rule on
+     * the whole table: a customer who muted "order updates" and then quietly lost an order to
+     * a failed charge would have muted the one message that was not optional.
+     *
+     * ⚠ **De-duplicated by the orchestrator's transition guard, not by the key alone.**
+     * `createIfNotExists` upserts the in-app row but `dispatch` still re-delivers the push and
+     * the WhatsApp template, so what actually stops three identical messages is that the
+     * publisher fires on the *change* into a dead status. The key is the backstop.
+     */
+    async handleOrderPaymentFailed(event: DomainEvent): Promise<void> {
+        const p = event.payload as {
+            orderId?: string;
+            customerId?: string;
+            orderNumber?: string;
+            amount: number;
+            currency: string;
+            aggregateType?: string;
+        };
+
+        // The same charge pipeline carries bookings, plan purchases and credit top-ups.
+        // No orderId → not ours, exactly as `handleOrderPaymentReceived` decides.
+        if (!p.orderId || (p.aggregateType && p.aggregateType !== 'order')) return;
+
+        const { customer, orderNumber } = await this.customerFromOrder(p.orderId, p.customerId);
+        if (!customer) return;
+
+        await this.notify({
+            situation: 'order.payment_failed',
+            customerId: customer._id.toString(),
+            aggregateType: 'order',
+            aggregateId: p.orderId,
+            idempotencyKey: `customer.order.payment_failed:${p.orderId}`,
+            context: {
+                orderId: p.orderId,
+                orderNumber: p.orderNumber ?? orderNumber ?? p.orderId,
+                currency: p.currency,
+                amountFormatted: this.formatAmount(p.amount)
+            }
+        });
+    }
+
     async handleOrderCancelled(event: DomainEvent): Promise<void> {
         const p = event.payload as {
             orderId: string;

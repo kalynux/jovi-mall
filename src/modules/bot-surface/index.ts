@@ -113,6 +113,24 @@ export { BOT_ACTION_VERBS, skipActionId } from './domain/bot-action-id';
 export type { BotActionVerb } from './domain/bot-action-id';
 
 /**
+ * Which purchase button a product gets — Bargain, Add to cart, Buy now or Book.
+ *
+ * ⚠ **Exported because FIVE surfaces ask this question and only one may answer it**: the chat
+ * card, the in-app listing, the in-app detail screen, the slash-command answer and the
+ * bargaining hand-off. Every rung mirrors a refusal `CartService.addToCart` already enforces,
+ * so a second implementation is a second chance to offer a button that answers `400` — which
+ * is the defect this replaces, found live on a bookable yoga class.
+ *
+ * Consumers render what they are handed and decide nothing.
+ */
+export { resolvePurchaseAffordance } from './domain/purchase-affordance';
+export type {
+    PurchaseAffordance,
+    PurchaseAffordanceInput,
+    PurchaseVerb,
+} from './domain/purchase-affordance';
+
+/**
  * The resolved-caller type, so a signature elsewhere can name it without reaching into a
  * service file. Nothing outside this module produces one — `botIdentityService.resolve` is
  * the only path, and it runs in this module's own middleware.

@@ -73,8 +73,43 @@ export type AgentNotificationType =
     | 'plan.expiring'
     | 'plan.expired'
     /** This agent's own media storage crossed a usage threshold (80/90/100%). */
-    | 'storage.alert';
-export type AgentAggregateType = 'deposit' | 'offer' | 'shipment' | 'contract' | 'plan' | 'storage';
+    | 'storage.alert'
+    /**
+     * The agent's own money leaving the platform.
+     *
+     * ⚠ **All four are new, and their absence was the defect.** Vendors and agencies have had
+     * payout notifications since this stack shipped; this union had none, so an agent
+     * requested their money and heard nothing in any channel.
+     *
+     * ⚠ **`transfer_failed` is not a terminal state and must never be worded like one.** A
+     * *rejected* payout returns the funds to the available balance; a *failed* transfer leaves
+     * them held in `requested_balance`, so the agent cannot request again
+     * (`409 EARNINGS_PAYOUT_ALREADY_PENDING`) and an administrator must retry or reject. It
+     * is the only one of the four where silence means money frozen with no signal.
+     */
+    | 'payout.requested'
+    | 'payout.paid'
+    | 'payout.rejected'
+    | 'payout.transfer_failed';
+export type AgentAggregateType = 'deposit' | 'offer' | 'shipment' | 'contract' | 'plan' | 'storage' | 'payout';
+
+/**
+ * The aggregate types as a runtime array, for the schema enum to spread.
+ *
+ * ⚠ **Typed as `readonly AgentAggregateType[]` on purpose** — that annotation is the only
+ * thing that makes a missing member a compile error rather than a silent Mongoose
+ * ValidationError at write time. Same mechanism as `AGENT_NOTIFICATION_TYPES` below, added
+ * for the same reason after the same defect recurred on this exact field.
+ */
+export const AGENT_AGGREGATE_TYPES: readonly AgentAggregateType[] = [
+    'deposit',
+    'offer',
+    'shipment',
+    'contract',
+    'plan',
+    'storage',
+    'payout'
+];
 
 /**
  * Every situation above, as a runtime array. The Mongoose enum is built FROM
@@ -105,7 +140,11 @@ export const AGENT_NOTIFICATION_TYPES: readonly AgentNotificationType[] = [
     'shipment.reassigned_away',
     'plan.expiring',
     'plan.expired',
-    'storage.alert'
+    'storage.alert',
+    'payout.requested',
+    'payout.paid',
+    'payout.rejected',
+    'payout.transfer_failed'
 ] as const;
 
 /**
@@ -151,11 +190,26 @@ const AgentNotificationSchema = new Schema<IAgentNotification>(
         },
         title: { type: String, required: true, trim: true, maxlength: 200 },
         message: { type: String, required: true, trim: true, maxlength: 1000 },
-        // 'contract' was likewise missing here, so even with the type fixed a
-        // contract notification would still have failed on this field.
+        /**
+         * ⚠ **Spread from `AGENT_AGGREGATE_TYPES`, never typed here — and this field is why
+         * that rule exists twice in one file.**
+         *
+         * It used to be a hand-written literal list, and it had drifted exactly as the
+         * situation enum had: `'contract'` was in the union and missing from this array, so
+         * even with the type fixed a contract notification still failed on THIS field. The
+         * comment recording that sat directly above the literal that would do it again.
+         *
+         * It did do it again. Adding the four `payout.*` situations needed a seventh aggregate
+         * type, `'payout'`, and TypeScript could not catch its absence here because a plain
+         * string array is not checked against the union — so every agent payout notification
+         * would have thrown a Mongoose ValidationError and the agent would have been told
+         * nothing, which is the precise silence those four situations were added to end.
+         *
+         * Derived now. A new aggregate type updates this enum with it.
+         */
         aggregateType: {
             type: String,
-            enum: ['deposit', 'offer', 'shipment', 'contract', 'plan', 'storage'],
+            enum: [...AGENT_AGGREGATE_TYPES],
             required: true
         },
         aggregateId: { type: Schema.Types.ObjectId, required: true },

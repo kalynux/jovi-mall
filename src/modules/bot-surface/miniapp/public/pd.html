@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>wi-mall</title>
+<!--
+  inAppProductDetail — options, variants, and the one purchase button.  Screen kind `pd`.
+
+  ⚠ **THE FILENAME IS THE ROUTE** — `inapp-page.controller.ts` sends `public/<kind>.html`.
+
+  ── WHO OWNS WHAT ───────────────────────────────────────────────────────────
+  Stream 0 wrote the frame and froze the two seams below.  **Stream B owns this file from
+  here on.**  What Stream B must build:  `GET  /api/bot/miniapp/s/pd/:handle/data`
+                                         `POST /api/bot/miniapp/s/pd/:handle/act`
+
+  ── ⚠ SEAM 1: THE BUTTON IS RENDERED HERE AND DECIDED ON THE SERVER ─────────
+  `resolvePurchaseAffordance()` is the single source of truth for which of the four rungs a
+  product is on — Bargain · Add to cart · Buy now · Book — and it is the same function the
+  chat card calls.  The data endpoint returns its result **verbatim**, per variant, already
+  translated through `botChrome()`.  **This page hardcodes no button logic and no label.**
+
+  Without that rule Stream B and Stream C both own the button and neither can finish; with it
+  a customer sees the same word on the chat card and on the screen, which is the whole point
+  of there being one ladder.
+
+  ⚠ **And the server re-resolves it on the POST.**  What this page sends is a variant id, not
+  a verb.  A page is a thing a customer can edit; a page that could name its own rung could
+  ask to "buy now" something that is negotiable, or to add a service the cart refuses.
+
+  ── ⚠ SEAM 2: TWO RUNGS CANNOT FINISH IN THIS SCREEN, AND THE WAY OUT IS A PUSH ─
+  `add` and `buy` are HTTP calls that end in a basket.  `bargain` and `book` are
+  conversations — a haggle is a negotiation with the bargaining agent, a booking needs a date.
+  A Mini App cannot write to the chat: `Telegram.WebApp.sendData()` works only for an app
+  launched from a REPLY keyboard, and this one is launched from an inline `web_app` button
+  (`channel-reply.ts`), so it is unavailable here.
+
+  The way out is that **jovi-mall holds `TELEGRAM_BOT_TOKEN` itself** and
+  `TelegramBotService.sendMessage` can push straight into the thread; the session carries the
+  `externalId` to address it.  So those two rungs are: POST → the server posts a message into
+  the chat → this page closes.  `outcome: "chat"` below is that case.
+
+  ⚠ **AND THE PUSHED MESSAGE MUST INVITE A REPLY — it cannot BE the haggle.**  An earlier
+  draft of this comment called it "the bargaining agent's opening message", which rests on a
+  premise that is false: the bargaining agent lives entirely in **n8n**, and jovi-mall's whole
+  negotiation surface (`/api/internal/negotiation/{playbook,tools/*,gate}`, behind
+  `requireServiceToken`) is n8n calling **in**.  There is no outbound path from here that makes
+  the agent take a turn.  A message this service pushes therefore reaches the **customer** and
+  does not wake the **agent** — what wakes it is the customer's reply, arriving through the
+  ordinary inbound webhook.  So the copy has to be a question worth answering.  Verified in
+  source by the stream that owns `/act`, which is where that message is written.
+
+  ── THE THREE RULES ─────────────────────────────────────────────────────────
+    1. Works with no Telegram runtime at all — every `Telegram.WebApp` touch is guarded.
+    2. Never renders a blank screen: loading, lapsed and failed are real states with words.
+    3. The handle is the only credential, and it is bound to one product by the session.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/api/bot/miniapp/shell.css">
+<style>
+  /* Screen-specific only. Anything another screen would also want belongs in shell.css. */
+  .hero { aspect-ratio: 1 / 1; max-width: 100%; border-radius: var(--radius); overflow: hidden; background: var(--line); }
+  .hero img { inline-size: 100%; block-size: 100%; object-fit: cover; display: block; }
+  .lede { display: flex; flex-direction: column; gap: 4px; margin-block: 14px; }
+  .lede__price { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .desc { color: var(--muted); font-size: 14px; margin-block-start: 18px; white-space: pre-wrap; }
+  .desc h2 { font-size: 13px; color: var(--fg); margin: 0 0 4px; }
+</style>
+</head>
+<body>
+  <header class="screen__head">
+    <h1 class="screen__title" id="title"></h1>
+    <div class="screen__sub" id="sub"></div>
+  </header>
+
+  <main class="screen__body" id="body">
+    <div class="state" id="state"><p class="state__text" id="stateText"></p></div>
+
+    <div id="detail" hidden>
+      <div class="hero" id="hero"></div>
+      <div class="lede">
+        <div class="lede__price" id="price"></div>
+        <div class="card__store" id="store"></div>
+      </div>
+      <div class="opts" id="opts"></div>
+      <div class="desc" id="descWrap" hidden>
+        <h2 id="descLabel"></h2>
+        <div id="desc"></div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="screen__foot" id="foot" hidden>
+    <button class="btn btn--primary btn--block" id="act" disabled></button>
+    <div class="note" id="note"></div>
+  </footer>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ── Telegram, entirely optional ──────────────────────────────────────── */
+  var tg = (window.Telegram && window.Telegram.WebApp) || null;
+  if (tg) {
+    try {
+      tg.ready();
+      tg.expand();
+      var p = tg.themeParams || {};
+      var root = document.documentElement.style;
+      if (p.bg_color) root.setProperty("--bg", p.bg_color);
+      if (p.text_color) root.setProperty("--fg", p.text_color);
+      if (p.hint_color) root.setProperty("--muted", p.hint_color);
+      if (p.secondary_bg_color) root.setProperty("--card", p.secondary_bg_color);
+      if (p.button_color) root.setProperty("--accent", p.button_color);
+      if (p.button_text_color) root.setProperty("--accent-fg", p.button_text_color);
+    } catch (e) { /* an old client, or one reporting no theme. Keep our own colours. */ }
+  }
+
+  var base = window.location.pathname.replace(/\/+$/, "");
+  var lang = new URLSearchParams(window.location.search).get("lang") || "";
+
+  var el = {
+    title: document.getElementById("title"),
+    sub: document.getElementById("sub"),
+    state: document.getElementById("state"),
+    stateText: document.getElementById("stateText"),
+    detail: document.getElementById("detail"),
+    hero: document.getElementById("hero"),
+    price: document.getElementById("price"),
+    store: document.getElementById("store"),
+    opts: document.getElementById("opts"),
+    descWrap: document.getElementById("descWrap"),
+    descLabel: document.getElementById("descLabel"),
+    desc: document.getElementById("desc"),
+    foot: document.getElementById("foot"),
+    act: document.getElementById("act"),
+    note: document.getElementById("note")
+  };
+
+  var copy = null;
+  var product = null;
+  var chosen = Object.create(null);   /* option name → value id */
+  var busy = false;
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function state(text, retry) {
+    el.detail.hidden = true;
+    el.foot.hidden = true;
+    el.state.hidden = false;
+    el.stateText.textContent = text;
+
+    var old = el.state.querySelector("button");
+    if (old) old.remove();
+    if (retry && copy) {
+      var b = document.createElement("button");
+      b.className = "btn";
+      b.textContent = copy.retry;
+      b.addEventListener("click", load);
+      el.state.appendChild(b);
+    }
+  }
+
+  function say(text, bad) {
+    el.note.textContent = text || "";
+    el.note.className = bad ? "note note--bad" : "note";
+  }
+
+  function json(url, init) {
+    return fetch(url, init).then(function (r) {
+      return r.json()
+        .catch(function () { return null; })
+        .then(function (b) { return { status: r.status, ok: r.ok, body: b }; });
+    });
+  }
+
+  function explain(res) {
+    if (res.status === 404 || res.status === 410) return copy.expired;
+    var e = res.body && res.body.error;
+    return (e && (e.customerMessage || e.message)) || copy.failed;
+  }
+
+  /* ── The contract Stream B's data endpoint must satisfy ────────────────────
+   *
+   *   { success: true, data: {
+   *       title:       string,
+   *       storeName:   string,
+   *       storeCity:   string | null,   // ⚠ CITY ONLY — ship-from addresses stay private
+   *       imageUrl:    string | null,
+   *       description: string | null,
+   *       options: [{ name: string, values: [{ id, label }] }],
+   *       variants: [{
+   *         variantId:  string,
+   *         valueIds:   string[],       // one per option, in the same order as `options`
+   *         priceText:  string,         // FORMATTED server-side — the page does no money maths
+   *         inStock:    boolean,
+   *         affordance: { verb, label, enabled }   // verbatim; see SEAM 1 at the top
+   *       }],
+   *       defaultVariantId: string | null
+   *   }}
+   *
+   * A product in `simple` mode has zero options and exactly one variant, so the picker draws
+   * nothing and the button is live on arrival. That is the common case and it must stay the
+   * quiet one — no empty "Choose" heading over an empty row.
+   */
+  function currentVariant() {
+    if (!product || !product.variants.length) return null;
+    if (!product.options.length) return product.variants[0];
+
+    var wanted = product.options.map(function (o) { return chosen[o.name] || null; });
+    if (wanted.some(function (v) { return v === null; })) return null;
+
+    return product.variants.filter(function (v) {
+      return v.valueIds.length === wanted.length
+        && v.valueIds.every(function (id, i) { return id === wanted[i]; });
+    })[0] || null;
+  }
+
+  /** The button always shows the SERVER's word for the selected variant. Never ours. */
+  function refresh() {
+    var v = currentVariant();
+
+    if (!v) {
+      el.act.disabled = true;
+      el.act.textContent = copy.detailPickFirst;
+      el.price.textContent = "";
+      return;
+    }
+
+    el.price.textContent = v.inStock ? v.priceText : v.priceText + " · " + copy.outOfStock;
+    el.act.textContent = v.affordance.label;
+    el.act.disabled = !v.affordance.enabled;
+  }
+
+  function drawOptions() {
+    el.opts.innerHTML = "";
+    if (!product.options.length) return;
+
+    var head = document.createElement("div");
+    head.className = "opts__label";
+    head.textContent = copy.detailChoose;
+    el.opts.appendChild(head);
+
+    product.options.forEach(function (option) {
+      var block = document.createElement("div");
+      block.innerHTML = '<div class="opts__label">' + esc(option.name) + "</div>";
+
+      var row = document.createElement("div");
+      row.className = "opts__row";
+
+      option.values.forEach(function (value) {
+        var chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "chip";
+        chip.setAttribute("aria-pressed", "false");
+        chip.textContent = value.label;
+        chip.addEventListener("click", function () {
+          chosen[option.name] = value.id;
+          row.querySelectorAll(".chip").forEach(function (c) { c.setAttribute("aria-pressed", "false"); });
+          chip.setAttribute("aria-pressed", "true");
+          if (tg && tg.HapticFeedback) { try { tg.HapticFeedback.selectionChanged(); } catch (e) {} }
+          say("", false);
+          refresh();
+        });
+        row.appendChild(chip);
+      });
+
+      block.appendChild(row);
+      el.opts.appendChild(block);
+    });
+  }
+
+  function draw(data) {
+    product = data;
+
+    el.title.textContent = data.title;
+    el.sub.textContent = [data.storeName, data.storeCity].filter(Boolean).join(" · ");
+    el.store.textContent = data.storeName;
+
+    el.hero.innerHTML = data.imageUrl
+      ? '<img alt="" src="' + esc(data.imageUrl) + '">'
+      : "";
+
+    drawOptions();
+
+    if (data.description) {
+      el.descLabel.textContent = copy.detailDescription;
+      el.desc.textContent = data.description;
+      el.descWrap.hidden = false;
+    }
+
+    /* Pre-select the default variant, so a simple product needs no taps at all. */
+    if (data.defaultVariantId && data.options.length) {
+      var pick = data.variants.filter(function (v) { return v.variantId === data.defaultVariantId; })[0];
+      if (pick) {
+        data.options.forEach(function (o, i) { chosen[o.name] = pick.valueIds[i]; });
+        el.opts.querySelectorAll(".opts__row").forEach(function (row, i) {
+          row.querySelectorAll(".chip").forEach(function (c) {
+            c.setAttribute("aria-pressed", String(c.textContent === labelFor(data, i, pick.valueIds[i])));
+          });
+        });
+      }
+    }
+
+    el.state.hidden = true;
+    el.detail.hidden = false;
+    el.foot.hidden = false;
+    refresh();
+  }
+
+  function labelFor(data, optionIndex, valueId) {
+    var values = data.options[optionIndex].values;
+    var hit = values.filter(function (v) { return v.id === valueId; })[0];
+    return hit ? hit.label : "";
+  }
+
+  /*
+   * ⚠ **Sends a variant id and nothing else** — see SEAM 1. The server decides the rung and
+   * tells us what happened:
+   *
+   *   { outcome: "cart",     message: string }          → say it, then close
+   *   { outcome: "checkout", url: string }               → go there (digital "Buy now")
+   *   { outcome: "chat",     message?: string }          → the server has posted into the
+   *                                                        thread; close so the customer
+   *                                                        lands on it (Bargain / Book)
+   */
+  el.act.addEventListener("click", function () {
+    var v = currentVariant();
+    if (!v || busy) return;
+
+    busy = true;
+    el.act.disabled = true;
+    say(copy.loading, false);
+
+    json(base + "/act", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ variantId: v.variantId })
+    }).then(function (res) {
+      busy = false;
+
+      if (!res.ok || !res.body || res.body.success === false || !res.body.data) {
+        say(explain(res), true);
+        el.act.disabled = false;
+        return;
+      }
+
+      var out = res.body.data;
+      if (out.outcome === "checkout" && out.url) { window.location.assign(out.url); return; }
+
+      say(out.message || "", false);
+      if (tg && tg.HapticFeedback) { try { tg.HapticFeedback.notificationOccurred("success"); } catch (e) {} }
+
+      /*
+       * Closing IS the confirmation. The customer lands back in the thread, which is where
+       * the next step already is — the basket for `cart`, and for `chat` the message the
+       * server has just posted, waiting on a reply. See SEAM 2 on why it waits on one.
+       */
+      window.setTimeout(function () { if (tg && tg.close) { try { tg.close(); } catch (e) {} } }, 900);
+    }).catch(function () {
+      busy = false;
+      say(copy.failed, true);
+      el.act.disabled = false;
+    });
+  });
+
+  function load() {
+    state(copy ? copy.loading : "…", false);
+
+    json(base + "/data", { headers: { Accept: "application/json" } })
+      .then(function (res) {
+        if (!res.ok || !res.body || res.body.success === false || !res.body.data) {
+          state(explain(res), true);
+          return;
+        }
+        draw(res.body.data);
+      })
+      .catch(function () { state(copy.failed, true); });
+  }
+
+  /*
+   * ⚠ **`copy` is never null once boot has run.** Every state and every button label reads
+   * it, so a failed copy call falls back to English rather than to nothing — otherwise the
+   * page throws while rendering the message that explains why it could not load.
+   */
+  var FALLBACK = {
+    loading: "Loading…",
+    failed: "Something went wrong. Close this and ask me again in the chat.",
+    expired: "This page is no longer available. Ask me again in the chat.",
+    retry: "Try again",
+    outOfStock: "Out of stock",
+    detailChoose: "Choose",
+    detailDescription: "Description",
+    detailPickFirst: "Pick an option first"
+  };
+
+  function boot(d) {
+    copy = (d && d.copy) || FALLBACK;
+    document.documentElement.lang = (d && d.language) || "en";
+    document.documentElement.dir = (d && d.direction) || "ltr";
+    load();
+  }
+
+  /* ⚠ Copy first, data second — a lapsed page must say so in the customer's own language. */
+  json(base + "/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
+    .then(function (res) { boot((res.body && res.body.data) || null); })
+    .catch(function () { boot(null); });
+})();
+</script>
+</body>
+</html>

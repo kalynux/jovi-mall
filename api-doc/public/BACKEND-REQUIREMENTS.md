@@ -160,11 +160,24 @@ store pages carry rating rich results legitimately.
 
 ### 3d. WhatsApp entry point
 
-`BRAND.whatsappNumber` in `src/lib/constants.ts` is still the placeholder
-`+2340000000000`, and `WHATSAPP_CUSTOMER_LINK` is built from it. The marketing
-pages route their CTAs to `/register?role=…` rather than to WhatsApp precisely
-because of this — the customer CTA is the one path they do not push. Set the real
-number and the customer-side CTA becomes usable on every page.
+`BRAND.whatsappNumber` in `src/lib/constants.ts` is the real bot line, and
+`NEXT_PUBLIC_WHATSAPP_NUMBER` only overrides it. The customer-side WhatsApp CTA
+is therefore live everywhere, including the third hero button and the contact
+page, both of which are built from it via `buildWhatsAppUrl()`.
+
+⛔ **THE NUMBER CHANGED ON 2026-09-16 AND THIS IS A LANDING-SIDE EDIT NOBODY ELSE
+CAN MAKE.** The bot line is now **`+237 652 705 926`** (bare digits
+`237652705926`), display name **Wi-Mall**. The old `+15557845447` was a Meta-issued
+US test number; it has been **removed from the WhatsApp Business Account entirely**,
+so it no longer receives anything. A `wa.me/15557845447` link still renders, still
+opens WhatsApp and still looks like it worked — **the message simply arrives
+nowhere**. There is no error state to detect and no backend call involved, which is
+why this cannot be caught anywhere but here.
+
+Change `BRAND.whatsappNumber` in `src/lib/constants.ts`, and any deployment that
+sets `NEXT_PUBLIC_WHATSAPP_NUMBER` (it wins over the constant). The backend half is
+`WA_BOT_NUMBER`, already updated; the two are not compared anywhere, so a drift here
+is silent on both sides.
 
 ---
 

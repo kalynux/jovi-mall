@@ -828,6 +828,59 @@ export const CUSTOMER_NOTIFICATION_CATALOG: Record<CustomerNotificationType, Sit
         button: PAY_LINK_BUTTON
     },
 
+    /**
+     * ⚠ **The silence this closes was the defect.** Every other checkout outcome said
+     * something; a failed payment said nothing, so it was indistinguishable from a successful
+     * one that had gone quiet. The customer waits for an order that is not coming.
+     *
+     * Three rules the copy obeys, and each is load-bearing:
+     *
+     *   - **It does not say the order is cancelled**, because it is not. The basket survives
+     *     and the charge is retryable, so announcing a cancellation would destroy a recoverable
+     *     sale and send the customer to start again from nothing.
+     *   - **It blames nobody.** "Declined" reads as an accusation about the customer's money;
+     *     the common causes here are an unapproved push prompt and a timeout, neither of which
+     *     is a judgement on them.
+     *   - **It names the amount**, so a customer with two orders in flight knows which one this
+     *     is about — the same reason every other entry carries `orderNumber`.
+     *
+     * `ORDER_BUTTON` rather than a fresh pay link: at failure time there may be no valid
+     * token to mint one from, and a button that opens a dead payment page is worse than one
+     * that opens the order the retry lives on.
+     */
+    'order.payment_failed': {
+        base: {
+            en: {
+                subject: 'Payment did not go through for {{orderNumber}}',
+                body: 'We could not take the {{currency}} {{amountFormatted}} for {{orderNumber}}. Nothing has been charged and your items are still waiting — open the order to try again.'
+            },
+            fr: {
+                subject: 'Paiement non abouti pour {{orderNumber}}',
+                body: "Nous n'avons pas pu encaisser les {{currency}} {{amountFormatted}} pour {{orderNumber}}. Rien n'a été débité et vos articles vous attendent toujours — ouvrez la commande pour réessayer."
+            },
+            pt: {
+                subject: 'O pagamento não foi concluído para {{orderNumber}}',
+                body: 'Não conseguimos cobrar os {{currency}} {{amountFormatted}} de {{orderNumber}}. Nada foi debitado e os seus artigos continuam à espera — abra a encomenda para tentar de novo.'
+            },
+            es: {
+                subject: 'El pago no se completó para {{orderNumber}}',
+                body: 'No pudimos cobrar los {{currency}} {{amountFormatted}} de {{orderNumber}}. No se ha cobrado nada y tus artículos siguen esperando — abre el pedido para intentarlo otra vez.'
+            },
+            ar: {
+                subject: 'لم يتم الدفع للطلب {{orderNumber}}',
+                body: 'لم نتمكن من تحصيل {{currency}} {{amountFormatted}} للطلب {{orderNumber}}. لم يُخصم أي مبلغ ولا تزال منتجاتك في انتظارك — افتح الطلب لإعادة المحاولة.'
+            }
+        },
+        whatsapp: {
+            text: {},
+            template: {
+                name: 'customer_order_payment_failed',
+                bodyParams: ['{{currency}}', '{{amountFormatted}}', '{{orderNumber}}']
+            }
+        },
+        button: ORDER_BUTTON
+    },
+
     'order.shipped': {
         base: {
             en: {

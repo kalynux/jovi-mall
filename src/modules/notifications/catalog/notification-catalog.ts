@@ -413,6 +413,41 @@ export const NOTIFICATION_CATALOG: Record<NotificationType, SituationMessages> =
         button: { type: 'url', label: VIEW_TICKET_LABEL, urlSuffix: 'tickets/{{ticketId}}' }
     },
 
+    /**
+     * ⭐ **The gateway did not complete the transfer.** Published since the payout-execution
+     * work and consumed by nothing on any of the three stacks until now.
+     *
+     * It is the only one of the four payout outcomes where silence freezes money. A
+     * *rejected* payout returns the amount to the available balance; this leaves it held in
+     * `requested_balance`, so the vendor cannot request again (one open request per owner) and
+     * an administrator has to retry the send or reject it.
+     *
+     * Three rules the copy obeys, each load-bearing:
+     *
+     *   - ⚠ **Not terminal — must not read as "rejected".** The request is still open and the
+     *     same send will be retried. `payout-request.service.ts` states it in its own ticket
+     *     note: *"The funds remain held — retry the transfer or reject the request to return
+     *     them."*
+     *   - ⚠ **Do not invite a second request.** It answers 409, which the vendor reads as the
+     *     app breaking on top of their money being stuck.
+     *   - ⚠ **The gateway's `reason` is not relayed.** Provider-sourced text that can name the
+     *     provider and its codes; it is on the ticket for whoever retries.
+     */
+    'payout.transfer_failed': {
+        base: {
+            en: { subject: 'Problem paying out {{currency}} {{amountFormatted}}', body: 'We hit a problem sending your {{currency}} {{amountFormatted}}. The money is safe and still reserved for this payout — our team is on it and will retry. Nothing is needed from you; see Tickets for progress.' },
+            fr: { subject: 'Problème de versement de {{currency}} {{amountFormatted}}', body: 'Nous avons rencontré un problème en envoyant vos {{currency}} {{amountFormatted}}. L\'argent est en sécurité et toujours réservé pour ce paiement — notre équipe s\'en occupe et fera une nouvelle tentative. Rien n\'est requis de votre part ; suivez l\'avancement dans Tickets.' },
+            pt: { subject: 'Problema ao pagar {{currency}} {{amountFormatted}}', body: 'Tivemos um problema ao enviar os seus {{currency}} {{amountFormatted}}. O dinheiro está seguro e continua reservado para este pagamento — a nossa equipa está a tratar disso e vai tentar de novo. Não precisa de fazer nada; acompanhe em Chamados.' },
+            es: { subject: 'Problema al pagar {{currency}} {{amountFormatted}}', body: 'Tuvimos un problema al enviar tus {{currency}} {{amountFormatted}}. El dinero está seguro y sigue reservado para este pago — nuestro equipo se está ocupando y lo reintentará. No necesitas hacer nada; consulta el progreso en Tickets.' },
+            ar: { subject: 'مشكلة في تحويل {{currency}} {{amountFormatted}}', body: 'واجهنا مشكلة في إرسال مبلغ {{currency}} {{amountFormatted}}. المال آمن ولا يزال محفوظًا لهذا التحويل — فريقنا يعمل على ذلك وسيعيد المحاولة. لا حاجة لأي إجراء منك؛ تابع التقدم ضمن التذاكر.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'vendor_payout_transfer_failed', bodyParams: ['{{currency}}', '{{amountFormatted}}'] }
+        },
+        button: { type: 'url', label: VIEW_TICKET_LABEL, urlSuffix: 'tickets/{{ticketId}}' }
+    },
+
     // A delivery agency declined a shipment. The specific reason + note live on
     // the order view (like payout.rejected points to Tickets), so this copy just
     // alerts + deep-links — no need to localize the fixed reason codes.

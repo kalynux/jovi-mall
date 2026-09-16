@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { app } from './app';
 import { initLogging, enableLogPersistence, logger, logMongoSink } from './core/logging';
 import { assertSigningSecrets } from './config/secrets.config';
+import { assertFlowKeyUsable } from './modules/whatsapp/flows/flows.config';
 import { assertEnvironment } from './config/env';
 import { assertInternalAdminToken } from './config/internal-admin.config';
 import { assertExposedConfigSafe } from './modules/system/domain/exposed-config';
@@ -17,6 +18,7 @@ import { assertBotOnboardingCopyComplete } from './modules/bot-surface/domain/bo
 import { assertBotChromeCopyFits } from './modules/bot-surface/domain/bot-chrome-copy';
 import { assertCommandCopyComplete } from './modules/bot-commands/domain/command-copy';
 import { assertMiniAppCopyComplete } from './modules/bot-surface/miniapp/miniapp-copy';
+import { assertInAppCopyComplete } from './modules/bot-surface/miniapp/inapp-copy';
 import { initAggregationScheduler } from './core/jobs/aggregation-scheduler';
 import { awaitWorkerLocksReleased, locksHeldInProcess } from './core/jobs/worker-lock';
 import { stopAllWorkers } from './modules/dev-tools/worker-registry';
@@ -117,6 +119,13 @@ export async function startServer(): Promise<Server> {
     // Optional until the admin service cuts over — but a token set to a placeholder is
     // worse than none, because the API is then open and looks configured.
     assertInternalAdminToken();
+    // The same asymmetry once more, on the WhatsApp Flows key. ABSENT is a valid deployment —
+    // no Flows, and the `inapp` intent renders a browser link instead — so absence is not
+    // checked at all. What is refused is a key that is SET AND UNPARSEABLE, which is otherwise
+    // invisible: the config swallows the parse failure and the endpoint reports "no Flows", so
+    // a PEM that lost its line breaks in an environment variable looks exactly like a
+    // deployment that never wanted Flows. This is the only place the two can be told apart.
+    assertFlowKeyUsable();
     // Same posture, one step further: a config whitelist that names a credential must kill the
     // process rather than serve it once. Pure function of code, so it belongs beside the other
     // two and before anything can accept a request.
@@ -157,6 +166,12 @@ export async function startServer(): Promise<Server> {
     // templated in — which means a missing translation there is exactly as silent as one in
     // the three tables above, and closed the same way.
     assertMiniAppCopyComplete();
+    // And a fifth time for the in-app SCREENS — the listing, product, checkout, order and
+    // store pages. A separate table from the one above because a screen is a web page with
+    // room for a sentence, while `bot-chrome-copy.ts` is capped at WhatsApp's twenty
+    // characters; sharing one table would mean either exempting keys from that cap or
+    // writing page copy to a chat button's budget. Same silence, same closure.
+    assertInAppCopyComplete();
 
     // Database Connection
     //

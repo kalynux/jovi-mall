@@ -557,8 +557,8 @@ Read `data.status` to decide UI: `paid` → credited (refresh balance), `pending
 Credits are consumed as a side effect of other vendor actions — there is no
 "spend credits" endpoint:
 
-- **Vectorisation (1 cr / product)** happens when a vendor creates/updates a product, enables vectorisation, or retries it (see the catalog product docs). If credits are insufficient the product still saves but its `vectorisationStatus` is `skipped_no_credits` — surface a "top up to enable AI search" hint when you see that status.
-- **WhatsApp template (1 cr / message)** is charged when a billable vendor→customer template is sent. If the balance is too low the send is rejected with `402 BILLING_INSUFFICIENT_CREDITS`.
+- **Vectorisation (5 cr / product)** happens when a vendor creates/updates a product, enables vectorisation, or retries it (see the catalog product docs). If credits are insufficient the product still saves but its `vectorisationStatus` is `skipped_no_credits` — surface a "top up to enable AI search" hint when you see that status.
+- **WhatsApp template (2 cr / message)** is charged when a billable vendor→customer template is sent. If the balance is too low the send is rejected with `402 BILLING_INSUFFICIENT_CREDITS`.
 
 ## Related: plan product limit
 

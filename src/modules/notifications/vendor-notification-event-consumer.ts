@@ -31,6 +31,13 @@ export function initializeVendorNotificationEventConsumers(): void {
     eventBus.subscribe('payout.requested', handler.handlePayoutRequested.bind(handler));
     eventBus.subscribe('payout.paid', handler.handlePayoutPaid.bind(handler));
     eventBus.subscribe('payout.rejected', handler.handlePayoutRejected.bind(handler));
+    /**
+     * ⚠ **This event had NO subscriber on any stack** — published by
+     * `payout-request.service.ts:580` and consumed by nothing. It is the only payout outcome
+     * where silence freezes money: rejected returns the funds, failed leaves them held with
+     * the owner unable to re-request.
+     */
+    eventBus.subscribe('payout.transfer_failed', handler.handlePayoutTransferFailed.bind(handler));
     eventBus.subscribe('shipment.rejected', handler.handleShipmentRejected.bind(handler));
     // Subscription plan lifecycle (owner-typed; handler no-ops on non-vendor owners).
     eventBus.subscribe('plan.expiring', handler.handlePlanExpiring.bind(handler));

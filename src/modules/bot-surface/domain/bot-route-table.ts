@@ -125,6 +125,40 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
     // ── Checkout and money ───────────────────────────────────────────────────
     // The route GAP-001 says must not ship without idempotency: a retry creates a second
     // set of orders AND a second 30-minute stock hold.
+    /**
+     * ⚠ **LITERALS BEFORE THE BARE PATH.** `/checkout/screen` and its two siblings are
+     * declared above `/checkout` deliberately — not because Express would confuse them (they
+     * differ in segment count) but because `assertNoShadowedRoutes()` is the only thing
+     * standing between this table and the `/articles/index`-behind-`/articles/:slug` defect
+     * this service has shipped twice, and literal-first is the habit that keeps it true.
+     */
+    /**
+     * Mints the checkout screen's handle.
+     *
+     * ⚠ **`mutating: true` although it writes no business record**, for the reason
+     * `inapp_open_*` carries it: it mints **the largest credential on this surface** — a URL
+     * that can place an order against a saved address and start a payment. A retried chat
+     * message must collapse onto one handle rather than leaving a trail of live ones.
+     */
+    { tool: 'checkout_open_screen', method: 'POST', path: '/checkout/screen', mutating: true, requiresCustomerRole: true },
+    /**
+     * ⚠ **NOT a duplicate of `payment_get_transaction`, and the difference is the whole point.**
+     * That one reads the stored record; this one asks the GATEWAY. A mobile-money confirmation
+     * arrives by webhook, and a webhook that has not landed leaves the record saying PENDING for
+     * a payment approved two minutes ago — so at the one moment a customer asks "did it go
+     * through?", the stored answer is the wrong one. Today only the reconciliation sweep closes
+     * that gap, ten minutes out.
+     *
+     * ⚠ **It takes no transactionId on purpose.** The id never reaches the chat — the screen's
+     * `place` answers a browser and the browser closes — so a model asked for one would invent
+     * it. It resolves the caller's own latest checkout payment instead.
+     */
+    { tool: 'checkout_payment_status', method: 'POST', path: '/checkout/payment-status', mutating: false, requiresCustomerRole: true },
+    /**
+     * ⚠ `mutating: true` for the reason `bookings_pay` is: it pushes a USSD prompt to a real
+     * handset, and a second unasked-for prompt is a second interruption of somebody's day.
+     */
+    { tool: 'checkout_retry_payment', method: 'POST', path: '/checkout/retry-payment', mutating: true, requiresCustomerRole: true },
     { tool: 'checkout_create_orders', method: 'POST', path: '/checkout', mutating: true, requiresCustomerRole: true },
     { tool: 'payment_get_transaction', method: 'POST', path: '/payments/:transactionId', mutating: false, requiresCustomerRole: true },
     // GAP-008. `mutating`, and the classification is the interesting half: it changes
@@ -225,6 +259,33 @@ export const BOT_ROUTES: readonly BotRouteSpec[] = Object.freeze([
      * classified this way, arriving through a different door.
      */
     { tool: 'catalog_display_action', method: 'POST', path: '/catalog/action', mutating: true, requiresCustomerRole: true },
+
+    // ── The in-app screens ───────────────────────────────────────────────────
+    /**
+     * ⚠ **All three are `mutating`, and none of them writes a business record.** They mint a
+     * handle that authorises a browser to read a customer's data and — on the checkout screen
+     * this trio will grow — to spend money. That is the same reasoning
+     * `catalog_show_products` is classified under: the `Idempotency-Key` collapses a retried
+     * chat message onto ONE handle instead of leaving a trail of live credentials behind every
+     * network hiccup.
+     *
+     * ⚠ **`/inapp/stores` before `/inapp/products/:productId`** is not load-bearing here (the
+     * segments differ), but the order is kept literal-first anyway because
+     * `assertNoShadowedRoutes()` is the only thing standing between this table and the
+     * `/articles/index`-behind-`/articles/:slug` defect this service has already shipped twice.
+     */
+    { tool: 'inapp_open_listing', method: 'POST', path: '/inapp/listing', mutating: true, requiresCustomerRole: true },
+    { tool: 'inapp_open_stores', method: 'POST', path: '/inapp/stores', mutating: true, requiresCustomerRole: true },
+    /**
+     * The order-history screen's door.
+     *
+     * ⚠ **It takes no arguments at all**, and that is the session shape rather than an
+     * oversight: an order listing is scoped by the caller's own identity, so naming an id
+     * would be inventing a parameter that could only ever be wrong. `InAppSurfaceSession`'s
+     * `ol` member carries no query for the same reason.
+     */
+    { tool: 'inapp_open_orders', method: 'POST', path: '/inapp/orders', mutating: true, requiresCustomerRole: true },
+    { tool: 'inapp_open_product', method: 'POST', path: '/inapp/products/:productId', mutating: true, requiresCustomerRole: true },
 
     // ── Wishlist and recently viewed ─────────────────────────────────────────
     { tool: 'wishlist_list', method: 'POST', path: '/wishlist/list', mutating: false, requiresCustomerRole: true },

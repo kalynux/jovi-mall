@@ -620,6 +620,56 @@ export const BotDisplayActionSchema = z
     .object({ token: z.string().trim().min(1).max(128) })
     .strict();
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The in-app screens
+//
+// ⚠ **All three are `.strict()`**, which on this surface is the norm rather than a choice:
+// an unknown key here means the automation layer and this contract disagree, and a silently
+// ignored field is how a filter the model believed it applied never reaches the query.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `inapp_open_listing` — what the product grid should show.
+ *
+ * ⚠ **Every field is optional and an empty body is VALID**, meaning "the whole shop". That is
+ * the browse case and it is the common one; requiring a filter would make the plain
+ * "show me what you have" turn impossible to express.
+ *
+ * ⚠ **`productIds` is the one field that is not a filter** — it pins an exact set, for a
+ * wishlist or a model-chosen selection rendered as a grid rather than as five chat cards. It
+ * is capped at fifty, well above the chat's ten: the grid is precisely the surface that can
+ * show more than a chat can, so inheriting the chat's ceiling would defeat the feature. The
+ * cap exists at all because the value is echoed into a query.
+ */
+export const BotInAppListingSchema = z
+    .object({
+        q: z.string().trim().min(1).max(120).optional(),
+        category: z.string().trim().min(1).max(120).optional(),
+        storeSlug: z.string().trim().min(1).max(160).optional(),
+        productIds: z.array(objectId).min(1).max(50).optional(),
+    })
+    .strict();
+
+/**
+ * `inapp_open_product` — the product whose screen to open.
+ *
+ * ⚠ **Not `objectId`, deliberately, and the controller re-checks the shape.** Same rule as
+ * `BotTransactionParamSchema`: a shape refusal here would answer 400 where every other unknown
+ * product answers 404, and a caller learning that its id was well-formed-but-unknown is being
+ * told a real row exists somewhere.
+ */
+export const BotInAppProductSchema = z.object({
+    productId: z.string().trim().min(1).max(64),
+});
+
+/** `inapp_open_stores` — the store directory, optionally narrowed. */
+export const BotInAppStoresSchema = z
+    .object({
+        q: z.string().trim().min(1).max(120).optional(),
+        city: z.string().trim().min(1).max(120).optional(),
+    })
+    .strict();
+
 export const BotBookingListSchema = z
     .object({
         status: z.enum(['pending', 'confirmed', 'completed', 'no_show', 'cancelled']).optional(),

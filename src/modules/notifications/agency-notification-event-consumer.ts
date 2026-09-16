@@ -62,6 +62,13 @@ export function initializeAgencyNotificationEventConsumers(): void {
     eventBus.subscribe('payout.requested', handler.handlePayoutRequested.bind(handler));
     eventBus.subscribe('payout.paid', handler.handlePayoutPaid.bind(handler));
     eventBus.subscribe('payout.rejected', handler.handlePayoutRejected.bind(handler));
+    /**
+     * ⚠ **This event had NO subscriber on any stack** — published by
+     * `payout-request.service.ts:580` and consumed by nothing. It is the only payout outcome
+     * where silence freezes money: rejected returns the funds, failed leaves them held with
+     * the owner unable to re-request.
+     */
+    eventBus.subscribe('payout.transfer_failed', handler.handlePayoutTransferFailed.bind(handler));
     eventBus.subscribe('cod.deposit.declared', handler.handleCodDepositDeclared.bind(handler));
     // Shared with the agent consumer — this handler only acts on the
     // direct-to-platform case, where the agency's liability moved without them.

@@ -169,8 +169,8 @@ env-overridable, which is exactly why they must be read rather than copied.
       { "code": "pack_2250", "credits": 2250, "price": 12000, "currency": "XAF" }
     ],
     "actionCosts": {
-      "vectorisation": 1,
-      "whatsappTemplate": 1
+      "vectorisation": 5,
+      "whatsappTemplate": 2
     }
   }
 }

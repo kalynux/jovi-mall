@@ -73,31 +73,60 @@ export class FlowValidator {
             );
         }
 
-        // Check if flow is registered and published
+        /**
+         * Check that the flow is registered and published.
+         *
+         * ⚠ **AN UNKNOWN FLOW ID IS REFUSED, AND THIS GUARD USED TO DO THE OPPOSITE.**
+         *
+         * It logged a warning and then **proceeded with the send**, throwing only for an id
+         * that *was* registered with status `DRAFT`. So the guard whose own header says its
+         * job is to "prevent sending unpublished flows" passed the dangerous state and
+         * refused the safe one: an id nobody had ever registered — which, with the registry
+         * empty, was every id — sailed through as a log line, while the only thing it ever
+         * caught was an id somebody had already taken the trouble to declare.
+         *
+         * Inverted deliberately on 2026-09-16, while the blast radius was still zero: nothing
+         * in this service sends a `flow` message today, so making this strict costs nothing
+         * now and can never be this cheap again. Left as it was, the first real Flow send
+         * would have inherited a guard that does not guard.
+         *
+         * The refusal is `FLOW_NOT_REGISTERED` rather than the published one because the two
+         * have different remedies — an unregistered id means the `WHATSAPP_FLOW_ID_*`
+         * variable for that screen is unset or wrong, not that somebody forgot to publish.
+         */
         const flow = this.registry.get(message.flowId);
         if (!flow) {
-            console.warn(
-                `[FlowValidator] Flow not in registry: ${message.flowId}. ` +
-                `This may fail if flow is not published.`
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_POLICY_VIOLATION,
+                403,
+                `WhatsApp policy violation: Flow ${message.flowId} is not registered`,
+                { policyType: 'FLOW_NOT_REGISTERED', reason: `Flow ${message.flowId} is not registered on this deployment`, flowId: message.flowId }
             );
-        } else {
-            // Check if flow is published
-            if (flow.status !== 'PUBLISHED') {
-                throw createAppError(
-                    ERROR_CODES.WHATSAPP_POLICY_VIOLATION,
-                    403,
-                    `WhatsApp policy violation: Flow ${message.flowId} is not published`,
-                    { policyType: 'FLOW_NOT_PUBLISHED', reason: `Flow ${message.flowId} is not published`, flowId: message.flowId, status: flow.status }
-                );
-            }
+        }
 
-            // Validate screen if specified
-            if (message.flowScreen && !flow.screens.includes(message.flowScreen)) {
-                console.warn(
-                    `[FlowValidator] Screen '${message.flowScreen}' not found in flow ${message.flowId}. ` +
-                    `Available screens: ${flow.screens.join(', ')}`
-                );
-            }
+        // Check if flow is published
+        if (flow.status !== 'PUBLISHED') {
+            throw createAppError(
+                ERROR_CODES.WHATSAPP_POLICY_VIOLATION,
+                403,
+                `WhatsApp policy violation: Flow ${message.flowId} is not published`,
+                { policyType: 'FLOW_NOT_PUBLISHED', reason: `Flow ${message.flowId} is not published`, flowId: message.flowId, status: flow.status }
+            );
+        }
+
+        /**
+         * ⚠ **An EMPTY screen list means "not enumerated", never "no screens".** The screen
+         * names live in the Flow JSON published to Meta; the registry deliberately keeps no
+         * second copy of them, because a copy drifts silently the first time one is renamed.
+         * So a populated list is checked and an empty one is no opinion — without this
+         * branch, every send would warn about a screen the registry was never told about.
+         */
+        if (message.flowScreen && flow.screens.length > 0
+            && !flow.screens.includes(message.flowScreen)) {
+            console.warn(
+                `[FlowValidator] Screen '${message.flowScreen}' not found in flow ${message.flowId}. ` +
+                `Available screens: ${flow.screens.join(', ')}`
+            );
         }
     }
 

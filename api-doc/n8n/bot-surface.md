@@ -1658,6 +1658,44 @@ the turn that produced it. **Each verb has exactly one mapping, and it is this t
 | `add:<productId>:<variantId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
 | `buy:<productId>:<variantId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
 | `more:<setId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+| `next:<setId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+| `bargain:<productId>:<variantId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+| `book:<productId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+| `open:pl:<ref>` · `open:pd:<productId>` · `open:ol` · `open:sl` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+| `cat:<categoryId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+| `yes:<context>` · `no:<context>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+| `ord:<orderId>` · `shp:<orderId>:<shipmentId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+| `code:<orderId>:<shipmentId>` · `track:<orderId>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+| `tkt:<ticketId>` · `rate:<orderId>:<stars>` · `lang:<code>` | `/catalog/action` | `{ "token": "<the token verbatim>" }` |
+
+⚠ **Every verb EXCEPT `skip:` posts to `/catalog/action`, and you never parse any of them.**
+The rule below about the three product verbs now covers the rest: one route is the surface's
+single tap handler, so a verb added next month needs no change in the automation layer at all.
+The route's name is historical — it is not a catalogue-only door.
+
+⚠ **THE VOCABULARY IS DECLARED AHEAD OF ITS HANDLERS, AND HERE IS WHAT THAT MEANS FOR YOU.**
+`skip · add · buy · more` work today. The other fourteen are the frozen token shapes for
+buttons still being built, published now so the strings never change once they are in a chat
+history. Until each one's handler ships, `/catalog/action` answers
+`BOT_ACTION_TOKEN_UNKNOWN` (422) — which carries `error.customerMessage`, so a tap produces a
+sentence rather than silence.
+
+**No button carrying an unhandled verb is rendered yet**, so this is not reachable in normal
+use; it is the contract you can build against. Handle it exactly as the paragraph at the end of
+this table already says: relay the customer message, and do not guess at the token.
+
+⚠ **`next:` and `more:` are DIFFERENT and both ride on one message.** `next:` sends the next
+five cards *into the chat*; `more:` opens the in-app listing screen. They share a `<setId>`
+because they are two ways of reading one held result. Forward whichever the customer pressed —
+you never have to know which is which.
+
+⚠ **`open:ol` and `open:sl` carry no reference**, and that is not a truncation. Those two
+screens are scoped by the caller's own identity, so naming an id would be inventing a
+parameter that could only ever be wrong. The bare surface name **is** the argument.
+
+⚠ **Never print a `yes:`/`no:` context, an `open:` reference or any handle in a sentence.**
+The reference in an `open:pl:` token names a screen session that authorises a browser to read
+a customer's data — on the checkout screen, to spend money. It is a credential.
 
 ⚠ **The three product verbs all post to ONE route and you never parse them.** Forward the
 token exactly as the platform returned it; `/catalog/action` owns the vocabulary. Splitting
@@ -2366,6 +2404,90 @@ The `Idempotency-Key` the generator emits is `{{ $execution.id }}-auth_send_logi
 one per turn — asking twice in a single turn sends one message; asking again in a later
 message mints a fresh pair.
 
+
+## 19 · ⭐ The in-app screens — when a chat bubble is the wrong shape
+
+Three tools open a real screen instead of answering in the chat:
+**`inapp_open_listing`**, **`inapp_open_product`**, **`inapp_open_stores`**.
+
+### 19.1 · The rule that decides which to use
+
+**Chat carries decisions; a screen carries display.** Five choices or fewer, a confirmation, a
+yes/no — chat. Many items, many fields, or anything the customer needs to *compare* — a screen.
+
+That is why `catalog_show_products` (five cards, in the chat) and `inapp_open_listing` (a
+grid) both exist and are not alternatives: the first **answers a question**, the second
+**opens a shelf**. A customer who asked "do you have red shoes in 42?" wants the first. One who
+said "what else do you sell?" wants the second.
+
+⚠ **`inapp_open_product` is the ONLY place a variant can be chosen.** A chat card carries the
+product's *default* variant and nothing else — so a product with sizes or colours is
+unbuyable from chat alone, and every card that offers one needs this door beside it.
+
+### 19.2 · You send the `reply` and say nothing else
+
+All three answer with a ready-made `reply` (§ 14). Send it unmodified and **do not also
+describe the button in your own words** — the customer would get the sentence twice.
+
+### 19.3 · What it renders to, per channel
+
+| | |
+|---|---|
+| **Telegram** | a `web_app` button. The screen opens **inside** Telegram, and closing it returns the customer to this thread. |
+| **WhatsApp** | a `cta_url` button to the storefront, until a Flow is published for that screen. |
+
+⚠ **The WhatsApp half is genuinely different today, and this is deliberate sequencing rather
+than an oversight.** A Mini App is a web page; a WhatsApp Flow is a *form* built from a fixed
+set of components in Meta's Flow Builder, and a Flow that loads live data needs an encrypted
+endpoint this platform has not built. So the screens are being proven on Telegram first and
+ported after. Until then WhatsApp customers get the storefront — the same sentence, the same
+label, a browser instead of an in-chat page.
+
+⚠ **A Flow can never be opened outside the 24-hour service window**, so this will remain the
+WhatsApp behaviour on any proactive turn even once Flows land.
+
+### 19.4 · ⚠ It degrades to the storefront, and that is the path running today
+
+`BOT_MINIAPP_BASE_URL` is **unset in production**, so there is no in-app origin and *every*
+one of these calls currently answers with a storefront `link` instead of an in-app button. The
+turn still works and the customer still reaches the right page.
+
+Three states, and you branch on none of them — the `reply` is already correct:
+
+1. a screen is configured → an in-app button;
+2. no screen, but a storefront → a link button to the equivalent page;
+3. neither → **no `reply` at all**, and the turn is yours to word. A button with an empty
+   target is worse than no button, which is the rule `/payments/:id/pay-link` already follows.
+
+### 19.5 · ⛔ The handle in the response is a CREDENTIAL
+
+Each call returns a `handle`. **Never print it, never put it in a sentence, and never reuse one
+from an earlier turn** — mint a new screen instead.
+
+It is the *only* credential the screen has: a browser cannot hold `INTERNAL_SERVICE_TOKEN` or
+`BOT_WEBHOOK_SECRET` without handing every viewer the whole bot surface. So the handle is
+opaque, short-lived, and bound to one conversation — and it is checked by **kind** as well as
+by owner, which means a listing handle cannot be replayed against a checkout screen.
+
+⚠ The checkout screen's handle is shorter-lived than the rest and is **spent** by the write
+that places the order, because that one can move money.
+
+### 19.6 · Two screens answer with a link for now
+
+The **order listing** and **store directory** screens are a later milestone. `inapp_open_stores`
+already works — it answers with the storefront directory link — and will start returning an
+in-app button when the screen lands, with **no contract change**. Nothing in your flow changes
+on that day.
+
+### 19.7 · One configuration fact that decides whether any of this is visible
+
+⚠ **`BOT_MINIAPP_BASE_URL` must be `https://` and publicly reachable.** Telegram refuses a
+`web_app` button on any other scheme and refuses **the whole message** with it — so the backend
+checks the scheme and the host, and falls back to the storefront rather than sending a message
+Telegram will drop. A Tailscale or loopback origin opens for nobody but the developer who set
+it, and nothing on the backend's side reports that.
+
+---
 
 ## Related
 

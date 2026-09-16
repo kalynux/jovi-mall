@@ -372,6 +372,21 @@ export interface FlowMessage {
     type: 'flow';
     /** Flow ID */
     flowId: string;
+    /**
+     * The session this Flow belongs to — Meta echoes it on **every** encrypted request the
+     * data endpoint receives and on the completion message, so it is the only thing tying a
+     * Flow back to the customer who opened it.
+     *
+     * ⚠ **Required, and deliberately not optional.** Meta rejects a Flow message without one,
+     * and this field was missing entirely until 2026-09-16 — so every payload this handler
+     * could build was unsendable, invisibly, because nothing in this service has ever sent a
+     * `flow` message.
+     *
+     * ⚠ **Not a new identifier.** It carries the `ia_…` in-app surface handle that the
+     * Telegram Mini App already puts in its URL, so one customer session serves both
+     * channels — see `bot-surface/services/inapp-surface.store.ts`.
+     */
+    flowToken: string;
     /** Flow action (navigate or data_exchange) */
     flowAction: 'navigate' | 'data_exchange';
     /** Flow screen */

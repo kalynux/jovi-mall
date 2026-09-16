@@ -10,35 +10,68 @@
 > ✅ **ALL 190 ARE APPROVED** — measured 2026-09-15. The 188 catalog templates cleared review
 > roughly a day after submission.
 >
-> ⛔ **APPROVED IS NOT SENDABLE, AND NOTHING ON THIS WABA CAN SEND TODAY.** A live send of the
-> approved OTP template on 2026-09-15 returned:
+> ✅ **THE 131037 DISPLAY-NAME BLOCKER IS CLOSED — 2026-09-16 — and it closed by REPLACING THE
+> NUMBER, not by approving a name on the old one.** The sending number is now
+> **`1263609603508344` (+237 652 705 926)**, `verified_name: "Wi-Mall"`,
+> **`name_status: "APPROVED"`**. The block below stood here until that swap and described the
+> real state at the time; it is kept only as the diagnostic order, because the gate it names
+> still sits above every other WhatsApp precondition and a future number would meet it again.
+>
+> <details><summary>What the old number looked like (superseded 2026-09-16)</summary>
+>
+> `614443908428263` (+1 555-784-5447) reported `name_status: "NON_EXISTS"`,
+> `new_name_status: "NONE"` and a leftover `verified_name` of `"Mrzenn"`, so a live send of the
+> approved OTP template returned `(#131037) WhatsApp provided number needs display name approval
+> before message can be sent.` — and a plain free-form text returned the identical error, *before*
+> the 24-hour window was evaluated. Setting the name was impossible too: `POST
+> /{phone_number_id}` with `new_display_name` answered **403, code 4, subcode 2593011**, the ten
+> monthly display-name changes already spent with nothing pending. The recorded options were to
+> wait for the rollover or to onboard a different number — **the second is what happened**, and a
+> new number does take its display name at registration rather than out of that quota.
+>
+> </details>
+>
+> ⛔ **THE OLD PHONE ID IS GONE, NOT MERELY STALE.** `614443908428263` was removed from the WABA
+> outright: `GET /614443908428263` now answers Graph **code 100, subcode 33**, *"object does not
+> exist"*. So any deployment still holding it has a **dead** send path, not a degraded one —
+> including the n8n automation layer, which reads `$env.WHATSAPP_PHONE_NUMBER_ID` with **no
+> fallback** in `UP-wi-mall-core` → `send whatsapp` and `UP-wi-mall-wa-adapter` → `typing
+> (first)`. Two places hold this value and nothing compares them.
+>
+> ✅ **THE 190 TEMPLATES SURVIVED THE SWAP UNTOUCHED**, and that is the structural point worth
+> keeping: **templates are WABA-scoped, sending is phone-scoped.** The WABA
+> (`3361724037302135`, now named "Wi-Mall") did not change, so all 190 are still `APPROVED`,
+> including both `wi_mall_phone_verification` rows — re-measured 2026-09-16. Changing the number
+> costs no resubmission. ⚠ The converse is the trap: an approved **display name** *is*
+> phone-scoped and does not move with the WABA, which is why the blocker above could not be
+> carried over and had to be earned again on the new number.
+>
+> ✅ **THE SECOND PHONE-SCOPED GATE IS ALSO CLOSED — registered 2026-09-16.** A number can be
+> verified and named and still send nothing: for a few hours this one read `status: "PENDING"`,
+> `platform_type: "NOT_APPLICABLE"`, meaning **not registered on the Cloud API**. `POST
+> /1263609603508344/register` (`messaging_product: whatsapp` + the six-digit two-step PIN)
+> returned `{"success":true}`, and it now measures `status: "CONNECTED"`,
+> `platform_type: "CLOUD_API"`, `quality_rating: "GREEN"`, `throughput.level: "STANDARD"`.
+>
+> ⚠ **Keep this gate in the diagnostic list even though it is closed.** It is invisible in every
+> symptom a developer sees — the templates were approved, the token was valid, the display name
+> was approved, and sending still failed — and it is **re-created by every future number change**,
+> because registration is phone-scoped like the display name. It is an account action, not a code
+> change; nothing in these three repositories can detect or report it.
+>
+> ⚠ **Check BOTH of these before diagnosing a delivery failure as a template problem** — one
+> call, no side effects:
 >
 > ```
-> (#131037) WhatsApp provided number needs display name approval before message can be sent.
+> GET /{phone_number_id}?fields=verified_name,name_status,new_name_status,status,platform_type
 > ```
 >
-> The sending number `614443908428263` (+1 555-784-5447) has **`name_status: "NON_EXISTS"`** and
-> `new_name_status: "NONE"` — **a display name has never been submitted for approval**, and its
-> `verified_name` is a leftover, `"Mrzenn"`. ⚠ **This gate sits ABOVE both delivery paths**: a
-> free-form text to the same number fails with the identical 131037, *before* the 24-hour window
-> is even evaluated. So template approval, business verification and the service window are all
-> necessary and none of them is sufficient — **every outbound WhatsApp message on this
-> deployment fails until a display name is approved.** That is an account action, not a code
-> change; nothing in these three repositories can affect it.
+> `name_status: APPROVED` **and** `status: CONNECTED` are both required. Either one short means
+> nothing sends, whatever else is fixed — and the errors point at the message, not at the number.
 >
-> ⛔ **And it cannot be set right now — the monthly quota is spent.** `POST /{phone_number_id}`
-> with `new_display_name` answers **403, code 4, subcode 2593011**: *"You have exceeded the 10
-> display name changes allowed per month."* Ten were spent and `name_status` is still
-> `NON_EXISTS` with nothing pending, so none of them produced an approved name. The options are
-> to wait for the monthly rollover or to onboard a different phone number — a new number takes
-> its display name at registration rather than out of this quota, and an approved name is bound
-> to the number it was approved for.
->
-> ⚠ **Check this BEFORE diagnosing a delivery failure as a template problem.** It is one call:
-> `GET /{phone_number_id}?fields=verified_name,name_status,new_name_status`. `APPROVED` is the
-> only value that sends.
->
-> ⛔ **PENDING is not APPROVED, and that distinction still matters for anything NEW.** A freshly
+> ⛔ **PENDING is not APPROVED, and that distinction still matters for anything NEW.** ⚠ This is
+> a TEMPLATE `status`, a different field from the phone-number `status` discussed directly above —
+> same word, same value, different object, and only one of them is about review. A freshly
 > submitted template is unsendable until Meta clears it, and this page cannot tell you the
 > current state — poll `GET /{waba}/message_templates?fields=name,language,status`. ⚠ **A
 > template's `category` while PENDING is not its final category either**; see the MARKETING note
@@ -425,6 +458,7 @@ reference for what the params mean. Plan templates (`agency_plan_expiring`,
 | `agency_payout_requested` | `{{1}}`=currency, `{{2}}`=amount | `tickets/{{ticketId}}` · View ticket | Your request to withdraw {{1}} {{2}} was created. Track its progress under Tickets. |
 | `agency_payout_paid` | `{{1}}`=currency, `{{2}}`=amount | `tickets/{{ticketId}}` · View ticket | Your payout of {{1}} {{2}} has been paid. |
 | `agency_payout_rejected` | `{{1}}`=currency, `{{2}}`=amount | `tickets/{{ticketId}}` · View ticket | Your request to withdraw {{1}} {{2}} was rejected. See Tickets for the reason. |
+| ⭐ `agency_payout_transfer_failed` | `{{1}}`=currency, `{{2}}`=amount | `tickets/{{ticketId}}` · View ticket | We hit a problem sending your {{1}} {{2}}. The money is safe and still reserved for this payout — our team is on it and will retry. Nothing is needed from you; see Tickets for progress. |
 | `agency_cod_deposit_declared` | `{{1}}`=agent name, `{{2}}`=currency, `{{3}}`=amount, `{{4}}`=deadline days | `cod/deposits/{{depositId}}` · Review deposit | {{1}} declared a cash deposit of {{2}} {{3}}. Confirm or reject it within {{4}} days — unanswered declarations freeze your reserve releases. |
 | `agency_cod_deposit_direct_to_platform` | `{{1}}`=agent name, `{{2}}`=currency, `{{3}}`=amount | `cod/deposits/{{depositId}}` · Review deposit | {{1}} paid {{2}} {{3}} of collected cash straight to the platform. Your liability has been reduced by the same amount and the collections it covers are settled — nothing is owed to you for it. |
 | `agency_storage_alert` | `{{1}}`=percent used, `{{2}}`=usage, `{{3}}`=limit | `settings/storage` (static) · Manage storage | *(same copy as `vendor_storage_alert`, §7)* |
@@ -470,6 +504,25 @@ Plan templates (`agent_plan_expiring`, `agent_plan_expired`) are in §9.
 | `agent_shipment_offer_expired` | `{{1}}`=agency name, `{{2}}`=order number | `offers/{{offerId}}` · Review offer | The delivery offer from {{1}} for order {{2}} expired because it wasn't accepted in time. |
 | `agent_shipment_reassigned_away` | `{{1}}`=order number, `{{2}}`=agency name | **none** | The delivery for order {{1}} has been reassigned to another agent by {{2}}. You are no longer responsible for it, and its customer and tracking details are no longer available to you. It stays in your activity history. |
 | `agent_storage_alert` | `{{1}}`=percent used, `{{2}}`=usage, `{{3}}`=limit | `settings/storage` (static) · Manage storage | *(same copy as `vendor_storage_alert`, §7)* |
+| ⭐ `agent_payout_requested` | `{{1}}`=currency, `{{2}}`=amount | `earnings` (static) · View earnings | Your request to withdraw {{1}} {{2}} was created. You will hear from us when it is paid. |
+| ⭐ `agent_payout_paid` | `{{1}}`=currency, `{{2}}`=amount | `earnings` (static) · View earnings | Your payout of {{1}} {{2}} has been paid. |
+| ⭐ `agent_payout_rejected` | `{{1}}`=currency, `{{2}}`=amount | `earnings` (static) · View earnings | Your request to withdraw {{1}} {{2}} was rejected. The money is back in your available balance — open your earnings to see why, and you can request again. |
+| ⭐ `agent_payout_transfer_failed` | `{{1}}`=currency, `{{2}}`=amount | `earnings` (static) · View earnings | We hit a problem sending your {{1}} {{2}}. Your money is safe and still reserved for this payout — our team is on it and will retry. There is nothing you need to do. |
+
+⭐ **The four `agent_payout_*` templates are NEW and not yet submitted.** They close a total
+gap: `agent-notification-event-consumer.ts` subscribed to **no** `payout.*` event, so an agent
+requested their money and heard nothing in any channel. `agent_payout_transfer_failed` is new
+for all three roles — the event was published and consumed by nobody.
+
+⚠ **`agent_payout_rejected` and `agent_payout_transfer_failed` must not be confused when
+reviewing copy.** Rejected **returns** the money and invites another request. Failed leaves it
+**held**, is not terminal, and must **not** invite a retry — the owner would get a `409`. The
+two read similarly in a list and mean opposite things to the person waiting.
+
+⚠ `earnings` carries **no** placeholder, unlike the vendor and agency payout buttons which use
+`tickets/{{ticketId}}`. The agent app has no tickets screen, and an agent has at most one open
+payout request, so the summary is unambiguous. It is a **new** entry in the agent app's
+deep-link vocabulary — see [deep-links.md](./deep-links.md#agent--agent_app-flutter).
 
 ### 11a. Agent-contract templates (agent side)
 
@@ -824,6 +877,32 @@ name appears on this page, so a situation added without its approval copy fails 
 | pt_PT | Conclua o pagamento de {{1}} {{2}} | Abra esta página para pagar {{1}} {{2}} de {{3}} com cartão. O link é válido durante {{4}} minutos — peça-me um novo se expirar. | Pagar agora |
 | es | Termina el pago de {{1}} {{2}} | Abre esta página para pagar {{1}} {{2}} de {{3}} con tarjeta. El enlace dura {{4}} minutos — pídeme otro si caduca. | Pagar ahora |
 | ar | أكمل دفع {{1}} {{2}} | افتح هذه الصفحة لدفع {{1}} {{2}} مقابل {{3}} بالبطاقة. الرابط صالح لمدة {{4}} دقيقة — اطلب مني رابطًا جديدًا إذا انتهت صلاحيته. | ادفع الآن |
+
+### `customer_order_payment_failed`
+
+⚠ **NEW — submitted separately from the 188, and not yet approved.** Added 2026-09-16 to close
+a silence rather than to add a feature: a declined or unapproved charge previously told the
+customer *nothing*, so a failed payment was indistinguishable from a successful one that had
+gone quiet. Submit it with the same command as the rest; it reads the WABA first and sends only
+the difference.
+
+⚠ **The copy must not say the order is cancelled, because it is not.** The basket survives and
+the charge is retryable. It also blames nobody — the usual causes here are an unapproved push
+prompt and a timeout, neither of which is a judgement on the customer's money.
+
+- **Situation:** `order.payment_failed`
+- **Body params:** `{{1}}`=currency, `{{2}}`=amountFormatted, `{{3}}`=orderNumber
+- **Button:** URL → `shop/account/orders/detail/{{orderId}}` — the order page, where the retry
+  lives. Deliberately **not** a fresh pay link: at failure time there may be no valid token to
+  mint one from, and a button opening a dead payment page is worse than one opening the order.
+
+| Lang | Header | Body | Button label |
+|---|---|---|---|
+| en | Payment did not go through for {{3}} | We could not take the {{1}} {{2}} for {{3}}. Nothing has been charged and your items are still waiting — open the order to try again. | View order |
+| fr | Paiement non abouti pour {{3}} | Nous n'avons pas pu encaisser les {{1}} {{2}} pour {{3}}. Rien n'a été débité et vos articles vous attendent toujours — ouvrez la commande pour réessayer. | Voir la commande |
+| pt_PT | O pagamento não foi concluído para {{3}} | Não conseguimos cobrar os {{1}} {{2}} de {{3}}. Nada foi debitado e os seus artigos continuam à espera — abra a encomenda para tentar de novo. | Ver encomenda |
+| es | El pago no se completó para {{3}} | No pudimos cobrar los {{1}} {{2}} de {{3}}. No se ha cobrado nada y tus artículos siguen esperando — abre el pedido para intentarlo otra vez. | Ver pedido |
+| ar | لم يتم الدفع للطلب {{3}} | لم نتمكن من تحصيل {{1}} {{2}} للطلب {{3}}. لم يُخصم أي مبلغ ولا تزال منتجاتك في انتظارك — افتح الطلب لإعادة المحاولة. | عرض الطلب |
 
 ### `customer_order_shipped`
 

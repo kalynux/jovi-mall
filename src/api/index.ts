@@ -6,6 +6,7 @@ import { mobileAuthRoutes } from '../modules/auth/routes/mobile-auth.routes';
 import { messagingLoginRoutes } from '../modules/messaging-login/messaging-login.routes';
 import { mobileMessagingLoginRoutes } from '../modules/messaging-login/mobile-messaging-login.routes';
 import { createWhatsappRouter } from '../modules/whatsapp/whatsapp.routes';
+import whatsappFlowsRoutes from '../modules/whatsapp/flows/flows.routes';
 import { createTelegramRouter } from '../modules/telegram/telegram.routes';
 import { googleRoutes } from '../modules/integrations/calendar/google/google.routes';
 import { productBookingRouter } from '../modules/catalog/routes/product-booking.routes';
@@ -125,6 +126,14 @@ router.use('/auth/magic', messagingLoginRoutes);
  * and do not reach `/auth/mobile/magic`.
  */
 router.use('/auth/mobile/magic', mobileMessagingLoginRoutes);
+/**
+ * ⚠ **Declared ABOVE `/webhooks/whatsapp`, and the order is the point.** Meta calls this one;
+ * the automation layer calls the one below. They carry different credentials — this endpoint
+ * is authenticated by `X-Hub-Signature-256` and the router below by `BOT_WEBHOOK_SECRET`,
+ * which Meta does not hold — so they cannot share a mount without an exemption branch inside
+ * a shared guard. Reasoning in full at `whatsapp/flows/flows.routes.ts`.
+ */
+router.use('/webhooks/whatsapp/flows', whatsappFlowsRoutes);
 router.use('/webhooks/whatsapp', createWhatsappRouter(commandBus));
 router.use('/webhooks/telegram', createTelegramRouter(commandBus));  // Telegram webhook
 router.use('/webhooks', paymentWebhookRouter);  // Payment gateway webhooks

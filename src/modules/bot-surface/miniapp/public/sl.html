@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>wi-mall</title>
+<!--
+  inAppStoreListing — the shop directory.  Screen kind `sl`.
+
+  ⚠ **THE FILENAME IS THE ROUTE.** `inapp-page.controller.ts` sends `public/<kind>.html`, so
+  this file is `sl.html` and cannot be renamed without renaming the screen kind in
+  `inapp-surface.store.ts`, `bot-action-id.ts` and `inapp-url.ts` with it.  Renaming it alone
+  turns this screen into a 503 with nothing failing anywhere else.
+
+  ── WHO OWNS WHAT ───────────────────────────────────────────────────────────
+  The frame is `pl.html`'s, copied rather than re-invented so the five screens behave
+  identically when things go wrong.  **Stream E owns this file**; nobody else edits it.
+
+  Served by:  `GET  /api/bot/miniapp/s/sl/:handle/data`
+              `POST /api/bot/miniapp/s/sl/:handle/open`
+              → `miniapp/surfaces/store-listing.controller.ts`
+
+  ⚠ **THE CHAT DOOR FOR THIS SCREEN ALREADY EXISTS AND ALREADY WORKS.**  `bot-inapp.controller
+  .ts`'s `stores` handler has been minting `sl` sessions all along and falling back to a
+  storefront link because this file was absent.  Landing it switches the real screen on with no
+  change on the chat side.
+
+  ⚠ **A SHOP SHOWS A CITY AND NEVER AN ADDRESS.**  Owner's decision, and it is a privacy rule
+  rather than a layout one: a shop's ship-from address is not public.  The card the server sends
+  has no field that could carry one — see `ShopCard` in the controller — so this page cannot
+  render one even by mistake.  If you are adding a line to a card here and it is about where the
+  shop physically is, stop.
+
+  ── WHY A POST TO OPEN A SHOP, RATHER THAN A LINK PER CARD ──────────────────
+  The product grid needs a `pl` handle and only the backend can mint one, so a directory of 24
+  cards drawn as links would mean 24 Redis writes per page for a customer who taps at most one.
+  The page posts the shop it wants and gets one URL back.  The alternative — linking out to each
+  shop's public storefront page — was declined: it navigates the customer out of the Telegram
+  WebView mid-session, losing `close()`, the theme and the back button.
+
+  ── THE THREE RULES THIS PAGE IS BUILT ON ───────────────────────────────────
+    1. **It must work with no Telegram runtime at all.**  Every `Telegram.WebApp` touch is
+       guarded; a page that throws on `themeParams` renders white-on-white, which is reported
+       as "the shop is broken".
+    2. **It never renders a blank screen.**  Loading, empty, lapsed and failed are four real
+       states with words in the customer's language.
+    3. **The handle is the only credential.**  It is in the path, it names one conversation,
+       and it dies in thirty minutes.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/api/bot/miniapp/shell.css">
+<style>
+  /* Screen-specific only. Anything another screen would also want belongs in shell.css. */
+  .grid { margin-block-start: 8px; }
+
+  /*
+   * A logo is a logo, not a photograph: `contain` on a padded tile rather than `cover`, so a
+   * wordmark is readable and a square avatar is not cropped into initials.
+   */
+  .shop__shot { position: relative; aspect-ratio: 1 / 1; background: var(--line); }
+  .shop__shot img {
+    inline-size: 100%;
+    block-size: 100%;
+    object-fit: contain;
+    display: block;
+    padding: 12px;
+    box-sizing: border-box;
+  }
+
+  .shop__city { color: var(--muted); font-size: 12px; }
+
+  /*
+   * ⚠ **Not `shell.css`'s `.badge` for the verified mark.** That class is `position: absolute`
+   * and belongs inside the positioned tile, where "Closed" sits. A second absolute badge would
+   * land on top of the first; this one is inline, in the card's body, where it reads as a
+   * property of the shop rather than as a state of the picture.
+   */
+  .tag {
+    align-self: flex-start;
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+
+  /*
+   * ⚠ **The tap-feedback class is NOT `card--muted`, and that is a real bug avoided rather than
+   * a preference.** A closed shop is already drawn with `card--muted`, so using the same class
+   * for "this tap is in flight" would leave the tap's `remove()` un-muting a shop that is
+   * genuinely closed — the card would brighten on a failed tap and never dim again.
+   */
+  .shop--busy { opacity: .55; }
+
+  .more { margin-block-start: 18px; }
+</style>
+</head>
+<body>
+  <header class="screen__head">
+    <h1 class="screen__title" id="title"></h1>
+    <div class="screen__sub" id="sub"></div>
+  </header>
+
+  <main class="screen__body" id="body">
+    <div class="state" id="state"><p class="state__text" id="stateText"></p></div>
+    <div class="grid" id="grid" hidden></div>
+    <div class="more" hidden id="moreWrap">
+      <button class="btn btn--block" id="more"></button>
+    </div>
+  </main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ── Telegram, entirely optional ──────────────────────────────────────── */
+  var tg = (window.Telegram && window.Telegram.WebApp) || null;
+  if (tg) {
+    try {
+      tg.ready();
+      tg.expand();
+      var p = tg.themeParams || {};
+      var root = document.documentElement.style;
+      if (p.bg_color) root.setProperty("--bg", p.bg_color);
+      if (p.text_color) root.setProperty("--fg", p.text_color);
+      if (p.hint_color) root.setProperty("--muted", p.hint_color);
+      if (p.secondary_bg_color) root.setProperty("--card", p.secondary_bg_color);
+      if (p.button_color) root.setProperty("--accent", p.button_color);
+      if (p.button_text_color) root.setProperty("--accent-fg", p.button_text_color);
+    } catch (e) { /* an old client, or one reporting no theme. Keep our own colours. */ }
+  }
+
+  /*
+   * Everything is derived from the URL, so this file stays a static asset the build copies
+   * verbatim.  Nothing is rendered per request, so nothing here can leak between two of them.
+   */
+  var base = window.location.pathname.replace(/\/+$/, "");
+  var lang = new URLSearchParams(window.location.search).get("lang") || "";
+
+  var el = {
+    title: document.getElementById("title"),
+    sub: document.getElementById("sub"),
+    state: document.getElementById("state"),
+    stateText: document.getElementById("stateText"),
+    grid: document.getElementById("grid"),
+    moreWrap: document.getElementById("moreWrap"),
+    more: document.getElementById("more")
+  };
+
+  var copy = null;
+  var labels = { verified: "", closed: "" };
+  var cursor = null;
+  var busy = false;
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  /** One of the four states, with an optional retry. Never leaves the page empty. */
+  function state(text, retry) {
+    el.grid.hidden = true;
+    el.moreWrap.hidden = true;
+    el.state.hidden = false;
+    el.stateText.textContent = text;
+
+    var old = el.state.querySelector("button");
+    if (old) old.remove();
+    if (retry && copy) {
+      var b = document.createElement("button");
+      b.className = "btn";
+      b.textContent = copy.retry;
+      b.addEventListener("click", function () { load(null); });
+      el.state.appendChild(b);
+    }
+  }
+
+  function json(url, init) {
+    return fetch(url, init).then(function (r) {
+      return r.json()
+        .catch(function () { return null; })
+        .then(function (b) { return { status: r.status, ok: r.ok, body: b }; });
+    });
+  }
+
+  /**
+   * ⚠ A failed read is reported as LAPSED or as FAILED, never as empty.
+   * "No shops matched" and "we could not ask" look identical to a customer and have opposite
+   * remedies — one is a different question, the other is tapping again.
+   */
+  function explain(res) {
+    if (res.status === 404 || res.status === 410) return copy.expired;
+    var e = res.body && res.body.error;
+    return (e && (e.customerMessage || e.message)) || copy.failed;
+  }
+
+  /* ── The contract `store-listing.controller.ts` satisfies ──────────────────
+   *
+   *   { success: true, data: {
+   *       heading: string | null,       // the city or search term, echoed in the customer's
+   *                                     // own words — never translated, never invented
+   *       shops: [{
+   *         slug:     string,
+   *         name:     string,
+   *         city:     string | null,    // ⚠ THE ONLY LOCATION. Never a ship-from address.
+   *         imageUrl: string | null,
+   *         verified: boolean,
+   *         open:     boolean           // vendor vacation mode; products stay listed
+   *       }],
+   *       labels: { verified: string, closed: string },   // localised, sent once
+   *       emptyText: string,
+   *       cursor: string | null         // null = no further page
+   *   }}
+   *
+   * ⚠ **The two badge words arrive ONCE at the top rather than on every row.**  They do not
+   * vary per shop, and a directory of 24 cards would otherwise carry 48 copies of two words.
+   *
+   * ⚠ **`labels` and `emptyText` travel with the DATA rather than through `/copy`.**  `/copy` is
+   * the shared table every screen reads and it belongs to another stream; a key added to it
+   * mid-flight with one translation missing stops the server's boot for every session in this
+   * tree.  So the words specific to shops travel with the shops.
+   */
+  function draw(shops, append) {
+    if (!append) el.grid.innerHTML = "";
+
+    shops.forEach(function (shop) {
+      var card = document.createElement("div");
+      card.className = "card card--tappable" + (shop.open ? "" : " card--muted");
+
+      card.innerHTML =
+        '<div class="shop__shot">'
+        + (shop.imageUrl ? '<img loading="lazy" alt="" src="' + esc(shop.imageUrl) + '">' : "")
+        + (shop.open ? "" : '<div class="badge">' + esc(labels.closed) + "</div>")
+        + "</div>"
+        + '<div class="card__body">'
+        + '<div class="card__title">' + esc(shop.name) + "</div>"
+        + (shop.city ? '<div class="shop__city">' + esc(shop.city) + "</div>" : "")
+        + (shop.verified ? '<span class="tag">' + esc(labels.verified) + "</span>" : "")
+        + "</div>";
+
+      /*
+       * ⚠ **A closed shop is still tappable, deliberately.**  Vacation mode means the shop is
+       * not serving today; its products stay listed and browsable, and the cart is where an
+       * unavailable item is actually refused.  Making the card dead here would hide a whole
+       * shop's catalogue over a flag the customer can wait out.
+       */
+      card.addEventListener("click", function () { open(shop.slug, card); });
+
+      el.grid.appendChild(card);
+    });
+
+    el.state.hidden = true;
+    el.grid.hidden = false;
+  }
+
+  /** Mint a product-grid session for one shop and go there. See the POST note at the top. */
+  function open(storeSlug, card) {
+    if (busy) return;
+    busy = true;
+    card.classList.add("shop--busy");
+
+    if (tg && tg.HapticFeedback) { try { tg.HapticFeedback.selectionChanged(); } catch (e) {} }
+
+    json(base + "/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storeSlug: storeSlug })
+    }).then(function (res) {
+      busy = false;
+      card.classList.remove("shop--busy");
+      if (res.ok && res.body && res.body.data && res.body.data.url) {
+        window.location.assign(res.body.data.url);
+        return;
+      }
+      state(explain(res), true);
+    }).catch(function () {
+      busy = false;
+      card.classList.remove("shop--busy");
+      state(copy.failed, true);
+    });
+  }
+
+  function load(after) {
+    if (busy) return;
+    busy = true;
+    if (!after) state(copy ? copy.loading : "…", false);
+    else { el.more.disabled = true; el.more.textContent = copy.loading; }
+
+    var url = base + "/data" + (after ? "?cursor=" + encodeURIComponent(after) : "");
+
+    json(url, { headers: { Accept: "application/json" } }).then(function (res) {
+      busy = false;
+      el.more.disabled = false;
+      el.more.textContent = copy.loadMore;
+
+      if (!res.ok || !res.body || res.body.success === false || !res.body.data) {
+        state(explain(res), true);
+        return;
+      }
+
+      var data = res.body.data;
+      if (data.heading) el.sub.textContent = data.heading;
+      if (data.labels) {
+        labels.verified = data.labels.verified || "";
+        labels.closed = data.labels.closed || "";
+      }
+
+      var shops = data.shops || [];
+      if (shops.length === 0 && !after) {
+        state(data.emptyText || FALLBACK.shopsEmpty, false);
+        return;
+      }
+
+      draw(shops, Boolean(after));
+      cursor = data.cursor || null;
+      el.moreWrap.hidden = !cursor;
+    }).catch(function () {
+      busy = false;
+      state(copy ? copy.failed : "Could not load. Please try again.", true);
+    });
+  }
+
+  el.more.addEventListener("click", function () { if (cursor) load(cursor); });
+
+  /*
+   * ⚠ **`copy` is never null once boot has run, and that is a correctness property, not a
+   * nicety.** Every state and every button label reads it. The one request that could leave
+   * this page wordless is the copy call itself, so a failure there falls back to English
+   * rather than to nothing — the alternative is a page that throws while rendering the
+   * message explaining why it could not load.
+   *
+   * `shopsEmpty` is in this table and NOT in `/copy`: it is the one string the page may need
+   * before the data call it normally arrives with has succeeded.
+   */
+  var FALLBACK = {
+    loading: "Loading…",
+    failed: "Something went wrong. Close this and ask me again in the chat.",
+    expired: "This page is no longer available. Ask me again in the chat.",
+    retry: "Try again",
+    storesHeading: "Shops",
+    shopsEmpty: "No shops to show here.",
+    loadMore: "Load more"
+  };
+
+  function boot(d) {
+    copy = (d && d.copy) || FALLBACK;
+    document.documentElement.lang = (d && d.language) || "en";
+    document.documentElement.dir = (d && d.direction) || "ltr";
+    el.title.textContent = copy.storesHeading || FALLBACK.storesHeading;
+    el.more.textContent = copy.loadMore || FALLBACK.loadMore;
+    load(null);
+  }
+
+  /*
+   * ⚠ **Copy first, data second, and the order is load-bearing.**  A page whose handle has
+   * lapsed still has to say so in the customer's own language, and it cannot learn the
+   * language from the request that just failed.  `/copy` resolves no handle and never fails;
+   * the language comes from `?lang=`, which `inAppScreenUrl` puts on every screen URL.
+   */
+  json(base + "/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
+    .then(function (res) { boot((res.body && res.body.data) || null); })
+    .catch(function () { boot(null); });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,333 @@
+/*
+ * shell.css — the one stylesheet behind every in-app screen.
+ *
+ * ── WHY A FILE, WHEN THE OLD RAIL INLINED ITS CSS ───────────────────────────
+ * `page.html` carries a 90-line <style> block, which was right for one page and is wrong for
+ * several: five copies of a token set drift, and the drift shows up as two screens of the
+ * same shop in two slightly different greys. A stylesheet is also the ONE shared browser
+ * asset this surface may have — `npm run lint` is `eslint src scripts --max-warnings 0` and
+ * would lint a shared `.js` here as Node code, flagging `window` and `document` as
+ * undefined. CSS is not linted. So: styles are shared, scripts stay inline per page.
+ *
+ * ⚠ **This file loads only because `inapp-page.controller.ts` puts `'self'` in `style-src`.**
+ * The old rail's policy has `'unsafe-inline'` alone, because it had nothing external to
+ * fetch. Under that policy this request is refused with no error anywhere on the server side
+ * and the customer gets an unstyled page — which reads as "the shop is broken" rather than as
+ * a misconfiguration. If a screen ever renders as bare HTML, check the CSP before anything
+ * else.
+ *
+ * ⚠ **It reaches `dist/` only because `modules/bot-surface/miniapp/public` is on the
+ * `copy-build-assets.ts` manifest.** `tsc` emits `.js` and imported `.json` and nothing else.
+ * The directory is already listed, so this file needs no manifest change; a new sibling
+ * directory would, and `test:system` fails the build if one is added without it.
+ *
+ * ── THREE RULES EVERY SCREEN DEPENDS ON ─────────────────────────────────────
+ *   1. **Logical properties, never left/right.** Arabic is one of the five languages and each
+ *      page sets `dir="rtl"` from its copy call. `margin-inline-start` flips; `margin-left`
+ *      does not, and the mistake is invisible to anyone testing in English.
+ *   2. **Telegram's theme wins where it is offered.** The tokens below are defaults; the
+ *      inline bootstrap in each page overwrites them from `themeParams` when a Telegram
+ *      runtime is present. The same URL must also render correctly in a plain browser, which
+ *      is why they are real values rather than empty custom properties.
+ *   3. **Nothing here assumes a screen's structure.** Class names are components, not
+ *      screens. A stream styling something only its screen has puts that in its own page's
+ *      inline <style> — editing this file is editing four other sessions' screens.
+ */
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Tokens
+   ───────────────────────────────────────────────────────────────────────────── */
+
+:root {
+    --bg: #ffffff;
+    --fg: #111418;
+    --muted: #707a86;
+    --card: #f6f7f9;
+    --line: #e4e7eb;
+    --accent: #2f8f4e;
+    --accent-fg: #ffffff;
+    --danger: #c2410c;
+
+    --radius: 14px;
+    --radius-sm: 10px;
+    --gap: 12px;
+    --pad-inline: 16px;
+
+    /* Matches the old rail's stack, so the two look like one shop during the overlap. */
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/*
+ * ⚠ Dark is defined on the TOKENS only. A colour whose sole definition sits inside this block
+ * never applies to a viewer whose system is light, and the page then renders one theme's text
+ * on the other theme's ground.
+ */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #17181c;
+        --fg: #f2f4f7;
+        --muted: #9aa3af;
+        --card: #212329;
+        --line: #2f323a;
+        --danger: #fb923c;
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Reset and frame
+   ───────────────────────────────────────────────────────────────────────────── */
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; min-height: 100%; }
+
+body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.45 var(--font);
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+}
+
+img { max-width: 100%; }
+
+/*
+ * A visible focus ring. These pages are operated by thumb on a handset and by keyboard by
+ * whoever is testing them; removing the ring for the first breaks the second.
+ */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.screen__head { padding: 14px var(--pad-inline) 8px; }
+.screen__title { font-size: 17px; font-weight: 600; margin: 0; text-wrap: balance; }
+.screen__sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+.screen__body {
+    flex: 1 1 auto;
+    padding-inline: var(--pad-inline);
+    padding-block: 4px 18px;
+}
+
+/*
+ * ⚠ `env(safe-area-inset-bottom)` is why every page sets `viewport-fit=cover`. Without the
+ * pair, the primary button sits under the home indicator on a notched handset — reachable,
+ * but half-hidden, which reads as a broken layout.
+ */
+.screen__foot {
+    position: sticky;
+    inset-block-end: 0;
+    margin-block-start: auto;
+    padding: 12px var(--pad-inline) calc(12px + env(safe-area-inset-bottom));
+    border-block-start: 1px solid var(--line);
+    background: var(--bg);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   States — loading, empty, lapsed, failed
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/*
+ * ⚠ **Every screen renders one of these, and none of them is a blank page.** A WebView that
+ * shows nothing is the most expensive failure on this surface: the customer has left the
+ * chat, has no control to tap, and reports it as the shop being down.
+ */
+.state {
+    padding: 44px 8px;
+    text-align: center;
+    color: var(--muted);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+
+.state__text { max-width: 34ch; margin: 0; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Buttons
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.btn {
+    appearance: none;
+    -webkit-appearance: none;
+    border: 1px solid var(--line);
+    background: var(--card);
+    color: var(--fg);
+    border-radius: var(--radius-sm);
+    padding: 11px 16px;
+    font: 600 15px/1.2 var(--font);
+    cursor: pointer;
+    text-align: center;
+    text-decoration: none;
+}
+
+.btn--primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+.btn--block { display: block; inline-size: 100%; padding-block: 13px; }
+.btn[disabled] { opacity: .45; cursor: default; }
+
+/* Under the button, where a write reports what happened. Reserved so it cannot reflow. */
+.note {
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    margin-block-start: 8px;
+    min-block-size: 16px;
+}
+
+.note--bad { color: var(--danger); }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Product cards — the listing grid and the detail header
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/*
+ * `auto-fill` with a floor rather than a fixed column count: two up on a phone, more in the
+ * Telegram Desktop pane, and never one stretched card alone on the last row.
+ */
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: var(--gap);
+}
+
+.card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    text-align: start;
+    color: inherit;
+    text-decoration: none;
+}
+
+.card--tappable { cursor: pointer; }
+.card--muted { opacity: .55; }
+
+.card__shot { position: relative; aspect-ratio: 1 / 1; max-width: 100%; background: var(--line); }
+.card__shot img { inline-size: 100%; block-size: 100%; object-fit: cover; display: block; }
+
+.badge {
+    position: absolute;
+    inset-inline-start: 8px;
+    inset-block-start: 8px;
+    background: rgba(0, 0, 0, .66);
+    color: #fff;
+    font-size: 11px;
+    padding: 3px 7px;
+    border-radius: 6px;
+}
+
+.card__body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 4px; }
+
+.card__title {
+    font-weight: 600;
+    font-size: 14px;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* Prices sit in a column on the listing and beside a total on checkout — they must line up. */
+.card__price, .money { font-weight: 700; font-variant-numeric: tabular-nums; }
+.card__store { color: var(--muted); font-size: 12px; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Option picker — the reason the detail screen exists
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.opts { display: flex; flex-direction: column; gap: 14px; }
+.opts__label { font-size: 13px; color: var(--muted); }
+.opts__row { display: flex; flex-wrap: wrap; gap: 8px; margin-block-start: 6px; }
+
+.chip {
+    appearance: none;
+    -webkit-appearance: none;
+    border: 1px solid var(--line);
+    background: var(--card);
+    color: var(--fg);
+    border-radius: 999px;
+    padding: 8px 14px;
+    font: 500 14px/1.2 var(--font);
+    cursor: pointer;
+}
+
+.chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.chip[disabled] { opacity: .4; cursor: default; text-decoration: line-through; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Rows — cart lines, order lines, totals, addresses
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.rows { display: flex; flex-direction: column; }
+
+.row {
+    display: flex;
+    align-items: center;
+    gap: var(--gap);
+    padding-block: 12px;
+    border-block-end: 1px solid var(--line);
+}
+
+.row:last-child { border-block-end: 0; }
+.row__main { flex: 1 1 auto; min-inline-size: 0; }
+.row__title { font-weight: 600; font-size: 14px; }
+.row__sub { color: var(--muted); font-size: 12px; margin-block-start: 2px; }
+.row__end { flex: 0 0 auto; text-align: end; }
+
+.row__thumb {
+    flex: 0 0 auto;
+    inline-size: 52px;
+    block-size: 52px;
+    border-radius: var(--radius-sm);
+    object-fit: cover;
+    background: var(--line);
+}
+
+.row--total { font-size: 16px; font-weight: 700; padding-block-start: 14px; }
+
+/* A labelled block of read-only detail — a delivery address, a payment method. */
+.panel {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    background: var(--card);
+}
+
+.panel__label { font-size: 12px; color: var(--muted); }
+.panel__value { margin-block-start: 4px; }
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+
+.field input {
+    /* ⚠ 16px or iOS Safari zooms the whole page on focus and never zooms back. */
+    font: 16px/1.3 var(--font);
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--fg);
+    inline-size: 100%;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Skeleton — what a page shows before its data arrives
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.skeleton {
+    background: var(--line);
+    border-radius: var(--radius-sm);
+    animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse { 50% { opacity: .45; } }
+
+@media (prefers-reduced-motion: reduce) {
+    .skeleton { animation: none; opacity: .6; }
+}
+
+[hidden] { display: none !important; }

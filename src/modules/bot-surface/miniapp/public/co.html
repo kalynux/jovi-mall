@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>wi-mall</title>
+<!--
+  Checkout — cart, address, delivery, payment, in one screen.  Screen kind `co`.
+
+  ⚠ **THE FILENAME IS THE ROUTE** — `inapp-page.controller.ts` sends `public/<kind>.html`.
+
+  ── WHO OWNS WHAT ───────────────────────────────────────────────────────────
+  Stream 0 wrote the frame and froze the four rules below.  **Stream D owns this file from
+  here on.**  What Stream D must build:  `GET  /api/bot/miniapp/s/co/:handle/data`
+                                         `POST /api/bot/miniapp/s/co/:handle/place`
+
+  ── ⚠ THIS HANDLE IS THE BIGGEST CREDENTIAL ON THE WHOLE BOT SURFACE ────────
+  The old Mini App handle's worst case is *adding items to a stranger's basket* — annoying,
+  reversible, worth nothing to anybody.  A `co` handle authorises **placing an order against a
+  stranger's saved address and starting a payment**, from a URL carrying no other credential.
+  Four consequences, and every one of them is already enforced in `inapp-surface.store.ts` or
+  must be enforced by Stream D's endpoints:
+
+    1. **A ten-minute life**, not thirty.  `TTL_SECONDS.co`.
+    2. **`consume`, not `read`, on the POST that places the order.**  A double-tap, a refresh
+       and a forwarded URL all find the handle gone, so two orders are impossible.  This mount
+       has no `Idempotency-Key` — a browser sends what the page sends — so the store is the
+       only guard there is.
+    3. **The address is projected MASKED** (the `maskPhone` / `stripDeliveryCodes`
+       precedent).  A forwarded URL must not read out where somebody lives.
+    4. **The mobile-money number is masked too, and this page never receives it in full.**  It
+       is shown as the field's placeholder; submitting the field empty means "use the number on
+       my account", so the common case is one tap and no disclosure.  A typed number is sent
+       as typed.
+
+  ⚠ **Because the handle is SPENT by the POST — even when the POST then fails — this page
+  offers no retry on that call.**  A retry button here would spend a dead handle and report
+  "no longer available", which reads as the shop losing an order.  The failure text sends the
+  customer back to the chat, which can mint a fresh screen.
+
+  ── ⚠ IT REQUIRES AN EXISTING ADDRESS AND DELIBERATELY CAPTURES NONE ────────
+  Collecting one here would drag the whole geocoding candidate flow — `geo-candidate.store.ts`,
+  `geo_search_address`, the `gc_` picker — into a WebView, and the chat already does it well
+  with a map pin and a candidate list.  So "no saved address" is a real state with a real
+  instruction (`checkoutNoAddress`), not an error, and there is no pay button in it.
+
+  ── ⚠ THE RESULT OF THE PAYMENT COMES BACK IN THE CHAT, NOT HERE ────────────
+  Neither a Mini App nor a WhatsApp Flow can hold a session open while somebody approves a
+  mobile-money push on their handset.  So this screen promises the answer in the thread
+  (`checkoutWatchChat`) and closes; the chat delivers it, with Check-status and Try-again.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/api/bot/miniapp/shell.css">
+<style>
+  /* Screen-specific only. Anything another screen would also want belongs in shell.css. */
+  .block { margin-block-start: 18px; }
+  .block__label { font-size: 12px; color: var(--muted); margin-block-end: 6px; }
+</style>
+</head>
+<body>
+  <header class="screen__head">
+    <h1 class="screen__title" id="title"></h1>
+  </header>
+
+  <main class="screen__body" id="body">
+    <div class="state" id="state"><p class="state__text" id="stateText"></p></div>
+
+    <div id="sheet" hidden>
+      <div class="rows" id="lines"></div>
+
+      <div class="row row--total">
+        <div class="row__main" id="totalLabel"></div>
+        <div class="row__end money" id="total"></div>
+      </div>
+
+      <div class="block">
+        <div class="block__label" id="addressLabel"></div>
+        <div class="panel"><div class="panel__value" id="address"></div></div>
+      </div>
+
+      <div class="block field">
+        <label class="block__label" for="phone" id="phoneLabel"></label>
+        <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel">
+      </div>
+    </div>
+  </main>
+
+  <footer class="screen__foot" id="foot" hidden>
+    <button class="btn btn--primary btn--block" id="pay"></button>
+    <div class="note" id="note"></div>
+  </footer>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ── Telegram, entirely optional ──────────────────────────────────────── */
+  var tg = (window.Telegram && window.Telegram.WebApp) || null;
+  if (tg) {
+    try {
+      tg.ready();
+      tg.expand();
+      var p = tg.themeParams || {};
+      var root = document.documentElement.style;
+      if (p.bg_color) root.setProperty("--bg", p.bg_color);
+      if (p.text_color) root.setProperty("--fg", p.text_color);
+      if (p.hint_color) root.setProperty("--muted", p.hint_color);
+      if (p.secondary_bg_color) root.setProperty("--card", p.secondary_bg_color);
+      if (p.button_color) root.setProperty("--accent", p.button_color);
+      if (p.button_text_color) root.setProperty("--accent-fg", p.button_text_color);
+    } catch (e) { /* an old client, or one reporting no theme. Keep our own colours. */ }
+  }
+
+  var base = window.location.pathname.replace(/\/+$/, "");
+  var lang = new URLSearchParams(window.location.search).get("lang") || "";
+
+  var el = {
+    title: document.getElementById("title"),
+    state: document.getElementById("state"),
+    stateText: document.getElementById("stateText"),
+    sheet: document.getElementById("sheet"),
+    lines: document.getElementById("lines"),
+    totalLabel: document.getElementById("totalLabel"),
+    total: document.getElementById("total"),
+    addressLabel: document.getElementById("addressLabel"),
+    address: document.getElementById("address"),
+    phoneLabel: document.getElementById("phoneLabel"),
+    phone: document.getElementById("phone"),
+    foot: document.getElementById("foot"),
+    pay: document.getElementById("pay"),
+    note: document.getElementById("note")
+  };
+
+  var copy = null;
+  /** ⚠ Latches true on the first submit and never clears. See the SPENT note at the top. */
+  var placed = false;
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  /**
+   * ⚠ **`retry` is offered for a failed READ only, never for a failed PLACE.** Reading is
+   * repeatable; placing spends the handle.
+   */
+  function state(text, retry) {
+    el.sheet.hidden = true;
+    el.foot.hidden = true;
+    el.state.hidden = false;
+    el.stateText.textContent = text;
+
+    var old = el.state.querySelector("button");
+    if (old) old.remove();
+    if (retry && copy && !placed) {
+      var b = document.createElement("button");
+      b.className = "btn";
+      b.textContent = copy.retry;
+      b.addEventListener("click", load);
+      el.state.appendChild(b);
+    }
+  }
+
+  function say(text, bad) {
+    el.note.textContent = text || "";
+    el.note.className = bad ? "note note--bad" : "note";
+  }
+
+  function json(url, init) {
+    return fetch(url, init).then(function (r) {
+      return r.json()
+        .catch(function () { return null; })
+        .then(function (b) { return { status: r.status, ok: r.ok, body: b }; });
+    });
+  }
+
+  function explain(res) {
+    if (res.status === 404 || res.status === 410) return copy.expired;
+    var e = res.body && res.body.error;
+    return (e && (e.customerMessage || e.message)) || copy.failed;
+  }
+
+  /* ── The contract Stream D's data endpoint must satisfy ────────────────────
+   *
+   *   { success: true, data: {
+   *       lines: [{
+   *         title:        string,
+   *         variantLabel: string | null,
+   *         quantity:     number,
+   *         lineTotalText:string,          // FORMATTED — the page does no money maths
+   *         imageUrl:     string | null
+   *       }],
+   *       totalText: string,               // the one figure the customer is agreeing to pay
+   *       address:   { text: string } | null,   // ⚠ MASKED. null → the no-address state
+   *       payment:   { phoneMasked: string | null }
+   *   }}
+   *
+   * ⚠ **`totalText` is the server's figure and the page never adds anything up.** A WebView
+   * that computes a total is a second implementation of delivery fees, discounts and the
+   * negotiated price lock, in the one place nothing tests. If a line and the total disagree,
+   * the total is right.
+   *
+   * ⚠ **No prices are held in the session** — `inapp-surface.store.ts` says why: a stored
+   * total is a total that can disagree with the cart by the time somebody pays. The read is
+   * live on every open.
+   */
+  function draw(data) {
+    el.lines.innerHTML = "";
+
+    (data.lines || []).forEach(function (line) {
+      var row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML =
+        (line.imageUrl ? '<img class="row__thumb" alt="" src="' + esc(line.imageUrl) + '">' : '<div class="row__thumb"></div>')
+        + '<div class="row__main">'
+        + '<div class="row__title">' + esc(line.title) + "</div>"
+        + '<div class="row__sub">' + esc([line.variantLabel, "× " + line.quantity].filter(Boolean).join(" · ")) + "</div>"
+        + "</div>"
+        + '<div class="row__end money">' + esc(line.lineTotalText) + "</div>";
+      el.lines.appendChild(row);
+    });
+
+    el.totalLabel.textContent = copy.checkoutTotal;
+    el.total.textContent = data.totalText;
+
+    /*
+     * ⚠ The no-address state, and it is deliberately NOT an error — see the note at the top.
+     * The sheet is shown so the customer can see what they were about to buy; the pay button
+     * is not, because there is nowhere to send it.
+     */
+    if (!data.address) {
+      state(copy.checkoutNoAddress, false);
+      return;
+    }
+
+    el.addressLabel.textContent = copy.checkoutAddress;
+    el.address.textContent = data.address.text;
+
+    el.phoneLabel.textContent = copy.checkoutPhone;
+    var masked = data.payment && data.payment.phoneMasked;
+    if (masked) el.phone.setAttribute("placeholder", masked);
+
+    /*
+     * ⚠ **With no number on the account there is nothing to fall back to, so the button waits
+     * for one.** This is the only preventable way the submit can fail, and preventing it is
+     * worth more here than anywhere else on the surface: the handle is SPENT by the POST, so a
+     * refusal the page could have foreseen costs the customer their whole checkout screen and
+     * sends them back to the chat to mint another. No copy is needed — an empty field beside a
+     * dead button says it in every language.
+     */
+    if (!masked) {
+      el.pay.disabled = true;
+      el.phone.addEventListener("input", function () {
+        if (!placed) el.pay.disabled = el.phone.value.trim().length === 0;
+      });
+    }
+
+    el.state.hidden = true;
+    el.sheet.hidden = false;
+    el.foot.hidden = false;
+  }
+
+  /*
+   * ⚠ **One submit, ever.** `placed` latches before the request leaves, so a double-tap, a
+   * slow network and an impatient customer cannot produce two POSTs against a handle whose
+   * whole job is to be spent exactly once.
+   */
+  el.pay.addEventListener("click", function () {
+    if (placed) return;
+    /* A disabled button can still be reached by a stray synthetic click; see the note in draw. */
+    if (el.pay.disabled) return;
+    placed = true;
+    el.pay.disabled = true;
+    say(copy.loading, false);
+
+    /* Empty means "use the number on my account" — this page never holds it in full. */
+    var typed = el.phone.value.trim();
+
+    json(base + "/place", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone: typed.length > 0 ? typed : null })
+    }).then(function (res) {
+      if (!res.ok || !res.body || res.body.success === false) {
+        /*
+         * ⚠ No retry, and the button stays dead: the handle is spent even on a failure. The
+         * copy already says "close this and ask me again in the chat", which is the only
+         * remedy that works.
+         */
+        say(explain(res), true);
+        return;
+      }
+
+      say(copy.checkoutWatchChat, false);
+      if (tg && tg.HapticFeedback) { try { tg.HapticFeedback.notificationOccurred("success"); } catch (e) {} }
+
+      /*
+       * ⚠ **Longer than the other screens' 900ms, on purpose.** This is the one message the
+       * customer must actually read before the page disappears — it is what tells them the
+       * payment prompt is coming to their handset and the result to the chat.
+       */
+      window.setTimeout(function () { if (tg && tg.close) { try { tg.close(); } catch (e) {} } }, 2600);
+    }).catch(function () {
+      /*
+       * ⚠ **A network failure here is NOT proof the order was not placed** — the request may
+       * have arrived and the response been lost. So this says the same thing as any other
+       * failure and sends the customer to the chat, which knows the truth. It must never say
+       * "not placed", and it must never re-submit.
+       */
+      say(copy.failed, true);
+    });
+  });
+
+  function load() {
+    if (placed) return;
+    state(copy ? copy.loading : "…", false);
+
+    json(base + "/data", { headers: { Accept: "application/json" } })
+      .then(function (res) {
+        if (!res.ok || !res.body || res.body.success === false || !res.body.data) {
+          state(explain(res), true);
+          return;
+        }
+        draw(res.body.data);
+      })
+      .catch(function () { state(copy.failed, true); });
+  }
+
+  /*
+   * ⚠ **`copy` is never null once boot has run.** Every state and every label reads it, so a
+   * failed copy call falls back to English rather than to nothing.
+   */
+  var FALLBACK = {
+    loading: "Loading…",
+    failed: "Something went wrong. Close this and ask me again in the chat.",
+    expired: "This page is no longer available. Ask me again in the chat.",
+    retry: "Try again",
+    checkoutHeading: "Checkout",
+    checkoutTotal: "Total",
+    checkoutAddress: "Deliver to",
+    checkoutNoAddress: "You have no saved delivery address yet. Close this and send me your address in the chat.",
+    checkoutPhone: "Mobile money number",
+    checkoutPay: "Pay now",
+    checkoutWatchChat: "Approve the payment on your phone. I will tell you in the chat as soon as it lands."
+  };
+
+  function boot(d) {
+    copy = (d && d.copy) || FALLBACK;
+    document.documentElement.lang = (d && d.language) || "en";
+    document.documentElement.dir = (d && d.direction) || "ltr";
+    el.title.textContent = copy.checkoutHeading;
+    el.pay.textContent = copy.checkoutPay;
+    load();
+  }
+
+  /* ⚠ Copy first, data second — a lapsed page must say so in the customer's own language. */
+  json(base + "/copy?lang=" + encodeURIComponent(lang), { headers: { Accept: "application/json" } })
+    .then(function (res) { boot((res.body && res.body.data) || null); })
+    .catch(function () { boot(null); });
+})();
+</script>
+</body>
+</html>

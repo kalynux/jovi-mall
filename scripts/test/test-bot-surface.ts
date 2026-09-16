@@ -2432,14 +2432,57 @@ async function main(): Promise<void> {
             && controller.includes('stripDeliveryCodes(dto)');
     });
 
+    /**
+     * ⚠ **REWRITTEN 2026-09-16, because the original could not tell a READ from a DISCLOSURE.**
+     *
+     * It counted regions that *call* `getCodBlocksForOrders` and demanded there be exactly two,
+     * named `getCodCode` and `resendCodCode`. That failed the moment a module-level helper —
+     * `hasPendingCodCode`, which fetches the block and returns a **boolean** so the order screen
+     * knows whether to offer a "Get code" button at all — was added below the class. Nothing
+     * leaked; the guard simply could not see the difference between reading a value and putting
+     * it on the wire.
+     *
+     * ⚠ That is the same defect shape found in `app-distribution`'s own guard on the same day:
+     * **a scan of a whole region cannot see two things inside it disagreeing.** A guard that
+     * fails on correct code teaches the next person to weaken it, which is worse than no guard.
+     *
+     * So this now pins the property that actually matters — **the code may be READ anywhere it
+     * is needed to make a decision, and may leave this service only from the two dedicated
+     * handlers.** A helper that fetches a block and answers a yes/no question is legitimate and
+     * stays legitimate; a helper that fetches one and then answers a request is not.
+     */
     assert('⚠ only the dedicated route discloses a delivery code', () => {
         const controller = stripComments(read('modules/bot-surface/controllers/bot-order.controller.ts'));
-        const disclosing = controller.split('static ')
-            .filter((block) => block.includes('getCodBlocksForOrders') || block.includes('resendCodeAsCustomer'))
-            .map((block) => block.slice(0, block.indexOf('=')).trim());
-        return disclosing.length === 2
-            && disclosing.includes('getCodCode')
-            && disclosing.includes('resendCodCode');
+
+        /** Split on both handler and module-level function boundaries, not just `static `. */
+        const regions = controller
+            .split(/(?=\n\s*(?:static [a-zA-Z]+ =|(?:async )?function [a-zA-Z]+))/)
+            .filter((r) => r.includes('getCodBlocksForOrders') || r.includes('resendCodeAsCustomer'));
+
+        const nameOf = (region: string): string =>
+            region.match(/(?:static ([a-zA-Z]+) =|(?:async )?function ([a-zA-Z]+))/)?.slice(1).find(Boolean) ?? '?';
+
+        const DISCLOSING = ['getCodCode', 'resendCodCode'];
+
+        // Both dedicated handlers must still exist and still be the ones that fetch a code.
+        const names = regions.map(nameOf);
+        if (!DISCLOSING.every((n) => names.includes(n))) return false;
+
+        /**
+         * ⚠ **The real rule.** Any OTHER region may touch a code block, but must not also be
+         * the thing that answers the caller — no response body, no chat reply. That is the line
+         * between "read it to choose a button" and "read it to send it".
+         */
+        const leaking = regions
+            .filter((r) => !DISCLOSING.includes(nameOf(r)))
+            .filter((r) => r.includes('sendSuccess') || r.includes('setBotReply'))
+            .map(nameOf);
+
+        if (leaking.length > 0) {
+            console.error(`      a non-disclosing region both reads a code AND answers: ${leaking.join(', ')}`);
+            return false;
+        }
+        return true;
     });
 
     assert('the route table imports nothing — maintenance mode reads it', () => {
@@ -2869,9 +2912,9 @@ async function main(): Promise<void> {
      * above is a one-way guard — they all pass on an EMPTY emission, which is exactly the
      * failure mode of a filter that has become too broad. Only a count catches that.
      */
-    assert('the generator emits 51 tools — update this when one lands', () => {
-        if (emitted.length !== 51) console.error(`     ↳ emitted ${emitted.length}`);
-        return emitted.length === 51;
+    assert('the generator emits 54 tools — update this when one lands', () => {
+        if (emitted.length !== 54) console.error(`     ↳ emitted ${emitted.length}`);
+        return emitted.length === 54;
     });
 
     /**
@@ -3776,6 +3819,84 @@ async function main(): Promise<void> {
             '1',
         );
         return one.length === 1 && two.length === 1;
+    });
+
+    // ── The `inapp` intent — the in-app screen door ──────────────────────────
+
+    assert('⛔ Telegram opens an in-app screen with web_app, NOT a url button', () => {
+        const [reply] = renderBotReplies(
+            { kind: 'inapp', text: 'Here they are', label: 'See all', url: 'https://app.test/s/pl/ia_x' },
+            'telegram',
+            '1',
+        );
+        const markup = reply.body.reply_markup as { inline_keyboard: Record<string, unknown>[][] };
+        const button = markup.inline_keyboard[0][0] as Record<string, unknown>;
+        // `web_app` keeps the customer inside the chat; `url` sends them to the system
+        // browser, which `product-display.service.ts` argues is worse than no screen at all.
+        return button.web_app !== undefined && button.url === undefined;
+    });
+
+    assert('⚠ a NON-HTTPS screen url degrades to a url button, never a dropped message', () => {
+        const [reply] = renderBotReplies(
+            { kind: 'inapp', text: 'Here they are', label: 'See all', url: 'http://localhost:8022/s/pl/x' },
+            'telegram',
+            '1',
+        );
+        const markup = reply.body.reply_markup as { inline_keyboard: Record<string, unknown>[][] };
+        const button = markup.inline_keyboard[0][0] as Record<string, unknown>;
+        // Telegram refuses the WHOLE message on a non-HTTPS web_app url — sentence and all.
+        // Losing the button is recoverable; losing the turn is not.
+        return button.url !== undefined && button.web_app === undefined && reply.body.text !== undefined;
+    });
+
+    assert('⚠ WhatsApp falls back to cta_url while no Flow is published', () => {
+        const [reply] = renderBotReplies(
+            { kind: 'inapp', text: 'Here they are', label: 'See all', url: 'https://shop.test/s' },
+            'whatsapp',
+            '237600000000',
+        );
+        const interactive = reply.body.interactive as Record<string, unknown>;
+        // ⚠ This branch is the WhatsApp half of the feature until Flows land — it is NOT
+        // dead code. Deleting it leaves the channel with nothing.
+        return interactive.type === 'cta_url';
+    });
+
+    assert('⚠ WhatsApp renders a Flow when one IS published, and never data_exchange', () => {
+        const [reply] = renderBotReplies(
+            {
+                kind: 'inapp',
+                text: 'Here they are',
+                label: 'See all',
+                url: 'https://shop.test/s',
+                flow: { id: '1234567890', screen: 'LISTING' },
+            },
+            'whatsapp',
+            '237600000000',
+        );
+        const interactive = reply.body.interactive as {
+            type: string;
+            action: { parameters: Record<string, unknown> };
+        };
+        // `data_exchange` would need the encrypted endpoint this platform has not built, so a
+        // published Flow must be driven by `navigate` with its data already supplied.
+        return (
+            interactive.type === 'flow'
+            && interactive.action.parameters.flow_action === 'navigate'
+            && interactive.action.parameters.flow_id === '1234567890'
+        );
+    });
+
+    assert('⚠ the in-app intent is ONE message on both channels', () => {
+        const intent = {
+            kind: 'inapp' as const,
+            text: 'Here they are',
+            label: 'See all',
+            url: 'https://app.test/s',
+        };
+        return (
+            renderBotReplies(intent, 'telegram', '1').length === 1
+            && renderBotReplies(intent, 'whatsapp', '237600000000').length === 1
+        );
     });
 
     // ── The display store ────────────────────────────────────────────────────

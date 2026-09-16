@@ -1878,8 +1878,12 @@ assert('MIGRATIONS covers every migrate:*/backfill:* binding, and every row has 
 // started from. That makes the sixth uniqueness argument in this list also much the largest:
 // one wallet per owner, one COD collection per shipment, SKU uniqueness, one channel identity
 // per account.
-assert('all twenty-three are registered — the count is the count on disk', () =>
-    MIGRATIONS.length === 23);
+// ⚠ 23 -> 24 with `migrate:payout-lifecycle-index` (2026-09-16), which widens the
+// one-payout-per-owner constraint from `pending` alone to every status that still holds the
+// owner's money, and drops the legacy index it replaces. It is a named index build, so it sits
+// with the others above the catch-all.
+assert('all twenty-four are registered — the count is the count on disk', () =>
+    MIGRATIONS.length === 24);
 
 // The catch-all is LAST, and unlike the general index-after-data rule below this is a
 // dependency on the OTHER INDEX MIGRATIONS: it builds only what the declared-vs-live diff

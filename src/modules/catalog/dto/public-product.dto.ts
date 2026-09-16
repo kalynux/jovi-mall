@@ -41,6 +41,7 @@
 import { Product } from '../repositories/mappers/product.mapper';
 import { Variant } from '../repositories/mappers/variant.mapper';
 import { FileDetail } from '../read-models/product-detail.read-model';
+import { isBargainEffective } from '../domain/services/bargain-price.rule';
 import { publicCompareAtPrice, publicDisplayPrice } from '../read-models/public-display-price';
 import type { RatingBreakdownDto, RatingSummaryDto } from '../../reviews/dto/review.dto';
 
@@ -171,6 +172,25 @@ export interface PublicProductListItemDto {
      */
     inStock: boolean;
 
+    /**
+     * Is the price on the table — may a shopper haggle for this product?
+     *
+     * True when the **default variant** has a live bargain window, which is the same
+     * `vectorisationEnabled && bargain != null` predicate `price` above already branches on
+     * (`read-models/public-display-price.ts`). It is computed in the pipeline rather than
+     * here because the mapper cannot recompute it: `bargain.minPrice` is deliberately never
+     * projected, so only the aggregation stage that built `price` ever saw the window.
+     *
+     * ⚠ **It discloses that a window EXISTS, never its bounds.** The vendor's floor stays
+     * unpublished, exactly as it was before this field — a shopper learns only that haggling
+     * is possible, never the number to haggle down to.
+     *
+     * Added for the bot's purchase button, which must choose between Bargain, Add to cart,
+     * Buy now and Book without a second round-trip
+     * (`bot-surface/domain/purchase-affordance.ts`). The storefront may use it too.
+     */
+    negotiable: boolean;
+
     /** Thumbnail only. `null` when the product has no usable image. */
     image: FileDetail | null;
 
@@ -239,6 +259,19 @@ export interface PublicVariantDto {
     compareAtPrice: number | null;
     currency: string;
     inStock: boolean;
+
+    /**
+     * Is `price` above an ASK rather than a fixed price — may this variant be haggled for?
+     *
+     * ⚠ **Per variant, and that is the whole reason it exists here as well as on the list
+     * row.** A product may sell one variant at a fixed price and another with a window open,
+     * so a detail screen cannot take the row's answer and apply it to the picker. The list
+     * row reports its *default* variant; this reports *this* one, and they can disagree.
+     *
+     * Same predicate, same disclosure limit as
+     * `PublicProductListItemDto.negotiable` — that a window exists, never its bounds.
+     */
+    negotiable: boolean;
 
     /**
      * ⚠️ **The selection key. Never key a variant lookup on `optionSignature`.**
@@ -539,6 +572,10 @@ export function toPublicVariantDto(
         compareAtPrice: publicCompareAtPrice(parent.vectorisationEnabled, variant),
         currency,
         inStock: variantInStock(variant),
+        // The predicate the two lines above already branch on, named. Computed here rather
+        // than read from a pipeline because this path holds the real domain objects — the
+        // list row's identical field is projected in Mongo for the opposite reason.
+        negotiable: isBargainEffective(parent.vectorisationEnabled, variant.bargain),
         optionValueIds: [...variant.optionValueIds],
         options,
         ...(images.length > 0 ? { images } : {}),

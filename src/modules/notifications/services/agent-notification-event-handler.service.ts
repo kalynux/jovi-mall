@@ -649,6 +649,131 @@ export class AgentNotificationEventHandler {
         }
     }
 
+    // ─── Payouts — the agent's own money leaving the platform ────────────────
+    //
+    // ⚠ **All four are new, and the gap they close was total.** Vendors and agencies have had
+    // these since this stack shipped; the agent consumer subscribed to no `payout.*` event at
+    // all, so an agent requested their money and heard nothing in any channel. The only way
+    // to find out was opening the app — which `FRONTEND-SYNC/BRIEF-payout-agent-app.md` § 2
+    // had already told the app team to design the earnings screen around.
+    //
+    // ⚠ **The `ownerType !== 'agent'` guard is load-bearing on every one.** One event serves
+    // all three owner types, and each stack's handler filters for its own. Dropping the guard
+    // would send an agent a notification about a vendor's payout.
+    //
+    // ⚠ **`idempotencyKey` is keyed on the payout id, NOT on the event.** A retried transfer
+    // republishes `payout.transfer_failed` for the same payout, and a second identical
+    // "we hit a problem" message is worse than none — it reads as a second failure.
+
+    async handlePayoutRequested(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, amount, currency, payoutRequestId } = event.payload;
+            if (ownerType !== 'agent') return;
+
+            const prefs = await this.preferenceRepo.getByAgent(ownerId);
+            if (prefs.preferences.payoutUpdates === false) return; // opted out (default on)
+
+            await this.dispatch({
+                situation: 'payout.requested',
+                prefs,
+                agentId: ownerId,
+                aggregateType: 'payout',
+                aggregateId: payoutRequestId,
+                idempotencyKey: `agent.payout.requested:${payoutRequestId}`,
+                context: { currency, amountFormatted: Number(amount).toLocaleString() }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle payout.requested:', error);
+        }
+    }
+
+    async handlePayoutPaid(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, amount, currency, payoutRequestId } = event.payload;
+            if (ownerType !== 'agent') return;
+
+            const prefs = await this.preferenceRepo.getByAgent(ownerId);
+            if (prefs.preferences.payoutUpdates === false) return;
+
+            await this.dispatch({
+                situation: 'payout.paid',
+                prefs,
+                agentId: ownerId,
+                aggregateType: 'payout',
+                aggregateId: payoutRequestId,
+                idempotencyKey: `agent.payout.paid:${payoutRequestId}`,
+                context: { currency, amountFormatted: Number(amount).toLocaleString() }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle payout.paid:', error);
+        }
+    }
+
+    async handlePayoutRejected(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, amount, currency, payoutRequestId } = event.payload;
+            if (ownerType !== 'agent') return;
+
+            const prefs = await this.preferenceRepo.getByAgent(ownerId);
+            if (prefs.preferences.payoutUpdates === false) return;
+
+            /**
+             * ⚠ **The rejection REASON is deliberately not carried into the message.** It is
+             * free text an administrator wrote, it lives on the payout record as
+             * `rejectionReason`, and the earnings screen renders it inline — which is also
+             * the only place it can be shown in full, since an approved WhatsApp template
+             * cannot carry unbounded text. The message says the money came back and sends
+             * them to the screen that has the reason.
+             */
+            await this.dispatch({
+                situation: 'payout.rejected',
+                prefs,
+                agentId: ownerId,
+                aggregateType: 'payout',
+                aggregateId: payoutRequestId,
+                idempotencyKey: `agent.payout.rejected:${payoutRequestId}`,
+                context: { currency, amountFormatted: Number(amount).toLocaleString() }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle payout.rejected:', error);
+        }
+    }
+
+    /**
+     * ⭐ **The one that made this gap urgent, and the only one where silence freezes money.**
+     *
+     * A *rejected* payout returns the funds to the available balance — nothing is stuck, and
+     * the agent can request again. A *failed transfer* leaves them in `requested_balance`:
+     * the payout is not coming, a second request answers
+     * `409 EARNINGS_PAYOUT_ALREADY_PENDING`, and an administrator has to retry or reject.
+     *
+     * ⚠ **`reason` is on the payload and is NOT relayed.** It is the gateway's own text, it
+     * can name the payment provider and its internal codes, and the agent needs to know
+     * somebody is on it rather than which API returned what. It is already on the ticket for
+     * whoever retries — `payout-request.service.ts` notes it there in the same transaction.
+     */
+    async handlePayoutTransferFailed(event: DomainEvent): Promise<void> {
+        try {
+            const { ownerType, ownerId, amount, currency, payoutRequestId } = event.payload;
+            if (ownerType !== 'agent') return;
+
+            const prefs = await this.preferenceRepo.getByAgent(ownerId);
+            if (prefs.preferences.payoutUpdates === false) return;
+
+            await this.dispatch({
+                situation: 'payout.transfer_failed',
+                prefs,
+                agentId: ownerId,
+                aggregateType: 'payout',
+                aggregateId: payoutRequestId,
+                idempotencyKey: `agent.payout.transfer_failed:${payoutRequestId}`,
+                context: { currency, amountFormatted: Number(amount).toLocaleString() }
+            });
+        } catch (error) {
+            console.error('[AgentNotificationHandler] Failed to handle payout.transfer_failed:', error);
+        }
+    }
+
     /** Human-readable byte size (B/KB/MB/GB). */
     private formatBytes(bytes: number): string {
         if (bytes < 1024) return `${bytes} B`;

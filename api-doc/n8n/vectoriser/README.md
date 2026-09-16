@@ -171,7 +171,7 @@ attempt. It does two jobs:
 
 ⚠ **The claim happens BEFORE the refund, and the order is load-bearing.**
 Refunding first lets two deliveries of one report pay a vendor twice. This way
-the worst case is a refund that fails after the claim — one credit not returned,
+the worst case is a refund that fails after the claim — the claimed credits not returned,
 logged at error level — rather than credits minted by a retry.
 
 ⚠ Every write that **ends or restarts** an attempt clears the ticket:

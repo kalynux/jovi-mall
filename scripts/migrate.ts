@@ -21,13 +21,22 @@
  * ── ORDER IS DECLARED, not discovered ─────────────────────────────────────────
  * `MIGRATIONS` below is the order. One rule produces it:
  *
- *   Index builds run LAST. FOUR of them claim UNIQUENESS — `migrate:payment-indexes` (5
- *   unique indexes), `migrate:customer-catalog-indexes` (2), `migrate:review-indexes` (2)
- *   and `migrate:inventory-indexes` (2) — and a unique build fails outright against data
- *   that still holds duplicates. Letting the data migrations reach their final shape first
- *   turns "E11000, go and investigate" into a build that simply succeeds.
+ *   Index builds run LAST. SEVEN of them claim UNIQUENESS — `migrate:payment-indexes` (5
+ *   unique indexes), `migrate:customer-catalog-indexes` (2), `migrate:review-indexes` (2),
+ *   `migrate:inventory-indexes` (2), `migrate:payout-lifecycle-index` (2),
+ *   `migrate:booking-number-index` (1) and `migrate:plan-quota-indexes` (1) — and a unique
+ *   build fails outright against data that still holds duplicates. Letting the data
+ *   migrations reach their final shape first turns "E11000, go and investigate" into a build
+ *   that simply succeeds.
  *
  *   Re-count rather than trusting this line:  grep -c 'unique: *true' scripts/migrate-*.ts
+ *
+ *   ⚠ **That instruction has now caught this line twice.** It said FOUR and named four, while
+ *   `migrate:booking-number-index` and `migrate:plan-quota-indexes` had claimed uniqueness the
+ *   whole time — both are named in the array below with notes about exactly that, so the list
+ *   was contradicted twenty lines away. Found 2026-09-16 by running the grep while adding the
+ *   payout row. Same failure mode as the P-11 correction documented immediately below: **a
+ *   stated count is a second source of truth, and this one has never been right.**
  *
  *   ⚠ `migrate:cod-late-deposit-index` was named here as one of them until 2026-09-06 and
  *   is NOT (DOC-PROGRAM P-11). It creates no index at all — it only DROPS a superseded
@@ -242,6 +251,12 @@ export const MIGRATIONS: Migration[] = [
         file: 'scripts/migrate-plan-quota-indexes.ts',
         dryRun: true,
         note: 'the plan-quota sweep collection-scans every owner it visits, and TWO ENFORCEMENT STAMPS PER OWNER become possible — the unique index is what stops two passes each believing they enforced the current plan',
+    },
+    {
+        name: 'migrate:payout-lifecycle-index',
+        file: 'scripts/migrate-payout-lifecycle-index.ts',
+        dryRun: true,
+        note: 'AN OWNER CAN OPEN A SECOND PAYOUT WHILE THE FIRST STILL HOLDS THEIR MONEY — the legacy index constrains \'pending\' alone, so a payout left \'processing\' or \'failed\' (a transfer in flight, or one the gateway refused) frees them to request the same balance again and the platform owes it twice; and with no unique transfer reference, two payouts can claim one gateway transfer',
     },
     // ── The catch-all, and it must stay LAST of all ──────────────────────────
     // Every row above builds a named handful somebody reasoned about. This one builds

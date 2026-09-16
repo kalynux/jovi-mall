@@ -1,7 +1,8 @@
 # Notification deep links — the vendor, agency and agent apps
 
-**Verified against source on 2026-09-08** — the three vocabularies (8 vendor · 8 agency · 5
-agent), the five shape rules and the two deliberate absences re-checked by running
+**Verified against source on 2026-09-16** — the three vocabularies (8 vendor · 8 agency · 6
+agent, the sixth being `earnings`, added with the four `payout.*` situations the agent stack
+never had), the five shape rules and the two deliberate absences re-checked by running
 `npm run test:notification-deeplinks` (13/13, and its last assertion pins this very document);
 the channel defaults against `src/modules/notifications/models/*-notification-preference.model.ts`;
 and the App Links census against the three apps' own `android/app/src/main/AndroidManifest.xml`
@@ -144,7 +145,7 @@ route would silently capture it.
 
 ## Agent — `agent_app` (Flutter)
 
-`AGENT_APP_URL` · 5 labels.
+`AGENT_APP_URL` · 6 labels.
 
 | `path` | Sent by | Carries |
 |---|---|---|
@@ -153,11 +154,32 @@ route would silently capture it.
 | `memberships/{{contractId}}` | the eight `agent_contract.*` situations | ⚠ a **contract** id — see below |
 | `plans` | `plan.expiring`, `plan.expired` | — |
 | `settings/storage` | `storage.alert` | — |
+| ⭐ **`earnings`** | **`payout.requested`, `payout.paid`, `payout.rejected`, `payout.transfer_failed`** | — |
 | *(no button)* | `shipment.reassigned_away` | — |
 
-**Your app is the reference implementation of this contract.** `resolveDeepLink` in
-`lib/core/router/deep_links.dart` handles all five, documents them in a table, returns null
-for anything unknown and falls back to the inbox. Nothing to change.
+### ⭐ `earnings` is NEW, and it is the one thing on this page you have to build
+
+You were the reference implementation of this contract and handled all five. There are now
+**six**: add a case for `earnings` that opens the earnings screen.
+
+It carries **no placeholder**, deliberately — an agent has at most one open payout request
+(one per owner, enforced by `409 EARNINGS_PAYOUT_ALREADY_PENDING`), so the summary is
+unambiguous and an id could only ever go stale.
+
+**Why it exists:** until now `agent-notification-event-consumer.ts` subscribed to **no**
+`payout.*` event at all, while the vendor and agency stacks each subscribed to three. An agent
+requested their money and heard nothing — not when it was paid, not when it was rejected, in
+any channel. `FRONTEND-SYNC/BRIEF-payout-agent-app.md` § 2 documented that and told you to
+design the earnings screen around the silence. **The silence is now closed**, so the screen no
+longer has to carry that weight alone — but the button needs somewhere to land.
+
+⚠ **It is `earnings` and not `tickets/{{ticketId}}`**, which is what the vendor and agency apps
+get for the same four situations. Your app has no tickets screen, so that token would be a
+button you cannot translate.
+
+⚠ **`payout.transfer_failed` is the one to read carefully.** It is **not** a rejection and not
+terminal: the money is still held, an administrator will retry or reject, and the agent
+**cannot** request again meanwhile. The copy says so — do not add UI that invites a retry.
 
 ⚠ **`memberships` is the pre-refactor word for a contract**, and it is kept deliberately.
 The backend calls it a contract everywhere else (`AgentAgencyContract`, `contractId`,

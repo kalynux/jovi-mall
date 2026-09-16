@@ -427,6 +427,278 @@ const ADDED_TO_CART_CHECKOUT: Copy = {
     ar: 'أُضيف إلى سلتك. قل «إتمام الطلب» متى كنت مستعدًا وسأتولى الباقي.',
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  The rich-UI vocabulary
+//
+//  ⚠ **Declared in ONE pass, deliberately, including strings nothing renders yet.**
+//  Several workstreams build on this table at once, in one working tree, and two sessions
+//  writing one file is a lost write rather than a merge conflict. More pressingly:
+//  `assertBotChromeCopyFits` runs at BOOT, so a session adding a key mid-flight and getting a
+//  cap or a translation wrong stops the server for everyone. Adding them together, once, is
+//  what makes the rest of the work parallel-safe.
+//
+//  Every string below is capped at 20 — WhatsApp's reply-button title — except where noted.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Rung 1 of the purchase ladder. See `purchase-affordance.ts`. */
+const BARGAIN_BUTTON: Copy = {
+    en: 'Bargain',
+    fr: 'Négocier',
+    pt: 'Negociar',
+    es: 'Negociar',
+    ar: 'فاوض',
+};
+
+/** Rung 4 — a service. Never "Buy": the cart refuses services outright. */
+const BOOK_BUTTON: Copy = {
+    en: 'Book',
+    fr: 'Réserver',
+    pt: 'Reservar',
+    es: 'Reservar',
+    ar: 'احجز',
+};
+
+/**
+ * What the customer is asked after tapping **Bargain**.
+ *
+ * ⚠ **A QUESTION, not an opening offer, and the reason is structural rather than stylistic.**
+ * The bargaining agent lives in n8n; jovi-mall's negotiation surface is n8n calling *in*, and
+ * there is no outbound path from here that makes the agent take a turn. So a message this
+ * service pushes reaches the **customer** and does not wake the **agent** — what wakes it is
+ * the customer's reply, arriving through the ordinary inbound webhook. A sentence that did not
+ * invite a reply would leave the haggle waiting for a turn that never comes.
+ *
+ * ⚠ **No placeholder.** The product's title is composed as data above this sentence, so the
+ * string stays plainly translatable and no translator has to move a token through a clause.
+ */
+const BARGAIN_INVITE_PROMPT: Copy = {
+    en: 'Make me an offer — what would you like to pay for this?',
+    fr: "Faites-moi une offre — combien voulez-vous payer pour cet article ?",
+    pt: 'Faça-me uma proposta — quanto gostaria de pagar por isto?',
+    es: '¿Cuánto te gustaría pagar por esto? Hazme una oferta.',
+    ar: 'اعرض عليّ سعرًا — كم تودّ أن تدفع مقابل هذا؟',
+};
+
+/** What the customer is asked after tapping **Book**. Same no-placeholder rule. */
+const BOOK_INVITE_PROMPT: Copy = {
+    en: 'When would you like this? Tell me a day and a time.',
+    fr: 'Quand le souhaitez-vous ? Indiquez-moi un jour et une heure.',
+    pt: 'Quando prefere? Diga-me um dia e uma hora.',
+    es: '¿Para cuándo lo quieres? Dime un día y una hora.',
+    ar: 'متى تريد ذلك؟ أخبرني باليوم والوقت.',
+};
+
+// ── Orders and fulfilment ────────────────────────────────────────────────────
+
+/** The order detail's second action. Destructive, so it opens a confirm rather than acting. */
+const CANCEL_ORDER_BUTTON: Copy = {
+    en: 'Cancel order',
+    fr: 'Annuler',
+    pt: 'Cancelar',
+    es: 'Cancelar',
+    ar: 'إلغاء الطلب',
+};
+
+/**
+ * ⚠ **A two-answer question that is collected as FREE TEXT today**, in five languages, which
+ * is why it earns a pair of buttons more than almost anything else on this surface.
+ */
+const CONFIRM_DELIVERY_PROMPT: Copy = {
+    en: 'Did your parcel arrive?',
+    fr: 'Avez-vous bien reçu votre colis ?',
+    pt: 'A sua encomenda chegou?',
+    es: '¿Te llegó tu paquete?',
+    ar: 'هل وصلك طردك؟',
+};
+
+/** The confirm in front of a cancellation. Never cancels on the first tap. */
+const CANCEL_ORDER_PROMPT: Copy = {
+    en: 'Cancel this order? This cannot be undone.',
+    fr: 'Annuler cette commande ? Cette action est définitive.',
+    pt: 'Cancelar esta encomenda? Não é possível desfazer.',
+    es: '¿Cancelar este pedido? No se puede deshacer.',
+    ar: 'إلغاء هذا الطلب؟ لا يمكن التراجع عن ذلك.',
+};
+
+/**
+ * ⚠ **The reason is TYPED, never picked from a list.** Owner's decision: a canned reason tells
+ * the vendor less than a sentence does, and the list would have to guess at the cases.
+ */
+const CANCEL_REASON_PROMPT: Copy = {
+    en: 'What went wrong? Tell me in your own words and I will pass it on.',
+    fr: "Que s'est-il passé ? Dites-le avec vos mots et je transmettrai.",
+    pt: 'O que correu mal? Diga-me por palavras suas e eu transmito.',
+    es: '¿Qué pasó? Cuéntamelo con tus palabras y lo transmito.',
+    ar: 'ما الذي حدث؟ أخبرني بكلماتك وسأنقل ذلك.',
+};
+
+/**
+ * ⚠ **A status the customer can SEE and cannot interpret.** `handing_over` appears on their
+ * shipment when a delivery moves between agents mid-route. Today they get the status and
+ * silence, which reads as something having gone wrong.
+ */
+const HANDOVER_PROMPT: Copy = {
+    en: 'Your parcel is moving to a different delivery agent. It is still on its way.',
+    fr: "Votre colis passe à un autre livreur. Il est toujours en route.",
+    pt: 'A sua encomenda está a passar para outro estafeta. Continua a caminho.',
+    es: 'Tu paquete está pasando a otro repartidor. Sigue en camino.',
+    ar: 'طردك يُنقل إلى مندوب توصيل آخر. لا يزال في طريقه إليك.',
+};
+
+/** Opens the in-app product screen, where variants can actually be chosen. */
+const OPEN_BUTTON: Copy = {
+    en: 'Open',
+    fr: 'Ouvrir',
+    pt: 'Abrir',
+    es: 'Abrir',
+    ar: 'افتح',
+};
+
+/**
+ * The next five cards, IN THE CHAT — distinct from `seeMoreButton`, which now opens the
+ * in-app listing. Two different destinations needed two different words, and the pair appears
+ * side by side on one message, so a customer must be able to tell them apart at a glance.
+ */
+const NEXT_PAGE_BUTTON: Copy = {
+    en: 'Show 5 more',
+    fr: '5 de plus',
+    pt: 'Mais 5',
+    es: '5 más',
+    ar: '٥ أخرى',
+};
+
+/** Opens the in-app listing — the whole result set, not the next page of it. */
+const BROWSE_ALL_BUTTON: Copy = {
+    en: 'See all',
+    fr: 'Tout voir',
+    pt: 'Ver tudo',
+    es: 'Ver todo',
+    ar: 'عرض الكل',
+};
+
+/** Opens the in-app store listing. There are too many stores for a chat picker. */
+const VIEW_STORES_BUTTON: Copy = {
+    en: 'Stores',
+    fr: 'Boutiques',
+    pt: 'Lojas',
+    es: 'Tiendas',
+    ar: 'المتاجر',
+};
+
+/**
+ * The last row of a chat list, opening the in-app listing for the rest.
+ *
+ * ⚠ Capped at **24**, not 20 — it is a WhatsApp list ROW title rather than a reply button,
+ * and rows have the wider cap. It is never rendered as a button.
+ */
+const LOAD_MORE_ROW: Copy = {
+    en: 'Load more',
+    fr: 'Afficher plus',
+    pt: 'Carregar mais',
+    es: 'Cargar más',
+    ar: 'تحميل المزيد',
+};
+
+/** The three that follow every add-to-basket. Exactly three — WhatsApp's hard cap. */
+const VIEW_CART_BUTTON: Copy = {
+    en: 'View basket',
+    fr: 'Voir le panier',
+    pt: 'Ver carrinho',
+    es: 'Ver cesta',
+    ar: 'عرض السلة',
+};
+
+const CHECKOUT_BUTTON: Copy = {
+    en: 'Checkout',
+    fr: 'Commander',
+    pt: 'Finalizar',
+    es: 'Pagar',
+    ar: 'إتمام الطلب',
+};
+
+const BROWSE_MORE_BUTTON: Copy = {
+    en: 'Keep shopping',
+    fr: 'Continuer',
+    pt: 'Continuar',
+    es: 'Seguir viendo',
+    ar: 'متابعة التسوق',
+};
+
+/**
+ * The universal confirm pair.
+ *
+ * ⚠ **These exist so that no consequential action is ever ended by a TYPED word.** Closing an
+ * account, cancelling an order, emptying a basket and confirming a delivery are all decided
+ * today by parsing whatever the customer wrote, in five languages — which is the exact
+ * failure `bot-action-id.ts` was written to abolish and the one place it was never applied.
+ */
+const CONFIRM_BUTTON: Copy = {
+    en: 'Yes',
+    fr: 'Oui',
+    pt: 'Sim',
+    es: 'Sí',
+    ar: 'نعم',
+};
+
+const DECLINE_BUTTON: Copy = {
+    en: 'No',
+    fr: 'Non',
+    pt: 'Não',
+    es: 'No',
+    ar: 'لا',
+};
+
+/** Order and shipment actions. */
+const TRACK_BUTTON: Copy = {
+    en: 'Track',
+    fr: 'Suivre',
+    pt: 'Rastrear',
+    es: 'Seguir',
+    ar: 'تتبع',
+};
+
+const SHIPMENTS_BUTTON: Copy = {
+    en: 'Shipments',
+    fr: 'Colis',
+    pt: 'Envios',
+    es: 'Envíos',
+    ar: 'الشحنات',
+};
+
+const GET_HELP_BUTTON: Copy = {
+    en: 'Get help',
+    fr: 'Aide',
+    pt: 'Ajuda',
+    es: 'Ayuda',
+    ar: 'مساعدة',
+};
+
+/** ⚠ There is deliberately no "Resend" companion — a replacement code comes from the agent. */
+const GET_CODE_BUTTON: Copy = {
+    en: 'Get code',
+    fr: 'Voir le code',
+    pt: 'Ver código',
+    es: 'Ver código',
+    ar: 'رمز التسليم',
+};
+
+/** The two that ride the payment-result message. */
+const CHECK_STATUS_BUTTON: Copy = {
+    en: 'Check status',
+    fr: 'Vérifier',
+    pt: 'Verificar',
+    es: 'Verificar',
+    ar: 'تحقق من الحالة',
+};
+
+const TRY_AGAIN_BUTTON: Copy = {
+    en: 'Try again',
+    fr: 'Réessayer',
+    pt: 'Tentar de novo',
+    es: 'Reintentar',
+    ar: 'حاول مجددًا',
+};
+
 /**
  * Every chrome string, and the cap each one has to satisfy.
  *
@@ -472,6 +744,36 @@ const CHROME = Object.freeze({
     moreProductsPrompt: { copy: MORE_PRODUCTS_PROMPT, cap: null },
     addedToCart: { copy: ADDED_TO_CART, cap: null },
     addedToCartCheckout: { copy: ADDED_TO_CART_CHECKOUT, cap: null },
+
+    // ── The rich-UI vocabulary (declared together — see the block above) ─────
+    bargainButton: { copy: BARGAIN_BUTTON, cap: 20 },
+    bookButton: { copy: BOOK_BUTTON, cap: 20 },
+    openButton: { copy: OPEN_BUTTON, cap: 20 },
+    nextPageButton: { copy: NEXT_PAGE_BUTTON, cap: 20 },
+    browseAllButton: { copy: BROWSE_ALL_BUTTON, cap: 20 },
+    viewStoresButton: { copy: VIEW_STORES_BUTTON, cap: 20 },
+    // ⚠ 24, not 20 — a WhatsApp list ROW title, never a reply button.
+    loadMoreRow: { copy: LOAD_MORE_ROW, cap: 24 },
+    viewCartButton: { copy: VIEW_CART_BUTTON, cap: 20 },
+    checkoutButton: { copy: CHECKOUT_BUTTON, cap: 20 },
+    browseMoreButton: { copy: BROWSE_MORE_BUTTON, cap: 20 },
+    confirmButton: { copy: CONFIRM_BUTTON, cap: 20 },
+    declineButton: { copy: DECLINE_BUTTON, cap: 20 },
+    trackButton: { copy: TRACK_BUTTON, cap: 20 },
+    shipmentsButton: { copy: SHIPMENTS_BUTTON, cap: 20 },
+    getHelpButton: { copy: GET_HELP_BUTTON, cap: 20 },
+    getCodeButton: { copy: GET_CODE_BUTTON, cap: 20 },
+    checkStatusButton: { copy: CHECK_STATUS_BUTTON, cap: 20 },
+    tryAgainButton: { copy: TRY_AGAIN_BUTTON, cap: 20 },
+    // ── The two rungs that finish as a conversation, not as a write ──────────
+    bargainInvitePrompt: { copy: BARGAIN_INVITE_PROMPT, cap: null },
+    bookInvitePrompt: { copy: BOOK_INVITE_PROMPT, cap: null },
+    // ── Orders and fulfilment ────────────────────────────────────────────────
+    cancelOrderButton: { copy: CANCEL_ORDER_BUTTON, cap: 20 },
+    confirmDeliveryPrompt: { copy: CONFIRM_DELIVERY_PROMPT, cap: null },
+    cancelOrderPrompt: { copy: CANCEL_ORDER_PROMPT, cap: null },
+    cancelReasonPrompt: { copy: CANCEL_REASON_PROMPT, cap: null },
+    handoverPrompt: { copy: HANDOVER_PROMPT, cap: null },
 } as const);
 
 export type BotChromeKey = keyof typeof CHROME;

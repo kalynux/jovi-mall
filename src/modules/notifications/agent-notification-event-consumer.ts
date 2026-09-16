@@ -76,6 +76,25 @@ export function initializeAgentNotificationEventConsumers(): void {
     // Media storage threshold alerts (80/90/100%), from the file-cleanup sweep.
     eventBus.subscribe('agent.storage.alert', handler.handleStorageAlert.bind(handler));
 
+    /**
+     * ── Payouts ──────────────────────────────────────────────────────────────
+     *
+     * ⚠ **These four lines are the whole defect, in the place it lived.** This consumer
+     * subscribed to no `payout.*` event at all while the vendor and agency consumers each
+     * subscribed to three — so an agent requested their money and heard nothing, in any
+     * channel, ever. `FRONTEND-SYNC/BRIEF-payout-agent-app.md` § 2 documented it and told the
+     * app team to design the earnings screen around the silence.
+     *
+     * ⚠ **`payout.transfer_failed` had NO subscriber on any of the three stacks.** It is
+     * published by `payout-request.service.ts:580` and was consumed by nobody, which is the
+     * worst of the four to miss: a *rejected* payout returns the money, while a *failed*
+     * transfer leaves it held with no signal and no way for the owner to re-request.
+     */
+    eventBus.subscribe('payout.requested', handler.handlePayoutRequested.bind(handler));
+    eventBus.subscribe('payout.paid', handler.handlePayoutPaid.bind(handler));
+    eventBus.subscribe('payout.rejected', handler.handlePayoutRejected.bind(handler));
+    eventBus.subscribe('payout.transfer_failed', handler.handlePayoutTransferFailed.bind(handler));
+
     console.log(
         `[AgentNotifications] Event handlers registered successfully (FCM push: ${isFcmConfigured() ? 'enabled' : 'disabled'})`
     );

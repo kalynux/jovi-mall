@@ -59,6 +59,31 @@ export interface IAgentNotificationPreference extends Document {
         planUpdates: boolean;
         /** The agent's own media storage threshold alerts (storage.alert, 80/90/100%). */
         storageAlert: boolean;
+        /**
+         * The agent's own money leaving the platform — `payout.requested` /
+         * `.paid` / `.rejected` / `.transfer_failed`.
+         *
+         * ⚠ **Added late, and its absence was the whole defect.** Vendors and
+         * agencies have had `payoutUpdates` since this stack shipped; the agent
+         * model had no such flag and `agent-notification-event-consumer.ts`
+         * subscribed to no `payout.*` event, so an agent requested their money
+         * and heard nothing — not when it was paid, not when it was rejected.
+         * The only way to find out was opening the app, which
+         * `FRONTEND-SYNC/BRIEF-payout-agent-app.md` § 2 had already told the app
+         * team to design around.
+         *
+         * ⚠ **`transfer_failed` is the one that made this urgent**, and it is the
+         * reason this flag deserves the same scrutiny as `codDepositUpdates`. A
+         * *rejected* payout returns the money to the available balance — nothing
+         * is stuck. A *failed* transfer leaves it in `requested_balance`, so the
+         * agent cannot request again (`409
+         * EARNINGS_PAYOUT_ALREADY_PENDING` — one open request per owner) and the
+         * payout is not coming. Silence there is money frozen with no signal.
+         *
+         * Defaults ON, and it gates only the secondary channel — in-app and push
+         * are always delivered, as with `assignmentOffers`.
+         */
+        payoutUpdates: boolean;
     };
 
     updatedAt: Date;
@@ -120,6 +145,10 @@ const AgentNotificationPreferenceSchema = new Schema<IAgentNotificationPreferenc
                 default: true
             },
             storageAlert: {
+                type: Boolean,
+                default: true
+            },
+            payoutUpdates: {
                 type: Boolean,
                 default: true
             }

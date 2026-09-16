@@ -40,6 +40,7 @@ import {
     VENDOR_PUBLISHABLE_MATCH,
 } from '../../domain/services/public-catalog.filter';
 import {
+    bargainEffectiveExpr,
     displayCompareAtPriceExpr,
     displayPriceExpr,
 } from '../../read-models/public-display-price';
@@ -62,6 +63,16 @@ export interface PublicProductListRow {
     priceMin: number;
     priceMax: number;
     inStock: boolean;
+    /**
+     * Is the DEFAULT variant's bargain window live — `vectorisationEnabled && bargain != null`,
+     * the same predicate `price` above already branched on.
+     *
+     * ⚠ **It says a window EXISTS, never what is in it.** `bargain.minPrice` — the vendor's
+     * floor — is not projected into this pipeline at all, so nothing downstream can leak it.
+     * A shopper learns only that haggling is on the table, which is what the bot needs to
+     * label its purchase button (`bot-surface/domain/purchase-affordance.ts`).
+     */
+    negotiable: boolean;
     /** Product-level media ids, thumbnail-first resolution happens above. */
     fileIds: string[];
     defaultVariantId: string | null;
@@ -297,6 +308,18 @@ export class PublicCatalogRepositoryMongo {
                                     {
                                         displayPrice: displayPriceExpr(displayPaths),
                                         displayCompareAtPrice: displayCompareAtPriceExpr(displayPaths),
+                                        // ⚠ The SAME predicate `displayPrice` already branches
+                                        // on, projected as a value rather than recomputed by the
+                                        // mapper — which could not recompute it anyway, because
+                                        // `bargain.minPrice` is deliberately not projected above
+                                        // and only `maxPrice` survives into this stage.
+                                        //
+                                        // It is published so the bot can offer "Bargain" instead
+                                        // of "Add to cart" on a row (`purchase-affordance.ts`).
+                                        // Cheap here and nowhere else: the expression is already
+                                        // built for the two fields above, so this adds a boolean
+                                        // to a `$mergeObjects` that was already running.
+                                        negotiable: bargainEffectiveExpr(displayPaths),
                                     },
                                 ],
                             },
@@ -365,6 +388,11 @@ export class PublicCatalogRepositoryMongo {
                 priceMin: '$_priceMin',
                 priceMax: '$_priceMax',
                 inStock: '$_inStock',
+                // ⚠ The DEFAULT variant's window, not the product's — a product may have a
+                // bargainable variant and a fixed-price one, and the row quotes the default.
+                // `$ifNull` because a product whose default was archived out from under it has
+                // no `_defaultVariant` at all, and an absent boolean must read as "no".
+                negotiable: { $ifNull: ['$_defaultVariant.negotiable', false] },
                 fileIds: { $ifNull: ['$fileIds', []] },
                 defaultVariantId: { $ifNull: [{ $toString: '$_defaultVariant._id' }, null] },
                 storeSlug: '$store.slug',

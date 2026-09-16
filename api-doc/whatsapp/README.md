@@ -173,6 +173,16 @@ the same 30 minutes and the same single use.
   reports itself unconfigured and every notification handler silently skips it.
 - `WA_BOT_NUMBER` is what `GET /api/me/connections` uses to build the "message this number"
   instruction and the `wa.me` deep link.
+- ⛔ **`WHATSAPP_PHONE_NUMBER_ID` is held in TWO places and nothing compares them.** The n8n
+  automation layer reads it as `$env.WHATSAPP_PHONE_NUMBER_ID` with **no fallback**
+  (`UP-wi-mall-core` → `send whatsapp`, `UP-wi-mall-wa-adapter` → `typing (first)`), so a
+  number change is two edits, not one. Updating only this service leaves notifications sending
+  and the customer bot mute, or the reverse — neither side logs anything about the other.
+- ⚠ **The id does not survive a number change and the old one does not linger.** When the
+  platform moved to +237 652 705 926 on 2026-09-16, the previous id was removed from the WABA
+  outright and now answers Graph code 100. `WHATSAPP_BUSINESS_ACCOUNT_ID` is the value that is
+  stable across such a move — which is also why the 190 approved templates needed no
+  resubmission, while the approved **display name**, being phone-scoped, had to be earned again.
 
 ## Related
 

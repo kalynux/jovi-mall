@@ -95,6 +95,33 @@ const STORAGE_BUTTON: ButtonDef = {
     urlSuffix: 'settings/storage'
 };
 
+const VIEW_EARNINGS_LABEL: Record<Language, string> = {
+    en: 'View earnings',
+    fr: 'Voir mes revenus',
+    pt: 'Ver ganhos',
+    es: 'Ver ganancias',
+    ar: 'عرض الأرباح'
+};
+
+/**
+ * Where every payout message sends an agent.
+ *
+ * ⚠ **`earnings`, not `tickets/{{ticketId}}` like the agency stack's payout button.** These
+ * suffixes are a vocabulary the apps translate, not URLs they follow blindly — so a token the
+ * agent app has no screen for is a dead control. The agent app has no tickets screen, and
+ * `FRONTEND-SYNC/BRIEF-payout-agent-app.md` § 2 names the earnings summary as the place payout
+ * state belongs and where an agent already looks.
+ *
+ * ⚠ It takes no id, deliberately: an agent has at most one open payout request at a time
+ * (one per owner, enforced by `409 EARNINGS_PAYOUT_ALREADY_PENDING`), so the summary is
+ * unambiguous and an id would be a parameter that could only ever go stale.
+ */
+const EARNINGS_BUTTON: ButtonDef = {
+    type: 'url',
+    label: VIEW_EARNINGS_LABEL,
+    urlSuffix: 'earnings'
+};
+
 /**
  * Who answered the deposit, when it was the platform rather than an agency.
  *
@@ -800,6 +827,109 @@ export const AGENT_NOTIFICATION_CATALOG: Record<AgentNotificationType, Situation
             template: { name: 'agent_storage_alert', bodyParams: ['{{percentUsed}}', '{{usageFormatted}}', '{{limitFormatted}}'] }
         },
         button: STORAGE_BUTTON
+    },
+
+    // ─── Payouts — the agent's own money leaving the platform ────────────────
+    //
+    // ⚠ **These four did not exist, and their absence was the defect.** Vendors and agencies
+    // have had payout notifications since this stack shipped; the agent catalogue had no
+    // payout copy at all and `agent-notification-event-consumer.ts` subscribed to no
+    // `payout.*` event — so an agent requested their money and heard nothing, in any channel.
+    // `FRONTEND-SYNC/BRIEF-payout-agent-app.md` § 2 had already told the app team to design
+    // the earnings screen around that silence.
+    //
+    // ⚠ **The button is EARNINGS, not TICKETS.** The agency stack points its payout messages
+    // at `tickets/{{ticketId}}` because an agency dashboard has a tickets screen. The agent
+    // app does not — its payout state lives on the earnings summary, which is where the brief
+    // says an agent already looks. A `tickets/…` suffix here would be a button the app cannot
+    // translate, which is a dead control rather than a wrong one.
+
+    'payout.requested': {
+        base: {
+            en: { subject: 'Payout request created', body: 'Your request to withdraw {{currency}} {{amountFormatted}} was created. You will hear from us when it is paid.' },
+            fr: { subject: 'Demande de paiement créée', body: 'Votre demande de retrait de {{currency}} {{amountFormatted}} a été créée. Nous vous préviendrons dès qu\'elle est payée.' },
+            pt: { subject: 'Pedido de pagamento criado', body: 'O seu pedido de retirada de {{currency}} {{amountFormatted}} foi criado. Avisamos-lhe quando for pago.' },
+            es: { subject: 'Solicitud de pago creada', body: 'Tu solicitud de retiro de {{currency}} {{amountFormatted}} fue creada. Te avisaremos cuando se pague.' },
+            ar: { subject: 'تم إنشاء طلب السحب', body: 'تم إنشاء طلبك لسحب {{currency}} {{amountFormatted}}. سنخبرك عند دفعه.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_payout_requested', bodyParams: ['{{currency}}', '{{amountFormatted}}'] }
+        },
+        button: EARNINGS_BUTTON
+    },
+
+    'payout.paid': {
+        base: {
+            en: { subject: 'Payout paid', body: 'Your payout of {{currency}} {{amountFormatted}} has been paid.' },
+            fr: { subject: 'Paiement effectué', body: 'Votre paiement de {{currency}} {{amountFormatted}} a été effectué.' },
+            pt: { subject: 'Pagamento efetuado', body: 'O seu pagamento de {{currency}} {{amountFormatted}} foi efetuado.' },
+            es: { subject: 'Pago realizado', body: 'Tu pago de {{currency}} {{amountFormatted}} ha sido realizado.' },
+            ar: { subject: 'تم الدفع', body: 'تم دفع مبلغ {{currency}} {{amountFormatted}} الخاص بك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_payout_paid', bodyParams: ['{{currency}}', '{{amountFormatted}}'] }
+        },
+        button: EARNINGS_BUTTON
+    },
+
+    /**
+     * ⚠ **Rejected returns the money — say so.** The amount goes back to the available
+     * balance, so the agent can request again immediately. That is the whole difference from
+     * `transfer_failed` below, and stating it is what stops a rejection reading as a loss.
+     *
+     * The reason itself is NOT carried here: it is free text an administrator wrote and it
+     * lives on the payout record as `rejectionReason`, which the earnings screen renders
+     * inline. An approved WhatsApp template cannot carry unbounded text anyway.
+     */
+    'payout.rejected': {
+        base: {
+            en: { subject: 'Payout request rejected', body: 'Your request to withdraw {{currency}} {{amountFormatted}} was rejected. The money is back in your available balance — open your earnings to see why, and you can request again.' },
+            fr: { subject: 'Demande de paiement refusée', body: 'Votre demande de retrait de {{currency}} {{amountFormatted}} a été refusée. L\'argent est de retour dans votre solde disponible — ouvrez vos revenus pour voir le motif, vous pouvez refaire une demande.' },
+            pt: { subject: 'Pedido de pagamento rejeitado', body: 'O seu pedido de retirada de {{currency}} {{amountFormatted}} foi rejeitado. O dinheiro está de volta no seu saldo disponível — abra os seus ganhos para ver o motivo, e pode pedir novamente.' },
+            es: { subject: 'Solicitud de pago rechazada', body: 'Tu solicitud de retiro de {{currency}} {{amountFormatted}} fue rechazada. El dinero volvió a tu saldo disponible — abre tus ganancias para ver el motivo, y puedes solicitarlo otra vez.' },
+            ar: { subject: 'تم رفض طلب السحب', body: 'تم رفض طلبك لسحب {{currency}} {{amountFormatted}}. أُعيد المبلغ إلى رصيدك المتاح — افتح أرباحك لمعرفة السبب، ويمكنك تقديم الطلب مرة أخرى.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_payout_rejected', bodyParams: ['{{currency}}', '{{amountFormatted}}'] }
+        },
+        button: EARNINGS_BUTTON
+    },
+
+    /**
+     * ⭐ **The one that made this whole gap urgent.**
+     *
+     * Three rules the copy obeys, and every one of them is load-bearing:
+     *
+     *   - ⚠ **It must NOT read as "declined".** A failed transfer is not terminal: an
+     *     administrator retries the same send, or rejects it to return the funds. Wording it
+     *     like a rejection tells the agent their request is finished when it is still open.
+     *   - ⚠ **It must NOT tell them to request again.** They cannot — the money is still held
+     *     in `requested_balance` and a second request answers
+     *     `409 EARNINGS_PAYOUT_ALREADY_PENDING`. Inviting the attempt produces an error the
+     *     agent reads as the app being broken on top of their money being stuck.
+     *   - ⚠ **The gateway's `reason` is NOT relayed.** It is provider-sourced text that can
+     *     name the payment provider and its internal codes; the agent needs to know somebody
+     *     is on it, not which API returned what. The reason is on the ticket for whoever
+     *     retries.
+     *
+     * So the promise is deliberately narrow and true: we know, it is not lost, we are on it.
+     */
+    'payout.transfer_failed': {
+        base: {
+            en: { subject: 'Problem paying out {{currency}} {{amountFormatted}}', body: 'We hit a problem sending your {{currency}} {{amountFormatted}}. Your money is safe and still reserved for this payout — our team is on it and will retry. There is nothing you need to do.' },
+            fr: { subject: 'Problème de versement de {{currency}} {{amountFormatted}}', body: 'Nous avons rencontré un problème en envoyant vos {{currency}} {{amountFormatted}}. Votre argent est en sécurité et toujours réservé pour ce paiement — notre équipe s\'en occupe et fera une nouvelle tentative. Vous n\'avez rien à faire.' },
+            pt: { subject: 'Problema ao pagar {{currency}} {{amountFormatted}}', body: 'Tivemos um problema ao enviar os seus {{currency}} {{amountFormatted}}. O seu dinheiro está seguro e continua reservado para este pagamento — a nossa equipa está a tratar disso e vai tentar de novo. Não precisa de fazer nada.' },
+            es: { subject: 'Problema al pagar {{currency}} {{amountFormatted}}', body: 'Tuvimos un problema al enviar tus {{currency}} {{amountFormatted}}. Tu dinero está seguro y sigue reservado para este pago — nuestro equipo se está ocupando y lo reintentará. No tienes que hacer nada.' },
+            ar: { subject: 'مشكلة في تحويل {{currency}} {{amountFormatted}}', body: 'واجهنا مشكلة في إرسال مبلغ {{currency}} {{amountFormatted}} الخاص بك. أموالك آمنة ولا تزال محفوظة لهذا التحويل — فريقنا يعمل على ذلك وسيعيد المحاولة. لا حاجة لأي إجراء منك.' }
+        },
+        whatsapp: {
+            text: {},
+            template: { name: 'agent_payout_transfer_failed', bodyParams: ['{{currency}}', '{{amountFormatted}}'] }
+        },
+        button: EARNINGS_BUTTON
     }
 };
 

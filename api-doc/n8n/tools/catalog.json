@@ -5490,6 +5490,238 @@
       }
     },
     {
+      "name": "inapp_open_listing",
+      "version": 1,
+      "title": "Open the product grid",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Open a scrollable product grid the customer can browse properly, with a picture, a price and a buy button on every card. Use it for a whole shelf; use catalog_show_products for a short, specific answer of five or fewer.",
+      "when_to_use": "When the customer wants to BROWSE rather than be answered: a category, a whole store, their saved items, or \"what else do you have\". Also after a page of cards, when they ask to see everything.",
+      "when_not_to_use": "Not for a specific question with a short answer (\"do you have red shoes in 42?\") — five cards answer that better than a grid. Not for one product: use inapp_open_product.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/inapp/listing"
+      },
+      "doc": "n8n/bot-surface.md#19-the-in-app-screens",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "q": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Free-text search. Omit to show everything."
+          },
+          "category": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Category slug or name, as the catalogue publishes it."
+          },
+          "storeSlug": {
+            "type": "string",
+            "maxLength": 160,
+            "description": "Narrow to one store."
+          },
+          "productIds": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "string"
+            },
+            "description": "Pin an exact set instead of filtering — for saved items, or a selection you chose yourself. Up to 50, far more than a chat can show."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "q",
+          "category",
+          "storeSlug",
+          "productIds"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "opened"
+        ],
+        "never_relay": [
+          "handle"
+        ]
+      },
+      "errors": [],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "Each call mints a fresh screen session. Send an Idempotency-Key so a retried chat message reuses one screen instead of leaving a trail of live ones.",
+      "requires_confirmation": false,
+      "risk": "low",
+      "audit": false,
+      "requires_customer_role": true,
+      "side_effects": [
+        "Mints a short-lived screen session the customer’s browser can open."
+      ],
+      "platform_notes": {
+        "telegram": "Renders as a Mini App button — the grid opens inside Telegram, and closing it returns the customer to this chat. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+        "whatsapp": "Renders as a cta_url button to the storefront until a WhatsApp Flow is published for this screen. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice."
+      },
+      "context_resolution": {
+        "subject": "product",
+        "policy": "explicit_only",
+        "must_echo": false,
+        "notes": "The handle in the reply is a credential. Never print it, never put it in a sentence, and never reuse one from an earlier turn — mint a new screen instead."
+      }
+    },
+    {
+      "name": "inapp_open_stores",
+      "version": 1,
+      "title": "Open the store directory",
+      "tier": "extended",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Open a browsable directory of the shops on the platform, each with its logo, name, description and city.",
+      "when_to_use": "When the customer asks which shops exist, or wants to find a shop rather than a product. There are far more stores than a chat list can hold, which is why this is a screen and not a list of choices.",
+      "when_not_to_use": "Not when they have already named a shop and want its products — use inapp_open_listing with storeSlug.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/inapp/stores"
+      },
+      "doc": "n8n/bot-surface.md#19-the-in-app-screens",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "q": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Search shop names."
+          },
+          "city": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Narrow to one city. City is the only location a shop publishes."
+          }
+        }
+      },
+      "request": {
+        "body": [
+          "q",
+          "city"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "opened"
+        ],
+        "never_relay": [
+          "handle"
+        ]
+      },
+      "errors": [],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "Each call mints a fresh screen session. Send an Idempotency-Key so a retried chat message reuses one screen instead of leaving a trail of live ones.",
+      "requires_confirmation": false,
+      "risk": "low",
+      "audit": false,
+      "requires_customer_role": true,
+      "side_effects": [
+        "Mints a short-lived screen session the customer’s browser can open."
+      ],
+      "platform_notes": {
+        "telegram": "A Mini App button. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+        "whatsapp": "A cta_url button to the storefront directory until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice."
+      },
+      "context_resolution": {
+        "subject": "store",
+        "policy": "explicit_only",
+        "must_echo": false,
+        "notes": "The store SCREEN itself is a later milestone; until it lands this still answers with a working storefront link rather than a dead button. A shop publishes its city and never its street address."
+      }
+    },
+    {
+      "name": "inapp_open_product",
+      "version": 1,
+      "title": "Open one product, with its options",
+      "tier": "core",
+      "status": "available",
+      "service": "jovi-mall",
+      "surface": "bot_internal",
+      "description": "Open one product on its own screen, where the customer can pick a size, a colour or any other option, read the full description, and buy the exact variant they chose.",
+      "when_to_use": "Whenever the customer needs to CHOOSE something about a product before buying — a size, a colour, a variant. A chat card can only ever offer the default variant, so a product with options is unbuyable from chat alone.",
+      "when_not_to_use": "Not for answering a passing question about a product — say the answer. Not for several products: use inapp_open_listing.",
+      "operation": {
+        "method": "POST",
+        "path": "/api/internal/bot/inapp/products/{productId}"
+      },
+      "doc": "n8n/bot-surface.md#19-the-in-app-screens",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "productId"
+        ],
+        "properties": {
+          "productId": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "The product id, as the catalogue returned it."
+          }
+        }
+      },
+      "request": {
+        "path": [
+          "productId"
+        ]
+      },
+      "response": {
+        "source": "body.data",
+        "type": "object",
+        "important_fields": [
+          "opened"
+        ],
+        "never_relay": [
+          "handle"
+        ]
+      },
+      "errors": [
+        {
+          "code": "CATALOG_PRODUCT_NOT_FOUND",
+          "status": 404,
+          "category": "not_found",
+          "when": "No such product, or it is no longer on sale",
+          "customer_action": "explain"
+        }
+      ],
+      "mutating": true,
+      "idempotent": false,
+      "idempotency": "Each call mints a fresh screen session. Send an Idempotency-Key so a retried chat message reuses one screen instead of leaving a trail of live ones.",
+      "requires_confirmation": false,
+      "risk": "low",
+      "audit": false,
+      "requires_customer_role": true,
+      "side_effects": [
+        "Mints a short-lived screen session the customer’s browser can open."
+      ],
+      "platform_notes": {
+        "telegram": "A Mini App button. The screen opens inside Telegram. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice.",
+        "whatsapp": "A cta_url button to the product page until a WhatsApp Flow is published. This tool answers with a ready-made `reply` — send it unmodified. Do not also describe the button in your own words; the customer would get the sentence twice."
+      },
+      "context_resolution": {
+        "subject": "product",
+        "policy": "single_unambiguous_focus",
+        "must_echo": false,
+        "notes": "The handle in the reply is a credential — never print it. This is the ONLY place on this surface where a variant can be chosen."
+      }
+    },
+    {
       "name": "wishlist_list",
       "version": 1,
       "title": "The customer's saved products",

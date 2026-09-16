@@ -12,6 +12,7 @@ import { payLinkService } from '../../payments/services/pay-link.service';
 import { botCallerOf, botResponseLanguageOf } from '../middlewares/bot-identity.middleware';
 import { setBotReply } from '../middlewares/bot-reply.middleware';
 import { botChrome } from '../domain/bot-chrome-copy';
+import { addedToCartActions } from './bot-purchase.controller';
 import {
     BotCartAddItemSchema,
     BotCartQuoteSchema,
@@ -61,6 +62,36 @@ export class BotCartController {
             undefined, // currency — the service's own default, as before
             negotiationLockRef,
         );
+
+        /**
+         * ⚠ **THE SAME THREE BUTTONS A TAP PRODUCES — View cart · Checkout · Browse more.**
+         *
+         * A customer reaches a basket two ways: they tap "Add to cart" under a product, or they
+         * type "add two of the blue ones". Only the first used to get follow-up buttons, so the
+         * customer who typed had to type "checkout" as well — which is the magic-word problem
+         * § 14.6 abolished, arrived at from the other side.
+         *
+         * ⭐ **The repeated sentence below is DELIBERATE and owner-chosen (2026-09-16).** The
+         * model has just written its own reply ("Done, two blue shirts are in your basket") and
+         * this adds "Added to your cart" underneath it, so the customer reads much the same
+         * thing twice. The alternative put to the owner was a new neutral line ("What next?")
+         * that would repeat nothing; they chose the extra sentence over the extra phrase.
+         *
+         * ⚠ **So do not "tidy" this** into a neutral line, and do not delete the reply to stop
+         * the repetition. Either one silently reverses a decision that was taken with the
+         * trade-off in front of it. The buttons are the point; the duplication is its accepted
+         * cost.
+         *
+         * The action list is imported rather than rebuilt: two copies is how one door grows a
+         * fourth button or loses Checkout with nothing failing.
+         */
+        const language = botResponseLanguageOf(req);
+        setBotReply(req, {
+            kind: 'text',
+            text: botChrome('addedToCart', language),
+            actions: addedToCartActions(language),
+        });
+
         sendSuccess(res, cart);
     });
 

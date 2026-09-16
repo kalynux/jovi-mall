@@ -87,6 +87,11 @@ const UNMUTABLE: CustomerNotificationType[] = [
     // the rest of this list — and a page the customer asked for in a chat must not be
     // silenced by a setting about order progress.
     'order.payment_link',
+    // A declined charge, and unmutable for the same reason as the line above plus a sharper
+    // one: it is the ANSWER to something the customer did thirty seconds ago. A preference
+    // about "order progress" silencing it would leave somebody who just tried to pay
+    // believing the payment worked — the precise silence this situation was added to end.
+    'order.payment_failed',
     // The three GAP-012 support situations, and NOT on the counterparty argument the rest
     // of this list rests on — a support request is the customer's own. Narrower: all three
     // are the ANSWER to a question they asked, and `awaiting_customer` is the platform
@@ -118,6 +123,9 @@ const EXPECTED_WA_PARAMS: Record<CustomerNotificationType, number> = {
     'order.cancelled': 1,
     'order.refunded': 3,
     'order.payment_link': 4,
+    // currency + amount + orderNumber. The amount is carried so a customer with two orders
+    // in flight can tell which one failed.
+    'order.payment_failed': 3,
     'ticket.replied': 1,
     'ticket.awaiting_customer': 1,
     // TWO, and the second is a whole sentence. Whether the customer may still reply
@@ -173,14 +181,15 @@ function main(): void {
 
     console.log('\n── Catalog ↔ model enum (the drift that bit the agent stack) ──');
 
-    // 22 = the 18 this stack shipped with, plus GAP-012's three `ticket.*` and the card
-    // payment page. The literal is kept rather than derived: this assertion's whole job is
+    // 23 = the 18 this stack shipped with, plus GAP-012's three `ticket.*`, the card
+    // payment page, and `order.payment_failed` — the silence that used to follow a declined
+    // charge. The literal is kept rather than derived: this assertion's whole job is
     // to notice a situation appearing on one side and not the other, and `catalog.length
     // === model.length` would pass happily while both drifted away from what anybody meant.
-    assert('catalog and model enum list the same 22 situations', () => {
+    assert('catalog and model enum list the same 23 situations', () => {
         const catalog = Object.keys(CUSTOMER_NOTIFICATION_CATALOG).sort();
         const model = [...CUSTOMER_NOTIFICATION_TYPES].sort();
-        return catalog.length === 22 && JSON.stringify(catalog) === JSON.stringify(model);
+        return catalog.length === 23 && JSON.stringify(catalog) === JSON.stringify(model);
     });
 
     // The aggregate enum is spread from CUSTOMER_AGGREGATE_TYPES rather than hand-kept —

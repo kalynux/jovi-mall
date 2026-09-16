@@ -53,6 +53,20 @@ export function initializeCustomerNotificationEventConsumers(): void {
     // Also fires for plan purchases and credit top-ups; the handler no-ops on
     // payloads carrying no orderId, the same way the shared cod.* events do.
     eventBus.subscribe('payment.received.full', handler.handleOrderPaymentReceived.bind(handler));
+    /**
+     * ⭐ The other half of that sentence, and it had no publisher and no subscriber at all.
+     *
+     * `PaymentOrchestratorService` announced every success and announced no failure on any
+     * path, so a refused mobile-money push reached the customer as silence — indistinguishable
+     * from a payment that had worked and gone quiet. They waited for an order that was not
+     * coming.
+     *
+     * ⚠ **It covers the reconciliation sweep as well as the webhook**, because the orchestrator
+     * publishes from `verifyPayment` too and `PaymentReconciliationWorker` closes a lost
+     * callback through exactly that method. The customer whose failure is only discovered ten
+     * minutes later by the cron is the one who has been in the dark longest.
+     */
+    eventBus.subscribe('payment.failed', handler.handleOrderPaymentFailed.bind(handler));
 
     // ── Delivery progress ───────────────────────────────────────────────────
     // Only four shipment statuses reach the customer (shipped / out for delivery /
