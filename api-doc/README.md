@@ -282,6 +282,7 @@ Same JWT signs both services — forward the viewer's access token to geo-tracke
 - [**Public API (no auth)**](./public/README.md) — the published price list: plan catalog + credit packs, for the marketing site
 - [**Public catalog (no auth)**](./public/catalog.md) — the storefront's read side: products, categories, stores. **Product URLs are nested under their store**
 - [**Public blog (no auth)**](./public/articles.md) — articles, typed blocks, hreflang & slug redirects. The editor is **wi-admin's** (`admin/api-doc/api/content.md`), not this service's
+- [**Public app downloads (no auth)**](./public/app-downloads.md) — the **agent APK**, for the landing page’s download button. `/app/agent-android/download` is a **302** to the CDN and is the stable link; `/latest` carries the version, size, `minSdk` and the **signing-certificate fingerprint**
 - [**Reviews & ratings — cross-role**](./reviews.md) — one module, **two subjects**: a product review (public, verified purchase) and a **delivery** review (internal, written by the customer *and* the vendor *and* the agency, each feeding a different factor of the agent's trust score). Also the rule for `aggregateRating`: emit it **iff** `rating` is non-null
 - [**Billing, plans & credit — cross-dashboard guide**](./billing-plans-across-roles.md) (vendor · agency · agent · admin)
 - [Error catalog](./errors/README.md)

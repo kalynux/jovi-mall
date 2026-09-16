@@ -116,6 +116,8 @@
         "test:uploads": "ts-node scripts/test/test-uploads.ts",
         "test:kyc": "ts-node scripts/test/test-kyc.ts",
         "test:storage-r2": "ts-node scripts/test/test-storage-r2.ts",
+        "test:app-releases": "ts-node scripts/test/test-app-releases.ts",
+        "app:publish": "ts-node scripts/publish-app-release.ts",
         "test:vehicle-profile": "ts-node scripts/test/test-vehicle-profile.ts",
         "test:payout-lifecycle": "ts-node scripts/test/test-payout-lifecycle.ts",
     "test:payout-methods": "ts-node scripts/test/test-payout-methods.ts",

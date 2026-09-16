@@ -712,6 +712,32 @@ async function main(): Promise<void> {
         const offenders = srcFiles.filter((file) => {
             if (file.includes(path.join('core', 'storage'))) return false;
             if (file.endsWith('file-detail.resolver.ts')) return false;
+            /**
+             * ⚠ **The one exemption, and it is exempt because it builds no FileDetail at all.**
+             *
+             * This guard's subject is the FileDetail choke point: every *stored file record*
+             * must get its `url` from `toFileDetail`, so the private-tree and quota rules are
+             * applied in one place. An app release is not a stored file record — it has no
+             * owner, no quota, no `file_references` row and no `File` document (see the
+             * APP_RELEASE note in `core/database/collections.ts`), and nothing it returns
+             * reaches a client as a FileDetail. It answers a `302 Location`.
+             *
+             * Routing it through `toFileDetail` anyway was the alternative and it is worse: it
+             * needs a synthetic `id` for a record that does not exist, and it would tell the
+             * next reader that a release IS a file record, contradicting the model.
+             *
+             * What replaces the choke point here is the same rule applied explicitly: the
+             * service calls `isPrivateStorageKey` BEFORE `getPublicUrl` and turns a private
+             * key into a named 503. `test:app-releases` § 4 pins that ordering, and § 1 pins
+             * the tree's `public` verdict — so the property this guard protects is asserted,
+             * just in the suite that owns the module.
+             *
+             * ⚠ Do NOT widen this into a pattern. The header above explains that a guard
+             * anchored on a *spelling* missed all three offenders it was written to catch; a
+             * guard with a growing allowlist fails the same way, one plausible entry at a
+             * time. A second exemption needs its own reason written here.
+             */
+            if (file.endsWith(path.join('app-distribution', 'services', 'app-release.service.ts'))) return false;
             return /[.]getPublicUrl[(]/.test(code(fs.readFileSync(file, 'utf8')));
         });
         if (offenders.length) {

@@ -2183,6 +2183,49 @@ variant list: one rule, so a variant is not called two different things on two s
 `/api/public/*` has its own IP-scoped rate-limit bucket on top of Layer A, so anonymous browse
 traffic cannot exhaust the global counter for the signed-in users behind the same NAT.
 
+### App distribution (`src/modules/app-distribution/`)
+
+The agent app is **not on Google Play**, so an agent installs it by downloading an APK from the
+marketing site. One row per published build (`app_releases`), two unauthenticated reads under
+`/api/public/app`, one PUBLIC storage tree (`app-releases`). Contract:
+`api-doc/public/app-downloads.md`. Suite: `npm run test:app-releases` (56, no DB, no network).
+
+**The write path is a script, not a route** — `npm run app:publish -- --apk <path>`. Publishing
+uploads ~79 MB and then asserts "this is what an agent should install"; neither half belongs
+behind a request timeout or a button that can be clicked twice. There is no HTTP writer, and a
+publishing screen — if one is ever wanted — belongs in wi-admin behind a permission (ADR-004 D-4).
+
+⚠ **`GET /api/public/app/:app/download` answers a `302` and never the bytes.** The artefact lives
+in a public tree, so the CDN serves it directly. Streaming it through this process instead is a
+four-line change that looks tidier and moves the platform’s whole install traffic onto the
+2 vCPU box `docs/DEPLOY-VPS.md` sizes for *everything* — while also dropping the range requests a
+79 MB download over a mobile connection depends on. `test:app-releases` § 4 pins it, including the
+assertion that neither the controller nor the service names `getDownloadStream`.
+
+⚠ **302, not 301.** A 301 is cached by browsers indefinitely, pinning a device to one build’s CDN
+object for the life of the profile. The entire point of the endpoint is that its target changes.
+
+⚠ **The publish script refuses the Android DEBUG key, and that refusal is the most valuable line
+in the module.** `agent_app/android/app/build.gradle.kts` falls back to the debug keystore when
+`key.properties` is absent — correct for a developer’s own build, and indistinguishable from a
+real release by size, by name and by how it runs. A debug-signed build installs fine and then
+cannot take a Play-signed update without an **uninstall**, so the failure lands months later on
+other people’s phones and cannot be repaired server-side. `--dry-run` runs that gate for real.
+
+⚠ **`versionCode`, never `publishedAt`, decides "latest".** It is the number Android itself
+compares. Ordering by recency would make a rollback (`--promote <versionCode>`) the newest row and
+hand every downloader a build their phone refuses to install over what they already have.
+
+⚠ **A release artefact is NOT a `FileDetail` and has no `file_references` row.** It has no owner,
+no quota and no virus scan, and `file-cleanup` must never see it — the `app_releases` row is its
+only reference. This is the one file exempted from `test:uploads`’ "every `getPublicUrl` call goes
+through `toFileDetail`" scan; the exemption is named, and the compensating `isPrivateStorageKey`
+guard it relies on is asserted in `test:app-releases` § 4.
+
+Publishing is the ONE state. `AppReleaseStatus` has no `draft`, because the tree is public — an
+uploaded artefact is fetchable the instant the upload finishes, and a `draft` would name a
+confidentiality this module does not provide.
+
 ### Reviews & ratings (`src/modules/reviews/`)
 
 **ONE collection, TWO subjects, THREE author roles**, and the reason it is not just a storefront

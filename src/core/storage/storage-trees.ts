@@ -56,6 +56,18 @@ export const STORAGE_TREE_VISIBILITY: Readonly<Record<string, TreeVisibility>> =
     // No writer today; kept classified so it cannot become an unclassified surprise.
     system: 'public',
 
+    // The Android build of the agent app, distributed by direct download because the app is
+    // not on Play yet (`modules/app-distribution/`). Public, and the word does LESS work here
+    // than it does above: an APK is signed, and its authenticity comes from the signature
+    // Android verifies at install time, never from the secrecy of its URL. Anyone may hold
+    // this link — putting it on a marketing page is the entire point.
+    //
+    // ⚠ Written ONLY by `scripts/publish-app-release.ts`, never by the upload pipeline. A
+    // release artefact is not user content: it has no owner, no quota, no virus scan and no
+    // `file_references` row, and it is ~79 MB — two orders of magnitude past what
+    // `multer.memoryStorage()` is sized for. No route under `/api/files/upload` can name it.
+    'app-releases': 'public',
+
     // ── PRIVATE. Served only by an authorized route. ──────────────────────────
     // A vendor's digital product, sold to a named buyer. `GET /api/digital/download/:token`
     // is the only door, and its single-use consumption, download counter and revocation only

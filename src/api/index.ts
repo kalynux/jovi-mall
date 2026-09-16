@@ -262,6 +262,22 @@ router.use('/public', botPublicAssetRoutes);
 import publicReviewRoutes from '../modules/reviews/routes/public-review.routes';
 router.use('/public', publicReviewRoutes);
 
+// The agent app's APK download — the SIXTH router on this prefix. Declares only
+// `/app/:app/latest` and `/app/:app/download`, which none of the five above has a route for.
+//
+// ⚠ **`/download` answers a 302 and never the bytes.** The artefact is ~79 MB and lives in
+// the public `app-releases` storage tree, so it is served by the CDN (or, under
+// `STORAGE_PROVIDER=local`, by the `express.static` mount at the bottom of this file) and
+// never through this event loop. `modules/app-distribution/services/app-release.service.ts`
+// carries the reasoning and what the choice costs.
+//
+// Same rules as its neighbours otherwise: published data only, five-minute cache, no
+// identity, no write. NOT on the maintenance exemption list — a `readonly` window leaves the
+// download working (it is a read) and a `down` window refuses it, which is the same verdict
+// the storefront gets and the right one: nothing cross-service depends on this path.
+import publicAppReleaseRoutes from '../modules/app-distribution/routes/public-app-release.routes';
+router.use('/public', publicAppReleaseRoutes);
+
 // Earnings: commission/escrow ledger. Vendor sees held vs withdrawable balances;
 // agency sees its own held vs withdrawable delivery-fee balance; agent sees their
 // cut of the delivery fees on runs they completed; admin sees the platform

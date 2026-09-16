@@ -221,6 +221,18 @@ export const MODELS = Object.freeze({
   ARTICLE_AUTHOR: 'ArticleAuthor',
 
   /**
+   * App distribution — one row per published build of a first-party mobile app.
+   *
+   * ⚠ **Not a `FileDetail`, and deliberately not a `file_references` row.** Every other
+   * stored file on this platform belongs to somebody — a vendor's product image, an agent's
+   * proof photo — and is reference-counted so `file-cleanup` can reclaim it when the owner
+   * drops it. A release artefact belongs to the platform, is written by a script rather than
+   * by a request, and must survive every sweep: the row below IS its owner and its only
+   * reference. See modules/app-distribution.
+   */
+  APP_RELEASE: 'AppRelease',
+
+  /**
    * Reviews & ratings (Phase 6 Step 10) — ONE collection, two subjects.
    *
    * A row rates either a `product` or a `delivery`, told apart by `subject_type`.
@@ -400,6 +412,9 @@ export const COLLECTIONS = Object.freeze({
   // Blog / editorial (the marketing site's article pages)
   ARTICLE: 'articles',
   ARTICLE_AUTHOR: 'article_authors',
+
+  // App distribution (see the MODELS entry above for why this is not a file_references row)
+  APP_RELEASE: 'app_releases',
 
   // Reviews & ratings (see the MODELS entries above for what each holds)
   REVIEW: 'reviews',

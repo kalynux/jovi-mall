@@ -38,6 +38,7 @@ type DomainPrefix =
     | 'STOCK'         // the two-sided stock-adjustment request flow
     | 'REVIEW'        // reviews & ratings — products AND deliveries
     | 'SYSTEM'        // operations surface: maintenance mode, cache controls
+    | 'APP'           // first-party mobile app distribution (the agent APK download)
     | 'INTERNAL'      // INTERNAL_SERVER_ERROR
     | 'NOT'           // NOT_FOUND — router-level only
     | 'REQUEST'       // body-parser rejections — global handler only (Phase 16)
@@ -1792,6 +1793,32 @@ export const ERROR_CODES = Object.freeze({
      * differently for each: this one clears on a clock, that one clears on a resend window.
      */
     RATE_LIMIT_EXCEEDED: 'RATE_LIMIT_EXCEEDED',
+
+    // ── APP DISTRIBUTION — the direct-download surface for first-party mobile apps ──
+    // Public, unauthenticated reads. There is no `APP_*_FORBIDDEN`: the download is open by
+    // design, and an APK's authenticity is the signature Android checks at install, not the
+    // secrecy of its URL. See modules/app-distribution.
+
+    /** The `:app` path segment is not one of `APP_KEYS`. 404, so an unknown app and an
+     *  unpublished one are indistinguishable from outside — there is nothing to enumerate. */
+    APP_UNKNOWN: 'APP_UNKNOWN',
+    /**
+     * A known app with no published release. 404.
+     *
+     * ⚠ This is the ORDINARY state of a new app key, not a fault. A landing page must render
+     * "not available yet" from it rather than an error — see `api-doc/public/app-downloads.md`.
+     */
+    APP_RELEASE_NOT_FOUND: 'APP_RELEASE_NOT_FOUND',
+    /**
+     * A published row exists and its bytes cannot be addressed. 503.
+     *
+     * Reachable exactly one way: the active storage provider cannot build a public URL for a
+     * key it did not write — a deployment that published under `r2` and now boots on `local`,
+     * or the reverse. The row is not wrong and the artefact is not lost; the provider is
+     * looking in the wrong store. Never raised for a missing object, which this service
+     * cannot see: the CDN answers that 404 itself.
+     */
+    APP_RELEASE_UNAVAILABLE: 'APP_RELEASE_UNAVAILABLE',
 
     // ── MIDDLEWARE / ROUTER FALLBACKS — DO NOT USE IN SERVICES ───────────────
     INTERNAL_SERVER_ERROR: 'INTERNAL_SERVER_ERROR',  // assigned by global handler
