@@ -4,8 +4,7 @@ import { sendSuccess } from '../../../core/responses';
 import { createAppError } from '../../../core/errors';
 import { ERROR_CODES } from '../../../core/error-codes';
 import { appReleaseService } from '../services/app-release.service';
-import { AppKeyParamSchema } from '../validators/app-release.validator';
-import { isAppKey } from '../app-distribution.types';
+import { AppKey, isAppKey } from '../app-distribution.types';
 
 /**
  * How long a client may cache the answer to "what is the current build".
@@ -20,6 +19,32 @@ import { isAppKey } from '../app-distribution.types';
  * for a year instead would pin every downloader to one build forever.
  */
 const CACHE_SECONDS = 300;
+
+/**
+ * Resolve `:app` to a known key, or refuse with `404 APP_UNKNOWN`.
+ *
+ * ⚠ **Shared by BOTH handlers, and it is shared because they disagreed.** `latest` validated
+ * this segment with Zod and `download` checked it by hand, so one unknown app key produced a
+ * `400 VALIDATION_ERROR` on one route and a `404 APP_UNKNOWN` on the other — for the same
+ * segment, on the same prefix, in the same module. `api-doc/public/app-downloads.md` described
+ * only the second and was therefore half wrong about its own contract.
+ *
+ * **404 is the correct one.** A 400 says "your request is malformed", and a request naming an
+ * app this platform does not distribute is perfectly well formed — the resource simply does
+ * not exist. The distinction is not pedantry on a path a marketing page links to: a CDN, a log
+ * scraper and a person reading an incident all branch on that difference.
+ *
+ * ⚠ It returns the SAME status as an unmatched route, so `404` alone cannot tell "this app key
+ * is unknown" from "this build has no app-distribution routes at all". The `error.code` in the
+ * body is what separates them — `APP_UNKNOWN` versus `NOT_FOUND`. Anything using this endpoint
+ * as a deploy probe must read the code, or ask for a REAL key and look for a 200.
+ */
+function requireAppKey(value: unknown): AppKey {
+    if (!isAppKey(value)) {
+        throw createAppError(ERROR_CODES.APP_UNKNOWN, 404, `Unknown app "${String(value)}".`);
+    }
+    return value;
+}
 
 /**
  * Unauthenticated reads of the current mobile build.
@@ -43,7 +68,7 @@ export class PublicAppReleaseController {
      * size, the checksum and the release notes beside its download button.
      */
     static latest = asyncHandler(async (req: Request, res: Response) => {
-        const { app } = AppKeyParamSchema.parse(req.params);
+        const app = requireAppKey(req.params.app);
         const release = await appReleaseService.getLatest(app);
         res.set('Cache-Control', `public, max-age=${CACHE_SECONDS}`);
         sendSuccess(res, release);
@@ -60,16 +85,12 @@ export class PublicAppReleaseController {
      * on other people's phones, as "the download gives an old version". The entire value of
      * this endpoint is that its target may change.
      *
-     * ⚠ **`:app` is checked by hand here rather than through Zod**, because an unknown app
-     * must be a 404 and a Zod failure is a 400. That is not pedantry on a route a marketing
-     * page links to: a 400 reads as "your request is malformed" to a CDN, a log scraper and a
-     * developer alike, when what actually happened is that the resource does not exist.
+     * `:app` is resolved by `requireAppKey`, the same way `latest` above resolves it — see that
+     * function for why an unknown app is a 404 rather than a 400, and for the period when
+     * these two handlers disagreed about it.
      */
     static download = asyncHandler(async (req: Request, res: Response) => {
-        const app = req.params.app;
-        if (!isAppKey(app)) {
-            throw createAppError(ERROR_CODES.APP_UNKNOWN, 404, `Unknown app "${app}".`);
-        }
+        const app = requireAppKey(req.params.app);
 
         const { url, release } = await appReleaseService.resolveDownloadTarget(app);
 

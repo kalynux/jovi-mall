@@ -124,10 +124,39 @@ function run(): void {
     assert('a path-traversal probe is refused', () => !isAppKey('../../digital'));
     assert('a non-string is refused', () => !isAppKey(undefined) && !isAppKey(42));
 
-    assert('the validator is an enum over APP_KEYS, not a free string', () => {
-        const validator = code(read(MODULE, 'validators', 'app-release.validator.ts'));
-        return validator.includes('z.enum(APP_KEYS)') && !validator.includes('z.string()');
+    /**
+     * ⚠ **PER HANDLER, because the file-wide version of this passed over a real defect.**
+     *
+     * The original assertion asked whether `APP_UNKNOWN, 404` and `isAppKey` appeared anywhere
+     * in the controller. They did — in `download`. `latest` was meanwhile validating the same
+     * segment with Zod, so one unknown app key answered `400 VALIDATION_ERROR` on one route and
+     * `404 APP_UNKNOWN` on the other, and the api-doc documented only the second. A guard that
+     * scans a whole file cannot see two handlers disagreeing inside it.
+     */
+    const handlerBodies: Array<[string, string]> = ['latest', 'download'].map((name) => {
+        const start = CONTROLLER_CODE.indexOf('static ' + name + ' = asyncHandler');
+        const rest = CONTROLLER_CODE.slice(start + 1);
+        const next = rest.indexOf('static ');
+        return [name, next === -1 ? rest : rest.slice(0, next)] as [string, string];
     });
+
+    assert('both handlers were located', () =>
+        handlerBodies.length === 2 && handlerBodies.every(([, body]) => body.length > 40));
+
+    for (const [name, body] of handlerBodies) {
+        assert('`' + name + '` resolves :app through the shared 404 guard', () =>
+            body.includes('requireAppKey(req.params.app)'));
+        assert('…and `' + name + '` does NOT parse it with Zod (that would be a 400)', () =>
+            !body.includes('.parse(') && !body.includes('Schema'));
+    }
+
+    assert('the guard raises APP_UNKNOWN at 404', () =>
+        /function requireAppKey[\s\S]{0,400}ERROR_CODES\.APP_UNKNOWN,\s*404/.test(CONTROLLER_CODE));
+
+    // The Zod validator this replaced is gone; a file nothing imports is a trap for the next
+    // reader, who would reasonably assume the routes still use it.
+    assert('the superseded Zod validator is deleted, not merely unused', () =>
+        !fs.existsSync(path.join(ROOT, MODULE, 'validators', 'app-release.validator.ts')));
 
     section('3. The public routes carry NO auth guard');
 
@@ -299,9 +328,21 @@ function run(): void {
         && ERROR_CODES.APP_RELEASE_UNAVAILABLE === 'APP_RELEASE_UNAVAILABLE');
 
     // A Zod failure is a 400, and "this app does not exist" is not a malformed request.
+    // The per-handler form of this lives in § 2; this is the module-level statement of it.
     assert('an unknown app is a 404, not a validation 400', () =>
-        /APP_UNKNOWN,\s*404/.test(CONTROLLER_CODE)
-        && CONTROLLER_CODE.includes('isAppKey(app)'));
+        /APP_UNKNOWN,\s*404/.test(CONTROLLER_CODE) && !CONTROLLER_CODE.includes('.parse('));
+
+    /**
+     * ⚠ An unknown app key and a build with no app-distribution routes at all BOTH answer 404.
+     * The `error.code` is the only thing that separates them, which matters because this
+     * endpoint is the one unauthenticated probe on the platform that can answer "is this
+     * deployed" — every `/api/internal/*` prefix returns 401 for real and fake paths alike.
+     * Documented so nobody builds a deploy check on the status alone.
+     */
+    assert('the doc states that 404 alone cannot prove route-absence', () => {
+        const doc = read('api-doc', 'public', 'app-downloads.md');
+        return doc.includes('APP_UNKNOWN') && /404 alone|status alone|error\.code/i.test(doc);
+    });
 
     assert('no published release is a 404', () =>
         /APP_RELEASE_NOT_FOUND,\s*\n?\s*404/.test(SERVICE_CODE));

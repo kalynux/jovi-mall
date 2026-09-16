@@ -29,9 +29,16 @@ verifies at install time rather than from the secrecy of a URL — which is why
 |---|---|
 | `agent-android` | Wi-Agent for Android (`com.wi_mall.wiagent`) |
 
-Anything else is `404 APP_UNKNOWN`. The key names the app **and** the platform: when an iOS build
-exists it will be `agent-ios`, a separate key with its own version and its own artefact — never a
-second file under one key.
+Anything else is `404 APP_UNKNOWN`, on **both** endpoints. The key names the app **and** the
+platform: when an iOS build exists it will be `agent-ios`, a separate key with its own version and
+its own artefact — never a second file under one key.
+
+⚠ **A `404` does not by itself prove the route exists.** An unknown app key and a deployment with
+no app-distribution routes at all both answer `404`; only the body separates them —
+`error.code` is `APP_UNKNOWN` in the first case and `NOT_FOUND` in the second. If you are using
+this endpoint to check whether a build is deployed (it is the one unauthenticated endpoint here
+that can answer that — every `/api/internal/*` path returns `401` whether it exists or not), ask
+for a **real** key and look for `200`, or read the code. Do not branch on the status alone.
 
 ---
 
