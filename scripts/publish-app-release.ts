@@ -186,12 +186,47 @@ interface Signing {
     schemes: string;
 }
 
+function hasJava(): boolean {
+    try {
+        execFileSync('java', ['-version'], { stdio: 'ignore' });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * How to invoke apksigner, as a command plus its leading arguments.
+ *
+ * ⚠ **`apksigner` on Windows is a `.bat`, and Node refuses to spawn one.** Since the fix for
+ * CVE-2024-27980 (Node 18.20.2 / 20.12.2 and later), `execFileSync` throws `EINVAL` on a
+ * `.bat` or `.cmd` unless it is given a shell — and the failure reads as "apksigner could not
+ * verify the APK", which points at the APK rather than at the launcher.
+ *
+ * The wrapper's entire job is to run `java -jar <build-tools>/lib/apksigner.jar`, so calling
+ * the jar directly is the fix AND one process fewer. `cmd.exe /c` is the fallback for a
+ * machine with no `java` on PATH; argv is still passed as an array, never concatenated into a
+ * command string, so a path with a space or an ampersand cannot become shell syntax.
+ */
+function findApksigner(): { cmd: string; args: string[] } | null {
+    const binary = findBuildTool('apksigner');
+    if (!binary) return null;
+
+    const jar = path.join(path.dirname(binary), 'lib', 'apksigner.jar');
+    if (fs.existsSync(jar) && hasJava()) return { cmd: 'java', args: ['-jar', jar] };
+
+    if (/\.(bat|cmd)$/i.test(binary)) {
+        return { cmd: process.env.COMSPEC || 'cmd.exe', args: ['/c', binary] };
+    }
+    return { cmd: binary, args: [] };
+}
+
 function readSigning(apkPath: string): Signing | null {
-    const apksigner = findBuildTool('apksigner');
+    const apksigner = findApksigner();
     if (!apksigner) return null;
     let out: string;
     try {
-        out = execFileSync(apksigner, ['verify', '--print-certs', '-v', apkPath], {
+        out = execFileSync(apksigner.cmd, [...apksigner.args, 'verify', '--print-certs', '-v', apkPath], {
             encoding: 'utf8',
             maxBuffer: 16 * 1024 * 1024,
         });
